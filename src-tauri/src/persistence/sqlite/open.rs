@@ -7,7 +7,7 @@ use super::{Database, SCHEMA_VERSION};
 impl Database {
     /// Open or create a database at the given path
     pub fn open(path: &Path) -> Result<Self> {
-        // Per-open chatter is debug-only — `open` is called for every
+        // Per-open chatter is debug-only - `open` is called for every
         // project create / save-as / import / recent-list refresh.
         tracing::debug!("Opening database at: {:?}", path);
 
@@ -59,7 +59,7 @@ impl Database {
 
     /// Open an existing database (does not create if missing)
     pub fn open_existing(path: &Path) -> Result<Self> {
-        // Verbose open-time logging is debug-only — it fires on every
+        // Verbose open-time logging is debug-only - it fires on every
         // project load and every recent-projects metadata read, which
         // adds up.  The error paths still log at error/warn.
         tracing::debug!("Opening existing database at: {:?}", path);
@@ -90,7 +90,7 @@ impl Database {
         // the indexes; SQLite caps this against its own limits.
         let _ = db.conn.pragma_update(None, "cache_size", -32_000i64); // negative = KiB
                                                                        // Skip syncing on read-only-equivalent operations.
-                                                                       // (load path doesn't write — this is harmless on writes too;
+                                                                       // (load path doesn't write - this is harmless on writes too;
                                                                        // we already use a single transaction in save_project.)
         let _ = db.conn.pragma_update(None, "temp_store", "MEMORY");
 
@@ -142,7 +142,7 @@ impl Database {
     /// project data; for the recent-projects listing they add hundreds of
     /// milliseconds per file (PRAGMA quick_check walks every page). The
     /// metadata reads below are pure SELECTs and will fail with a clear
-    /// error if the schema is missing — that's enough validation for the
+    /// error if the schema is missing - that's enough validation for the
     /// purpose. If the user later opens this project, the full open path
     /// runs its checks then.
     pub fn open_for_metadata(path: &Path) -> Result<Self> {

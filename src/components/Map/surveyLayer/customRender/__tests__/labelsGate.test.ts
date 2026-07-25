@@ -3,7 +3,7 @@ import { CUSTOM_LABELS_SYNC_HOOK } from '../labelsGate';
 
 /**
  * Labels gate module (#customRender labels). The custom WebGL label renderer is
- * now the SOLE label path — there is no gate and no opt-out machinery. All that
+ * now the SOLE label path - there is no gate and no opt-out machinery. All that
  * survives is the runtime re-sync hook name; assert it is stable + distinct from
  * the geometry hook (controllers and the agent bridge key off it).
  */

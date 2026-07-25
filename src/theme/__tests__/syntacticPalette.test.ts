@@ -82,7 +82,7 @@ describe('syntacticVarName', () => {
 
 describe('index.css --sh-* defaults', () => {
   // The :root defaults in index.css avoid a flash before useSyntacticHighlighting
-  // paints. They must mirror the default preset (the source of truth) exactly —
+  // paints. They must mirror the default preset (the source of truth) exactly -
   // this guards against the two copies silently drifting apart.
   it('mirror the default preset for every role', () => {
     const cssPath = fileURLToPath(new URL('../../index.css', import.meta.url));

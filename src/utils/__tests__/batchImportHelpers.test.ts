@@ -256,7 +256,7 @@ describe('redirectDeletedTargets', () => {
     const conn = importingConn(0, 5, 1, 1);
     const conns = [conn];
 
-    // Pool has B→A suggestion (B is importSectionIndex) — but B's shots are
+    // Pool has B→A suggestion (B is importSectionIndex) - but B's shots are
     // actually INTERPOLATED (not deleted) because A→B was processed first
     const pool = [makeSuggestion({
       importSectionIndex: 1,     // B is the "import" side of this suggestion
@@ -279,7 +279,7 @@ describe('redirectDeletedTargets', () => {
 
     redirectDeletedTargets(conns, edits, new Map(), pool);
 
-    // Should NOT redirect — B's overlap shots are interpolated, not deleted
+    // Should NOT redirect - B's overlap shots are interpolated, not deleted
     expect(conn.targetType).toBe('importing');
     expect(conn.targetImportIndex).toBe(1);
     expect(conn.targetImportStationIndex).toBe(1);
@@ -378,7 +378,7 @@ describe('redirectDeletedTargets', () => {
 
     redirectDeletedTargets(conns, edits, confirmed, pool);
 
-    // Keep original target B — no redirect through reverse unconfirmed candidate.
+    // Keep original target B - no redirect through reverse unconfirmed candidate.
     expect(conn.targetType).toBe('importing');
     expect(conn.targetImportIndex).toBe(1);
     expect(conn.targetImportStationIndex).toBe(1);

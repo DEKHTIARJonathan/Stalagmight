@@ -1,5 +1,5 @@
 /**
- * Vitest global setup (issue #107 — component-test tier).
+ * Vitest global setup (issue #107 - component-test tier).
  *
  * Runs before each test file, in that file's resolved environment. The tiers
  * are split by file extension via `environmentMatchGlobs` in vite.config.ts:
@@ -15,7 +15,7 @@ import '@testing-library/jest-dom/vitest';
 import { afterEach } from 'vitest';
 
 // Component tests render into a jsdom DOM. DialogWrapper portals into a
-// `#dialog-root` element (mirrors index.html), so provision it once here —
+// `#dialog-root` element (mirrors index.html), so provision it once here -
 // otherwise every dialog component test renders nothing. No-op in the node-env
 // logic tests (no `document`), so they pay no DOM cost.
 if (typeof document !== 'undefined' && !document.getElementById('dialog-root')) {
@@ -27,7 +27,7 @@ if (typeof document !== 'undefined' && !document.getElementById('dialog-root')) 
 afterEach(async () => {
   // Only component tests render into a DOM. We run with globals:false, so
   // React Testing Library's built-in afterEach auto-cleanup does not
-  // self-register — do it explicitly here.
+  // self-register - do it explicitly here.
   if (typeof document !== 'undefined') {
     const { cleanup } = await import('@testing-library/react');
     cleanup();

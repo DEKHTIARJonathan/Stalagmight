@@ -33,7 +33,7 @@ function clampPrecision(precision: number): number {
  *
  * @param bar - Pressure in bar
  * @param units - 'metric' (bar) or 'imperial' (psi)
- * @param precision - Decimal places (default 0 — gauges read as whole numbers)
+ * @param precision - Decimal places (default 0 - gauges read as whole numbers)
  */
 export function formatPressure(bar: number, units: GasUnits, precision: number = 0): string {
   if (!isFiniteNumber(bar)) {
@@ -63,10 +63,10 @@ export function formatVolume(litres: number, units: GasUnits, precision: number 
 }
 
 /**
- * Format a length given in metres (canonical) as m or ft — used for route distance and depth in
+ * Format a length given in metres (canonical) as m or ft - used for route distance and depth in
  * the Plan readout, so they follow the same metric/imperial toggle (and "value unit" spacing) as
  * the gas figures. Distinct from `formatStats.formatLength` (which takes a `LengthUnit` and renders
- * without a space, e.g. "42.3m") — this one is the GasUnits-keyed, spaced sibling of formatPressure
+ * without a space, e.g. "42.3m") - this one is the GasUnits-keyed, spaced sibling of formatPressure
  * / formatVolume, kept here so the Plan readouts stay visually consistent.
  *
  * @param metres - Length in metres

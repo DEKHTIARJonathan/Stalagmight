@@ -11,7 +11,7 @@ import {
 } from './helpers/app';
 
 /**
- * #79 / #20 — a move-tool drag must keep the grabbed point under the cursor across
+ * #79 / #20 - a move-tool drag must keep the grabbed point under the cursor across
  * a mid-drag ZOOM, and must grab the EXACT feature (not the imprecise click point).
  *
  * The drag preview keeps the grabbed feature's ORIGINAL position and carries the
@@ -23,7 +23,7 @@ import {
  *   - #20 (grab precision): the grab baselined on `unproject(click)`, which at low
  *     zoom lands meters off the feature. Each test clicks a few px OFF the feature
  *     and asserts the *feature* (snapped: a station, or the nearest point on a shot)
- *     — not the click point — sits under the cursor at the grab zoom (the `at grab
+ *     - not the click point - sits under the cursor at the grab zoom (the `at grab
  *     zoom` checks; on un-fixed code these fail first).
  *   - #79 (zoom drift): the translate was a fixed offset from the grab's screen
  *     point, so on a mid-drag zoom the re-projected feature drifted. The fix
@@ -33,7 +33,7 @@ import {
  * Three grab paths, because they take different code: move_segment grabbed on a
  * station (`stationRef` → station coords, `updateDragPreview`), move_segment grabbed
  * on a shot line (`queryNearestShotPoint`, `updateDragPreview`), and move_station
- * (`updateStationDragPreview` — translate + per-shot geometry rebuild). There was no
+ * (`updateStationDragPreview` - translate + per-shot geometry rebuild). There was no
  * prior E2E for move-tool dragging.
  *
  * Gap reads use `toPass` (not one-shot `evaluate`): the segment preview layer is
@@ -59,7 +59,7 @@ const SECTION_SEEDS: SectionSeed[] = [
  * stock `survey-stations` / `survey-shots` layer for `queryRenderedFeatures`; the
  * shared helpers in helpers/app.ts project this hook to screen px, but these tests
  * need the map coords themselves because each one `setCenter`s on a feature before
- * grabbing it. Yields empty arrays until the geometry is indexed — callers poll via
+ * grabbing it. Yields empty arrays until the geometry is indexed - callers poll via
  * pollGeometry.
  */
 async function readDrawnGeometry(page: Page): Promise<{
@@ -111,7 +111,7 @@ async function pollGeometry<T>(read: () => Promise<T[]>, min: number, label: str
 
 /** Center on a station at `zoom`; return its canvas screen position + lng/lat. */
 async function centerOnStation(page: Page, zoom: number) {
-  // Capture the station coords on a successful poll, then center on the FIRST one —
+  // Capture the station coords on a successful poll, then center on the FIRST one -
   // one concrete station to grab. Centering uses the captured lng/lat, so it never
   // races the live render state.
   const pts = await pollGeometry(() => readStationLngLats(page), 1, 'centerOnStation');
@@ -140,7 +140,7 @@ async function centerOnStation(page: Page, zoom: number) {
  * Center on a shot's midpoint at `zoom`; return its screen position, lng/lat, and the
  * unit screen-vector PERPENDICULAR to the shot. Clicking `screen + perp*n` puts the
  * cursor n px off the line so the snap's nearest-point-on-shot lands back on the
- * midpoint — i.e. it proves the grab used `queryNearestShotPoint`, not the click.
+ * midpoint - i.e. it proves the grab used `queryNearestShotPoint`, not the click.
  */
 async function centerOnShotMidpoint(page: Page, zoom: number) {
   // Capture the first shot's segment on a successful poll, then center on its
@@ -180,7 +180,7 @@ async function centerOnShotMidpoint(page: Page, zoom: number) {
  * The preview is the custom WebGL ghost layer (`survey-drag-ghost`,
  * surveyLayer/customRender/surveyGhostLayer.ts): its vertices are the captured
  * ORIGINAL positions and the live cursor delta is a single screen-pixel shader
- * uniform, so the grabbed feature paints at `project(original) + offset` — the same
+ * uniform, so the grabbed feature paints at `project(original) + offset` - the same
  * arithmetic the old `getPaintProperty('survey-drag-stations','circle-translate')`
  * read fed. The offset and the projection come from `getDragGhostState` in ONE
  * evaluate (so both describe the same frame), which reads the app's
@@ -234,7 +234,7 @@ async function zoomInAndPan(page: Page) {
 /** Two well-separated stations of the section, centered to fit both at `zoom`. */
 async function firstAndLastStation(page: Page, zoom: number) {
   // Capture the station coords on a successful poll, then take the farthest-apart
-  // pair as origin/target — two well-separated stations, independent of coordinate
+  // pair as origin/target - two well-separated stations, independent of coordinate
   // order (was: first + last Point feature). Centering uses the captured lng/lats.
   const pts = await pollGeometry(() => readStationLngLats(page), 2, 'firstAndLastStation');
   let a = pts[0]!;
@@ -285,11 +285,11 @@ async function projectLngLat(page: Page, lngLat: { lng: number; lat: number }) {
 
 /**
  * After a click-to-drop, assert the COMMITTED move offset lands the grabbed feature at
- * the cursor (#20): offset ≈ (cursorWorld − snappedFeatureWorld) in metres. Predicts with
+ * the cursor (#20): offset ≈ (cursorWorld - snappedFeatureWorld) in metres. Predicts with
  * the app's OWN transform via `__stalagmight_to_meters__` (mapCoordsToMeters + the live
- * gpsOrigin) — these mocked specs run with a non-null gpsOrigin (config.satellite_gps_origin),
+ * gpsOrigin) - these mocked specs run with a non-null gpsOrigin (config.satellite_gps_origin),
  * so the ENU transform applies, NOT the linear fallback. An un-snapped grab (the #20 bug)
- * would be off by the grab imprecision (metres) — well outside the 1 m bound.
+ * would be off by the grab imprecision (metres) - well outside the 1 m bound.
  */
 async function expectCommitLandsAtCursor(
   page: Page,
@@ -343,7 +343,7 @@ test('move_segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   const { screen: s, lngLat } = await centerOnStation(page, 18);
 
   // Click-to-grab (the intentional click → move → click-to-drop UX) a few px OFF the
-  // station center but inside its hit target — the baseline must snap to the EXACT
+  // station center but inside its hit target - the baseline must snap to the EXACT
   // station, so the station (not the click point) tracks the cursor. Then move.
   await page.mouse.click(box.x + s.x + 6, box.y + s.y);
   const cursor = { x: s.x + 60, y: s.y - 40 };
@@ -354,7 +354,7 @@ test('move_segment grabbed on a STATION snaps + tracks across a mid-drag zoom (#
   await expectTracksCursor(page, lngLat, cursor, '#79 station after mid-drag zoom');
 
   // Drop with a click at the current cursor (click-to-grab → move → click-to-drop;
-  // there's no mouse.down() to pair an up() with — a click is the real drop).
+  // there's no mouse.down() to pair an up() with - a click is the real drop).
   await page.mouse.click(box.x + cursor.x, box.y + cursor.y);
   await waitForMapIdle(page);
   await expectCommitLandsAtCursor(page, lngLat, cursor, '#20 station-grab commit');
@@ -371,13 +371,13 @@ test('move_segment grabbed on a SHOT line snaps + tracks across a mid-drag zoom 
   const box = await page.getByTestId('map-canvas').boundingBox();
   if (!box) throw new Error('no canvas box');
 
-  // Grab the segment by clicking a SHOT line (no station under the cursor) — this
+  // Grab the segment by clicking a SHOT line (no station under the cursor) - this
   // takes the queryNearestShotPoint snap branch, distinct from the station path.
   const { screen: s, perp, lngLat } = await centerOnShotMidpoint(page, 18);
 
-  // Click 3px PERPENDICULAR off the midpoint — inside the 8px-wide shot hitbox, but
+  // Click 3px PERPENDICULAR off the midpoint - inside the 8px-wide shot hitbox, but
   // off the centerline. The snap must pull to the nearest point ON the shot (≈ the
-  // midpoint), so the midpoint — not the off-line click — tracks the cursor. Asserting
+  // midpoint), so the midpoint - not the off-line click - tracks the cursor. Asserting
   // gap MAGNITUDE ≤1.5 cleanly separates snap (~0) from no-snap (~3px = the offset).
   await page.mouse.click(box.x + s.x + perp.x * 3, box.y + s.y + perp.y * 3);
   const cursor = { x: s.x + 60, y: s.y - 40 };
@@ -424,7 +424,7 @@ test('move_station grabbed off-center snaps + tracks across a mid-drag zoom (#79
 test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', async ({ page }) => {
   // Guards the M2 split: the per-frame zoom re-apply skips the O(all-stations) snap SCAN
   // but must still re-ALIGN a held snap at the new zoom. Grab one station, drag onto
-  // another (snap), then zoom — the dragged station must stay locked on the target, not
+  // another (snap), then zoom - the dragged station must stay locked on the target, not
   // jump back to the raw cursor.
   await setupMockedPage(page);
   await createProject(page, 'Station Snap Test');
@@ -440,7 +440,7 @@ test('move_station snap-to-target holds across a mid-drag zoom (snap + #79)', as
 
   // Grab the origin station, then move to 5px OFF the target (inside the 10px snap
   // threshold). Snap must pull the origin ONTO the target, so it renders at the target
-  // (gap ~0), NOT at the 5px-off cursor — that's how we know snapping fired.
+  // (gap ~0), NOT at the 5px-off cursor - that's how we know snapping fired.
   await page.mouse.click(box.x + origin.screen.x + 4, box.y + origin.screen.y);
   const near = { x: target.screen.x + 5, y: target.screen.y };
   await page.mouse.move(box.x + near.x, box.y + near.y, { steps: 8 });

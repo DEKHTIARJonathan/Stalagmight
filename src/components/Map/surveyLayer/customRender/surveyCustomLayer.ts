@@ -1,7 +1,7 @@
 /**
  * MapLibre `CustomLayerInterface` for the bulk survey geometry prototype
  * (#customRender). Draws shots (screen-space AA lines) and stations (fragment
- * circles) directly from typed-array vertex buffers — no vector tiles, no
+ * circles) directly from typed-array vertex buffers - no vector tiles, no
  * publication machinery. An edit becomes a buffer re-upload + `triggerRepaint`.
  *
  * GL discipline (per the CustomLayerInterface contract):

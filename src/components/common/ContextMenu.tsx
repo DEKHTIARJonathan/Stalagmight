@@ -62,7 +62,7 @@ export default function ContextMenu() {
 
   // Close on outside mousedown / external scroll / resize (shared hook). This
   // component only mounts while the context-menu dialog is active, so `open` is
-  // always true here. Escape is kept separate — the hook doesn't own it.
+  // always true here. Escape is kept separate - the hook doesn't own it.
   useDismissableLayer({ open: true, onDismiss: closeDialog, contains: [menuRef] });
   useEffect(() => {
     const handleEscape = (e: KeyboardEvent) => {
@@ -430,7 +430,7 @@ export default function ContextMenu() {
       // Look up the source shot for geometry copying
       const sourceSection = project?.sections.find((s) => s.id === target.sectionId);
       const sourceShot = sourceSection?.shots.find((sh) => sh.id === target.shotId);
-      // Copy geometry only (azimuth, depth, pitch) — not temperature/marker_index
+      // Copy geometry only (azimuth, depth, pitch) - not temperature/marker_index
       const sourceGeometry = sourceShot ? {
         azimuth_in: sourceShot.azimuth_in,
         azimuth_out: sourceShot.azimuth_out,
@@ -548,7 +548,7 @@ export default function ContextMenu() {
   };
 
   // Plan / Export are READ-ONLY: the survey mutation menu must not appear at all (not merely
-  // disabled). In Plan, a right-click offers the turnaround pick (Set as endpoint) — the origin is
+  // disabled). In Plan, a right-click offers the turnaround pick (Set as endpoint) - the origin is
   // set by single-click / the datum star, so "Set as origin" was dropped here, leaving room for
   // future recalc affordances. Export, or a non-station target in Plan, gets no menu. Survey keeps
   // the full menu, with the closure-adjusted (read-only) view disabling mutations as before.
@@ -571,7 +571,7 @@ export default function ContextMenu() {
           })()
         : [];
   } else {
-    // Survey view: closure-adjusted geometry is read-only — disable mutations (all except
+    // Survey view: closure-adjusted geometry is read-only - disable mutations (all except
     // read-only navigation like "Zoom to Section"). Edits are made on the measured view.
     const geometryReadOnly = geometryMode === 'closureAdjusted' || speleoReadOnly;
     const READ_ONLY_SAFE_LABELS = new Set(['Zoom to Section']);

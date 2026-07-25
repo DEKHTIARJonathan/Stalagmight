@@ -6,7 +6,7 @@ const devServerCommand = coverageEnabled ? 'VITE_COVERAGE=1 pnpm dev' : 'pnpm de
 // Retries: CI gets 2; locally 1, so a single timing blip under load (e.g. the
 // pre-push @smoke gate on a 1-worker headless VM) doesn't abort an otherwise-
 // green push (issue #15). PW_RETRIES overrides, but only with a validated
-// non-negative integer — anything else (PW_RETRIES=foo, -1, 1.5) falls back to
+// non-negative integer - anything else (PW_RETRIES=foo, -1, 1.5) falls back to
 // the default instead of becoming NaN and breaking config load.
 const defaultRetries = process.env.CI ? 2 : 1;
 const envRetries = Number(process.env.PW_RETRIES);

@@ -1,5 +1,5 @@
 /**
- * Anonymous telemetry — batches event counts in memory and periodically
+ * Anonymous telemetry - batches event counts in memory and periodically
  * flushes them to the Rust backend via IPC.
  *
  * Self-gating: if the `is_telemetry_available` command doesn't exist
@@ -16,7 +16,7 @@ const FLUSH_INTERVAL_MS = 60_000;
 const DWELL_FLUSH_INTERVAL_MS = 60_000;
 
 /** Active-dwell window (#31): active dwell only accrues while the user interacted
- *  within this span — it pauses when the app sits idle, unlike plain dwell. */
+ *  within this span - it pauses when the app sits idle, unlike plain dwell. */
 const ACTIVE_DWELL_WINDOW_MS = 15_000;
 
 /** Throttle for the global interaction listener (≪ the 15s window, so it keeps the
@@ -35,27 +35,27 @@ let flushTimer: ReturnType<typeof setTimeout> | null = null;
 let dwellFlushInterval: ReturnType<typeof setInterval> | null = null;
 let available: boolean | null = null;
 
-/** Source hint for the next action — consumed by dispatchers. */
+/** Source hint for the next action - consumed by dispatchers. */
 let _source = 'unknown';
 let _sourceTimer: ReturnType<typeof setTimeout> | null = null;
 
 /**
  * Pending source for a project open/create/import flow. Unlike `_source`, this
- * does NOT auto-reset after 50ms — it bridges the file-picker / dialog gap
+ * does NOT auto-reset after 50ms - it bridges the file-picker / dialog gap
  * between the originating click and the terminal IPC. Set at the entry point,
  * peeked at each terminal command, cleared when the flow completes
  * (setView('single')) or is cancelled.
  */
 let _pendingProjectSource: SourceName | null = null;
 
-/** Dialog completion flag — set before closeDialog() in success paths. */
+/** Dialog completion flag - set before closeDialog() in success paths. */
 let _dialogCompleted: string | null = null;
 
 /** When true, trackAction/trackCommand calls are suppressed (for programmatic UI changes). */
 let _silent = false;
 
 /** When true, persistence side effects are suppressed (for programmatic UI changes
- *  that must not write to the user's config — e.g. onboarding's transient panel toggles).
+ *  that must not write to the user's config - e.g. onboarding's transient panel toggles).
  *  Separate from `_silent` so a caller can skip telemetry WITHOUT also dropping a persist. */
 let _persistSuppressed = false;
 
@@ -78,11 +78,11 @@ let _lastInteraction = 0;
 let _lastInteractionMark = 0;
 let _interactionAttached = false;
 
-/** Last undoable command — for regret detection. */
+/** Last undoable command - for regret detection. */
 let _lastUndoable: { command: string; time: number } | null = null;
 const REGRET_WINDOW_MS = 15_000;
 
-/** Canonical navigation action names — parsed by registry exhaustiveness tests. */
+/** Canonical navigation action names - parsed by registry exhaustiveness tests. */
 export type NavigationAction =
   | 'center-on-shot'
   | 'center-on-station'
@@ -94,25 +94,25 @@ export type NavigationAction =
   | 'zoom-out'
   | 'zoom-to-section';
 
-/** Canonical panel names — parsed by registry exhaustiveness tests. */
+/** Canonical panel names - parsed by registry exhaustiveness tests. */
 export type PanelName =
   | 'data-table'
   | 'detail'
   | 'sections';
 
-/** Canonical selection types — parsed by registry exhaustiveness tests. */
+/** Canonical selection types - parsed by registry exhaustiveness tests. */
 export type SelectionType =
   | 'section'
   | 'shot'
   | 'station';
 
-/** Canonical context-menu action names — parsed by registry exhaustiveness tests. */
+/** Canonical context-menu action names - parsed by registry exhaustiveness tests. */
 export type ContextMenuAction =
   | 'remove-closure'
   | 'toggle-reference'
   | 'unmerge';
 
-/** Canonical source names — parsed by registry exhaustiveness tests. */
+/** Canonical source names - parsed by registry exhaustiveness tests. */
 export type SourceName =
   | 'context-menu'
   | 'data-table'
@@ -175,7 +175,7 @@ async function flushToRust(): Promise<void> {
   try {
     await invoke('track_events', { events: snapshot, projectSeq: _projectSeq });
   } catch {
-    // Restore counts if flush failed — they'll be retried next cycle
+    // Restore counts if flush failed - they'll be retried next cycle
     for (const [key, value] of Object.entries(snapshot)) {
       counts[key] = (counts[key] || 0) + value;
     }
@@ -237,7 +237,7 @@ export function withPersistSuppressed(fn: () => void): void {
 /**
  * Whether persistence is currently suppressed (inside a `withPersistSuppressed`
  * callback). The synchronous prefix of any side effect started inside the
- * callback observes it — e.g. `savePanelLayout` skips the config write so a
+ * callback observes it - e.g. `savePanelLayout` skips the config write so a
  * temporary onboarding-driven layout isn't persisted.
  */
 export function isPersistSuppressed(): boolean {
@@ -304,7 +304,7 @@ function markInteraction(): void {
   if (_activeDwell) _activeDwell.lastTick = now;
 }
 
-/** Throttled window listener — keeps the active window fresh without per-event work. */
+/** Throttled window listener - keeps the active window fresh without per-event work. */
 function onInteraction(): void {
   if (!_enabled) return;
   const now = Date.now();
@@ -413,7 +413,7 @@ export function trackDialogComplete(dialogName: string): void {
 export function checkDialogCancel(dialogName: string): void {
   const completed = _dialogCompleted === dialogName;
   // A dialog that closes WITHOUT completing abandons whatever flow it was part
-  // of, so drop any pending entry-point source — otherwise a project open/create/
+  // of, so drop any pending entry-point source - otherwise a project open/create/
   // import flow cancelled at a dialog (including a chained wizard step) would leak
   // its source into the next, unrelated project command (the source has no auto-
   // reset). Every case where the source must SURVIVE marks completion first:
@@ -483,7 +483,7 @@ function stopDwellInterval(): void {
 }
 
 /**
- * Initialize telemetry — checks feature availability and reads config.
+ * Initialize telemetry - checks feature availability and reads config.
  * Telemetry collection only starts if both compiled in and enabled in config.
  * Call once at app startup.
  */

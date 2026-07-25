@@ -3,13 +3,13 @@
 This document covers key algorithmic decisions and their performance
 characteristics, for both the Rust backend and the MapLibre frontend.
 
-## Loop Closure Adjustment — Sparse PCG Solver
+## Loop Closure Adjustment - Sparse PCG Solver
 
 **File:** `src-tauri/src/models/project.rs`, `adjust_least_squares()`
 
 The loop closure adjustment solves a weighted least-squares system to distribute
 survey errors across the network. The normal equations form a weighted graph
-Laplacian matrix — each edge (shot) contributes a constraint between two station
+Laplacian matrix - each edge (shot) contributes a constraint between two station
 groups, with weights derived from measurement uncertainties (sigma for length and
 azimuth, scaled by section quality).
 
@@ -17,7 +17,7 @@ azimuth, scaled by section quality).
 
 The normal matrix A^T A is:
 - **Symmetric positive-definite** (graph Laplacian)
-- **Extremely sparse** — at most ~3 non-zeros per row (each station group
+- **Extremely sparse** - at most ~3 non-zeros per row (each station group
   connects to a small number of neighbors via shots)
 - **Dimension n** = number of unknown station groups (groups connected via
   merges and aligned closures)
@@ -36,7 +36,7 @@ solver uses a sparse representation and iterative Conjugate Gradient:
    to avoid borrow issues with mutable arrays.
 
 2. **Sparse matrix-vector product** (`spmv`): iterates diagonal + adjacency
-   list — O(nnz) per call.
+   list - O(nnz) per call.
 
 3. **Jacobi preconditioner:** M = diag(A), trivially inverted. Good enough for
    graph Laplacians where the diagonal dominance ensures fast convergence.
@@ -52,7 +52,7 @@ solver uses a sparse representation and iterative Conjugate Gradient:
 
 A sparse Cholesky (LDL^T) factorization would also work and give exact results
 in one pass. However:
-- It requires a sparse matrix library (e.g., `sprs`, `cholmod` bindings) — an
+- It requires a sparse matrix library (e.g., `sprs`, `cholmod` bindings) - an
   extra dependency.
 - The graph Laplacian structure makes CG converge extremely fast (typically
   under 50 iterations for survey networks), so the iterative approach is both
@@ -69,7 +69,7 @@ On a project with ~500 sections (~10,000 stations):
 - **After (sparse PCG):** `adjust_least_squares` dropped to 5.14% of CPU. The
   hotspots shifted to normal app activity (image resizing, tile rendering).
 
-## Frozen Shot Detection — Tarjan's Bridge-Finding
+## Frozen Shot Detection - Tarjan's Bridge-Finding
 
 **File:** `src-tauri/src/models/project.rs`, `compute_frozen_shots()`
 
@@ -85,11 +85,11 @@ including after every undo/redo operation. It must be fast.
 
 ### Previous approach: per-shot BFS
 
-The original `is_shot_frozen()` ran two BFS traversals per shot — one from each
-endpoint — to check if both sides can still reach a datum station when the shot
+The original `is_shot_frozen()` ran two BFS traversals per shot - one from each
+endpoint - to check if both sides can still reach a datum station when the shot
 is excluded. With S shots and V stations:
 
-**Complexity:** O(S × V) — for 500 sections with ~20 shots each, this means
+**Complexity:** O(S × V) - for 500 sections with ~20 shots each, this means
 ~20,000 BFS operations, each visiting up to V stations.
 
 ### Current approach: Tarjan's bridge detection
@@ -121,7 +121,7 @@ The algorithm:
    - Bridge + both sides have datums → frozen
    - Otherwise → not frozen
 
-**Complexity:** O(V + E) — a single DFS pass over the entire graph.
+**Complexity:** O(V + E) - a single DFS pass over the entire graph.
 
 ### Multigraph note
 
@@ -145,12 +145,12 @@ Every command whose `command_integrity` profile sets `affects_geometry` runs a
 `reconcile_geometry()` pass in the `execute()` epilogue (`check_merge_alignment`
 + `realign_merges` + `resolve_offsets`). That pass is O(total shots + total
 merges) and allocates two whole-project maps (`section_local_coords` and the
-resolved station offsets) — it is **not** cached between calls.
+resolved station offsets) - it is **not** cached between calls.
 
 `UpdateShot` is in this group (a length/azimuth/depth edit moves stations, and
 the bespoke `realign_after_shot_edit` no-ops on a merge group with no zero
 datum, so without the reconcile a shot edit upstream of a datum-less merge would
-leave the partners drifted). The cost is one O(N) pass **per discrete edit** —
+leave the partners drifted). The cost is one O(N) pass **per discrete edit** -
 acceptable because the Edit Shot dialog commits a single `UpdateShot` on save,
 not one per keystroke, and it matches the per-command cost every other geometry
 command (`MergeStations`, `MoveStation`, `SetZeroDatum`, …) already pays.
@@ -212,7 +212,7 @@ and lack of inlining/SIMD. Always use the `profiling` profile.
 
 ---
 
-## Frontend — MapLibre Rendering Performance
+## Frontend - MapLibre Rendering Performance
 
 **Files:** `src/components/Map/SurveyLayer.tsx`, `src/components/Map/MapCanvas.tsx`
 
@@ -229,13 +229,13 @@ all interactions at 60fps.
 maintains a GPU-backed spatial index over rendered features.
 
 ```typescript
-// BAD — O(N) per mousemove
+// BAD - O(N) per mousemove
 for (const station of allStations) {
   const screenPos = map.project(metersToMapCoords(station, gpsOrigin));
   if (distance(screenPos, cursor) < threshold) { ... }
 }
 
-// GOOD — O(log N) via spatial index
+// GOOD - O(log N) via spatial index
 const bbox = [[x - t, y - t], [x + t, y + t]];
 const features = map.queryRenderedFeatures(bbox, { layers: [hitboxLayer] });
 const nearest = resolveNearestStation(map, event, features, threshold);
@@ -252,10 +252,10 @@ re-evaluates the filter expression across **all** features in the layer.
 `setFeatureState` is an instant per-feature GPU-side update.
 
 ```typescript
-// BAD — O(N) filter re-evaluation
+// BAD - O(N) filter re-evaluation
 map.setFilter(highlightLayer, ['in', idExpr, ['literal', activeIds]]);
 
-// GOOD — O(1) per feature
+// GOOD - O(1) per feature
 map.setFeatureState({ source, id: prevFeatureId }, { snapped: false });
 map.setFeatureState({ source, id: newFeatureId }, { snapped: true });
 ```
@@ -280,7 +280,7 @@ this creates visible lag. Disable transitions on interactive layers:
 'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
 ```
 
-This applies to all layers that respond to mousemove — station hover, shot
+This applies to all layers that respond to mousemove - station hover, shot
 hover, station highlight/snap, etc.
 
 ### Pattern 4: RAF batching for mousemove
@@ -306,7 +306,7 @@ SurveyLayer's hover handler uses the same pattern internally.
 ### Pattern 5: Direct SurveyLayer updates, deferred React state
 
 Zustand state updates trigger synchronous React re-renders. On a large
-component like MapCanvas (~2700 lines), this takes ~15ms — enough to block the
+component like MapCanvas (~2700 lines), this takes ~15ms - enough to block the
 current frame's paint and cause a visible stutter.
 
 For visual feedback that must track the cursor at frame rate:
@@ -317,9 +317,9 @@ For visual feedback that must track the cursor at frame rate:
    get the correct state
 
 ```typescript
-// Direct visual update — instant
+// Direct visual update - instant
 surveyLayerRef.current.setSnappedStation(nearestStation);
-// Deferred store update — doesn't block paint
+// Deferred store update - doesn't block paint
 startTransition(() => setSnappedStation(nearestStation));
 ```
 

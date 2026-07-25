@@ -77,7 +77,7 @@ async function waitForScrollStable(page: Page, list: Locator, timeout = 3000): P
  *
  * The list lives in a `flex-1 overflow-auto` container, but its wrapper in
  * SingleSystemView was missing `h-full`, breaking the height chain so the panel
- * grew to fit all sections and got clipped by an `overflow-hidden` ancestor —
+ * grew to fit all sections and got clipped by an `overflow-hidden` ancestor -
  * i.e. nothing scrolled (two-finger / wheel scroll did nothing).
  */
 test.describe('Sections panel scrolling', () => {
@@ -129,7 +129,7 @@ test.describe('Sections panel scrolling', () => {
     expect(ids.length).toBe(40);
     const lastId = ids[ids.length - 1]!;
 
-    // Park the list at the top — this is the position we expect restored.
+    // Park the list at the top - this is the position we expect restored.
     await list.evaluate((el) => {
       el.scrollTop = 0;
     });
@@ -143,7 +143,7 @@ test.describe('Sections panel scrolling', () => {
     await waitForScrollStable(page, list);
 
     // Clearing the hover (nothing hovered anywhere) restores the pre-hover scroll
-    // (the top — captured before the auto-scroll moved the list).
+    // (the top - captured before the auto-scroll moved the list).
     await setExternalSectionHover(page, null);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBe(0);
   });
@@ -181,7 +181,7 @@ test.describe('Sections panel scrolling', () => {
 
     // Un-hover restores the original manual position, not either hovered extreme.
     // Allow a small virtualization drift: the restore lands on the pre-hover
-    // scrollTop, but re-measuring rows around that offset can nudge it a few px —
+    // scrollTop, but re-measuring rows around that offset can nudge it a few px -
     // far smaller than the hundreds-of-px gap to either hovered extreme.
     const RESTORE_TOLERANCE_PX = 40;
     await setExternalSectionHover(page, null);
@@ -211,7 +211,7 @@ test.describe('Sections panel scrolling', () => {
     const lastRow = page.locator(`[data-testid="section-row-${lastId}"]`);
 
     // Park at top; the owning row starts unselected. It is off-screen, so the
-    // virtualized list has it UNMOUNTED — assert it is not rendered as selected
+    // virtualized list has it UNMOUNTED - assert it is not rendered as selected
     // (true whether or not virtualization has mounted it), instead of reading an
     // attribute off a row that may not be in the DOM yet.
     await list.evaluate((el) => {
@@ -283,7 +283,7 @@ test.describe('Sections panel scrolling', () => {
     const ids = await getSectionIds(page);
     const lastId = ids[ids.length - 1]!;
 
-    // Park at top — this is the pre-hover position that must NOT be restored.
+    // Park at top - this is the pre-hover position that must NOT be restored.
     await list.evaluate((el) => {
       el.scrollTop = 0;
     });
@@ -293,7 +293,7 @@ test.describe('Sections panel scrolling', () => {
     await setExternalSectionHover(page, lastId);
     await expect.poll(async () => list.evaluate((el) => el.scrollTop)).toBeGreaterThan(0);
 
-    // Click to select the shot while still hovering — selection becomes the anchor.
+    // Click to select the shot while still hovering - selection becomes the anchor.
     const shotId = await getFirstShotId(page, lastId);
     await setSelection(page, { type: 'shot', sectionId: lastId, shotId });
 

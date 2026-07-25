@@ -51,7 +51,7 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
 
   useEffect(() => clearGrace, [clearGrace]);
 
-  // Drop the transient hover state whenever the panel is (re-)pinned — by the
+  // Drop the transient hover state whenever the panel is (re-)pinned - by the
   // user, or programmatically (section-focus, data-table fullscreen, keyboard /
   // menu toggles all force mode='pin'). Otherwise a `hovering=true` captured
   // before the pin would survive a later return to hover mode and float the panel
@@ -75,7 +75,7 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
 
   const scheduleClose = useCallback(
     (ms: number = PANEL_CLOSE_GRACE_MS) => {
-      // Don't let a shorter grace shorten a longer one already pending — e.g. the
+      // Don't let a shorter grace shorten a longer one already pending - e.g. the
       // reconciling mouseleave fired on resize pointer-capture release must not
       // clobber the generous post-resize grace down to the default.
       const deadline = Date.now() + ms;
@@ -127,7 +127,7 @@ export function usePanelReveal(panel: PanelId): PanelReveal {
   // Memoize so the returned object keeps a stable identity across renders where no
   // field changed (e.g. the ~60×/s store-width updates during a sibling's resize
   // drag don't touch mode/open/hovering). The callbacks are all stable, so this
-  // object's identity flips only when a reveal boolean does — letting React.memo'd
+  // object's identity flips only when a reveal boolean does - letting React.memo'd
   // <Dock>s that take `reveal` skip re-rendering during unrelated resize ticks.
   return useMemo(
     () => ({

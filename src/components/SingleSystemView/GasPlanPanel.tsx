@@ -28,7 +28,7 @@ const RESERVE_PRESETS: readonly ReservePreset[] = [
 ];
 const UNIT_OPTIONS: readonly GasUnits[] = ['metric', 'imperial'];
 
-/** Stage cylinders a strategy requires in the rig — mirrors the Rust `required_stages`
+/** Stage cylinders a strategy requires in the rig - mirrors the Rust `required_stages`
  *  (gas.rs). The Half-Minus strategies are greyed until the diver carries that many stages;
  *  Free (#245) needs none (the diver sets each tank's usable gas by hand). */
 const REQUIRED_STAGES: Record<ReservePreset, number> = {
@@ -55,7 +55,7 @@ function writeSwimSpeedToDisk(v: number): void {
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
  * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
- * rig editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) — this sidebar
+ * rig editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) - this sidebar
  * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
  * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
  * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
@@ -152,7 +152,7 @@ export function GasPlanPanel() {
   // Count only ENABLED stages: the engine filters disabled tanks before counting stages
   // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
   // panel would show a staged plan + its reserve control while the engine has fallen back to
-  // All-thirds (#245 UI/backend parity — this drives the button-enable, isStaged, and re-check).
+  // All-thirds (#245 UI/backend parity - this drives the button-enable, isStaged, and re-check).
   const stageCount = cylinders.filter((c) => c.role === 'stage' && c.enabled).length;
   const strategy = gasConfig.default_reserve;
   // Effective staged state: a staged strategy AND the rig actually carries enough stages. Mirrors
@@ -167,7 +167,7 @@ export function GasPlanPanel() {
   // the normalized reserve, and the stage-count fallback, so the panel can't drift from the
   // reachable overlay. `stage_drop_bars` has one entry per counted stage of the effective strategy.
   const backgasTurn = reachField ? reachField.backgas_turn_bar : null;
-  // Per-stage drops (pressure + swum distance from origin), aligned 1:1; one readout row each — any
+  // Per-stage drops (pressure + swum distance from origin), aligned 1:1; one readout row each - any
   // number of stages (Free is uncapped). When drops exist the diver switches to back gas after
   // dropping the stages, so the back-gas gauge reads "switch pressure", not "turn pressure".
   const stageDrops = reachField
@@ -185,7 +185,7 @@ export function GasPlanPanel() {
   const anyOverReserve = stageDrops.some((d) => d.overReserve);
 
   // Route metrics (backend single source of truth), shown once a real route is known. Gate on the
-  // route having at least one LEG — not just final_turn_ref — so a degenerate single-station route
+  // route having at least one LEG - not just final_turn_ref - so a degenerate single-station route
   // (origin == turnaround when only the origin is in budget) doesn't render a meaningless
   // "Distance to turnaround: 0 m". The distance is the one-way swum line length to the turnaround;
   // depths are the route's deepest point + the distance-weighted average depth.
@@ -208,7 +208,7 @@ export function GasPlanPanel() {
   const confirmPushy = () => {
     if (!pendingPushy) return;
     // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
-    // visible alongside it). Only apply if the rig still satisfies the strategy — otherwise we'd
+    // visible alongside it). Only apply if the rig still satisfies the strategy - otherwise we'd
     // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.
     if (stageCount >= REQUIRED_STAGES[pendingPushy]) {
@@ -280,10 +280,10 @@ export function GasPlanPanel() {
           </div>
         </section>
 
-        {/* Swim speed — the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
+        {/* Swim speed - the diver's pace; feeds the in-leg gas-to-reach computation. Unlike the
             panel's other (per-session) inputs, swim speed PERSISTS: a commit updates the working
             copy (so the overlay/route refetch immediately) AND writes the value back to the saved
-            config — the same gas.swim_speed_m_per_min that Settings ▸ Gas edits — so a speed set
+            config - the same gas.swim_speed_m_per_min that Settings ▸ Gas edits - so a speed set
             while planning sticks across Plan exit / restart and stays in sync with Settings (#236).
             The disk write is debounced (see persistSwimSpeed) so rapid typing doesn't fire one
             config save per keystroke; only this field is written back, reserve / units / diver

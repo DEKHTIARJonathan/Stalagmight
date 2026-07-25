@@ -430,7 +430,7 @@ test.describe('Section zoom margin', () => {
     const sectionId = await getSectionIdByName(page, 'Zoom Test Passage');
 
     // Frame the section via the store. (#50 makes single-click select-only and
-    // double-click enter focus mode + re-fit on the enlarged map — two fits at
+    // double-click enter focus mode + re-fit on the enlarged map - two fits at
     // two container sizes, a racy baseline. Triggering the fit directly keeps the
     // container stable so this isolates fitToSection's re-fit idempotence.)
     await page.evaluate((secId) => {

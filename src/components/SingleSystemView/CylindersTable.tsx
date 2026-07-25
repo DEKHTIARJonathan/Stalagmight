@@ -10,10 +10,10 @@ import type { CylRole } from '../../types/ipc.generated';
 const CYL_ROLES: readonly CylRole[] = ['back_gas', 'stage', 'dil_out', 'bailout', 'deco'];
 
 /**
- * The diver's cylinder set — the "Cylinders" tab of the Plan-mode bottom panel (#38).
+ * The diver's cylinder set - the "Cylinders" tab of the Plan-mode bottom panel (#38).
  * Add tanks from presets, edit fill pressure + role, remove. Budget-role rows (back
  * gas / stage) are emphasised; the rest are dimmed (they don't count toward the swim-in
- * budget — PRD §5.3). Edits flow to gasPlanStore, which nulls the cached reach field so
+ * budget - PRD §5.3). Edits flow to gasPlanStore, which nulls the cached reach field so
  * the map overlay refetches. Tank water *capacity* stays in litres regardless of units
  * (it's a tank spec, not a gas volume); only the fill pressure flips bar↔psi.
  */
@@ -138,7 +138,7 @@ export function CylindersTable() {
                   <span className="opacity-70" data-testid="gas-cylinder-usable-readonly">
                     {usableBars && usableBars[idx] !== undefined && usableBars[idx] > 0
                       ? Math.round(pressureToDisplay(usableBars[idx], units))
-                      : '—'}
+                      : '-'}
                   </span>
                 )}
               </td>

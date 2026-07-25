@@ -22,7 +22,7 @@ export const PITCH_AVG_KEY = '_pitch_avg';
 /** Build a ShotUpdates patch for one shot from its edits. The azimuth-average
  *  column rotates both legs by (newMean - currentMean); the pitch-average column
  *  shifts both legs the same way when both are present, otherwise it sets the
- *  present leg (or both, when neither is) to the typed value — and a `null`
+ *  present leg (or both, when neither is) to the typed value - and a `null`
  *  (cleared Avg cell) clears both legs. A non-finite new mean is skipped. All
  *  other column keys are real shot fields, assigned directly. */
 export function buildShotUpdates(

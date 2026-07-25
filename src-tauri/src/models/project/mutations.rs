@@ -34,7 +34,7 @@ impl Project {
         }
 
         // Reject only if the two sections are already RIGIDLY connected (via merges
-        // or *aligned* closures) — adding a merge there would create a redundant
+        // or *aligned* closures) - adding a merge there would create a redundant
         // rigid cycle, which is what a loop closure is for. An INERT (unaligned)
         // closure does not constrain the two stations yet, so a merge across one is
         // the first real connection and must be allowed; rejecting it (the old
@@ -70,7 +70,7 @@ impl Project {
         // Current horizontal (x/y) positions in the world coordinate system. Only
         // x/y are needed to align the merge point (the offset below is purely
         // horizontal), so use the x/y-only walk and skip the expensive Z/colocation
-        // computation — this is on the per-merge hot path of a large import.
+        // computation - this is on the per-merge hot path of a large import.
         let coords_a = self
             .compute_station_raw_xy(station_a)
             .ok_or_else(|| "Failed to compute coordinates for station A".to_string())?;
@@ -101,7 +101,7 @@ impl Project {
         // Apply offset to all sections in the moving merge group (rigid body)
         // This repositions the entire moving group relative to the datum coordinate system
         let moving_sections = self.get_merged_section_ids(moving_section_id);
-        // Resolve-aware (a dangling datum is not a real anchor — matching
+        // Resolve-aware (a dangling datum is not a real anchor - matching
         // section_has_zero_datum), so a deleted-anchor datum can't trigger a
         // spurious "merge would move a zero datum" alarm.
         let moving_has_zero_datum = self
@@ -311,7 +311,7 @@ impl Project {
     /// Sections/merges/offsets are fixed for the batch (the import's cascade ran
     /// first and Batch closures are never `is_aligned`, so they don't rigidify),
     /// so only the closure-dependent state (connectivity UF, closure adjacency,
-    /// dup set) updates per created closure — exactly what path-length needs to
+    /// dup set) updates per created closure - exactly what path-length needs to
     /// still see earlier closures. Returns one result per input pair (Ok =
     /// created, Err = skipped, with the same reason strings as the single path).
     pub fn create_loop_closures_batch(
@@ -534,11 +534,11 @@ impl Project {
 
         if let Some(pos) = pos {
             self.station_merges.remove(pos);
-            // Drop the adjacency cache — recomputing the precise edge
+            // Drop the adjacency cache - recomputing the precise edge
             // deletion would duplicate the work `retain` already did.
             self.merge_adjacency_cache.clear();
 
-            // Decide which closures match the unmerged pair before the retain —
+            // Decide which closures match the unmerged pair before the retain -
             // `resolve_key` needs `&self`, but `retain` borrows `loop_closures`
             // mutably, so the resolution can't happen inside the closure.
             let remove_flags: Vec<bool> = self
@@ -582,8 +582,8 @@ impl Project {
         //
         // Resolve every merge endpoint to a station-level adjacency map ONCE
         // (resolve_key is O(1)), then BFS over that. The previous version
-        // re-scanned ALL `station_merges` at every BFS node — O(group × merges)
-        // per call — which made a batch import that checks this once per loop
+        // re-scanned ALL `station_merges` at every BFS node - O(group × merges)
+        // per call - which made a batch import that checks this once per loop
         // closure (with thousands of merges) quadratic-to-cubic.
         let adjacency = self.build_station_merge_adjacency();
         let mut visited = HashSet::new();
@@ -925,7 +925,7 @@ impl Project {
         let merge_group = self.get_merged_section_ids(edited_section_id);
 
         // Find the zero datum for this merge group (if any). A dangling datum
-        // (anchor key no longer resolves) is not a real anchor — skip it so we
+        // (anchor key no longer resolves) is not a real anchor - skip it so we
         // don't run a realign pass on an unanchored group (#174).
         let datum = self
             .zero_datums

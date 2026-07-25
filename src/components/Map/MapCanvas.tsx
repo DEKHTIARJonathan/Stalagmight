@@ -53,7 +53,7 @@ const CTRL_PAN_TOOLS = ['select', 'zoom', 'merge', 'measure', 'move_station', 'm
 
 // Stable empty warnings array fed to the survey-layer rebuild effect when
 // Issue-severity coloring is OFF. Module-level so its identity never changes
-// across renders — a per-render [] would defeat the rebuild-gating memo below.
+// across renders - a per-render [] would defeat the rebuild-gating memo below.
 const EMPTY_WARNINGS: ProjectWarning[] = [];
 
 interface BoxSelectState {
@@ -202,7 +202,7 @@ function MapCanvas() {
   // Keyboard-picking a turn marker nulls reachField (setEndpoint), which tears down
   // every turn marker incl. the focused one; when the recomputed field rebuilds them,
   // focus would be stranded on <body>. Remember the picked ref so the rebuild can
-  // restore focus to its new marker element — the a11y feature would otherwise lose
+  // restore focus to its new marker element - the a11y feature would otherwise lose
   // the AT user's place on every pick (#243).
   const pendingTurnFocusRef = useRef<StationRef | null>(null);
   // Same story for a keyboard-nudged / reset ▼ drop marker (#246): the recompute rebuilds every
@@ -232,7 +232,7 @@ function MapCanvas() {
   // RAF batching for snap-to-station checks (prevents event queue buildup on mousemove)
   const snapRafId = useRef<number | null>(null);
   const pendingSnapPosition = useRef<{ x: number; y: number } | null>(null);
-  // Ref mirror of snappedStation — used for same-value comparison in the snap hot path
+  // Ref mirror of snappedStation - used for same-value comparison in the snap hot path
   // so checkSnapToStation doesn't depend on React state (avoids re-render in the loop)
   const snappedStationRef = useRef<StationRef | null>(null);
   // Ref mirror of the measure shot-snap candidate (#26) + its live cursor marker,
@@ -264,18 +264,18 @@ function MapCanvas() {
   // --- Drag hot-path refs (bypass React state to avoid re-render per mousemove) ---
   // Current drag position (updated imperatively on every mousemove)
   const moveDragLngLatRef = useRef<{ lng: number; lat: number } | null>(null);
-  // Last cursor position (client coords) during a move-drag — lets us re-apply the
+  // Last cursor position (client coords) during a move-drag - lets us re-apply the
   // preview on map zoom (when no pointer event fires) so it tracks across zoom (#79).
   const lastCursorClientRef = useRef<{ clientX: number; clientY: number } | null>(null);
   // Connected section IDs being dragged (used by rAF callback for segment preview)
   const dragConnectedSectionIdsRef = useRef<Set<number>>(new Set());
   // Origin station that initiated the segment drag (for snap-to-merge)
   const dragOriginStationRef = useRef<StationRef | null>(null);
-  // Current snap target during drag (ref, not state — updated per mousemove)
+  // Current snap target during drag (ref, not state - updated per mousemove)
   const dragSnapRef = useRef<StationRef | null>(null);
-  // Last raw (pre-snap) pixel offset — used to restore preview if snap-merge is cancelled
+  // Last raw (pre-snap) pixel offset - used to restore preview if snap-merge is cancelled
   const lastRawDragOffsetRef = useRef<{ dx: number; dy: number } | null>(null);
-  // True while snap-to-merge dialog is open — blocks mouseup from ending drag
+  // True while snap-to-merge dialog is open - blocks mouseup from ending drag
   const snapMergeDialogPendingRef = useRef(false);
   // Co-located station refs for station drag (includes merged/closured stations)
   const stationDragColocatedRefsRef = useRef<StationRef[]>([]);
@@ -292,7 +292,7 @@ function MapCanvas() {
   const setGeometryMode = useUIStore((s) => s.setGeometryMode);
   const setActiveTool = useUIStore((s) => s.setActiveTool);
 
-  // #50: section-focus mode — show an exit-focus control at the map's top-left
+  // #50: section-focus mode - show an exit-focus control at the map's top-left
   // while focused.
   const focusedSectionId = useUIStore((s) => s.focusedSectionId);
   const exitSectionFocus = useUIStore((s) => s.exitSectionFocus);
@@ -330,7 +330,7 @@ function MapCanvas() {
     // this drops from "force-materialize all" to a 3 × O(N) typed
     // array pass. When `surveyData` isn't available (very early in
     // initial load or unusual init paths), fall back to the legacy
-    // shape — accepted regression cost in that corner case.
+    // shape - accepted regression cost in that corner case.
     let min = Infinity;
     let max = -Infinity;
     if (activeSurveyData) {
@@ -461,7 +461,7 @@ function MapCanvas() {
   // sub-mode). Derived so the existing showGasPlan-gated effects below are unchanged.
   const showGasPlan = appMode === 'plan';
 
-  // Gas & route-planning sub-mode inputs (#38) — a separate store so editing the
+  // Gas & route-planning sub-mode inputs (#38) - a separate store so editing the
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
   const {
     origin: gasOrigin,
@@ -506,7 +506,7 @@ function MapCanvas() {
   const effectiveDepthGradient = showDepthGradient && !effectiveIssueSeverity;
   // Gate the survey-layer rebuild on issue-severity coloring. `warnings` changes
   // identity on every refreshWarnings (each edit/resolve/ignore), but warnings
-  // only affect colors when severity coloring is effectively ON — feed the rebuild
+  // only affect colors when severity coloring is effectively ON - feed the rebuild
   // a stable shared [] when OFF so warning-only refreshes don't rebuild the GeoJSON.
   const severityWarnings = useMemo(
     () => (effectiveIssueSeverity ? warnings : EMPTY_WARNINGS),
@@ -584,7 +584,7 @@ function MapCanvas() {
   // Note: Snap detection works even when stations are hidden - the highlight layer
   // will show the snapped station. Merge tool is an exception (blocked when hidden).
   // Visual update goes directly to SurveyLayer (bypassing React re-render) so the
-  // indicator tracks the cursor at frame rate — same strategy as hover detection.
+  // indicator tracks the cursor at frame rate - same strategy as hover detection.
   const checkSnapToStation = useCallback(
     (screenX: number, screenY: number) => {
       const clearStationSnap = () => {
@@ -628,13 +628,13 @@ function MapCanvas() {
         screenX, screenY, snapConfig.threshold
       );
       // Measure (#26) also snaps to an exact point on a shot when no station is
-      // within range — stations win when both are close.
+      // within range - stations win when both are close.
       const nearestShot =
         activeTool === 'measure' && !nearestStation
           ? surveyLayerRef.current.queryNearestShotPoint(screenX, screenY, snapConfig.threshold)
           : null;
 
-      // Station snap — compare via ref (no React state dependency in the hot path).
+      // Station snap - compare via ref (no React state dependency in the hot path).
       const prev = snappedStationRef.current;
       if (nearestStation) {
         if (
@@ -643,9 +643,9 @@ function MapCanvas() {
           prev.station_index !== nearestStation.station_index
         ) {
           snappedStationRef.current = nearestStation;
-          // Direct visual update — no React re-render needed
+          // Direct visual update - no React re-render needed
           surveyLayerRef.current.setSnappedStation(nearestStation);
-          // Deferred store update for click handling — startTransition prevents
+          // Deferred store update for click handling - startTransition prevents
           // synchronous React re-render from blocking the current frame's paint
           startTransition(() => setSnappedStation(nearestStation));
         }
@@ -749,19 +749,19 @@ function MapCanvas() {
       snappedStationRef.current = null;
       setSnappedStation(null);
     }
-    // The measure shot-snap (#26) only exists for the measure tool — drop its
+    // The measure shot-snap (#26) only exists for the measure tool - drop its
     // marker + state when leaving it so a stale cyan dot can't linger.
     if (activeTool !== 'measure' && (shotSnapMarkerRef.current || measureSnapShotRef.current)) {
       shotSnapMarkerRef.current?.remove();
       shotSnapMarkerRef.current = null;
       measureSnapShotRef.current = null;
-      // measureSnapShot isn't subscribed (see useShallow above) — read it live.
+      // measureSnapShot isn't subscribed (see useShallow above) - read it live.
       if (useUIStore.getState().measureSnapShot) setMeasureSnapShot(null);
     }
   }, [activeTool, snappedStation, setSnappedStation, setMeasureSnapShot]);
 
   // Tear down the shot-snap marker + ref whenever the store snap clears, even while
-  // the measure tool stays active — a reset that keeps the tool (Escape, dialog,
+  // the measure tool stays active - a reset that keeps the tool (Escape, dialog,
   // geometry-mode/project change → clearMeasure) nulls the store snap but there's
   // no mousemove to run checkSnapToStation's teardown, so a stale cyan dot would
   // linger and the ref would desync from the cleared store value (#26, Codex).
@@ -778,7 +778,7 @@ function MapCanvas() {
   // Hiding Shots disables shot interaction; hiding only Reference Shots disables it
   // for reference legs. Drop a live measure shot-snap in either case (when the snap
   // is on a now-hidden reference leg), so the cyan marker doesn't linger on hidden
-  // geometry — the null-ness effect above then removes the marker + ref (#26, Codex).
+  // geometry - the null-ness effect above then removes the marker + ref (#26, Codex).
   useEffect(() => {
     const snap = useUIStore.getState().measureSnapShot;
     if (!snap) return;
@@ -818,12 +818,12 @@ function MapCanvas() {
       // Snap the grab baseline to the EXACT grabbed feature rather than the raw
       // unproject(click). At low zoom one pixel spans many meters, so the click
       // lands well off the feature and that offset only becomes visible once you
-      // zoom in — anchoring on the feature's world coord makes IT (not the
+      // zoom in - anchoring on the feature's world coord makes IT (not the
       // imprecise click point) track the cursor through zoom (#79). A station grab
       // snaps to the station; a shot grab snaps to the nearest point on the shot.
       // NOTE: this baseline reads `activeStations` (geometry-mode-aware), while the
       // per-frame handleMoveDragMove and the commit read raw `stations`. They diverge
-      // only in `closureAdjusted` mode — but move tools are mutating, so the tool is
+      // only in `closureAdjusted` mode - but move tools are mutating, so the tool is
       // forced back to `select` there (isMutatingTool effect), making the move-drag
       // path unreachable in that mode. If that disable is ever relaxed, switch this to
       // `stations` so the baseline and per-frame origin share one coordinate set.
@@ -874,7 +874,7 @@ function MapCanvas() {
         // Store origin station for snap-to-merge during drag
         dragOriginStationRef.current = data.stationRef;
         setMoveDrag({ ...baseDragState, type: 'station', stationRef: data.stationRef });
-        // Begin drag preview — returns co-located stations (merged/closured at same coords)
+        // Begin drag preview - returns co-located stations (merged/closured at same coords)
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
           data.stationRef.section_id,
           data.stationRef.station_index
@@ -889,7 +889,7 @@ function MapCanvas() {
         // Block segment drag until anchored IDs have been fetched (prevents
         // moving anchored segments during the window after tool activation)
         if (!anchoredIdsLoaded) return;
-        // Check if section is anchored — silent no-op if so
+        // Check if section is anchored - silent no-op if so
         if (anchoredSectionIds.has(segmentSectionId)) return;
 
         // Set a pending drag token to detect stale async results
@@ -906,7 +906,7 @@ function MapCanvas() {
           dragConnectedSectionIdsRef.current = connectedSet;
           // Clear segment hover before starting drag preview (temp layers take over)
           surveyLayerRef.current?.setHoveredSegment([]);
-          // Begin drag preview — creates temp layers with *-translate paint property
+          // Begin drag preview - creates temp layers with *-translate paint property
           surveyLayerRef.current?.beginDragPreview(connectedSet);
           setMoveDrag({
             ...baseDragState,
@@ -942,7 +942,7 @@ function MapCanvas() {
           sectionId: data.sectionId,
           shotIndex: data.shotIndex,
         });
-        // Begin drag preview seeded from both shot endpoints — returns all co-located stations
+        // Begin drag preview seeded from both shot endpoints - returns all co-located stations
         // (merged/closured at same coordinates) that should move together
         const otherEndpoint = { section_id: data.sectionId, station_index: data.shotIndex + 1 };
         const colocated = surveyLayerRef.current?.beginStationDragPreview(
@@ -1045,7 +1045,7 @@ function MapCanvas() {
       // Resolve stations in the box via SurveyLayer (#mem): the rendered
       // hitbox query gates candidate sections and the SoA resolver applies
       // the same circle-box hit semantics the direct queryRenderedFeatures
-      // call had — per-station identity no longer lives on bulk features.
+      // call had - per-station identity no longer lives on bulk features.
       const refs = surveyLayerRef.current?.queryStationsInBox(minX, minY, maxX, maxY) ?? [];
 
       if (refs.length > 0) {
@@ -1145,17 +1145,17 @@ function MapCanvas() {
     setZoomBox({ start: null, end: null });
   }, [zoomBox, zoomStep, zoomMax]);
 
-  // Move drag handlers — hot path bypasses React state for performance.
+  // Move drag handlers - hot path bypasses React state for performance.
   // Position is stored in a ref (no re-render), and segment preview is updated
   // synchronously since setPaintProperty is essentially free (shader uniform).
   const handleMoveDragMove = useCallback(
     // skipSnapScan: the per-frame map-'move' re-apply (zoom/pan) passes true to skip the
-    // O(all-stations) snap SCAN — the cursor's world position is unchanged so the snap
+    // O(all-stations) snap SCAN - the cursor's world position is unchanged so the snap
     // target can't change. The cheap snap RE-ALIGN (for an already-held target) and the
     // #79 re-projection still run, so the preview tracks and stays snapped across zoom.
     (clientX: number, clientY: number, skipSnapScan = false) => {
       // While the snap-merge dialog is up the drag is paused (moveDrag is held alive
-      // so Cancel can resume it) — don't let the map-'move' listener re-apply the
+      // so Cancel can resume it) - don't let the map-'move' listener re-apply the
       // preview and clobber the held position. Mirrors handleMoveDragStart/End, which
       // both already guard on this; this is the only drag-move entry that didn't.
       if (snapMergeDialogPendingRef.current) return;
@@ -1168,19 +1168,19 @@ function MapCanvas() {
       // Convert screen coords to map coords
       const lngLat = map.current.unproject([x, y]);
 
-      // Store in ref (no React state update — avoids re-render per mousemove)
+      // Store in ref (no React state update - avoids re-render per mousemove)
       moveDragLngLatRef.current = { lng: lngLat.lng, lat: lngLat.lat };
       lastCursorClientRef.current = { clientX, clientY };
 
       // Re-project the grab's WORLD point at the CURRENT zoom (NOT a fixed grab-screen
-      // baseline — that drifts when the map re-projects on zoom mid-drag, #79). dx/dy
+      // baseline - that drifts when the map re-projects on zoom mid-drag, #79). dx/dy
       // is then the cursor offset from where the grabbed point renders right now.
       const grabScreen = map.current.project([moveDrag.startLngLat.lng, moveDrag.startLngLat.lat]);
       const dx = x - grabScreen.x;
       const dy = y - grabScreen.y;
       lastRawDragOffsetRef.current = { dx, dy };
 
-      // Station drag preview — translate station circles/labels + rebuild shot geometries
+      // Station drag preview - translate station circles/labels + rebuild shot geometries
       if (moveDrag.type === 'station' && surveyLayerRef.current) {
         const snapThreshold = config?.map.snap.threshold ?? 10;
         // Enter for a live scan, OR (on the zoom path) only to re-align a held snap.
@@ -1255,7 +1255,7 @@ function MapCanvas() {
         surveyLayerRef.current.updateStationDragPreview(dx, dy);
       }
 
-      // Shot drag preview — same pipeline as station drag (both endpoints + co-located stations move)
+      // Shot drag preview - same pipeline as station drag (both endpoints + co-located stations move)
       if (moveDrag.type === 'shot' && surveyLayerRef.current) {
         surveyLayerRef.current.updateStationDragPreview(dx, dy);
       }
@@ -1340,7 +1340,7 @@ function MapCanvas() {
   );
 
   // While a move-drag is active, re-apply the preview on every map move (zoom OR
-  // programmatic pan) so the grabbed feature stays glued to the cursor — a
+  // programmatic pan) so the grabbed feature stays glued to the cursor - a
   // scroll-zoom / easeTo fires no pointer event, so synthesize from the last cursor
   // position (#79). No-op when lastCursorClientRef is null: a center-grab with no
   // screen coords forgoes zoom-tracking (every real caller passes coords).
@@ -1422,7 +1422,7 @@ function MapCanvas() {
     dragSnapRef.current = null;
 
     if (!moveDrag || !map.current) {
-      // Early bail — clean up everything
+      // Early bail - clean up everything
       snapMergeDialogPendingRef.current = false;
       dragOriginStationRef.current = null;
       lastRawDragOffsetRef.current = null;
@@ -1464,11 +1464,11 @@ function MapCanvas() {
         const segmentMoveCmd: BatchCommand = { type: 'move_segment', section_id: sectionId, offset: snapOffset };
 
         // Don't clear moveDrag, dragConnectedSectionIdsRef, or dragOriginStationRef
-        // — these keep the drag alive after Cancel.
+        // - these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: [segmentMoveCmd],
           onBeforeConfirm: async () => {
-            // UI cleanup only — backend move is batched with merge/closure by the dialog
+            // UI cleanup only - backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
             dragOriginStationRef.current = null;
             lastRawDragOffsetRef.current = null;
@@ -1525,12 +1525,12 @@ function MapCanvas() {
           type: 'move_station' as const, station_ref: ref, offset: snapOffset,
         }));
 
-        // Don't clear moveDrag or dragOriginStationRef —
+        // Don't clear moveDrag or dragOriginStationRef -
         // these keep the drag alive after Cancel.
         promptSnapMerge(originStationRef, snapTarget, {
           preCommands: moveCommands,
           onBeforeConfirm: async () => {
-            // UI cleanup only — backend move is batched with merge/closure by the dialog
+            // UI cleanup only - backend move is batched with merge/closure by the dialog
             snapMergeDialogPendingRef.current = false;
             dragOriginStationRef.current = null;
             lastRawDragOffsetRef.current = null;
@@ -1595,7 +1595,7 @@ function MapCanvas() {
           : await moveStation(moveDrag.stationRef, offset);
         // If the move was rejected (e.g. the #191 read-only edit gate), the
         // scheduled endDragPreview only fires on the next layer update after a
-        // successful refresh — which never comes — so the committed preview would
+        // successful refresh - which never comes - so the committed preview would
         // leave the dragged features hidden ("shots vanish"). Restore them now.
         if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
@@ -1612,7 +1612,7 @@ function MapCanvas() {
         // newPosition + dragOffset (a one-frame double-distance flash).
         surveyLayerRef.current?.commitDragPreview();
         const res = await moveSegment(moveDrag.sectionId, offset);
-        // Rejected move (read-only gate): restore now — see the station branch.
+        // Rejected move (read-only gate): restore now - see the station branch.
         if (!res.success) surveyLayerRef.current?.endDragPreview();
         setMoveDrag(null);
         return;
@@ -1769,7 +1769,7 @@ function MapCanvas() {
         snapRafId.current = null;
       }
       // map.remove() tears down all layers, sources, the worker and the
-      // canvas element atomically — calling surveyLayer.destroy() first
+      // canvas element atomically - calling surveyLayer.destroy() first
       // duplicates that work serially while the worker still holds a large
       // FeatureCollection, which blocks the main thread for seconds on a
       // 75k-shot survey (the "back-button is frozen" symptom). We rely on
@@ -1777,7 +1777,7 @@ function MapCanvas() {
       // against `hasLiveStyle === false` so it bails harmlessly after
       // map.remove() runs.
       // Still release the module-level VT registry (the flat geometry arrays
-      // MapLibre doesn't own) — that piece survives map.remove() and is keyed
+      // MapLibre doesn't own) - that piece survives map.remove() and is keyed
       // by a fixed source id shared across projects, so skipping it leaks this
       // project's arrays until the next project publishes (#mem). Cheap: JS-map
       // clears only, no map/worker work, so it doesn't reintroduce the freeze.
@@ -1815,7 +1815,7 @@ function MapCanvas() {
 
   // Map E2E hooks (drawn geometry, measured-path tint, drag-ghost offset, the
   // active meters transform). The custom renderer makes MapLibre's feature/paint
-  // queries useless to tests, so these expose what is actually drawn — see
+  // queries useless to tests, so these expose what is actually drawn - see
   // src/dev/mapE2eHooks.ts for the full rationale.
   useEffect(
     () =>
@@ -1827,7 +1827,7 @@ function MapCanvas() {
   );
 
   // Update survey layer when data changes or map loads.
-  // useLayoutEffect ensures setData() runs before the browser paints — critical
+  // useLayoutEffect ensures setData() runs before the browser paints - critical
   // for drag commit where endDragPreview() must fire in the same frame as setData().
   useLayoutEffect(() => {
     if (surveyLayerRef.current && project) {
@@ -1836,8 +1836,8 @@ function MapCanvas() {
         activeStations,
         // Closure overlays are drawn from the active coordinates, so an adjusted
         // (closed) loop collapses to a zero-length, invisible line, while a loop
-        // that wasn't closed — an ineligible/deferred closure, or a component whose
-        // solve fell back to measured — stays visible. Pass closures in both modes
+        // that wasn't closed - an ineligible/deferred closure, or a component whose
+        // solve fell back to measured - stays visible. Pass closures in both modes
         // rather than hiding them wholesale, so the adjusted view doesn't look
         // resolved when some loops are still open.
         project.loop_closures,
@@ -1852,11 +1852,11 @@ function MapCanvas() {
   }, [project, activeStations, mapLoaded, gpsOrigin, effectiveDepthGradient, depthRange, precision, geometryMode, surveyDataAdjusted, effectiveIssueSeverity, severityWarnings]);
 
   // (The Warnings-tab auto-highlight is now derived via `effectiveIssueSeverity`
-  // above — no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
+  // above - no snapshot/restore effect needed, so nothing to lose on leave/unmount.)
 
   // On a project switch (created_at changes on switch, stable across edits AND
   // saves), reset the distance origin to the entrance default and drop the stale
-  // field — otherwise the previous project's distances paint the new project gray
+  // field - otherwise the previous project's distances paint the new project gray
   // (#34). Keyed on created_at alone so Save As (a file_path change) does NOT move
   // the origin.
   useEffect(() => {
@@ -1871,7 +1871,7 @@ function MapCanvas() {
   }, [project?.created_at]);
 
   // Reset the ruler on a switch too, but keyed on file_path + created_at so opening
-  // a distinct file that happens to share created_at — e.g. a duplicated project —
+  // a distinct file that happens to share created_at - e.g. a duplicated project -
   // still clears stale ruler state (#26, Codex). (Save As also clears the ruler,
   // which is harmless; the modified_at effect below covers same-file edits.)
   const projectSwitchKey = `${project?.file_path ?? ''}|${project?.created_at ?? ''}`;
@@ -1901,7 +1901,7 @@ function MapCanvas() {
   // Distance-gradient overlay (#34): fetch the per-station distance field when the
   // overlay is on and the origin or project data changes. Distances use MEASURED
   // geometry (surveyed lengths), so neither closure-adjustment config nor the
-  // display geometryMode affects them — no need to refetch on either. `from` null
+  // display geometryMode affects them - no need to refetch on either. `from` null
   // = the entrance (zero-datum) default.
   useEffect(() => {
     if (!showDistanceGradient) return undefined;
@@ -1950,7 +1950,7 @@ function MapCanvas() {
       .then((field) => { if (!cancelled) { setGasReachField(field); setGasFieldFailed(false); } })
       .catch((e) => {
         console.warn('[gas-plan] field fetch failed', e);
-        // Clear on failure (#38): mirror the distance overlay — drop the stale
+        // Clear on failure (#38): mirror the distance overlay - drop the stale
         // field + flag the failure so the apply effect restores base colors
         // rather than holding the old ramp against the new gas inputs.
         if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
@@ -1964,7 +1964,7 @@ function MapCanvas() {
     if (!surveyLayerRef.current || !mapLoaded) return;
     if (showDistanceGradient && !effectiveIssueSeverity && distanceField && surveyData) {
       // Measured SoA: distances use surveyed geometry, and the builder only needs
-      // section metadata + shot ids — never the lazy `section.shots` objects.
+      // section metadata + shot ids - never the lazy `section.shots` objects.
       const state = buildDistanceFeatureState(surveyData, distanceField);
       surveyLayerRef.current.setDistanceGradient(true, state);
     } else if (overlayApplyAction(showDistanceGradient && !effectiveIssueSeverity, distanceField != null, surveyData != null, distanceFieldFailed) === 'off') {
@@ -2025,7 +2025,7 @@ function MapCanvas() {
   // Distance-gradient origin marker (#34): a ring on the chosen origin station.
   // A MapLibre Marker so it auto-tracks the camera and shows even when the
   // stations layer is hidden (common with the gradient on). Only for a *picked*
-  // origin — the entrance default is the zero datum(s), already starred.
+  // origin - the entrance default is the zero datum(s), already starred.
   useEffect(() => {
     originMarkerRef.current?.remove();
     originMarkerRef.current = null;
@@ -2062,7 +2062,7 @@ function MapCanvas() {
 
   // Gas-plan origin marker (#38): a teal ring on the chosen origin (mirrors the
   // distance origin marker; teal to distinguish "start" from the gold→purple
-  // reachable ramp). Only for a *picked* origin — the entrance default is the
+  // reachable ramp). Only for a *picked* origin - the entrance default is the
   // zero datum(s), already starred.
   useEffect(() => {
     gasOriginMarkerRef.current?.remove();
@@ -2095,8 +2095,8 @@ function MapCanvas() {
   }, [showGasPlan, gasOrigin, activeStations, gpsOrigin, mapLoaded]);
 
   // Gas turn-frontier markers (#38): a red dot on each reachable station that
-  // borders an unreachable one — "this is where you turn", and the candidate end points.
-  // Right-click one to open the Plan menu (Set as endpoint / origin) — these stay visible
+  // borders an unreachable one - "this is where you turn", and the candidate end points.
+  // Right-click one to open the Plan menu (Set as endpoint / origin) - these stay visible
   // even when survey stations are hidden, so they're the reliable route-pick target.
   // Rebuilt whenever the field changes; bounded by the frontier size (a handful of leads).
   useEffect(() => {
@@ -2442,7 +2442,7 @@ function MapCanvas() {
     }
   }, [geometryMode, project, setGeometryMode]);
 
-  // The adjusted view is read-only — and so is the whole map in Plan/Export, even on a
+  // The adjusted view is read-only - and so is the whole map in Plan/Export, even on a
   // project with no closures where the display falls back to measured geometry. Drop any
   // geometry-mutating tool back to select in either case (appMode is the robust authority;
   // geometryMode only drives which coords are drawn).
@@ -2469,7 +2469,7 @@ function MapCanvas() {
   }, [config, mapLoaded]);
 
   // Apply theme colors to SurveyLayer and map background when resolvedTheme changes
-  // MapLibre GL JS does NOT read CSS variables — colors must be re-applied explicitly
+  // MapLibre GL JS does NOT read CSS variables - colors must be re-applied explicitly
   useEffect(() => {
     const colors = getMapThemeColors();
     if (surveyLayerRef.current) {
@@ -2806,7 +2806,7 @@ function MapCanvas() {
       if (e.key === 'Control') {
         // WORKAROUND: Tauri/WebKit fires spurious Ctrl keyup events at the moment of
         // mousedown/mouseup while holding Ctrl. Only suppress keyups that occur within
-        // 50ms of a mouse event during a Ctrl+drag — genuine Ctrl releases go through
+        // 50ms of a mouse event during a Ctrl+drag - genuine Ctrl releases go through
         // immediately so the cursor resets without delay.
         if (ctrlPanActiveRef.current && Date.now() - ctrlPanMouseEventTimeRef.current < 50) {
           return;
@@ -2973,7 +2973,7 @@ function MapCanvas() {
     };
 
     // Capture the DOM click event during/after a custom pan gesture.
-    // The browser fires 'click' as a separate event after mouseup — stopping propagation
+    // The browser fires 'click' as a separate event after mouseup - stopping propagation
     // on mousedown/mouseup does NOT prevent click from being dispatched. MapLibre listens
     // for 'click' on the canvas, so we must capture it to prevent spurious map clicks.
     const handleClickCapture = (e: MouseEvent) => {
@@ -2983,7 +2983,7 @@ function MapCanvas() {
       }
     };
 
-    // Capture pointer events during custom pan — MapLibre may use pointer events
+    // Capture pointer events during custom pan - MapLibre may use pointer events
     // internally, so capturing only mouse events is insufficient to prevent click leakage
     const handlePointerDownCapture = (e: PointerEvent) => {
       const isCtrlLeftPan = e.ctrlKey && e.button === 0;
@@ -2995,7 +2995,7 @@ function MapCanvas() {
 
     const handlePointerUpCapture = (e: PointerEvent) => {
       // If we're in custom pan, stop pointer events from reaching MapLibre.
-      // (customPanStart is still set here — cleared by handleMouseUpCapture which fires after)
+      // (customPanStart is still set here - cleared by handleMouseUpCapture which fires after)
       if (customPanStart && e.pointerType === 'mouse') {
         e.stopPropagation();
       }
@@ -3206,7 +3206,7 @@ function MapCanvas() {
   }, [tileReloadGeneration, mapLoaded, showSatellite]);
 
   // 10% margins on all sides. The map is the central flex column (already
-  // sized to exclude the side panels), so no panel offsets are needed — adding
+  // sized to exclude the side panels), so no panel offsets are needed - adding
   // them double-counts the panel widths and squeezes the fit (see #64).
   const calcPadding = useCallback((container: HTMLElement) => {
     const marginX = Math.round(container.clientWidth * 0.1);
@@ -3216,12 +3216,12 @@ function MapCanvas() {
 
   // Fit to survey bounds using transformed coordinates
   const fitToBounds = useCallback((options?: { snap?: boolean }) => {
-    // Frame the *active* (drawn) geometry — adjusted in the closure-adjusted view.
+    // Frame the *active* (drawn) geometry - adjusted in the closure-adjusted view.
     if (!map.current) return;
 
     // Prefer the SoA `stationCoords` typed array (stride-3 [x,y,z,…]) so the
     // fit computes X/Y bounds without materializing the ~89k-object lazy
-    // `activeStations` view — this callback runs on every load via the
+    // `activeStations` view - this callback runs on every load via the
     // requestFitToBounds effect. Fall back to `activeStations` only when
     // surveyData isn't available yet (unusual early-init paths).
     let bounds: { minX: number; maxX: number; minY: number; maxY: number };
@@ -3288,7 +3288,7 @@ function MapCanvas() {
       // reference shots are hidden, a long ref/jump connector or a ref-only
       // station shouldn't inflate the bounds and shrink the section (mirrors
       // the export, which never draws reference shots). But when reference
-      // shots are *visible* (the default), they're drawn — so include them, or
+      // shots are *visible* (the default), they're drawn - so include them, or
       // a visible connector could be left off-screen.
       const refShotsVisible = getEffectiveShowReferenceShots(showShots, showReferenceShots);
       const byIndex = new Map<number, (typeof sectionStations)[number]>();
@@ -3325,7 +3325,7 @@ function MapCanvas() {
       const animationDuration = animationConfig.enabled ? animationConfig.duration : 0;
 
       // Padding: 10% margins only. The map container is the central flex
-      // column, so it already excludes the side panels — adding the panel
+      // column, so it already excludes the side panels - adding the panel
       // widths here double-counts and squeezes the section into a sliver
       // (e.g. a 730px map minus 250+300px panels left ~34px usable). Matches
       // fitToBounds.
@@ -3367,7 +3367,7 @@ function MapCanvas() {
       const ne = metersToMapCoords(bounds.maxX, bounds.maxY, gpsOrigin);
 
       // Always fit the section's bounds. fitBounds depends only on the bounds,
-      // padding and container — not the live (possibly mid-animation) camera —
+      // padding and container - not the live (possibly mid-animation) camera -
       // so rapidly clicking between different sections can't drift the zoom.
       // (The previous skip-zoom-in heuristic read the transitional camera via
       // map.project() and accumulated across interrupted animations.) Re-fitting
@@ -3431,7 +3431,7 @@ function MapCanvas() {
 
   // Progressive zoom-in centered on a shot's midpoint: each call recenters and
   // zooms one step closer (capped at zoom_max). Drives the resolve view's zoom
-  // button (#57) — clicking repeatedly closes in on the problematic shot.
+  // button (#57) - clicking repeatedly closes in on the problematic shot.
   const zoomToShotMidpoint = useCallback(
     (sectionId: SectionId, shotId: ShotId) => {
       if (!map.current || !config || !project) return;
@@ -3576,7 +3576,7 @@ function MapCanvas() {
         setTimeout(() => {
           fitToBounds();
           // Same clean-slate label re-evaluation as the snap path, but the
-          // camera animates here — wait for the map to settle ('idle' also
+          // camera animates here - wait for the map to settle ('idle' also
           // fires when the fit was a no-op, unlike 'moveend').
           map.current?.once('idle', () => {
             surveyLayerRef.current?.resetLabelZoomHysteresis();
@@ -3952,7 +3952,7 @@ function MapCanvas() {
       {mapLoaded && map.current && <GridOverlay map={map.current} gpsOrigin={gpsOrigin} />}
 
       {/* Depth legend when depth gradient is enabled (suppressed while the
-          distance overlay is active — distance wins visually, one legend). */}
+          distance overlay is active - distance wins visually, one legend). */}
       {effectiveDepthGradient && !showDistanceGradient && (
         <DepthLegend
           minDepth={depthRange.min}
@@ -3967,7 +3967,7 @@ function MapCanvas() {
       {showDistanceGradient && !effectiveIssueSeverity && distanceField && (
         <DistanceLegend max={distanceField.max_reachable} visible={showDistanceGradient} />
       )}
-      {/* While the field is being (re)computed — first toggle / re-root — show a
+      {/* While the field is being (re)computed - first toggle / re-root - show a
           lightweight cue so a slow closure solve doesn't look frozen. */}
       {showDistanceGradient && !effectiveIssueSeverity && !distanceField && (
         <div
@@ -3988,7 +3988,7 @@ function MapCanvas() {
         </div>
       )}
 
-      {/* Gas reachable-frontier legend (#38) — gold→purple, 0 → turn budget. */}
+      {/* Gas reachable-frontier legend (#38) - gold→purple, 0 → turn budget. */}
       {showGasPlan && gasReachField && (
         <GasLegend field={gasReachField} units={gasPlanConfig.units} visible={showGasPlan} />
       )}
@@ -4101,7 +4101,7 @@ function MapCanvas() {
           <span className="font-medium">{t('map.measure.alongLine')}:</span>{' '}
           <span data-testid="measure-along-line">
             {measureStart?.kind === 'point' || measureEnd.kind === 'point'
-              ? '—'
+              ? '-'
               : measureAlongLinePending
                 ? '…'
                 : measureAlongLine?.alongLine != null
@@ -4149,7 +4149,7 @@ function MapCanvas() {
       {/* Comment tool overlay */}
       <CommentOverlay />
 
-      {/* Move comment cursor tag — shows picked-up comment following cursor */}
+      {/* Move comment cursor tag - shows picked-up comment following cursor */}
       <MoveCommentCursorTag />
 
       {/* Hover sync - lightweight child to avoid re-rendering MapCanvas on every mousemove */}
@@ -4165,7 +4165,7 @@ function MapCanvas() {
 }
 
 // Memoized: MapCanvas takes no props and drives itself from the stores, so it
-// must NOT re-render just because a parent (SingleSystemView) re-renders — e.g.
+// must NOT re-render just because a parent (SingleSystemView) re-renders - e.g.
 // on every tick of a panel resize. Without this the whole (large) map component
 // re-rendered ~60×/s during a drag, which is what made resizing feel heavy.
 export default memo(MapCanvas);

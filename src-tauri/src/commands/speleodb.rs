@@ -2,7 +2,7 @@
 //!
 //! Thin wrappers over the `AppState::speleodb_*` orchestration (which lives in
 //! `core::state::speleodb`, over the `crate::speleodb` client primitives).
-//! Errors are flattened to `String` at the IPC boundary — the structured
+//! Errors are flattened to `String` at the IPC boundary - the structured
 //! status→action contract is #186. The auth token is never returned to the
 //! webview (login yields only the email + keychain flag).
 //!
@@ -48,7 +48,7 @@ async fn run_blocking<T: Send + 'static>(
 /// pasted `token` must be supplied; with a pasted token the `email` is ignored
 /// and derived from the API instead. `endpoint` overrides the configured/env
 /// endpoint for this session. Returns the (authoritative) user email + whether
-/// the token was stored in the OS keychain — never the token itself.
+/// the token was stored in the OS keychain - never the token itself.
 #[tauri::command]
 pub async fn speleodb_login(
     app: AppHandle,
@@ -234,7 +234,7 @@ pub async fn speleodb_set_exclude_geojson(
 
 /// Report whether the backend already holds a usable token (and for whom). The
 /// dialog calls this on open to restore the project list instead of re-prompting
-/// for credentials — the in-memory token outlives the dialog's React state.
+/// for credentials - the in-memory token outlives the dialog's React state.
 #[tauri::command]
 pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_session_status).await

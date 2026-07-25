@@ -243,7 +243,7 @@ describe('MeasurePathController', () => {
 });
 
 /**
- * drawnCounts() — the observable E2E asserts on. The measure tint is a custom GL
+ * drawnCounts() - the observable E2E asserts on. The measure tint is a custom GL
  * layer with no MapLibre feature-state, so "is the path tinted" is answered by
  * how many segments/discs were handed to the layer, not by reading feature-state
  * off a (deleted) vector-tile source.

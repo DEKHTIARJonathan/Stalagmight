@@ -6,7 +6,7 @@ use ts_rs::TS;
 /// `.stalx` belongs to plus whether it carries un-pushed edits.
 ///
 /// `is_remote` (on [`crate::models::ProjectMetadata`]) is DERIVED from the
-/// existence of this row — it is never stored as a column. The link is stamped
+/// existence of this row - it is never stored as a column. The link is stamped
 /// once on pull and is intentionally NOT rewritten by `save_project` (a local
 /// save/autosave must never clear `has_unpushed_edits`).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
@@ -29,7 +29,7 @@ pub struct SpeleoLink {
     /// RFC-3339 UTC timestamp of the most recent accepted edit on this linked
     /// project (refreshed in `mark_remote_dirty`), or `None` if never edited
     /// since pull. Persisted (schema v10) so the guardrail-7 ancestry recovery
-    /// can decide — across a crash/restart — whether a landed-by-ancestry push
+    /// can decide - across a crash/restart - whether a landed-by-ancestry push
     /// may clear the dirty bit (only when `last_edit_at <= push-start`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]

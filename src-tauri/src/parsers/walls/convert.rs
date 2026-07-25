@@ -32,7 +32,7 @@ pub(crate) fn utm_to_wgs84(
 
 /// Geodetic family of a Walls datum name that this importer can project with a
 /// dedicated PROJ token. Walls stores datum *display* names (the first column
-/// of its 28-entry datum table — e.g. `WGS 1984`, `NAD83`, `NAD27 CONUS`); the
+/// of its 28-entry datum table - e.g. `WGS 1984`, `NAD83`, `NAD27 CONUS`); the
 /// long NIMA names (`North American 1983`/`1927`) also appear in the wild. Any
 /// datum outside these four families is an obscure regional datum that PROJ's
 /// simple `datum=`/`ellps=` tokens don't cover, so it is approximated as WGS84.
@@ -42,7 +42,7 @@ pub(crate) enum DatumFamily {
     Wgs72,
     Nad83,
     Nad27,
-    /// Unrecognized — projected as WGS84 and may be off by tens of meters.
+    /// Unrecognized - projected as WGS84 and may be off by tens of meters.
     OtherApproxWgs84,
 }
 
@@ -115,7 +115,7 @@ pub(crate) fn is_importable_shot(v: &WallsVector, include_splays: bool) -> bool 
 /// Build the import-dialog preview from parsed data.
 pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
     // Count shots the import would ACTUALLY produce under the default options
-    // (splays excluded), not the raw vector count — otherwise the preview
+    // (splays excluded), not the raw vector count - otherwise the preview
     // overstates a file of splays/equates that converts to nothing.
     let shot_count = parsed
         .surveys
@@ -124,7 +124,7 @@ pub fn build_preview(parsed: &ParsedWalls) -> WallsFile {
         .filter(|v| is_importable_shot(v, false))
         .count() as u32;
     // Splay/anonymous-wall shots not counted above but importable once the user
-    // enables "Include splays" — so a splay-only file isn't reported as empty.
+    // enables "Include splays" - so a splay-only file isn't reported as empty.
     let splay_count = parsed
         .surveys
         .iter()
@@ -257,7 +257,7 @@ pub fn convert_walls_to_import_configs(
             } else {
                 v.to.clone()
             };
-            // Finalize azimuth: + declination − convergence (grid-relative).
+            // Finalize azimuth: + declination - convergence (grid-relative).
             // Convergence is the `.REF` grid convergence (when grid-relative)
             // plus any explicit `#Units Grid=` the survey set; both rotate true
             // north to grid north and so are subtracted from the azimuth.
@@ -283,7 +283,7 @@ pub fn convert_walls_to_import_configs(
 
             // The model stores azimuth as a plain f64, so an omitted/unreadable
             // bearing collapses to 0° (due north). That is correct for a plumb
-            // shot but silently wrong for anything else — surface it.
+            // shot but silently wrong for anything else - surface it.
             if v.azimuth_in.is_none() && !v.is_depth_gauge {
                 let plumb = v.inc_deg.map(|i| i.abs() >= 89.5).unwrap_or(false);
                 if !plumb {
@@ -301,7 +301,7 @@ pub fn convert_walls_to_import_configs(
                     // Exactly one depth column was supplied (the other was `--` or
                     // absent). The leg's vertical change is unknown, so it is
                     // integrated as flat and the unmeasured station inherits its
-                    // neighbour's depth — surface that rather than asserting a
+                    // neighbour's depth - surface that rather than asserting a
                     // zero gain silently. (A genuine depth-gauge reading for that
                     // station from another leg still overrides the estimate.)
                     (Some(_), None) | (None, Some(_)) => {
@@ -434,7 +434,7 @@ pub fn convert_walls_to_import_configs(
                 };
                 // Resolve this shot's FROM-station LRUD honoring `#Units LRUD`. A
                 // From-typed leg contributes its own LRUD; a To-typed leg's LRUD
-                // belongs to its TO station — i.e. the FROM of the NEXT shot — so
+                // belongs to its TO station - i.e. the FROM of the NEXT shot - so
                 // it is adopted from the previous leg in the chain. (A To survey
                 // thus shifts each cross-section one shot forward; the final To
                 // station's LRUD has no outgoing shot and is dropped.)
@@ -558,7 +558,7 @@ pub(crate) fn resolve_declination(
     georef: &Option<WallsRef>,
     warnings: &mut Vec<String>,
 ) -> f64 {
-    // An explicit `Decl=` always wins — including an explicit `Decl=0`, which
+    // An explicit `Decl=` always wins - including an explicit `Decl=0`, which
     // declares the azimuths already true/grid and suppresses auto-derivation.
     if let Some(decl) = v.units_decl {
         return decl;
@@ -572,7 +572,7 @@ pub(crate) fn resolve_declination(
         (Some(r), Some(date)) => {
             match crate::parsers::geo::igrf_declination(r.latitude, r.longitude, date) {
                 Ok(d) => d,
-                // The bundled IGRF model only spans 1900–2025; a survey dated
+                // The bundled IGRF model only spans 1900-2025; a survey dated
                 // outside that range (e.g. a current-year dive) would otherwise
                 // import with a silent 0° correction. Surface it instead.
                 // Identical per-shot lines collapse via the dedup at the end of
@@ -580,7 +580,7 @@ pub(crate) fn resolve_declination(
                 Err(_) => {
                     warnings.push(format!(
                         "Could not derive magnetic declination for {date} at {:.3}, {:.3} \
-                         (date/location outside the IGRF model range 1900–2025); using 0°.",
+                         (date/location outside the IGRF model range 1900-2025); using 0°.",
                         r.latitude, r.longitude
                     ));
                     0.0
@@ -612,7 +612,7 @@ pub(crate) fn resolve_anchors(
     let mut anchors: Vec<AnchorGeo> = Vec::new();
     let mut seen: HashSet<String> = HashSet::new();
     for (si, survey) in parsed.surveys.iter().enumerate() {
-        // A deselected survey's fixes must not anchor (or warn as "unused") —
+        // A deselected survey's fixes must not anchor (or warn as "unused") -
         // skip them so deselecting a fix-heavy surface mesh stays silent.
         if !opts.includes_survey(si) {
             continue;
@@ -645,8 +645,8 @@ pub(crate) fn resolve_anchors(
 /// Count the `#Fix` stations in ONE survey that would actually anchor: unique by
 /// station name (first declaration wins) AND passing the same coordinate-validity
 /// check `resolve_anchors` applies (`GpsCoordinates::new`). Without this the
-/// per-survey preview stat counted raw `lat_long.is_some()` fixes — duplicates and
-/// out-of-range projections included — so it could exceed the deduped, validated
+/// per-survey preview stat counted raw `lat_long.is_some()` fixes - duplicates and
+/// out-of-range projections included - so it could exceed the deduped, validated
 /// project total and display nonsense like "3 / 2".
 pub(crate) fn survey_fixed_station_count(survey: &ParsedSurvey) -> u32 {
     let mut seen: HashSet<&str> = HashSet::new();
@@ -787,7 +787,7 @@ pub(crate) fn build_station_depths(
                             // #Fix in the same component is a consistency check,
                             // not a second datum. Surface a material disagreement
                             // as a vertical misclosure but KEEP the integrated
-                            // (measured-geometry) depth — overriding it would
+                            // (measured-geometry) depth - overriding it would
                             // inject a fake vertical change and corrupt shot
                             // lengths, which Walls/dewalls never do.
                             None => {
@@ -826,7 +826,7 @@ pub(crate) struct Placements {
 /// every other chain in the component merges to its discoverer via
 /// FromImporting, and shared stations that aren't the tree edge become loop
 /// closures (see [`build_closures`]). At most ONE zero datum is emitted per
-/// component — the model forbids multiple datums per merge component — so extra
+/// component - the model forbids multiple datums per merge component - so extra
 /// fixed stations in the same connected survey ride along via merges + closures
 /// rather than becoming separate datums.
 pub(crate) fn place_chains(
@@ -1044,7 +1044,7 @@ pub(crate) fn build_closures(
                 // A station revisited later within the SAME chain (a contiguous
                 // intra-chain loop, e.g. A->B->C->A) is the same physical station
                 // as its canonical occurrence and must be tied by an
-                // intra-section closure — fall through to emit it. The
+                // intra-section closure - fall through to emit it. The
                 // already-joined-by-merge shortcut only applies to cross-section
                 // ties.
                 if canon_sec != *section_index

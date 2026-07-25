@@ -33,7 +33,7 @@ export function setUiScale(value: number): number {
   void getCurrentWebview()
     .setZoom(scale)
     .catch(() => {
-      /* zoom unsupported on this platform — ignore */
+      /* zoom unsupported on this platform - ignore */
     });
   window.dispatchEvent(new CustomEvent(UI_SCALE_EVENT, { detail: scale }));
   return scale;

@@ -316,13 +316,13 @@ test.describe('ID=0 Bug Fixes', () => {
 
     // Select the section with id=0 via the app-wide selection (the table follows
     // external selection; its header no longer has a section dropdown). This
-    // exercises the `selection.sectionId !== undefined` path with sectionId=0 —
+    // exercises the `selection.sectionId !== undefined` path with sectionId=0 -
     // a falsy check would ignore the selection and leave the pill on 'One Section'.
     await page.evaluate(() => {
       (window as any).__E2E_TEST__.uiStore.getState().setSelection({ type: 'section', sectionId: 0 });
     });
 
-    // Header pill follows the selection — proves the id=0 section was resolved
+    // Header pill follows the selection - proves the id=0 section was resolved
     await expect(page.getByTestId('data-table-section-pill')).toContainText('Zero Section', { timeout: 3000 });
 
     // Verify the warning indicator is visible with the correct data-testid

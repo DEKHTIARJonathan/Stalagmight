@@ -17,7 +17,7 @@ ipc-typegen = []
 
 [lib]
 name = "stalagmight_lib"
-# staticlib dropped — only needed for iOS, which isn't configured (no
+# staticlib dropped - only needed for iOS, which isn't configured (no
 # src-tauri/gen/apple). cdylib stays for Android (src-tauri/gen/android).
 crate-type = ["lib", "cdylib"]
 
@@ -25,7 +25,7 @@ crate-type = ["lib", "cdylib"]
 # Tauri's bundler doesn't try to copy it into the .app: the bundler enumerates
 # every bin target, and a feature-gated bin still appears in that list but isn't
 # built → `tauri build` failed to copy it. `required-features` also keeps it out
-# of default `cargo build`/`test`/`--release` — only `pnpm gen:ipc-types` (which
+# of default `cargo build`/`test`/`--release` - only `pnpm gen:ipc-types` (which
 # passes --features ipc-typegen) compiles it.
 [[example]]
 name = "gen_ipc_types"
@@ -80,14 +80,14 @@ igrf = "0.2"
 proj4rs = "0.1"
 time = "0.3"
 
-# `trash` has no Android platform module, and the app ships desktop-only — gate it
+# `trash` has no Android platform module, and the app ships desktop-only - gate it
 # off the Android `cdylib` target so `tauri android build` keeps compiling.
 [target.'cfg(not(target_os = "android"))'.dependencies]
 trash = "5.2.6"
 
 # SpeleoDB auth token at rest (#183, full tiering in #188). Per-OS native secret
 # store. On Linux, Secret Service (gnome-keyring / KWallet) is persistent across
-# sessions — unlike the session-scoped `linux-native` keyutils. `crypto-rust`
+# sessions - unlike the session-scoped `linux-native` keyutils. `crypto-rust`
 # avoids a system OpenSSL dependency, and `vendored` statically builds libdbus
 # (keyring → dbus-secret-service → dbus → libdbus-sys) so there is no
 # `libdbus-1-dev` system build dependency to install on a clean box or in CI.
@@ -131,7 +131,7 @@ debug = 1
 [lints.clippy]
 pedantic = { level = "warn", priority = -1 }
 
-# Pedantic noise — suppressed (too many false positives or impractical to fix)
+# Pedantic noise - suppressed (too many false positives or impractical to fix)
 doc_markdown = "allow"
 missing_errors_doc = "allow"
 must_use_candidate = "allow"
@@ -156,7 +156,7 @@ unwrap_used = "deny"
 expect_used = "deny"
 panic = "deny"
 
-# Cast safety — suppressed (too many false positives across geometry/image code)
+# Cast safety - suppressed (too many false positives across geometry/image code)
 cast_possible_truncation = "allow"
 cast_sign_loss = "allow"
 cast_precision_loss = "allow"
@@ -174,13 +174,13 @@ unimplemented = "deny"
 print_stdout = "deny"
 print_stderr = "deny"
 
-# Visibility hygiene — AI over-uses pub
+# Visibility hygiene - AI over-uses pub
 wildcard_imports = "deny"
 
 # String nonsense AI generates
 inefficient_to_string = "deny"
 
-# Clone-spam — AI appeases the borrow checker with .clone()
+# Clone-spam - AI appeases the borrow checker with .clone()
 cloned_instead_of_copied = "warn"
 redundant_clone = "warn"
 implicit_clone = "warn"

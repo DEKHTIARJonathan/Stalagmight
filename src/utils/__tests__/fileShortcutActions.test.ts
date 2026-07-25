@@ -60,7 +60,7 @@ describe('runFileShortcutAction("new_file")', () => {
   });
 });
 
-describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', () => {
+describe('runFileShortcutAction("import_dmp") - read-only-map guard (#243)', () => {
   beforeEach(() => {
     pickAndRouteMock.mockClear();
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
@@ -77,7 +77,7 @@ describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', (
   });
 
   // Ctrl+I is the third import route the #243 guard had to cover; Plan/Export force
-  // closureAdjusted, which falls back to measured on a no-closures project — so a
+  // closureAdjusted, which falls back to measured on a no-closures project - so a
   // geometryMode-only check would open the picker under the read-only map.
   it('skips the picker in Plan even when geometryMode fell back to measured', () => {
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
@@ -91,7 +91,7 @@ describe('runFileShortcutAction("import_dmp") — read-only-map guard (#243)', (
     expect(pickAndRouteMock).not.toHaveBeenCalled();
   });
 
-  it('opens the picker with NO project (GlobalView) regardless of mode — the guard is project-scoped', () => {
+  it('opens the picker with NO project (GlobalView) regardless of mode - the guard is project-scoped', () => {
     useProjectStore.setState({ project: null, isDirty: false });
     useUIStore.setState({ appMode: 'plan', geometryMode: 'measured' });
     runFileShortcutAction('import_dmp');

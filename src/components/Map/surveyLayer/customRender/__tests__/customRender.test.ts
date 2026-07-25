@@ -728,7 +728,7 @@ describe('segment highlight flag (Move Segment whole-segment hover)', () => {
     expect(LINE_VERTEX_SRC).toContain(
       '(a_highlight > 1.5) ? u_hover_width_mul : ((a_highlight > 0.5) ? u_select_width_mul : 1.0)',
     );
-    // Circle: highlight takes PRECEDENCE over zero-datum sizing — level 2 / level 1
+    // Circle: highlight takes PRECEDENCE over zero-datum sizing - level 2 / level 1
     // pick the configured radius-ratio uniforms (default 1.5x / 1.25x), and only an
     // unhighlighted station uses a_size_mul (zero-datum 2x). Radius + stroke grow
     // together via the size multiplier.

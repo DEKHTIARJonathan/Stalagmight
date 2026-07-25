@@ -8,12 +8,12 @@ name: Leak Scan
 # planning/coordination doc + tool filenames, or the private issue tracker. See
 # scripts/check-private-leaks.mjs for the rules and rationale.
 #
-# IMPORTANT — this workflow runs with NO `paths-ignore`, unlike `ci.yml` (`check`)
+# IMPORTANT - this workflow runs with NO `paths-ignore`, unlike `ci.yml` (`check`)
 # and `e2e-smoke.yml` (`smoke`), which BOTH ignore `**/*.md` and `docs/**`. A leak
 # most often lands in exactly those files (e.g. a new `docs/plans/*.md`), so a
-# docs-only change runs neither of those jobs — the gate must run on EVERYTHING.
+# docs-only change runs neither of those jobs - the gate must run on EVERYTHING.
 #
-# Pure-Node, no dependencies (only `git ls-files` + the stdlib), no secrets — so
+# Pure-Node, no dependencies (only `git ls-files` + the stdlib), no secrets - so
 # it runs on fork PRs too. Sub-second. Safe to block on because `master` is
 # unprotected (no required-check deadlock, per #122).
 on:
@@ -42,7 +42,7 @@ jobs:
       # Pin the rules with the fixture test first (proves each rule still fires on
       # its target and that the functional CI-picker tokens do NOT), then scan the
       # tracked tree.
-      - name: Private-leak rules — fixture test
+      - name: Private-leak rules - fixture test
         run: node scripts/check-private-leaks.test.mjs
       - name: Private-leak scan
         run: node scripts/check-private-leaks.mjs

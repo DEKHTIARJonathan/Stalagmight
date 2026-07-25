@@ -14,7 +14,7 @@ import { computeImmovableStationKeys } from '../immovableStations';
  */
 
 // The original algorithm, verbatim from MapCanvas before the SoA migration, over
-// a materialized Station[] — the behavioral oracle the SoA path must reproduce.
+// a materialized Station[] - the behavioral oracle the SoA path must reproduce.
 function immovableViaStationArray(
   stations: readonly Station[],
   alignedClosureIds: ReadonlySet<bigint>,

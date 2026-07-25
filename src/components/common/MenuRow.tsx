@@ -1,5 +1,5 @@
 /**
- * MenuRow / MenuSeparator — the row body shared by AppMenu and ContextMenu.
+ * MenuRow / MenuSeparator - the row body shared by AppMenu and ContextMenu.
  *
  * Both menus render visually-identical rows: the same button base classes
  * ('w-full px-3 py-2 text-left text-sm flex items-center gap-2'), the same

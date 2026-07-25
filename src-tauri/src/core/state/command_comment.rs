@@ -66,11 +66,11 @@ impl AppState {
         // already under execute()'s command_lock AND past its read-only edit gate
         // (MoveComment is not a lifecycle pass-through). It takes no command_lock
         // of its own, so it inherits the guard rather than calling it directly. If
-        // a future DIRECT caller is added, it MUST route through guard_mutation —
+        // a future DIRECT caller is added, it MUST route through guard_mutation -
         // the chokepoint enumeration test fails if MoveComment leaks past execute.
         debug_assert!(
             self.edit_enabled(),
-            "execute_move_comment reached with edit disabled — it must run only via execute()'s gate"
+            "execute_move_comment reached with edit disabled - it must run only via execute()'s gate"
         );
         // Step 1: Take BEFORE snapshot
         let before_snapshot = match self.capture_project_snapshot() {

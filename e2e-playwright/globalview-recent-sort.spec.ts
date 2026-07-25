@@ -39,7 +39,7 @@ async function selectSortField(page: Page, label: string): Promise<void> {
   await page.getByRole('option', { name: label, exact: true }).click();
 }
 
-test.describe('GlobalView Recent Projects — path, relative time, sort', () => {
+test.describe('GlobalView Recent Projects - path, relative time, sort', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await switchToListTab(page);
@@ -51,7 +51,7 @@ test.describe('GlobalView Recent Projects — path, relative time, sort', () => 
     await expect(path).toHaveAttribute('data-full-path', '/projects/cave-alpha.stalx');
 
     await path.hover();
-    // No tooltip anymore — the full path is revealed in place (scrolls if it overflows).
+    // No tooltip anymore - the full path is revealed in place (scrolls if it overflows).
     await expect(page.locator('[role="tooltip"]', { hasText: '/projects/cave-alpha.stalx' })).toHaveCount(0);
     await expect(path).toContainText('/projects/cave-alpha.stalx');
   });

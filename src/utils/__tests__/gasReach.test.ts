@@ -21,7 +21,7 @@ describe('buildGasReachFeatureState', () => {
   } as unknown as Pick<SurveyData, 'sections' | 'shotIds'>;
 
   // (1,2) is finite-but-OVER-budget (gas_to_reach 1500 > budget 1000, reachable false)
-  // — the adversarial case. (2,1) is disconnected (null). Budget is 1000.
+  // - the adversarial case. (2,1) is disconnected (null). Budget is 1000.
   const field: GasReachField = {
     station_refs: [
       { section_id: 1, station_index: 0 },
@@ -55,7 +55,7 @@ describe('buildGasReachFeatureState', () => {
     expect(stations.get(encodeFeatureId(2, 0))).toBe(200);
   });
 
-  it('greys a finite-but-OVER-budget station (the conservative direction — never paint it reachable)', () => {
+  it('greys a finite-but-OVER-budget station (the conservative direction - never paint it reachable)', () => {
     // gas_to_reach is Some(1500) but reachable=false; it must NOT leak the 1500 value.
     const { stations } = buildGasReachFeatureState(data, field);
     expect(stations.get(encodeFeatureId(1, 2))).toBe(UNREACHABLE_GAS);

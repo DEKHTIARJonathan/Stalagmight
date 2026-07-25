@@ -1,12 +1,12 @@
 #!/bin/bash
 #
-# reap-tracked.test.sh — deterministic regression test for the macOS window-reaping
+# reap-tracked.test.sh - deterministic regression test for the macOS window-reaping
 # logic in scripts/wdio.sh (`reap_tracked_stalagmight`).
 #
 # This is safety-critical: a regression could SIGKILL a real `stalagmight` the user
 # has open (e.g. via ./scripts/dev.sh) instead of only the windows the test run
 # spawned. The function is sourced verbatim from wdio.sh, and `ps`/`kill` are
-# mocked so we can assert EXACTLY which PIDs it decides to kill — no live
+# mocked so we can assert EXACTLY which PIDs it decides to kill - no live
 # processes, no races.
 #
 # Run:  bash scripts/reap-tracked.test.sh   (exits 0 on pass, 1 on failure)
@@ -37,7 +37,7 @@ ps() {
   esac
 }
 
-# Source the REAL function under test (via a temp file — process substitution +
+# Source the REAL function under test (via a temp file - process substitution +
 # `source` is unreliable on macOS's bash 3.2).
 sed -n '/^reap_tracked_stalagmight() {/,/^}/p' "$WDIO_SH" > "$TEST/fn.sh"
 source "$TEST/fn.sh"

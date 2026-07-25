@@ -2,7 +2,7 @@
  * Shared per-feature color resolvers for the custom-render build + incremental
  * paths (#customRender). Factored out of the controller's `build()` so the
  * incremental section/station recompute (incremental.ts) resolves colors with
- * the EXACT same closures the full build uses — a prerequisite for the
+ * the EXACT same closures the full build uses - a prerequisite for the
  * byte-identical incremental guarantee (a moved section rebuilt incrementally
  * must be indistinguishable from a full rebuild of the same geometry).
  *

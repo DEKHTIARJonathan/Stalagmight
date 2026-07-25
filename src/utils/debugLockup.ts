@@ -1,5 +1,5 @@
 // Optional instrumentation for the macOS UI lockup investigation. Off by
-// default — when set, gates the entire body so Vite tree-shakes it out of
+// default - when set, gates the entire body so Vite tree-shakes it out of
 // production bundles. Re-enable with:
 //
 //   VITE_DEBUG_MACOS_LOCKUP=true pnpm tauri dev
@@ -83,7 +83,7 @@ if (ENABLED) {
   const log = console.log.bind(console);
   const error = console.error.bind(console);
 
-  // Global error capture — surface anything React error boundaries or
+  // Global error capture - surface anything React error boundaries or
   // fire-and-forget promise chains would otherwise swallow. Log the full
   // stack so we can see the call chain that led to a throw.
   window.addEventListener('error', (e) => {

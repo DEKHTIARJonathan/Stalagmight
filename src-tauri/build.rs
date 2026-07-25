@@ -23,8 +23,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // tauri_build embeds a Common-Controls v6 manifest into the app exe, but not
     // into `cargo test` harness binaries. Without it the loader binds to the
-    // legacy comctl32 v5 (System32), which lacks `TaskDialogIndirect` — pulled in
-    // as a static import via rfd / tauri-plugin-dialog — so the test binary
+    // legacy comctl32 v5 (System32), which lacks `TaskDialogIndirect` - pulled in
+    // as a static import via rfd / tauri-plugin-dialog - so the test binary
     // aborts at startup with STATUS_ENTRYPOINT_NOT_FOUND (0xC0000139) before any
     // test runs. (We can't just embed the manifest into test binaries: the only
     // link-arg category that reaches the lib unit-test harness is the broad one,
@@ -72,7 +72,7 @@ fn git_short_hash() -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-/// Ask cargo to re-run build.rs when HEAD — or the branch it points to — changes,
+/// Ask cargo to re-run build.rs when HEAD - or the branch it points to - changes,
 /// so `APP_VERSION`'s embedded hash tracks the checked-out commit instead of going
 /// stale across commits. Best-effort: emits nothing when git/`.git` is unavailable.
 fn emit_git_rerun() {
@@ -91,7 +91,7 @@ fn emit_git_rerun() {
         return;
     }
     println!("cargo::rerun-if-changed={}", head.display());
-    // HEAD is normally a symbolic ref (`ref: refs/heads/<branch>`) — also watch that
+    // HEAD is normally a symbolic ref (`ref: refs/heads/<branch>`) - also watch that
     // ref file so a new commit on the current branch retriggers the build.
     if let Ok(contents) = std::fs::read_to_string(&head) {
         if let Some(reference) = contents.strip_prefix("ref: ") {

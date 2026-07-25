@@ -2,15 +2,15 @@
 //!
 //! One-directional diff: given the baseline Stalagmight last exported (stored in
 //! `project.collab`) and a returned Ariane `.tml` (parsed into `TmlFile`), compute
-//! the set of changes the collaborator made — added / edited / removed shots and
-//! section-metadata changes — so they can be previewed and applied to the `.stalx`
+//! the set of changes the collaborator made - added / edited / removed shots and
+//! section-metadata changes - so they can be previewed and applied to the `.stalx`
 //! while preserving Stalagmight-only data (closures, merges, offsets, etc.).
 //!
 //! Matching is tiered (per the external edit-lock there are no conflicting edits):
-//!   1. UUID            — exact, authoritative (Ariane 26+)
-//!   2. Ariane integer ID — guarded: skipped if the file was wholesale-renumbered
-//!   3. geometry fingerprint (LCS) — primary for UUID-less files (Ariane ≤25)
-//!   4. positional      — last resort within a matched section
+//!   1. UUID            - exact, authoritative (Ariane 26+)
+//!   2. Ariane integer ID - guarded: skipped if the file was wholesale-renumbered
+//!   3. geometry fingerprint (LCS) - primary for UUID-less files (Ariane ≤25)
+//!   4. positional      - last resort within a matched section
 //!
 //! The geometry fingerprint is the real backbone: real Ariane files renumber
 //! integer IDs across edits, so IDs are only a hint.
@@ -35,7 +35,7 @@ pub enum MatchQuality {
     ArianeId,
     /// Some matches relied on the geometry fingerprint.
     Fingerprint,
-    /// Some matches were positional only — review carefully.
+    /// Some matches were positional only - review carefully.
     Positional,
 }
 
@@ -56,7 +56,7 @@ pub struct AddedShot {
     /// Target section if it already exists; `None` if part of a new section.
     pub section_id: Option<SectionId>,
     pub section_name: String,
-    /// Index of this shot within the returned (Ariane) section — its document
+    /// Index of this shot within the returned (Ariane) section - its document
     /// order, used to apply inserts in sequence. Not a live project index.
     pub position: u32,
     /// Id of the existing shot to insert after (the nearest preceding *matched*
@@ -64,7 +64,7 @@ pub struct AddedShot {
     /// Anchoring on a stable shot id keeps the insert correct regardless of the
     /// edit/remove phases that run first at apply time.
     pub after_shot_id: Option<ShotId>,
-    /// The collaborator's UUID for this shot — Ariane 26+ writes the
+    /// The collaborator's UUID for this shot - Ariane 26+ writes the
     /// `<UUID>` element on its new shots so we can round-trip identity
     /// back.  `None` for Ariane ≤25 (no UUID emission).  Apply uses
     /// this to mint the shot with the collaborator's UUID instead of a
@@ -232,7 +232,7 @@ fn returned_section_shots(section: &TmlSection) -> Vec<ReturnedShot> {
         let mut data = normalize_tml_shot(shot, depth_in);
         // Split shot vs station portions of the Comment field. An Ariane-
         // authored Comment carries no marker, so the whole text routes to
-        // the station — matching Ariane's visual convention where Comment
+        // the station - matching Ariane's visual convention where Comment
         // text is centered on the station, not along the shot.
         let (shot_part, station_part) = crate::core::comment_split::split(data.comment.as_deref());
         data.comment = shot_part;
@@ -288,7 +288,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     // "enable collab, save empty project, Ariane adds first shots" would
     // reconcile.  Removing it breaks the real-Ariane corpus replay
     // (`reconcile_fuzz::corpus_replay_real_ariane_history`) somewhere
-    // mid-iteration — exact root cause not yet pinned without local data
+    // mid-iteration - exact root cause not yet pinned without local data
     // access.  Tracked as a known limitation: the "Ariane adds first
     // shots" workflow requires the Stalagmight user to save at least one
     // real shot before handing the .tml off.  See the #[ignore]'d
@@ -306,7 +306,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     // disambiguates via UUID (Ariane 26+) or Ariane-id (when reliable);
     // the name map is a fallback hint only.  But for Ariane ≤25
     // (UUID unavailable) and renumber-prone Ariane-id batches, that
-    // fallback is silently the FIRST exported section — the second
+    // fallback is silently the FIRST exported section - the second
     // would look like "deleted + re-added" with the same shots.  Surface
     // that explicitly so the user can investigate before applying.
     let mut name_to_id: HashMap<&str, SectionId> = HashMap::new();
@@ -323,7 +323,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         cs.warnings.push(CollabWarning {
             message: format!(
                 "Duplicate exported section name(s): {}.  Without Ariane-26+ UUIDs the matcher \
-                 can only disambiguate the first occurrence — any edits to the others may \
+                 can only disambiguate the first occurrence - any edits to the others may \
                  appear as 'removed + re-added' in this changeset.",
                 duplicate_names.join(", "),
             ),
@@ -331,7 +331,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     }
 
     // Synthetic export legs (`<name> (reversed)`, `<name> (pre-zero-datum)`) are
-    // reversed duplicates of forward geometry we wrote ourselves — never edits.
+    // reversed duplicates of forward geometry we wrote ourselves - never edits.
     // Skipping them keeps a clean round-trip (zero datum off the root station, or
     // a merged child section) from surfacing phantom new sections.
     let synthetic: HashSet<&str> = collab
@@ -380,7 +380,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     let ids_reliable = !baseline_ids.is_empty() && returned_id_overlap * 2 >= baseline_ids.len();
 
     // Stable per-shot identity → owning baseline section. Sections are matched by
-    // their shots' identity (UUID, then Ariane id when reliable), NOT by name — so
+    // their shots' identity (UUID, then Ariane id when reliable), NOT by name - so
     // a section renamed in Ariane is still recognized (its rename is reconciled,
     // not turned into delete+add) and two sections sharing a name (which collapse
     // into one returned TmlSection on parse) are split back apart.
@@ -409,7 +409,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     // Pass 1: which baseline section does each returned section *name* belong to,
     // by majority vote of its identity-matched shots? Lets unidentified shots
     // (brand-new inserts carry no baseline UUID/id) fall back to the owner of the
-    // section they came back in — even when that section was renamed.
+    // section they came back in - even when that section was renamed.
     let mut votes: HashMap<&str, HashMap<SectionId, usize>> = HashMap::new();
     for (section, shots) in &returned_sections {
         for r in shots {
@@ -424,12 +424,12 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
     }
     // `HashMap::into_iter` is non-deterministic, so a plain `max_by_key`
     // on vote count picks an arbitrary winner when two baseline sections
-    // tie — the next reconcile of the same `.tml` could route shots to
+    // tie - the next reconcile of the same `.tml` could route shots to
     // a different owner.  Break ties by smaller `SectionId`
     // (deterministic, also tends to prefer the older / parent section in
     // chronologically-grown projects).  `max_by` returns the last
     // element of any equal-keyed run, so the key is
-    // `(count, Reverse(sid))` — higher count wins; on a tie, the
+    // `(count, Reverse(sid))` - higher count wins; on a tie, the
     // smaller `sid` is "greater" under Reverse and is returned last.
     let name_owner: HashMap<&str, SectionId> = votes
         .into_iter()
@@ -499,7 +499,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
             source.name.as_str()
         };
         // Emit a `name` change only when the baseline carries a real
-        // (non-empty) name — otherwise a baseline section with no name
+        // (non-empty) name - otherwise a baseline section with no name
         // would compare-unequal to any non-empty returned name and
         // we'd silently auto-assign the parser's fallback string (e.g.
         // "Section 12") onto the user's intentionally-nameless section.
@@ -526,7 +526,7 @@ pub fn diff(project: &Project, tml: &TmlFile) -> CollabChangeSet {
         }
         // Export writes 2000-01-01 for a null date; treat that re-imported
         // sentinel as "unset" so a clean round-trip isn't a phantom change.
-        // BUT — if the section's actual date IS 2000-01-01, the round-trip
+        // BUT - if the section's actual date IS 2000-01-01, the round-trip
         // looks identical and the user's legitimate date must survive.  Only
         // collapse the sentinel to None when the project side ALSO had no
         // date; otherwise pass the returned value through verbatim so the
@@ -726,7 +726,7 @@ fn align_section(
     matched_by_returned.sort_by_key(|&(r_idx, _)| r_idx);
 
     // `added_returned` is already in ascending document order, so the resulting
-    // `shots_added` for this section are too — apply relies on that ordering.
+    // `shots_added` for this section are too - apply relies on that ordering.
     for &r_idx in &added_returned {
         let after_shot_id = matched_by_returned
             .iter()
@@ -899,7 +899,7 @@ fn opt_num(field: &str, a: Option<f64>, b: Option<f64>, out: &mut Vec<CollabFiel
     // `None` is treated as 0.0 here on the assumption that Ariane writes
     // 0.0 for "unmeasured" (which `parsers::tml::lrud_opt` then collapses
     // back to None on parse).  This means `Some(0.0)` and `None` compare
-    // equal — semantically distinct ("wall flush against the survey line"
+    // equal - semantically distinct ("wall flush against the survey line"
     // vs "wall not measured") but identical on the TML wire, so reconcile
     // can't distinguish them without a richer Ariane convention.  If
     // Ariane ever ships a separate sentinel for unmeasured the lrud_opt
@@ -1129,7 +1129,7 @@ mod tests {
     fn test_renumbered_ids_do_not_cause_mass_remove_add() {
         // Simulate Ariane ≤25 wholesale renumber: clear UUIDs and shift all IDs,
         // with one genuine length edit. The engine must fall back to geometry
-        // matching and report exactly one edit — NOT remove-all + add-all.
+        // matching and report exactly one edit - NOT remove-all + add-all.
         let dir = tempfile::TempDir::new().unwrap();
         let base = baseline_project(three(), dir.path());
 
@@ -1246,7 +1246,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
         p.add_section(section_with("Main", three()));
-        // Branch's merge station (child station 2) sits at depth 1.0 — the same
+        // Branch's merge station (child station 2) sits at depth 1.0 - the same
         // depth as root station 1 it merges onto (merged points are physically
         // coincident), so the forward leg round-trips without a phantom depth edit.
         p.add_section(section_with(
@@ -1283,7 +1283,7 @@ mod tests {
     #[test]
     fn test_section_rename_is_reconciled_not_destroyed() {
         // Renaming a section in Ariane (geometry unchanged) must be one name
-        // change — not a section delete + re-add that drops Stalagmight-only data
+        // change - not a section delete + re-add that drops Stalagmight-only data
         // (bug_003 rename half).
         let dir = tempfile::TempDir::new().unwrap();
         let base = baseline_project(three(), dir.path());
@@ -1363,7 +1363,7 @@ mod tests {
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
         p.add_section(section_with("Main", three()));
-        // Second "Main" — same exported name as the first.  Wire it up
+        // Second "Main" - same exported name as the first.  Wire it up
         // as a child merge so the export pipeline succeeds.
         p.add_section(section_with(
             "Main",
@@ -1383,7 +1383,7 @@ mod tests {
         let cs = diff(&base, &ret);
 
         // The shot-identity tiers fully match (clean round-trip), so the
-        // changeset is empty — but the duplicate-name warning must
+        // changeset is empty - but the duplicate-name warning must
         // still fire because the section_name_map carries the collision.
         assert!(
             cs.warnings
@@ -1398,7 +1398,7 @@ mod tests {
     fn test_diff_is_deterministic_across_calls() {
         // Catches the non-deterministic `HashMap::into_iter` tie-break
         // (the bug Codex's round-4 fix re-keyed via Reverse(sid)).  Even
-        // when ties exist (or none — this test runs the duplicate-name
+        // when ties exist (or none - this test runs the duplicate-name
         // topology to maximise hash-iteration variation), two diff calls
         // on identical inputs must produce identical debug-formatted
         // changesets.
@@ -1486,7 +1486,7 @@ mod tests {
     fn apply_changeset_skips_non_finite_edit_and_add() {
         // The collab apply path writes foreign TML geometry straight into shots, so
         // it must reject non-finite (NaN/inf) values at ingest the same way the
-        // command boundary does — otherwise a corrupt collaborator file poisons
+        // command boundary does - otherwise a corrupt collaborator file poisons
         // coordinate computation. apply_changeset skips such shots (with a warning)
         // and leaves the project's existing geometry untouched.
         let mut p = project_with(three());
@@ -1564,11 +1564,11 @@ mod tests {
         // Simulate an Ariane user typing a new note into the Comment field of
         // shot 0 (whose to-station is station 1, which had no comment before).
         // The note carries no ZWSP marker, so reconcile must classify it as a
-        // station_comment — and apply must write it to project.station_comments.
+        // station_comment - and apply must write it to project.station_comments.
         let dir = tempfile::TempDir::new().unwrap();
         let base = baseline_for(project_with_comments(), dir.path());
 
-        // Export, then directly mutate the parsed TML to inject the new line —
+        // Export, then directly mutate the parsed TML to inject the new line -
         // bypassing the Stalagmight export so the inserted text is unmarked.
         let path = dir.path().join("returned.tmlu");
         export_tml_with_baseline(&base, &path).unwrap();

@@ -1,5 +1,5 @@
 /**
- * Component test (#110) — Compass import warning surfacing.
+ * Component test (#110) - Compass import warning surfacing.
  *
  * CompassImportDialog's warning-surfacing block is a copy-paste sibling of TML's
  * and can drift independently, so it gets its own coverage: the deferred-save
@@ -33,7 +33,7 @@ const SAVE_WARNING: ValidationWarning = {
   code: 'SYSTEM',
   message:
     'Imported, but could not save the new project to disk: disk full. ' +
-    'Your changes are unsaved — please save manually.',
+    'Your changes are unsaved - please save manually.',
   severity: 'warning',
 };
 const VALIDATION_WARNING: ValidationWarning = {
@@ -107,7 +107,7 @@ describe('CompassImportDialog warning surfacing (#110)', () => {
     expect(orphanCalled()).toBe(false);
   });
 
-  it('does NOT modal a routine validation warning on a saved import — orphan still runs', async () => {
+  it('does NOT modal a routine validation warning on a saved import - orphan still runs', async () => {
     executeCompassImport.mockResolvedValue(ok([VALIDATION_WARNING], [1]));
     render(<CompassImportDialog compassFile={compassFile} filePath="/tmp/cave.dat" />);
 

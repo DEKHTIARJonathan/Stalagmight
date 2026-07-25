@@ -10,7 +10,7 @@ vi.mock('@tauri-apps/api/core', () => ({
 import { usePanelReveal } from '../usePanelReveal';
 import { useUIStore } from '../../../store/uiStore';
 
-describe('usePanelReveal — close-grace + pin clearing', () => {
+describe('usePanelReveal - close-grace + pin clearing', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     // Detail panel in hover mode, closed at rest.
@@ -28,7 +28,7 @@ describe('usePanelReveal — close-grace + pin clearing', () => {
     expect(result.current.isFloatingOpen).toBe(true);
 
     act(() => result.current.scheduleClose(700)); // generous post-resize grace
-    act(() => result.current.scheduleClose(120)); // shorter — must NOT clobber the 700
+    act(() => result.current.scheduleClose(120)); // shorter - must NOT clobber the 700
 
     act(() => vi.advanceTimersByTime(120));
     // The 120ms grace would have closed it; the 700ms one is still pending.
@@ -43,7 +43,7 @@ describe('usePanelReveal — close-grace + pin clearing', () => {
 
     act(() => result.current.onRegionEnter());
     act(() => result.current.scheduleClose(120));
-    act(() => result.current.scheduleClose(700)); // longer — replaces the 120
+    act(() => result.current.scheduleClose(700)); // longer - replaces the 120
 
     act(() => vi.advanceTimersByTime(120));
     expect(result.current.isFloatingOpen).toBe(true); // 120 timer was cleared

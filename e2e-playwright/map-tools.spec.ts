@@ -401,7 +401,7 @@ test.describe('Zoom Tool Click Behavior', () => {
 
       expect(zoomAfterClick).toBeGreaterThan(initialZoom);
 
-      // Right click should zoom out — settle before asserting it returned to
+      // Right click should zoom out - settle before asserting it returned to
       // ~the original level (within 0.1), so we need the full animation done.
       await page.mouse.click(centerX, centerY, { button: 'right' });
       await page.waitForFunction((z) => {

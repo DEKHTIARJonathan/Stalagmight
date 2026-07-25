@@ -1,22 +1,22 @@
 /**
- * Per-label REVEAL-ZOOM computation for the custom-render LABEL pass — the
+ * Per-label REVEAL-ZOOM computation for the custom-render LABEL pass - the
  * declutter + decimation core (replaces the old boolean `labelCollide.ts`).
  *
  * PURE (no GL, no DOM, no MapLibre): given the viewport-scoped
  * {@link LabelDescriptor} set + each label's shaped em {@link ExtentEm} + a
  * {@link RevealInput} (build zoom, world-pixel scale, toggles), it returns one
- * float per label — the minimum LIVE ZOOM at which that label is visible. The
+ * float per label - the minimum LIVE ZOOM at which that label is visible. The
  * shader then draws a label iff `u_zoom >= a_reveal_zoom`, so the reveal value
  * folds BOTH the collision declutter AND the zoom-band decimation into a single
  * per-build threshold evaluated per frame (`labelShaders.ts`).
  *
  * WHY REVEAL ZOOM (fixes the three reported defects):
- *  1. Zoom updates no longer wait for a coalesced zoomend rebuild — admission is
+ *  1. Zoom updates no longer wait for a coalesced zoomend rebuild - admission is
  *     a per-frame shader compare, so zoom-in is instant and needs no rebuild.
  *  2. A zoom-band crossing never flashes the full set: there is no stale baked
  *     "hidden" bit to lag behind the new band; a label simply appears when the
  *     live zoom reaches its reveal threshold.
- *  3. The visible set is MONOTONE in zoom by construction — for a fixed build,
+ *  3. The visible set is MONOTONE in zoom by construction - for a fixed build,
  *     `{ z >= reveal }` only grows as `z` grows, so a label visible at a lower
  *     zoom can never vanish at a higher one.
  *
@@ -30,14 +30,14 @@
  *
  * ALGORITHM (zoom-ladder greedy, chosen for provable monotonicity + determinism
  * over analytic elegance): candidates are ordered ONCE by a ZOOM-INDEPENDENT
- * priority — (decimation tier asc, kind priority, ordinal, stable id) — then a
+ * priority - (decimation tier asc, kind priority, ordinal, stable id) - then a
  * ladder of 0.5-zoom steps runs from the coarsest candidate minzoom up to the
  * emit horizon (`buildZoom + slack`). At each step, already-revealed winners are
  * re-seeded into the grid at THAT zoom, then still-unrevealed admitted candidates
  * are placed greedily in priority order; a candidate that first fits at zoom `z`
  * gets `reveal = z`. Seeding a revealed winner every step guarantees a
  * lower-zoom label keeps its slot, so a later finer-tier label can never evict
- * it — the visible set only ever grows.
+ * it - the visible set only ever grows.
  *
  * DETERMINISM ACROSS REBUILDS. The priority order uses a STABLE per-label id
  * (global shot / station index, or section id) rather than the array position,
@@ -65,12 +65,12 @@ export const REVEAL_LADDER_STEP = 0.5;
  *  {@link emitSlackFor} / {@link ADAPTIVE_EMIT_MAX}). */
 export const EMIT_SLACK = 2;
 
-/** The app's maximum zoom (`config.map.zoom_max`, default 22) — the top of the
+/** The app's maximum zoom (`config.map.zoom_max`, default 22) - the top of the
  *  ADAPTIVE-EMIT ladder. When the viewport candidate set is small enough to emit
  *  in full (at/below {@link ADAPTIVE_EMIT_MAX}), the reveal ladder runs all the
  *  way to here so EVERY label that ever clears within reachable zoom is emitted
- *  with its true reveal. A zoom-in then needs NO rebuild — admission is a
- *  per-frame shader compare — which fixes the "newly-revealed labels appear late
+ *  with its true reveal. A zoom-in then needs NO rebuild - admission is a
+ *  per-frame shader compare - which fixes the "newly-revealed labels appear late
  *  when zooming in at high zoom" report (the batch reveals at the z16 / z18
  *  decimation band edges used to fall past the old bounded horizon and only
  *  reappear after a coalesced settle rebuild). Overshooting the real max (build
@@ -117,7 +117,7 @@ export interface ScreenBox {
 
 /** Inputs the reveal pass needs beyond the descriptors + their em extents. */
 export interface RevealInput {
-  /** Zoom at build time — the base for the world-pixel-scale ramp + the emit
+  /** Zoom at build time - the base for the world-pixel-scale ramp + the emit
    *  horizon (`buildZoom + slack`). */
   buildZoom: number;
   /** Screen CSS px per unit of anchor-relative mercator AT `buildZoom`
@@ -212,7 +212,7 @@ function overlaps(a: ScreenBox, b: ScreenBox): boolean {
   return a.minX < b.maxX && a.maxX > b.minX && a.minY < b.maxY && a.maxY > b.minY;
 }
 
-/** Whether a label is a collision CANDIDATE under the current toggles — the CPU
+/** Whether a label is a collision CANDIDATE under the current toggles - the CPU
  *  mirror of the shader's non-reveal collapse conditions. A non-candidate does
  *  not occupy collision space (a toggled-off / reference-hidden kind must not
  *  block others), but is still emitted at its decimation floor (below). */
@@ -222,7 +222,7 @@ function isCandidate(desc: LabelDescriptor, input: RevealInput): boolean {
     return false;
   }
   // Comment tool active (C1): comment kinds are overlap-exempt. Treated as
-  // non-candidates so they neither get culled nor occupy collision space — the
+  // non-candidates so they neither get culled nor occupy collision space - the
   // same uncontested-emit path a toggled-off kind takes, giving `reveal =
   // admitZoom` (their minzoom). Non-comment kinds fall through unchanged.
   if (

@@ -9,11 +9,11 @@
  * gives them `position:fixed` (via useAnchoredFixedMenu) so they escape the clip.
  *
  * To exercise the flip-up path deterministically (independent of the runner's
- * window size — the reason PR CI's default ~1280x720 missed this while the
+ * window size - the reason PR CI's default ~1280x720 missed this while the
  * 730x434 nightly caught it), we shrink the data-table panel to its minimum
  * height. That puts the sub-header near the bottom of the window (so both menus
  * flip up) and makes the 100px panel's clip box tightly clip any upward
- * `absolute` menu. We assert the click EFFECT (not mere visibility — a clipped
+ * `absolute` menu. We assert the click EFFECT (not mere visibility - a clipped
  * menu is still "visible" in the DOM), the menu's viewport bounds, and that
  * elementFromPoint over an item hits the menu rather than the map canvas.
  */
@@ -199,7 +199,7 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
     const list = page.getByTestId('data-table-section-menu-list');
     await expect(list).toBeVisible();
     // The list is position:fixed at a rect captured ON OPEN; useAnchoredFixedMenu
-    // deliberately does NOT reposition on resize/scroll — it delegates stale-position
+    // deliberately does NOT reposition on resize/scroll - it delegates stale-position
     // handling to useDismissableLayer, which must dismiss the menu on resize (else it
     // would float at a now-wrong spot). Pin that contract so a future change that
     // drops the resize listener fails here.
@@ -207,13 +207,13 @@ test.describe('#162 header dropdowns are usable when flipped up', () => {
     await expect(list).toBeHidden();
   });
 
-  // The THIRD migrated dropdown — the raw-table picker (`data-table-raw-table-pill`)
-  // — is intentionally not covered here. It is the very same `SubHeaderPickerMenu`
+  // The THIRD migrated dropdown - the raw-table picker (`data-table-raw-table-pill`)
+  // - is intentionally not covered here. It is the very same `SubHeaderPickerMenu`
   // (and thus the same `useAnchoredFixedMenu` positioning) as the section picker
   // tested above; only its options/trigger content differ. Its real options are
   // also fetched only in fullscreen mode (DataTable's `get_raw_table_names` effect
   // is gated on `dataTableFullScreen`), so in the windowed docked-low layout this
-  // suite exercises it would show only a disabled "loading" row — no click-through
+  // suite exercises it would show only a disabled "loading" row - no click-through
   // to assert. The shared positioning path is fully covered by the section-picker
   // flip-up / flip-down / toolbar-clamp tests in this file.
 });

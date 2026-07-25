@@ -68,7 +68,7 @@ fn env_pairs(cfg: &WebkitMemoryConfig) -> Vec<(&'static str, String)> {
 /// environment (if any). The documented way to disable the feature without
 /// editing `config.toml` is to force that variable to `0`. But `env_pairs` only
 /// sees the CONFIG, so on its own the override would leave `JSC_forceRAMSize`
-/// (derived from `jsc_force_ram_size_mb`) still exported — and JavaScriptCore
+/// (derived from `jsc_force_ram_size_mb`) still exported - and JavaScriptCore
 /// reads it directly, independent of the wry pressure handler that `LIMIT_MB=0`
 /// disables. The result would be "pressure off, but JSC still sizes itself as a
 /// 700 MB machine", i.e. the advertised override does NOT restore upstream
@@ -106,7 +106,7 @@ fn config_path() -> Option<std::path::PathBuf> {
 ///
 /// Returns the loaded [`WebkitMemoryConfig`] so the caller can log a summary via
 /// [`log_applied_config`] AFTER the logger is initialized. This runs as the very
-/// first statement of `run()` — before `logging::init()` — so emitting a
+/// first statement of `run()` - before `logging::init()` - so emitting a
 /// `tracing` event here would be dropped (no subscriber exists yet); it also
 /// must run there so the `set_var` calls below are genuinely single-threaded.
 ///

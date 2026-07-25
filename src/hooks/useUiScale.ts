@@ -5,7 +5,7 @@ import { getUiScale, setUiScale, UI_SCALE_STEP, UI_SCALE_DEFAULT } from '../util
  * Whole-UI zoom via Ctrl+= / Ctrl+- / Ctrl+0, persisted across launches.
  *
  * Uses Tauri's native webview page zoom (correct hit-testing, unlike CSS `zoom`).
- * The map's own `=`/`-` zoom is untouched — those are bound without a modifier,
+ * The map's own `=`/`-` zoom is untouched - those are bound without a modifier,
  * so Ctrl-modified presses fall through to this handler. Requires the
  * `core:webview:allow-set-webview-zoom` capability. The Settings → Display
  * "UI scale" slider drives the same {@link setUiScale}.

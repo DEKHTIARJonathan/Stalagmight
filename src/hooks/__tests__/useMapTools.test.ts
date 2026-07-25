@@ -1,5 +1,5 @@
 /**
- * Unit tests for useMapTools helpers. Covers nearestReachableStationRef — the Plan-mode
+ * Unit tests for useMapTools helpers. Covers nearestReachableStationRef - the Plan-mode
  * "set a turnaround anywhere" resolver (#236): right-clicking the map (even with no turn-frontier
  * dots, e.g. low RMV / lots of gas, or with stations hidden) snaps to the nearest reachable station.
  */
@@ -42,7 +42,7 @@ describe('nearestReachableStationRef', () => {
     });
   });
 
-  it('restricts to reachable stations — skips a closer unreachable one', () => {
+  it('restricts to reachable stations - skips a closer unreachable one', () => {
     // The click is nearest station 3 (x=30), but only 0..1 are reachable → picks station 1, the
     // nearest one a diver can actually turn at (an unreachable pick would fall back to deepest).
     const reachable = new Set(['1:0', '1:1']);

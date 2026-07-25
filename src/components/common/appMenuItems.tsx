@@ -2,7 +2,7 @@
  * Shared AppMenu rows used by BOTH the GlobalView hamburger and the in-project
  * hamburger (useProjectMenuItems), so the common New / Open / Settings / Debug /
  * Quit entries are defined exactly once instead of being hand-maintained twice
- * (they had already drifted — e.g. the quit handler). Item ids match the
+ * (they had already drifted - e.g. the quit handler). Item ids match the
  * legacy/e2e selectors so existing tests keep working.
  */
 import type { TFunction } from 'i18next';
@@ -22,7 +22,7 @@ import type { AppMenuItem } from './AppMenu';
 
 const ICON_SIZE = 18;
 
-/** Filters passed to the file picker — `[{ name, extensions }]`. */
+/** Filters passed to the file picker - `[{ name, extensions }]`. */
 type FileFilters = Array<{ name: string; extensions: string[] }>;
 
 /**
@@ -140,7 +140,7 @@ export function serviceMenuItems(
   ];
 }
 
-/** Quit row — shares the single close + error-handling contract via quitApp. */
+/** Quit row - shares the single close + error-handling contract via quitApp. */
 export function quitMenuItem(t: TFunction): AppMenuItem {
   return {
     id: 'global-quit-button',

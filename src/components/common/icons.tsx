@@ -65,7 +65,7 @@ function BaseIcon24({
 
 // A stroked straight segment rendered as a filled, round-capped bar (same
 // centerline + round caps as the original stroke). Fills rasterize cleanly under
-// the WebKit/WKWebView page-zoom UI scale, where thin strokes get fattened — see
+// the WebKit/WKWebView page-zoom UI scale, where thin strokes get fattened - see
 // the webkit-icon-stroke-zoom note. `w` is the bar weight (≈ former strokeWidth):
 // 1.9 in the 20-unit BaseIcon space, ~2.2 in the 24-unit BaseIcon24 space.
 function Bar({
@@ -84,7 +84,7 @@ function Bar({
   const cx = (x1 + x2) / 2;
   const cy = (y1 + y2) / 2;
   // Extend the rect by w (w/2 at each end) so the rounded ends sit *beyond* the
-  // endpoints — matching strokeLinecap="round", which caps half a stroke-width
+  // endpoints - matching strokeLinecap="round", which caps half a stroke-width
   // past each end. Without this the glyph reads noticeably short (arrows/chevrons).
   const len = Math.hypot(x2 - x1, y2 - y1) + w;
   const angle = (Math.atan2(y2 - y1, x2 - x1) * 180) / Math.PI;
@@ -679,7 +679,7 @@ export function BugIcon(props: IconProps) {
 
 export function MenuIcon(props: IconProps) {
   // Filled bars (not strokes) so the icon keeps a consistent weight at any UI
-  // scale — WebKit/WKWebView render thin strokes heavy under page-zoom, but
+  // scale - WebKit/WKWebView render thin strokes heavy under page-zoom, but
   // fills rasterize cleanly. Matches the duotone glyphs' filled base.
   return (
     <BaseIcon {...props}>

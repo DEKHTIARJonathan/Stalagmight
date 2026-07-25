@@ -1,14 +1,14 @@
 /**
  * MapLibre `CustomLayerInterface` for the custom-render LABEL pass (#customRender
  * labels, Phase 2). Draws SDF glyph quads from typed-array buffers + a growing R8
- * glyph-atlas texture — the first sampler in this renderer. Sibling of
+ * glyph-atlas texture - the first sampler in this renderer. Sibling of
  * `surveyCustomLayer.ts` (geometry); same GL discipline (WebGL2 / GLSL ES 3.00,
  * premultiplied-alpha blend, first-frames `getError()` self-disable) and the same
  * anchor-relative-mercator + screen-px-offset primitive via `composeAnchorMatrix`.
  *
  * INDEPENDENCE: this layer fails on its own. A compile/link failure or a GL error
  * self-disables JUST the labels (the controller restores the stock label layer),
- * leaving the geometry custom layer untouched — the design's "the two custom
+ * leaving the geometry custom layer untouched - the design's "the two custom
  * layers can fail independently" (§8).
  *
  * PER-FRAME UNIFORMS: the layer holds no zoom-dependent state. Each frame it reads
@@ -37,7 +37,7 @@ export interface LabelRenderData {
   anchorX: number;
   anchorY: number;
   buffers: LabelBuffers;
-  /** The glyph atlas backing `a_uv` — the layer drains its pending texture
+  /** The glyph atlas backing `a_uv` - the layer drains its pending texture
    *  uploads (grow → full re-upload; else per-rect `texSubImage2D`). */
   atlas: GlyphAtlas;
 }
@@ -94,7 +94,7 @@ function makeBuffer(gl: WebGL2RenderingContext, target: number, data: ArrayBuffe
 }
 
 /** A neutral style default so a frame before the controller pushes inputs never
- *  reads undefined (everything hidden, opaque-black halo — draws nothing since
+ *  reads undefined (everything hidden, opaque-black halo - draws nothing since
  *  kindVisible is 0). */
 const DEFAULT_STYLE: LabelStyleInputs = {
   dpr: 1,
@@ -191,7 +191,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
   }
 
   /**
-   * Re-upload ONLY the per-vertex flags buffer — the cheap DIM / drag-hide flip +
+   * Re-upload ONLY the per-vertex flags buffer - the cheap DIM / drag-hide flip +
    * collision-rerun path (Phase 5). `flags.length` must equal the currently
    * uploaded glyph buffer's vertex count (the controller recomputes it from the
    * SAME shaped set via `buildLabelFlags`, so it always matches). `bufferSubData`
@@ -208,7 +208,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
   }
 
   /**
-   * Re-upload ONLY the per-vertex reveal-zoom buffer — the cheap kind / reference
+   * Re-upload ONLY the per-vertex reveal-zoom buffer - the cheap kind / reference
    * toggle path (rerun the reveal pass off the render loop, re-upload the
    * thresholds). Sibling of {@link updateFlags}: `revealZoom.length` must equal
    * the uploaded glyph buffer's vertex count (the controller recomputes it from

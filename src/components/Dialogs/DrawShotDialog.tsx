@@ -50,7 +50,7 @@ export default function DrawShotDialog() {
     return String(reversed);
   }, [sourceGeometry, prependMode]);
 
-  // Form state — prefill from source geometry if provided
+  // Form state - prefill from source geometry if provided
   const [azimuthIn, setAzimuthIn] = useState(initialAzimuthIn);
   const [azimuthOut, setAzimuthOut] = useState(initialAzimuthOut);
   const [length, setLength] = useState((prependMode || appendMode) ? '0' : '');
@@ -124,7 +124,7 @@ export default function DrawShotDialog() {
     try {
       // Build shot data with normalized azimuths
       // In prepend mode with existing shots, reverse the azimuth by 180° (user enters forward direction, shot stores backward)
-      // For empty sections (no reference shot), skip reversal — the first shot added is just a normal shot
+      // For empty sections (no reference shot), skip reversal - the first shot added is just a normal shot
       const rawAzimuthIn = parseFloat(azimuthIn);
       const rawAzimuthOut = azimuthOut ? parseFloat(azimuthOut) : rawAzimuthIn;
       const shouldReverse = prependMode && section.shots.length > 0;

@@ -350,7 +350,7 @@ export default function SettingsDialog() {
   // Panel ID base for ARIA associations
   const panelIdBase = useId();
 
-  // Active (selected) category — initialCategory from dialogData (e.g. from "Customize shortcuts" link)
+  // Active (selected) category - initialCategory from dialogData (e.g. from "Customize shortcuts" link)
   const dialogData = useUIStore((s) => s.dialogData);
   const [activeCategory, setActiveCategory] = useState<SettingsCategory>(
     (dialogData?.initialCategory as SettingsCategory) || 'general'
@@ -366,13 +366,13 @@ export default function SettingsDialog() {
   // Category error states
   const [categoryErrors, setCategoryErrors] = useState<Partial<Record<SettingsCategory, boolean>>>({});
 
-  // Fixed size for settings dialog — constant from first render through all category switches
+  // Fixed size for settings dialog - constant from first render through all category switches
   const settingsFixedSize: FixedSize = useMemo(() => ({
     width: 'min(800px, 95vw)',
     height: 'clamp(500px, 80vh, 800px)',
   }), []);
 
-  // Ref for scrollable content area — used to reset scroll on category change
+  // Ref for scrollable content area - used to reset scroll on category change
   const contentRef = useRef<HTMLDivElement>(null);
 
   // Custom unsaved changes dialog state

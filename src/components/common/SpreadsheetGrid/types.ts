@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
 /**
- * SpreadsheetGrid — a self-contained, library-free, Excel-like editing grid.
+ * SpreadsheetGrid - a self-contained, library-free, Excel-like editing grid.
  *
  * Clean-room note: implemented from observable spreadsheet behaviour and
  * commodity algorithms only; no third-party grid library source was referenced.
@@ -52,7 +52,7 @@ export interface GridColumn<Row> {
   multiline?: boolean;
   /** Parse a raw typed/pasted string into the value to commit. Return
    *  `undefined` to SKIP the write (e.g. a non-finite number, or an empty string
-   *  into a non-nullable numeric — never silently write 0). Defaults to a
+   *  into a non-nullable numeric - never silently write 0). Defaults to a
    *  locale-aware parser based on {@link kind}. */
   parse?: (raw: string, row: Row) => unknown;
   /** Validate a parsed value before it is committed. Return an error message to

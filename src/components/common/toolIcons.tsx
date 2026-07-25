@@ -1,5 +1,5 @@
 /**
- * Duotone tool icons for the toolbar — a soft accent-fill silhouette plus a
+ * Duotone tool icons for the toolbar - a soft accent-fill silhouette plus a
  * solid accent line, where the object color encodes WHAT the tool acts on and
  * a shared modifier (slate move-compass) encodes the move action. Ported from
  * the project's Cave Survey icon spec.
@@ -83,7 +83,7 @@ const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
     <g>
       <path className="s" d="M6.5 8 L14 12" />
       <path className="s" d="M6.5 16 L14 12" />
-      {/* The merged objects are stations — color their circles with the station
+      {/* The merged objects are stations - color their circles with the station
           color (overriding the tool's --o for this subtree). */}
       <g className="sh-tone" style={{ '--o': 'var(--sh-station)' } as CSSProperties}>
         <Station cx={4} cy={8} r={2.4} />
@@ -135,7 +135,7 @@ const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
     </g>
   ),
   move_segment: () => (
-    // A segment is a BRANCHING run of shots — the fork (extra path + node)
+    // A segment is a BRANCHING run of shots - the fork (extra path + node)
     // distinguishes it from a plain section polyline, matching delete-segment.
     <g>
       <MoveDeco />
@@ -275,7 +275,7 @@ const deleteX: BadgeContent = (cx, cy, r) => {
   );
 };
 
-/** Orange pencil (edit) — a filled pencil, rotated diagonally. */
+/** Orange pencil (edit) - a filled pencil, rotated diagonally. */
 const editPencil: BadgeContent = (cx, cy, r) => {
   const k = r * 0.92;
   return (
@@ -302,7 +302,7 @@ const datumStar: BadgeContent = (cx, cy, r) => (
   <path className="datum-star" d={starD(cx, cy, r * 1.02, r * 0.42)} />
 );
 
-/** Eye (open, or crossed with a slash) — visibility / reference state. */
+/** Eye (open, or crossed with a slash) - visibility / reference state. */
 function eyeShape(cx: number, cy: number, r: number, crossed: boolean): ReactNode {
   const rx = r * 0.98, ry = r * 0.62, pr = r * 0.32, a = r * 0.8;
   return (
@@ -331,7 +331,7 @@ const greenPlus: BadgeContent = (cx, cy, r) => {
   );
 };
 
-/** Broken chain (remove closure / unmerge) — two link hooks with a gap, mapped
+/** Broken chain (remove closure / unmerge) - two link hooks with a gap, mapped
  * from the link-off art (20-unit space) into the badge. */
 const brokenChain: BadgeContent = (cx, cy, r) => {
   const k = r * 0.108;
@@ -346,7 +346,7 @@ const brokenChain: BadgeContent = (cx, cy, r) => {
   );
 };
 
-/** Chat bubble (comments) — a rounded speech bubble with a small tail. */
+/** Chat bubble (comments) - a rounded speech bubble with a small tail. */
 const chatBubble: BadgeContent = (cx, cy, r) => {
   const w = r * 1.4, h = r * 0.96, rx = r * 0.32;
   const x = cx - w / 2;
@@ -361,11 +361,11 @@ const chatBubble: BadgeContent = (cx, cy, r) => {
   );
 };
 
-/** "Data rows" / hamburger (shot data) — three stacked lines. */
+/** "Data rows" / hamburger (shot data) - three stacked lines. */
 const dataLines: BadgeContent = (cx, cy, r) => {
   const hw = r * 0.6, gap = r * 0.44;
   // Draw each row as a FILLED stadium (rounded rect) instead of a stroked line:
-  // WebKit fattens thin strokes under the setZoom UI scale (the project rule —
+  // WebKit fattens thin strokes under the setZoom UI scale (the project rule -
   // draw UI icons filled, not stroked). Height + rx reproduce the prior
   // stroke-width 1.6 with round caps, so the glyph is pixel-identical at 1x.
   const t = 1.6;
@@ -415,7 +415,7 @@ const BADGE_POS: Record<BlobEntity, { bx: number; by: number; br: number }> = {
 };
 
 /** Entity glyph + a corner action badge (object color via --o; the badge modifier
- * color comes from its own class — red ✕ / orange pencil / gold star). */
+ * color comes from its own class - red ✕ / orange pencil / gold star). */
 function EntityBadgedSymbol({
   entity,
   content,
@@ -471,7 +471,7 @@ export function EntityPermanentSymbol(props: EntitySymbolProps) {
 export function EntityAddSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={greenPlus} />;
 }
-/** Duotone "unlink <entity>" (entity color + broken-chain badge) — remove
+/** Duotone "unlink <entity>" (entity color + broken-chain badge) - remove
  * closure / unmerge. */
 export function EntityUnlinkSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={brokenChain} />;

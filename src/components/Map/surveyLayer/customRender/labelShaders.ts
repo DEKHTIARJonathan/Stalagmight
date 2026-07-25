@@ -7,8 +7,8 @@
  * and the same anchor-relative-mercator + screen-px-offset primitive: one anchor
  * per label is projected by `u_matrix` (composed via `composeAnchorMatrix` from
  * `defaultProjectionData.mainMatrix`), then each glyph corner is displaced by a
- * per-vertex screen-space offset — exactly the `CIRCLE_VERTEX_SRC`
- * `offsetPx / u_viewport * 2.0 * base.w` idiom — so a whole word tracks the map
+ * per-vertex screen-space offset - exactly the `CIRCLE_VERTEX_SRC`
+ * `offsetPx / u_viewport * 2.0 * base.w` idiom - so a whole word tracks the map
  * during pan for free (matrix reprojection), only the glyph quad varying.
  *
  * WHAT IS NEW vs the geometry shaders:
@@ -18,7 +18,7 @@
  *    never a per-glyph re-layout; the vertex shader normalizes.
  *  - Integer attributes `a_kind` / `a_flags` (bound with `vertexAttribIPointer`,
  *    UNSIGNED_BYTE) so the fragment can index per-kind uniform arrays and the
- *    vertex can test flag bits — the design's `(a_flags & HIDE) != 0` sketch.
+ *    vertex can test flag bits - the design's `(a_flags & HIDE) != 0` sketch.
  *  - Per-kind uniform arrays (size 5, one slot per {@link LABEL_KIND}) so zoom
  *    size / opacity / visibility / halo are CPU-recomputed each frame WITHOUT any
  *    buffer rebuild (§3 of the design: the load-bearing "no rebuild for zoom /
@@ -29,13 +29,13 @@
  *    `mod(a_ordinal, N)` decimation: declutter + decimation are computed ONCE per
  *    build (`labelReveal.ts`) as a single reveal threshold. Because the shader
  *    test is `u_zoom >= a_reveal_zoom`, the visible set is MONOTONE in zoom by
- *    construction — zooming in only ever ADDS labels (never removes one), a band
+ *    construction - zooming in only ever ADDS labels (never removes one), a band
  *    crossing never flashes the full set, and admission tracks live zoom with no
  *    rebuild. Zoom-in needs no rebuild at all (the built set is a superset).
  *
  * SDF ENCODING (must agree with `glyphAtlas.ts`): TinySDF with `cutoff = 0.25`
  * puts the glyph EDGE at byte `255 * (1 - cutoff) = 191`, i.e. normalized
- * `d = 0.75` — NOT `0.5`. This is exactly MapLibre's own glyph shader constant
+ * `d = 0.75` - NOT `0.5`. This is exactly MapLibre's own glyph shader constant
  * (`buff = 192/256 = 0.75`); the companion design doc's "0.5 = edge" is a
  * transcription slip for the stated `cutoff: 0.25`, corrected to {@link SDF_EDGE}
  * here so the fragment math matches the bytes the atlas actually produces.
@@ -45,7 +45,7 @@
  */
 
 /** Per-label KIND, indexing every per-kind uniform array. Mirrors the 5 stock
- *  symbol layers. The numeric values are the shader's `a_kind` contract — keep
+ *  symbol layers. The numeric values are the shader's `a_kind` contract - keep
  *  in lock-step with the `int(a_kind)` switch below and the uniform-array order. */
 export const LABEL_KIND = {
   SHOT_LABEL: 0,
@@ -84,7 +84,7 @@ export const LABEL_KIND_COUNT = 5;
  * The old `COLLIDE_HIDE` bit is GONE: collision decluttering is no longer a
  * boolean baked per zoom (which flashed stale bits on band crossings and evicted
  * lower-zoom winners) but a per-label reveal zoom (`a_reveal_zoom`) evaluated per
- * frame — see the module header + `labelReveal.ts`.
+ * frame - see the module header + `labelReveal.ts`.
  */
 export const LABEL_FLAG = {
   FIRST_IN_SECTION: 1 << 0,
@@ -152,7 +152,7 @@ const FLAG_DEFINES = `
  * single monotone `u_zoom >= a_reveal_zoom` compare, zooming in only adds labels
  * and never removes one. All four verts of a glyph share
  * `a_anchor`/`a_kind`/`a_reveal_zoom`/`a_flags`, so both triangles degenerate
- * together — same guarantee the line/circle collapses rely on.
+ * together - same guarantee the line/circle collapses rely on.
  */
 export const LABEL_VERTEX_SRC = `#version 300 es
 precision highp float;
@@ -225,8 +225,8 @@ void main() {
  * text edge + outward halo (§1 of the design). `d` (0..1) is the atlas red
  * channel, {@link SDF_EDGE} (0.75) is the glyph edge; deeper inside = higher `d`.
  * The AA half-band `gamma` and the halo edge are both expressed in SDF units via
- * `sdfPerScreenPx = u_font_size / (u_sdf_radius * v_size_px)` — the raster-px ->
- * screen-px -> SDF-unit chain — so a halo width given in SCREEN px lands at the
+ * `sdfPerScreenPx = u_font_size / (u_sdf_radius * v_size_px)` - the raster-px ->
+ * screen-px -> SDF-unit chain - so a halo width given in SCREEN px lands at the
  * right SDF threshold at any rendered size. Output is premultiplied to match the
  * geometry layer's `fragColor = vec4(col.rgb * a, a)` convention.
  */

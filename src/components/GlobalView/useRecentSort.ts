@@ -111,7 +111,7 @@ export function useRecentSort(): RecentSort {
  * Returns a new array of projects sorted by the given field and direction.
  * `last_edited`/`sections`/`length` sort numerically; `name` uses a
  * locale-aware comparison; `last_opened` preserves the backend's recency order
- * (the input array is already most-recently-opened first — there is no
+ * (the input array is already most-recently-opened first - there is no
  * per-project "opened at" timestamp, so the original position is the signal).
  * Direction flips the comparator: `desc` puts the largest/most-recent first.
  */

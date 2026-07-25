@@ -1,5 +1,5 @@
 //! Property-based, seeded fuzz tests for the collaboration reconcile engine
-//! (Layers 1–2 of `docs/collab-stress-testing.md`).
+//! (Layers 1-2 of `docs/collab-stress-testing.md`).
 //!
 //! Dependency-free: a SplitMix64 PRNG plus a generator bounded to project
 //! topologies *proven* to round-trip cleanly (mirroring the targeted tests in
@@ -25,7 +25,7 @@ use crate::models::{
 use crate::parsers::tml::{parse_tml, TmlFile, TmlShotType};
 
 // --------------------------------------------------------------------------
-// PRNG (SplitMix64) — deterministic and reproducible from a seed.
+// PRNG (SplitMix64) - deterministic and reproducible from a seed.
 // --------------------------------------------------------------------------
 
 struct Rng(u64);
@@ -62,7 +62,7 @@ fn iters() -> u64 {
 }
 
 // --------------------------------------------------------------------------
-// Generator — bounded to constructs proven to round-trip to an empty diff.
+// Generator - bounded to constructs proven to round-trip to an empty diff.
 // --------------------------------------------------------------------------
 
 /// The clean-round-trip topologies the generator can emit. Each mirrors a
@@ -77,7 +77,7 @@ enum Kind {
     /// Root + a differently-named child merged mid-station (synthetic reversed leg).
     Merge,
     /// Root + a same-named child merged at its start (no synthetic leg; tests the
-    /// identity split of duplicate names — needs UUIDs, so excluded from the
+    /// identity split of duplicate names - needs UUIDs, so excluded from the
     /// degraded property).
     DupNames,
 }
@@ -329,7 +329,7 @@ fn prop_edit_converges(seed: u64) {
     apply_changeset(&mut p2, &cs);
 
     // Convergence: after applying, re-seed p2's baseline and re-diff against the
-    // same returned file — there must be nothing left to do (content + order).
+    // same returned file - there must be nothing left to do (content + order).
     // Degrade the returned side so matching is geometry-only: an insert/delete
     // shifts shot indices, and p2's re-seeded baseline reuses the cloned UUIDs by
     // (section_id, shot_index), so a UUID-tier match here would compare shifted
@@ -345,7 +345,7 @@ fn prop_edit_converges(seed: u64) {
 
 /// Run one iteration of property 4: the diff is deterministic.  Running
 /// `diff` twice on identical inputs must produce identical changesets
-/// — catches non-determinism from `HashMap::into_iter` (e.g. the
+/// - catches non-determinism from `HashMap::into_iter` (e.g. the
 /// majority-vote tie-break before the `Reverse(sid)` ordering fix).
 fn prop_diff_is_deterministic(seed: u64, kind: Kind) {
     let dir = TempDir::new().unwrap();
@@ -363,7 +363,7 @@ fn prop_diff_is_deterministic(seed: u64, kind: Kind) {
 
 /// Run one iteration of property 5: inserting a shot in Stalagmight
 /// between two exports must not silently re-bind UUIDs.  This is the
-/// regression net for the `pick_uuid((section_id, shot_index))` bug —
+/// regression net for the `pick_uuid((section_id, shot_index))` bug -
 /// before the `Shot.uuid` field, the second export would assign the
 /// pre-existing shots' UUIDs to whichever shot happened to land at that
 /// `(section_id, shot_index)` slot after the insert.
@@ -418,7 +418,7 @@ fn prop_uuid_survives_local_insert(seed: u64) {
 
 /// True if any stored cross-reference dangles (its anchoring shot is gone).
 /// With stable identity this is the failure an interleaved insert/delete must
-/// never produce — a missed positional shift used to leave one silently.
+/// never produce - a missed positional shift used to leave one silently.
 fn has_dangling_ref(p: &Project) -> bool {
     p.check_structural_integrity()
         .iter()
@@ -466,14 +466,14 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
         );
     }
     // Any merge that survived the edits must still be colocated (the offset
-    // cascade kept its endpoints coincident — no silent drift).
+    // cascade kept its endpoints coincident - no silent drift).
     assert!(
         p.check_merge_alignment().is_empty(),
         "seed={seed}: a merge drifted after interleaved edits:\n{p:#?}"
     );
 }
 
-/// Re-run a single seed across all properties — for pinning a discovered failure
+/// Re-run a single seed across all properties - for pinning a discovered failure
 /// as a deterministic regression test.
 #[expect(dead_code)]
 fn run_seed(seed: u64) {
@@ -541,7 +541,7 @@ fn fuzz_anchors_survive_interleaved_edits() {
 }
 
 // --------------------------------------------------------------------------
-// Layer 2 — real-Ariane corpus replay (opt-in; skips if the data is absent).
+// Layer 2 - real-Ariane corpus replay (opt-in; skips if the data is absent).
 // --------------------------------------------------------------------------
 
 fn corpus_dir() -> std::path::PathBuf {

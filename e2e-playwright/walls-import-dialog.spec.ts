@@ -2,7 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 
 /**
- * E2E coverage for the Walls import dialog's per-survey selection gating —
+ * E2E coverage for the Walls import dialog's per-survey selection gating -
  * the derived state that silently imports the wrong surveys if it drifts:
  * the select-all → `null` vs explicit-sorted-index payload, the
  * selection-scoped shot/splay Import gate, and the splay-only enable branch.
@@ -56,7 +56,7 @@ async function getWallsImportCalls(page: Page): Promise<Array<Record<string, unk
   );
 }
 
-test.describe('Walls import dialog — survey selection gating', () => {
+test.describe('Walls import dialog - survey selection gating', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await page.evaluate(() => (window as unknown as { __MOCK_RESET_WALLS_IMPORT_CALLS__?: () => void }).__MOCK_RESET_WALLS_IMPORT_CALLS__?.());

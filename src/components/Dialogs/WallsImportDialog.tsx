@@ -61,7 +61,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
   // Importable shots in the CURRENTLY SELECTED surveys (each summary's
   // shot_count already excludes splays, same filter as the project total), so
   // the Shots stat and the Import gate track the selection rather than the
-  // whole file — deselecting every shot-bearing survey disables Import.
+  // whole file - deselecting every shot-bearing survey disables Import.
   const selectedShotCount = useMemo(
     () =>
       wallsFile.surveys.reduce(
@@ -74,7 +74,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
   // Splays / fixed stations in the SELECTED surveys, computed the same way as
   // `selectedShotCount`. The Import gate's splay branch and the Fixed-stations
   // stat/warning key off these so they track the selection rather than the whole
-  // file — deselecting a splay-only or fix-heavy survey no longer leaves the gate
+  // file - deselecting a splay-only or fix-heavy survey no longer leaves the gate
   // enabled or the anchor stat/warning stale.
   const selectedSplayCount = useMemo(
     () =>
@@ -158,8 +158,8 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       }
 
       // A partial-success import (new-project deferred save failed) returns
-      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that — before
-      // the optional orphan step — so "unsaved — save manually" isn't swallowed.
+      // success WITH a "SYSTEM" save-failure warning. Surface ONLY that - before
+      // the optional orphan step - so "unsaved - save manually" isn't swallowed.
       if (finalizeDeferredSaveWarnings(result.warnings, 'walls-import', importUi)) {
         return;
       }
@@ -167,7 +167,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
       // `section_ids` is omitted from the IPC payload when empty, so default it.
       const sectionIds = result.section_ids ?? [];
 
-      // Nothing was imported — most commonly a `.wpj` whose `.srv` files aren't
+      // Nothing was imported - most commonly a `.wpj` whose `.srv` files aren't
       // next to it on disk. Tell the user why instead of silently "succeeding".
       if (sectionIds.length === 0) {
         trackDialogComplete('walls-import');
@@ -239,7 +239,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary" title="#Fix stations — each becomes a GPS zero datum on its connected component">
+            <div className="text-xs text-text-tertiary" title="#Fix stations - each becomes a GPS zero datum on its connected component">
               Fixed stations
             </div>
             <div className="text-sm font-medium">
@@ -248,7 +248,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           </div>
           <div>
-            <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive — the coordinate system, not a station anchor">
+            <div className="text-xs text-text-tertiary" title="Projection reference from the .wpj .REF directive - the coordinate system, not a station anchor">
               Projection
             </div>
             <div className="text-sm font-medium">{projectionLabel}</div>
@@ -258,7 +258,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
           <div className="text-xs text-text-secondary">
             This project has a coordinate reference (.REF) but no <code>#Fix</code> stations in the
             resolved surveys, so nothing is GPS-anchored. Walls keeps fixed points in separate
-            survey files — include those to georeference the cave.
+            survey files - include those to georeference the cave.
           </div>
         )}
 
@@ -267,7 +267,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
         {wallsFile.shot_count === 0 && (
           <div className="p-3 bg-warning-10 border border-warning-20 rounded text-sm">
             {wallsFile.missing_file_count > 0
-              ? `None of the ${wallsFile.missing_file_count} referenced .SRV survey file(s) were found next to "${fileName}", so there is nothing to import. A .wpj references its survey files by name — put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.`
+              ? `None of the ${wallsFile.missing_file_count} referenced .SRV survey file(s) were found next to "${fileName}", so there is nothing to import. A .wpj references its survey files by name - put the .SRV files in the same folder as the .wpj, or import a single .srv file directly.`
               : wallsFile.splay_count > 0
                 ? `This file has no regular survey shots, but ${wallsFile.splay_count} anonymous wall / splay shot(s). Enable "Include anonymous wall / splay shots" below to import them.`
                 : 'This file contains no survey shots to import.'}
@@ -287,7 +287,7 @@ export default function WallsImportDialog({ wallsFile, filePath }: WallsImportDi
             </div>
           )}
 
-        {/* Survey list — choose which surveys to import */}
+        {/* Survey list - choose which surveys to import */}
         <div className="space-y-1">
           <div className="flex items-center justify-between text-xs text-text-tertiary">
             <span>Surveys to import</span>

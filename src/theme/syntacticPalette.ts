@@ -77,7 +77,7 @@ export const SYNTACTIC_ROLES: SyntacticRoleDef[] = [
 export type SyntacticPalette = Record<SyntacticRole, string>;
 
 /**
- * Default preset — the spec palette (`icons.jsx`). Hex values for the oklch
+ * Default preset - the spec palette (`icons.jsx`). Hex values for the oklch
  * entries are exact sRGB conversions of the spec's oklch colors so the color
  * pickers stay lossless.
  */
@@ -96,7 +96,7 @@ const DEFAULT_PALETTE: SyntacticPalette = {
   zoom: '#84a8fd', // indigo             (oklch 0.74 0.13 266)
 };
 
-// Okabe–Ito colorblind-safe palette — mutually distinguishable across the major
+// Okabe-Ito colorblind-safe palette - mutually distinguishable across the major
 // CVD types. Used as the source colors for the colorblind presets below.
 const OI = {
   orange: '#e69f00',
@@ -111,7 +111,7 @@ const OI = {
 } as const;
 
 /**
- * Deuteranopia (green-weak) — lean on the orange↔blue↔yellow↔purple axis;
+ * Deuteranopia (green-weak) - lean on the orange↔blue↔yellow↔purple axis;
  * station uses sky-blue (separated from shot's dark blue by lightness) to avoid
  * a green that could blur against warm hues.
  */
@@ -131,7 +131,7 @@ const DEUTERANOPIA_PALETTE: SyntacticPalette = {
 };
 
 /**
- * Protanopia (red-weak) — same safe axis; since none of the entities are red,
+ * Protanopia (red-weak) - same safe axis; since none of the entities are red,
  * station can stay bluish-green (red-green confusion only bites against reds,
  * and `delete`'s vermillion lives in a distinct action context).
  */
@@ -151,8 +151,8 @@ const PROTANOPIA_PALETTE: SyntacticPalette = {
 };
 
 /**
- * Tritanopia (blue-yellow weak) — favor the red↔green↔pink axis and lightness
- * contrast; blue vs green are separated by Okabe–Ito's lightness spread.
+ * Tritanopia (blue-yellow weak) - favor the red↔green↔pink axis and lightness
+ * contrast; blue vs green are separated by Okabe-Ito's lightness spread.
  */
 const TRITANOPIA_PALETTE: SyntacticPalette = {
   segment: OI.vermillion,

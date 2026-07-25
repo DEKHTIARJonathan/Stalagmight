@@ -8,7 +8,7 @@ canonical `.stalx`. Stalagmight saves both files; an Ariane user edits the `.tml
 on the next open, Stalagmight detects the external edit and offers to reconcile
 those changes back into the `.stalx`.
 
-The `.stalx` stays the source of truth — it stores data Ariane cannot represent
+The `.stalx` stays the source of truth - it stores data Ariane cannot represent
 (loop closures, station merges, section/station offsets, comments, dual azimuth,
 markers, temperature). Reconciliation never destroys that data on surviving shots.
 
@@ -30,7 +30,7 @@ markers, temperature). Reconciliation never destroys that data on surviving shot
     in-memory open project via `set_collab_enabled`; and
   - the **recent-projects metadata panel** in the global view (`MetadataPanel`),
     which acts on a recent project that may not be open via
-    `set_collab_enabled_for_path` — it mutates the `.stalx` `collab_state` row on
+    `set_collab_enabled_for_path` - it mutates the `.stalx` `collab_state` row on
     disk directly (and keeps the open project's in-memory copy in sync if it's the
     same file). `ProjectMetadata.collab_enabled` carries the current state into the
     list/map without opening the project.
@@ -40,25 +40,25 @@ markers, temperature). Reconciliation never destroys that data on surviving shot
 
 ## Data flow
 
-### Save (collab on) — `core/state/project_io.rs`
+### Save (collab on) - `core/state/project_io.rs`
 After the atomic `.stalx` write succeeds, `write_collab_sibling` exports the sibling
 `.tml` (`export/tml.rs::export_tml_with_baseline`), then stores in the project's
 `CollabState`:
-- `last_export_tml_sha256` — sha256 of the inner `Data.xml` we just wrote,
-- `shot_baseline` — a per-shot identity map,
-- `section_name_map` — export-time section names (Ariane's names are lossy).
+- `last_export_tml_sha256` - sha256 of the inner `Data.xml` we just wrote,
+- `shot_baseline` - a per-shot identity map,
+- `section_name_map` - export-time section names (Ariane's names are lossy).
 
 A failed `.tml` write degrades to success-with-warning; it never fails the `.stalx`
 save. Persisted via the single-row `collab_state` table (`.stalx` schema v5).
 
-### Open — `src/store/projectStore.ts`
+### Open - `src/store/projectStore.ts`
 After a successful load, the frontend calls `detect_collab_changes`. The backend
 (`core/state/collab.rs::compute_collab`) returns `None` unless collab is enabled,
 the sibling exists, and its inner-XML sha256 differs from `last_export_tml_sha256`.
 If a non-empty `CollabChangeSet` comes back, the **Collaboration Review** dialog
 opens.
 
-### Reconcile — `core/reconcile.rs` (pure `diff`)
+### Reconcile - `core/reconcile.rs` (pure `diff`)
 `diff(project, tml)` produces a `CollabChangeSet { shots_added, shots_edited,
 shots_removed, sections_added, section_meta_changed, warnings, match_quality }`.
 
@@ -74,12 +74,12 @@ Stalagmight shot IDs are regenerated on load, so the stable baseline key is
 `(section_id, shot_index)`. Matching a returned `.tml` shot to a baseline shot uses
 tiers, in order:
 
-1. **UUID** — native `<UUID>`/`<UU>`, emitted on export. Ariane 26+ round-trips it;
+1. **UUID** - native `<UUID>`/`<UU>`, emitted on export. Ariane 26+ round-trips it;
    Ariane ≤25 drops it, so this tier only "switches on" once collaborators upgrade.
-2. **Ariane integer ID** — *guarded*. Real Ariane data renumbers IDs across saves
+2. **Ariane integer ID** - *guarded*. Real Ariane data renumbers IDs across saves
    (verified in test data: v1→v2 went `0..74` → `29..160`). If the baseline∩returned
    ID overlap is below ~50%, this tier is skipped as untrustworthy.
-3. **Geometry fingerprint** — the primary matcher in practice. A quantized key
+3. **Geometry fingerprint** - the primary matcher in practice. A quantized key
    (`geo_key`: azimuth 0.1°, length 5 mm, depth-delta 1 cm) aligned with an
    LCS-style walk so a mid-section insert/delete doesn't cascade.
 4. **Positional** fallback → `match_quality = Positional` (the review dialog warns).
@@ -114,7 +114,7 @@ back to name-based matching (today's behavior).
 
 **Overwritten from the `.tml`** on edited shots: azimuth (→ azimuth_in), length,
 depth_in/out, inclination (→ pitch_in), L/R/U/D, comment, is_reference; and section
-name/color/surveyor/date. **Station comments** round-trip too — see
+name/color/surveyor/date. **Station comments** round-trip too - see
 [Station comments via the ZWSP marker](#station-comments-via-the-zwsp-marker).
 
 **Preserved (never overwritten):** azimuth_out, pitch_out, marker_index, temperature,
@@ -127,7 +127,7 @@ dialog surfaces a `DeleteShotImpact` warning before you apply.
 Ariane's `.tml` format has one `<Comment>` field per shot and no per-station
 comment field, so a Stalagmight station comment otherwise has nowhere to live
 in `.tml`. Each station comment is attached to the shot whose **`to` station**
-matches it (the shot that "creates" that station — i.e. `shot_index + 1`).
+matches it (the shot that "creates" that station - i.e. `shot_index + 1`).
 Shot vs station lines inside the resulting Comment are distinguished by a
 zero-width-space (`U+200B`) prefix:
 
@@ -136,7 +136,7 @@ zero-width-space (`U+200B`) prefix:
 
 The marker is invisible in any editor, including Ariane's, so a collaborator
 sees a single readable Comment block. New text an Ariane user types carries no
-marker and routes back to the **station** on reconcile — matching how Ariane
+marker and routes back to the **station** on reconcile - matching how Ariane
 visually centers Comment text on the station, not along the shot.
 
 Reconcile captures the station-portion text in `ShotBaselineEntry.station_comment`
@@ -162,15 +162,15 @@ has no markers, so every Comment line routes to the station.
 
 ## Key files
 
-- `src-tauri/src/models/collab.rs` — `CollabState`, `ShotBaselineEntry`, `geo_key`
-- `src-tauri/src/export/tml.rs` — UUID emission + `export_tml_with_baseline`
-- `src-tauri/src/core/reconcile.rs` — pure `diff` engine + change-set types
-- `src-tauri/src/core/state/collab.rs` — enable/detect/apply on `AppState`
-- `src-tauri/src/commands/collab.rs` — IPC commands
-- `src/components/Dialogs/CollabReviewDialog.tsx` — the review/apply preview
-- `src/components/SingleSystemView/DetailPanel.tsx` — the per-project toggle
+- `src-tauri/src/models/collab.rs` - `CollabState`, `ShotBaselineEntry`, `geo_key`
+- `src-tauri/src/export/tml.rs` - UUID emission + `export_tml_with_baseline`
+- `src-tauri/src/core/reconcile.rs` - pure `diff` engine + change-set types
+- `src-tauri/src/core/state/collab.rs` - enable/detect/apply on `AppState`
+- `src-tauri/src/commands/collab.rs` - IPC commands
+- `src/components/Dialogs/CollabReviewDialog.tsx` - the review/apply preview
+- `src/components/SingleSystemView/DetailPanel.tsx` - the per-project toggle
   (`CollaborationSection`, in the Details tab) and the open-time off warning
-- `src/components/GlobalView/MetadataPanel.tsx` — the same per-project toggle for a
+- `src/components/GlobalView/MetadataPanel.tsx` - the same per-project toggle for a
   recent project in the global list/map (acts by path, not on the open project)
 
 ## Testing
@@ -185,5 +185,5 @@ has no markers, so every Comment line routes to the station.
   under mocked IPC.
 - Manual end-to-end test data lives at `~/src/cave/data/collab_test_data`
   (7 `.tml` versions of one project + source `.dmp` files in `./dmps`).
-- [collab-stress-testing.md](collab-stress-testing.md) — invariants, a scenario
+- [collab-stress-testing.md](collab-stress-testing.md) - invariants, a scenario
   matrix, adversarial inputs, and a fuzz/soak harness sketch.

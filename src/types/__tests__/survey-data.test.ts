@@ -184,7 +184,7 @@ describe('SurveyData', () => {
       /** Compare two shots field-by-field. Numeric fields are checked
        *  with f32-precision tolerance (the SoA stores doubles as f32). */
       const expectShotsEqual = (actual: Shot, expected: Shot) => {
-        // Integer / categorical fields — exact equality.
+        // Integer / categorical fields - exact equality.
         expect(actual.id).toBe(expected.id);
         expect(actual.is_reference).toBe(expected.is_reference);
         expect(actual.marker_index).toBe(expected.marker_index);
@@ -278,7 +278,7 @@ describe('SurveyData', () => {
       expect(lazy.length).toBe(data.stationCount);
       expect(lazy.length).toBe(stations.length);
 
-      // Deep-equals what the old eager loop would have produced — which is
+      // Deep-equals what the old eager loop would have produced - which is
       // exactly `getStation(data, i)` for every index.
       for (let i = 0; i < data.stationCount; i++) {
         expect(lazy[i]).toEqual(getStation(data, i));

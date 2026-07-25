@@ -26,11 +26,11 @@ use std::path::Path;
 /// v8 adds a nullable `shot_uuid` column to `resolved_warnings` (issue #57):
 /// "Ignore" suppression is keyed by the shot's stable UUID so it survives shot
 /// inserts/deletes/reorders. Backfilled lazily from the legacy
-/// `(section_id, shot_id)` key — no rewrite of existing rows at migration time.
+/// `(section_id, shot_id)` key - no rewrite of existing rows at migration time.
 ///
 /// v9 adds the additive single-row `speleo_link` table (SpeleoDB hand-off
 /// identity + dirty bit, #189). No existing column or row is touched;
-/// forward-looking only — no backfill. The table is created in BOTH
+/// forward-looking only - no backfill. The table is created in BOTH
 /// `init_schema` and `migrate_schema`, so legacy v8 files gain it on
 /// `open_existing`. `is_remote` is DERIVED from `EXISTS(speleo_link)`, never
 /// stored. See `PRESERVED_SPELEOLINK_COLUMNS` (the carry-forward fence) for the

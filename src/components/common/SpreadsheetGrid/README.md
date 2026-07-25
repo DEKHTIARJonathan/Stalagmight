@@ -6,7 +6,7 @@ A self-contained, **library-free**, Excel-like editing grid for issue #61.
 > (Excel / Google Sheets) and commodity algorithms only. No third-party grid
 > library source was read or referenced.
 
-It is **not yet wired into the app** — it's a standalone, reusable element to be
+It is **not yet wired into the app** - it's a standalone, reusable element to be
 integrated into `DataTable` later.
 
 ## Features
@@ -25,7 +25,7 @@ integrated into `DataTable` later.
   1×1-fills-selection, integer-multiple tiling, and clip-to-bounds. A cut clears
   its source on **paste** (Esc cancels it); pasting the grid's own copy moves the
   raw values, so full numeric precision survives the display formatting.
-- **Fill** down (Ctrl/Cmd+D), right (Ctrl/Cmd+R), and via the drag fill-handle —
+- **Fill** down (Ctrl/Cmd+D), right (Ctrl/Cmd+R), and via the drag fill-handle -
   copy-fill only (the selection block is tiled across the extension; no numeric
   auto-series, deliberate for survey data).
 - **Delete/Backspace** clears the selection (never writes 0 into a required
@@ -55,13 +55,13 @@ host can record them as **one undo unit**.
 
 Survey-specific behaviour plugs in through `GridColumn`, keeping the grid generic:
 
-- `editable` / `isEditable(row, i)` — read-only vs editable; use `isEditable` for
+- `editable` / `isEditable(row, i)` - read-only vs editable; use `isEditable` for
   frozen rows (`isShotFrozen`) and closure-adjusted (`geometryReadOnly`) mode.
-- `kind: 'number' | 'number-nullable' | 'text'` — default coercion + type-to-edit
+- `kind: 'number' | 'number-nullable' | 'text'` - default coercion + type-to-edit
   gating.
-- `parse(raw, row)` — custom coercion (e.g. the `_azimuth_avg` delta field);
+- `parse(raw, row)` - custom coercion (e.g. the `_azimuth_avg` delta field);
   return `undefined` to **skip** a write.
-- `format(value, row)` / `render(row, i)` — display + clipboard text, and rich
+- `format(value, row)` / `render(row, i)` - display + clipboard text, and rich
   cells (badges, dropdowns, icons).
 
 ## Usage sketch (future DataTable integration)
@@ -101,8 +101,8 @@ const columns: GridColumn<Shot>[] = [
 ## Tests
 
 Pure logic is unit-tested (Vitest, node env):
-- `__tests__/gridClipboard.test.ts` — locale parsing, TSV serialize/parse round-trips.
-- `__tests__/gridGeometry.test.ts` — selection math, nav (incl. read-only skip),
+- `__tests__/gridClipboard.test.ts` - locale parsing, TSV serialize/parse round-trips.
+- `__tests__/gridGeometry.test.ts` - selection math, nav (incl. read-only skip),
   paste placement (fill/tile/clip), fill targets.
 
 The React layer is thin glue over these helpers; full interaction coverage

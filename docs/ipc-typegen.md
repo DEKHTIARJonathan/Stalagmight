@@ -16,7 +16,7 @@ This runs `src-tauri/examples/gen_ipc_types.rs` (via `--example`) and produces:
 
 > The example is gated behind the `ipc-typegen` cargo feature
 > (`required-features` in `src-tauri/Cargo.toml`) so plain `cargo build` /
-> `cargo build --release` skip it — it's dev-only tooling and was paying its
+> `cargo build --release` skip it - it's dev-only tooling and was paying its
 > own full LTO pass in release builds. `pnpm gen:ipc-types` enables the
 > feature automatically; it is the only supported way to run the generator.
 

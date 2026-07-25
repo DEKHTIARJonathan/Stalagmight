@@ -33,7 +33,7 @@ const MB = 1024 * 1024;
 const KB = 1024;
 
 function fmtBytes(b: number): string {
-  if (!Number.isFinite(b) || b < 0) return '—';
+  if (!Number.isFinite(b) || b < 0) return '-';
   if (b >= MB * 100) return `${(b / MB).toFixed(0)} MB`;
   if (b >= MB) return `${(b / MB).toFixed(1)} MB`;
   if (b >= KB) return `${(b / KB).toFixed(0)} KB`;
@@ -104,7 +104,7 @@ export function MemoryProbe(): JSX.Element | null {
   /** Last dump result shown to the user; cleared after a few seconds. */
   const [dumpStatus, setDumpStatus] = useState<string | null>(null);
 
-  // Long-task PerformanceObserver — runs even when the probe is hidden
+  // Long-task PerformanceObserver - runs even when the probe is hidden
   // so we capture freezes the user didn't expect.
   useEffect(() => {
     startLongTaskObserver();
@@ -276,7 +276,7 @@ export function MemoryProbe(): JSX.Element | null {
           )}
 
           <div style={{ fontSize: 10, color: '#888', marginTop: 6 }}>
-            Display ▸ Dev stats toggles · estimates ±2× — see backend RSS for truth
+            Display ▸ Dev stats toggles · estimates ±2× - see backend RSS for truth
           </div>
         </>
       )}
@@ -329,7 +329,7 @@ function Row({
 }
 
 function formatDelta(deltaKb: number): string {
-  const sign = deltaKb >= 0 ? '+' : '−';
+  const sign = deltaKb >= 0 ? '+' : '-';
   const abs = Math.abs(deltaKb);
   if (abs < 50) return ''; // hide noise
   return ` ${sign}${(abs / 1024).toFixed(1)}MB`;

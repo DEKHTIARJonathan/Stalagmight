@@ -93,7 +93,7 @@ describe('uiStore data-table fullscreen', () => {
   });
 
   // Regression (#3): fullscreen entered WHILE section-focused must snapshot the
-  // user's real pre-focus table state, not the focus-forced open+pin — otherwise a
+  // user's real pre-focus table state, not the focus-forced open+pin - otherwise a
   // hover/closed table is stranded pinned-open once both focus and fullscreen exit.
   describe('fullscreen entered while section-focused', () => {
     beforeEach(() => {

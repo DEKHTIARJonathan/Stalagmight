@@ -8,8 +8,8 @@ use super::{
 
 /// Split a `#Units` argument string into tokens on whitespace, treating a
 /// double-quoted span as a single token (the quotes are retained so `unquote`
-/// can strip them later). Walls permits quoted values with embedded spaces —
-/// e.g. `Flag="loose rock"`, `Prefix="A B"`, `$name="meters decl"` — which a
+/// can strip them later). Walls permits quoted values with embedded spaces -
+/// e.g. `Flag="loose rock"`, `Prefix="A B"`, `$name="meters decl"` - which a
 /// plain `split_whitespace` would tear across tokens, corrupting the value and
 /// emitting spurious "unknown option" warnings.
 pub(crate) fn split_units_args(args: &str) -> Vec<String> {
@@ -65,7 +65,7 @@ pub(crate) fn apply_units_options(
             None => (token.to_ascii_lowercase(), None),
         };
         // A token like `=DAV` (a leading `=`, from a stray space that
-        // `collapse_eq_spaces` couldn't reattach) has no key — skip it silently
+        // `collapse_eq_spaces` couldn't reattach) has no key - skip it silently
         // rather than warn "Unknown #units option ''".
         if key.is_empty() {
             continue;
@@ -131,7 +131,7 @@ pub(crate) fn apply_units_option(
             units.d_unit = LengthUnit::Feet;
             units.s_unit = LengthUnit::Feet;
         }
-        // CT/RECT only flip the active vector type — the per-type column orders
+        // CT/RECT only flip the active vector type - the per-type column orders
         // (`ct_order` / `rect_order`) are independent and untouched, matching
         // dewalls. This is what lets a bare `#Units CT` after a `#Units RECT`
         // block read shots with the CT order again instead of dropping them.
@@ -212,7 +212,7 @@ pub(crate) fn apply_units_option(
                 units.vb_unit = u;
             }
         }
-        // `Decl=<angle>` sets an explicit declination — including an explicit
+        // `Decl=<angle>` sets an explicit declination - including an explicit
         // `Decl=0`, which declares the azimuths already true/grid and suppresses
         // auto-derivation. A bare `Decl=` / `Decl` clears it back to the default
         // (derive when the .STATUS flag is on).
@@ -296,7 +296,7 @@ pub(crate) fn apply_units_option(
                 .filter(|s| !s.is_empty());
         }
         "uvh" | "uvv" | "uv" => {
-            // Variance scaling — not modeled (we don't carry per-shot variance).
+            // Variance scaling - not modeled (we don't carry per-shot variance).
         }
         _ => {
             warnings.push(format!("Unknown #units option '{key}'"));
@@ -430,7 +430,7 @@ pub(crate) fn is_omitted(tok: &str) -> bool {
 }
 
 /// A from/to station of exactly one or two dashes (`-` or `--`) is an anonymous
-/// wall/splay endpoint, not a real named station — matching genuine Walls'
+/// wall/splay endpoint, not a real named station - matching genuine Walls'
 /// `name_isnull` (`wall-srv.cpp`: `*p=='-'` and the next char is a space, or
 /// `--` then a space). Three-or-more dashes (`---`, `----`) are NOT null in
 /// Walls: they are stored as a real station name, so we must keep them too.
@@ -461,7 +461,7 @@ pub(crate) fn split_first_token(line: &str) -> (&str, &str) {
 /// double-quoted spans so a quoted value containing `;` is preserved. Walls
 /// treats `;` as a comment start anywhere outside quotes, so e.g.
 /// `#Date 2008-12-01 ;TODO` and `#Date 2000-06-06; oraz 2000-06-30` carry the
-/// date plus a trailing note — without stripping, the date fails to parse.
+/// date plus a trailing note - without stripping, the date fails to parse.
 pub(crate) fn strip_inline_comment(s: &str) -> &str {
     let mut in_quotes = false;
     for (i, c) in s.char_indices() {
@@ -575,7 +575,7 @@ pub(crate) fn parse_length(tok: &str, default: LengthUnit) -> Option<f64> {
     if t.is_empty() || is_omitted(t) {
         return None;
     }
-    // Feet-and-inches: `<ft>i<in>`, `<ft>i`, or `i<in>` — 'i' separates feet
+    // Feet-and-inches: `<ft>i<in>`, `<ft>i`, or `i<in>` - 'i' separates feet
     // from inches. (Measurement columns are numeric, so a lone 'i' only ever
     // appears in this notation or in junk like "inf", which fails to parse.)
     let lower = t.to_ascii_lowercase();
@@ -596,8 +596,8 @@ pub(crate) fn parse_length(tok: &str, default: LengthUnit) -> Option<f64> {
             inches_str.parse().ok()?
         };
         // A leading '-' applies to the whole feet-and-inches measurement, so
-        // the inches must inherit the feet token's sign (`-2i6` = −2 ft 6 in,
-        // `-0i7` = −7 in). Adding `inches` with a fixed positive sign would
+        // the inches must inherit the feet token's sign (`-2i6` = -2 ft 6 in,
+        // `-0i7` = -7 in). Adding `inches` with a fixed positive sign would
         // flip `-0iN` and under-count `-FiI`.
         let sign = if t.starts_with('-') { -1.0 } else { 1.0 };
         let m = sign * (feet.abs() + inches / 12.0) * FEET_TO_METERS;

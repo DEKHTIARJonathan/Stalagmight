@@ -11,7 +11,7 @@ impl AppState {
     /// forward / undo / redo path to maintain them perfectly by hand (the source
     /// of the redo-desync and cascade-propagation bugs), the command layer
     /// reconciles them once after each user action. It is a no-op when nothing
-    /// drifted (the common case — an `O(shots + merges)` check thanks to the
+    /// drifted (the common case - an `O(shots + merges)` check thanks to the
     /// coordinate precompute) and is skipped during the bulk-import loop
     /// (`cascade_deferred`), so it doesn't reintroduce the per-mutation cost.
     pub(super) fn reconcile_geometry(&self) {

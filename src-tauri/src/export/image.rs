@@ -7,7 +7,7 @@
 //! at their deepest reachable station with a penetration-distance label
 //! (`p. 560`), where distance is the **along-cave** shortest path from
 //! the nearest zero datum (sum of shot lengths through the survey graph,
-//! with `station_merges` / aligned closures as zero-cost edges) — the
+//! with `station_merges` / aligned closures as zero-cost edges) - the
 //! same metric the Survey overview panel reports via
 //! [`Project::calculate_penetration`], so the two agree.
 //!
@@ -19,18 +19,18 @@
 //!
 //! A **tie** links two segments through a sequence of reference shots,
 //! possibly passing through reference-only intermediate stations. A chain
-//! `seg₁ —ref— · —ref— · —ref— seg₂` (with the dots in stations that
+//! `seg₁ -ref- · -ref- · -ref- seg₂` (with the dots in stations that
 //! belong to no real segment) counts as one tie, because reference-shot
-//! chains are an artifact of how the survey was taken — they have nothing
+//! chains are an artifact of how the survey was taken - they have nothing
 //! to do with the cave's topology. Implementation: every station whose
 //! segment owns ≥1 non-reference shot is an *anchor*; everything else is
 //! *free*. We compute connected components in the ref-shot subgraph of
 //! free stations; each such *free cluster*, together with the anchors
-//! linked to it by a single ref shot, forms one tie hub — every pair of
+//! linked to it by a single ref shot, forms one tie hub - every pair of
 //! distinct segments attached to that hub becomes mutual neighbors. Direct
 //! anchor↔anchor reference shots add a tie of length one.
 //!
-//! A segment's **branching factor** is `|neighbors|` — the number of
+//! A segment's **branching factor** is `|neighbors|` - the number of
 //! *distinct other segments* tied to it.
 //!
 //! With `branching_threshold = T`, segments with `branching_factor >= T` are
@@ -171,7 +171,7 @@ fn depth_range(project: &Project, stations: &[crate::models::Station]) -> (f64, 
 /// survey map: `None`/negative render grey; otherwise a near→far lerp **in plain
 /// (gamma) sRGB channels**. MapLibre's `['interpolate', ['linear'], …]` on colors
 /// uses the default `rgb` space, which lerps the parsed gamma channels directly
-/// (NOT linear light) — so a naive per-channel lerp is what actually matches the
+/// (NOT linear light) - so a naive per-channel lerp is what actually matches the
 /// on-screen distance ramp. (The GPU renders float colors, so the export's 8-bit
 /// rounding lands within ±1 level of the map.)
 fn distance_gradient_color(value: Option<f64>, max: f64) -> String {
@@ -233,7 +233,7 @@ pub struct ExportImageOptions {
     #[serde(default)]
     pub color_mode: ColorMode,
     /// Whether to draw station-index labels at every station touched by at
-    /// least one drawn (non-reference) shot — i.e. all points on the drawn
+    /// least one drawn (non-reference) shot - i.e. all points on the drawn
     /// passage, deduped by colocation (station merges / aligned closures).
     /// Opt-in (default `false`); black text + white halo, same placement
     /// machinery as the penetration labels, so labels stay monochrome
@@ -291,7 +291,7 @@ pub fn export_image(project: &Project, path: &Path, options: &ExportImageOptions
 }
 
 /// Like [`export_image`] but renders from a caller-supplied set of station
-/// coordinates instead of the measured ones — the commands pass the memoized
+/// coordinates instead of the measured ones - the commands pass the memoized
 /// closure-adjusted solve so the export matches the on-screen (adjusted) map.
 pub fn export_image_with_stations(
     project: &Project,
@@ -432,7 +432,7 @@ const PEN_LABEL_HALO_PX: f64 = 3.0;
 /// Distance from the labelled station to the label centre, in *pixels*.
 const PEN_LABEL_OFFSET_PX: f64 = 9.0;
 /// Approximate per-glyph width as a fraction of `font-size`. Used to derive
-/// the bounding box for placement-collision tests — we don't need pixel
+/// the bounding box for placement-collision tests - we don't need pixel
 /// accuracy, just enough to avoid label overlap.
 const PEN_LABEL_CHAR_WIDTH_RATIO: f64 = 0.55;
 
@@ -457,7 +457,7 @@ pub fn generate_svg_string_with_stations(
     stations: Vec<crate::models::Station>,
 ) -> Result<String> {
     // ---- Bounds and scale ---------------------------------------------------
-    // Bounds come from *rendered* geometry only — endpoints of non-reference
+    // Bounds come from *rendered* geometry only - endpoints of non-reference
     // shots plus zero-datum stations. Reference shots aren't drawn, so a
     // long ref connector or ref-only intermediate station should NOT
     // inflate the viewBox and shrink the visible map.
@@ -649,9 +649,9 @@ pub fn generate_svg_string_with_stations(
     }
 
     // `free_uf` clusters free stations. Two free stations are in the same
-    // cluster if either (a) they're the same physical point — i.e. their
+    // cluster if either (a) they're the same physical point - i.e. their
     // segment_uf roots already match, which encodes station_merges and
-    // aligned closures — or (b) they're connected by a reference shot. The
+    // aligned closures - or (b) they're connected by a reference shot. The
     // first rule keeps merged "hub" stations across separate stub sections
     // from being split into multiple sibling clusters.
     let mut free_uf = UnionFind::new(n);
@@ -765,7 +765,7 @@ pub fn generate_svg_string_with_stations(
     // shots (possibly a short stub section, possibly a direct anchor↔
     // anchor ref) ends visually right next to the parent line, blending
     // into it. The parent's polyline typically passes *through* the
-    // connection as a middle vertex, so it shouldn't be touched — only
+    // connection as a middle vertex, so it shouldn't be touched - only
     // the child should retract.
     //
     // Rule: for each polyline endpoint, look at the segments tied to its
@@ -845,7 +845,7 @@ pub fn generate_svg_string_with_stations(
     // station_trim_dist[i] = how far the polyline endpoint at station i
     // should retract; 0 if no qualifying ref-shot tie exists. The trim
     // amount itself is the same uniform `JUNCTION_TRIM_PX` for every
-    // qualifying endpoint — what varies per-station is *whether* to
+    // qualifying endpoint - what varies per-station is *whether* to
     // trim, governed by the parent-vs-child branching rule.
     let trim_dist = px(JUNCTION_TRIM_PX);
     let mut station_trim_dist = vec![0.0_f64; stations.len()];
@@ -857,7 +857,7 @@ pub fn generate_svg_string_with_stations(
         let own_seg = uf.find(i);
         let own_branching = neighbors.get(&own_seg).map_or(0u32, |s| s.len() as u32);
         // If any tied segment has branching ≥ this endpoint's own, the
-        // endpoint is a child or peer (not the strict parent) — retract.
+        // endpoint is a child or peer (not the strict parent) - retract.
         let qualifies = tied
             .iter()
             .filter(|&&s| s != own_seg)
@@ -889,7 +889,7 @@ pub fn generate_svg_string_with_stations(
     let dist_field = (mode == ColorMode::Distance).then(|| {
         // The map colors the distance ramp from MEASURED distances (it draws
         // adjusted geometry but deliberately computes the distance field from
-        // measured coords — see `AppState::distance_field`). Match that: distances
+        // measured coords - see `AppState::distance_field`). Match that: distances
         // key by station_ref, so this stays consistent with the adjusted geometry
         // we draw. (It also skips the adjusted solve the map was designed to avoid.)
         let field = project.distance_field_from(&project.compute_station_coordinates(), None);
@@ -907,7 +907,7 @@ pub fn generate_svg_string_with_stations(
     );
     if matches!(mode, ColorMode::Depth | ColorMode::Distance) {
         // Per-shot gradient: mirror the live map's per-shot coloring. No junction
-        // trimming here — the color variation carries the visual, not line breaks.
+        // trimming here - the color variation carries the visual, not line breaks.
         for section in &project.sections {
             for j in 0..section.shots.len() {
                 if section.shots[j].is_reference {
@@ -948,7 +948,7 @@ pub fn generate_svg_string_with_stations(
                 } else {
                     let (min_d, max_d) = depth_rng.unwrap_or((0.0, 50.0));
                     let shot = &section.shots[j];
-                    // Subdivide into 4–12 segments (the map's smoothness formula),
+                    // Subdivide into 4-12 segments (the map's smoothness formula),
                     // each colored at its midpoint depth.
                     let segs = ((shot.length / 2.0).ceil() as i64).clamp(4, 12) as usize;
                     for s in 0..segs {
@@ -1019,7 +1019,7 @@ pub fn generate_svg_string_with_stations(
                 // distinct segments don't blend into one continuous line.
                 // Cap the combined trim at `total_len - MIN_VISIBLE_SHOT_PX`
                 // so a short tied passage doesn't get its vertices eaten
-                // entirely and silently disappear from the export — scale
+                // entirely and silently disappear from the export - scale
                 // both ends proportionally when the budget is tight.
                 let want_start = first_si.map_or(0.0, |si| station_trim_dist[si]);
                 let want_end = last_si.map_or(0.0, |si| station_trim_dist[si]);
@@ -1065,7 +1065,7 @@ pub fn generate_svg_string_with_stations(
                         }
                     }
                 }
-                // Advance past the run, but never less than one — protects
+                // Advance past the run, but never less than one - protects
                 // against a station-lookup failure on the run's first shot
                 // (which would leave `j == i`).
                 i = if j > i { j } else { i + 1 };
@@ -1134,7 +1134,7 @@ pub fn generate_svg_string_with_stations(
     // halo for readability and dodge collisions by trying eight placement
     // offsets before giving up.
     if options.show_penetration_labels && !zero_datum_indices.is_empty() {
-        // Use the project's shared along-cave penetration computation —
+        // Use the project's shared along-cave penetration computation -
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
@@ -1199,7 +1199,7 @@ pub fn generate_svg_string_with_stations(
 
                 // Primary placement: along the bisector of the largest
                 // angular gap between drawn shot directions at this
-                // station. That puts the label in the *empty* wedge —
+                // station. That puts the label in the *empty* wedge -
                 // guaranteed not to overlap the line at the station
                 // itself. Fallback placements rotate around the primary
                 // in 45° steps and are only reached when another label
@@ -1232,7 +1232,7 @@ pub fn generate_svg_string_with_stations(
                     placed.push(bb);
                 }
                 // If every candidate collided, drop the label rather
-                // than stack it on top of another — better to lose one
+                // than stack it on top of another - better to lose one
                 // number than to render an unreadable smudge.
             }
             svg.push_str("</g>\n");
@@ -1299,7 +1299,7 @@ pub fn generate_svg_string_with_stations(
         let quarter_turn = std::f64::consts::FRAC_PI_4;
 
         // Pass 4a: station-index label at every point touched by at least
-        // one drawn shot (deg >= 1) — i.e. all stations on drawn passage,
+        // one drawn shot (deg >= 1) - i.e. all stations on drawn passage,
         // deduped by colocation. Representative station per point = smallest
         // station index (deterministic).
         if options.show_station_labels {
@@ -1349,7 +1349,7 @@ pub fn generate_svg_string_with_stations(
 
         // Pass 4b: a station's comment at its own point, for every station
         // with a comment that sits on drawn geometry. Unlike station labels
-        // this is per-STATION, not deduped by point — colocated stations may
+        // this is per-STATION, not deduped by point - colocated stations may
         // each carry their own comment.
         if options.show_station_comments {
             let mut opened = false;
@@ -1623,7 +1623,7 @@ fn polyline_length(points: &[(f64, f64)]) -> f64 {
 /// remaining trim, the edge's outer vertex is dropped entirely and we
 /// continue with the leftover distance on the next edge. The polyline is
 /// left potentially shorter (fewer vertices) than the caller passed in,
-/// possibly degenerate (< 2 vertices) — the caller must check before
+/// possibly degenerate (< 2 vertices) - the caller must check before
 /// emitting.
 fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f64) {
     while points.len() >= 2 && dist > 0.0 {
@@ -1667,7 +1667,7 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
     }
 }
 
-/// Return the angle (in screen coordinates — y axis flipped, same frame the
+/// Return the angle (in screen coordinates - y axis flipped, same frame the
 /// SVG itself uses) that points into the largest empty wedge between the
 /// *drawn* (non-reference) shot directions incident to `station_idx`.
 ///
@@ -1675,7 +1675,7 @@ fn trim_polyline_end(points: &mut Vec<(f64, f64)>, from_start: bool, mut dist: f
 /// overlap any line at the labelled station, no matter how the
 /// surrounding passages bend. Stations physically colocated with
 /// `station_idx` (via station_merges or aligned closures, detected here
-/// by coordinate equality) contribute their incident shots too — merged
+/// by coordinate equality) contribute their incident shots too - merged
 /// stations are the same point, so a shot leaving the merged twin still
 /// leaves *this* station.
 ///
@@ -1745,7 +1745,7 @@ fn label_open_space_angle(
 
 /// Returns the first candidate `(x, y)` in `offsets` (each a `(dx, dy)`
 /// relative to `(hub_x, hub_y)`) whose text bounding box doesn't collide
-/// with `placed`, along with that box. `None` if every candidate collided —
+/// with `placed`, along with that box. `None` if every candidate collided -
 /// callers drop the label rather than stack it on top of another. Shared by
 /// every label pass that dodges collisions from a single anchor point
 /// (station labels/comments, section names, shot data/comments); Pass 3
@@ -1951,7 +1951,7 @@ mod tests {
 
     #[test]
     fn zero_size_bounds_are_clamped_to_non_degenerate_viewbox() {
-        // A single-station project (one section with no shots) — the
+        // A single-station project (one section with no shots) - the
         // only station sits at the origin, so raw extent_x == extent_y
         // == 0. Without clamping the viewBox would be 0×0 and usvg
         // would refuse to rasterise it.
@@ -1992,7 +1992,7 @@ mod tests {
     fn reference_only_stations_do_not_inflate_bounds() {
         // A small drawn passage (10 m east) with a long invisible
         // reference shot (1000 m further east). The viewBox should hug
-        // the drawn 10 m line, not the 1010 m total span — otherwise
+        // the drawn 10 m line, not the 1010 m total span - otherwise
         // the actual stick map shrinks to ~1 % of the rendered area.
         let mut project = Project::new("RefBounds".to_string(), None);
         let main_id = project
@@ -2023,7 +2023,7 @@ mod tests {
 
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         let (_, _, w, _) = parse_viewbox(&svg);
-        // Width should reflect just the drawn 10 m extent + padding —
+        // Width should reflect just the drawn 10 m extent + padding -
         // an order of magnitude tighter than the 1000 m raw span.
         assert!(
             w < 100.0,
@@ -2229,7 +2229,7 @@ mod tests {
         // keeps at least one stroke-width of visible polyline.
         //
         // Build a parent (100 m east) and a 1 m side that's tied to
-        // the parent at *both* ends via short stubs — so both side
+        // the parent at *both* ends via short stubs - so both side
         // endpoints qualify for trim and would, without the clamp,
         // consume the entire side polyline.
         let mut project = Project::new("ShortSide".to_string(), None);
@@ -2289,7 +2289,7 @@ mod tests {
         // Two polylines must survive: the parent and the (clamped) side.
         assert_eq!(polylines.len(), 2, "{svg}");
         // The side polyline is the short one. Its remaining length must
-        // be positive (at least the minimum visible budget) — proves
+        // be positive (at least the minimum visible budget) - proves
         // the clamp kept it alive.
         let side_poly = polylines
             .iter()
@@ -2451,7 +2451,7 @@ mod tests {
         // NOT get pulled back.
         //
         // Topology: trunk (3 children) with a fourth child that is itself
-        // a tiny parent of two grandchildren — so it has branching > 1
+        // a tiny parent of two grandchildren - so it has branching > 1
         // (it's tied to the trunk AND to 2 grandchildren) but still less
         // than the trunk. The trunk should stay full length.
         let mut project = Project::new("Asymm".to_string(), None);
@@ -2642,7 +2642,7 @@ mod tests {
     fn extract_unique_stroke_widths(svg: &str) -> Vec<String> {
         // Only consider stroke widths emitted on shot <polyline> elements.
         // The pen-distance label group also carries its own (halo)
-        // stroke-width on its <text> wrapper — that's unrelated to line
+        // stroke-width on its <text> wrapper - that's unrelated to line
         // weights.
         let mut found: HashSet<String> = HashSet::new();
         for line in svg.lines() {
@@ -2672,7 +2672,7 @@ mod tests {
         // into the trunk's tip station and station 1 merged into the
         // leaf's start station. Putting refs in separate sections is the
         // only way to make them genuinely fan out from a single trunk
-        // station — within a section, shots form a linear chain.
+        // station - within a section, shots form a linear chain.
         let mut project = Project::new("Trunk".to_string(), None);
 
         let trunk_id = project
@@ -2786,7 +2786,7 @@ mod tests {
                 ..Default::default()
             })
             .id;
-        // Two-hop reference chain. Stations 0,1,2 — only ref shots in this
+        // Two-hop reference chain. Stations 0,1,2 - only ref shots in this
         // section, so all three are "free" w.r.t. real segments.
         let chain_id = project
             .add_section(SectionData {
@@ -2856,7 +2856,7 @@ mod tests {
     fn anchor_y_junction_does_not_cross_tie_siblings() {
         // Trunk segment with two independent direct ref shots, each leading
         // out to a different leaf segment. Topologically the two leaves are
-        // *not* directly tied to one another — they only share the trunk.
+        // *not* directly tied to one another - they only share the trunk.
         // Branching: trunk = 2, each leaf = 1. The trunk's role as the
         // shared station must not promote leaves into mutual neighbors.
         let mut project = Project::new("YAtAnchor".to_string(), None);
@@ -3133,7 +3133,7 @@ mod tests {
         )
         .unwrap();
         assert!(svg.contains("p. 250"), "expected p. 250 label: {svg}");
-        // Exactly one label — the trunk has only one deepest station.
+        // Exactly one label - the trunk has only one deepest station.
         let count = svg.matches(">p. ").count();
         assert_eq!(count, 1, "{svg}");
     }
@@ -3188,7 +3188,7 @@ mod tests {
     #[test]
     fn pen_distance_label_placed_in_open_space_away_from_line() {
         // Single shot heading east (azimuth 90°, length 100). Zero datum at
-        // station 0 — the deepest reachable station is station 1 at world
+        // station 0 - the deepest reachable station is station 1 at world
         // (≈100, 0). The only line direction *at station 1* points west,
         // so the open-space wedge is the entire half-plane to the east.
         // The label must therefore land east of station 1.
@@ -3575,7 +3575,7 @@ mod tests {
     #[test]
     fn depth_color_mode_paints_a_varying_gradient() {
         // A shot descending 0 → 100 must paint MULTIPLE distinct depth colors from
-        // the per-shot subdivision — not one flat color. Guards the subdivision
+        // the per-shot subdivision - not one flat color. Guards the subdivision
         // count, the midpoint-depth formula, and the per-segment coloring.
         let mut project = Project::new("DepthGrad".to_string(), None);
         project.add_section(SectionData {

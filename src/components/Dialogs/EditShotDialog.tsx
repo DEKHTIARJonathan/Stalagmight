@@ -124,7 +124,7 @@ export default function EditShotDialog() {
 
   // Pitch (inclination) is only valid in [-90°, 90°]; highlight the input red
   // (matching the backend INVALID_PITCH error) when a typed value is out of range.
-  // Purely presentational — submission is not blocked on this.
+  // Purely presentational - submission is not blocked on this.
   const pitchInVal = parseFloat(pitchIn);
   const pitchInInvalid = Number.isFinite(pitchInVal) && (pitchInVal < -90 || pitchInVal > 90);
   const pitchOutVal = parseFloat(pitchOut);
@@ -169,7 +169,7 @@ export default function EditShotDialog() {
 
         {frozen && (
           <div className="p-2 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-            Geometry fields are locked — this shot is part of an adjusted survey network.
+            Geometry fields are locked - this shot is part of an adjusted survey network.
           </div>
         )}
 

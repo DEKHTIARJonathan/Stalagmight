@@ -192,11 +192,11 @@ describe('load-path laziness', () => {
     const { project, surveyData, stations } = buildResult(env, 0);
     shotMaterialization.count = 0;
 
-    // Distance gradient (persisted-on at load) — used to walk section.shots.
+    // Distance gradient (persisted-on at load) - used to walk section.shots.
     const dist = buildDistanceFeatureState(surveyData, distanceFieldFor(env));
     expect(dist.shots.size).toBe(50 * 6);
 
-    // Gas reachability overlay (Plan mode) — same pattern.
+    // Gas reachability overlay (Plan mode) - same pattern.
     const gas = buildGasReachFeatureState(surveyData, gasFieldFor(env));
     expect(gas.shots.size).toBe(50 * 6);
 

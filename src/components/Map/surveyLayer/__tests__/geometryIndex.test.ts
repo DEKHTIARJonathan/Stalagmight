@@ -397,7 +397,7 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
  * globally encoded (`sectionId * FEATURE_ID_STRIDE + local`), so a
  * `floor(fid / STRIDE)` split (the old code) mis-attributes every shot in
  * section >= 1 and drops its tint (stations, whose scoped id is a small local
- * index, decoded fine — the reported "stations tint, shots don't" bug). This
+ * index, decoded fine - the reported "stations tint, shots don't" bug). This
  * fixture reproduces the production id scheme so the regression is pinned.
  */
 describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
@@ -463,8 +463,8 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
  * Candidate-section gate (#customRender): `sectionsIntersectingBox` replaces the
  * old `queryRenderedFeatures` prefilter, so candidate discovery no longer needs
  * the stock layers to be rendered. The gate must return a SUPERSET of the
- * sections the per-item SoA resolvers then pick — never dropping an in-tolerance
- * hit — and honor the padded-box reach semantics (`padProbeBox`).
+ * sections the per-item SoA resolvers then pick - never dropping an in-tolerance
+ * hit - and honor the padded-box reach semantics (`padProbeBox`).
  */
 describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
   const { data } = buildPerFeature();
@@ -507,7 +507,7 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
   });
 
   it('reach padding captures a section just beyond its bounds (missed unpadded)', () => {
-    // Probe 8 px to the RIGHT of station (1,3) at (60,25) m — section 1's max x.
+    // Probe 8 px to the RIGHT of station (1,3) at (60,25) m - section 1's max x.
     // The station is within the 10 px reach, but an UNPADDED point box lands past
     // the section's AABB and misses it; padding by the reach restores it.
     const at = screen(60, 25);

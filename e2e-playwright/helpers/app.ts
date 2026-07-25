@@ -162,7 +162,7 @@ export async function switchRecentView(page: Page, view: 'list' | 'map'): Promis
 export async function closeProjectViaMenu(page: Page): Promise<void> {
   await openAppMenu(page);
   await page.getByTestId('back-button').click();
-  // A dirty project blocks the close on an unsaved-changes dialog — discard to
+  // A dirty project blocks the close on an unsaved-changes dialog - discard to
   // proceed so the helper works whether or not there are unsaved edits.
   const discard = page.locator('button:has-text("Discard")');
   if (await discard.isVisible({ timeout: 1000 }).catch(() => false)) {
@@ -333,7 +333,7 @@ export async function placeAllSections(page: Page): Promise<void> {
  *   - Windows/WebView2:         `http://stalagmight-tiles.localhost/<provider>/{z}/{y}/{x}`
  * The Vite + Chromium test environment reports the `http://…localhost/` form. Both
  * are served by the same registered Rust protocol handler (`src-tauri/src/lib.rs`
- * `register_asynchronous_uri_scheme_protocol("stalagmight-tiles", …)`) — neither is
+ * `register_asynchronous_uri_scheme_protocol("stalagmight-tiles", …)`) - neither is
  * a raw network fetch. This regex intentionally accepts only those two forms, so a
  * real external tile server (`https://server.arcgisonline.com/…`) still fails the
  * assertion (the original CORS-bug guard these satellite tests were written for).
@@ -380,7 +380,7 @@ interface GeometrySnapshot {
 /**
  * Screen positions of every drawn station and shot, honoring the live
  * reference-shots toggle (hidden reference legs are absent, matching the
- * renderer). Empty arrays until the map + geometry are ready — poll with
+ * renderer). Empty arrays until the map + geometry are ready - poll with
  * `expect.poll` rather than asserting immediately after a seed.
  */
 export async function getDrawnGeometry(page: Page): Promise<GeometrySnapshot> {
@@ -513,7 +513,7 @@ export async function getDragGhostState(
 // The map canvas is created with `preserveDrawingBuffer: false`, so the drawing
 // buffer is only readable *inside* the frame that drew it. Reading during
 // MapLibre's `render` event (fired synchronously at the end of `_render()`,
-// before the compositor swap) is valid and deterministic — two reads of the same
+// before the compositor swap) is valid and deterministic - two reads of the same
 // unchanged scene return byte-identical pixels.
 
 /** One RGBA sample (each channel 0..255). */
@@ -568,7 +568,7 @@ export async function readCanvasPixelBlock(
   );
 }
 
-/** The single painted pixel at (`x`, `y`) — see {@link readCanvasPixelBlock}. */
+/** The single painted pixel at (`x`, `y`) - see {@link readCanvasPixelBlock}. */
 export async function readCanvasPixel(page: Page, x: number, y: number): Promise<PixelRgba> {
   const buf = await readCanvasPixelBlock(page, x, y, 1);
   return [buf[0] ?? 0, buf[1] ?? 0, buf[2] ?? 0, buf[3] ?? 0];

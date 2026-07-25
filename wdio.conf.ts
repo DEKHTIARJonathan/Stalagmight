@@ -42,7 +42,7 @@ function readEnvInt(name: string, fallback: number): number {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
-// macOS: force sequential execution — shared tauri-wd means all apps inherit
+// macOS: force sequential execution - shared tauri-wd means all apps inherit
 // the same environment, so parallel workers would contend on config/data files.
 const maxInstances = isMacOS ? 1 : readEnvInt('WDIO_MAX_INSTANCES', DEFAULT_MAX_INSTANCES);
 const basePort = readEnvInt('WDIO_BASE_PORT', 4444);
@@ -136,7 +136,7 @@ function getTestLabel(test: { title?: string; parent?: { title?: string } | stri
 }
 
 export const config: Options.Testrunner = {
-  // Test file pattern. The wdio layer is quarantined under e2e/legacy/ — it is
+  // Test file pattern. The wdio layer is quarantined under e2e/legacy/ - it is
   // an on-demand, heavyweight real-Tauri integration suite, not part of any
   // automated gate (CI runs tsc + cargo test + the Playwright @smoke workflow;
   // the full Playwright suite runs nightly). See e2e/legacy/README.md.
@@ -248,7 +248,7 @@ export const config: Options.Testrunner = {
     // launched by tauri-wd inherit tauri-wd's env. So we set up an isolated
     // HOME here BEFORE starting tauri-wd, ensuring all apps use a clean config.
     // This same inheritance carries STALAGMIGHT_TEST_PIDFILE to the wrapper so
-    // launched apps get tracked for reaping — keep the spawn() env inherited;
+    // launched apps get tracked for reaping - keep the spawn() env inherited;
     // don't pass an explicit `env:` here without spreading `...process.env`.
     if (isMacOS) {
       // Create isolated HOME so the app doesn't read the user's real config
@@ -293,7 +293,7 @@ export const config: Options.Testrunner = {
     currentWorkerId = workerId;
 
     // macOS: env isolation was set up in onPrepare (before tauri-wd started),
-    // so skip per-worker isolation — all sessions share the same tauri-wd env.
+    // so skip per-worker isolation - all sessions share the same tauri-wd env.
     if (!isMacOS) {
       tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), `stalagmight-wdio-${cid}-`));
       applyWorkerEnv(tempRoot);
@@ -373,7 +373,7 @@ export const config: Options.Testrunner = {
       return true;
     };
 
-    // Override isDisplayed() — most common source of execute/sync element ref failures
+    // Override isDisplayed() - most common source of execute/sync element ref failures
     browser.overwriteCommand(
       'isDisplayed',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -391,7 +391,7 @@ export const config: Options.Testrunner = {
             return Boolean(result);
           }
           // For non-CSS selectors (button*=text, =text, etc.), use isExisting()
-          // as best-effort check — can't use document.querySelector for these
+          // as best-effort check - can't use document.querySelector for these
           return await this.isExisting();
         } catch {
           return false;
@@ -400,7 +400,7 @@ export const config: Options.Testrunner = {
       true,
     );
 
-    // Override isClickable() — internally uses execute/sync for viewport/visibility checks
+    // Override isClickable() - internally uses execute/sync for viewport/visibility checks
     browser.overwriteCommand(
       'isClickable',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -429,7 +429,7 @@ export const config: Options.Testrunner = {
       true,
     );
 
-    // Override isSelected() — internally uses execute/sync for .checked/.selected
+    // Override isSelected() - internally uses execute/sync for .checked/.selected
     browser.overwriteCommand(
       'isSelected',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

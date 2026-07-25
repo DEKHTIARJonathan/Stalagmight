@@ -85,8 +85,8 @@ function warn(
  * Standard fixture:
  *   section 1: shots [101, 102] → stations idx 0,1,2 (global 0,1,2)
  *   section 2: shot  [201]      → stations idx 0,1   (global 3,4)
- * shot 101 (g0) connects global 0–1; shot 102 (g1) connects global 1–2;
- * shot 201 (g2) connects global 3–4.
+ * shot 101 (g0) connects global 0-1; shot 102 (g1) connects global 1-2;
+ * shot 201 (g2) connects global 3-4.
  */
 function fixture(merged?: number[][]): SurveyData {
   return buildSurveyData({
@@ -135,7 +135,7 @@ describe('computeIssueSeverity', () => {
       warn(1, 102, 'warning'), // unresolved → counts
     ]);
     expect([...shotSeverity]).toEqual([SEV_CLEAR, SEV_WARNING, SEV_CLEAR]);
-    // shot 102 connects global 1–2 ⇒ those are yellow; global 0 clear.
+    // shot 102 connects global 1-2 ⇒ those are yellow; global 0 clear.
     expect([...stationSeverity]).toEqual([SEV_CLEAR, SEV_WARNING, SEV_WARNING, SEV_CLEAR, SEV_CLEAR]);
   });
 
@@ -151,7 +151,7 @@ describe('computeIssueSeverity', () => {
   it('severity propagates to merged stations', () => {
     // Merge global 2 (section1 idx2) with global 3 (section2 idx0).
     const { stationSeverity } = computeIssueSeverity(fixture([[2, 3]]), [
-      warn(2, 201, 'warning'), // shot 201 connects global 3–4 ⇒ both yellow
+      warn(2, 201, 'warning'), // shot 201 connects global 3-4 ⇒ both yellow
     ]);
     // global 3 is merged with global 2 ⇒ global 2 inherits yellow.
     expect(stationSeverity[2]).toBe(SEV_WARNING);
@@ -164,7 +164,7 @@ describe('computeIssueSeverity', () => {
   it('propagates across a full (transitive) merge group, taking the max', () => {
     // Group {global 2, 3, 4}; error on shot 102 flags global 2 (its endpoint).
     const { stationSeverity } = computeIssueSeverity(fixture([[2, 3, 4]]), [
-      warn(1, 102, 'error'), // shot 102 connects global 1–2 ⇒ global 2 red
+      warn(1, 102, 'error'), // shot 102 connects global 1-2 ⇒ global 2 red
     ]);
     expect(stationSeverity[2]).toBe(SEV_ERROR);
     expect(stationSeverity[3]).toBe(SEV_ERROR); // via the group, not a direct shot
@@ -182,7 +182,7 @@ describe('computeIssueSeverity', () => {
       stations: [
         { sectionId: 1, stationIndex: 0 },
         { sectionId: 1, stationIndex: 1 },
-        { sectionId: 3, stationIndex: 0 }, // global 2 — isolated
+        { sectionId: 3, stationIndex: 0 }, // global 2 - isolated
       ],
     });
     const { stationSeverity } = computeIssueSeverity(data, [warn(1, 101, 'error')]);

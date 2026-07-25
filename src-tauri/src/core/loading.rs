@@ -73,7 +73,7 @@ impl LoadError {
         Self::with_details("CORRUPT", message, path)
     }
 
-    /// Error when the OS denied filesystem access to the file — e.g. macOS
+    /// Error when the OS denied filesystem access to the file - e.g. macOS
     /// forgot a previously-granted folder permission after an OS/app update.
     /// The `path` rides in `details` so the frontend can name the file.
     pub fn permission(message: impl Into<String>, path: &str) -> Self {
@@ -298,7 +298,7 @@ pub enum LoadingPhase {
     ExportGenerating,
     ExportWriting,
     ExportComplete,
-    // Import phases (4 total) — used by TML and Compass survey-file imports
+    // Import phases (4 total) - used by TML and Compass survey-file imports
     ImportParsing,
     ImportConverting,
     ImportApplyingChanges,

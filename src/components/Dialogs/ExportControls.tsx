@@ -220,7 +220,7 @@ export default function ExportControls({
       if (isMountedRef.current) {
         // `trackDialogComplete` pairs with a dialog close (it suppresses the
         // dialog-cancel telemetry). The panel isn't a dialog, so firing it there
-        // would leave `_dialogCompleted` stuck — only track for the dialog variant
+        // would leave `_dialogCompleted` stuck - only track for the dialog variant
         // (Copilot review).
         if (variant === 'dialog') {
           trackDialogComplete('export');

@@ -37,7 +37,7 @@ import {
 } from './gridGeometry';
 
 let editorMeasureCtx: CanvasRenderingContext2D | null = null;
-/** Width of the widest line at the editor's font — drives the GS-style
+/** Width of the widest line at the editor's font - drives the GS-style
  *  grow-rightward single-line editor. */
 function measureEditorText(text: string): number {
   if (!editorMeasureCtx) editorMeasureCtx = document.createElement('canvas').getContext('2d');
@@ -65,7 +65,7 @@ export interface SpreadsheetGridProps<Row> {
   /** Commit many coerced edits as ONE undo unit (paste / fill / clear). */
   onBatchEdit?: (edits: CellEdit[]) => void;
   /** A REQUIRED cell (`kind: 'number'`) was emptied/deleted, so no value was
-   *  emitted through {@link onEdit} — the grid just shows it as "missing" while
+   *  emitted through {@link onEdit} - the grid just shows it as "missing" while
    *  the model keeps its last value. Hosts whose model is PROVISIONAL (draft
    *  rows that have not been committed yet) should use this to drop the field, so
    *  a later auto-commit doesn't resurrect the value the user cleared. Hosts
@@ -101,7 +101,7 @@ export interface SpreadsheetGridProps<Row> {
    *  committed, `clipped` fell past the grid's last row/column, `skipped` landed
    *  on read-only/unparseable cells. Let the host surface a notice. */
   onPasteReport?: (info: { written: number; clipped: number; skipped: number }) => void;
-  /** Fired with the row index under the pointer (null on leave) — for host-level
+  /** Fired with the row index under the pointer (null on leave) - for host-level
    *  hover effects (e.g. highlighting the corresponding map feature). */
   onRowHover?: (rowIndex: number | null) => void;
   /** When set, scroll this data-row index into view (e.g. an external selection
@@ -122,24 +122,24 @@ export interface SpreadsheetGridProps<Row> {
   /** Label for the row-number gutter (default: 1-based row index). E.g. a
    *  domain id like "5:3" so rows match what the rest of the app calls them. */
   rowLabel?: (row: Row, rowIndex: number) => ReactNode;
-  /** Gutter width in px (default 48) — widen when rowLabel renders something
+  /** Gutter width in px (default 48) - widen when rowLabel renders something
    *  larger than a plain row number. */
   gutterWidth?: number;
   /** Render the built-in toolbar row (name box, Columns, Maximize). Default
    *  true; hosts that fold the grid into their own chrome turn it off and
    *  track {@link onSelectionChange} instead. */
   showToolbar?: boolean;
-  /** Right-click on a column header — let the host show its own menu (hide
+  /** Right-click on a column header - let the host show its own menu (hide
    *  column, switch column families, ...). The grid only prevents the native
    *  menu when this is set. */
   onHeaderContextMenu?: (colKey: string, pos: { x: number; y: number }) => void;
   /** Chrome strings (context menu, shortcut hints, toolbar buttons, editor
-   *  aria-label) — partial, merged over the English {@link DEFAULT_GRID_LABELS}.
+   *  aria-label) - partial, merged over the English {@link DEFAULT_GRID_LABELS}.
    *  The grid stays i18next-free; hosts pass `t()`-backed labels (including a
    *  domain `rowNoun` so menus say "Delete shot", "Copy 3 shots"). */
   labels?: Partial<GridLabels>;
   /** Fired whenever the selection rectangle or active cell changes (and once
-   *  on mount) — lets a host render its own name-box/indicator. */
+   *  on mount) - lets a host render its own name-box/indicator. */
   onSelectionChange?: (sel: { rows: number; cols: number; activeRow: number; activeColKey: string }) => void;
   /** Host-provided context-menu entries appended after the built-in ones
    *  (e.g. "Remove draft row"). Called with the selection's row range when the
@@ -150,7 +150,7 @@ export interface SpreadsheetGridProps<Row> {
   onToggleMaximize?: () => void;
 
   className?: string;
-  /** Notified when the user moves the focus (active cell) — wire to app
+  /** Notified when the user moves the focus (active cell) - wire to app
    *  selection (map/detail sync) at integration. */
   onActiveCellChange?: (rowIndex: number, colKey: string) => void;
 }
@@ -159,14 +159,14 @@ interface EditState {
   row: number;
   colKey: string;
   draft: string;
-  /** The draft as seeded from the model — committing an unchanged draft is a
+  /** The draft as seeded from the model - committing an unchanged draft is a
    *  no-op (never rewrite stored data with a re-parsed display value). */
   initial: string;
 }
 
 const PRINTABLE = /^.$/u;
 
-/** Full-precision, group-free, locale-decimal string for editing/converting —
+/** Full-precision, group-free, locale-decimal string for editing/converting -
  *  must round-trip through parseLocaleNumber. */
 const formatEditValue = (value: unknown, locale: string): string => {
   if (typeof value === 'number') {
@@ -293,7 +293,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // clipboard text still matches `text`.
   const copyStash = useRef<{ text: string; values: unknown[][]; colKeys: string[] } | null>(null);
   // Provenance for `copyStash`: true while the OS clipboard is still OUR last
-  // copy/cut. Set when we copy; cleared on window blur — an external app can only
+  // copy/cut. Set when we copy; cleared on window blur - an external app can only
   // overwrite the clipboard while it has focus, so a blur means a later text
   // match may be coincidental and must NOT be treated as an internal paste (which
   // would paste hidden raw precision or, worse, clear a pending cut source). The
@@ -312,7 +312,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const editorRef = useRef<HTMLTextAreaElement>(null);
   // Drop the stash's "internal" provenance whenever the OS clipboard may no
   // longer hold our range copy: a window blur (another app took focus and could
-  // have copied), OR any copy/cut event in this document — the grid's own range
+  // have copied), OR any copy/cut event in this document - the grid's own range
   // copy/cut preventDefault, so they never dispatch these native events; one
   // firing therefore means some OTHER source (a textarea/dialog, the cell editor,
   // a page text selection) just overwrote the clipboard.
@@ -548,7 +548,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   // Google-Sheets Ctrl+Arrow: jump to the edge of the contiguous data block in a
-  // direction — skip a gap to the next non-empty cell, or run to the last
+  // direction - skip a gap to the next non-empty cell, or run to the last
   // non-empty cell before a gap / the grid boundary.
   const dataEdgeTarget = useCallback(
     (startRow: number, startColIdx: number, dRow: number, dCol: number) => {
@@ -567,7 +567,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       let i = vertical ? startRow : startColIdx;
       const next = i + step;
       if (next < 0 || next >= count) {
-        // already at the boundary — stay put
+        // already at the boundary - stay put
       } else if (isEmpty(i) || isEmpty(next)) {
         let j = next;
         while (j >= 0 && j < count && isEmpty(j)) j += step;
@@ -605,7 +605,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   // Commit the editor's draft. Side effects run OUTSIDE setEditing (a state
-  // updater must be pure — StrictMode double-invokes it in dev). `refocus`
+  // updater must be pure - StrictMode double-invokes it in dev). `refocus`
   // returns keyboard focus to the grid so the type→Enter→Arrow loop keeps
   // working; the blur path passes false so a deliberate click-away isn't trapped.
   const commitEdit = useCallback(
@@ -614,7 +614,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (!cur) return;
       const colIdx = colIndexOf(cur.colKey);
       const col = colAt(colIdx);
-      // An untouched draft just closes the editor — no edit, no undo entry.
+      // An untouched draft just closes the editor - no edit, no undo entry.
       const dirty = cur.draft !== cur.initial;
       const value = dirty && col ? parseForColumn(col, cur.draft, cur.row) : undefined;
       // Reject an invalid value: flash red, and on a keyboard commit keep the
@@ -628,7 +628,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       }
       setEditing(null);
       if (col && dirty && value === undefined) {
-        // The dirty draft didn't parse to a value — a required cell emptied, or
+        // The dirty draft didn't parse to a value - a required cell emptied, or
         // unparseable input ("abc" in a number cell, garbage in a custom-parse
         // column): keep the model value, show the cell as missing until a valid
         // value is committed (same rule as Delete). A provisional host (draft
@@ -665,7 +665,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // Refocusing the scroller (from commitEdit or cancelEdit) blurs the still-
   // mounted textarea synchronously, and its onBlur would otherwise commit the
-  // draft — a double commit after Enter/Tab, or a commit of the dirty draft
+  // draft - a double commit after Enter/Tab, or a commit of the dirty draft
   // Escape just discarded. The flag tells that one blur to skip the commit. It
   // is cleared by the blur handler itself (one-shot) and defensively on the
   // next beginEdit, in case an editor unmounts without ever blurring.
@@ -677,7 +677,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   }, []);
 
   // Focus + caret-to-end when the editor OPENS (keyed on the cell, not the
-  // editing object — draft keystrokes must not snap the caret back to the end).
+  // editing object - draft keystrokes must not snap the caret back to the end).
   const editingCellId = editing ? `${editing.row}:${editing.colKey}` : null;
   useEffect(() => {
     if (editingCellId && editorRef.current) {
@@ -735,7 +735,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     // paste back into the grid keeps full numeric precision. The stash and the
     // marquee are set unconditionally (and synchronously, before the clipboard
     // write), so in-grid copy/cut/paste keep working in webviews where async
-    // clipboard access is denied — the OS write is best-effort on top.
+    // clipboard access is denied - the OS write is best-effort on top.
     const values: unknown[][] = [];
     for (let r = rect.r0; r <= rect.r1; r++) {
       const data = rows[r];
@@ -754,14 +754,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       await navigator.clipboard.writeText(text);
       return true;
     } catch {
-      return false; // OS clipboard unavailable — informational only
+      return false; // OS clipboard unavailable - informational only
     }
   }, [buildRangeMatrix, rect, rows, colAt, colKeys]);
 
   // Cut = copy + remember the source; the source clears when the content is
   // PASTED (Excel semantics) so Esc cancels a cut. Nothing is cleared until the
   // paste lands, so it's safe to proceed even when the OS-clipboard write
-  // fails — the move then runs entirely on the internal stash.
+  // fails - the move then runs entirely on the internal stash.
   const doCut = useCallback(async () => {
     const copied = doCopy(); // stash + marquee are set synchronously
     setCutRect(rect);
@@ -801,7 +801,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       // and complete a pending cut) only when the source is our own stash:
       // either the caller read it directly (`fromStash`, the WebKitGTK fallback),
       // or the OS clipboard text still matches AND we still own it (no blur since
-      // the copy). Text equality alone is not enough — an external app could have
+      // the copy). Text equality alone is not enough - an external app could have
       // copied identical text. External data re-parses through each column.
       const stash = copyStash.current;
       const internal =
@@ -813,7 +813,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const single = ch === 1 && cw === 1;
       const edits: CellEdit[] = [];
       // Stash cells (by stash-relative coords) whose value actually produced a
-      // destination edit. A cut may only clear sources that LANDED somewhere —
+      // destination edit. A cut may only clear sources that LANDED somewhere -
       // a write skipped by cellEditable/coerce/validate must keep its source
       // intact (mirrors `moved` in moveCells).
       const landed = new Set<string>();
@@ -900,7 +900,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // clipboard data, so this path tries the async clipboard API, and where
   // reads are denied (e.g. WebKitGTK) falls back to the internal copy stash so
   // in-grid copy/paste still works. When the clipboard IS readable, its text
-  // wins — pasteText only uses the stash values when the texts match.
+  // wins - pasteText only uses the stash values when the texts match.
   const doPaste = useCallback(async () => {
     try {
       pasteText(await navigator.clipboard.readText());
@@ -916,7 +916,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   // denied), so the keydown handler never calls preventDefault. But some
   // webviews (WebKit) don't dispatch `paste` to non-editable elements at all,
   // so each Ctrl+V also arms a one-shot fallback: if no paste event arrives
-  // shortly after the keystroke, read the clipboard — and failing that, paste
+  // shortly after the keystroke, read the clipboard - and failing that, paste
   // the internal copy stash.
   const pasteTextRef = useRef(pasteText);
   pasteTextRef.current = pasteText;
@@ -956,7 +956,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   // Copy-fill the selection block across `preview`'s extension: tile the RAW
   // source values (modular repeat, fill order away from the source). NO series
-  // extrapolation — deliberate for survey data.
+  // extrapolation - deliberate for survey data.
   const commitFill = useCallback(
     (preview: Rect) => {
       const edits: CellEdit[] = [];
@@ -1028,7 +1028,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     const edits: CellEdit[] = [];
     const missing: string[] = [];
     const restored: string[] = [];
-    // Required cells freshly cleared to "missing" — reported to a provisional
+    // Required cells freshly cleared to "missing" - reported to a provisional
     // host so it can drop the field (a present→missing transition only, never a
     // restore).
     const cleared: { row: number; colKey: string }[] = [];
@@ -1036,7 +1036,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       for (let c = rect.c0; c <= rect.c1; c++) {
         const col = colAt(c);
         if (!col || !cellEditable(r, col)) continue;
-        // Route through the column's coercion: number → undefined (required —
+        // Route through the column's coercion: number → undefined (required -
         // never write 0; mark the cell as missing instead), number-nullable →
         // null, text/custom-parse → its empty value. Delete on an already-
         // missing cell restores it: the model still holds the value, so
@@ -1146,14 +1146,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (ctrl && (e.key === 'x' || e.key === 'X')) { e.preventDefault(); void doCut(); return; }
       // Paste is grid-owned like copy/cut, but it must NOT preventDefault (the
       // native `paste` event is the primary path). Stop propagation so a global
-      // shortcut rebound to Ctrl/Cmd+V doesn't also fire — the browser still
+      // shortcut rebound to Ctrl/Cmd+V doesn't also fire - the browser still
       // dispatches the separate paste event.
       if (ctrl && (e.key === 'v' || e.key === 'V')) { e.stopPropagation(); schedulePasteFallback(); return; }
       if (ctrl && (e.key === 'd' || e.key === 'D')) { e.preventDefault(); doFill(true); return; }
       if (ctrl && (e.key === 'r' || e.key === 'R')) { e.preventDefault(); doFill(false); return; }
       if (ctrl && (e.key === 'a' || e.key === 'A')) {
         e.preventDefault();
-        // The grid owns Ctrl/Cmd+A — without this the host's global select-all
+        // The grid owns Ctrl/Cmd+A - without this the host's global select-all
         // (e.g. select-all-stations) fires on the same press (mirrors Delete).
         e.stopPropagation();
         // Two-stage (Google Sheets): first Ctrl+A selects the contiguous data
@@ -1224,7 +1224,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         case 'Delete':
         case 'Backspace': {
           e.preventDefault();
-          // The grid owns Delete here — without this the app's global
+          // The grid owns Delete here - without this the app's global
           // delete-selected-entity shortcut would fire on a plain cell clear.
           e.stopPropagation();
           const fullRows = rect.c0 === 0 && rect.c1 === colCount - 1;
@@ -1233,7 +1233,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
           return;
         }
         case 'Escape': {
-          // Consuming a copy/cut marquee owns the keypress — without the
+          // Consuming a copy/cut marquee owns the keypress - without the
           // preventDefault the app's global Escape (e.g. exit-fullscreen)
           // would fire on the same press. A bare Escape bubbles.
           if (copiedRect || cutRect) e.preventDefault();
@@ -1247,7 +1247,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
             const col = colAt(colIdx);
             if (col && cellEditable(row, col)) {
               e.preventDefault();
-              // The grid consumed this key to open the editor — keep it from
+              // The grid consumed this key to open the editor - keep it from
               // also triggering a host shortcut bound to that character (e.g. a
               // reserved `?` overlay), mirroring Delete / Ctrl+A above.
               e.stopPropagation();
@@ -1382,7 +1382,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     [selectColumnRange],
   );
 
-  // True while the current selection was made via the row-number gutter —
+  // True while the current selection was made via the row-number gutter -
   // Delete then means "delete these rows" (when the host wires onDeleteRows),
   // not "clear these cells". Any other selection gesture resets it.
   const rowSelectIntent = useRef(false);
@@ -1420,7 +1420,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         rowDrag.current = { mode: 'select', anchorRow, fromR0: 0, fromR1: 0 };
         setInteracting(true);
         selectRowRange(anchorRow, rowIdx);
-        // A plain gutter click moves the active cell to this row — notify the
+        // A plain gutter click moves the active cell to this row - notify the
         // host like any other active-cell move (a Shift-extend keeps it put).
         const firstKey = colKeys[0];
         if (!e.shiftKey && firstKey !== undefined) onActiveCellChange?.(rowIdx, firstKey);
@@ -1430,7 +1430,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   // Right-click on the gutter: select that row (unless it's already inside the
-  // current gutter selection) and open the grid context menu — its Copy/Cut/
+  // current gutter selection) and open the grid context menu - its Copy/Cut/
   // Paste/Clear/Delete-rows entries then apply to the row(s).
   const onGutterContextMenu = useCallback(
     (rowIdx: number, e: ReactMouseEvent) => {
@@ -1447,7 +1447,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
 
   const onGutterMouseEnter = useCallback(
     (rowIdx: number) => {
-      // The gutter is part of the row — host hover effects (map highlight)
+      // The gutter is part of the row - host hover effects (map highlight)
       // should track it just like the cells do.
       if (hoverRowRef.current !== rowIdx) {
         hoverRowRef.current = rowIdx;
@@ -1482,7 +1482,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   );
 
   // Double-click a resize border → fit the column to its widest VISIBLE content
-  // (virtualized, so off-screen rows aren't measured — a pragmatic approximation).
+  // (virtualized, so off-screen rows aren't measured - a pragmatic approximation).
   const autoFitColumn = useCallback((key: string) => {
     const root = scrollRef.current;
     if (!root) return;
@@ -1550,7 +1550,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       if (src.r0 === dst.r0 && src.c0 === dst.c0) return;
       const h = src.r1 - src.r0;
       const w = src.c1 - src.c0;
-      // Abort the whole move if ANY destination cell is non-writable — otherwise
+      // Abort the whole move if ANY destination cell is non-writable - otherwise
       // the source-clear below would blank source data with nowhere to land it.
       for (let dr = 0; dr <= h; dr++) {
         for (let dc = 0; dc <= w; dc++) {
@@ -1917,7 +1917,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
   const overlayStyle: CSSProperties = {
     position: 'absolute',
     // The overlay lives INSIDE the rows-area (which starts below the sticky
-    // header), where row 0 is at y=0 — so no header offset here.
+    // header), where row 0 is at y=0 - so no header offset here.
     top: rect.r0 * ROW_HEIGHT,
     left: gutterWidth + (offsets[rect.c0] ?? 0),
     width: (offsets[rect.c1 + 1] ?? 0) - (offsets[rect.c0] ?? 0),
@@ -2025,7 +2025,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
         aria-activedescendant={`sg-cell-${selection.active.row}-${selection.active.colKey}`}
       >
         <div style={{ width: totalWidth, position: 'relative' }}>
-          {/* Sticky header. z-30 beats the gutter cells' z-20 — rows scrolling
+          {/* Sticky header. z-30 beats the gutter cells' z-20 - rows scrolling
               under the header must pass beneath the corner, not bleed over it. */}
           <div
             role="row"
@@ -2243,7 +2243,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
               </div>
             )}
 
-            {/* Cell editor — overlays the active cell so it fills the whole cell
+            {/* Cell editor - overlays the active cell so it fills the whole cell
                 and sits above the selection overlay. */}
             {editing && colIndexOf(editing.colKey) >= 0 && (
               <textarea
@@ -2286,7 +2286,7 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
                 onChange={(ev) => setEditing({ ...editing, draft: ev.target.value })}
                 onBlur={() => {
                   // A blur caused by commitEdit's or cancelEdit's own refocus
-                  // must NOT commit — the draft is already committed/discarded.
+                  // must NOT commit - the draft is already committed/discarded.
                   if (suppressBlurCommitRef.current) {
                     suppressBlurCommitRef.current = false;
                     return;

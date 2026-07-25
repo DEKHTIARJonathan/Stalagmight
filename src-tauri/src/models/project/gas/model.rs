@@ -2,11 +2,11 @@
 //! Constructors guard non-finite / non-positive inputs at the ingest boundary (mirroring
 //! `Coordinates::new_checked`), so a NaN RMV or zero cylinder can never poison the gas
 //! field downstream. The persisted/per-plan `GasConfig` (units, reserve preset, speeds)
-//! lives in `crate::config` — these are the per-dive, ephemeral parts.
+//! lives in `crate::config` - these are the per-dive, ephemeral parts.
 
 // The types/fields are `pub` (re-exported to `models` for IPC + ts-rs), so they are NOT dead;
 // but the guarding constructors (`new` / `from_sac` / `gas_volume_l`) are exercised only by
-// tests until the Phase-1.3 command uses them for input validation — dead in the lib build
+// tests until the Phase-1.3 command uses them for input validation - dead in the lib build
 // until then, so the expectation is scoped to the non-test build (matches `models/shot.rs`;
 // `#[allow]` is denied crate-wide).
 #![cfg_attr(not(test), expect(dead_code))]
@@ -22,8 +22,8 @@ fn default_true() -> bool {
     true
 }
 
-/// Cylinder construction material. Hints role suitability — steel ≈ negative buoyancy →
-/// back gas; aluminium ≈ neutral → fine as a stage — but it is guidance, never a hard
+/// Cylinder construction material. Hints role suitability - steel ≈ negative buoyancy →
+/// back gas; aluminium ≈ neutral → fine as a stage - but it is guidance, never a hard
 /// rule (PRD §5.3).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
@@ -57,7 +57,7 @@ pub enum PlanMode {
     CcrBailout,
 }
 
-/// A diver identified by RMV — the canonical, persisted gas-rate. SAC is a *constructor*
+/// A diver identified by RMV - the canonical, persisted gas-rate. SAC is a *constructor*
 /// concern only (see [`Diver::from_sac`]); it is never stored, so an inconsistent
 /// SAC/reference pair can't linger in the model.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
@@ -101,8 +101,8 @@ impl Diver {
     }
 }
 
-/// A single cylinder. `fill_bar` is an INPUT and may exceed `rated_pressure_bar` —
-/// overfilling LP steels to MP or higher is routine (§5.3) — so rated is reference only
+/// A single cylinder. `fill_bar` is an INPUT and may exceed `rated_pressure_bar` -
+/// overfilling LP steels to MP or higher is routine (§5.3) - so rated is reference only
 /// and is **never** used to clamp the fill.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct Cylinder {
@@ -113,14 +113,14 @@ pub struct Cylinder {
     pub role: CylRole,
     pub label: Option<String>,
     /// Whether this cylinder is carried on THIS dive (#245). A disabled tank stays in the
-    /// table (greyed) but is excluded from every gas computation — budget, gauges, drops —
+    /// table (greyed) but is excluded from every gas computation - budget, gauges, drops -
     /// so a diver can toggle rig variants without deleting rows. `#[serde(default)]` = `true`,
     /// so a plan/config saved before this field loads with all tanks enabled.
     #[serde(default = "default_true")]
     pub enabled: bool,
     /// Under the **Free** strategy (#245) this is the diver's manually-chosen penetration
-    /// allowance (bar) — the gas they'll breathe off this tank on the way IN before turning.
-    /// The engine budgets exactly this (Z-derated span from `fill` down to `fill − usable_gas_bar`).
+    /// allowance (bar) - the gas they'll breathe off this tank on the way IN before turning.
+    /// The engine budgets exactly this (Z-derated span from `fill` down to `fill - usable_gas_bar`).
     /// Ignored by every other strategy, which COMPUTE the usable bar from the reserve rules and
     /// report it back on `GasReachField::cylinder_usable_bars`. `#[serde(default)]` = `0.0`.
     #[serde(default)]
@@ -160,7 +160,7 @@ impl Cylinder {
     }
 
     /// Ideal free-gas volume (litres) at the current fill. Ideal-gas (see the §5.3
-    /// real-gas caveat — the conservative derate / Z correction is applied by the engine,
+    /// real-gas caveat - the conservative derate / Z correction is applied by the engine,
     /// not baked in here).
     pub(crate) fn gas_volume_l(&self) -> f64 {
         cylinder_gas_volume(self.fill_bar, self.water_volume_l)
@@ -177,13 +177,13 @@ pub struct Team {
     pub mode: PlanMode,
 }
 
-/// Result of the gas-weighted reachability compute — the gas analogue of `DistanceField`.
+/// Result of the gas-weighted reachability compute - the gas analogue of `DistanceField`.
 /// Per-station gas-to-reach from the origin (one-way, in-leg), the reachable mask under the
 /// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
 /// `gas_to_reach` is `None` for graph-unreachable stations (JSON-safe ∞); `station_refs` echo
 /// the input order so the field is self-describing.
 ///
-/// One leg of the planned route — origin→target, station to station. `is_jump` marks a
+/// One leg of the planned route - origin→target, station to station. `is_jump` marks a
 /// reference/jump shot (a swum shortcut normally hidden in the survey view), so the UI can draw it
 /// dashed and distinct from a regular swum leg. A merge / loop-closure tie (coincident points) is
 /// `is_jump = false` (zero-length, drawn solid).
@@ -197,9 +197,9 @@ pub struct RouteLeg {
 /// The `route` / `stage_drop_refs` / `final_turn_ref` describe the **planned route** to the route
 /// target (the user-selected endpoint, else the farthest in-budget point): the ordered legs from
 /// the origin to the target (for the route highlight), the station where each stage's IN gas runs
-/// out (its drop point — staged strategies only), and the final turn. `route` + `final_turn_ref`
+/// out (its drop point - staged strategies only), and the final turn. `route` + `final_turn_ref`
 /// are populated for **any** strategy when a target is reachable; `stage_drop_refs` is **empty for
-/// All-thirds** (and any rig that falls back to it — no per-stage drops).
+/// All-thirds** (and any rig that falls back to it - no per-stage drops).
 ///
 /// `backgas_turn_bar` and `stage_drop_bars` are the **readout gauges**, computed here (the single
 /// source of truth) so the UI never re-derives the budget math and drifts from the reachable
@@ -219,7 +219,7 @@ pub struct GasReachField {
     pub route: Vec<RouteLeg>,
     /// Station where each stage's IN gas is exhausted, in stage order (staged strategies only).
     pub stage_drop_refs: Vec<StationRef>,
-    /// The final turn — the route target station; `None` when nothing is reachable.
+    /// The final turn - the route target station; `None` when nothing is reachable.
     pub final_turn_ref: Option<StationRef>,
     /// Back-gas turn pressure gauge (bar); `None` when the rig has no back gas.
     pub backgas_turn_bar: Option<f64>,
@@ -228,7 +228,7 @@ pub struct GasReachField {
     /// Whether each stage drop is **over-reserve** (#246), aligned 1:1 with `stage_drop_refs` /
     /// `stage_drop_bars`. `true` only when the diver dragged that drop DEEPER than its
     /// strategy-computed (gas-safe) point, so the stage is breathed past its reserve to reach the
-    /// pinned station — the UI flags it red. Every entry is `false` for the un-dragged default
+    /// pinned station - the UI flags it red. Every entry is `false` for the un-dragged default
     /// (and for All-thirds, which has no drops). The over-reserve reach it produces is honest but
     /// unsafe; the flag is the warning, not a block (the diver asked for it).
     pub stage_drop_over_reserve: Vec<bool>,
@@ -239,7 +239,7 @@ pub struct GasReachField {
     /// Per-cylinder penetration allowance (bar) the engine used, aligned 1:1 with the INPUT
     /// cylinder order (disabled tanks and non-budget roles are `0.0`) so the table can show a
     /// "usable gas" value per row (#245). Under the reserve presets these are engine-COMPUTED
-    /// (`fill − turn/drop`): a back-gas tank shows its strategy fraction of usable, a counted
+    /// (`fill - turn/drop`): a back-gas tank shows its strategy fraction of usable, a counted
     /// stage its Half-Minus IN half; under **Free** they echo the diver's clamped input. The
     /// single source of truth for the column, so it can never drift from the budget/gauges.
     pub cylinder_usable_bars: Vec<f64>,

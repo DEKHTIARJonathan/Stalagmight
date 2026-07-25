@@ -1,17 +1,17 @@
 /**
- * Component test (#161) — Section Adjust dialog accepts negative / partial input.
+ * Component test (#161) - Section Adjust dialog accepts negative / partial input.
  *
  * Regression for the controlled-number-input bug: dx/dy were a numeric
  * `value={dx}` coerced with `parseFloat(e.target.value) || 0`, so every
  * intermediate keystroke ('-', '', '.') collapsed to 0 and the controlled
- * re-render wiped it — negatives were impossible and a leading 0 couldn't be
+ * re-render wiped it - negatives were impossible and a leading 0 couldn't be
  * cleared. The fix backs the inputs with string state that starts empty.
  *
  * `userEvent.type` simulates real per-keystroke entry, which is what exercises
- * the bug — and crucially these tests do NOT clear/select first, so they cover
+ * the bug - and crucially these tests do NOT clear/select first, so they cover
  * the natural click-then-type flow a user actually hits. (Playwright's `.fill()`
  * sets the value atomically and never reaches the buggy intermediate state, which
- * is why the existing e2e `dyInput.fill('-3.2')` passed while the bug was live —
+ * is why the existing e2e `dyInput.fill('-3.2')` passed while the bug was live -
  * so this guard lives at the component tier.)
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -74,7 +74,7 @@ describe('SectionAdjustDialog negative / partial input (#161)', () => {
   });
 
   it('accepts a negative and a leading-dot decimal in dy', async () => {
-    // dy goes through handleDyChange — a separate handler/closure from dx, so it
+    // dy goes through handleDyChange - a separate handler/closure from dx, so it
     // needs its own coverage. fireEvent.change is atomic (no debounce-interleave),
     // and the per-keystroke negative path is already covered by the dx test above.
     render(<SectionAdjustDialog />);
@@ -92,7 +92,7 @@ describe('SectionAdjustDialog negative / partial input (#161)', () => {
     const dx = await screen.findByTestId('dx-input');
 
     // fireEvent.change is atomic + synchronous, so it exercises the reject branch
-    // deterministically — per-keystroke userEvent.type of rejected chars races
+    // deterministically - per-keystroke userEvent.type of rejected chars races
     // React's controlled-value restore under load (a flake we already hit once).
     fireEvent.change(dx, { target: { value: '-2' } });
     expect(dx).toHaveValue('-2');

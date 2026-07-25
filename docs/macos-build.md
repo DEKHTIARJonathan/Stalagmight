@@ -27,18 +27,18 @@ Build artifacts land under `src-tauri/target/release/bundle/`.
 | `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node 22, pnpm 9, Rust, tauri-wd) |
 | `scripts/mac-build.sh` | Run the full build pipeline (deps, tsc, cargo test, tauri build) |
 
-## `mac-setup.sh` — Dev Tool Installer
+## `mac-setup.sh` - Dev Tool Installer
 
 Installs all required development tools, skipping anything already present. Safe to run repeatedly.
 
 ### Tools installed
 
-1. **Xcode Command Line Tools** — headless install via `softwareupdate`
-2. **Homebrew** — standard installer if sudo is available, otherwise git-clones to `~/.homebrew`
-3. **Node.js 22** — via `brew install node@22`, with PATH fix for keg-only installs
-4. **pnpm 9** — via `npm install -g pnpm@9`, with CA cert fix for Homebrew's OpenSSL
-5. **Rust stable** — via rustup
-6. **tauri-wd** — via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
+1. **Xcode Command Line Tools** - headless install via `softwareupdate`
+2. **Homebrew** - standard installer if sudo is available, otherwise git-clones to `~/.homebrew`
+3. **Node.js 22** - via `brew install node@22`, with PATH fix for keg-only installs
+4. **pnpm 9** - via `npm install -g pnpm@9`, with CA cert fix for Homebrew's OpenSSL
+5. **Rust stable** - via rustup
+6. **tauri-wd** - via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
 
 ### Homebrew PATH detection
 
@@ -50,7 +50,7 @@ The script checks three Homebrew locations in order:
 | `/usr/local/bin/brew` | Standard Intel install |
 | `~/.homebrew/bin/brew` | No-sudo fallback install |
 
-## `mac-build.sh` — Build Pipeline
+## `mac-build.sh` - Build Pipeline
 
 Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already been run.
 
@@ -65,14 +65,14 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 
 ### Build steps
 
-1. `pnpm install` — install frontend dependencies
-2. `pnpm tsc --noEmit` — TypeScript type check
-3. `playwright install chromium` — install Playwright browsers *(only with `--test-ui*`)*
-4. `pnpm test:ui` / `pnpm test:ui:headed` — Playwright tests *(only with `--test-ui*`)*
-5. `cargo test` — Rust test suite (with `ulimit -n 4096`)
-5a. `pnpm tauri build --debug --no-bundle -- --features e2e` — E2E debug binary *(only with `--test-e2e`)*
-5b. `./scripts/wdio.sh --skip-build` — WebDriverIO E2E tests *(only with `--test-e2e`)*
-6. `CI=true pnpm tauri build` — production build (`.app` bundle + `.dmg`)
+1. `pnpm install` - install frontend dependencies
+2. `pnpm tsc --noEmit` - TypeScript type check
+3. `playwright install chromium` - install Playwright browsers *(only with `--test-ui*`)*
+4. `pnpm test:ui` / `pnpm test:ui:headed` - Playwright tests *(only with `--test-ui*`)*
+5. `cargo test` - Rust test suite (with `ulimit -n 4096`)
+5a. `pnpm tauri build --debug --no-bundle -- --features e2e` - E2E debug binary *(only with `--test-e2e`)*
+5b. `./scripts/wdio.sh --skip-build` - WebDriverIO E2E tests *(only with `--test-e2e`)*
+6. `CI=true pnpm tauri build` - production build (`.app` bundle + `.dmg`)
 
 ### Build artifacts
 
@@ -98,11 +98,11 @@ The `--test-e2e` flag runs WebDriverIO E2E tests against the Tauri app. On macOS
 
 #### How it works
 
-1. The app is built with `--features e2e`, which compiles in `tauri-plugin-webdriver-automation` — a Tauri plugin that exposes W3C WebDriver protocol for WKWebView
+1. The app is built with `--features e2e`, which compiles in `tauri-plugin-webdriver-automation` - a Tauri plugin that exposes W3C WebDriver protocol for WKWebView
 2. `tauri-wd` is spawned as the WebDriver server (instead of `tauri-driver`)
 3. WebDriverIO connects to `tauri-wd` and runs tests as normal
 
-The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]` in `Cargo.toml`), so it is **never compiled** in normal or release builds — zero impact on the production binary.
+The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]` in `Cargo.toml`), so it is **never compiled** in normal or release builds - zero impact on the production binary.
 
 #### Prerequisites
 

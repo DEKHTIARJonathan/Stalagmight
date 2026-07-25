@@ -159,7 +159,7 @@ interface ProjectStore {
    * Whether the open project is backed by an on-disk database. A new project
    * created with a deferred initial save reserves `project.file_path` but leaves
    * the backend database unopened until the first save, so DB-backed actions
-   * (e.g. persisting an ignored warning) can't run yet — gate them on this, not
+   * (e.g. persisting an ignored warning) can't run yet - gate them on this, not
    * on `file_path` alone (issue #57 / Codex).
    */
   databaseOpen: boolean;
@@ -229,8 +229,8 @@ interface ProjectStore {
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
-   * project (`importContext === 'new-project'`) the initial save is deferred —
-   * only a real save writes the `.stalx` and registers it in Recent Projects —
+   * project (`importContext === 'new-project'`) the initial save is deferred -
+   * only a real save writes the `.stalx` and registers it in Recent Projects -
    * so this saves. For an import into an EXISTING project it only marks dirty, so
    * the user's unrelated pending edits aren't silently committed; the normal
    * unsaved-changes / autosave flow then persists it.
@@ -253,7 +253,7 @@ interface ProjectStore {
    * import wizard applies sections via direct `import_sections` IPC calls that
    * bypass `executeCommand`, so they don't set `isDirty` themselves; the wizard
    * calls this after each successful batch so the imported sections register as
-   * unsaved — powering autosave and the project-close guard (`handleCloseProject`).
+   * unsaved - powering autosave and the project-close guard (`handleCloseProject`).
    * (Window-close during the wizard is guarded separately, by `isImportInProgress`
    * in App.tsx.) (#110)
    */
@@ -274,7 +274,7 @@ interface ProjectStore {
    * issue set changes (genuinely new issues re-show). Ignored while
    * `integritySaveBlocked` is true (a save-blocking project can't hide Repair). */
   integrityDismissed: boolean;
-  /** True when the open project has unresolvable cross-references — the exact
+  /** True when the open project has unresolvable cross-references - the exact
    * condition that refuses both manual and auto-save. While true the integrity
    * banner stays shown and non-dismissable so the Repair entry point can't be
    * hidden on a project that can't be saved. */
@@ -417,8 +417,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // knows there are un-pushed edits (drives the button's push&release-with-
         // comment flow). No-op for a local project (no link).
         useSpeleoStore.getState().markDirty();
-        // A command can RESOLVE (or surface) an integrity issue — e.g. removing a
-        // drifted loop closure clears its banner entry — so re-check, mirroring
+        // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
+        // drifted loop closure clears its banner entry - so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
         // may be an autosave (which skips its own post-save re-check to avoid churn),
         // so without this the banner/dialog can keep showing an already-fixed issue
@@ -426,13 +426,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         await get().checkProjectIntegrity();
       } else {
         // executeCommand used to be SILENT on a rejected CommandResult (no refresh,
-        // no feedback). That left optimistic UI desynced from backend truth — the
+        // no feedback). That left optimistic UI desynced from backend truth - the
         // #191 read-only edit gate's "shots vanish on drag" bug: a committed drag
         // preview stayed rendered because the success-only refresh never fired.
         // ALWAYS re-sync the view to backend truth, discarding the phantom edit.
         await get().refreshProjectState();
         // Surface a read-only rejection (EDIT_DISABLED) as a single friendly notice
-        // across ALL edit paths (drag, dialogs, shortcuts) — a blocked drag was
+        // across ALL edit paths (drag, dialogs, shortcuts) - a blocked drag was
         // otherwise a silent no-op. Other failures keep their existing handling
         // (dialogs show an inline error), so validation errors aren't double-toasted.
         // Full edit-state UX (suppress this, offer "Start editing") is owned by #204.
@@ -447,9 +447,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       return result;
     } catch (e) {
-      // A genuine IPC/transport rejection (rare — distinct from a returned
+      // A genuine IPC/transport rejection (rare - distinct from a returned
       // {success:false}) would otherwise skip the re-sync above and strand an
-      // optimistic edit (a committed drag preview) hidden forever — the same
+      // optimistic edit (a committed drag preview) hidden forever - the same
       // "vanishing shots" failure. Re-sync the view first (the re-render drains
       // the scheduled drag-preview restore), THEN re-throw so every caller's
       // existing error handling (dialog catch blocks, etc.) is unchanged.
@@ -480,7 +480,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useSpeleoStore.getState().markDirty();
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
-        // dedup key as executeCommand, not the raw coded string — mashing Ctrl+Z
+        // dedup key as executeCommand, not the raw coded string - mashing Ctrl+Z
         // on a read-only remote project shows one tidy toast, not "EDIT_DISABLED:…".
         // A #202 re-verify divergence routes to the divergence prompt instead.
         if (isReverifyDivergedError(result.error)) {
@@ -496,9 +496,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
     } finally {
       await get().refreshProjectState();
-      // Undo/redo can change which cross-references resolve — e.g. undoing a
+      // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
-      // station an offset anchored on — so re-check integrity, otherwise the
+      // station an offset anchored on - so re-check integrity, otherwise the
       // banner and save-block go stale (showing clean while the project isn't).
       await get().checkProjectIntegrity();
     }
@@ -561,7 +561,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   setConfig: (config: Config) => {
     // Replacing the config (e.g. Settings ▸ Advanced "Reload from disk") can change
-    // the closure-adjustment sigmas, so drop the cached adjusted geometry here too —
+    // the closure-adjustment sigmas, so drop the cached adjusted geometry here too -
     // this is the shared config-replacement path that `updateConfig` doesn't use.
     set({ config, stationsAdjusted: null, surveyDataAdjusted: null });
   },
@@ -911,7 +911,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       // Check clientOpId hasn't changed
       if (get().loading.clientOpId !== clientOpId) {
-        // Superseded/cancelled — drop the entry-point source so it can't
+        // Superseded/cancelled - drop the entry-point source so it can't
         // mis-attribute a later, unrelated project command (it has no auto-reset;
         // only a completed flow (setView) or this clear drops it). Mirrors
         // loadProject's clear on every early-return.
@@ -955,7 +955,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
       return emptyCommandResult(true, null);
     } catch (e) {
-      // Create failed — drop the entry-point source (no auto-reset) so it can't
+      // Create failed - drop the entry-point source (no auto-reset) so it can't
       // mis-attribute a later, unrelated project command. Mirrors loadProject.
       clearProjectActionSource();
       const error = parseLoadError(e);
@@ -969,7 +969,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   saveProject: async (path?: string, isAutosave?: boolean) => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
     // non-finite geometry in memory before persisting, which mutates the backend
-    // project — so afterward the frontend's mirror can be stale. Those heals only
+    // project - so afterward the frontend's mirror can be stale. Those heals only
     // ever fire on a project the integrity check already flags, so capture that here
     // as a cheap signal to refresh below, avoiding a get_project_state on every
     // clean save / autosave.
@@ -988,7 +988,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // `CommandResult::success().with_path(...)`), so an autosave to the same
         // path would otherwise re-spread the project on every debounced write.
         // That changes the project's identity, and MapCanvas's republish
-        // useLayoutEffect keys on it — a no-op save would trigger a full survey
+        // useLayoutEffect keys on it - a no-op save would trigger a full survey
         // rebuild + republish, briefly blanking all geometry (#mem).
         if (project && project.file_path !== result.saved_path) {
           set({ project: { ...project, file_path: result.saved_path } });
@@ -996,7 +996,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           // name from the final .stalx stem (e.g. `cave.stalx` →
           // `cave.tml`).  The in-memory `project.collab.sibling_tml_relative`
           // is still the pre-save placeholder (e.g. `collaboration.tml`)
-          // until we refresh — the Project Details panel would otherwise
+          // until we refresh - the Project Details panel would otherwise
           // mislead the user about which companion file was actually
           // written.  Refresh the collab state when collab is on.
           if (project.collab?.enabled) {
@@ -1015,14 +1015,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Lightweight: just refresh undo/redo availability
       await get().refreshUndoState();
       // The first successful save opens the on-disk database for a deferred project
-      // — UNLESS the backend saved the file but couldn't reopen the DB (it clears
+      // - UNLESS the backend saved the file but couldn't reopen the DB (it clears
       // the handle and flags DATABASE_NOT_REOPENED). In that case keep
       // databaseOpen=false so DB-backed actions stay disabled (issue #57 / Codex).
       const dbNotReopened = result.warnings?.some((w) => w.code === 'DATABASE_NOT_REOPENED') ?? false;
       set({ isDirty: false, databaseOpen: !dbNotReopened });
       // If the save healed the project in memory (re-minted duplicate UUIDs,
       // dropped orphan section offsets, sanitized non-finite geometry), the
-      // frontend's shots/stations are now stale vs the saved file — refresh so the
+      // frontend's shots/stations are now stale vs the saved file - refresh so the
       // rendered state matches. Gated on hadIntegrityIssues so a clean save/autosave
       // skips the extra get_project_state fetch and re-render.
       if (hadIntegrityIssues) {
@@ -1030,7 +1030,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
-      // the next load. Skip on a clean autosave to avoid churn — BUT still re-check
+      // the next load. Skip on a clean autosave to avoid churn - BUT still re-check
       // when the project entered the save flagged (hadIntegrityIssues), because the
       // save path auto-heals some issues (duplicate UUIDs / orphan offsets) on
       // autosave too; without this the banner/dialog would stay stale after an
@@ -1044,7 +1044,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // (a status indicator/toast may render it, e.g. on autosave).
       set({
         error: permission
-          ? 'Folder access denied — check Privacy & Security settings'
+          ? 'Folder access denied - check Privacy & Security settings'
           : (result.error ?? 'Failed to save project'),
       });
       // A filesystem permission denial (e.g. macOS forgot folder access after
@@ -1059,7 +1059,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // A save is also blocked when the project has unresolvable cross-references;
       // re-check so they surface in the integrity banner (the repair entry point)
       // and the user can Repair and re-save. Awaited (not fire-and-forget) so
-      // `integritySaveBlocked` is up to date by the time saveProject resolves —
+      // `integritySaveBlocked` is up to date by the time saveProject resolves -
       // the auto-save hook reads it to decide whether to pause, and
       // surfaceSaveFailure reads it to route a blocked save to Review & Repair.
       // (On a permission error this is a harmless no-op: the project is
@@ -1094,7 +1094,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = await get().saveProject();
     } catch (e) {
       // A reject (e.g. IPC transport failure) means saveProject never ran its
-      // integrity recheck, so `integritySaveBlocked` may be stale — routing through
+      // integrity recheck, so `integritySaveBlocked` may be stale - routing through
       // surfaceSaveFailure could wrongly open Review & Repair. Show the generic
       // save error directly instead, and keep the project dirty (close-guarded).
       console.error('[import] save after import failed:', e);
@@ -1138,7 +1138,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (result.success) {
         set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
         // Closing a project bypasses the setView() cleanup funnel, so drop the gas
-        // sub-mode (#38) here too — a stale overlay/panel must not outlive the project.
+        // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
         useUIStore.getState().exitGasPlan();
         // #204: drop the SpeleoDB action-shell edit-state - no project is open.
         useSpeleoStore.getState().clearLink();
@@ -1272,7 +1272,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         cur.loading.clientOpId !== opAtStart
       ) {
         // Drop this result if it has been superseded. Two ways:
-        // 1. A NEWER check was issued after this one started (last-issued-wins) —
+        // 1. A NEWER check was issued after this one started (last-issued-wins) -
         //    so an earlier check can't clobber a fresher result even on the SAME
         //    project (e.g. a save's fire-and-forget check racing a Repair's check,
         //    which the project-identity guard below can't tell apart).
@@ -1289,7 +1289,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // newly-appeared issues re-show the banner. Compare order-independently:
         // the backend's message order isn't stable (orphan offset/comment messages
         // come from HashMap iteration), so a positional compare could spuriously
-        // reset a dismissal — and thus resurface a banner — on a mere reorder.
+        // reset a dismissal - and thus resurface a banner - on a mere reorder.
         const prev = [...state.integrityIssues].sort();
         const next = [...issues].sort();
         const unchanged =
@@ -1300,7 +1300,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           integrityDismissed: unchanged ? state.integrityDismissed : false,
           // Keep the Review & Repair dialog flag consistent with what's actually
           // rendered (the dialog gate is integrityDialogOpen && issues.length > 0).
-          // When the last issue clears — via Repair or a command that resolved it —
+          // When the last issue clears - via Repair or a command that resolved it -
           // close the dialog explicitly, so the flag can't linger true-but-hidden
           // and pop the dialog back open if a later issue reappears.
           integrityDialogOpen: issues.length === 0 ? false : state.integrityDialogOpen,
@@ -1321,11 +1321,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // Repair mutates the project; refresh derived state so the UI reflects it.
       await get().refreshProjectState();
       // Repair records a snapshot-pair undo entry, so refresh undo/redo
-      // availability — the Undo button must enable so the user can revert it.
+      // availability - the Undo button must enable so the user can revert it.
       await get().refreshUndoState();
       // Re-check rather than assuming clean: some issues are detect-only and not
-      // auto-repairable (a drifted aligned loop closure — recompute/remove it;
-      // non-finite shot geometry — fix the data), so reflect the TRUE post-repair
+      // auto-repairable (a drifted aligned loop closure - recompute/remove it;
+      // non-finite shot geometry - fix the data), so reflect the TRUE post-repair
       // state instead of clearing the banner on issues that still exist.
       await get().checkProjectIntegrity();
       // A repair that actually changed the project leaves unsaved edits: mark the
@@ -1352,7 +1352,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     } catch (e) {
       // Do NOT fabricate a successful no-op { fixed: 0, remaining: 0 }: a thrown
       // repair (an IPC rejection during window/app teardown, a serialization
-      // failure, or a backend panic — note the command itself is infallible, so a
+      // failure, or a backend panic - note the command itself is infallible, so a
       // normal backend Err is not a trigger) must be distinguishable from a genuine
       // clean repair. Otherwise the caller shows a fake "Repaired 0 issues" success
       // toast and swallows the error. Re-throw so the caller surfaces the failure
@@ -1393,7 +1393,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  // Permanently delete a project's files from disk (destructive — distinct from
+  // Permanently delete a project's files from disk (destructive - distinct from
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
   // files to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
@@ -1680,7 +1680,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'anchor survey to GPS coordinates', fields: { stationRef } }
     );
     if (result.success && options?.fitToBounds !== false) {
-      // Snap (no animation) for first zero datum — the camera has no
+      // Snap (no animation) for first zero datum - the camera has no
       // meaningful prior position so animating from it is disorienting.
       useUIStore.getState().triggerFitToBounds(isFirstDatum ? { snap: true } : undefined);
     }
@@ -1857,7 +1857,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // Re-arm the transient `_source` from the durable pending bridge (it resets
     // ~50ms after being set), so `command.execute_walls_import` is attributed to
     // the real entry point (hamburger/keyboard/drag-drop/dialog) instead of
-    // 'unknown' — matching executeCompassImport/Tml/Gpx.
+    // 'unknown' - matching executeCompassImport/Tml/Gpx.
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {

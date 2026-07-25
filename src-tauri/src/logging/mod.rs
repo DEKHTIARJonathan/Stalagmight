@@ -146,7 +146,7 @@ where
 ///
 /// Returns a guard that must be kept alive for the duration of the application.
 /// On platforms where file logging is unavailable (e.g. Android before setup),
-/// only stderr and the in-memory ring buffer are used — no panic.
+/// only stderr and the in-memory ring buffer are used - no panic.
 pub fn init() -> Option<WorkerGuard> {
     // Create the in-memory ring buffer
     let buffer = Arc::new(Mutex::new(VecDeque::with_capacity(RING_BUFFER_CAPACITY)));
@@ -244,7 +244,7 @@ pub fn log_directory() -> Result<PathBuf> {
     if let Some(dir) = crate::app_dirs::data_local_dir() {
         return Ok(dir.join("logs"));
     }
-    // Pre-setup fallback (desktop only — `directories` returns None on Android)
+    // Pre-setup fallback (desktop only - `directories` returns None on Android)
     let dirs = directories::ProjectDirs::from("com", "stalagmight", "Stalagmight")
         .ok_or_else(|| anyhow::anyhow!("No home directory"))?;
     Ok(dirs.data_local_dir().join("logs"))
@@ -473,7 +473,7 @@ mod tests {
         std::fs::write(log_dir.join("first.log"), b"abc").expect("write log");
         std::fs::write(log_dir.join("second.log"), b"defg").expect("write log");
 
-        // Limit of 10 bytes — both files fit
+        // Limit of 10 bytes - both files fit
         cleanup_logs_in_dir(&log_dir, 10).expect("cleanup logs");
 
         assert!(log_dir.join("first.log").exists());

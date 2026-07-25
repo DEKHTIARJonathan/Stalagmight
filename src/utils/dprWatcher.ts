@@ -1,5 +1,5 @@
 /**
- * Notify `onChange` whenever the device pixel ratio changes — e.g. the desktop
+ * Notify `onChange` whenever the device pixel ratio changes - e.g. the desktop
  * window is dragged to a monitor with a different scale factor. Returns a dispose
  * function.
  *

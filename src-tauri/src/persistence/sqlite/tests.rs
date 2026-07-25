@@ -28,7 +28,7 @@ fn load_project_validation_returns_none_when_table_absent() {
 #[test]
 fn save_resolved_warning_never_clobbers_a_different_shots_uuid_row() {
     // The legacy positional UNIQUE must not let one shot's ignore delete another
-    // shot's UUID-keyed ignore sharing the (section, shot_id) slot — which can
+    // shot's UUID-keyed ignore sharing the (section, shot_id) slot - which can
     // happen transiently when in-memory ids diverge from saved positions after a
     // save (issue #57 / Codex). The conditional upsert preserves the existing row
     // and reports the collision rather than silently dropping either ignore.
@@ -1193,7 +1193,7 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
 #[test]
 fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     // Issue #57 regression guard: resolve_all can hand the bulk save two
-    // warnings with the SAME (section_id, shot_id, warning_code) — e.g. a shot
+    // warnings with the SAME (section_id, shot_id, warning_code) - e.g. a shot
     // with both azimuths out of range yields two INVALID_AZIMUTH rows, and an
     // over-anchored merge component can map two datums onto one shot. The bulk
     // save must not abort on the legacy UNIQUE constraint.
@@ -1275,7 +1275,7 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
 fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
     // Issue #57 (review): un-ignore passes the LIVE shot's UUID. A legacy
     // NULL-uuid row suppressing that same shot (e.g. on a load path that didn't
-    // run the backfill) must still be cleared — the delete's position branch is
+    // run the backfill) must still be cleared - the delete's position branch is
     // restricted to `shot_uuid IS NULL`, so it clears the legacy row WITHOUT
     // touching a DIFFERENT shot's by-UUID row that occupies the same position.
     let mut db = Database::in_memory().unwrap();
@@ -1296,7 +1296,7 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
         shot_uuid: None,
     })
     .unwrap();
-    // A DIFFERENT shot's by-UUID suppression at a distinct position (0, 2) — must
+    // A DIFFERENT shot's by-UUID suppression at a distinct position (0, 2) - must
     // NOT be deleted when we un-ignore the shot at (0, 1). (UNIQUE(section_id,
     // shot_id, warning_code) forbids two rows sharing one position+code, so this
     // models a different shot, not a same-position collision.)
@@ -1351,7 +1351,7 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
         shot_uuid: None,
     })
     .unwrap();
-    // Legacy row whose (section, shot) is NOT in the live map — must stay NULL.
+    // Legacy row whose (section, shot) is NOT in the live map - must stay NULL.
     db.save_resolved_warning(&ResolvedWarning {
         section_id: 0,
         shot_id: 7,
@@ -1579,7 +1579,7 @@ fn test_integrity_check_passes_on_valid_db() {
     db.save_project(&project).unwrap();
     drop(db);
 
-    // open_existing runs validate_integrity internally — should succeed
+    // open_existing runs validate_integrity internally - should succeed
     let db = Database::open_existing(&db_path).unwrap();
     // full_integrity_check should also pass
     let errors = db.full_integrity_check().unwrap();
@@ -1599,7 +1599,7 @@ fn test_integrity_check_passes_on_readonly() {
     db.save_project(&project).unwrap();
     drop(db);
 
-    // open_readonly runs validate_integrity internally — should succeed
+    // open_readonly runs validate_integrity internally - should succeed
     let _db = Database::open_readonly(&db_path).unwrap();
 }
 
@@ -1893,7 +1893,7 @@ fn test_legacy_v6_undo_history_dropped_on_open_existing() {
     let temp_dir = TempDir::new().unwrap();
     let path = write_legacy_v6_project_with_undo_history(&temp_dir, "legacy_undo.stalx");
 
-    // Sanity: the legacy payload IS the dangerous shape — under the new
+    // Sanity: the legacy payload IS the dangerous shape - under the new
     // deserializer its explicit nulls decode to Some(None) ("clear field").
     let dangerous: crate::models::ShotUpdates =
         serde_json::from_str(r#"{"length":2.0,"left":null,"pitch_in":null,"comment":null}"#)
@@ -2155,7 +2155,7 @@ fn test_migrate_schema_is_idempotent() {
         db.save_project(&project).unwrap();
     }
 
-    // Opening again re-runs migrations — should not error
+    // Opening again re-runs migrations - should not error
     let db = Database::open_existing(&db_path).unwrap();
     let loaded = db.load_project().unwrap();
     assert_eq!(loaded.name, "Migration");
@@ -2845,7 +2845,7 @@ fn test_migrate_schema_idempotent() {
     db.save_project(&project).unwrap();
     drop(db);
 
-    // Open it twice — migration runs both times, second should be a no-op
+    // Open it twice - migration runs both times, second should be a no-op
     let db1 = Database::open_existing(&db_path).unwrap();
     let p1 = db1.load_project().unwrap();
     drop(db1);
@@ -2999,7 +2999,7 @@ fn test_save_load_round_trip_all_metadata() {
         .unwrap();
 
     // set_zero_datum creates section offsets for all connected sections (A and B are merged),
-    // so we don't add a manual section_offset — we just verify the ones set_zero_datum created.
+    // so we don't add a manual section_offset - we just verify the ones set_zero_datum created.
     project
         .station_offsets
         .insert(StationRef::new(section_id, 1).into(), (1.0, 2.0, 3.0));
@@ -3161,7 +3161,7 @@ fn test_compress_unicode() {
 
 #[test]
 fn test_decompress_single_byte_not_gzip() {
-    // Single byte can't be gzip — should return as lossy UTF-8
+    // Single byte can't be gzip - should return as lossy UTF-8
     let result = decompress_json(&[0x41]).unwrap();
     assert_eq!(result, "A");
 }
@@ -3431,7 +3431,7 @@ fn test_format_blob_placeholder_units() {
 }
 
 // ===========================================================================
-// SpeleoDB hand-off link (speleo_link, schema v9) — #189 round-trip + is_remote
+// SpeleoDB hand-off link (speleo_link, schema v9) - #189 round-trip + is_remote
 // and #190 carry-forward fence. No telemetry (these live in persistence tests,
 // avoiding the 418 EVENT_NAMES bump). See PRESERVED_SPELEOLINK_COLUMNS.
 // ===========================================================================
@@ -3702,7 +3702,7 @@ fn speleo_link_column_info(db: &Database) -> Vec<(String, String, bool)> {
 fn carry_forward_four_cell_raw_sql_null_stays_null() {
     // Raw-SQL on-disk: INSERT NULL base + dirty=1, force migrate_schema (drop the
     // table + stamp v8 so open_existing migrates), assert NULL stays NULL and the
-    // dirty bit stays 1 — never coerced to '' / 0.
+    // dirty bit stays 1 - never coerced to '' / 0.
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("raw_fence.stalx");
     {
@@ -3820,7 +3820,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     // A genuine v9-shaped speleo_link (no last_edit_at) gains the column via the
     // v9→v10 ALTER on open_existing. A row that was already DIRTY under v9
     // (has_unpushed_edits=1) is backfilled to the epoch so a later confirmed push
-    // can clear it — WITHOUT the backfill, edits_captured_by_push(None, push_start)
+    // can clear it - WITHOUT the backfill, edits_captured_by_push(None, push_start)
     // is false and the dirty bit would stick forever (#197 review).
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("v9_speleo_link.stalx");
@@ -3878,7 +3878,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
 #[test]
 fn migrate_v9_clean_speleo_link_keeps_null_last_edit_at() {
     // The v9→v10 backfill only touches DIRTY rows. A clean v9 row
-    // (has_unpushed_edits=0) keeps last_edit_at NULL — there is no un-pushed edit to
+    // (has_unpushed_edits=0) keeps last_edit_at NULL - there is no un-pushed edit to
     // preserve, and a fresh edit will stamp it at edit time.
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("v9_clean.stalx");
@@ -3987,7 +3987,7 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
 
 #[test]
 fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
-    // #197 review: the hot-path dirty stamp is a single UPDATE — no row for a
+    // #197 review: the hot-path dirty stamp is a single UPDATE - no row for a
     // local-only project (no-op, false), and for a remote link it sets the bit +
     // refreshes last_edit_at WITHOUT disturbing base_commit_sha / identity.
     let temp = TempDir::new().unwrap();
@@ -4029,7 +4029,7 @@ fn touch_speleo_link_dirty_is_targeted_and_locality_aware() {
         "hand-off identity untouched"
     );
 
-    // A second touch REFRESHES the timestamp (not idempotent — g7 needs the latest).
+    // A second touch REFRESHES the timestamp (not idempotent - g7 needs the latest).
     assert!(db
         .touch_speleo_link_dirty("2026-06-28T09:09:09+00:00")
         .unwrap());
@@ -4245,8 +4245,8 @@ fn vacuum_snapshot_missing_source_errors() {
 #[test]
 fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
     // #197: the push snapshot clears ONLY the dirty bit + per-machine view toggles
-    // (display_settings). Durable project data — the import-dedup hashes and
-    // resolved_warnings — PROLIFERATES with the project (only a lock-holding editor
+    // (display_settings). Durable project data - the import-dedup hashes and
+    // resolved_warnings - PROLIFERATES with the project (only a lock-holding editor
     // can push, so anything in the snapshot is a legitimate change). The survey
     // project row is preserved.
     let temp = TempDir::new().unwrap();
@@ -4353,7 +4353,7 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         0,
         "collab_state (local Ariane-collab wiring) must not ride to collaborators"
     );
-    // Durable project data proliferates — NOT stripped.
+    // Durable project data proliferates - NOT stripped.
     assert_eq!(
         count("resolved_warnings"),
         1,

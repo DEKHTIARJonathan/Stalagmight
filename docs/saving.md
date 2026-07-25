@@ -28,7 +28,7 @@ Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stack
 ```
 1. invoke('save_project', { path })
 2. If saved_path in result, update project.file_path in store
-3. refreshUndoState() — lightweight, just fetches can_undo/can_redo booleans
+3. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
 4. Set isDirty: false
 ```
 
@@ -39,7 +39,7 @@ The frontend does **not** call `refreshProjectState()` after save. Save doesn't 
 All saves use a temp file with atomic rename to prevent data loss on crash or power failure:
 
 1. Write to `file.stalx.tmp` (new SQLite database)
-2. On success: `rename(file.stalx.tmp, file.stalx)` — atomic on POSIX, nearly atomic on Windows
+2. On success: `rename(file.stalx.tmp, file.stalx)` - atomic on POSIX, nearly atomic on Windows
 3. On failure: delete `file.stalx.tmp`, original file untouched
 
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting.

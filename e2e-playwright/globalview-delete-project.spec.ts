@@ -2,7 +2,7 @@ import { test, expect, type Page } from './fixtures/coverage';
 import { setupMockedPage } from './helpers/app';
 
 /**
- * E2E for the destructive "Delete project" action (#118) — distinct from the
+ * E2E for the destructive "Delete project" action (#118) - distinct from the
  * non-destructive "Remove from recent". Covers the GlobalView context-menu item,
  * its single-selection gating, and the confirm-dialog flow.
  *
@@ -21,7 +21,7 @@ async function switchToListTab(page: Page): Promise<void> {
   await expect(page.getByTestId(`system-card-${ALPHA}`)).toBeVisible();
 }
 
-test.describe('GlobalView — Delete project (destructive)', () => {
+test.describe('GlobalView - Delete project (destructive)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await switchToListTab(page);

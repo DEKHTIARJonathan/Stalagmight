@@ -561,7 +561,7 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
 
     // Plan mode remounts the map read-only (closure-adjusted; the mock's adjusted
     // geometry equals the measured one, so the legs stay where they were) and
-    // repaints the survey in the plan view's own palette — measured, a cyan family
+    // repaints the survey in the plan view's own palette - measured, a cyan family
     // that shifts by a byte or two per leg. So the survey-mode pixels captured
     // above are NOT a valid reference here, and neither is exact equality between
     // two legs.

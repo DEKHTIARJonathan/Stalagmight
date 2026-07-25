@@ -120,7 +120,7 @@ export class GlobalCustomController {
     return this.metadataById.get(systemId);
   }
 
-  /** Build/refresh the custom layer (the sole global-survey renderer — no gate). */
+  /** Build/refresh the custom layer (the sole global-survey renderer - no gate). */
   sync(systems: SystemGeometry[]): void {
     // A fatal (dead GL) controller never rebuilds; the survey stays blank.
     if (this.fatal) return;
@@ -133,7 +133,7 @@ export class GlobalCustomController {
     else this.layer?.update(data);
   }
 
-  /** Rebuild from the held systems — e.g. after a device-pixel-ratio change, which
+  /** Rebuild from the held systems - e.g. after a device-pixel-ratio change, which
    *  invalidates the baked device-pixel sizes. No-op unless already drawing. */
   resync(): void {
     if (this.active) this.sync(this.systems);
@@ -172,7 +172,7 @@ export class GlobalCustomController {
     // above the canvas, so no beforeId anchor is needed.
     this.map.addLayer(layer);
     if (layer.isDisabled()) {
-      // FATAL: the custom layer cannot draw. There is NO stock fallback — remove
+      // FATAL: the custom layer cannot draw. There is NO stock fallback - remove
       // the dead layer and route to the error state instead of restoring stock.
       const reason = layer.getDisabledReason() ?? 'unknown';
       console.warn(
@@ -196,7 +196,7 @@ export class GlobalCustomController {
     this.map.triggerRepaint();
   }
 
-  /** Remove the custom layer (the sole global-survey renderer — no stock to
+  /** Remove the custom layer (the sole global-survey renderer - no stock to
    *  restore or republish). Safe when already inactive. Non-fatal teardown only
    *  (destroy); the fatal path uses {@link tearDownFatal}. */
   private teardown(): void {

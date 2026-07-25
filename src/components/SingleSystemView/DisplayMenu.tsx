@@ -75,7 +75,7 @@ const OVERLAYS: ToggleItem[] = [
 
 // Each pill is tinted/iconned by the element it annotates (the category header
 // already carries the comment glyph), so the comment/label pills inherit their
-// PARENT entity's color — station comments read as station-colored, etc. —
+// PARENT entity's color - station comments read as station-colored, etc. -
 // rather than the generic 'comment' role color.
 const COMMENTS_LABELS: ToggleItem[] = [
   { key: 'showSectionNames', labelKey: 'displayMenu.items.sectionNames', descriptionKey: 'displayMenu.descriptions.sectionNames', entity: 'section', symbol: 'label' },
@@ -89,7 +89,7 @@ const COMMENTS_LABELS: ToggleItem[] = [
  * A pill toggle. When `entityColored` is set, the pill carries its element's
  * color (`--o` = `var(--sh-<entity>)`, the same setting-wired palette the
  * data-table/legend chips use): off shows just a faint entity-tinted outline,
- * on fills with the full element color (with `onColor` — a contrast color — for
+ * on fills with the full element color (with `onColor` - a contrast color - for
  * the label + glyph). Otherwise it fills with the theme accent. Dimmed when
  * disabled.
  */
@@ -199,7 +199,7 @@ export default function DisplayMenu({
   })));
 
   // The element-toggle booleans, read as a keyed map so a pill can look itself
-  // up by `item.key` (and its `disabledWhen` dependency) — this IS the source,
+  // up by `item.key` (and its `disabledWhen` dependency) - this IS the source,
   // not a hand-maintained copy of separately destructured values.
   const toggleValues = useUIStore(
     useShallow(
@@ -256,7 +256,7 @@ export default function DisplayMenu({
     // Read live (not cached): the --sh-<entity> vars change on a preset / per-
     // element color override without changing syntacticLevel, so a cache keyed on
     // the level would serve a stale (possibly illegible) color. The cost is one
-    // getComputedStyle per on-pill on an already-open menu — negligible.
+    // getComputedStyle per on-pill on an already-open menu - negligible.
     const onColor = entityColored && active && item.entity
       ? getContrastColor(getThemeColor(syntacticVarName(item.entity)))
       : undefined;
@@ -278,7 +278,7 @@ export default function DisplayMenu({
   };
 
   // Close on outside mousedown / external scroll / resize (shared hook, same as
-  // Select/AppMenu). Escape is handled separately below — the hook doesn't own it.
+  // Select/AppMenu). Escape is handled separately below - the hook doesn't own it.
   useDismissableLayer({
     open: isOpen,
     onDismiss: () => setIsOpen(false),
@@ -363,7 +363,7 @@ export default function DisplayMenu({
           data-testid="display-menu"
         >
           <div className="grid grid-cols-2 gap-x-5 gap-y-4">
-            {/* Row 1: Color | Overlays. The Color overlays are hidden in Plan — the gas
+            {/* Row 1: Color | Overlays. The Color overlays are hidden in Plan - the gas
                 reachability gradient owns the station/shot coloring there, so a color pill would
                 be a confusing no-op (it still shows in Survey + Export). */}
             {appMode !== 'plan' && (
@@ -410,7 +410,7 @@ export default function DisplayMenu({
               </Category>
             </div>
 
-            {/* Row 4: Geometry (single-select), full width. Survey-only — Plan/Export force the
+            {/* Row 4: Geometry (single-select), full width. Survey-only - Plan/Export force the
                 read-only closure map, so flipping measured/adjusted there would fight the mode. */}
             {appMode === 'survey' && (
             <div className="col-span-2 border-t border-border pt-3">

@@ -100,7 +100,7 @@ describe('dialogStack', () => {
       pushAndTrack(a);
       pushAndTrack(b);
 
-      // Push A again — should move to top
+      // Push A again - should move to top
       pushDialog(a);
       trackedElements.push(a); // track for cleanup
 

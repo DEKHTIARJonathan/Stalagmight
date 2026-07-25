@@ -82,7 +82,7 @@ export function sameSurveyLayout(prev: SurveyData, next: SurveyData): boolean {
  * Whether the GLOBAL color inputs are unchanged, so color differences are
  * confined to the sections whose geometry / section-color changed. A change to
  * any of these can recolor every section, which the incremental path cannot
- * bound cheaply — the caller full-rebuilds instead. In issue-severity mode the
+ * bound cheaply - the caller full-rebuilds instead. In issue-severity mode the
  * per-flush `issueSeverity` arrays are freshly computed (new identity) and a
  * move can shift severity non-locally, so severity mode always falls back here.
  */
@@ -210,12 +210,12 @@ export function planIncrementalUpdate(
  * full-rebuild reproject + tessellate).
  *
  * Returns false (⇒ the caller full-rebuilds, or the geometry-incremental path
- * ran first) when the color globals are UNCHANGED (nothing to recolor globally —
+ * ran first) when the color globals are UNCHANGED (nothing to recolor globally -
  * a geometry edit or no-op), on a gps / layout / anchor change, or when any
  * non-color geometry input moved too (a combined edit the color-only path cannot
  * bound): station x/y (⇒ positions), station flags (⇒ zero-datum `sizeMul`), or
  * shot flags (⇒ per-vertex `reference` + per-station `allReference`). Section
- * colors, depths, and z are pure color inputs and MAY change — the resolvers
+ * colors, depths, and z are pure color inputs and MAY change - the resolvers
  * read them from `next`, so the recolor stays correct.
  */
 export function planColorOnlyUpdate(

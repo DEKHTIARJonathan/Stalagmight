@@ -85,7 +85,7 @@ async function selectThemeMode(page: Page, label: string): Promise<void> {
   const trigger = selectContainer.locator('button[role="combobox"]');
   await trigger.click();
 
-  // The dropdown is portaled to document.body — find the option there
+  // The dropdown is portaled to document.body - find the option there
   const option = page.locator(`[role="option"]:has-text("${label}")`);
   await expect(option).toBeVisible({ timeout: 3000 });
   await option.click();

@@ -86,7 +86,7 @@ export function useResizeHandle({
     (e: PointerEvent) => {
       if (!isResizingRef.current) return;
       // Only persist when an actual drag occurred. sizeRef was already
-      // clamp+rounded by onPointerMove, so forward it as-is — the u32 persist
+      // clamp+rounded by onPointerMove, so forward it as-is - the u32 persist
       // contract is enforced once at the store choke-point (savePanelSizes).
       if (movedRef.current) {
         onResizeEnd?.(sizeRef.current);

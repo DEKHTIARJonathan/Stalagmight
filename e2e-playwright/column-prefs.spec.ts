@@ -15,7 +15,7 @@ import {
  * Honesty note: the mock stores the view state in memory and folds it back
  * into get_config's panels, so these tests pin (a) the exact IPC payload the
  * debounce sends and (b) the config re-sync round trip the frontend performs
- * after saving — NOT real on-disk persistence (that's the Rust
+ * after saving - NOT real on-disk persistence (that's the Rust
  * update_data_table_view_impl tests).
  *
  * Calls are recorded in __MOCK_DATA_TABLE_VIEW_CALLS__ (camelCase payloads).
@@ -92,7 +92,7 @@ test.describe('Data table column preferences', () => {
     const dropdown = page.getByTestId('data-table-columns-dropdown');
     await expect(dropdown).toBeVisible();
 
-    // Hide Comment, show Shot ID — two quick toggles, one debounced save.
+    // Hide Comment, show Shot ID - two quick toggles, one debounced save.
     await dropdown.getByTestId('col-vis-comment').click();
     await dropdown.getByTestId('col-vis-shot_id').click();
     await page.keyboard.press('Escape');
@@ -153,14 +153,14 @@ test.describe('Data table column preferences', () => {
 
     // The persisted order is the FULL key list (hidden columns keep their slots
     // so they reappear in place when re-shown). Assert on the LATEST recorded
-    // `update_data_table_view` call — its order has depth_out immediately before
-    // length — never an exact call count or the first call. Under slower /
+    // `update_data_table_view` call - its order has depth_out immediately before
+    // length - never an exact call count or the first call. Under slower /
     // contended CI timing the debounced save (DataTable.tsx) was observed to
     // record more than one call and/or an earlier call carrying a non-final
     // order, so the old "exactly one call, read calls[0]" assertion flaked two
     // ways on the self-hosted nightly runner. The trailing debounce always
     // wins, so the latest recorded call is authoritative. (The post-save
-    // loadConfig() re-sync is NOT the cause — its re-seed effect is ref-guarded
+    // loadConfig() re-sync is NOT the cause - its re-seed effect is ref-guarded
     // against re-firing the save.)
     await page.waitForFunction(
       () => {
@@ -190,7 +190,7 @@ test.describe('Data table column preferences', () => {
 
     const menu = page.getByTestId('data-table-header-menu');
     // The right-click → `contextmenu` → menu-open gesture intermittently does not
-    // register under CPU load: the menu never mounts (confirmed by repro — the
+    // register under CPU load: the menu never mounts (confirmed by repro - the
     // element count is 0 at failure, i.e. NOT a slow paint, so a longer
     // `toBeVisible` timeout cannot help). Retry the whole GESTURE, re-resolving the
     // header locator each attempt, until the menu actually opens. This is a

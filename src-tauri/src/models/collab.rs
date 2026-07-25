@@ -9,7 +9,7 @@ use super::SectionId;
 /// Lets Stalagmight diff a returned (Ariane-edited) `.tml` against exactly what it
 /// last wrote, so a one-directional reconcile can classify added/edited/removed shots.
 ///
-/// The identity key is `(section_id, shot_index)` — the only shot identity that
+/// The identity key is `(section_id, shot_index)` - the only shot identity that
 /// survives a save/reload, since `Shot.id` is regenerated on load from the sequence
 /// order (see `persistence::sqlite`). It is NOT the in-memory `ShotId`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS, PartialEq)]
@@ -91,7 +91,7 @@ pub fn geo_key(azimuth_in: f64, length: f64, depth_in: f64, depth_out: f64) -> S
 
 impl CollabState {
     /// Create freshly-enabled collaboration state for the given sibling `.tml`
-    /// (relative to the `.stalx` dir). No baseline yet — seeded on first save.
+    /// (relative to the `.stalx` dir). No baseline yet - seeded on first save.
     pub fn new(sibling_tml_relative: String) -> Self {
         Self {
             enabled: true,

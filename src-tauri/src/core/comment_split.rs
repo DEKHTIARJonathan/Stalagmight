@@ -10,10 +10,10 @@
 //!
 //! This survives a round-trip through Ariane: the marker is invisible to humans
 //! and Ariane preserves Comment text verbatim. New text Ariane users add carries
-//! no marker, which routes it to the station — matching how Ariane visually
+//! no marker, which routes it to the station - matching how Ariane visually
 //! displays Comment text (centered on the station, not along the shot).
 
-/// Zero-width space — the per-line marker that classifies a line as a shot
+/// Zero-width space - the per-line marker that classifies a line as a shot
 /// comment. Single Unicode codepoint (3 bytes UTF-8). Invisible in any editor.
 pub const SHOT_MARKER: char = '\u{200B}';
 
@@ -134,7 +134,7 @@ mod tests {
     #[test]
     fn ariane_authored_no_marker_routes_to_station() {
         // The whole point of the default: Ariane users have no way to type ZWSP,
-        // so any comment they add lands on the station — matching Ariane's
+        // so any comment they add lands on the station - matching Ariane's
         // visual convention (Comment displayed at the station).
         let (shot, station) = split(Some("muddy water\nfollows main passage"));
         assert_eq!(shot, None);
@@ -144,7 +144,7 @@ mod tests {
     #[test]
     fn mid_line_marker_is_ignored() {
         // A ZWSP that isn't the very first character of a line carries no
-        // meaning — keep it in the text so the original content round-trips.
+        // meaning - keep it in the text so the original content round-trips.
         let body = format!("note with{M}embedded zwsp");
         let (shot, station) = split(Some(&body));
         assert_eq!(shot, None);
@@ -164,7 +164,7 @@ mod tests {
     #[test]
     fn whitespace_in_inputs_is_kept() {
         // Empty STRINGS map to None (see `non_empty`), but whitespace-only is
-        // user content — keep it.
+        // user content - keep it.
         let m = merge(Some("  "), Some(" ")).unwrap();
         assert_eq!(m, format!("{M}  \n "));
         assert_eq!(split(Some(&m)), (Some("  ".into()), Some(" ".into())));

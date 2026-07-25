@@ -157,7 +157,7 @@ pub struct ExistingShotUpdate {
 #[serde(tag = "type", rename_all = "snake_case")]
 #[ts(rename_all = "snake_case")]
 pub enum ImportPlacement {
-    /// Place at origin (0, 0) — no additional operations needed.
+    /// Place at origin (0, 0) - no additional operations needed.
     Origin,
     /// Set a GPS zero datum on a specific station.
     ZeroDatum {

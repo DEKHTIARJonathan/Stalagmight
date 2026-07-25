@@ -171,7 +171,7 @@ test.describe('Frozen Shots', () => {
   test('frozen shot tooltip contains frozen text', async ({ page }) => {
     const frozenIndicator = page.getByTestId(`frozen-${sectionId}-${shotIds[0]}`);
     const title = await frozenIndicator.getAttribute('title');
-    // The tooltip should contain the i18n frozen message: "Geometry locked — part of adjusted network"
+    // The tooltip should contain the i18n frozen message: "Geometry locked - part of adjusted network"
     expect(title).toContain('locked');
   });
 });

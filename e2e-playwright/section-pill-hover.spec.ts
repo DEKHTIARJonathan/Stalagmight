@@ -256,7 +256,7 @@ test.describe('section pill hover highlighting', () => {
  * Regression: hovering a section (e.g. a picker option, or map geometry) drives
  * the Sections panel's debounced auto-scroll. If that off-screen scroll fires
  * while the picker is open, the picker's outside-scroll dismissal would close it
- * — so it must close "randomly" a moment after the pointer settled. The panel
+ * - so it must close "randomly" a moment after the pointer settled. The panel
  * auto-scroll is suppressed while a dropdown is open; the picker stays open.
  */
 test.describe('section picker is not dismissed by background auto-scroll', () => {
@@ -289,7 +289,7 @@ test.describe('section picker is not dismissed by background auto-scroll', () =>
     await expect(menu).toBeVisible();
 
     // Hover an off-screen section (as hovering a picker option / map geometry
-    // does) — this would auto-scroll the panel behind the picker after 120ms.
+    // does) - this would auto-scroll the panel behind the picker after 120ms.
     const lastId = await page.evaluate(() => {
       const stores = (window as unknown as {
         __E2E_TEST__?: {

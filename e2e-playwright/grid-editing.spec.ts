@@ -19,7 +19,7 @@ import {
  * Clipboard: the main suite grants Chromium clipboard-read/-write so the OS
  * clipboard path is exercised for real; a separate run stubs
  * navigator.clipboard to always reject (the WebKitGTK situation) to pin the
- * grid's internal copy-stash fallback — if that fallback regresses, in-grid
+ * grid's internal copy-stash fallback - if that fallback regresses, in-grid
  * copy/paste dies on Linux and the test goes red.
  *
  * Cells are grid-cell-{rowIndex}-{colKey}; the model lives in the project
@@ -150,7 +150,7 @@ test.describe('Grid editing', () => {
     await cell.click();
     await page.keyboard.press('Delete');
 
-    // Required number: never write 0 — display empties, model keeps the value.
+    // Required number: never write 0 - display empties, model keeps the value.
     await expect(cell).toHaveClass(/sg-cell-missing/);
     await expect(cell).toHaveText('');
     expect((await getShots(page))[0]!.length).toBe(10);
@@ -235,7 +235,7 @@ test.describe('Grid editing', () => {
       .locator('.overflow-auto')
       .first();
     await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBe(0);
-    // End jumps to the rightmost column — the scroller must follow.
+    // End jumps to the rightmost column - the scroller must follow.
     await page.keyboard.press('End');
     await expect.poll(() => scroller.evaluate((el) => el.scrollLeft)).toBeGreaterThan(0);
     // The active cell must sit inside the viewport, clear of the sticky gutter.

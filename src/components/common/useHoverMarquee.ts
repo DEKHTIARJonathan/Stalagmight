@@ -14,7 +14,7 @@ export function getTextMeasureContext(): CanvasRenderingContext2D | null {
 const SCROLL_SPEED_PX_PER_S = 45;
 
 export interface HoverMarquee {
-  /** True while hovering AND the text overflows — render the scrolling overlay. */
+  /** True while hovering AND the text overflows - render the scrolling overlay. */
   scrolling: boolean;
   /** Inline style (animation + distance var) for the absolutely-positioned overlay. */
   overlayStyle: CSSProperties | undefined;

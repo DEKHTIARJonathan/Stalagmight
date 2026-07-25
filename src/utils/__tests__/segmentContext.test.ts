@@ -193,7 +193,7 @@ describe('computeDmpBfsContext', () => {
       importingConn(0, 1, 1, 0),
       importingConn(1, 1, 2, 0),
     ];
-    // Exclude section 1 — BFS from 0 should not visit 1 or reach 2
+    // Exclude section 1 - BFS from 0 should not visit 1 or reach 2
     const result = computeDmpBfsContext(0, new Set([1]), conns, sections);
 
     expect(result.dmpContext).toEqual([]);

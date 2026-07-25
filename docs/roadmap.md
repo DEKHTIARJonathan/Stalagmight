@@ -55,7 +55,7 @@ These features were implemented after the original roadmap was completed:
 |---------|-------------|
 | Color Themes | 9 color themes (dark, light, cave, dracula, one_dark, solarized_light, catppuccin_latte, nord, catppuccin_mocha) with independent day/night palettes |
 | Keyboard Shortcuts Overlay | `?` key opens a filterable shortcuts reference dialog |
-| Grid Overlay | Theme-aware coordinate grid with auto-spacing (1–100m) |
+| Grid Overlay | Theme-aware coordinate grid with auto-spacing (1-100m) |
 | Placement Suggestion Tuning | Heuristic constants exposed in Advanced Settings |
 
 ## Backend Changes

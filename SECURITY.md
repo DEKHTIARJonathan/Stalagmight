@@ -18,7 +18,7 @@ Report privately through **GitHub's private vulnerability reporting**:
 
 This routes the report privately to the maintainers. If private reporting is
 unavailable to you, open a minimal public issue that says only that you have a
-security report and asks for a private contact channel — **do not include
+security report and asks for a private contact channel - **do not include
 details** in that issue.
 
 Please include, where possible:

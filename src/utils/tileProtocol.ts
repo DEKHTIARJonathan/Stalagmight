@@ -54,7 +54,7 @@ const isAndroid = navigator.userAgent.includes('Android');
 /**
  * Register the tile protocol for MapLibre.
  *
- * On desktop, this is a no-op — tiles go directly through Tauri's native
+ * On desktop, this is a no-op - tiles go directly through Tauri's native
  * protocol handler (register_asynchronous_uri_scheme_protocol).
  *
  * On Android, the native protocol handler serializes requests through a single

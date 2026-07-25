@@ -1,4 +1,4 @@
-//! Pure gas-planning physics — no graph, no config, no I/O. Golden-tested in
+//! Pure gas-planning physics - no graph, no config, no I/O. Golden-tested in
 //! `super::tests`. Canonical SI throughout: depth in metres (positive-down), RMV in
 //! L/min, pressure in bar, gas volume in litres. These are plain `f64` functions; the
 //! finite/positive guards live in the `model` constructors (RMV, cylinders) and in
@@ -17,7 +17,7 @@ pub(crate) fn gas_rate(rmv_l_per_min: f64, depth_m: f64) -> f64 {
 }
 
 /// Mean depth (m) of a straight leg between two stations. Trapezoidal mean of the
-/// endpoints — exact for a leg whose depth varies linearly along its length.
+/// endpoints - exact for a leg whose depth varies linearly along its length.
 pub(crate) fn avg_depth(z_from: f64, z_to: f64) -> f64 {
     0.5 * (z_from + z_to)
 }
@@ -26,7 +26,7 @@ pub(crate) fn avg_depth(z_from: f64, z_to: f64) -> f64 {
 /// breathing `rmv_l_per_min`, the leg running from depth `z_from` to `z_to` metres.
 /// `gas = rate(avg_depth) × time = gas_rate(rmv, avg_depth) × (length / speed)`.
 ///
-/// Precondition: `speed_m_per_min > 0` — guaranteed for config-sourced speeds by
+/// Precondition: `speed_m_per_min > 0` - guaranteed for config-sourced speeds by
 /// `GasConfig::normalize`; any other caller must validate before calling.
 pub(crate) fn edge_gas(
     rmv_l_per_min: f64,
@@ -41,23 +41,23 @@ pub(crate) fn edge_gas(
 
 /// Convert a SAC (surface air consumption, bar/min measured against a reference
 /// cylinder) to a volumetric RMV (L/min): `rmv = sac × reference_water_volume`.
-/// SAC is a constructor concern only — never stored (see `model::Diver::from_sac`).
+/// SAC is a constructor concern only - never stored (see `model::Diver::from_sac`).
 pub(crate) fn sac_to_rmv(sac_bar_per_min: f64, ref_cyl_water_volume_l: f64) -> f64 {
     sac_bar_per_min * ref_cyl_water_volume_l
 }
 
 /// Ideal free-gas volume (litres) a cylinder holds at `fill_bar`: `fill × water_volume`.
-/// Ideal-gas relation — at typical 200–232 bar fills real compressibility (Z) over-states this
-/// by ~4–6%, rising to ~12% at 300 bar (the unsafe direction). This is the raw ideal primitive;
+/// Ideal-gas relation - at typical 200-232 bar fills real compressibility (Z) over-states this
+/// by ~4-6%, rising to ~12% at 300 bar (the unsafe direction). This is the raw ideal primitive;
 /// the usable-gas paths use [`deliverable_gas`] instead, which divides by [`air_z_factor`].
 pub(crate) fn cylinder_gas_volume(fill_bar: f64, water_volume_l: f64) -> f64 {
     fill_bar * water_volume_l
 }
 
 /// Real-gas compressibility factor Z for air/nitrox at `fill_bar` (bar). A quadratic fit
-/// anchored to the **conservative (upper) end** of tabulated air Z at cool cave temps —
-/// `Z(207)≈1.045`, `Z(300)≈1.12` (cf. NIST/US-Navy air tables, ~1.04–1.06 @ 200–232 bar,
-/// ~1.10–1.13 @ 300 bar) — so `deliverable = fill·vol / Z` never over-states real gas. **Clamped
+/// anchored to the **conservative (upper) end** of tabulated air Z at cool cave temps -
+/// `Z(207)≈1.045`, `Z(300)≈1.12` (cf. NIST/US-Navy air tables, ~1.04-1.06 @ 200-232 bar,
+/// ~1.10-1.13 @ 300 bar) - so `deliverable = fill·vol / Z` never over-states real gas. **Clamped
 /// to ≥ 1.0**: real air dips ~0.5% below 1 near 50 bar, but crediting *more* than ideal there is
 /// the unsafe direction, so the derate can never become a credit. Monotone non-decreasing after
 /// the clamp over the working range (the parabola turns down only well past any real fill).
@@ -66,7 +66,7 @@ pub(crate) fn air_z_factor(fill_bar: f64) -> f64 {
     (1.0 - 1.89e-4 * p + 1.96e-6 * p * p).max(1.0)
 }
 
-/// Real deliverable free-gas volume (litres) — **always** Z-corrected (never ideal):
+/// Real deliverable free-gas volume (litres) - **always** Z-corrected (never ideal):
 /// `p × water_volume / air_z_factor(p)`. When `conservative` (the "call-it-an-80"
 /// community derate, PRD §5.3) the pressure is first capped to `rated_bar`
 /// (`p = min(fill, rated)`), so an overfilled tank counts only its rated capacity; the Z

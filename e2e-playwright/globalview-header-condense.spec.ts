@@ -31,7 +31,7 @@ async function readState(page: Page): Promise<CondenseState> {
   });
 }
 
-test.describe('GlobalView header — progressive condensation', () => {
+test.describe('GlobalView header - progressive condensation', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     // The Map|List toggle (stage 3) only renders with recent items; the mocked page

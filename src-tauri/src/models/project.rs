@@ -13,7 +13,7 @@ use super::{
 use super::{LoopClosureWire, ZeroDatumWire};
 
 // Re-export the sibling module so the relocated `suggest_orphan_placements` (now in
-// the `distance` child) keeps resolving `super::placement_suggest` — its `super` is
+// the `distance` child) keeps resolving `super::placement_suggest` - its `super` is
 // now `project`, not `models`.
 use super::placement_suggest;
 
@@ -157,14 +157,14 @@ pub struct DeleteShotImpact {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "snake_case")]
 pub enum RangeDeleteKind {
-    /// The range covers every shot — the whole section is removed.
+    /// The range covers every shot - the whole section is removed.
     WholeSection,
     /// The range starts at the first shot (nothing before); the survivors keep
     /// their absolute position by an offset shift.
     Prefix,
     /// The range ends at the last shot (nothing after); the head is truncated.
     Suffix,
-    /// Shots remain both before and after — the section can be split (A=before,
+    /// Shots remain both before and after - the section can be split (A=before,
     /// B=after) or gap-closed (shift).
     Interior,
 }
@@ -180,8 +180,8 @@ pub struct DeleteShotRangeImpact {
     pub end_pos: u32,
     pub kind: RangeDeleteKind,
     /// Stations any offered action removes. For an interior range this is the
-    /// gap-close (shift) set `(start_pos+1 ..= end_pos+1)` — the superset that
-    /// also covers the split's interior set — so the relationship panel never
+    /// gap-close (shift) set `(start_pos+1 ..= end_pos+1)` - the superset that
+    /// also covers the split's interior set - so the relationship panel never
     /// hides what closing the gap touches. (Prefix/suffix/whole remove exactly
     /// the gap-close set; only an interior split keeps the boundary `end_pos+1`.)
     pub removed_stations: Vec<StationRef>,
@@ -201,12 +201,12 @@ pub struct DeleteShotRangeImpact {
     #[serde(default)]
     pub shift_blocked_reasons: Vec<String>,
     /// Zero datums the SPLIT would drop (anchored on a strictly-interior station
-    /// the split removes) — surfaced so the dialog can warn. The gap-close path
+    /// the split removes) - surfaced so the dialog can warn. The gap-close path
     /// is instead blocked when it would drop a datum, so this set is split-only.
     #[serde(default)]
     pub removed_datums: Vec<StationRef>,
     /// Station comments the SPLIT would drop (anchored on a strictly-interior
-    /// station the split removes) — surfaced so the dialog can warn before the
+    /// station the split removes) - surfaced so the dialog can warn before the
     /// annotation disappears.
     #[serde(default)]
     pub removed_comments: Vec<StationRef>,
@@ -282,7 +282,7 @@ pub struct Project {
     #[serde(default)]
     pub validation: crate::config::ValidationConfig,
 
-    /// Transient flag (NOT persisted) — when true,
+    /// Transient flag (NOT persisted) - when true,
     /// [`Self::cascade_connection_offsets`] returns immediately. Used by
     /// batch importers to skip the per-call O(N) cascade and run a
     /// single cascade after all sections / merges are in place. Callers
@@ -300,7 +300,7 @@ pub struct Project {
     /// large imports (~4 lookups per merge × 14 k merges = ~400 M ops).
     /// Maintained incrementally by `add_section` / `remove_section`.
     /// After deserialization the map is empty and a linear fallback
-    /// kicks in — callers that hammer the lookup (e.g. the batch
+    /// kicks in - callers that hammer the lookup (e.g. the batch
     /// importer) should call [`Self::rebuild_section_index`] first.
     #[serde(skip, default)]
     #[ts(skip)]
@@ -320,7 +320,7 @@ pub struct Project {
 
     /// `(section_id, shot_uuid)` → shot vector index. Transient, NOT persisted.
     /// Turns `resolve_key`'s `AfterShot` arm from an O(shots) linear scan with a
-    /// per-element UUID string compare into an O(1) lookup — the dominant cost
+    /// per-element UUID string compare into an O(1) lookup - the dominant cost
     /// when building merge/closure connectivity over a large import (issue:
     /// importing a big Walls project pinned one core for minutes). Populated only
     /// by [`Self::rebuild_shot_uuid_index`] (batch import, post-load, snapshot
@@ -369,7 +369,7 @@ pub struct ProjectMetadata {
 /// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
 /// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
 /// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
-/// shared reachability graph (jumps in, references out — see `build_survey_graph`).
+/// shared reachability graph (jumps in, references out - see `build_survey_graph`).
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DistanceField {
     pub distances: Vec<Option<f64>>,
@@ -401,8 +401,8 @@ pub struct PathShot {
 
 /// Result of an along-cave-line ruler query (#26). `along_line` is `None` when the
 /// two endpoints lie in different connected components (no path). `path_shots`
-/// are the shots traversed from A toward B — whole shots, even when an endpoint
-/// only partially crosses one — with zero-cost merge/closure ties skipped (they
+/// are the shots traversed from A toward B - whole shots, even when an endpoint
+/// only partially crosses one - with zero-cost merge/closure ties skipped (they
 /// aren't shots and must not be tinted). Uses the same shots+merges+closures
 /// graph as the distance-gradient overlay (#34), so it matches the Display
 /// "line distance" view.
@@ -471,9 +471,9 @@ fn deserialize_station_comments<'de, D: serde::Deserializer<'de>>(
 /// collections in positional wire form (`StationRef { section_id, station_index }`).
 /// This wrapper forwards every ts-exported field and re-encodes those three to
 /// wire, dropping dangling refs (the same resolution the binary load path's
-/// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` — the
+/// `ProjectHeaderBinary` does). `#[ts(skip)]` fields on `Project` - the
 /// `StationKey`-keyed `station_offsets`/`station_comments` and the transient
-/// caches — are intentionally omitted to match the generated `Project` TS type.
+/// caches - are intentionally omitted to match the generated `Project` TS type.
 struct ProjectIpc<'a>(&'a Project);
 
 impl Serialize for ProjectIpc<'_> {
@@ -657,7 +657,7 @@ impl Project {
     /// Remove a section by ID
     pub fn remove_section(&mut self, section_id: SectionId) -> Option<Section> {
         let pos = self.sections.iter().position(|s| s.id == section_id)?;
-        // Removing shifts every later section's index down by one — rather
+        // Removing shifts every later section's index down by one - rather
         // than touching N cache entries, we drop the cache and let the
         // linear fallback rebuild it on demand (removes are rare relative
         // to lookups). Callers running a batch can call
@@ -724,7 +724,7 @@ impl Project {
     /// Map every shot that has a UUID to its `(section_id, shot_id)` position.
     /// Shared by both load entry points (`open_project` and
     /// `do_load_project_full`) to feed `backfill_resolved_warning_uuids`, so the
-    /// two sites can't diverge. Shots with no UUID are skipped — call
+    /// two sites can't diverge. Shots with no UUID are skipped - call
     /// [`ensure_shot_uuids`] first if every shot must be represented.
     pub fn shot_uuid_by_position(&self) -> HashMap<(u32, u32), String> {
         self.sections
@@ -774,8 +774,8 @@ impl Project {
     /// Rebuild the `(section_id, shot_uuid)` → shot-index cache from the current
     /// `sections`. O(total shots). Call before a hot `resolve_key` loop (batch
     /// import, post-load, snapshot restore). Because `resolve_key` re-checks the
-    /// cached index against the shot's UUID, a stale entry is harmless — it falls
-    /// back to the linear scan — so this only needs to run often enough to keep
+    /// cached index against the shot's UUID, a stale entry is harmless - it falls
+    /// back to the linear scan - so this only needs to run often enough to keep
     /// the lookups fast, not for correctness.
     pub fn rebuild_shot_uuid_index(&mut self) {
         self.shot_uuid_index.clear();
@@ -803,7 +803,7 @@ impl Project {
         // surviving merges in `station_merges`, leaving the cache empty
         // and the merges intact.  If we then incrementally insert just
         // this new merge, the cache becomes non-empty but only contains
-        // THIS edge — and `get_merged_section_ids` treats any non-empty
+        // THIS edge - and `get_merged_section_ids` treats any non-empty
         // cache as authoritative, silently ignoring every surviving
         // merge from before the delete.  Rebuild from `station_merges`
         // first when the cache is empty but merges exist so the
@@ -841,7 +841,7 @@ impl Project {
     /// removing shots, which changes station indices for all subsequent stations.
     ///
     /// Affects: station_merges, loop_closures, zero_datums, station_offsets,
-    /// station_comments — all routed through [`Self::map_station_refs`].
+    /// station_comments - all routed through [`Self::map_station_refs`].
     /// THE single enumeration of every [`StationKey`]-bearing collection on the
     /// project, for READ access. `check_structural_integrity` and
     /// `reanchor_station_refs` consume this so a newly-added ref-bearing collection
@@ -870,7 +870,7 @@ impl Project {
     /// (rewrite twin of [`Self::for_each_station_ref`]). Vec fields mapped in place;
     /// the offset/comment HashMaps rebuilt with transformed keys. Used by
     /// [`Self::reanchor_station_refs`]. (Keys are position-independent, so
-    /// insert/delete no longer rewrite them — `shift_station_refs` is gone.)
+    /// insert/delete no longer rewrite them - `shift_station_refs` is gone.)
     pub(crate) fn map_station_refs(&mut self, mut f: impl FnMut(StationKey) -> StationKey) {
         for m in &mut self.station_merges {
             m.station_a = f(m.station_a.clone());
@@ -1002,8 +1002,8 @@ impl Project {
 
     /// Per-section cumulative LOCAL `(x, y)` for every station index
     /// (`0..=shots.len()`), before section/station offsets are applied. Built
-    /// once so callers that look up many stations — the alignment check and the
-    /// offset solver — avoid re-walking a section's shots on every lookup. This
+    /// once so callers that look up many stations - the alignment check and the
+    /// offset solver - avoid re-walking a section's shots on every lookup. This
     /// is what keeps those operations `O(shots + merges)` instead of the
     /// `O(merges × depth)` that made the per-mutation alignment check too costly.
     /// Resolve a stored, position-independent [`StationKey`] to a transient
@@ -1013,7 +1013,7 @@ impl Project {
     ///
     /// This is the read side of the stable-identity boundary: cross-references are
     /// stored as `StationKey`, and the solver/IPC resolve them to a positional
-    /// `StationRef` here. `O(shots)` per call — callers that resolve many keys for
+    /// `StationRef` here. `O(shots)` per call - callers that resolve many keys for
     /// the same section should hoist the lookup.
     pub fn resolve_key(&self, key: &StationKey) -> Option<StationRef> {
         let section = self.get_section(key.section_id)?;
@@ -1051,7 +1051,7 @@ impl Project {
     }
 
     /// True if the stored key resolves to exactly `sr` (the sound way to ask "is
-    /// this stored ref the same physical station as this positional ref" — never
+    /// this stored ref the same physical station as this positional ref" - never
     /// compare a positional `Index` key to a stored `AfterShot` key directly).
     pub fn key_is_ref(&self, key: &StationKey, sr: StationRef) -> bool {
         self.resolve_key(key) == Some(sr)
@@ -1086,7 +1086,7 @@ impl Project {
     }
 
     /// Positional wire form of a stored merge, or `None` if either endpoint
-    /// dangles (its anchoring shot was deleted) — a dangling merge is invalid and
+    /// dangles (its anchoring shot was deleted) - a dangling merge is invalid and
     /// must be omitted rather than shown at a phantom station.
     pub(crate) fn merge_to_wire(&self, m: &StationMerge) -> Option<StationMergeWire> {
         Some(StationMergeWire {
@@ -1149,7 +1149,7 @@ impl Project {
             i,
             canon.len(),
             "reanchor_station_refs: map_station_refs visited a different number of \
-             refs than for_each_station_ref produced — station-ref traversal order \
+             refs than for_each_station_ref produced - station-ref traversal order \
              diverged between the read and write passes"
         );
     }
@@ -1196,7 +1196,7 @@ impl Project {
     }
 
     /// The `station_offsets` map (per-station manual nudges) resolved to
-    /// transient positional [`StationRef`] keys against the CURRENT structure —
+    /// transient positional [`StationRef`] keys against the CURRENT structure -
     /// the sound positional view for hot solver paths. Usually empty; entries
     /// whose anchor no longer resolves are dropped (surfaced by integrity).
     fn resolved_station_offsets(&self) -> HashMap<StationRef, (f64, f64, f64)> {
@@ -1210,11 +1210,11 @@ impl Project {
     }
 
     /// Per-station manual offset for a single positional ref. Found by resolving
-    /// each stored key to its positional ref — sound for ANY anchor kind
+    /// each stored key to its positional ref - sound for ANY anchor kind
     /// (canonical `AfterShot`/`SectionStart` after reanchor, or transitional
     /// `Index` straight off a raw load), unlike building a canonical key (which
     /// would never match an `Index` entry). `None` when there is no nudge (the
-    /// common case — short-circuits before touching the map).
+    /// common case - short-circuits before touching the map).
     pub(crate) fn station_offset_for_ref(&self, sr: StationRef) -> Option<(f64, f64, f64)> {
         if self.station_offsets.is_empty() {
             return None;

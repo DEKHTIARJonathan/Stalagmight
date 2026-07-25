@@ -206,7 +206,7 @@ test.describe('Dive-plan persistence (#244)', () => {
     await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(planA.id);
     await setDiverRmv(page, 99); // dirty
 
-    // Selecting B must NOT switch yet — it prompts.
+    // Selecting B must NOT switch yet - it prompts.
     await page.locator('[data-testid="dive-plan-select"]').selectOption(String(planB.id));
     await expect(page.locator('[data-testid="dive-plan-switch-confirm"]')).toBeVisible();
     expect(await loadedPlanId(page)).toBe(planA.id); // still A until confirmed

@@ -13,7 +13,7 @@ impl Project {
     /// A cave survey graph is almost a tree: long degree-2 passages and degree-1
     /// spurs with only a handful of independent loops (≈ one per eligible
     /// closure). We exploit that with **exact** Gaussian elimination of every
-    /// node whose current off-diagonal degree is ≤ 2 — degree-1 is leaf
+    /// node whose current off-diagonal degree is ≤ 2 - degree-1 is leaf
     /// back-substitution, degree-2 is series reduction (fill between the two
     /// neighbours). Both axes are carried in lockstep since the structure is
     /// shared; SPD guarantees positive pivots throughout. Peeling collapses the
@@ -36,7 +36,7 @@ impl Project {
         // A node is only eliminated when its current pivot is *safely positive*
         // relative to the node's original diagonal. A pivot that is non-positive or
         // has collapsed to roundoff (a tiny fraction of its starting scale) means
-        // the node sits in the system's null space — a floating axis. Such a pivot
+        // the node sits in the system's null space - a floating axis. Such a pivot
         // is mathematically 0 but, with varied edge weights, lands at ~±1e-12 from
         // cancellation, so an absolute 1e-30 floor would wrongly eliminate it and
         // divide by ~0, shifting the whole component off its warm-started (measured)
@@ -186,7 +186,7 @@ impl Project {
     /// just for convergence speed: a node that is unconstrained on this axis (e.g.
     /// reachable only through a zero-length cardinal shot, so its weight is 0) has
     /// an empty row, leaving that coordinate in the system's null space. CG never
-    /// moves a null-space direction, so it stays at `x0` — preserving the measured
+    /// moves a null-space direction, so it stays at `x0` - preserving the measured
     /// position instead of snapping it to world 0.
     fn pcg_axis(
         n: usize,
@@ -225,9 +225,9 @@ impl Project {
         let mut p = z.clone();
         let mut rz: f64 = r.iter().zip(z.iter()).map(|(&ri, &zi)| ri * zi).sum();
 
-        // Converge relative to the *initial residual* ‖b − A·x0‖, not ‖b‖. With a
+        // Converge relative to the *initial residual* ‖b - A·x0‖, not ‖b‖. With a
         // warm start that is the correct reference: return x0 only when it already
-        // satisfies the system (residual ~0 — which includes pure null-space
+        // satisfies the system (residual ~0 - which includes pure null-space
         // directions), and otherwise let CG converge the range component while
         // leaving null-space directions at x0. Keying the early exit off ‖b‖ alone
         // would wrongly return a non-optimal x0 when Schur elimination cancels the
@@ -415,7 +415,7 @@ impl Project {
 
         // Sparse assembly for the symmetric positive-definite normal matrix A^T A.
         // The matrix is a weighted graph Laplacian (grounded at the fixed
-        // datum/anchor) — extremely sparse (≤3 non-zeros per row). We store
+        // datum/anchor) - extremely sparse (≤3 non-zeros per row). We store
         // diagonal entries and off-diagonal adjacency, then solve via degree-≤2
         // graph reduction plus PCG on the tiny core (see `solve_reduced_laplacian`).
         let mut atb_x = vec![0.0; n];
@@ -586,7 +586,7 @@ impl Project {
         // exact degree-≤2 graph reduction: peel spurs and series-reduce long
         // passages in O(n), then Jacobi-PCG on the small remaining 2-core (≈ the
         // cycle space, ~#closures nodes), then back-substitute. This replaces the
-        // former full-system PCG, which took O(loop-diameter) iterations — i.e.
+        // former full-system PCG, which took O(loop-diameter) iterations - i.e.
         // O(n) iterations on a single long loop, making the solve O(n²) (#81).
         // See `solve_reduced_laplacian`.
         let (sol_x, sol_y) =
@@ -595,9 +595,9 @@ impl Project {
         // Optimality guard (tests only): the closure adjustment is the minimizer of
         // the weighted misclosure, i.e. the solution of the SPD normal equations
         // `A·x = atb`. Verify that directly on the *real* assembled system by
-        // checking the residual `‖A·x − atb‖∞ ≈ 0` for both axes. This runs for
+        // checking the residual `‖A·x - atb‖∞ ≈ 0` for both axes. This runs for
         // every test that exercises the solve (analytic, realistic, fuzz), so it
-        // proves the result is the true optimum — not merely that "the loop closed".
+        // proves the result is the true optimum - not merely that "the loop closed".
         #[cfg(test)]
         {
             let residual_inf = |diag: &[f64], atb: &[f64], sol: &[f64], axis: usize| -> f64 {
@@ -615,7 +615,7 @@ impl Project {
             let ry = residual_inf(&diag_y, &atb_y, &sol_y, 1);
             assert!(
                 rx < 1e-6 && ry < 1e-6,
-                "closure solve is not at the LSQ optimum: ‖A·x−b‖∞ = ({rx:.3e}, {ry:.3e})"
+                "closure solve is not at the LSQ optimum: ‖A·x-b‖∞ = ({rx:.3e}, {ry:.3e})"
             );
         }
 
@@ -646,7 +646,7 @@ impl Project {
         let station_offsets = self.resolved_station_offsets();
 
         // Identify spur stations (not on any cycle) by iterative leaf pruning.
-        // Spur shots have no redundancy — there's nothing to adjust them against —
+        // Spur shots have no redundancy - there's nothing to adjust them against -
         // so they must be skipped in the update phase.
         let spur_stations: HashSet<StationRef> = {
             let mut adj_deg: HashMap<StationRef, Vec<StationRef>> = HashMap::new();
@@ -681,7 +681,7 @@ impl Project {
                 }
             }
 
-            // Fixed stations must not be pruned — they anchor the network
+            // Fixed stations must not be pruned - they anchor the network
             // even if they sit at a graph leaf.  The anchor station is only
             // fixed when no zero datums exist (mirrors the solver logic).
             let mut pinned: HashSet<StationRef> = zero_datum_set.clone();
@@ -727,7 +727,7 @@ impl Project {
                 let station_i = StationRef::new(section.id, idx as u32);
                 let station_j = StationRef::new(section.id, (idx + 1) as u32);
 
-                // Skip spur shots — they have no loop redundancy and must
+                // Skip spur shots - they have no loop redundancy and must
                 // not be modified by the adjustment.
                 if spur_stations.contains(&station_i) || spur_stations.contains(&station_j) {
                     continue;
@@ -740,7 +740,7 @@ impl Project {
                     .get(&station_j)
                     .ok_or_else(|| "Missing station root".to_string())?;
 
-                // Skip shots within the same constraint group — both endpoints
+                // Skip shots within the same constraint group - both endpoints
                 // share the same solved position, so the shot displacement would
                 // collapse to zero. These shots are internal to a rigid group
                 // (connected via merges/closures) and should not be modified.
@@ -798,7 +798,7 @@ impl Project {
             let mut delta_xy: Option<(f64, f64)> = None;
             for idx in 0..=section.shots.len() {
                 let station = StationRef::new(section.id, idx as u32);
-                // Skip spur stations — their shots were not updated, so their
+                // Skip spur stations - their shots were not updated, so their
                 // current positions don't match the solved positions.
                 if spur_stations.contains(&station) {
                     continue;

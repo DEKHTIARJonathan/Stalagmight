@@ -64,7 +64,7 @@ git push origin master && git push origin --tags
 
 - **Trigger**: push of `v*` tags
 - **Steps**: TypeScript check, Rust tests, `pnpm tauri build`
-- **Artifacts**: `.deb`, `.rpm`, `.AppImage` (Linux only — current runner is Linux)
+- **Artifacts**: `.deb`, `.rpm`, `.AppImage` (Linux only - current runner is Linux)
 - Creates a GitHub release via the `gh` CLI with changelog content as the body
 - Uploads all artifacts to the release
 
@@ -89,4 +89,4 @@ Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but 
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.
 
 ### Multi-platform builds
-Currently Linux-only. Windows/Mac builds require runners on those platforms — Tauri can't cross-compile due to platform-specific system library dependencies.
+Currently Linux-only. Windows/Mac builds require runners on those platforms - Tauri can't cross-compile due to platform-specific system library dependencies.

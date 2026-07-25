@@ -12,8 +12,8 @@ impl Project {
     /// Per-station along-cave distance from the given `roots` (indices into
     /// `stations`), summing each shot's measured `length` along the shortest
     /// path. Merges and all loop closures are zero-cost (a closed loop ties two
-    /// stations to the same physical point). Unreachable stations — and every
-    /// station when `roots`/`stations` is empty — get `f64::INFINITY`.
+    /// stations to the same physical point). Unreachable stations - and every
+    /// station when `roots`/`stations` is empty - get `f64::INFINITY`.
     ///
     /// This is the reusable core shared by penetration distance (roots = zero
     /// datums), the distance-gradient overlay (roots = a chosen station), and a
@@ -38,7 +38,7 @@ impl Project {
     /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
     ///
     /// Equivalent to [`compute_distances_from`] seeded with the zero-datum
-    /// station indices — the default origin for the distance-gradient overlay.
+    /// station indices - the default origin for the distance-gradient overlay.
     pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
         let n = stations.len();
         if n == 0 || self.zero_datums.is_empty() {
@@ -50,7 +50,7 @@ impl Project {
         Self::dijkstra(&adj, &roots)
     }
 
-    /// Maximum along-cave penetration distance — the longest shortest-path
+    /// Maximum along-cave penetration distance - the longest shortest-path
     /// distance from any zero datum to any station through the survey
     /// graph. Zero if there are no zero datums or nothing is reachable.
     pub fn calculate_penetration(&self, stations: &[Station]) -> f64 {
@@ -63,7 +63,7 @@ impl Project {
     /// Per-station distance field from a chosen origin `from` station, or from the
     /// zero datum(s) when `from` is `None` (the gradient's entrance default).
     ///
-    /// Edge weights come from each station's **coordinates** in `stations` — the
+    /// Edge weights come from each station's **coordinates** in `stations` - the
     /// caller passes MEASURED coordinates (surveyed lengths), so distances reflect
     /// the physical guideline length (#34). Merges/closures stay zero-cost.
     /// Unreachable stations come back as `None`; the returned `station_refs` echo
@@ -115,7 +115,7 @@ impl Project {
 
     /// Shortest along-cave-line distance between two ruler endpoints (#26), plus
     /// the ordered shots traversed (for tinting). The distance sums the lengths of
-    /// the shots on the path — each shot weighted by the euclidean distance between
+    /// the shots on the path - each shot weighted by the euclidean distance between
     /// its endpoints in `stations` (the *placed* shot length), so passing the
     /// closure-ADJUSTED coordinates (see `AppState::along_line_between`) yields the
     /// closure-adjusted shot lengths the user asked for. For a continuous survey
@@ -212,7 +212,7 @@ impl Project {
         };
 
         // Both endpoints on the SAME shot: the direct sub-segment is |Δt|·L. We do
-        // NOT short-circuit to it — a merge/loop closure between the shot's stations
+        // NOT short-circuit to it - a merge/loop closure between the shot's stations
         // can make a route *around* shorter than the direct segment, and Dijkstra
         // must stay free to pick the genuine shortest along-cave-line path. Instead
         // we remember it and add it as a direct edge between the two virtual nodes
@@ -361,7 +361,7 @@ impl Project {
             // Skip a step that actually traversed a zero-cost merge/closure tie. When
             // a closure runs PARALLEL to a real shot (same station pair) `shot_edge`
             // maps the pair to the shot, but a ~0-cost step means Dijkstra took the
-            // tie, not the shot — tinting it would be wrong. This also drops a
+            // tie, not the shot - tinting it would be wrong. This also drops a
             // zero-length same-shot measurement (ta≈tb), whose direct edge has weight
             // 0, leaving an empty path like identical station endpoints (#26, Codex).
             // `w[0]` is the predecessor of `w[1]`, so the step weight is exactly the
@@ -823,8 +823,8 @@ impl Project {
                 if comp.iter().any(|sid| new_set.contains(sid)) {
                     return false;
                 }
-                // Skip if component has a datum (an empty component — impossible
-                // here — is treated as non-orphan).
+                // Skip if component has a datum (an empty component - impossible
+                // here - is treated as non-orphan).
                 let Some(&any_member) = comp.iter().next() else {
                     return false;
                 };
@@ -970,7 +970,7 @@ impl Project {
                     for ps in placement_suggestions {
                         // Only keep matches from the terminal end (import station 0).
                         // suggest_placements tries both ends of the leaf, but for orphan
-                        // placement only the terminal end is meaningful — matches from
+                        // placement only the terminal end is meaningful - matches from
                         // the interior end would produce wrong orphan station indices.
                         if ps.import_station_index != 0 {
                             continue;

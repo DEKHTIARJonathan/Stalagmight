@@ -50,7 +50,7 @@ $ADB push "$APK_SIGNED" /data/local/tmp/stalagmight.apk
 echo "==> Installing..."
 $ADB shell pm install -r /data/local/tmp/stalagmight.apk
 
-# Boox firmware auto-disables sideloaded apps — re-enable
+# Boox firmware auto-disables sideloaded apps - re-enable
 $ADB shell pm enable "$PACKAGE" > /dev/null 2>&1 || true
 
 # Launch

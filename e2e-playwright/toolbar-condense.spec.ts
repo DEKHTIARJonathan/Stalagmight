@@ -34,7 +34,7 @@ async function readState(page: Page): Promise<CondenseState> {
   });
 }
 
-test.describe('SingleSystemView Toolbar — progressive condensation', () => {
+test.describe('SingleSystemView Toolbar - progressive condensation', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await createProject(page, 'Toolbar Condense Test');

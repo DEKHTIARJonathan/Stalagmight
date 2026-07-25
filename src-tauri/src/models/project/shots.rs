@@ -21,7 +21,7 @@ pub const MIN_SPLIT_CHILD_LENGTH_M: f64 = 0.01;
 impl Project {
     /// Stations adjacent to `station_ref` through shots (skipping `excluded_shot`)
     /// and merges, plus loop closures when `include_closures` is true. Pass
-    /// `false` to ask "are these connected by the *survey itself*" — used to tell
+    /// `false` to ask "are these connected by the *survey itself*" - used to tell
     /// a true loop from a detached pair when deciding closure-vs-merge.
     fn station_neighbors_excluding_shot(
         &self,
@@ -170,7 +170,7 @@ impl Project {
         if section.shots.len() >= Self::max_shots_per_section() {
             return None;
         }
-        // Compute displacement before data is consumed — the new shot shifts
+        // Compute displacement before data is consumed - the new shot shifts
         // all stations after the insertion point.
         let (dx, dy) = Self::shot_displacement(&data);
         let section = self.get_section_mut(section_id)?;
@@ -180,7 +180,7 @@ impl Project {
         // Station keys are position-independent: no ref-shifting on insert (the
         // junction the new shot extends from keeps its anchor; shots beyond keep
         // theirs). The new shot's displacement still shifts stations > pos+1 in
-        // space — if the tail side is datum-anchored, back-shift the offset so the
+        // space - if the tail side is datum-anchored, back-shift the offset so the
         // tail stays put. Positions are resolved from the stored keys.
         if dx != 0.0 || dy != 0.0 {
             let boundary = (pos + 1) as u32;
@@ -558,7 +558,7 @@ impl Project {
                         false,
                     ) {
                         // The two ends still reach each other through the survey
-                        // (shots + merges), so it remains a genuine loop — just
+                        // (shots + merges), so it remains a genuine loop - just
                         // move the closure off the deleted station.
                         impact.replacement_closure_updates.push(ClosureUpdate {
                             closure_id: closure.closure_id,
@@ -617,7 +617,7 @@ impl Project {
     /// `[start_shot_id .. end_shot_id]` (by their current positions) from one
     /// section. Used by the bulk-delete dialog to show a range summary, the
     /// removed station relationships, and whether the gap-close (shift) path is
-    /// available. `start`/`end` may be given in any order — they are normalized.
+    /// available. `start`/`end` may be given in any order - they are normalized.
     pub fn preview_delete_shot_range(
         &self,
         section_id: SectionId,
@@ -669,7 +669,7 @@ impl Project {
                 .is_some_and(|sr| removed_set.contains(&sr))
         };
 
-        // Stations the SPLIT drops (interior only — it keeps both boundaries).
+        // Stations the SPLIT drops (interior only - it keeps both boundaries).
         // Datums/comments anchored here are silently lost by the split, so the
         // dialog warns about them; the gap-close instead BLOCKS on datum loss,
         // so these loss sets are intentionally split-only.
@@ -677,7 +677,7 @@ impl Project {
             RangeDeleteKind::Interior => ((start_pos as u32 + 1)..=(end_pos as u32))
                 .map(|i| StationRef::new(section_id, i))
                 .collect(),
-            // No split path exists for these — their loss set is the removed set.
+            // No split path exists for these - their loss set is the removed set.
             _ => removed_set.clone(),
         };
         let split_in_removed = |key: &StationKey| -> bool {
@@ -717,7 +717,7 @@ impl Project {
             // constraints that survive the delete, so gap-closing two
             // merge-connected sides is over-constrained. A loop closure is a
             // soft/redundant constraint that the delete removes (or converts), so
-            // the resulting geometry is still valid — closures must NOT block
+            // the resulting geometry is still valid - closures must NOT block
             // (include_closures = false).
             if sim.stations_connected_excluding_range(
                 head,
@@ -752,8 +752,8 @@ impl Project {
             }
         }
         // The gap-close removes every station in `removed_set`; if any carries a
-        // zero datum the survey loses an anchor, so block (use split — which
-        // keeps the boundary datums — or remove the datum first).
+        // zero datum the survey loses an anchor, so block (use split - which
+        // keeps the boundary datums - or remove the datum first).
         let shift_drops_datum = self
             .zero_datums
             .iter()
@@ -767,7 +767,7 @@ impl Project {
 
         // Station comments on every station the gap-close removes (the shift
         // superset, incl. the tail boundary `end_pos+1`). The dialog frames these
-        // per action — a SPLIT keeps `end_pos+1` and its comment — using the
+        // per action - a SPLIT keeps `end_pos+1` and its comment - using the
         // `start_pos`/`end_pos` it carries.
         let removed_comments: Vec<StationRef> = self
             .station_comments
@@ -826,7 +826,7 @@ impl Project {
         // Connectivity the operation PRESERVES, so the dialog doesn't overstate
         // loss (it would otherwise list a bridging merge/closure as "Removed"
         // with no replacement shown). Diff the simulated post-preservation graph
-        // against the current one — see [`Self::preview_preserved_connections`].
+        // against the current one - see [`Self::preview_preserved_connections`].
         let (replacement_merges, replacement_closure_updates) =
             self.preview_preserved_connections(impact_sim);
 
@@ -936,7 +936,7 @@ impl Project {
 
     /// Does `station` reach a zero datum WITHOUT using a shot in the range or
     /// passing through a `removed` station (datums on removed stations don't
-    /// count — they are themselves being deleted)?
+    /// count - they are themselves being deleted)?
     fn station_reaches_datum_excluding_range(
         &self,
         station: StationRef,
@@ -1060,7 +1060,7 @@ impl Project {
     /// delete, with two range-specific knobs:
     /// - `doomed_anchors`: canonical keys of stations the surrounding range will
     ///   ALSO remove. The keep-side (head vs tail) decision ignores anchors on
-    ///   these — deciding from an anchor that is itself about to be deleted would
+    ///   these - deciding from an anchor that is itself about to be deleted would
     ///   displace the survivors (e.g. a suffix shift would shift the head).
     /// - `defer_cascade`: skip the per-shot `cascade_connection_offsets` and the
     ///   alignment assert. The range driver runs ONE cascade after all range
@@ -1085,7 +1085,7 @@ impl Project {
 
         let impact = self.preview_delete_shot(section_id, shot_id)?;
         let removed_station = impact.removed_station;
-        // The deleted station's canonical key (still resolvable — the shot is
+        // The deleted station's canonical key (still resolvable - the shot is
         // removed below). Stored refs are canonical, so key equality is sound.
         let removed_key = self.key_for_ref(removed_station);
 
@@ -1167,7 +1167,7 @@ impl Project {
                 .ok_or_else(|| format!("Shot {shot_id} not found in section {section_id}"))?
         };
 
-        // Station keys are position-independent — no ref-shifting on delete. The
+        // Station keys are position-independent - no ref-shifting on delete. The
         // deleted station's own refs were rewired above; every surviving ref keeps
         // its anchor (its resolved index just moves down).
         //
@@ -1176,7 +1176,7 @@ impl Project {
         // is NOT the `removed_station` (this happens at `pos == 0`, where
         // `removed_station` is `SectionStart` but a prepend had re-anchored a
         // boundary ref to `AfterShot(first_shot)`). Its anchoring shot is now gone,
-        // so re-anchor it to the station that absorbs the deleted boundary —
+        // so re-anchor it to the station that absorbs the deleted boundary -
         // `SectionStart` when the first shot was removed, else `AfterShot(prev)`.
         if let Some(deleted_uuid) = deleted_shot.uuid.clone() {
             let survivor = if pos == 0 {
@@ -1200,7 +1200,7 @@ impl Project {
         }
 
         // The deletion may have removed the OTHER path of a loop, leaving a
-        // closure as the sole bridge to a section — that is no longer a loop, so
+        // closure as the sole bridge to a section - that is no longer a loop, so
         // turn any such closure into a merge before the offsets are recomputed
         // (issue #8, beyond the closure-touched-the-deleted-station case above).
         self.convert_orphan_closures_to_merges();

@@ -13,7 +13,7 @@ The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cav
 
 ## Virtual Connections
 
-During the `suggesting` phase, confirmed placements are recorded as **virtual connections** — lightweight client-side records that describe how two sections should be joined. No backend call happens until the `placing` phase.
+During the `suggesting` phase, confirmed placements are recorded as **virtual connections** - lightweight client-side records that describe how two sections should be joined. No backend call happens until the `placing` phase.
 
 ```typescript
 type VirtualConnection = {
@@ -34,11 +34,11 @@ type VirtualConnection = {
 
 The backend command `suggest_all_import_placements` compares every import section against both existing project sections and other import sections. It produces a flat list of `CrossSectionSuggestion` objects sorted by score, each carrying:
 
-- `importSectionIndex` / `existingStationIndex` — which stations to merge
-- `matchedShots` / `direction` — how many shots overlapped and in which direction
-- `confidence` — `high` / `medium` / `low` tier
-- `targetType` — `existing` or `importing`
-- `score` — aggregate match score (higher is better)
+- `importSectionIndex` / `existingStationIndex` - which stations to merge
+- `matchedShots` / `direction` - how many shots overlapped and in which direction
+- `confidence` - `high` / `medium` / `low` tier
+- `targetType` - `existing` or `importing`
+- `score` - aggregate match score (higher is better)
 
 The wizard picks the top suggestion for each unplaced section and shows alternatives for the same section.
 
@@ -57,7 +57,7 @@ The overlap mode is persisted to the project config.
 
 ### Centralized Overlap Treatment
 
-All overlap mutation is handled by a single function — `applyAllOverlapTreatments` — which runs once during the `placing` phase, before `buildBatchImport`. The `handleConfirm` callback does **not** mutate overlap shots; it only records:
+All overlap mutation is handled by a single function - `applyAllOverlapTreatments` - which runs once during the `placing` phase, before `buildBatchImport`. The `handleConfirm` callback does **not** mutate overlap shots; it only records:
 
 1. The virtual connection (placement info)
 2. A `ConfirmedOverlapInfo` entry (which merge station the user chose)
@@ -131,7 +131,7 @@ After applying shot updates, the backend checks whether any affected section has
 
 1. The datum station's absolute position was recorded before updates
 2. The new position is computed after updates
-3. The delta is applied (inverted) to the section offset — and to all sections in the same rigid group (`get_merged_section_ids`) — so the datum stays pinned
+3. The delta is applied (inverted) to the section offset - and to all sections in the same rigid group (`get_merged_section_ids`) - so the datum stays pinned
 
 This ensures that modifying overlap shots at indices lower than the zero datum station doesn't shift the section's GPS-anchored position.
 
@@ -158,7 +158,7 @@ The preview has two coordinate frames:
 
 A single `useEffect` computes `segmentContext: { importSide, targetSide }`:
 
-1. **Import-side BFS** — `computeDmpBfsContext(importIdx, ...)` walks `importing`-type virtual connections from the current import section, collecting:
+1. **Import-side BFS** - `computeDmpBfsContext(importIdx, ...)` walks `importing`-type virtual connections from the current import section, collecting:
    - DMP neighbor geometry (positioned relative to the import section)
    - Existing anchors (positions where DMP sections connect to project sections)
 
@@ -166,9 +166,9 @@ A single `useEffect` computes `segmentContext: { importSide, targetSide }`:
    - `existing` target: Fetch `get_segment_geometry(existingSectionId)` from backend. This returns all sections in that segment with shot-line geometry in a coordinate frame centered on the queried section.
    - `importing` target: Run a second BFS from the target DMP section to gather its neighbors and existing anchors.
 
-3. **Existing anchor resolution** — For each `ExistingAnchor` discovered by BFS (either side), fetch `get_segment_geometry` and position the result relative to the anchor point.
+3. **Existing anchor resolution** - For each `ExistingAnchor` discovered by BFS (either side), fetch `get_segment_geometry` and position the result relative to the anchor point.
 
-4. **Bridge discovery** — `discoverBridgedDmpSections()` finds DMP sections that are connected to existing sections we already have geometry for, but weren't reached by either BFS. This handles the case where DMP sections A and B both connect to existing section X through separate `existing`-type connections but have no direct `importing`-type edge.
+4. **Bridge discovery** - `discoverBridgedDmpSections()` finds DMP sections that are connected to existing sections we already have geometry for, but weren't reached by either BFS. This handles the case where DMP sections A and B both connect to existing section X through separate `existing`-type connections but have no direct `importing`-type edge.
 
 ### Bridge Discovery Algorithm
 

@@ -1,6 +1,6 @@
 name: Nightly E2E Regression
 
-# Comprehensive Playwright suite — the slow regression guard (issue #23).
+# Comprehensive Playwright suite - the slow regression guard (issue #23).
 # Runs on a schedule (and on demand) so timing-sensitive specs don't block the
 # fast pre-push / @smoke gate. Like the smoke workflow it runs against the Vite
 # dev server with mocked Tauri IPC (Node + Chromium only).
@@ -9,11 +9,11 @@ name: Nightly E2E Regression
 # ubuntu-latest-local) so the weekly suite costs zero Actions minutes (#130).
 #
 # NOTE: the heavyweight WebdriverIO suite (e2e/legacy/) drives the real Tauri
-# app and is intentionally NOT run here — it stays on-demand. See
+# app and is intentionally NOT run here - it stays on-demand. See
 # e2e/legacy/README.md.
 on:
   schedule:
-    # 07:00 UTC nightly — overnight in the Americas, morning in CET. Runs on the
+    # 07:00 UTC nightly - overnight in the Americas, morning in CET. Runs on the
     # self-hosted runner (zero Actions minutes, #130/#131), so the old weekly cap
     # (to conserve minutes, #114) no longer applies; the gate job still skips a
     # run when nothing has merged since the last one.
@@ -25,7 +25,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Skip a scheduled run when nothing has merged since the last nightly — the
+  # Skip a scheduled run when nothing has merged since the last nightly - the
   # self-hosted run is free, but there's no point re-testing unchanged code (and re-flagging
   # flakes). This gate job is ~15s; a manual workflow_dispatch always proceeds.
   gate:
@@ -39,20 +39,20 @@ jobs:
       - id: changed
         run: |
           if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            echo "manual dispatch — running."
+            echo "manual dispatch - running."
             echo "run=true" >> "$GITHUB_OUTPUT"
           elif [ -n "$(git log --since='2 days ago' --pretty=oneline)" ]; then
-            echo "commits since the last nightly — running."
+            echo "commits since the last nightly - running."
             echo "run=true" >> "$GITHUB_OUTPUT"
           else
-            echo "nothing merged in the last 2 days — skipping the suite."
+            echo "nothing merged in the last 2 days - skipping the suite."
             echo "run=false" >> "$GITHUB_OUTPUT"
           fi
 
   full:
     needs: gate
     if: needs.gate.outputs.run == 'true'
-    # Optional self-hosted runner — zero Actions minutes (#130).
+    # Optional self-hosted runner - zero Actions minutes (#130).
     runs-on: [self-hosted, ubuntu-latest-local]
     # Slower box than hosted (~44m at 2 workers); generous headroom over 60.
     timeout-minutes: 90
@@ -74,16 +74,16 @@ jobs:
         run: pnpm exec playwright install --with-deps chromium
       # --reporter on the CLI (github annotations + a json report file) overrides
       # the config reporter WITHOUT touching the shared playwright.config.ts and
-      # WITHOUT wrapping the test command — so the test exit code (the nightly's
+      # WITHOUT wrapping the test command - so the test exit code (the nightly's
       # pass/fail gate) is untouched. The json file feeds the summary step below.
-      # NB: `pnpm exec playwright test`, NOT `pnpm test:ui -- …` — pnpm forwards
+      # NB: `pnpm exec playwright test`, NOT `pnpm test:ui -- …` - pnpm forwards
       # the `--` through literally, which playwright reads as a positional test
       # filter ("No tests found"). `pnpm exec` passes the flags straight through.
       - name: Run Playwright (full suite)
         run: pnpm exec playwright test --reporter=github,json
         env:
           # JSON report written into the workspace (not runner.temp) so the
-          # upload step can persist it as a durable artifact — the primary
+          # upload step can persist it as a durable artifact - the primary
           # consumer is an AI pulling `gh run download` on a failed/flaky nightly
           # to see which specs failed and why. github → annotations; json → the
           # machine-readable per-test report.
@@ -91,7 +91,7 @@ jobs:
           # A small self-hosted runner (no GPU) renders MapLibre specs via
           # SwiftShader (CPU+RAM heavy). A CPU percentage sets the worker count
           # (validated sweet spot: 848 passed, 0 flaky, RAM headroom). Percentage,
-          # not a bare integer — playwright.config.ts rejects a non-percentage string.
+          # not a bare integer - playwright.config.ts rejects a non-percentage string.
           PW_WORKERS: '50%'
       # Surface results on the run summary page, flag flake/failures as
       # annotations, and signal the upload step (issues=true) to keep the report.
@@ -103,7 +103,7 @@ jobs:
         run: |
           f="playwright-report/results.json"
           if [ ! -f "$f" ]; then
-            echo "🎭 **Nightly E2E** on self-hosted runner — results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
+            echo "🎭 **Nightly E2E** on self-hosted runner - results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
           fi
           node -e '
@@ -111,14 +111,14 @@ jobs:
             const fs = require("fs");
             const ms = s.duration || 0;
             const dur = !ms ? "?" : ms >= 120000 ? Math.round(ms / 60000) + "m" : Math.round(ms / 1000) + "s";
-            const line = `🎭 **Nightly E2E** on self-hosted runner — ${s.expected ?? "?"} passed, ${s.flaky ?? 0} flaky, ${s.unexpected ?? 0} failed, ${s.skipped ?? 0} skipped (${dur})`;
+            const line = `🎭 **Nightly E2E** on self-hosted runner - ${s.expected ?? "?"} passed, ${s.flaky ?? 0} flaky, ${s.unexpected ?? 0} failed, ${s.skipped ?? 0} skipped (${dur})`;
             fs.appendFileSync(process.env.GITHUB_STEP_SUMMARY, line + "\n");
             const issues = (s.unexpected ?? 0) > 0 || (s.flaky ?? 0) > 0;
             if (issues && process.env.GITHUB_OUTPUT) fs.appendFileSync(process.env.GITHUB_OUTPUT, "issues=true\n");
-            if ((s.unexpected ?? 0) > 0) console.log(`::warning title=E2E failures::${s.unexpected} failed test(s) — full report in the nightly-e2e-report artifact (gh run download).`);
-            else if ((s.flaky ?? 0) > 0) console.log(`::warning title=E2E flake::${s.flaky} flaky test(s) (passed on retry) — trace in the nightly-e2e-report artifact.`);
-          ' "$f" || echo "🎭 **Nightly E2E** on self-hosted runner — could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
-      # Durable report for post-hoc debugging — primary consumer is an AI pulling
+            if ((s.unexpected ?? 0) > 0) console.log(`::warning title=E2E failures::${s.unexpected} failed test(s) - full report in the nightly-e2e-report artifact (gh run download).`);
+            else if ((s.flaky ?? 0) > 0) console.log(`::warning title=E2E flake::${s.flaky} flaky test(s) (passed on retry) - trace in the nightly-e2e-report artifact.`);
+          ' "$f" || echo "🎭 **Nightly E2E** on self-hosted runner - could not parse results (see job log)." >> "$GITHUB_STEP_SUMMARY"
+      # Durable report for post-hoc debugging - primary consumer is an AI pulling
       # `gh run download <run-id> -n nightly-e2e-report` on a failed/flaky nightly.
       # Uploads on any failure OR when the summary flagged failed/flaky specs (a
       # flaky run is green but its retry trace is worth keeping). results.json =

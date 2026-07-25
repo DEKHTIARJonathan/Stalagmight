@@ -13,7 +13,7 @@ import { createRequire } from 'node:module';
 // UMD bundle, which exposes `window.MessagePack.encode`.  The mock
 // handler for `load_project_full_binary` builds the same fixture as
 // `load_project_full`, repacks it into the binary wire format, and
-// encodes it — exercising the real decoder end-to-end with no
+// encodes it - exercising the real decoder end-to-end with no
 // production-code fallbacks.
 // ----------------------------------------------------------------------------
 let cachedMsgpackUmd: string | null = null;
@@ -271,7 +271,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_DIVE_PLANS__ = () => [...mockDivePlans];
       // Give the open project a file path (a saved project) so dive-plan save/list is
-      // enabled — the bar gates on file_path AND databaseOpen (#275 B3). Call
+      // enabled - the bar gates on file_path AND databaseOpen (#275 B3). Call
       // refreshProjectState() after to pick up the file_path change; databaseOpen is
       // set here directly (refreshProjectState doesn't touch it) to mirror what the
       // real app does on load (projectStore.ts:727) and on save success (:1002): a
@@ -1026,7 +1026,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }).MessagePack;
             if (!MessagePack) {
               throw new Error(
-                'load_project_full_binary mock: window.MessagePack missing — setupTauriMocks must inject the msgpack UMD',
+                'load_project_full_binary mock: window.MessagePack missing - setupTauriMocks must inject the msgpack UMD',
               );
             }
             const bytes = MessagePack.encode(envelope);
@@ -1195,7 +1195,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // project AND every nested array (sections, zero_datums, loop_closures, …)
               // gets a new identity per call. The mock mutates those arrays in place
               // (e.g. sections.push in create_section, datums.push in set_zero_datum),
-              // so returning the same reference froze #160's reference-keyed memos —
+              // so returning the same reference froze #160's reference-keyed memos -
               // `useMemo([sections])` left the SectionsPanel empty even as fresh `stats`
               // showed the populated count. A deep clone keeps every consumer's
               // ref-identity check honest, not just the sections one. (Caused ~50
@@ -1227,7 +1227,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'get_station_distances_from': {
-            // Distance-gradient field (#34). No real graph in the mock — synthesize
+            // Distance-gradient field (#34). No real graph in the mock - synthesize
             // distances from each station's mock x-coordinate (origin at x=0) so the
             // overlay + legend have finite values to render. `from` is ignored.
             const state = mockHandler('get_project_state', args) as
@@ -1328,7 +1328,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
-            // Gas reachable-frontier field (#38). No real graph in the mock —
+            // Gas reachable-frontier field (#38). No real graph in the mock -
             // synthesize a field from each station's mock x-coordinate (origin at
             // x=0) so the overlay + legend + turn markers have finite values to
             // render. Diver/cylinders/gasConfig inputs are ignored; the budget is a
@@ -1352,7 +1352,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
             }
             // Turn frontier: a reachable station whose next (by array order) is not
-            // reachable — enough for the marker layer to render in the smoke test.
+            // reachable - enough for the marker layer to render in the smoke test.
             const turn_frontier = stations
               .filter((_s, i) => reachable[i] && i + 1 < stations.length && !reachable[i + 1])
               .map((s) => s.station_ref);
@@ -1411,7 +1411,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const final_turn_ref = targetRef;
             // Drop stages: staged presets drop their first `dropCount` enabled stages; Free drops
             // every enabled stage with a positive usable (no cap). Each gets a ref, clamped to the
-            // turnaround when the route is shorter — mirroring the engine so refs/bars/distances align.
+            // turnaround when the route is shorter - mirroring the engine so refs/bars/distances align.
             const dropSourceStages =
               effective === 'free'
                 ? stageCyls.filter((c) => (c.usable_gas_bar ?? 0) > 0)
@@ -1449,7 +1449,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return over;
             });
             // Route legs to the target (consecutive reachable stations; the real graph path is
-            // exercised in Rust). is_jump stays false — the seeded e2e sections carry no jumps.
+            // exercised in Rust). is_jump stays false - the seeded e2e sections carry no jumps.
             const route =
               targetRef != null
                 ? reachableRefs
@@ -1458,7 +1458,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 : [];
 
             // Route physical metrics (#236) over the route's stations, in order (origin→turnaround),
-            // derived from the route legs the mock returns — so it mirrors the backend's route_refs
+            // derived from the route legs the mock returns - so it mirrors the backend's route_refs
             // CHAIN, not the full reachable set. NOTE: the seeded e2e cave is a single linear section
             // with no merge/closure ties, so this is an approximation for the linear seed, not a
             // re-implementation of the backend's tie-aware shortest path (exact math is Rust-tested).
@@ -1502,7 +1502,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sumWv > 0
                 ? backCyls.reduce((s, c) => s + (c.fill_bar ?? 0) * (c.water_volume_l ?? 0), 0) / sumWv
                 : 0;
-            // All-thirds turn rises by the safety margin (mock ignores Z: turn = avgStart·(1−⅓)+margin).
+            // All-thirds turn rises by the safety margin (mock ignores Z: turn = avgStart·(1-⅓)+margin).
             const backgas_turn_bar =
               sumWv > 0
                 ? Math.max(0, avgStart * (1 - frac) + (effective === 'all_thirds' ? margin : 0))
@@ -1548,11 +1548,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               const basis = gasConfig.conservative_tank_gas !== false ? Math.min(fill, rated) : fill;
               if (effective === 'free') {
                 // Clamp to `basis` (min(fill, rated) under conservative), matching the engine's
-                // free_usable_bar — not raw fill — so the mock doesn't diverge on overfilled tanks.
+                // free_usable_bar - not raw fill - so the mock doesn't diverge on overfilled tanks.
                 return isBudget(c.role) ? Math.max(0, Math.min(c.usable_gas_bar ?? 0, basis)) : 0;
               }
               if (effective === 'all_thirds') {
-                // ⅓ less the safety margin (mock ignores Z), clamped ≥ 0 — mirrors the engine.
+                // ⅓ less the safety margin (mock ignores Z), clamped ≥ 0 - mirrors the engine.
                 return isBudget(c.role) ? Math.max(0, fill / 3 - margin) : 0;
               }
               if (c.role === 'back_gas') return frac * fill;
@@ -1585,7 +1585,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'get_along_line_distance': {
-            // Ruler along-line distance (#26). No real survey graph in the mock —
+            // Ruler along-line distance (#26). No real survey graph in the mock -
             // return a deterministic distance and tint the first couple of shots
             // of endpoint `a`'s section so the readout + tint have something to show.
             const endpointA = (args?.a ?? null) as { section_id?: number } | null;

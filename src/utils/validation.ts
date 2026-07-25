@@ -20,7 +20,7 @@ export const DEFAULT_VALIDATION_CONFIG: ValidationConfig = defaultConfig.validat
  * Per-field validation errors for a ValidationConfig: each field maps to its
  * i18n error key, or null when valid.
  *
- * NOTE: this intentionally OMITS `warn_azimuth_deviation_max` — none of the
+ * NOTE: this intentionally OMITS `warn_azimuth_deviation_max` - none of the
  * three call sites (the global Settings dialog, the per-project settings
  * dialog, and the ValidationSettings panel) range-check that field, so the
  * record is a partial view of ValidationConfig by design. Do not assume it is

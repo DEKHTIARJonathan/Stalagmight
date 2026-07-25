@@ -6,18 +6,18 @@
  * string into a set of per-glyph quads whose corner offsets are expressed in EM
  * relative to the label's geographic anchor. The GL layer later multiplies these
  * em offsets by the per-kind rendered text size to get screen px (so one shaping
- * pass at 1 em is correct across all zooms — max-width, anchoring and offsets are
+ * pass at 1 em is correct across all zooms - max-width, anchoring and offsets are
  * all size-independent em constants, matching MapLibre semantics, §2 of design).
  *
  * SHAPING: left-to-right, per-character advance summation (no kerning, no
- * contextual shaping) — exactly how MapLibre lays out its own glyph runs, so
+ * contextual shaping) - exactly how MapLibre lays out its own glyph runs, so
  * matching it is both simpler and closer to current behavior than a real shaper.
  * Advances/bearings come from the atlas glyph metrics (24 px raster space),
  * divided by the raster em to get em.
  *
  * WRAP: comments (the two kinds with `text-max-width: 12`) greedily break on
  * whitespace at 12 em; a single word longer than the max gets its own line (no
- * mid-word break — a close-enough approximation of MapLibre's ideal-break, §2).
+ * mid-word break - a close-enough approximation of MapLibre's ideal-break, §2).
  * All other kinds are single-line.
  *
  * ANCHOR / OFFSET: each kind has a MapLibre `text-anchor` + `text-offset` (em).
@@ -97,7 +97,7 @@ export interface ShapedLabel {
 
 /** Axis-aligned em extent of a shaped label, anchor-relative, +x right / +y UP
  *  (the shader convention): the tight bounding box over every glyph quad corner.
- *  Consumed by collision (`labelCollide.ts`) to size a label's screen AABB —
+ *  Consumed by collision (`labelCollide.ts`) to size a label's screen AABB -
  *  `extent * text-size-px (+ halo)` is the placed box. `null` for an empty /
  *  whitespace-only label (no ink → no box → never a collision candidate). */
 export interface ExtentEm {
@@ -260,7 +260,7 @@ export function shapeLabel(text: string, kind: LabelKind, atlas: GlyphAtlas): Sh
  * the dominant CPU cost of a build on a large survey). Safe to share a
  * {@link ShapedLabel} across builds: it is immutable and stores ATLAS PIXEL rects,
  * whose origins never move (the atlas grows by doubling height, so a glyph's
- * `(ax, ay)` is stable — see `glyphAtlas.ts`). Insertion-ordered {@link Map} gives
+ * `(ax, ay)` is stable - see `glyphAtlas.ts`). Insertion-ordered {@link Map} gives
  * O(1) LRU: a hit re-inserts (moves to newest); an overflow evicts the oldest key.
  */
 export class ShapeCache {
@@ -273,7 +273,7 @@ export class ShapeCache {
     this.max = Math.max(1, max);
   }
 
-  /** Shaped label for `(kind, text)` — cached across builds, shaping on a miss. */
+  /** Shaped label for `(kind, text)` - cached across builds, shaping on a miss. */
   get(kind: LabelKind, text: string, atlas: GlyphAtlas): ShapedLabel {
     const key = `${kind} ${text}`;
     const hit = this.entries.get(key);

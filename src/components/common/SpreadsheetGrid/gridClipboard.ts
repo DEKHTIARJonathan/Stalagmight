@@ -2,7 +2,7 @@
  * Clipboard + locale helpers for SpreadsheetGrid. Pure and unit-tested.
  *
  * Clean-room: standard TSV (tab-separated columns, newline-separated rows) with
- * RFC-4180-style quoting for fields containing tabs/newlines/quotes — the same
+ * RFC-4180-style quoting for fields containing tabs/newlines/quotes - the same
  * shape Excel and Google Sheets put on the clipboard's `text/plain`. No grid
  * library source referenced.
  */
@@ -37,7 +37,7 @@ const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\
  * corrupts comma-decimal locales (`parseFloat("1,5") === 1`).
  *
  * The group separator is only stripped when the string is a genuinely grouped
- * number (groups of three digits, e.g. "1.234,5" in de-DE) — blindly stripping
+ * number (groups of three digits, e.g. "1.234,5" in de-DE) - blindly stripping
  * it would turn a pasted dot-decimal "1.5" into 15. Otherwise a single locale
  * decimal separator is swapped to '.', and finally a plain dot-decimal
  * fallback covers "1.5" typed in a comma-decimal locale.
@@ -111,7 +111,7 @@ export function parseTSV(text: string): string[][] {
       continue;
     }
     // A quote only opens a quoted field at the FIELD START (nothing accumulated
-    // yet). A quote in the middle of an unquoted field is a literal character —
+    // yet). A quote in the middle of an unquoted field is a literal character -
     // pasting `say "hi"` must keep the inch marks, not strip them (RFC-4180).
     if (ch === '"' && field === '') {
       inQuotes = true;

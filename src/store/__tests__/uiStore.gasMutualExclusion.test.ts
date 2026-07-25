@@ -5,9 +5,9 @@ import { useGasPlanStore } from '../gasPlanStore';
 /**
  * The Plan workspace mode (#38) paints the same shots/stations layer as the three
  * color overlays (depth / distance / issue-severity), so they must be mutually
- * exclusive. Entering Plan clears the color overlays; enabling a color overlay —
+ * exclusive. Entering Plan clears the color overlays; enabling a color overlay -
  * reachable via the Shift+D keyboard shortcut, which calls toggleDisplay directly,
- * bypassing setColorMode — returns to Survey (exitGasPlan). These guards pin BOTH
+ * bypassing setColorMode - returns to Survey (exitGasPlan). These guards pin BOTH
  * directions.
  */
 describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
@@ -87,7 +87,7 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
   it('restores measured geometry after Plan on the default (measured) survey view', () => {
     // The realistic default path: forced closureAdjusted ≠ saved measured, so this
     // distinguishes "restored the saved value" from "left the forced value" (the
-    // closureAdjusted-entry case can't tell those apart — they're equal).
+    // closureAdjusted-entry case can't tell those apart - they're equal).
     expect(useUIStore.getState().geometryMode).toBe('measured');
     useUIStore.getState().setAppMode('plan');
     expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
@@ -104,7 +104,7 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
     useUIStore.getState().applyDisplaySettings({ geometryMode: 'closureAdjusted' } as never);
     expect(useUIStore.getState().appMode).toBe('survey');
     expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
-    // The leftover funnel is now a no-op (already survey) — geometry stays B's.
+    // The leftover funnel is now a no-op (already survey) - geometry stays B's.
     useUIStore.getState().exitGasPlan();
     expect(useUIStore.getState().geometryMode).toBe('closureAdjusted');
   });
@@ -112,7 +112,7 @@ describe('Plan mode ↔ color-overlay mutual exclusion (#38)', () => {
   it('a project load resets the gas store (no pushyAck / plan-input leak across projects)', () => {
     // Project A: in Plan, the user accepted the advanced staged-reserve presets and picked an
     // origin. A DIRECT switch to project B sets appMode='survey' in applyDisplaySettings, which
-    // would short-circuit the later exitGasPlan funnel — so applyDisplaySettings must reset the
+    // would short-circuit the later exitGasPlan funnel - so applyDisplaySettings must reset the
     // gas store itself, or the safety ack (and inputs) leak into B's Plan session.
     useUIStore.getState().setAppMode('plan');
     useGasPlanStore.getState().setPushyAck(true);

@@ -1,7 +1,7 @@
 //! TLS / private-network transport policy for the SpeleoDB client (#187).
 //!
 //! The `http://` scheme is a plaintext-credential hazard, so it is **blocked
-//! unless every resolved address is loopback / private / link-local** — the
+//! unless every resolved address is loopback / private / link-local** - the
 //! dev-box case (`http://10.10.0.220:8000`) is allowed, a public `http://` host
 //! is refused before any byte is dialed. `https://` short-circuits before any
 //! resolution (TLS protects the credentials regardless of the peer address). A
@@ -9,7 +9,7 @@
 //! http/https, never silently rewrite).
 //!
 //! `insecure_http` (the persisted override, D-B10, owned by Track C config but
-//! consumed here) relaxes **only** the public-http scheme block — it never
+//! consumed here) relaxes **only** the public-http scheme block - it never
 //! disables TLS certificate verification, so self-signed / internal-CA `https://`
 //! endpoints stay rejected by ureq's TLS stack.
 //!
@@ -97,7 +97,7 @@ fn classify_v6(v6: Ipv6Addr) -> AddrClass {
 ///
 /// Uses [`DefaultResolver::host_and_port`] to assemble the exact `host:port`
 /// ureq dials, then `ToSocketAddrs` to resolve it (the D-187-permitted fallback
-/// — wiring the full `&Config`/`NextTimeout` resolver path is awkward and buys
+/// - wiring the full `&Config`/`NextTimeout` resolver path is awkward and buys
 /// nothing for a check that only needs the IP set). Returns an `InsecureEndpoint`
 /// error on a missing authority or a resolution failure (fail closed).
 fn resolve_addrs(uri: &Uri) -> Result<Vec<IpAddr>, SpeleoDbError> {
@@ -196,7 +196,7 @@ pub(crate) fn enforce(endpoint: &str, insecure_http: bool) -> Result<(), SpeleoD
                 })
             }
         }
-        // D-B19: require an explicit, known scheme — never silently rewrite.
+        // D-B19: require an explicit, known scheme - never silently rewrite.
         _ => Err(SpeleoDbError::InsecureEndpoint {
             endpoint: endpoint.to_owned(),
         }),
@@ -260,7 +260,7 @@ mod tests {
 
     #[test]
     fn enforce_https_short_circuits() {
-        // A public https host is fine — TLS protects the credentials; enforce
+        // A public https host is fine - TLS protects the credentials; enforce
         // must not resolve or block it.
         assert!(enforce("https://example.com", false).is_ok());
         assert!(enforce("https://8.8.8.8", false).is_ok());
@@ -330,7 +330,7 @@ mod tests {
     #[test]
     fn enforce_insecure_http_bypasses_public_block() {
         // With the override set, a public http host is allowed (scheme block
-        // lifted) — but a missing scheme is STILL rejected (the override only
+        // lifted) - but a missing scheme is STILL rejected (the override only
         // relaxes the http policy, not the require-explicit-scheme rule).
         assert!(enforce("http://8.8.8.8", true).is_ok());
         assert!(enforce("http://example.com", true).is_ok());

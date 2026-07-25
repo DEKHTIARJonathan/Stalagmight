@@ -3,7 +3,7 @@
  * (#customRender labels, Phase 1).
  *
  * Pure (no GL, no DOM beyond the injected {@link GlyphAtlas}), so the whole
- * label-buffer story is unit-testable in the `node` env — the GL layer (Phase 2)
+ * label-buffer story is unit-testable in the `node` env - the GL layer (Phase 2)
  * only uploads what {@link buildLabelBuffers} returns. Sibling of `tessellate.ts`
  * (lines/circles): the same anchor-relative-mercator float32 positions +
  * per-glyph-quad-as-4-verts + `UNSIGNED_INT` indices, and the same single-writer
@@ -39,7 +39,7 @@ import type { GlyphAtlas } from './glyphAtlas';
  * Padded viewport rectangle in ANCHOR-RELATIVE mercator (`mercator - anchor`),
  * the same space descriptor anchors live in (§4 of the design). When passed to
  * {@link buildLabelDescriptors}, a label whose anchor falls outside is not
- * emitted at all — the viewport-scoped build that bounds the live glyph set to
+ * emitted at all - the viewport-scoped build that bounds the live glyph set to
  * what is near the screen. Absent = whole-survey (every anchor kept), preserving
  * the pre-Phase-4 behavior for callers / tests that pass no viewport.
  */
@@ -77,22 +77,22 @@ export interface LabelDescriptor {
    *  (station labels); 0 for kinds without decimation. */
   ordinal: number;
   /** STATIC {@link LABEL_FLAG} bits only (FIRST_IN_SECTION / REFERENCE /
-   *  ALL_REFERENCE). Interaction bits (DIM / DRAG_HIDE) are NOT stored here —
+   *  ALL_REFERENCE). Interaction bits (DIM / DRAG_HIDE) are NOT stored here -
    *  they are computed per build / per flag-refresh from the controller's
    *  dim/hide state so a cheap flags-only re-upload can flip them without
    *  disturbing the reveal zoom (which the reveal-only path owns). */
   flags: number;
-  /** Owning section id — keys anchored-dim + drag-section-hide for every kind. */
+  /** Owning section id - keys anchored-dim + drag-section-hide for every kind. */
   sectionId?: number;
-  /** Global station index (station label + station comment) — keys station
+  /** Global station index (station label + station comment) - keys station
    *  drag-hide + (with {@link stationIndex}) immovable-station dim. */
   stationGlobal?: number;
-  /** Station index within its section (station label + station comment) — the
+  /** Station index within its section (station label + station comment) - the
    *  immovable feature id is `sectionId * FEATURE_ID_STRIDE + stationIndex`. */
   stationIndex?: number;
-  /** Global shot index (shot label + shot comment) — keys shot drag-hide. */
+  /** Global shot index (shot label + shot comment) - keys shot drag-hide. */
   shotGlobal?: number;
-  /** Shot id within its section (shot label + shot comment) — the immovable
+  /** Shot id within its section (shot label + shot comment) - the immovable
    *  feature id is `sectionId * FEATURE_ID_STRIDE + shotId`. */
   shotId?: number;
 }
@@ -105,12 +105,12 @@ export interface LabelBuildContext {
   /**
    * Comment-label text color resolver for the `move_comment` palette tint (#52).
    * Given a comment's OWNER key (`${sectionId}:s${shotId}` for shot comments,
-   * `${sectionId}:st${stationIndex}` for station comments — the exact keys
+   * `${sectionId}:st${stationIndex}` for station comments - the exact keys
    * `features.ts` / `colorResolvers.ts` use), returns the packed tint color.
    * ABSENT (the common case) = comments use the flat `labelColor`, matching the
    * stock `commentTextColor()` when the tool is not active. Injected (never
    * imported here) so this pure module never depends on `features.ts`
-   * (`commentColorForKey`) — no import cycle.
+   * (`commentColorForKey`) - no import cycle.
    */
   commentColor?: ((ownerKey: string) => Rgba8) | undefined;
 }
@@ -135,7 +135,7 @@ export interface LabelBuffers {
   color: Uint8Array;
   /** Per-vertex label kind (0..4), `vertexCount`. */
   kind: Uint8Array;
-  /** Per-vertex reveal zoom — the min live zoom at which the label draws
+  /** Per-vertex reveal zoom - the min live zoom at which the label draws
    *  (`labelReveal.ts`); the shader shows it iff `u_zoom >= revealZoom`. Folds in
    *  both collision declutter and decimation. `vertexCount`. */
   revealZoom: Float32Array;
@@ -185,13 +185,13 @@ export function buildLabelDescriptors(
   // Viewport filter (§4): keep only anchors inside the padded viewport. Absent =
   // whole-survey. Note the ORDINAL loops still run in full below (a shot's global
   // running index / a station's global ordinal must stay stable regardless of
-  // what is on screen, so decimation parity holds) — only the `push` is gated.
+  // what is on screen, so decimation parity holds) - only the `push` is gated.
   const inView = (x: number, y: number): boolean =>
     viewport === undefined ||
     (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
   const lookup = buildStationLookup(data);
   // allRef[g] === 1 <=> every shot touching station g is a reference shot (or it
-  // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot — the
+  // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot - the
   // `stationsWithNonReferenceShot` predicate features.ts uses.
   const allRef = computeStationAllReference(data, lookup);
   const stationRel = projectStationsRel(data, gpsOrigin, anchorX, anchorY);
@@ -217,7 +217,7 @@ export function buildLabelDescriptors(
       const ty = data.stationCoords[toG * 3 + 1]!;
       const tz = data.stationCoords[toG * 3 + 2]!;
       // Text uses the station-z average (labelDepth); color uses the shot
-      // depth_in/out average (avgDepth) — two different depths, per features.ts.
+      // depth_in/out average (avgDepth) - two different depths, per features.ts.
       const labelDepth = (fz + tz) / 2;
       const avgDepth = (data.shotDepthIn[shotGlobalIdx]! + data.shotDepthOut[shotGlobalIdx]!) / 2;
       const azimuthIn = data.shotAzimuthIn[shotGlobalIdx]!;
@@ -372,7 +372,7 @@ const CORNER_USE_B = [0, 0, 1, 1];
  * `emitLineSection` / `emitStation`): all 4 verts of a glyph share the label's
  * anchor / color / kind / revealZoom / flags; `offsetEm` + `uv` come from the
  * shaped glyph corners. `revealZoom` (min live zoom at which the label draws)
- * defaults to 0 (visible from any zoom — the whole-survey / no-projector
+ * defaults to 0 (visible from any zoom - the whole-survey / no-projector
  * fallback). Two-triangle winding `0,1,2, 2,1,3` matches the geometry layer.
  */
 export function emitLabel(
@@ -423,7 +423,7 @@ export function emitLabel(
  * index-aligned). Split from {@link buildLabelBuffers} so Phase 4 can shape ONCE
  * and feed the same shaped set to both collision (which needs each label's em
  * extent, `labelLayout.ts::shapedExtent`) and the buffer emit
- * ({@link buildLabelBuffersFromShaped}) — no double shaping.
+ * ({@link buildLabelBuffersFromShaped}) - no double shaping.
  */
 export function shapeDescriptors(
   descriptors: LabelDescriptor[],
@@ -451,7 +451,7 @@ export function buildLabelBuffers(descriptors: LabelDescriptor[], atlas: GlyphAt
  * with `descriptors`). The single allocation + emit half of {@link buildLabelBuffers}.
  * `flagFor(i)` supplies the per-label flag byte (default: the descriptor's static
  * `flags`); the controller passes a resolver that folds in the dynamic DIM /
- * DRAG_HIDE bits so they land in the fresh buffer with no separate upload — the
+ * DRAG_HIDE bits so they land in the fresh buffer with no separate upload - the
  * same bytes {@link buildLabelFlags} would produce for a later flags-only
  * refresh. `revealFor(i)` supplies the per-label reveal zoom (default 0 = visible
  * from any zoom), the same values {@link buildLabelRevealZooms} would produce.
@@ -511,7 +511,7 @@ export function buildLabelBuffersFromShaped(
  * label set, stamping `flagFor(i)` across every vertex of descriptor `i`. The
  * cheap flags-only refresh path: the controller recomputes DIM / DRAG_HIDE from
  * its interaction state and re-uploads just this array
- * (`SurveyCustomLabelLayer.updateFlags`) — no reshape, reproject, or re-emit of
+ * (`SurveyCustomLabelLayer.updateFlags`) - no reshape, reproject, or re-emit of
  * positions / uv / color. `flagFor` is indexed the same as the shaped array (==
  * the descriptor array), so a byte written here lands on exactly the vertices
  * `buildLabelBuffersFromShaped` would have stamped for that label.
@@ -535,7 +535,7 @@ export function buildLabelFlags(shaped: ShapedLabel[], flagFor: (index: number) 
  * descriptor `i`. The cheap reveal-only refresh path (sibling of
  * {@link buildLabelFlags}): a kind / reference toggle reruns the reveal pass off
  * the render loop and re-uploads just this array
- * (`SurveyCustomLabelLayer.updateReveal`) — no reshape, reproject, or re-emit —
+ * (`SurveyCustomLabelLayer.updateReveal`) - no reshape, reproject, or re-emit -
  * so decluttering updates immediately without a buffer rebuild. Index-aligned
  * with the shaped array exactly like {@link buildLabelFlags}.
  */

@@ -15,8 +15,8 @@ Run `cargo fmt` and `cargo clippy` locally before pushing (they're in the
 ## Why this exists: the rot lesson
 
 The strict policy was added in **Feb 2026 (`17dc4feb`)**, explicitly to
-guardrail AI-written Rust — its comments call out the patterns directly: *"AI loves
-.unwrap()"*, *"Clone-spam — AI appeases the borrow checker with .clone()"*, *"String
+guardrail AI-written Rust - its comments call out the patterns directly: *"AI loves
+.unwrap()"*, *"Clone-spam - AI appeases the borrow checker with .clone()"*, *"String
 nonsense AI generates"*, *"Prevent AI from silencing lints"*.
 
 But `[lints.clippy]` **only takes effect under `cargo clippy`**, and CI never ran
@@ -44,7 +44,7 @@ members). Only deny-level lints fail the build.
 ## Test code: the per-module `#[expect]` idiom
 
 Test code legitimately uses `unwrap`/`expect`/`panic`/`print`. The **deliberate
-convention** (not `clippy.toml`, not `#[allow]` — which is denied) is a
+convention** (not `clippy.toml`, not `#[allow]` - which is denied) is a
 per-test-module `#[expect(...)]` listing exactly the lints that module uses:
 
 ```rust
@@ -57,13 +57,13 @@ or, for an inline module, directly above `mod tests {`. `#[expect]` (not
 exemptions don't go stale. When you add a test that uses a new denied lint
 (e.g. a `println!` diagnostic), add that lint to the module's `#[expect]`.
 
-> Do **not** introduce `clippy.toml` `allow-*-in-tests` — it conflicts with the
+> Do **not** introduce `clippy.toml` `allow-*-in-tests` - it conflicts with the
 > ~30 existing `#[expect]` attributes (it suppresses the lint, leaving them
 > unfulfilled). Follow the existing idiom.
 
 ## Extending the policy: measure, don't vibe
 
-When adding lints, **measure the hit count on the real tree first** — a
+When adding lints, **measure the hit count on the real tree first** - a
 conceptually-good lint can be unusable in practice:
 
 ```bash
@@ -73,7 +73,7 @@ cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-tar
 ```
 
 Prefer **surgical** lints (catch a specific AI pattern, low false-positive) over
-**blunt** ones, and **respect the existing `allow`s** — `too_many_lines` and
+**blunt** ones, and **respect the existing `allow`s** - `too_many_lines` and
 `too_many_arguments` are allowed *on purpose* for the geometry/numerical code.
 
 ### Considered and deliberately deferred
@@ -83,15 +83,15 @@ clean tree.
 
 | Lint | Hits (prod/test) | Why not (yet) |
 |------|------------------|---------------|
-| `indexing_slicing` | 831 / 829 | Right instinct (`v[i]` panics, which `panic=deny` doesn't catch) but pervasive in legitimate code — denying = noise. Revisit as a focused audit, not a blanket gate. |
-| `default_numeric_fallback` | 1206 / — | Flags every untyped numeric literal. Impractical. |
-| `str_to_string` | 1002 / 1866 | `"x".to_string()` vs `.to_owned()` — stylistic, codebase-wide; `inefficient_to_string` already covers the perf case. |
-| `string_slice` | 53 / — | Byte-slicing `&s[a..b]` can panic on non-char-boundary, but most uses here are ASCII-safe. Candidate for a future audit. |
+| `indexing_slicing` | 831 / 829 | Right instinct (`v[i]` panics, which `panic=deny` doesn't catch) but pervasive in legitimate code - denying = noise. Revisit as a focused audit, not a blanket gate. |
+| `default_numeric_fallback` | 1206 / - | Flags every untyped numeric literal. Impractical. |
+| `str_to_string` | 1002 / 1866 | `"x".to_string()` vs `.to_owned()` - stylistic, codebase-wide; `inefficient_to_string` already covers the perf case. |
+| `string_slice` | 53 / - | Byte-slicing `&s[a..b]` can panic on non-char-boundary, but most uses here are ASCII-safe. Candidate for a future audit. |
 | `let_underscore_must_use` | 42 / 10 | Many `let _ =` discards are intentional. |
-| `map_err_ignore` | 32 / — | `.map_err(\|_\| …)` swallows errors (real AI tell), but discarding the source error is often deliberate. Warn-only candidate. |
-| `get_unwrap` | 7 / 18 | `.get(i).unwrap()` is a panic door worth closing — deferred only for the test-module `#[expect]` churn (18 sites). Good next add. |
-| `panic_in_result_fn` | 1 / — | The one hit is a *legitimate* invariant assert in the LSQ solver (`project.rs`). The lint conflates invariant-asserts with slop, so it'd just need a per-site `#[expect]`. |
-| `unreachable`, `exit` | 3 / 1 | Fire only on `#[tauri::command]` / `.run()` **macro expansions**, not our code — adding them would force permanent framework `#[expect]`s for ~zero AI-slop value. |
-| `too_many_arguments` (deny), `cognitive_complexity`, `too-many-lines-threshold` | — | Contradict deliberate `allow`s for the complex geometry/numerical code. |
-| `transmute_ptr_to_ref`, `cast_ptr_alignment` | — | Redundant: `unsafe_code = "deny"` already blocks anything that needs `unsafe`. |
+| `map_err_ignore` | 32 / - | `.map_err(\|_\| …)` swallows errors (real AI tell), but discarding the source error is often deliberate. Warn-only candidate. |
+| `get_unwrap` | 7 / 18 | `.get(i).unwrap()` is a panic door worth closing - deferred only for the test-module `#[expect]` churn (18 sites). Good next add. |
+| `panic_in_result_fn` | 1 / - | The one hit is a *legitimate* invariant assert in the LSQ solver (`project.rs`). The lint conflates invariant-asserts with slop, so it'd just need a per-site `#[expect]`. |
+| `unreachable`, `exit` | 3 / 1 | Fire only on `#[tauri::command]` / `.run()` **macro expansions**, not our code - adding them would force permanent framework `#[expect]`s for ~zero AI-slop value. |
+| `too_many_arguments` (deny), `cognitive_complexity`, `too-many-lines-threshold` | - | Contradict deliberate `allow`s for the complex geometry/numerical code. |
+| `transmute_ptr_to_ref`, `cast_ptr_alignment` | - | Redundant: `unsafe_code = "deny"` already blocks anything that needs `unsafe`. |
 | `cargo_common_metadata`, `multiple_crate_versions` | 15 / 44 | Matter for *published* crates; this is a private app binary with a large transitive tree. |

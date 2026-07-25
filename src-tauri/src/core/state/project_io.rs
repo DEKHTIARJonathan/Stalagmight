@@ -36,7 +36,7 @@ pub(super) fn save_failure(
 }
 
 impl AppState {
-    /// True when the open project's initial save is still deferred — it was created
+    /// True when the open project's initial save is still deferred - it was created
     /// with no save path and has never been written to disk, so it has no `.stalx`
     /// file and no Recent Projects entry yet. Used to durably persist a brand-new
     /// project on its first import (#92), at the command every import path funnels
@@ -60,8 +60,8 @@ impl AppState {
         // Refuse to persist a project with unresolvable cross-references (a station an
         // endpoint anchors on was deleted) BEFORE the heals below mutate the live
         // project. The heals (UUID mint/dedup, orphan-offset drop, and the DESTRUCTIVE
-        // non-finite sanitize) do NOT affect this predicate — it depends only on
-        // section existence and anchor resolution — so checking first is equivalent
+        // non-finite sanitize) do NOT affect this predicate - it depends only on
+        // section existence and anchor resolution - so checking first is equivalent
         // for the block decision but guarantees a REFUSED save leaves the open project
         // byte-for-byte unchanged (the non-finite sanitize rewrites shot values to
         // finite defaults with no undo entry, so mutating on a refused save would
@@ -105,7 +105,7 @@ impl AppState {
         // Mint UUIDs for any shot still missing one (pre-v6 .stalx
         // files loaded today come back with NULL uuid columns).
         // Doing this BEFORE the SQLite write and BEFORE the sibling
-        // .tml export guarantees both sides receive the same UUIDs —
+        // .tml export guarantees both sides receive the same UUIDs -
         // without it, db.save_project's INSERT path would mint one set
         // of fresh UUIDs and `write_collab_sibling`'s export would mint
         // a different set, leaving the .stalx and the .tml disagreeing
@@ -114,7 +114,7 @@ impl AppState {
         // Re-mint any within-section duplicate shot UUID before refs are resolved
         // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
         // the FIRST matching shot, so a ref anchored on a later duplicate would be
-        // written to the wrong station — duplicate_shot_uuid is a Critical violation
+        // written to the wrong station - duplicate_shot_uuid is a Critical violation
         // that the unresolvable-cross-reference save gate below does NOT catch (the
         // ref still resolves, just to the wrong shot). Re-minting is lossless and
         // non-destructive: the kept (first) occurrence keeps its UUID so refs
@@ -126,7 +126,7 @@ impl AppState {
 
         // Drop section_offsets for sections that no longer exist. An orphan entry
         // (a section removed via a path that bypassed cleanup) is dead data, and the
-        // SQLite section_offsets row carries a FOREIGN KEY to sections(id) — writing
+        // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing
         // it aborts the ENTIRE save with a generic FK error rather than routing the
         // user to Repair. Lossless (matches repair_structural_integrity), so heal on
         // save. (orphan_section_offset is Critical but the save gate below only sees
@@ -158,7 +158,7 @@ impl AppState {
         // it here so a save can neither abort nor write unusable geometry.
         // (non_finite_geometry is a detect-only Critical that Repair can't auto-fix,
         // so blocking the save would strand the user; neutralizing matches the load
-        // round-trip — the value was already unusable.)
+        // round-trip - the value was already unusable.)
         for section in &mut project.sections {
             for shot in &mut section.shots {
                 shot.sanitize_non_finite();
@@ -252,7 +252,7 @@ impl AppState {
                 Some(Ok(rows)) => {
                     // Drop rows whose section no longer exists. resolved_warnings has
                     // a FOREIGN KEY on section_id and the carry-over re-inserts in a
-                    // single transaction — one orphaned row (e.g. a section deleted
+                    // single transaction - one orphaned row (e.g. a section deleted
                     // after a warning on it was ignored; delete_section is in-memory
                     // only and never prunes this table) would abort the whole
                     // transaction and silently drop EVERY still-valid ignore.
@@ -272,7 +272,7 @@ impl AppState {
                     // Key by (section_id, uuid), not uuid alone: ensure_unique_shot_uuids
                     // only de-dups within a section, so two sections can share a shot
                     // UUID and a uuid-only key would collapse both live shots into one
-                    // entry — remapping section A's ignore to whichever section won the
+                    // entry - remapping section A's ignore to whichever section won the
                     // collect, losing A's ignore and mis-suppressing B (issue #57 / Codex).
                     let live_positions: std::collections::HashMap<
                         (SectionId, &str),
@@ -327,12 +327,12 @@ impl AppState {
                         })
                         .collect();
                     // Remap each UUID-keyed row to its shot's live position; DROP a
-                    // UUID-keyed row whose shot was deleted (UUID no longer live) — it
+                    // UUID-keyed row whose shot was deleted (UUID no longer live) - it
                     // can never match a live shot by UUID on reload, so it is dead.
                     // Keeping it with its stale id would let it collide (under
                     // UNIQUE(section_id, shot_id, warning_code) + INSERT OR REPLACE)
                     // with a live shot that a renumber moved onto that position, and
-                    // REPLACE could drop either row depending on insert order — i.e.
+                    // REPLACE could drop either row depending on insert order - i.e.
                     // silently lose the live shot's still-valid ignore. Dropping dead
                     // rows here also stops them accumulating across saves. NULL-uuid
                     // (legacy, position-keyed) rows are kept and matched by position
@@ -353,7 +353,7 @@ impl AppState {
                                     // Upgrade a position-keyed row to its shot's saved
                                     // position + now-persisted UUID when its (section_id,
                                     // shot_id) still maps to a live shot. A row that maps
-                                    // to NO live shot is DEAD (its shot was deleted) — DROP
+                                    // to NO live shot is DEAD (its shot was deleted) - DROP
                                     // it: carrying it forward would let the load-time
                                     // position backfill re-attach it to whatever shot now
                                     // occupies that saved position, suppressing an
@@ -388,7 +388,7 @@ impl AppState {
         // in its own table, not the Project model, so save_project() won't carry
         // it. The save pipeline writes a FRESH temp .stalx and atomically renames
         // it over the destination, so without this snapshot+re-apply a local save
-        // would DROP the link entirely — silently un-remoting the project and
+        // would DROP the link entirely - silently un-remoting the project and
         // clearing has_unpushed_edits (exactly the "local save NEVER clears the
         // dirty bit" invariant). Snapshot it here and re-apply to the fresh file
         // below. base_commit_sha + the dirty bit are carried verbatim.
@@ -451,7 +451,7 @@ impl AppState {
 
         // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
         // local save never un-remotes the project or clears the dirty bit. The
-        // dirty bit is set-only here — only a later server push clears it.
+        // dirty bit is set-only here - only a later server push clears it.
         if let Some(link) = &speleo_link {
             if let Err(e) = db.save_speleo_link(Some(link)) {
                 tracing::warn!(
@@ -471,8 +471,8 @@ impl AppState {
         // FILE_SHARE_DELETE, so MoveFileEx(REPLACE_EXISTING) fails with
         // "Access is denied" (os error 5). Unix renames over an open file fine
         // (the live handle keeps pointing at the old inode), which is why this
-        // only bit Windows. We reopen below — at save_path on success (existing
-        // logic), or at the prior path here if the rename fails — so the
+        // only bit Windows. We reopen below - at save_path on success (existing
+        // logic), or at the prior path here if the rename fails - so the
         // session keeps a working connection either way.
         let closed_open_db = self
             .database
@@ -521,7 +521,7 @@ impl AppState {
                     purpose = "reopen saved project for continued editing",
                     "Failed to reopen saved database (file was saved successfully)"
                 );
-                // File was saved but can't be reopened — subsequent operations
+                // File was saved but can't be reopened - subsequent operations
                 // (undo persistence, display settings) will fail. Clear the stale
                 // database handle so callers don't use it.
                 project.file_path = Some(save_path.clone());
@@ -579,9 +579,9 @@ impl AppState {
         project.file_path = Some(save_path.clone());
 
         // Collaboration mode: also write the sibling .tml and refresh the
-        // baseline. Best-effort — never fail the .stalx save if this
+        // baseline. Best-effort - never fail the .stalx save if this
         // fails.  Autosaves honour `CollabState.write_tml_on_autosave`
-        // — when that flag is `false` we skip the .tml rewrite on
+        // - when that flag is `false` we skip the .tml rewrite on
         // background saves so the file Ariane is editing doesn't churn
         // every 30 seconds; manual / explicit saves always rewrite.
         let collab_writes_tml = project

@@ -753,7 +753,7 @@ When an action is performed while the dropdown is open:
 - Shot data (azimuth, length, depth)
 - Reference shots (dotted lines)
 - Zero datum (golden star)
-- Grid overlay (theme-aware, auto-spacing from 1–100m based on zoom)
+- Grid overlay (theme-aware, auto-spacing from 1-100m based on zoom)
 - Scale bar
 - Satellite imagery
 - Depth color gradient (configurable palette)
@@ -1777,11 +1777,11 @@ Both dialogs:
 
 #### Initial Focus Heuristic
 On dialog open, focus is placed on the first matching element in priority order:
-1. `[data-autofocus]` — explicit autofocus target
-2. `input` / `select` / `textarea` — first form field
-3. `[data-primary-action]` — primary action button
-4. First non-close `button` — any button that is not the close/X button
-5. Close X button — fallback to the dialog's close button
+1. `[data-autofocus]` - explicit autofocus target
+2. `input` / `select` / `textarea` - first form field
+3. `[data-primary-action]` - primary action button
+4. First non-close `button` - any button that is not the close/X button
+5. Close X button - fallback to the dialog's close button
 
 Confirmation dialogs: focus the primary action button (marked with `[data-primary-action]`).
 

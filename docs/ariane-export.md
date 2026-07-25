@@ -14,7 +14,7 @@ The user chooses between the two formats in the save dialog's file-type filter.
 ## Export Workflow
 
 1. Open the **Export** dialog and select **Survey Data** → **TML (Ariane)**.
-2. Click **Export** — the save dialog offers two filters: "TML (ZIP)" and "TMLU (XML)".
+2. Click **Export** - the save dialog offers two filters: "TML (ZIP)" and "TMLU (XML)".
 3. The file extension chosen by the user determines the output format.
 
 ## Data Mapping
@@ -46,18 +46,18 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | Sequential integer | `ID` | Assigned starting from 0, incrementing across all sections |
 | Previous shot ID | `FromID` / `FRID` | Chains shots linearly within a section; START has -1 |
 | `shot.azimuth_in` | `Azimut` / `AZ` | Front-sight azimuth |
-| `shot.azimuth_out` | — | Not exported. Ariane does not encode backsight azimuth. |
+| `shot.azimuth_out` | - | Not exported. Ariane does not encode backsight azimuth. |
 | `shot.length` | `Length` / `LG` | |
 | `shot.depth_out` | `Depth` / `DP` | Absolute station depth |
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
-| `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker — see [Station-comment co-encoding](#station-comment-co-encoding). |
+| `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.is_reference` | `Type` / `TY` | `VIRTUAL` vs `REAL` (TML keeps Ariane's naming for compatibility) |
-| — | `Locked` / `LCK` | `false` for normal shots, `true` for START |
-| — | `Name` / `NM` | `"START"` for START shot, empty otherwise |
-| — | `Profiletype` / `PT` | Always `VERTICAL` |
-| — | `Excluded` / `EXC` | Always `false` |
+| - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
+| - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
+| - | `Profiletype` / `PT` | Always `VERTICAL` |
+| - | `Excluded` / `EXC` | Always `false` |
 
 ## Topology
 
@@ -69,7 +69,7 @@ Only the **root section** (the first section, or the one with no parent) gets a 
 
 ### Section connectivity
 
-Parent–child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
+Parent-child relationships are derived from `station_merges`. When section B's entry station merges with a station in section A, section B's first shot has its `FromID` set to the Ariane ID of the corresponding station in section A.
 
 When a root section is split at a non-zero zero datum, the generated pre-zero segment is exported in reverse direction. Its azimuth is always synthesized as `azimuth_in + 180°` (normalized), not from `azimuth_out`.
 

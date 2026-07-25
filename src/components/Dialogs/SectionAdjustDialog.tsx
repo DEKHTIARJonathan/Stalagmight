@@ -35,7 +35,7 @@ export default function SectionAdjustDialog() {
   // survive editing; the numeric offset is derived via offsetValue() at the
   // preview / apply / dirty sites (the single-string-input idiom the sibling shot
   // dialogs use). Start empty (not '0') so a leading '-' typed onto the field isn't
-  // rejected as '0-' — a pre-filled 0 was un-overwritable without a prior clear,
+  // rejected as '0-' - a pre-filled 0 was un-overwritable without a prior clear,
   // keeping negatives untypable in the natural click-then-type flow (#161). The
   // placeholder still shows "0" so the no-offset default reads clearly.
   const [dxStr, setDxStr] = useState('');
@@ -125,7 +125,7 @@ export default function SectionAdjustDialog() {
     if (sectionId === undefined) return;
 
     // Cancel any pending debounced preview so it can't fire a second move_section
-    // concurrently with the Apply below — a slow (>150ms) IPC would otherwise let
+    // concurrently with the Apply below - a slow (>150ms) IPC would otherwise let
     // the late preview double-apply the offset.
     if (previewTimeoutRef.current) {
       clearTimeout(previewTimeoutRef.current);
@@ -224,7 +224,7 @@ export default function SectionAdjustDialog() {
             className="p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
             data-testid="section-adjust-connected-note"
           >
-            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} — all {connectedCount} sections
+            Merged with {connectedCount - 1} other{connectedCount - 1 === 1 ? '' : 's'} - all {connectedCount} sections
             move together so the merge stays aligned.
           </div>
         )}

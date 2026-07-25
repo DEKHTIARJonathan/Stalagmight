@@ -853,7 +853,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
 
   const isGooglePlace = /google\.com\/maps\/place\//i.test(trimmed);
 
-  // Pattern 1a: Google Maps /place/ URL — extract DMS/DDM/DD from the place name segment
+  // Pattern 1a: Google Maps /place/ URL - extract DMS/DDM/DD from the place name segment
   if (isGooglePlace) {
     const placeMatch = trimmed.match(/\/place\/([^/@]+)/);
     if (placeMatch && placeMatch[1]) {
@@ -867,7 +867,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
         const ddResult = parseDD(decoded);
         if ('coordinates' in ddResult) return { ...ddResult, original: input };
       } catch {
-        // decodeURIComponent can throw on malformed input — fall through
+        // decodeURIComponent can throw on malformed input - fall through
       }
     }
   }
@@ -890,7 +890,7 @@ export function parseUrl(input: string): GpsParseResult | GpsParseError {
     }
   }
 
-  // Pattern 1c: @lat,lon — only use for non-place URLs (where it IS the coordinate)
+  // Pattern 1c: @lat,lon - only use for non-place URLs (where it IS the coordinate)
   // For /place/ URLs the @ is just the viewport center and should be a last resort.
   const googleAtPattern = /@(-?\d+\.?\d*),(-?\d+\.?\d*)/;
   const googleAtMatch = trimmed.match(googleAtPattern);

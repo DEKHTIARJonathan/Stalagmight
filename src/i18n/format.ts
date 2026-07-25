@@ -6,7 +6,7 @@ type RelativeUnit = 'second' | 'minute' | 'hour' | 'day' | 'week' | 'month' | 'y
 let numberFormatLocale = 'locale';
 let dateFormatLocale = 'locale';
 
-// Cache for Intl.NumberFormat instances — construction is expensive (~0.05ms each in WebKit).
+// Cache for Intl.NumberFormat instances - construction is expensive (~0.05ms each in WebKit).
 // With hundreds of sections rendering per frame, this adds up to 20-40ms.
 const numberFormatCache = new Map<string, Intl.NumberFormat>();
 
@@ -47,7 +47,7 @@ function getNumberLocale(explicitLocale?: string): string {
   return getCurrentLocale();
 }
 
-/** The effective BCP-47 locale used for number formatting — always a valid Intl
+/** The effective BCP-47 locale used for number formatting - always a valid Intl
  *  tag (never the sentinel 'locale'/'system'). Pass this to consumers (e.g. the
  *  data-table grid) that must PARSE numbers with the same separators they're
  *  displayed in. */

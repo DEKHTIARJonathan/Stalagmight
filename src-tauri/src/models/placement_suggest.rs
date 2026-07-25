@@ -274,9 +274,9 @@ struct SuggestionConfig {
     max_reference_shots: usize,
     /// Maximum number of suggestions to return.
     max_suggestions: usize,
-    /// Short shot threshold (meters) — shots below this get reduced weight.
+    /// Short shot threshold (meters) - shots below this get reduced weight.
     short_shot_threshold: f64,
-    /// Penalty multiplier for single-shot matches (0.0–1.0).
+    /// Penalty multiplier for single-shot matches (0.0-1.0).
     single_shot_penalty: f64,
     /// Hard cutoff: max azimuth error for full shots (degrees).
     max_azimuth_error_full: f64,
@@ -618,7 +618,7 @@ fn compute_shot_score(
     let depth_in_error = (import.depth_in - existing_depth_in).abs();
     let depth_out_error = (import.depth_out - existing_depth_out).abs();
 
-    // Hard cutoffs — reject physically implausible matches outright
+    // Hard cutoffs - reject physically implausible matches outright
     if az_error > config.max_azimuth_error_full
         || depth_in_error > config.max_depth_error
         || depth_out_error > config.max_depth_error
@@ -2584,7 +2584,7 @@ mod tests {
             depth_out: 4.0,
         };
 
-        // 24.9° — just under cutoff (max_azimuth_error_full=25.0), should pass
+        // 24.9° - just under cutoff (max_azimuth_error_full=25.0), should pass
         let import_pass = MatchShot {
             avg_azimuth: 90.0 + 24.9,
             ..base
@@ -2595,7 +2595,7 @@ mod tests {
             "24.9° azimuth error should pass cutoff, got {score}"
         );
 
-        // 25.1° — just over cutoff, should be rejected
+        // 25.1° - just over cutoff, should be rejected
         let import_fail = MatchShot {
             avg_azimuth: 90.0 + 25.1,
             ..base
@@ -2648,7 +2648,7 @@ mod tests {
             depth_out: 4.0,
         };
 
-        // 0.29m depth_in error — just under cutoff (max_depth_error=0.30)
+        // 0.29m depth_in error - just under cutoff (max_depth_error=0.30)
         let import_pass = MatchShot {
             depth_in: 3.29,
             ..base
@@ -2659,7 +2659,7 @@ mod tests {
             "0.29m depth error should pass cutoff, got {score}"
         );
 
-        // 0.31m depth_in error — just over cutoff
+        // 0.31m depth_in error - just over cutoff
         let import_fail = MatchShot {
             depth_in: 3.31,
             ..base
@@ -2718,7 +2718,7 @@ mod tests {
             depth_out: 4.0,
         };
 
-        // 0.39m error — under the 0.4m floor
+        // 0.39m error - under the 0.4m floor
         let import_pass = MatchShot {
             length: 2.39,
             ..existing
@@ -2729,7 +2729,7 @@ mod tests {
             "0.39m length error should pass floor cutoff, got {score}"
         );
 
-        // 0.41m error — over the 0.4m floor
+        // 0.41m error - over the 0.4m floor
         let import_fail = MatchShot {
             length: 2.41,
             ..existing
@@ -2752,7 +2752,7 @@ mod tests {
             depth_out: 4.0,
         };
 
-        // 0.59m error — under the 0.6m (3%) cutoff
+        // 0.59m error - under the 0.6m (3%) cutoff
         let import_pass = MatchShot {
             length: 20.59,
             ..existing
@@ -2763,7 +2763,7 @@ mod tests {
             "0.59m length error should pass 3% cutoff for 20m shot, got {score}"
         );
 
-        // 0.61m error — over the 0.6m (3%) cutoff
+        // 0.61m error - over the 0.6m (3%) cutoff
         let import_fail = MatchShot {
             length: 20.61,
             ..existing
@@ -2777,7 +2777,7 @@ mod tests {
 
     #[test]
     fn deduplication_keeps_best_score() {
-        // Two sequences might match the same position — should keep only the best
+        // Two sequences might match the same position - should keep only the best
         let import_shots = vec![make_shot_data(90.0, 90.0, 5.0, 3.0, 4.0)];
         let existing = vec![make_section(
             1,

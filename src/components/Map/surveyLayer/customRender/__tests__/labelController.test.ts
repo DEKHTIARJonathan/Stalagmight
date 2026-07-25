@@ -203,7 +203,7 @@ describe('SurveyLabelController activation (sole label path, no gate)', () => {
     const { map } = makeFakeMap();
     const c = makeController(map, { onActiveChange: (a: boolean) => changes.push(a) });
     c.sync(makeParams());
-    // A second sync is a refresh, never a disable — it stays active and the stock
+    // A second sync is a refresh, never a disable - it stays active and the stock
     // station labels stay hidden.
     c.sync(makeParams());
     expect(c.isActive()).toBe(true);
@@ -243,7 +243,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
     expect(c.isActive()).toBe(false);
     expect(removed).toContain(CUSTOM_ID);
     expect(fatals).toEqual(['webgl2-unavailable']);
-    // Fatal latch: a later sync() is inert (labels stay absent — no fallback).
+    // Fatal latch: a later sync() is inert (labels stay absent - no fallback).
     c.sync(makeParams());
     expect(removed.filter((id) => id === CUSTOM_ID).length).toBe(1);
     expect(fatals).toEqual(['webgl2-unavailable']); // at most once
@@ -274,7 +274,7 @@ describe('SurveyLabelController error state (no stock fallback)', () => {
 
     holder.fn?.();
     // Error state: dead layer removed, onFatal fired once, stock NOT restored
-    // (stays hidden from the clean enable — no fallback).
+    // (stays hidden from the clean enable - no fallback).
     expect(removed).toEqual([CUSTOM_ID]);
     expect(fatals).toEqual(['gl-error-0x502']);
     expect(c.isActive()).toBe(false);
@@ -551,7 +551,7 @@ describe('SurveyLabelController dispose (unmount-lite hook + cache release)', ()
 // ─── Phase 4: viewport scoping + collision + camera-triggered rebuild ─────────
 
 /** Fixed-metric fake atlas (one 10x18 quad per non-space char) so a build
- *  produces real glyphs — needed to inspect which KINDS the zoom gate built. */
+ *  produces real glyphs - needed to inspect which KINDS the zoom gate built. */
 function fakeGlyphAtlas(): GlyphAtlas {
   const raster: GlyphRasterizer = (c: string): RasterizedGlyph => {
     const empty = c === ' ';
@@ -585,7 +585,7 @@ const FIXTURE_CENTER_DEG = 50 / 111320;
  *  pass + conditional camera-settle rebuild) runs. Crucially, the bounds are
  *  DERIVED from `state.zoom` (world-pixel scale = 512·2^zoom, MapLibre's 512
  *  tile), so zooming in genuinely shrinks the viewport and raises the world-pixel
- *  scale — the physical premise the reveal pass relies on. `state.cLng/cLat` pan
+ *  scale - the physical premise the reveal pass relies on. `state.cLng/cLat` pan
  *  the center. */
 function makeCameraMap(zoom = 18): CameraMap {
   const base = makeFakeMap();
@@ -628,7 +628,7 @@ function makeCameraMap(zoom = 18): CameraMap {
 
 /** Fake map with a zoom + camera-settle listeners but NO bounds/canvas, so the
  *  build runs the zoom gate (which kinds to build) but SKIPS viewport scoping +
- *  the reveal pass — every candidate label is emitted at reveal 0. Used by the
+ *  the reveal pass - every candidate label is emitted at reveal 0. Used by the
  *  flag-plumbing tests (dim / drag / toggle) that assert on specific labels'
  *  flags without collision decluttering removing any. */
 function zoomOnlyMap(zoom = 18): CameraMap {
@@ -768,7 +768,7 @@ describe('SurveyLabelController camera-settle rebuild (conditional)', () => {
     expect(hold.count).toBe(2);
   });
 
-  it('never rebuilds mid-animation (isMoving) — waits for the next settle', () => {
+  it('never rebuilds mid-animation (isMoving) - waits for the next settle', () => {
     const cam = makeCameraMap(18);
     const hold = rebuildHolder();
     const c = cameraController(cam.map, {
@@ -863,7 +863,7 @@ describe('SurveyLabelController NO rebuild on zoom-in (reveal-zoom admission)', 
     const layer = h.layerState.last!;
     const before = layer.updateCalls;
     // Zoom in half a level: the viewport shrinks (still inside the built padded
-    // box). The shader admits more labels per frame from their reveal zooms — no
+    // box). The shader admits more labels per frame from their reveal zooms - no
     // rebuild (true on either emit path for a modest step).
     cam.state.zoom = 18.5;
     cam.fire('zoomend');
@@ -927,7 +927,7 @@ describe('SurveyLabelController emit slack (vertex-load bound)', () => {
 
   it('an ADAPTIVE build emits MORE than the bounded build at the same zoom (recovers dropped labels)', () => {
     // The reported fix: at a zoom where the bounded horizon drops dense-cluster /
-    // band-edge labels, adaptive emit (default threshold) emits them all instead —
+    // band-edge labels, adaptive emit (default threshold) emits them all instead -
     // so a zoom-in reveals them with NO rebuild.
     const bounded = cameraController(makeCameraMap(14).map, { adaptiveEmitMax: 0 });
     bounded.sync(makeParams());
@@ -950,7 +950,7 @@ describe('SurveyLabelController shape cache reuse', () => {
   });
   afterEach(() => vi.restoreAllMocks());
 
-  it('reuses shaped labels across camera rebuilds — same ShapedLabel object per (kind, text)', () => {
+  it('reuses shaped labels across camera rebuilds - same ShapedLabel object per (kind, text)', () => {
     // Spy on the atlas so we can prove a re-scope does NOT re-shape unchanged
     // labels: a cached (kind, text) hits the cache and never touches the atlas.
     const atlas = fakeGlyphAtlas();
@@ -964,7 +964,7 @@ describe('SurveyLabelController shape cache reuse', () => {
     const afterFirst = getGlyph.mock.calls.length;
     expect(afterFirst).toBeGreaterThan(0); // shaped on the first build
     // A camera-settle rebuild that EXITS the viewport (so build() runs again) on
-    // the SAME geometry must not re-shape — every (kind, text) is cache-served.
+    // the SAME geometry must not re-shape - every (kind, text) is cache-served.
     cam.state.cLng += 0.05;
     cam.fire('moveend');
     expect(getGlyph.mock.calls.length).toBe(afterFirst); // zero further shaping
@@ -998,7 +998,7 @@ function allKindHaveBit(layer: FakeLabelLayer, kind: number, bit: number): boole
 }
 
 /** Anchor-relative mercator of station global `g` (per-vertex ordinal is gone
- *  from the buffer, so labels are identified by their anchor — deterministic
+ *  from the buffer, so labels are identified by their anchor - deterministic
  *  from the fixture coords). */
 function stationAnchor(params: LabelSyncParams, g: number): [number, number] {
   const [ax, ay] = computeMercatorAnchor(params.surveyData, params.gpsOrigin);
@@ -1112,7 +1112,7 @@ describe('SurveyLabelController drag-hide parity (DRAG_HIDE flag)', () => {
   // PARITY BREAK (deliberate): stock left `survey-labels` out of the drag hide
   // layers, so a section name stayed pinned at its old anchor while the geometry
   // moved (reads as stuck). The custom label layer now DRAG_HIDEs the name of
-  // every AFFECTED section — the whole-section drag via `sectionIds`, a partial
+  // every AFFECTED section - the whole-section drag via `sectionIds`, a partial
   // station / shot drag via the `affectedSectionIds` set SurveyLayer threads in.
   it('hides the dragged station label + its comment + its section name; leaves other stations and unaffected section names', () => {
     const cam = zoomOnlyMap(18);
@@ -1306,7 +1306,7 @@ describe('SurveyLabelController synchronous placement (undo/redo)', () => {
     }
     c.sync(moved);
     // The build ran synchronously in this call (new data on the layer) and the
-    // survey anchor shifted with the moved coordinates — no deferred convergence.
+    // survey anchor shifted with the moved coordinates - no deferred convergence.
     expect(layer.updateCalls).toBeGreaterThan(0);
     expect((layer.data as LabelRenderData).anchorX).not.toBeCloseTo(before, 12);
   });
@@ -1329,7 +1329,7 @@ describe('SurveyLabelController reveal rerun on toggle', () => {
     const revealBefore = layer.revealCalls;
     const updatesBefore = layer.updateCalls;
     c.setShotLabelsVisible(false);
-    // Declutter re-ran via a reveal-only upload — NOT a buffer rebuild.
+    // Declutter re-ran via a reveal-only upload - NOT a buffer rebuild.
     expect(layer.revealCalls).toBeGreaterThan(revealBefore);
     expect(layer.updateCalls).toBe(updatesBefore);
   });

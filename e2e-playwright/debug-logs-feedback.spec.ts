@@ -2,18 +2,18 @@ import { test, expect } from './fixtures/coverage';
 import { setupMockedPage, openDebugFromMenu } from './helpers/app';
 
 /**
- * E2E for issue #49 — the Debug Logs window must give transient toast feedback on
+ * E2E for issue #49 - the Debug Logs window must give transient toast feedback on
  * Refresh and Copy (both were previously silent). The toast renders at the app
  * level via a portal (z above the modal) as role="status", so it's visible over
  * the dialog. Each test uses a fresh page, so the per-key toast throttle never
  * crosses tests.
  *
  * Assertions use a 2s deadline, comfortably under the toast's own 3s auto-clear
- * (uiStore showToast) so the visibility poll can't race the clear timer — the
+ * (uiStore showToast) so the visibility poll can't race the clear timer - the
  * toast appears within a few ms of the click, leaving a wide margin.
  */
 const TOAST_TIMEOUT = 2000;
-test.describe('Debug Logs — Copy/Refresh feedback (#49)', () => {
+test.describe('Debug Logs - Copy/Refresh feedback (#49)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await openDebugFromMenu(page);

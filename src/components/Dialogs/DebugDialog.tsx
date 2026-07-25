@@ -115,7 +115,7 @@ export default function DebugDialog() {
   }, []);
 
   // Explicit Refresh button: re-fetch, then confirm with a transient toast (#49).
-  // The on-mount fetch in the effect below stays silent — only a user-initiated
+  // The on-mount fetch in the effect below stays silent - only a user-initiated
   // refresh surfaces feedback. On failure the inline error already reports it, so
   // the success toast is skipped.
   const handleRefresh = useCallback(async () => {
@@ -151,7 +151,7 @@ export default function DebugDialog() {
       // Surface the failure rather than swallowing it (e.g. clipboard blocked /
       // unavailable on WebKitGTK). Distinct key so it isn't throttled by a prior
       // successful copy.
-      showToast('Copy failed — clipboard unavailable', 'debug-copy-failed');
+      showToast('Copy failed - clipboard unavailable', 'debug-copy-failed');
     }
   }, [filteredLogs, showToast]);
 

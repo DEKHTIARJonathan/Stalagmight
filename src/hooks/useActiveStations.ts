@@ -12,7 +12,7 @@ import { selectActiveStations } from '../store/geometrySelectors';
  * Read-only consumers that *show or compute coordinates* (coordinate inspection,
  * the measure tool) should use this so they stay consistent with what the map
  * draws. Editing paths and headline stats keep using the measured `stations`
- * directly — adjustment is non-destructive and stats are always measured.
+ * directly - adjustment is non-destructive and stats are always measured.
  */
 export function useActiveStations(): Station[] {
   const geometryMode = useUIStore((s) => s.geometryMode);

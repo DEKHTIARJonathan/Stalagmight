@@ -15,7 +15,7 @@ describe('surfaceSaveFailure', () => {
 
     surfaceSaveFailure("Can't save: 1 unresolved cross-reference", openDialog);
 
-    // No error dialog — instead the integrity (Review & Repair) dialog opens.
+    // No error dialog - instead the integrity (Review & Repair) dialog opens.
     expect(openDialog).not.toHaveBeenCalled();
     expect(useProjectStore.getState().integrityDialogOpen).toBe(true);
   });
@@ -83,7 +83,7 @@ describe('surfaceImportWarnings (#110)', () => {
     const openDialog = vi.fn();
     const message =
       'Imported, but could not save the new project to disk: disk full. ' +
-      'Your changes are unsaved — please save manually.';
+      'Your changes are unsaved - please save manually.';
 
     surfaceImportWarnings([sys(message)], openDialog);
 

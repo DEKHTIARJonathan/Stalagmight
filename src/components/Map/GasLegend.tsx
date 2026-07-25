@@ -9,7 +9,7 @@ import { GAS_NEAR, GAS_FAR } from '../../utils/gasReach';
 import type { GasReachField, GasUnits } from '../../types/ipc.generated';
 
 interface GasLegendProps {
-  /** The reachability field — its `budget_litres` is the far (purple) end of the scale. */
+  /** The reachability field - its `budget_litres` is the far (purple) end of the scale. */
   field: GasReachField;
   units: GasUnits;
   visible: boolean;
@@ -96,7 +96,7 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
         </div>
       </div>
 
-      {/* Symbol key — what the map markers mean. Drop / final-turn rows appear only for a staged
+      {/* Symbol key - what the map markers mean. Drop / final-turn rows appear only for a staged
           strategy (when the backend returns them). The turn point is always present in Plan. */}
       <div
         data-testid="gas-legend-key"

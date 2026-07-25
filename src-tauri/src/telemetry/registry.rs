@@ -1,7 +1,7 @@
 //! Canonical vocabulary of telemetry event and source names.
 //!
 //! The wire format sends event names verbatim (self-describing JSON), so these
-//! are no longer a numeric ID map — they exist to back the coverage tests below
+//! are no longer a numeric ID map - they exist to back the coverage tests below
 //! (every command / tool / dialog has a tracked event; typo detection).
 
 /// Known interaction-source names (appended to an event as `:source`).
@@ -884,7 +884,7 @@ mod tests {
                 let mirror = format!("active-dwell.{key}");
                 assert!(
                     EVENT_NAMES.iter().any(|&e| e == mirror),
-                    "dwell state '{name}' has no '{mirror}' — add it here and in \
+                    "dwell state '{name}' has no '{mirror}' - add it here and in \
                      telemetry-worker/src/registry.ts"
                 );
             }
@@ -901,7 +901,7 @@ mod tests {
                 let event = format!("tile.{kind}.{}", info.name);
                 assert!(
                     EVENT_NAMES.iter().any(|&e| e == event),
-                    "provider '{}' missing telemetry event '{event}' — add it to EVENT_NAMES \
+                    "provider '{}' missing telemetry event '{event}' - add it to EVENT_NAMES \
                      here and in telemetry-worker/src/registry.ts",
                     info.name
                 );
@@ -1075,7 +1075,7 @@ mod tests {
 
         // Tools removed from the UI whose event names are kept in the vocabulary
         // (their events simply never fire anymore). The registry is allowed to
-        // retain these even though they're gone from ToolType — but every
+        // retain these even though they're gone from ToolType - but every
         // *current* tool must still be covered.
         const RETIRED_TOOLS: &[&str] = &["draw", "delete"];
         let retired_action: HashSet<String> = RETIRED_TOOLS

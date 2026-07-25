@@ -6,7 +6,7 @@
  * Elision scheme (matches the agreed UX):
  *   1. full path
  *   2. leading folder segments abbreviated to a single letter, left → right
- *      (the filename — the last segment — is never abbreviated)
+ *      (the filename - the last segment - is never abbreviated)
  *   3. if still too long, middle-truncate with `…`, dropping interior folders
  *      while keeping the filename whole
  *

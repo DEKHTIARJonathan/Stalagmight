@@ -13,14 +13,14 @@ import {
  *
  * The e2e mock's `get_project_state` returns `structuredClone(currentProject)` so
  * every nested array (sections, zero_datums, loop_closures, …) gets a FRESH identity
- * each refresh — mirroring the real Tauri IPC (`project.clone()` → serialized). #163
+ * each refresh - mirroring the real Tauri IPC (`project.clone()` → serialized). #163
  * added that deep clone, but only the `sections`/SectionsPanel tests exercised it;
  * nothing drove a `zero_datums` change through the refresh and asserted the
  * reference-keyed memo re-derived. This test does exactly that for the
  * `[project?.zero_datums]` → `gpsOrigin` memo (MapCanvas).
  *
  * Mechanism: the mock mutates `zero_datums` IN PLACE (`datums.push`), so the datum
- * data is present either way — but only a deep clone gives the array a new identity,
+ * data is present either way - but only a deep clone gives the array a new identity,
  * which is what makes the `useMemo([…, project?.zero_datums])` recompute. We add a
  * datum whose GPS is far from `config.map.satellite_gps_origin`, then assert the
  * app's own coordinate transform (`__stalagmight_to_meters__`, which closes over the
@@ -78,7 +78,7 @@ test.describe('zero-datum reactivity through the project refresh', () => {
 
     // Add a zero datum whose GPS is FAR from the satellite origin. This drives
     // `set_zero_datum` (mutating zero_datums in place) and a refresh. The derived
-    // gpsOrigin — and thus the transform of FIXED — only MOVES if the
+    // gpsOrigin - and thus the transform of FIXED - only MOVES if the
     // `[project?.zero_datums]` memo recomputed, i.e. the refresh handed it a fresh
     // array identity (the deep clone), not the same mutated-in-place reference.
     const sectionId = await page.evaluate(() => {
@@ -118,7 +118,7 @@ test.describe('zero-datum reactivity through the project refresh', () => {
 
     // Precondition the guard depends on: the refresh propagated the new datum into
     // the store. (The mock pushes it in place onto zero_datums; get_project_state
-    // deep-clones it back out — see e2e-playwright/mocks/tauri-ipc.ts `set_zero_datum`.)
+    // deep-clones it back out - see e2e-playwright/mocks/tauri-ipc.ts `set_zero_datum`.)
     await expect
       .poll(async () =>
         page.evaluate(

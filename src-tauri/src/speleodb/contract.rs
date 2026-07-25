@@ -2,13 +2,13 @@
 //!
 //! One pure function, [`map_status`], turns an `(endpoint, http_status)` pair
 //! into a typed [`SpeleoDbAction`] the rest of the app (and the frontend, over
-//! IPC) branches on — instead of re-parsing human-facing error strings. The
+//! IPC) branches on - instead of re-parsing human-facing error strings. The
 //! function **fails closed**: any status we do not explicitly model maps to
 //! [`SpeleoDbAction::Fatal`] (surface it, keep the project dirty, never auto-drop
 //! the token).
 //!
 //! INVARIANT (D-186): the action is a pure function of `(endpoint, status)`.
-//! `client::parse_error_message` stays DISPLAY-only — **no** branch in
+//! `client::parse_error_message` stays DISPLAY-only - **no** branch in
 //! `map_status` reads the parsed message string. The `SpeleoDbError::Status`
 //! variant stays `{status, message}` with no action field; the action is derived
 //! here, at the IPC boundary, where the endpoint context is known, so the error
@@ -23,7 +23,7 @@ use super::SpeleoDbError;
 /// The decision the caller should take after a SpeleoDB call, derived from the
 /// HTTP status + the endpoint it came from. Crosses IPC as a ts-rs enum so the
 /// frontend branches on `err.action` rather than on message text (D-B2). Order
-/// is non-load-bearing (no `>=` comparisons — unlike [`super::Permission`]).
+/// is non-load-bearing (no `>=` comparisons - unlike [`super::Permission`]).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[ts(export)]
 pub enum SpeleoDbAction {
@@ -33,11 +33,11 @@ pub enum SpeleoDbAction {
     ReLogin,
     /// 403 on a read-capable endpoint (list/get/download = read-only access).
     ReadOnly,
-    /// 403 on upload/acquire/release — no write permission / lock fence.
+    /// 403 on upload/acquire/release - no write permission / lock fence.
     Fence,
-    /// A write surfaced without a confirmed server commit — keep dirty (g7).
+    /// A write surfaced without a confirmed server commit - keep dirty (g7).
     StayDirty,
-    /// Upload-304 — the remote tree is already at this state (benign; the dirty
+    /// Upload-304 - the remote tree is already at this state (benign; the dirty
     /// bit is left unchanged, this is NOT an error).
     UpToDate,
     /// An idempotent 5xx that the transport already retried + exhausted; the FE
@@ -49,7 +49,7 @@ pub enum SpeleoDbAction {
     /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
     /// action channel so the FE never branches on message text.
     Adopt,
-    /// Unmapped / 422 / 4xx we do not model — surface, fail closed.
+    /// Unmapped / 422 / 4xx we do not model - surface, fail closed.
     Fatal,
 }
 
@@ -111,14 +111,14 @@ impl Endpoint {
 ///
 /// Pure + fail-closed: an unmodelled status yields [`SpeleoDbAction::Fatal`].
 /// Per the ledger (D-186): no first-class 423/409/412/429 rows (the server does
-/// not use them — lock contention is acquire-**400**, handled by #194), so they
+/// not use them - lock contention is acquire-**400**, handled by #194), so they
 /// fall through to the Fatal default; 429/Retry-After is intentionally NOT a
 /// `Wait` action (there is no `Wait` in this issue).
 pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
     match status {
         // 401 = real token revocation on every authenticated endpoint. Login is
         // the exception: bad creds come back as 400 (verified), so a 401 cannot
-        // arise from Login and the catch-all below would treat it as Fatal — but
+        // arise from Login and the catch-all below would treat it as Fatal - but
         // we still special-case Login here so it is explicit and 401 never maps
         // to ReLogin for the unauthenticated login call.
         401 if !matches!(endpoint, Endpoint::Login) => SpeleoDbAction::ReLogin,
@@ -132,11 +132,11 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
         // disambiguates it with a whoami probe (`speleodb_token_is_dead`).
         403 if endpoint.is_read() => SpeleoDbAction::ReadOnly,
         403 => SpeleoDbAction::Fence, // UploadAuto / Acquire / Release / CreateProject / Login
-        // Upload-304: the remote tree already matches — benign, dirty bit
+        // Upload-304: the remote tree already matches - benign, dirty bit
         // unchanged. Without this row 304 would fall to the Fatal default.
         304 if matches!(endpoint, Endpoint::UploadAuto) => SpeleoDbAction::UpToDate,
         // 422: defensive unprocessable fatal row. NOTE (verified live): the box
-        // answers a malformed/missing-artifact upload with 400, NOT 422 — that 400
+        // answers a malformed/missing-artifact upload with 400, NOT 422 - that 400
         // has no first-class row and correctly falls to the fail-closed default
         // below. 422 is kept as a defensive mapping in case the server ever uses it.
         422 => SpeleoDbAction::Fatal,
@@ -326,7 +326,7 @@ mod tests {
     fn map_status_whoami_403_is_relogin_but_resource_403_is_not() {
         // Verified live: `/user/` returns 403 for a dead token, so a whoami 403 is
         // the unambiguous dead-token signal → ReLogin. The SAME 403 on a resource
-        // endpoint stays ReadOnly (read) / Fence (write) — it must NOT map to
+        // endpoint stays ReadOnly (read) / Fence (write) - it must NOT map to
         // ReLogin, or a read-only user would be logged out (D-B4); the
         // orchestration disambiguates a resource 403 with a whoami probe.
         assert_eq!(map_status(Endpoint::User, 403), SpeleoDbAction::ReLogin);
@@ -344,7 +344,7 @@ mod tests {
 
     #[test]
     fn map_status_login_401_is_not_relogin() {
-        // Login is unauthenticated — a 401 there (which the live box never sends,
+        // Login is unauthenticated - a 401 there (which the live box never sends,
         // it 400s on bad creds) must not be ReLogin.
         assert_ne!(map_status(Endpoint::Login, 401), SpeleoDbAction::ReLogin);
         assert_eq!(map_status(Endpoint::Login, 401), SpeleoDbAction::Fatal);

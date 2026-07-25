@@ -29,7 +29,7 @@ describe('parseLocaleNumber', () => {
   });
 
   it('dot-fallback: a plain "1.5" typed in a comma-decimal locale parses as 1.5', () => {
-    // The dot is NOT grouping here — "1.5" must never become 15.
+    // The dot is NOT grouping here - "1.5" must never become 15.
     expect(parseLocaleNumber('1.5', 'de-DE')).toBe(1.5);
     // Too many fraction digits for a group → also the dot-fallback.
     expect(parseLocaleNumber('1.2345', 'de-DE')).toBe(1.2345);

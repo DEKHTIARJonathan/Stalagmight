@@ -52,7 +52,7 @@ export const WALLS_EXTENSIONS = ['wpj', 'srv'];
  * dispatch. Extensions are lowercase and WITHOUT a leading dot (matching the
  * Tauri dialog filter shape); the router lowercases the path and adds the dot.
  *
- * `.stalx` (native project) is intentionally NOT here — opening a project is not
+ * `.stalx` (native project) is intentionally NOT here - opening a project is not
  * an import. It lives in `PROJECT_EXTENSION`.
  */
 export const IMPORT_EXTENSIONS = {
@@ -106,7 +106,7 @@ export function gpxOpenFilters() {
 
 /**
  * Filters for importing into an already-open project: DMP only. No "All Files"
- * entry — so a `.stalx` project (or any unrelated file) can't be picked through
+ * entry - so a `.stalx` project (or any unrelated file) can't be picked through
  * an in-project import entry point and mis-routed by the open/import router into
  * loadProject, replacing the open project. GPX and Ariane/Compass create new
  * projects, so they aren't importable into an open one (the router rejects a GPX
@@ -119,10 +119,10 @@ export function dmpImportFilters() {
 
 /**
  * Import picker filters scoped to context. With a project open, only DMP imports
- * into it (DMP-only, no "All Files" — so an unrelated file or a `.stalx` project
+ * into it (DMP-only, no "All Files" - so an unrelated file or a `.stalx` project
  * can't be picked and mis-routed). With no project open, any importable survey
  * format is offered plus "All Files" (so the unified router can also open a
- * native `.stalx` project picked through it — there is nothing to replace).
+ * native `.stalx` project picked through it - there is nothing to replace).
  */
 export function importFiltersForContext(hasProject: boolean) {
   return hasProject ? dmpImportFilters() : importOpenFilters();
@@ -130,7 +130,7 @@ export function importFiltersForContext(hasProject: boolean) {
 
 export function importOpenFilters() {
   return [
-    // Combined "everything importable" entry — derived from IMPORTABLE_EXTENSIONS
+    // Combined "everything importable" entry - derived from IMPORTABLE_EXTENSIONS
     // (the single source of truth) so it can't drift from the per-format rows
     // below or the router's isImportable guard when a new format is added.
     { name: 'Survey Files', extensions: [...IMPORTABLE_EXTENSIONS] },
@@ -195,7 +195,7 @@ export async function saveDialog(options?: SaveDialogOptions): Promise<string | 
     ]);
 
     if (result === 'timeout' || result === null) {
-      // Native dialog hung or was cancelled — fall back to in-app picker
+      // Native dialog hung or was cancelled - fall back to in-app picker
       return result === 'timeout' ? androidSaveDialog(options) : null;
     }
 
@@ -215,7 +215,7 @@ export async function saveDialog(options?: SaveDialogOptions): Promise<string | 
         options = { ...options, defaultPath: `${dir}${sep()}${options.defaultPath}` };
       }
     } catch {
-      // Documents dir unavailable — fall back to the native dialog default.
+      // Documents dir unavailable - fall back to the native dialog default.
     }
   }
 
@@ -249,7 +249,7 @@ function resolveAndroidPath(uri: string): string {
     return `/storage/emulated/0/${decodeURIComponent(primaryMatch[1]!)}`;
   }
 
-  // Can't parse — return as-is and hope for the best
+  // Can't parse - return as-is and hope for the best
   return uri;
 }
 

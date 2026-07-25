@@ -45,7 +45,7 @@
  * deleted layers used): shot line hover 4/2 = 2x, selection 3/2 = 1.5x; station
  * radius hover 6/4 = 1.5x, selection 5/4 = 1.25x. Now the FALLBACK when the config
  * sizes are unavailable (base width/radius non-positive, or the emphasized size
- * unset) — see {@link highlightSizeMul}. The live uniforms (`u_hover_width_mul`
+ * unset) - see {@link highlightSizeMul}. The live uniforms (`u_hover_width_mul`
  * etc.) let independent `map.shot.hover_width` / `selection_width` +
  * `map.station.hover_radius` / `selection_radius` config drive the widths (C2).
  */
@@ -263,7 +263,7 @@ void main() {
   // config drive them (C2). Highlight takes PRECEDENCE over zero-datum sizing
   // (a_size_mul = 2): a hovered/selected zero-datum station uses the highlight
   // size directly, matching the stock precedence (hover 6px / selection 5px, and
-  // the 2x = 8px only when unhighlighted) — NOT a_size_mul * highlight, which
+  // the 2x = 8px only when unhighlighted) - NOT a_size_mul * highlight, which
   // would balloon the entrance station to 12/10px. The fragment recomputes
   // disc/stroke radii from v_size_mul, so no separate fragment change is needed.
   float sizeMul = (a_highlight > 1.5) ? u_hover_size_mul

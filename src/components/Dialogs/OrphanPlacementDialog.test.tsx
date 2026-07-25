@@ -1,5 +1,5 @@
 /**
- * Component test (#107) — OrphanPlacementDialog completion wiring.
+ * Component test (#107) - OrphanPlacementDialog completion wiring.
  *
  * This is the bug-prone "completing X must call Y" path behind #92 (data loss):
  * when the orphan-placement step finishes it MUST persist the import via
@@ -8,7 +8,7 @@
  *
  * The store-level contract of `saveAfterImport` itself is covered by
  * projectStore.saveAfterImport.test.ts; this renders the real dialog and asserts
- * the UI action is actually wired to it — the layer that was previously
+ * the UI action is actually wired to it - the layer that was previously
  * untestable (no component tier) and shipped #92 on manual verification alone.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
@@ -16,7 +16,7 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 // SectionPreview imports maplibre-gl (WebGL) at module load, which jsdom cannot
-// execute. Stub it — this test is about completion wiring, not the preview.
+// execute. Stub it - this test is about completion wiring, not the preview.
 vi.mock('./SectionPreview', () => ({ default: () => null }));
 // Telemetry is fire-and-forget; keep it from reaching Tauri IPC under jsdom.
 vi.mock('../../utils/telemetry', async (importOriginal) => ({
@@ -80,22 +80,22 @@ beforeEach(() => {
   });
 });
 
-describe('OrphanPlacementDialog — completion persists the import (#92 / #107)', () => {
+describe('OrphanPlacementDialog - completion persists the import (#92 / #107)', () => {
   it('accepting the last suggestion saves and closes the dialog', async () => {
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
 
     await userEvent.click(screen.getByTestId('orphan-accept'));
 
-    // closeDialog is finish()'s terminal step — waiting for it guarantees the
+    // closeDialog is finish()'s terminal step - waiting for it guarantees the
     // whole chain ran (refresh → save → close), avoiding a race where we assert
-    // before the awaited save resolves. (finish() can run twice — from
-    // handleAccept and the isFinished effect — so assert "called", not a count.)
+    // before the awaited save resolves. (finish() can run twice - from
+    // handleAccept and the isFinished effect - so assert "called", not a count.)
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
     expect(refreshProjectState).toHaveBeenCalled();
     expect(saveAfterImport).toHaveBeenCalled();
   });
 
-  it('keeps the dialog open when the save fails — no phantom success (#92)', async () => {
+  it('keeps the dialog open when the save fails - no phantom success (#92)', async () => {
     saveAfterImport.mockResolvedValue(false);
 
     render(<OrphanPlacementDialog suggestions={[makeSuggestion()]} />);
@@ -104,7 +104,7 @@ describe('OrphanPlacementDialog — completion persists the import (#92 / #107)'
 
     await waitFor(() => expect(saveAfterImport).toHaveBeenCalled());
     // saveAfterImport resolved false. Flush a full macrotask so finish()'s
-    // post-await continuation runs to completion — a regression that closed the
+    // post-await continuation runs to completion - a regression that closed the
     // dialog *after* awaiting the failed save would fire here and be caught,
     // rather than racing past this assertion.
     await new Promise((resolve) => setTimeout(resolve, 0));

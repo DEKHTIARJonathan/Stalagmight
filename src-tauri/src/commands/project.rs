@@ -87,7 +87,7 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
 }
 
 /// Per-station along-cave distance from a chosen origin station, or from the
-/// zero-datum entrance(s) when `from` is null — backs the distance-gradient
+/// zero-datum entrance(s) when `from` is null - backs the distance-gradient
 /// overlay (#34). Distances are computed on the **closure-adjusted** geometry so
 /// they match the corrected map (falls back to measured when there are no
 /// eligible closures). `distances` are index-aligned with `station_refs`; `null`

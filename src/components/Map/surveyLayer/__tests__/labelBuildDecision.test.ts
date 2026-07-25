@@ -66,7 +66,7 @@ describe('skippedBuildForCamera', () => {
     expect(skippedBuildForCamera(input({ currentlyBuilt: false, zoom: 16, cameraSettled: true }))).toBe(false);
   });
 
-  it('is false when labels are already built (nothing to arm — they are kept)', () => {
+  it('is false when labels are already built (nothing to arm - they are kept)', () => {
     expect(skippedBuildForCamera(input({ currentlyBuilt: true, zoom: 16, cameraSettled: false }))).toBe(false);
   });
 

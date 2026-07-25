@@ -57,16 +57,16 @@ impl AppState {
 
         // Determine can_merge and reason with zero datum priority
         let (can_merge, reason) = if connected {
-            // Already connected — merging would create a survey loop
+            // Already connected - merging would create a survey loop
             (false, Some("Creates survey loop".to_string()))
         } else if a_has_zd && b_has_zd {
-            // Both sections have fixed coordinates — cannot merge
+            // Both sections have fixed coordinates - cannot merge
             (
                 false,
                 Some("Both sections have fixed coordinates".to_string()),
             )
         } else {
-            // Not connected and zero datum check passed — merge allowed
+            // Not connected and zero datum check passed - merge allowed
             (true, None)
         };
 

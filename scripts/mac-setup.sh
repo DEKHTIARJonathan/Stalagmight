@@ -1,5 +1,5 @@
 #!/bin/bash
-# mac-setup.sh — Install development tools on macOS (standalone, idempotent, non-interactive)
+# mac-setup.sh - Install development tools on macOS (standalone, idempotent, non-interactive)
 # Safe to run on any Mac. Skips tools that are already installed.
 set -euo pipefail
 
@@ -54,11 +54,11 @@ if command -v brew &>/dev/null; then
   ok "Already installed at $(command -v brew)"
 else
   if sudo -n true 2>/dev/null; then
-    # Has passwordless sudo — use the standard installer
+    # Has passwordless sudo - use the standard installer
     info "Installing Homebrew (standard)…"
     NONINTERACTIVE=1 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
   else
-    # No sudo — install to $HOME/.homebrew
+    # No sudo - install to $HOME/.homebrew
     info "Installing Homebrew (no-sudo, to ~/.homebrew)…"
     git clone --depth=1 https://github.com/Homebrew/brew "$HOME/.homebrew"
   fi

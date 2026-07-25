@@ -18,13 +18,13 @@ interface PanelOpenerTabProps {
   labels: { open: string; pin: string; unpin: string; close: string };
   /** Show the open-state controls while the panel is visually present (open OR
    *  sliding out), and only fall back to the opener label/arrow once fully
-   *  minified — avoids the tab flickering its contents mid-transition. Defaults
+   *  minified - avoids the tab flickering its contents mid-transition. Defaults
    *  to `reveal.isOpen` when omitted. */
   visuallyOpen?: boolean;
   /** While the panel is being resized, tint the tab border with the accent so
    *  the resize highlight visually wraps around the tab instead of under it. */
   resizing?: boolean;
-  /** The opener (edge bar + this tab) is hovered as a unit — highlight the
+  /** The opener (edge bar + this tab) is hovered as a unit - highlight the
    *  closed tab (lighter bg + brighter text) together with the bar, regardless
    *  of whether the pointer is over the bar or the tab. */
   hovered?: boolean;
@@ -58,7 +58,7 @@ export function PanelOpenerTab({
   // WebKit (the Tauri webview) computes the intrinsic block-size of a vertical
   // `writing-mode` text run once and does NOT recompute it when the page is
   // zoomed (Ctrl+), so the rotated label overflowed the tab on zoom. Measure the
-  // label in NORMAL (horizontal) flow — which is zoom-correct — and pin that as
+  // label in NORMAL (horizontal) flow - which is zoom-correct - and pin that as
   // the vertical label's length, recomputing on resize (zoom fires `resize`).
   const measureRef = useRef<HTMLSpanElement>(null);
   const [labelLen, setLabelLen] = useState<number | null>(null);
@@ -76,7 +76,7 @@ export function PanelOpenerTab({
     return () => window.removeEventListener('resize', update);
   }, [vertical, open, label]);
   // Omit the border on the panel-facing edge and overlap it by 1px (negative
-  // margin) so the tab reads as part of the panel — no seam between them.
+  // margin) so the tab reads as part of the panel - no seam between them.
   const edgeCls =
     edge === 'left'
       ? 'border-y border-r rounded-r -ml-px'

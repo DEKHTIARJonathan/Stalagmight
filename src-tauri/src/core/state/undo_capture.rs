@@ -21,7 +21,7 @@ impl AppState {
 
             // For DeleteSection, capture full project snapshot (before/after pair)
             // because cleanup_section_references removes merges, closures, offsets, and
-            // zero datums — a SectionSnapshot alone cannot restore those.
+            // zero datums - a SectionSnapshot alone cannot restore those.
             // Guard: only serialize if section exists (avoids overhead for doomed commands).
             Command::DeleteSection { section_id } => {
                 if project.get_section(*section_id).is_some() {
@@ -38,7 +38,7 @@ impl AppState {
             }
 
             // For DeleteShot, capture full project snapshot (before/after pair)
-            // because remove_shot shifts station refs — a ShotSnapshot alone cannot
+            // because remove_shot shifts station refs - a ShotSnapshot alone cannot
             // restore the original station references.
             Command::DeleteShot {
                 section_id,
@@ -149,7 +149,7 @@ impl AppState {
             // the groups, cascade_connection_offsets re-anchors any section reachable
             // through an ALIGNED loop closure (cascade phase 2), and such a section is
             // in neither merge group. A lightweight MergeInfo only restores the two
-            // groups' offsets, so that external section stays drifted on undo — and
+            // groups' offsets, so that external section stays drifted on undo - and
             // realign_merges() cannot self-heal it (it checks merge alignment only,
             // never closures). So capture a full before/after pair (like
             // Delete/Unmerge); undo then restores EVERY section_offset the cascade
@@ -176,13 +176,13 @@ impl AppState {
             // For unmerge, we need to know which stations to re-merge
             // Also capture closures that will be removed during unmerge
             // Unmerge removes a merge edge, which can strand a section so its sole
-            // remaining bridge is a loop closure — execute() then converts that
+            // remaining bridge is a loop closure - execute() then converts that
             // closure into a merge and re-derives offsets (#8). A lightweight
             // UnmergeInfo can only re-create the removed merge; it cannot reverse
             // that conversion (the closure would stay a merge, forming a cycle) or
             // restore the pre-unmerge offsets. So capture a full before/after pair
             // (matching DeleteShot/DeleteSection, which trigger the same side
-            // effect) — undo then restores the merge AND the converted closure AND
+            // effect) - undo then restores the merge AND the converted closure AND
             // the original positions atomically.
             Command::UnmergeStations { station_ref } => {
                 let involved = project.station_merges.iter().any(|m| {
@@ -314,7 +314,7 @@ impl AppState {
             // Move commands use inverse commands
             // MoveSection and MoveSegment both move the whole rigid-connected group
             // (MoveSection delegates to move_segment), so both capture every affected
-            // section and its previous offset at execution time — undo/redo stays
+            // section and its previous offset at execution time - undo/redo stays
             // correct even if the connectivity graph changes later. Filter to existing
             // sections to avoid stale merges/closures referencing deleted sections
             // (matches move_segment()'s own filtering).
@@ -341,7 +341,7 @@ impl AppState {
             // MoveStation rewrites the raw geometry of the two adjacent shots and can,
             // through reconcile, re-anchor sections connected by merges/aligned closures.
             // A lightweight StationMoveInfo captured only azimuth/length/depth of two
-            // shots and one section offset — it dropped pitch/lrud/temperature and any
+            // shots and one section offset - it dropped pitch/lrud/temperature and any
             // re-cascaded section. Capture a full before/after pair (like Merge/Unmerge)
             // so undo restores every field and every offset the move could have touched.
             Command::MoveStation {

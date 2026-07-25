@@ -16,11 +16,11 @@ interface ElidedPathProps {
  * leading folders collapse to single letters, then the middle is truncated with
  * `…`, with the filename always kept whole (see {@link pathElisionCandidates}).
  *
- * Fitting is pixel-based — the candidate is chosen by measuring against the
+ * Fitting is pixel-based - the candidate is chosen by measuring against the
  * element's real width using the element's computed font, re-fitting on resize.
  *
  * When the path is abbreviated, hovering reveals the full path by scrolling it
- * (marquee) within the same clip box — no tooltip — for as long as the pointer
+ * (marquee) within the same clip box - no tooltip - for as long as the pointer
  * stays over it. The scrolling copy is absolutely positioned, so it never widens
  * its container (e.g. it won't stretch a table column).
  */
@@ -42,7 +42,7 @@ export function ElidedPath({
       const available = el.clientWidth;
       const candidates = pathElisionCandidates(path);
       if (available <= 0) {
-        // Not yet laid out — show the full path until we can measure.
+        // Not yet laid out - show the full path until we can measure.
         setDisplay(candidates[0] ?? path);
         return;
       }

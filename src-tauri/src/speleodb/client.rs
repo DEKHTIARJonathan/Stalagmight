@@ -5,7 +5,7 @@
 //! attempt with a global timeout, and a retry loop over transient failures. The
 //! agent is configured with `http_status_as_error(false)` so non-2xx responses
 //! are returned (not turned into errors) and this module branches on the status
-//! itself — the shape #186's status→action table builds on.
+//! itself - the shape #186's status→action table builds on.
 //!
 //! Auth uses `Authorization: Bearer <token>` (verified: `BearerAuthentication`,
 //! `authentication.py:59`).
@@ -15,7 +15,7 @@
 //!   every request before the first attempt, then runs the closure with backoff.
 //! - The closure returns `(status, body)` so a 5xx is visible to the retry loop.
 //!   Idempotent (read-like) calls retry a transient 5xx; non-idempotent writes
-//!   (`idempotent == false`) run **exactly once** — a mid-response failure must
+//!   (`idempotent == false`) run **exactly once** - a mid-response failure must
 //!   never double-submit a commit / lock / create.
 
 use std::path::{Path, PathBuf};
@@ -34,10 +34,10 @@ use super::SpeleoDbError;
 /// Global per-request timeout for reads. Larger than the tile timeout because a
 /// project dump (whole working tree as a ZIP) can be bigger than a single tile.
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
-/// Upload (multipart `PUT`) timeout — a full `.stalx` + `.tml` push is larger and
+/// Upload (multipart `PUT`) timeout - a full `.stalx` + `.tml` push is larger and
 /// slower than a read, so it gets its own, longer budget (D-A-methods).
 // (Referenced by `upload_auto`, so rustc does not flag it dead even while that
-// method's orchestration caller is pending — no dead_code expectation needed.)
+// method's orchestration caller is pending - no dead_code expectation needed.)
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// Transient-transport retries (total attempts = 1 + MAX_RETRIES).
 const MAX_RETRIES: u32 = 2;
@@ -86,9 +86,9 @@ fn bearer(token: &str) -> String {
 /// `Err` is transport-level (DNS, timeout, connection reset, mid-body read).
 /// Retry rules (D-A-retry / D-B3):
 /// - `idempotent` reads retry a transport `Err` **and** an idempotent 5xx (read
-///   the body, treat a 500–599 like a transient error).
+///   the body, treat a 500-599 like a transient error).
 /// - non-idempotent writes (`idempotent == false`, `max_retries == 0`) run
-///   exactly once and surface a 5xx straight through — retrying could
+///   exactly once and surface a 5xx straight through - retrying could
 ///   double-submit (the response failure can land after the server committed).
 fn with_retry(
     base: &str,
@@ -235,7 +235,7 @@ struct AuthTokenResponse {
     token: String,
 }
 
-/// `POST /api/v2/user/auth-token/` — exchange email+password for a token.
+/// `POST /api/v2/user/auth-token/` - exchange email+password for a token.
 ///
 /// Note (verified against the live box): bad credentials return **400** with
 /// `{errors: {non_field_errors: [...]}}`, not 401. On an authenticated endpoint a
@@ -267,7 +267,7 @@ pub(crate) fn login(
     Ok(parsed.token)
 }
 
-/// `GET /api/v2/projects/` — list the projects visible to the token holder.
+/// `GET /api/v2/projects/` - list the projects visible to the token holder.
 pub(crate) fn list_projects(
     base: &str,
     token: &str,
@@ -292,7 +292,7 @@ pub(crate) fn list_projects(
     serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("projects list: {e}")))
 }
 
-/// `GET /api/v2/projects/{id}/` — fetch a single project (D-B11, #185). A ~10-line
+/// `GET /api/v2/projects/{id}/` - fetch a single project (D-B11, #185). A ~10-line
 /// mirror of [`list_projects`] parsing one bare [`Project`]. The caller validates
 /// `project_id` (UUID) before calling. Consumed by #194 start_editing (the
 /// lock-holder re-GET) and #202 (the freshness fold).
@@ -370,7 +370,7 @@ fn get_project_inner(
     serde_json::from_slice(&body).map_err(|e| SpeleoDbError::Parse(format!("project detail: {e}")))
 }
 
-/// `GET /api/v2/projects/{id}/revisions/` — the project's linear commit history
+/// `GET /api/v2/projects/{id}/revisions/` - the project's linear commit history
 /// (#193). Used by guardrail-7 ancestry recovery to decide, after a push whose
 /// confirmation was lost, whether our edit actually landed on the server. The
 /// caller validates `project_id` (UUID) first. A GET, so it is retry-safe.
@@ -405,7 +405,7 @@ struct UserInfo {
     email: String,
 }
 
-/// `GET /api/v2/user/` — return the authenticated user's email. The token-paste
+/// `GET /api/v2/user/` - return the authenticated user's email. The token-paste
 /// login path uses this to derive the authoritative email from the token itself
 /// (instead of trusting typed input) and, as a side effect, to validate the
 /// token at login time: a bad/expired token 401s here rather than slipping
@@ -433,7 +433,7 @@ pub(crate) fn fetch_user_email(
     Ok(info.email)
 }
 
-/// `GET /api/v2/projects/{id}/download/dump/` — download the project's working
+/// `GET /api/v2/projects/{id}/download/dump/` - download the project's working
 /// tree (HEAD) as a ZIP. Returns the raw ZIP bytes for [`super::dump`] to handle.
 pub(crate) fn download_dump(
     base: &str,
@@ -496,7 +496,7 @@ fn parse_project(body: &[u8], context: &str) -> Result<Project, SpeleoDbError> {
 
 /// MIME type for an artifact part, by extension (D-A-mime). The server selects
 /// the processor by *extension* via the AUTO catch-all, but then validates the
-/// part's `Content-Type` against that processor's allow-list — so for `.tml` the
+/// part's `Content-Type` against that processor's allow-list - so for `.tml` the
 /// explicit MIME is **REQUIRED, not just robustness**: `ArianeTMLFileProcessor`
 /// allows only `application/octet-stream` / `application/zip` (no `text/plain`),
 /// and a bare `.tml` part is rejected with HTTP 400 (OPEN-1, resolved live at
@@ -530,7 +530,7 @@ struct UploadParts {
 
 /// Build the multipart descriptor for an `upload/auto/` push: one `artifact` part
 /// per file (never `artifact[]`), each with an explicit per-extension MIME, plus
-/// the commit message. Rejects a blank message at the boundary (D-A-methods) — it
+/// the commit message. Rejects a blank message at the boundary (D-A-methods) - it
 /// does NOT substitute a placeholder like the spike's seed helper did.
 fn build_upload_parts(
     stalx: &Path,
@@ -543,13 +543,13 @@ fn build_upload_parts(
         ));
     }
     let part = |src: &Path, wire_name: &str| UploadPart {
-        // Both parts are named "artifact" (repeated), NEVER "artifact[]" — the
+        // Both parts are named "artifact" (repeated), NEVER "artifact[]" - the
         // server expects repeated same-named parts, not bracket-indexed ones.
         name: "artifact",
         // The multipart filename is the CANONICAL server-side name, decoupled from
         // the local source path's basename. The server's upload/auto/ is additive
         // (it `git add`s each uploaded file by its name onto ToT), so the `.stalx`
-        // MUST always land as `project.stalx` — else a push from the scratch
+        // MUST always land as `project.stalx` - else a push from the scratch
         // `snapshot.stalx` would commit a SECOND `.stalx` beside the canonical one,
         // and the next download_dump would be an ambiguous multi-`.stalx` repo.
         file_name: wire_name.to_owned(),
@@ -562,7 +562,7 @@ fn build_upload_parts(
     })
 }
 
-/// `PUT /api/v2/projects/{id}/upload/auto/` — push the project's `.stalx` and its
+/// `PUT /api/v2/projects/{id}/upload/auto/` - push the project's `.stalx` and its
 /// co-derived `ariane.tml` as a single multipart commit, returning the parsed
 /// [`Project`] (its `latest_commit.id` is the adopted hexsha for #186 step 5).
 ///
@@ -608,18 +608,18 @@ pub(crate) fn upload_auto(
         return Err(status_error(status, &body));
     }
     // CONDITIONAL CLEAR (#191): the adopted hexsha is the edit-epoch the
-    // comparison that clears has_unpushed_edits is owned by #191 — do NOT clear
+    // comparison that clears has_unpushed_edits is owned by #191 - do NOT clear
     // the dirty bit unconditionally here.
     // FRESHNESS FOLD (#189/#191): authoritative Project available here; cache +
     // reset last_verify_at lands later (D-B1, #202).
     //
-    // The upload/auto success body is an ENVELOPE — `{ files, message, hexsha,
-    // browser_url, project: {…} }` — with the Project NESTED under `project`
+    // The upload/auto success body is an ENVELOPE - `{ files, message, hexsha,
+    // browser_url, project: {…} }` - with the Project NESTED under `project`
     // (verified live; a bare `parse_project` here failed with "missing field
     // `id`"). The authoritative SHA of the commit THIS push created is the
     // TOP-LEVEL `hexsha`. The nested `project.latest_commit` is
     // eventually-consistent and was observed live still pointing at the PRIOR tip
-    // (the service-account root creation commit) immediately after a push — so we
+    // (the service-account root creation commit) immediately after a push - so we
     // adopt `hexsha`, not the nested pointer, and overwrite `latest_commit` with
     // it so every caller's `latest_commit.id` is the commit just created (#197).
     parse_upload_auto_response(&body)
@@ -629,7 +629,7 @@ pub(crate) fn upload_auto(
 /// top-level `hexsha` is the SHA of the commit THIS push created; prefer it and
 /// overwrite `latest_commit` so callers adopt the right BASE. If a deployment
 /// omits the top-level `hexsha`, fall back to the nested `project.latest_commit`
-/// rather than failing an ACCEPTED (200) push as a Parse/Fatal error — that would
+/// rather than failing an ACCEPTED (200) push as a Parse/Fatal error - that would
 /// strand the dirty bit forever (#197 review); a slightly-stale BASE self-heals via
 /// the ancestry fence on the next Sync.
 fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
@@ -648,7 +648,7 @@ fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
     Ok(project)
 }
 
-/// `POST /api/v2/projects/{id}/acquire/` — take the project mutex, returning the
+/// `POST /api/v2/projects/{id}/acquire/` - take the project mutex, returning the
 /// updated [`Project`]. The upload endpoint requires the caller to hold the lock
 /// (`UserOwnsProjectMutex`). `idempotent = false`. Consumed by #194
 /// `speleodb_start_editing`.
@@ -668,7 +668,7 @@ pub(crate) fn acquire_lock(
     )
 }
 
-/// `POST /api/v2/projects/{id}/release/` — release the project mutex, returning
+/// `POST /api/v2/projects/{id}/release/` - release the project mutex, returning
 /// the updated [`Project`]. `idempotent = false`. Consumed by #194/#197.
 pub(crate) fn release_lock(
     base: &str,
@@ -686,7 +686,7 @@ pub(crate) fn release_lock(
     )
 }
 
-/// `DELETE /api/v2/user/release_all_locks/` — release EVERY write lock the token
+/// `DELETE /api/v2/user/release_all_locks/` - release EVERY write lock the token
 /// holder currently holds, returning `()` on success. Idempotent (releasing when
 /// none are held is a no-op), so a transient-transport retry is safe. Drives the
 /// held-lock resume/release prompt's "Release all" choice (#201, B1).
@@ -710,7 +710,7 @@ pub(crate) fn release_all_locks(
     Ok(())
 }
 
-/// `PATCH /api/v2/projects/{id}/` — update project metadata, returning the updated
+/// `PATCH /api/v2/projects/{id}/` - update project metadata, returning the updated
 /// [`Project`]. Non-idempotent (`idempotent = false`) so a mid-response transport
 /// failure can't double-apply. Consumed by #200's Enable-rendering action (PATCH
 /// `exclude_geojson = false`); the server enforces permission (READ_AND_WRITE, no
@@ -1163,7 +1163,7 @@ mod tests {
     #[test]
     fn revisions_payload_decodes_verified_v2_field_names() {
         // The whole sync engine keys off the /revisions/ field names `parent_ids` and
-        // `author_email`, both #[serde(default)] — so a RENAMED server key would
+        // `author_email`, both #[serde(default)] - so a RENAMED server key would
         // SILENTLY default (parent_ids=[] → every commit reads as a root → tip None →
         // fail closed; author_email="" → stranger → Diverged) with no parse error. The
         // only other decode of a real payload is the #[ignore] live test, so this
@@ -1207,7 +1207,7 @@ mod tests {
     fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
         // #197 review: a top-level hexsha is the commit THIS push created → adopt it.
         // But a 200 envelope WITHOUT a top-level hexsha must NOT fail as Parse/Fatal
-        // (which would strand the dirty bit) — fall back to the nested latest_commit.
+        // (which would strand the dirty bit) - fall back to the nested latest_commit.
         let proj = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Up","latest_commit":{"id":"nested-prior"}}"#;
 
         let with = format!("{{\"hexsha\":\"top-new\",\"project\":{proj}}}");
@@ -1329,7 +1329,7 @@ mod tests {
     #[test]
     fn parse_error_message_is_display_only() {
         // Guards the #186 invariant at the unit level: parse_error_message only
-        // ever yields a display STRING — it never returns or implies an action.
+        // ever yields a display STRING - it never returns or implies an action.
         // (The action is a pure fn of (endpoint, status); see contract.rs.)
         let m = parse_error_message(br#"{"detail":"forbidden"}"#);
         assert_eq!(m.as_deref(), Some("forbidden"));
@@ -1338,7 +1338,7 @@ mod tests {
     #[test]
     fn upload_parts_both_named_artifact_never_bracketed() {
         // The `.stalx` source is the scratch SNAPSHOT path (its real basename in the
-        // push pipeline) — the wire filename MUST still be the canonical
+        // push pipeline) - the wire filename MUST still be the canonical
         // `project.stalx`, NOT the source basename. The server is additive, so a
         // `snapshot.stalx` wire name would commit a second `.stalx` and corrupt the
         // repo into an ambiguous multi-`.stalx` dump. (Regression: this test used to
@@ -1447,7 +1447,7 @@ mod tests {
     #[test]
     fn with_retry_reads_retry_transient_then_succeed() {
         // An idempotent read whose closure fails transiently the first time then
-        // succeeds returns Ok — over a loopback base so tls::enforce allows it.
+        // succeeds returns Ok - over a loopback base so tls::enforce allows it.
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
         let out = with_retry(
@@ -1518,7 +1518,7 @@ mod tests {
     #[test]
     fn with_retry_writes_run_exactly_once() {
         // A non-idempotent write whose closure 5xxs runs ONCE and returns the 5xx
-        // straight through (no retry — double-submit hazard).
+        // straight through (no retry - double-submit hazard).
         let n = Arc::new(AtomicUsize::new(0));
         let c = Arc::clone(&n);
         let out = with_retry(
@@ -1581,7 +1581,7 @@ mod tests {
                     };
                     // Drain the whole request (request line + headers + any
                     // multipart body) by reading with a short timeout until the
-                    // socket goes quiet — the body can arrive in a TCP segment
+                    // socket goes quiet - the body can arrive in a TCP segment
                     // after the headers, so a single read would miss it.
                     use std::io::Read as _;
                     let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
@@ -1589,7 +1589,7 @@ mod tests {
                     let mut chunk = vec![0u8; 16 * 1024];
                     loop {
                         match stream.read(&mut chunk) {
-                            // Peer closed write half — request fully delivered.
+                            // Peer closed write half - request fully delivered.
                             Ok(0) => break,
                             Ok(n) => captured_bytes.extend_from_slice(&chunk[..n]),
                             // WouldBlock/TimedOut (read timeout): the client is now
@@ -1667,7 +1667,7 @@ mod tests {
     #[test]
     fn loopback_multipart_parts_on_the_wire() {
         // The real multipart PUT must carry two `name="artifact"` parts with their
-        // explicit Content-Type headers — asserted against the captured bytes.
+        // explicit Content-Type headers - asserted against the captured bytes.
         let dir = tempfile::tempdir().expect("tempdir");
         let stalx = dir.path().join("project.stalx");
         let tml = dir.path().join("ariane.tml");
@@ -1688,7 +1688,7 @@ mod tests {
             "wire test",
         );
         stub.join();
-        // The stub returns `{}` which lacks id/name, so parsing fails — that's
+        // The stub returns `{}` which lacks id/name, so parsing fails - that's
         // fine; we only care about the bytes on the wire.
         let _ = project;
         let captured = stub.captured();

@@ -43,7 +43,7 @@ test.describe('Window Close Protection', () => {
 
   /**
    * Wait until the DMP import workflow settles into a state the driver loop can
-   * act on — an actionable wizard sub-step or the map placement overlay — or
+   * act on - an actionable wizard sub-step or the map placement overlay - or
    * until it finishes (the wizard closes). Returning on completion is what keeps
    * finishSingleSectionImport from hanging when the last section lands while the
    * loop is between point-in-time checks: the previous implementation waited only

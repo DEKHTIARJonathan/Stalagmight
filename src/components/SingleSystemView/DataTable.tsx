@@ -74,7 +74,7 @@ const ANGLE_FAMILY_KEYS = {
 } as const;
 
 /** Stations-view column groups in the eye menu / header hide entries (plain
- *  hide — no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
+ *  hide - no angle modes). X/Y toggle together as "Coordinates (m)", lat/long
  *  as the GPS pair. The index pill lives in the gutter, so it never hides. */
 const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
   { keys: ['_x', '_y'], nameKey: 'coordsMeters' },
@@ -86,7 +86,7 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
 ];
 
 /** Coordinate columns hidden by default (matches the backend serde default),
- *  used only as the pre-config-load initial state — once the persisted config
+ *  used only as the pre-config-load initial state - once the persisted config
  *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
@@ -124,7 +124,7 @@ function SubHeaderPickerMenu({
     align: 'center',
     gap: 4,
     width: 208, // px; the hook also sets this as the list width (single source of truth)
-    maxHeightCap: 256, // matches the old max-h-64 — stay compact + scroll on a tall window
+    maxHeightCap: 256, // matches the old max-h-64 - stay compact + scroll on a tall window
     // The raw-table submenu feeds async rawTables through `options`: it opens on
     // a single disabled "loading" row, then swaps to N rows once the load
     // resolves. Signal that resize so the hook re-places instead of sticking to
@@ -207,7 +207,7 @@ function SubHeaderPickerMenu({
  * Centers a sub-header pill across the full width WITHOUT a CSS `transform`. A
  * transformed ancestor would make the picker's `position:fixed` list resolve
  * against this box instead of the viewport, re-introducing the Dock-clip the fix
- * escapes (#162) — so we center with flex, not `-translate-x-1/2`. The band is
+ * escapes (#162) - so we center with flex, not `-translate-x-1/2`. The band is
  * `pointer-events-none` so it can't eat clicks on the surrounding sub-header
  * controls; the inner wrapper re-enables them for the pill itself.
  */
@@ -378,7 +378,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
     if (!selectionChanged) {
       // A table-internal re-dispatch of the SAME selection (e.g. keyboard
-      // column moves re-selecting the active shot) still consumed its event —
+      // column moves re-selecting the active shot) still consumed its event -
       // a stale flag here would swallow the next genuinely external selection.
       if (referenceChanged && internalSelectionRef.current) {
         internalSelectionRef.current = false;
@@ -564,7 +564,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // declaration order. Persisted with the rest of the view state below.
   const [shotColumnOrder, setShotColumnOrder] = useState<string[]>([]);
 
-  // Column visibility. Azimuth/inclination are tri-state —
+  // Column visibility. Azimuth/inclination are tri-state -
   // the average column, the in/out leg pair, or neither; the raw ID columns
   // start hidden; L/R/U/D toggle as one LRUD group.
   const [azimuthMode, setAzimuthMode] = useState<'avg' | 'inout' | 'off'>('avg');
@@ -682,7 +682,7 @@ export default function DataTable({ sections }: DataTableProps) {
     setShotColumnOrder(panelsConfig.data_table_shot_column_order);
     // The persisted list is authoritative: the backend fills a missing/legacy
     // config with the coordinate-column defaults (serde default), so an EMPTY
-    // array genuinely means the user unhid every station column ("show all") —
+    // array genuinely means the user unhid every station column ("show all") -
     // it must not be re-defaulted, or that preference could never persist.
     const stationHidden = panelsConfig.data_table_station_hidden_columns;
     setHiddenStationCols(new Set(stationHidden));
@@ -776,7 +776,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // The grid's row list: shots interleaved with draft rows (drafts hidden in
   // the read-only closure-adjusted view). EVERY grid row index maps through
-  // here — never into the shots array directly.
+  // here - never into the shots array directly.
   const rowEntries = useMemo(
     (): RowEntry[] =>
       selectedSection ? interleaveRows(selectedSection.shots, editingBlocked ? [] : drafts) : [],
@@ -796,7 +796,7 @@ export default function DataTable({ sections }: DataTableProps) {
         if (draft.key !== key) return draft;
         const d: Record<string, unknown> = { ...draft.data };
         // `undefined` means "drop the field" (a required cell cleared back to
-        // missing) — delete the key so completeDraftData/draftMissing treat it
+        // missing) - delete the key so completeDraftData/draftMissing treat it
         // as absent and a stale value can't survive into the committed shot. A
         // `null` (cleared optional, e.g. inclination) is kept as an explicit
         // clear. The avg columns fan out to both legs.
@@ -869,7 +869,7 @@ export default function DataTable({ sections }: DataTableProps) {
     [draftMissingByKey]
   );
 
-  // Commit a draft once its required fields are present — one at a time; the
+  // Commit a draft once its required fields are present - one at a time; the
   // refresh after create_shot re-runs the effect for the next complete one.
   const draftCommitting = useRef(false);
   useEffect(() => {
@@ -984,7 +984,7 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, editingBlocked, drafts]
   );
 
-  // "Remove draft row" appears when the selection covers draft rows only —
+  // "Remove draft row" appears when the selection covers draft rows only -
   // discarding a draft never asks for confirmation (nothing is stored yet).
   // "Insert Station..." appears for a single selected real shot row long
   // enough to split (#59) - the data table's live equivalent of the map
@@ -1049,7 +1049,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Delete on a gutter-selected range (or the context menu's "Delete rows"):
   // draft rows in the range are discarded outright (the end draft resets, no
-  // confirm — nothing is stored yet). A single real shot routes through the
+  // confirm - nothing is stored yet). A single real shot routes through the
   // shared position-aware helper (split-vs-shift choice for mid shots), matching
   // the detail panel / map. A contiguous run of >1 real shot opens the
   // bulk-delete flow (or the section-delete confirm when the whole section is
@@ -1095,7 +1095,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
       const { kind } = deriveRangeDeleteParams(firstIdx, lastIdx, total);
       if (kind === 'whole') {
-        // Deleting every shot removes the section — reuse the section confirm.
+        // Deleting every shot removes the section - reuse the section confirm.
         openDialog('confirm-delete', {
           type: 'section',
           sectionId: selectedSection.id,
@@ -1122,7 +1122,7 @@ export default function DataTable({ sections }: DataTableProps) {
     (shot: Shot) => {
       if (!selectedSection || editingBlocked) return;
       if (shot.id < 0) {
-        // A draft row — its id is the draft key.
+        // A draft row - its id is the draft key.
         applyDraftEdit(shot.id, 'is_reference', !shot.is_reference);
         return;
       }
@@ -1241,7 +1241,7 @@ export default function DataTable({ sections }: DataTableProps) {
   );
 
   // --- Stations view (SpreadsheetGrid) --------------------------------------
-  // Stations are derived from shots, so only the comment is editable — a
+  // Stations are derived from shots, so only the comment is editable - a
   // single edit per commit (set_station_comment has no batch form, so the
   // grid gets no onBatchEdit).
   const onStationEdit = useCallback(
@@ -1292,8 +1292,8 @@ export default function DataTable({ sections }: DataTableProps) {
     return idx >= 0 ? idx : null;
   }, [stationScrollToKey, sectionStations]);
 
-  // GPS (zero-datum) cell click: a station that already is — or is merged
-  // with — a zero datum opens the dialog in plain edit mode; the rest open in
+  // GPS (zero-datum) cell click: a station that already is - or is merged
+  // with - a zero datum opens the dialog in plain edit mode; the rest open in
   // add-zero-datum mode with the GPS input enabled and focused.
   const handleGpsCellClick = useCallback(
     (station: Station) => {
@@ -1462,8 +1462,8 @@ export default function DataTable({ sections }: DataTableProps) {
   // dataTableHeight, so it must be measured.
   const [fullScreenGridHeight, setFullScreenGridHeight] = useState<number | null>(null);
   // Chrome height above the grid body (the toolbar row). Cached so the DOCKED grid
-  // height can be derived directly from the live dataTableHeight — one render per
-  // resize tick, with NO measure→setState→re-render round-trip — while staying exact
+  // height can be derived directly from the live dataTableHeight - one render per
+  // resize tick, with NO measure→setState→re-render round-trip - while staying exact
   // (the chrome is constant during a vertical drag). The ResizeObserver refreshes it
   // only when it actually changes (toolbar wrap), guarded against sub-pixel churn so
   // a drag doesn't re-render the table via this state.
@@ -1499,7 +1499,7 @@ export default function DataTable({ sections }: DataTableProps) {
     ? fullScreenGridHeight ?? Math.max(MIN_GRID_HEIGHT, dataTableHeight - CHROME_OFFSET_DEFAULT)
     : Math.max(MIN_GRID_HEIGHT, dataTableHeight - chromeOffset);
 
-  // Unconditional hide (header right-click) — unlike the menu checkbox toggle.
+  // Unconditional hide (header right-click) - unlike the menu checkbox toggle.
   const hideShotCols = useCallback((keys: string[]) => {
     setHiddenShotCols((prev) => new Set([...prev, ...keys]));
   }, []);
@@ -1509,7 +1509,7 @@ export default function DataTable({ sections }: DataTableProps) {
 
   // Switch an angle family's mode, putting the newly shown columns in the slot
   // of the ones they replace (Avg ↔ In+Out swap in place). Transitions through
-  // Off keep every slot — hidden columns remember their position in the order.
+  // Off keep every slot - hidden columns remember their position in the order.
   const changeAngleMode = useCallback(
     (family: 'azimuth' | 'inclination', next: 'avg' | 'inout' | 'off') => {
       const current = family === 'azimuth' ? azimuthMode : inclinationMode;
@@ -1577,7 +1577,7 @@ export default function DataTable({ sections }: DataTableProps) {
     return items;
   }, [headerMenu, tableView, t, changeAngleMode, hideShotCols, shotColumns, stationColumns, hideStationCols]);
 
-  // Rows of the column-visibility menu: a checkbox per column (or group — the
+  // Rows of the column-visibility menu: a checkbox per column (or group - the
   // LRUD keys toggle together), and a tri-state Avg / In+Out / Off control for
   // the azimuth and inclination column families. The menu serves whichever
   // view is active, so the checkboxes read/write that view's hidden set.

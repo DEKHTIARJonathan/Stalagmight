@@ -693,7 +693,7 @@ test.describe('Zoom Tool', () => {
       expect(initialZoom).not.toBeNull();
 
       // Scroll up (zoom in). Poll for the zoom to actually change rather
-      // than sleeping a fixed 400ms — the scroll-zoom animation settles at
+      // than sleeping a fixed 400ms - the scroll-zoom animation settles at
       // different rates under load (xvfb / 1 worker), which made the old
       // fixed wait flake even on master (issue #15).
       await page.mouse.wheel(0, -100);
@@ -719,7 +719,7 @@ test.describe('Zoom Tool', () => {
       const initialZoom = await getMapZoom(page);
       expect(initialZoom).not.toBeNull();
 
-      // Scroll up (zoom in) while in select mode — poll for the change
+      // Scroll up (zoom in) while in select mode - poll for the change
       // instead of a fixed sleep (see "scroll wheel zooms in and out").
       await page.mouse.wheel(0, -100);
       const newZoom = await waitForZoomChange(page, initialZoom!, 'in');

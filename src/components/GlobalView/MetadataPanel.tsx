@@ -369,7 +369,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
                 testId="metadata-location"
               />
 
-              {/* File Path — abbreviated to fit; scrolls in full on hover. */}
+              {/* File Path - abbreviated to fit; scrolls in full on hover. */}
               <MetadataField
                 label={t('globalView.metadata.fields.file')}
                 value={singleProject.file_path}

@@ -1,5 +1,5 @@
 /**
- * Unit test — the SpeleoDB push/unlock verbs flush the survey to disk so the
+ * Unit test - the SpeleoDB push/unlock verbs flush the survey to disk so the
  * projectStore's `isDirty` flag clears immediately.
  *
  * Regression guard: a confirmed push/unlock already persists the survey to disk
@@ -47,7 +47,7 @@ beforeEach(() => {
   useUIStore.setState({ showToast: vi.fn() });
 });
 
-describe('useSpeleoActions — flush to disk after a confirmed push/unlock', () => {
+describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () => {
   it('unlock (done → released) saves the project to disk (quiet autosave)', async () => {
     invokeIpcMock.mockResolvedValue({ kind: 'released' });
     const { result } = renderHook(() => useSpeleoActions());
@@ -104,7 +104,7 @@ describe('useSpeleoActions — flush to disk after a confirmed push/unlock', () 
       outcome = await result.current.done();
     });
 
-    // The unlock still reports success and no error toast is raised — the flush
+    // The unlock still reports success and no error toast is raised - the flush
     // is best-effort and isDirty simply stays set (safe: the push already
     // persisted the same edits).
     expect(outcome).toEqual({ kind: 'released' });

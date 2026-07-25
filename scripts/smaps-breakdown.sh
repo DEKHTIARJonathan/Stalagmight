@@ -2,16 +2,16 @@
 # Categorize a process's VM mappings by purpose using /proc/PID/smaps.
 #
 # Buckets:
-#   code     — file-backed executable
-#   rodata   — file-backed read-only data
-#   data     — file-backed read-write data
-#   stack    — [stack:tid] mappings
-#   heap     — [heap] (libc malloc small allocations)
-#   shm      — /memfd:/SYSV/dev/shm
-#   bmalloc  — anon mappings sized in 2 MB (1 << 21) chunks (JSC bmalloc)
-#   jsc-iso  — anon mappings sized in 16 MB (1 << 24) chunks (JSC IsoHeap)
-#   big-anon — anon mappings ≥ 64 MB (typed arrays, image buffers, MapLibre)
-#   small-anon — anon mappings < 2 MB (everything else: thread stacks, libc arena)
+#   code     - file-backed executable
+#   rodata   - file-backed read-only data
+#   data     - file-backed read-write data
+#   stack    - [stack:tid] mappings
+#   heap     - [heap] (libc malloc small allocations)
+#   shm      - /memfd:/SYSV/dev/shm
+#   bmalloc  - anon mappings sized in 2 MB (1 << 21) chunks (JSC bmalloc)
+#   jsc-iso  - anon mappings sized in 16 MB (1 << 24) chunks (JSC IsoHeap)
+#   big-anon - anon mappings ≥ 64 MB (typed arrays, image buffers, MapLibre)
+#   small-anon - anon mappings < 2 MB (everything else: thread stacks, libc arena)
 # Within each bucket we report cumulative VirtualSize and Rss.
 #
 # Usage: smaps-breakdown.sh PID

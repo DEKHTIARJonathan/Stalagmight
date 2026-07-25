@@ -61,7 +61,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
   const isImportable = IMPORTABLE_EXTENSIONS.some((ext) => lowerPath.endsWith(`.${ext}`));
 
   // A dialog (or the terminal command it triggers) now owns the pending entry-
-  // point source's lifetime — leave it set so that flow can apply it on
+  // point source's lifetime - leave it set so that flow can apply it on
   // completion (or drop it on cancel via checkDialogCancel). EVERY other path
   // (abandon, guard-rejected, parse-null, unsupported, error) drops the source
   // in the finally below, so it can't mis-attribute a later, unrelated project
@@ -185,7 +185,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // mNemo DMP: import into the current project, or seed a new one.
       const dmpFile = await store.importDmp(path);
       if (!dmpFile) return;
-      // Re-read project state fresh after the parse — the existing/new-project
+      // Re-read project state fresh after the parse - the existing/new-project
       // decision must reflect the project as it is NOW, not the snapshot taken
       // before the await (a switch could have landed during the parse).
       if (useProjectStore.getState().project) {
@@ -201,7 +201,7 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       }
       handedOff = true;
     } else {
-      // Unknown/unsupported extension — don't blindly assume DMP (that fed
+      // Unknown/unsupported extension - don't blindly assume DMP (that fed
       // arbitrary files chosen via an "All Files" filter to the DMP parser).
       ui.openDialog('error', {
         title: errorTitle,
@@ -236,7 +236,7 @@ export async function pickAndRoute(
   try {
     selected = await open({ multiple: false, filters });
   } catch (err) {
-    // The native picker itself failed (plugin/permission error) — `open()`
+    // The native picker itself failed (plugin/permission error) - `open()`
     // rejects rather than resolving null. Surface it and drop the entry-point
     // source so it can't attribute a later, unrelated open/create/import (the
     // source has no auto-reset; only a completed flow or this clear drops it).

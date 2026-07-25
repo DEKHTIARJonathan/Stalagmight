@@ -22,7 +22,7 @@ export function useProject() {
   // (every edit toggling isDirty, autosave tick, stats/geometry update), which
   // gave the handler callbacks below new identities each time (their deps held
   // `store`) and defeated the useProjectMenuItems / GlobalView menu memos that
-  // depend on them — rebuilding the AppMenu items array + icon JSX on every tick.
+  // depend on them - rebuilding the AppMenu items array + icon JSX on every tick.
   // Store ACTIONS have stable identities in zustand, so the handlers built from
   // them stay stable; the data fields re-render only when they actually change.
   const saveProject = useProjectStore((s) => s.saveProject);
@@ -60,7 +60,7 @@ export function useProject() {
   const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
     // An untitled project goes through Save As, which surfaces its own failures
     // (saveProjectAs guards on !success). Surfacing again here would double-report
-    // — the second openDialog('error') is treated as dialog-chaining. So only the
+    // - the second openDialog('error') is treated as dialog-chaining. So only the
     // direct save-to-existing-path branch surfaces.
     if (!useProjectStore.getState().project?.file_path) {
       return handleSaveProjectAs(opts);
@@ -74,7 +74,7 @@ export function useProject() {
     } catch (e) {
       // store.saveProject rejects only on an IPC-transport failure (real save
       // failures resolve as CommandResult{success:false}, handled above). Surface
-      // it here rather than letting it escape as an unhandled rejection — callers
+      // it here rather than letting it escape as an unhandled rejection - callers
       // like the save-status retry and the menu Save invoke this without awaiting
       // or catching (`void onSave()` / `() => onSave()`).
       const message = getErrorMessage(e, 'Failed to save');
@@ -110,7 +110,7 @@ export function useProject() {
     //   t2→t3  first rAF after setView (= React commit + layout queued)
     //   t3→t4  next rAF = AFTER first paint (browser had time to repaint)
     // If t3→t4 is huge, the freeze is in JSC GC / paint between commit and
-    // visible update — the classic "old screen frozen, then snaps" symptom.
+    // visible update - the classic "old screen frozen, then snaps" symptom.
     const t0 = performance.now();
     // Concurrency guard is handled at store level (store.isClosing)
     const result = await closeProject();

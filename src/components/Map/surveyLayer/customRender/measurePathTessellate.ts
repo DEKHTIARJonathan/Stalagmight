@@ -67,7 +67,7 @@ export interface MeasurePathBuffers {
   circle: MeasureCircleBuffers;
 }
 
-/** Mercator centroid (bbox midpoint) of every coord — the anchor that keeps
+/** Mercator centroid (bbox midpoint) of every coord - the anchor that keeps
  *  anchor-relative float32 positions tiny. `[0.5, 0.5]` for an empty set. */
 function computeAnchor(segments: MeasureSegment[], points: MeasurePoint[]): [number, number] {
   let minX = Infinity;

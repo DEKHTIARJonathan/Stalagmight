@@ -3,9 +3,9 @@
  *
  * Keeps SurveyLayer.tsx to a few integration lines: SurveyLayer constructs one
  * of these, calls `sync(...)` after each geometry flush, and `destroy()` on
- * teardown. Everything else — building buffers from SoA, resolving colors,
+ * teardown. Everything else - building buffers from SoA, resolving colors,
  * adding/removing the custom layer, and toggling the stock bulk layers'
- * visibility — lives here.
+ * visibility - lives here.
  *
  * The custom layer is the SOLE survey renderer: `sync()` always builds/enables
  * it (no gate), adding it before `survey-interact-shots` (above basemap/ghosts,
@@ -247,7 +247,7 @@ export class SurveyCustomController {
     return this.active;
   }
 
-  /** Build/refresh the custom layer (the sole survey renderer — no gate). */
+  /** Build/refresh the custom layer (the sole survey renderer - no gate). */
   sync(params: CustomSyncParams): void {
     // A disposed (unmounted) or fatal (dead GL) controller never rebuilds.
     if (this.disposed || this.fatal) return;
@@ -318,7 +318,7 @@ export class SurveyCustomController {
     this.map.addLayer(layer, beforeId);
     if (layer.isDisabled()) {
       // FATAL: the custom layer cannot draw (no WebGL2 / shader link failure).
-      // Custom render is the sole renderer — there is NO stock fallback — so
+      // Custom render is the sole renderer - there is NO stock fallback - so
       // remove the dead layer and route to the error state instead of restoring
       // stock. Warn ungated so the failure is diagnosable in a production build.
       const reason = layer.getDisabledReason() ?? 'unknown';
@@ -350,7 +350,7 @@ export class SurveyCustomController {
     console.info('[customRender] disabled');
   }
 
-  /** Remove the custom layer (the sole survey renderer — no stock to restore).
+  /** Remove the custom layer (the sole survey renderer - no stock to restore).
    *  Safe when already inactive. Non-fatal teardown only (destroy); the fatal
    *  path uses {@link tearDownFatal}. */
   private teardown(): void {
@@ -384,7 +384,7 @@ export class SurveyCustomController {
    * FATAL teardown: remove the dead layer WITHOUT restoring or republishing the
    * stock layers, latch {@link fatal} so a later sync() bails, and surface the
    * error via {@link onFatal}. Deliberately does NOT fire `onActiveChange(false)`
-   * — that would drive SurveyLayer to republish the stock bulk sources, exactly
+   * - that would drive SurveyLayer to republish the stock bulk sources, exactly
    * the fallback this stage removes. The survey area stays blank (error state).
    */
   private tearDownFatal(reason: string): void {

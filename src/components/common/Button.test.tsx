@@ -4,7 +4,7 @@
  * Proves the jsdom + Testing Library harness end-to-end: a real component
  * mounts to the DOM, jest-dom matchers resolve, and user-event drives a
  * handler. `Button` is deliberately dependency-free (no store / i18n / IPC), so
- * this asserts the *harness*, not app wiring — the bug-prone-wiring regression
+ * this asserts the *harness*, not app wiring - the bug-prone-wiring regression
  * tests (e.g. wizard onComplete → save) land in a follow-up PR.
  */
 import { describe, it, expect, vi } from 'vitest';

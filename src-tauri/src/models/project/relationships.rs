@@ -300,7 +300,7 @@ impl Project {
     /// replacement merges so external merge groups stay connected after the
     /// stations vanish, and rewires closures off the removed stations to a
     /// surviving merge-group partner. Call this BEFORE dropping the removed
-    /// stations' own refs — it reads the live merge groups. Computing the
+    /// stations' own refs - it reads the live merge groups. Computing the
     /// replacement merges over the ENTIRE removed set at once (rather than
     /// per-station) guarantees every replacement joins two survivors.
     pub(crate) fn preserve_connections_for_removed_stations(
@@ -412,7 +412,7 @@ impl Project {
             // closure would be degenerate (a self-loop) and is silently skipped
             // by convert_orphan_closures_to_merges and the integrity checks, so
             // it would persist undetected. If no cross-section survivor exists
-            // the loop has genuinely collapsed into one section — leave the
+            // the loop has genuinely collapsed into one section - leave the
             // closure for cleanup to drop rather than rewire it into a self-loop.
             let replacement = candidates
                 .iter()
@@ -544,7 +544,7 @@ impl Project {
     /// that reference the given section. Call before `remove_section()` to avoid orphans.
     pub fn cleanup_section_references(&mut self, section_id: SectionId) {
         // Remove merges referencing this section. Clearing the
-        // adjacency cache is mandatory — we just dropped entries that
+        // adjacency cache is mandatory - we just dropped entries that
         // the cache still claims exist.
         self.station_merges.retain(|m| {
             m.station_a.section_id != section_id && m.station_b.section_id != section_id

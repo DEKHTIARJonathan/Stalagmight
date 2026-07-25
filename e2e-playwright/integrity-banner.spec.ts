@@ -61,7 +61,7 @@ test.describe('Structural-integrity banner', () => {
   test('repair reports issues that still need manual attention', async ({ page }) => {
     await seedAndCheck(page, [
       'Station merge #0 station_a references missing section 42',
-      'Loop closure 1 (0:2 ↔ 1:0) is marked closed but its ends are 8.10 m apart — recompute or remove it',
+      'Loop closure 1 (0:2 ↔ 1:0) is marked closed but its ends are 8.10 m apart - recompute or remove it',
     ]);
     // One of the two issues is detect-only and survives repair.
     await page.evaluate(() => {
@@ -85,7 +85,7 @@ test.describe('Structural-integrity banner', () => {
     await expect(page.getByTestId('integrity-dialog')).toBeVisible();
     await page.getByTestId('integrity-dialog-cancel').click();
     await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
-    // Banner stays — nothing was repaired.
+    // Banner stays - nothing was repaired.
     await expect(page.getByTestId('integrity-banner')).toBeVisible();
   });
 

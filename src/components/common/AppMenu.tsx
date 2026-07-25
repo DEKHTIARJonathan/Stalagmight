@@ -1,5 +1,5 @@
 /**
- * AppMenu — a portaled "hamburger" dropdown menu for the global view header.
+ * AppMenu - a portaled "hamburger" dropdown menu for the global view header.
  *
  * Modeled on Select.tsx (portal to document.body with position:fixed, flip /
  * clamp positioning, click-outside + scroll/resize close) and the row styling
@@ -54,11 +54,11 @@ interface AppMenuProps {
   triggerDanger?: boolean;
   /** Disable the trigger so the menu can't be opened (e.g. during placement mode):
    *  the file/project actions that moved into this menu were each disabled on the
-   *  old toolbar, so the menu must be unavailable too — otherwise Close Project /
+   *  old toolbar, so the menu must be unavailable too - otherwise Close Project /
    *  New / Open / Save As stay clickable mid-placement. */
   disabled?: boolean;
   /** Shrink the trigger button (tighter padding) when the toolbar is running out
-   *  of horizontal room — the final condensation stage. */
+   *  of horizontal room - the final condensation stage. */
   compact?: boolean;
   'aria-label'?: string;
   'data-testid'?: string;
@@ -284,7 +284,7 @@ export function AppMenu({
     (e: React.KeyboardEvent) => {
       if (disabled) return;
       if (e.key === 'Enter' || e.key === ' ') {
-        // Toggle, mirroring the trigger's click handler — so a keyboard user who
+        // Toggle, mirroring the trigger's click handler - so a keyboard user who
         // tabs back to the trigger while the menu is open can close it too, not
         // only open it.
         e.preventDefault();

@@ -50,7 +50,7 @@ impl AppState {
             d.clone()
         } else {
             // Default to user's documents/stalagmight directory, with fallbacks.
-            // 1. app_dirs (Tauri path resolver — works on Android)
+            // 1. app_dirs (Tauri path resolver - works on Android)
             // 2. directories crate (desktop pre-setup fallback)
             // 3. $HOME/Documents
             let documents_dir = crate::app_dirs::document_dir()
@@ -133,7 +133,7 @@ impl AppState {
 
     pub(super) fn create_project(&self, name: String, location: Option<String>) -> CommandResult {
         let mut project = Project::new(name, location);
-        // Seed per-project validation thresholds from the global config — the
+        // Seed per-project validation thresholds from the global config - the
         // "defaults for new projects" (#57). Authoritative in the .stalx after.
         project.validation = self.get_config().validation;
 
@@ -606,7 +606,7 @@ mod tests {
     #[test]
     fn resolve_project_path_creates_nonexistent_default_dir() {
         let state = AppState::new().unwrap();
-        // Use the default directory path (None) — should succeed even if
+        // Use the default directory path (None) - should succeed even if
         // the app documents subdirectory needs to be created.
         let result = state.resolve_project_path("CreateDirTest", None).unwrap();
         let parent = result.parent().expect("default path should have parent");

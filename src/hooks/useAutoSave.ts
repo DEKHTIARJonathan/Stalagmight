@@ -67,7 +67,7 @@ export function useAutoSave(): AutoSaveState {
   );
 
   useEffect(() => {
-    // Zustand v4 subscribe(listener) – listener receives (state, prevState).
+    // Zustand v4 subscribe(listener) - listener receives (state, prevState).
     const unsub = useProjectStore.subscribe((state, prevState) => {
       const isDirty = state.isDirty;
       const wasDirty = prevState.isDirty;
@@ -79,8 +79,8 @@ export function useAutoSave(): AutoSaveState {
 
       // --- Resume after a save-block clears ---
       // Auto-save pauses itself after a save-blocking failure (see the fire
-      // handler below). Resume the moment the project stops being save-blocked —
-      // i.e. the integrity issues were resolved (Repair) — so the next pending
+      // handler below). Resume the moment the project stops being save-blocked -
+      // i.e. the integrity issues were resolved (Repair) - so the next pending
       // edit saves normally.
       if (
         pausedRef.current &&
@@ -117,8 +117,8 @@ export function useAutoSave(): AutoSaveState {
         // If we're already executing a save, don't restart timers
         if (savingRef.current) return;
 
-        // Paused after a save-blocking failure — don't keep retrying a save that
-        // will just fail again. The status stays "didn't run — not saved" until
+        // Paused after a save-blocking failure - don't keep retrying a save that
+        // will just fail again. The status stays "didn't run - not saved" until
         // the resume check above fires (issues resolved).
         if (pausedRef.current) return;
 
@@ -143,7 +143,7 @@ export function useAutoSave(): AutoSaveState {
           });
         }, 1000);
 
-        // Debounce timer – fires the actual save
+        // Debounce timer - fires the actual save
         debounceRef.current = setTimeout(async () => {
           debounceRef.current = null;
           if (countdownRef.current) {
@@ -180,7 +180,7 @@ export function useAutoSave(): AutoSaveState {
             // flash) so the user knows their changes are not on disk; the integrity
             // banner shows how to fix it (Repair).
             // When the failure is the integrity save-block, PAUSE auto-save rather
-            // than retry on every edit — it would just fail again. It resumes via
+            // than retry on every edit - it would just fail again. It resumes via
             // the check at the top of the subscriber once the block clears. (The
             // failure branch of saveProject awaits checkProjectIntegrity, so this
             // flag is fresh here.)

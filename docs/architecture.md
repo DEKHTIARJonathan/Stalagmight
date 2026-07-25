@@ -217,7 +217,7 @@ Rust handler registered in `src-tauri/src/lib.rs` via
 The frontend builds the MapLibre source URL in `src/utils/tileConfig.ts`
 (`getTileConfig`).
 
-The URL form **differs by platform** — this is a required gotcha, not a
+The URL form **differs by platform** - this is a required gotcha, not a
 preference:
 
 | Platform | Tile URL template |

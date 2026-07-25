@@ -61,7 +61,7 @@ pub(crate) struct WpjEntry {
 #[derive(Clone)]
 pub(crate) struct WpjContext {
     pub(crate) dir: PathBuf,
-    /// The `.wpj`'s own directory — the immutable project root. A relative
+    /// The `.wpj`'s own directory - the immutable project root. A relative
     /// `.PATH` may not climb above it (traversal guard); an absolute `.PATH`
     /// resets `dir` but leaves `root` unchanged.
     pub(crate) root: PathBuf,
@@ -138,7 +138,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                         // Defense-in-depth: an absolute / drive-qualified `.PATH`
                         // is honored verbatim (genuine Walls does), but if it
                         // escapes the project root the importer is reading outside
-                        // the `.wpj`'s own tree — tell the user rather than doing
+                        // the `.wpj`'s own tree - tell the user rather than doing
                         // it silently. (The read is NOT blocked: an explicit
                         // absolute path is the author's deliberate choice.)
                         if ctx.dir.is_absolute() && !ctx.dir.starts_with(&ctx.root) {
@@ -280,7 +280,7 @@ pub(crate) fn parse_wpj(path: &Path) -> Result<ParsedWalls> {
                 }
             }
             _ => {
-                // Unknown directive — ignore.
+                // Unknown directive - ignore.
             }
         }
     }
@@ -319,7 +319,7 @@ pub(crate) fn derive_context(parent: &WpjContext, entry: &WpjEntry) -> WpjContex
         ctx.reference = None;
     }
     // Segment: an entry whose NAME_DEFINES_SEGMENT bit (3) is set contributes
-    // its own name as a segment level — for surveys as well as books
+    // its own name as a segment level - for surveys as well as books
     // (dewalls `WpjEntry::segment()` semantics).
     if let Some(name) = &entry.name {
         if !name.trim().is_empty() && entry.status & (1 << 3) != 0 {
@@ -379,7 +379,7 @@ pub(crate) fn resolve_survey(entry: &WpjEntry, ctx: &WpjContext) -> Option<PathB
 }
 
 /// Resolve a `.PATH` against a parent directory: an absolute / drive-qualified
-/// path REPLACES the base (genuine Walls honors it — `Walls32 prjhier.cpp`
+/// path REPLACES the base (genuine Walls honors it - `Walls32 prjhier.cpp`
 /// `GetPathPrefix` uses an absolute `.PATH` as the prefix), a relative path
 /// concatenates; backslashes are normalized. A relative `..` is clamped at
 /// `root` (the `.wpj`'s own directory) so a crafted `.PATH ../../../../` can't
@@ -395,8 +395,8 @@ pub(crate) fn resolve_path(parent: &Path, root: &Path, path: &str) -> PathBuf {
         match part {
             "" | "." => {}
             // Never pop above the project root (traversal guard). When `dir`
-            // already sits at/above `root` — e.g. a parent set an absolute
-            // `.PATH` so `dir` is a different tree — `starts_with` is false and
+            // already sits at/above `root` - e.g. a parent set an absolute
+            // `.PATH` so `dir` is a different tree - `starts_with` is false and
             // we leave it alone (that absolute base is the user's explicit dir).
             ".." => {
                 if dir != root && dir.starts_with(root) {
@@ -464,7 +464,7 @@ pub(crate) fn dms(d: f64, m: f64, s: f64) -> f64 {
 /// Build the initial `#Units` state and macro table for a survey from inherited
 /// `.OPTIONS`. Macros defined in a parent/book/survey `.OPTIONS` string (e.g.
 /// `$cave=ABC`) must be visible to the child `.SRV` body, so they are returned
-/// alongside the units rather than discarded — otherwise any `$(cave)` reference
+/// alongside the units rather than discarded - otherwise any `$(cave)` reference
 /// in the survey fails to expand and those shots are silently dropped.
 pub(crate) fn build_initial_units(
     ctx: &WpjContext,

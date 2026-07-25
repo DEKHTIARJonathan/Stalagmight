@@ -13,8 +13,8 @@ import { lngLatToMercator } from '../../mercatorCoords';
  * UNSIGNED_INT index type for the WebGL2 drawElements path, and the anchor-
  * relative-mercator invariant that makes a mid-measurement ZOOM correct (an
  * anchored vertex re-projects through the frame matrix, the anchor folded into
- * the matrix). Unlike the ghost buffers there is no color / move attribute — the
- * tint is a shader uniform — so these buffers hold ONLY geometry.
+ * the matrix). Unlike the ghost buffers there is no color / move attribute - the
+ * tint is a shader uniform - so these buffers hold ONLY geometry.
  */
 
 const seg = (a: [number, number], b: [number, number]): MeasureSegment => ({ a, b });
@@ -95,7 +95,7 @@ describe('anchor-relative mercator invariant (zoom correctness)', () => {
 
     // composeAnchorMatrix(mvp, anchor) * rel maps to the SAME clip position as
     // projecting the raw mercator coord under mvp, for realistic mercator->clip
-    // matrices — why a mid-measurement zoom keeps the tint glued.
+    // matrices - why a mid-measurement zoom keeps the tint glued.
     const rel = [mAx - anchorX, mAy - anchorY, 0, 1];
     const matrices: number[][] = [
       [2, 0, 0, 0, 0, 3, 0, 0, 0, 0, 1, 0, -0.5, -1.2, 0, 1],

@@ -8,7 +8,7 @@ import type { ClosureStrategy } from '../types/ipc/ClosureStrategy';
  *
  * Declared as a full `Record<ClosureStrategy, boolean>` so that adding a variant
  * to the generated `ClosureStrategy` union is a compile error here until it is
- * classified — preventing silent drift from the backend. Keep in sync with
+ * classified - preventing silent drift from the backend. Keep in sync with
  * `src-tauri/src/models/project.rs`.
  */
 const CLOSURE_STRATEGY_ELIGIBILITY: Record<ClosureStrategy, boolean> = {

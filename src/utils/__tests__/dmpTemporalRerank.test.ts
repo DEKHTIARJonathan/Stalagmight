@@ -257,7 +257,7 @@ describe('rerankSuggestionsByTemporalPlan', () => {
     // Mirrors the AC3 regression: C has a strong existing-section match (High) and
     // a weak import-to-import link to its predecessor B (Low). The chain link
     // "explains" the B→C temporal adjacency, so the planner scores it higher on
-    // checkedPairs and would surface it first — but a feasible High must win.
+    // checkedPairs and would surface it first - but a feasible High must win.
     const localSections = [
       makeSection('B', '2026-06-11T10:00:00', [makeShot(10, 10, 0), makeShot(10, 10, 5)]),
       makeSection('C', '2026-06-11T10:10:00', [makeShot(10, 10, 10), makeShot(10, 10, 15)]),
@@ -298,7 +298,7 @@ describe('rerankSuggestionsByTemporalPlan', () => {
 
   it('orders across import sections by the temporal plan, not by confidence tier (#101 / review)', () => {
     // The confidence guard must be scoped to a section's own alternatives, not a
-    // global sort — otherwise an unrelated high-confidence section is pulled ahead
+    // global sort - otherwise an unrelated high-confidence section is pulled ahead
     // of a link the plan chose to satisfy a temporal pair. Confidence is
     // intentionally decoupled from score here to isolate the cross-section
     // property: P's candidate is the plan's lead (higher score) but labelled

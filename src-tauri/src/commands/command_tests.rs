@@ -853,7 +853,7 @@ fn test_get_project_state_emits_positional_wire_refs() {
 
         // Regression guard: the raw Project serde (the undo snapshot path) must
         // STILL emit the lossless StationKey form. The two encodings diverge by
-        // design — only the IPC view is positional.
+        // design - only the IPC view is positional.
         let raw = serde_json::to_string(&project_state.project).unwrap();
         assert!(
             raw.contains("anchor"),
@@ -867,14 +867,14 @@ fn test_get_project_state_emits_positional_wire_refs() {
 fn test_open_project_updates_recent_projects_when_config_save_fails() {
     use std::os::unix::fs::PermissionsExt;
 
-    // Skip when running as root — file permission restrictions don't apply to UID 0
+    // Skip when running as root - file permission restrictions don't apply to UID 0
     if unsafe { libc::geteuid() } == 0 {
         eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
         return;
     }
 
     // Serialize against other config-touching tests, but DON'T redirect the
-    // config path to a temp dir — this test drives config_path() itself by
+    // config path to a temp dir - this test drives config_path() itself by
     // pointing XDG_CONFIG_HOME at a read-only dir to force a save failure.
     let _config_guard = crate::test_helpers::config_lock_guard();
     {
@@ -1055,8 +1055,8 @@ fn test_save_project_fails_when_output_is_directory() {
     });
 }
 
-// #92: importing into a never-saved (deferred) project must durably persist it —
-// write the .stalx and add it to Recent Projects — at the `import_sections`
+// #92: importing into a never-saved (deferred) project must durably persist it -
+// write the .stalx and add it to Recent Projects - at the `import_sections`
 // command every import path funnels through, so the fix survives changes to the
 // import UI. Guards the backend chokepoint (PR #104).
 #[test]
@@ -1116,7 +1116,7 @@ fn test_import_sections_persists_deferred_new_project() {
 // #92 / #112: the adversarial twin of the success test above. When the deferred
 // save *fails* (here: the save's parent directory is missing, so the temp
 // `.stalx.tmp` can't be created), `finalize_deferred_import` must return a PARTIAL
-// success —
+// success -
 // keep the import's `success` (so the frontend refreshes + marks dirty, keeping
 // the in-memory import under the close-guard), attach a warning, and never
 // phantom-add the never-written project to Recent Projects. A hard failure (or a
@@ -1129,13 +1129,13 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // Force the deferred save to fail: point it at a path whose PARENT directory
         // doesn't exist, so the atomic save can't create the temp `.stalx.tmp`
         // (`Database::open` returns "Failed to create save file"). NB a directory
-        // squatting the *exact* reserved path does NOT fail — the first implicit save
+        // squatting the *exact* reserved path does NOT fail - the first implicit save
         // auto-renames around a collision (`next_available_project_path`) and
         // succeeds; and a read-only dir wouldn't fail under the root-in-container CI
         // runner. A missing parent fails the create regardless of uid. (This drives the
         // GENERIC save-failure branch; the permission-denied humanization in
         // `finalize_deferred_import` needs `dir_present && EACCES`, which isn't
-        // root-safe to induce here — that sub-branch is covered by the
+        // root-safe to induce here - that sub-branch is covered by the
         // permission-denied twin test below.)
         let project_path = dir.path().join("missing-subdir").join("new-import.stalx");
 
@@ -1150,7 +1150,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             "precondition: project must be deferred (never saved)"
         );
 
-        // Import one origin-placed section through the command — same shape as the
+        // Import one origin-placed section through the command - same shape as the
         // success test, only the save target differs.
         let sections = vec![crate::models::ImportSectionConfig {
             section_index: 0,
@@ -1193,7 +1193,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // ...and the just-imported section must still be in memory: the partial-
         // success contract keeps the import under the close-guard so it isn't lost.
         // A regression that returns success+warning while dropping the in-memory
-        // import would be the #92 data-loss class on the failure path — assert the
+        // import would be the #92 data-loss class on the failure path - assert the
         // CommandResult flag (above) is NOT enough on its own.
         let project_state = state(&app).inner().get_project_state().unwrap();
         assert_eq!(
@@ -1204,7 +1204,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
     });
 }
 
-// #92 / #112: the permission-denied face of the failure path — the macOS "folder
+// #92 / #112: the permission-denied face of the failure path - the macOS "folder
 // access revoked" scenario the deferred-save warning was built for. When the save
 // fails with a permission-classified error, `finalize_deferred_import` must HUMANIZE
 // it ("permission denied (check folder access ...)") and must NOT leak the internal
@@ -1214,7 +1214,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
 // CAP_DAC_OVERRIDE, so mode bits don't bite), so we drive the same branch via the
 // classifier's documented string fallback: a directory squatting the `.stalx.tmp`
 // temp path makes SQLite report "unable to open database file", which
-// `is_permission_denied` (loading.rs) treats as permission-denied — and because the
+// `is_permission_denied` (loading.rs) treats as permission-denied - and because the
 // parent dir is present, `save_failure` keeps the marker prefix. The partial-success
 // invariants (no phantom, in-memory survival, still-deferred) are already covered by
 // the generic-failure twin above; this test focuses on the message mapping.
@@ -1227,7 +1227,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
         // Squat a DIRECTORY at the atomic-save temp path (`<stem>.stalx.tmp`). The
         // reserved `.stalx` path itself stays absent (so no collision auto-rename),
         // but `Database::open` on the temp dir fails with "unable to open database
-        // file" — classified as permission-denied — while the parent dir exists.
+        // file" - classified as permission-denied - while the parent dir exists.
         let temp_squat = dir.path().join("new-import.stalx.tmp");
         fs::create_dir_all(&temp_squat).unwrap();
 
@@ -1278,7 +1278,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
 }
 
 // #104 review: "deferred" is tracked by an explicit flag, not inferred from the DB
-// handle or file existence (both ambiguous — dropped handles after a save, and
+// handle or file existence (both ambiguous - dropped handles after a save, and
 // reserved-path collisions). A persisted project must never read as deferred; a
 // freshly-created deferred one must.
 #[test]
@@ -1288,13 +1288,13 @@ fn test_initial_save_deferred_uses_explicit_flag() {
         .inner()
         .set_project_for_tests(Project::new("P".to_string(), None));
 
-    // Persisted (flag cleared) — not deferred, even with no DB handle.
+    // Persisted (flag cleared) - not deferred, even with no DB handle.
     state(&app)
         .inner()
         .set_initial_save_deferred_for_tests(false);
     assert!(!state(&app).initial_save_deferred());
 
-    // Deferred new project (flag set) — deferred.
+    // Deferred new project (flag set) - deferred.
     state(&app)
         .inner()
         .set_initial_save_deferred_for_tests(true);
@@ -1437,7 +1437,7 @@ fn test_delete_project_tolerates_missing_file() {
 fn test_delete_project_partial_failure_still_prunes_recents() {
     // Regression (#118 review N3): once the primary `.stalx` is trashed, a later
     // failure (here the collab `.tml` sibling) must NOT report the whole delete as
-    // a failure — that would strand a "File not found" zombie row, because the
+    // a failure - that would strand a "File not found" zombie row, because the
     // frontend skips its recents refresh on `!success`. It should drop the entry
     // and return a partial success carrying a warning.
     with_config_lock(|| {
@@ -2764,7 +2764,7 @@ fn test_resolved_warning_follows_shot_uuid_after_id_change() {
 fn test_resolved_warning_legacy_position_fallback_matches_uuid_shot() {
     // Issue #57: a pre-v8 (or pre-v6) suppression row carries no shot_uuid and is
     // keyed by (section_id, shot_id) position. After load the shot has a freshly
-    // minted in-memory UUID, but the legacy row must still suppress it — without
+    // minted in-memory UUID, but the legacy row must still suppress it - without
     // the position fallback a pre-v6 file's ignores would be silently lost.
     let mut project = project_with_section(vec![shot_data(0.1)]);
     project.ensure_shot_uuids();
@@ -2945,7 +2945,7 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     }
     let surviving_section = zero[1].section_id;
 
-    // Delete the first section — its resolved_warnings row is now orphaned.
+    // Delete the first section - its resolved_warnings row is now orphaned.
     assert_success(&section::delete_section(state(&app), zero[0].section_id));
 
     // Save, then confirm the surviving section's ignore is still resolved.
@@ -3012,7 +3012,7 @@ fn test_save_preserves_by_uuid_ignore_when_a_renumber_lands_another_shot_on_its_
     let dir = tempfile::tempdir().unwrap();
     let _ = save_project_to_temp(&app, &dir);
 
-    // Both by-UUID ignores must survive — neither was REPLACE-deleted.
+    // Both by-UUID ignores must survive - neither was REPLACE-deleted.
     let after = state(&app).inner().load_resolved_warnings().unwrap();
     let surviving: std::collections::HashSet<_> = after
         .iter()
@@ -3036,7 +3036,7 @@ fn test_save_drops_deleted_shots_ignore_without_clobbering_the_survivor() {
     // shot's old position, so on save it re-derives to that same (section_id,
     // shot_id). If the dead row were carried over at its stale id, the two would
     // collide on UNIQUE(section_id, shot_id, warning_code) and INSERT OR REPLACE
-    // would — depending on insert order — drop the SURVIVOR's still-valid ignore.
+    // would - depending on insert order - drop the SURVIVOR's still-valid ignore.
     // The carry-over must DROP the dead (UUID-not-live) row so the survivor's
     // ignore always persists and dead rows don't accumulate.
     let project = project_with_section(vec![shot_data(0.1), shot_data(0.1)]);
@@ -3120,7 +3120,7 @@ fn test_project_validation_drives_warnings_and_persists() {
         validation_cfg,
     ));
 
-    // Now it's flagged — warnings use the PROJECT's thresholds, not the global.
+    // Now it's flagged - warnings use the PROJECT's thresholds, not the global.
     assert!(validation::get_project_warnings(state(&app))
         .iter()
         .any(|w| w.code == "SHORT_SHOT"));
@@ -3196,7 +3196,7 @@ fn test_resolve_warning_refuses_to_ignore_over_anchoring() {
 
 #[test]
 fn test_resolve_warning_refuses_error_severity_codes() {
-    // Issue #57 (Item 10/14): errors are not ignorable — one predicate
+    // Issue #57 (Item 10/14): errors are not ignorable - one predicate
     // (warning_is_ignorable) governs every code. Resolving an error-severity
     // warning must persist nothing and leave it unresolved; warnings stay ignorable.
     use crate::models::{warning_is_ignorable, MULTIPLE_DATUMS_PER_MERGE_COMPONENT};
@@ -3248,7 +3248,7 @@ fn test_resolve_warning_refuses_error_severity_codes() {
 fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
     // ensure_unique_shot_uuids only de-dups WITHIN a section, so two sections can
     // legally share a shot UUID. Ignoring a warning on one shot must NOT suppress
-    // the same code on the other section's shot (issue #57 / Codex) — suppression
+    // the same code on the other section's shot (issue #57 / Codex) - suppression
     // is keyed by (section_id, uuid, code), not the UUID alone.
     let mut project = Project::new("Dup UUID".to_string(), None);
     let a = project
@@ -3263,7 +3263,7 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
             ..Default::default()
         })
         .id;
-    // Force the same (cross-section) UUID on both shots — a legal duplicate.
+    // Force the same (cross-section) UUID on both shots - a legal duplicate.
     for section in &mut project.sections {
         section.shots[0].uuid = Some("shared-uuid".to_string());
     }
@@ -3303,11 +3303,11 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
             .find(|w| w.section_id == b && w.code == "SHORT_SHOT")
             .unwrap()
             .is_resolved,
-        "section B's shot shares the UUID but a different section — it must NOT be suppressed"
+        "section B's shot shares the UUID but a different section - it must NOT be suppressed"
     );
 
     // Now ignore B too, then un-ignore A: B's suppression must SURVIVE, because the
-    // delete is also keyed by (section_id, uuid) — un-ignoring A's shared-UUID shot
+    // delete is also keyed by (section_id, uuid) - un-ignoring A's shared-UUID shot
     // must not clear B's row (issue #57 / Codex round 7).
     let b_warning = after
         .iter()
@@ -3737,7 +3737,7 @@ fn test_get_segment_geometry_unconnected_section_excluded() {
     let id_a = create_section_with_shots(&app, vec![shot_data(5.0)]);
     let _id_b = create_section_with_shots(&app, vec![shot_data(3.0)]);
 
-    // No merge — sections are disconnected
+    // No merge - sections are disconnected
     let geom = section::get_segment_geometry_impl(state(&app).inner(), id_a).unwrap();
     assert_eq!(
         geom.sections.len(),
@@ -3760,7 +3760,7 @@ fn test_get_segment_geometry_queried_from_either_end() {
         StationRef::new(id_b, 0),
     ));
 
-    // Query from section B — should still include both sections
+    // Query from section B - should still include both sections
     let geom = section::get_segment_geometry_impl(state(&app).inner(), id_b).unwrap();
     assert_eq!(geom.sections.len(), 2);
 

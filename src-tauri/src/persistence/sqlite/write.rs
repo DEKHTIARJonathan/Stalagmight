@@ -84,7 +84,7 @@ impl Database {
             for (seq, shot) in section.shots.iter().enumerate() {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
                 // The database uses auto-increment for the id column.
-                // `shot.uuid` IS persisted — it's the only stable identity
+                // `shot.uuid` IS persisted - it's the only stable identity
                 // a shot has across save/load and the basis for the
                 // collaboration round-trip with Ariane.  Mint one lazily
                 // here for any shot that arrived without (e.g. loaded
@@ -126,7 +126,7 @@ impl Database {
 
         // Save station merges. Cross-references are stored as stable
         // `StationKey` anchors in memory but persisted positionally (resolved
-        // against the current shots) — the on-disk format stays positional, like
+        // against the current shots) - the on-disk format stays positional, like
         // the binary IPC wire; load reconstructs anchors and re-anchors them.
         // A dangling endpoint is SKIPPED, never collapsed to (section, 0): the
         // app-layer save gate already blocks this, but the persistence layer must

@@ -39,14 +39,14 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 const SECTION_FOCUS_REFIT_DELAY_MS = 180;
 
 // Top offsets (px) for the side opener tabs, aligning each tab with its panel's
-// header/content divider. These track the panel header layout — revisit if the
+// header/content divider. These track the panel header layout - revisit if the
 // header height or the top-left map controls change. (The webview UI zoom scales
 // these uniformly with the header, so they stay aligned under zoom.)
 const SECTIONS_TAB_TOP = 40; // just below the top-left "Fit to view" button (bottom ≈ 32px)
 const DETAILS_TAB_TOP = 79; // aligned to the Details panel's header/content divider
 
 // Opener-tab arrow glyphs. Module-level constant elements (immutable, depend on
-// nothing) so their identity is stable across renders — required for the memoized
+// nothing) so their identity is stable across renders - required for the memoized
 // <Dock> to skip reconciliation during a sibling's resize drag (a fresh element
 // each render would otherwise bust the memo every ~16ms).
 const CHEVRON_RIGHT = <ChevronRightIcon size={14} />;
@@ -72,7 +72,7 @@ export default function SingleSystemView() {
   const isDirty = useProjectStore((s) => s.isDirty);
   const autoSave = useAutoSave();
   const saveFailed = autoSave.status === 'error';
-  // Red wash in the status bar's bottom-right corner only when a save failed —
+  // Red wash in the status bar's bottom-right corner only when a save failed -
   // spans the full bar height and fades right→left across ~18% of its width.
   const statusBarGradient = saveFailed
     ? 'linear-gradient(to left, rgba(248, 113, 113, 0.30), transparent 18%)'
@@ -92,7 +92,7 @@ export default function SingleSystemView() {
 
   // Depend on the stable cancelPending useCallback (not the whole autoSave object,
   // which is a fresh object each render) so handleSaveProject keeps a stable
-  // identity — otherwise useProjectMenuItems' useMemo rebuilds the menu array on
+  // identity - otherwise useProjectMenuItems' useMemo rebuilds the menu array on
   // every render (incl. ~60×/s during a resize drag).
   const cancelPending = autoSave.cancelPending;
   const handleSaveProject = useCallback(async (opts?: { closeAfterSave?: boolean }) => {
@@ -101,8 +101,8 @@ export default function SingleSystemView() {
   }, [cancelPending, rawSave]);
 
   // Toolbar "Import" button: DMP-only picker (the only format importable into an
-  // open project; no "All Files" so non-importable types — notably a `.stalx`
-  // project — can't be chosen and mis-routed), routed through the shared
+  // open project; no "All Files" so non-importable types - notably a `.stalx`
+  // project - can't be chosen and mis-routed), routed through the shared
   // open/import router. GPX/Ariane/Compass start new projects, so they aren't
   // offered here.
   const handleImportDmp = useCallback(async () => {
@@ -154,7 +154,7 @@ export default function SingleSystemView() {
 
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
   // through a drag (these props feed useResizeHandle, which re-binds listeners
-  // when they change). Inline arrows would be re-created every render — including
+  // when they change). Inline arrows would be re-created every render - including
   // the ~60×/s store-width updates during the drag itself.
   const handleSectionsResizeEnd = useCallback(
     (size: number) => savePanelSizes('sections', size),
@@ -176,7 +176,7 @@ export default function SingleSystemView() {
   // Programmatic Details reveal (jump-to-warning from the data table). The store
   // bumps detailRevealNonce ONLY in hover mode (pin mode is revealed by opening
   // the panel in the store directly), so float it open like a hover and arm an
-  // auto-close — the reveal isn't driven by a pointer over the panel, so without
+  // auto-close - the reveal isn't driven by a pointer over the panel, so without
   // this it could float open indefinitely. Lives here, not in usePanelReveal, so
   // only the Details panel carries the subscription (the others never need it).
   const detailRevealNonce = useUIStore((s) => s.detailRevealNonce);
@@ -195,7 +195,7 @@ export default function SingleSystemView() {
   // is open (covering the gap left by a compressed side bar), or sits between the
   // closed bars (BAR inset) when the Data panel is itself closed.
   const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
-  // Which panel (if any) is being resized — at most one at a time, so a single
+  // Which panel (if any) is being resized - at most one at a time, so a single
   // enum replaces three parallel booleans. Drives each panel's edge that follows a
   // sibling so it can track live (no transition lag): the side bars follow the Data
   // panel's height, and the Data overlay's left/right follow the side panels' widths.
@@ -214,7 +214,7 @@ export default function SingleSystemView() {
   const onDetailResizing = useCallback((r: boolean) => setPanelResizing('detail', r), [setPanelResizing]);
   const dataResizing = resizingPanel === 'data-table';
   const sidePanelResizing = resizingPanel === 'sections' || resizingPanel === 'detail';
-  // Stop the Data overlay at ANY open side panel's edge — pinned OR hover-floating
+  // Stop the Data overlay at ANY open side panel's edge - pinned OR hover-floating
   // (both render the full panel at its persisted width); only fill to the window
   // edge when the side is minimized and the Data panel is open, else sit between
   // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
@@ -248,7 +248,7 @@ export default function SingleSystemView() {
       ? focusedSection?.name ?? t('sections.defaultName', { id: focusedSectionId })
       : null;
 
-  // The section that owns the current selection (section / shot / station) — the
+  // The section that owns the current selection (section / shot / station) - the
   // same mapping the data table uses to pick its section.
   const selectedSectionId: SectionId | undefined =
     selection?.type === 'section' || selection?.type === 'shot'
@@ -261,7 +261,7 @@ export default function SingleSystemView() {
   // (entry) or return (exit). ENTRY (null -> id) frames the focused section in the
   // enlarged map; EXIT (id -> null) returns to a neutral whole-map overview
   // (fit-to-bounds) rather than staying zoomed into the section. NOT on a follow
-  // (id -> id'), so clicking another section never re-zooms — consistent with
+  // (id -> id'), so clicking another section never re-zooms - consistent with
   // single-click no longer moving the map. Lives here (not in SectionsPanel,
   // which unmounts on collapse) so the timer survives the panel mount/unmount.
   const prevFocusedRef = useRef<SectionId | null>(null);
@@ -370,7 +370,7 @@ export default function SingleSystemView() {
   useEffect(() => {
     // Onboarding's transient panel toggles must produce NO telemetry AND NO
     // config write (the user's saved layout must survive the temporary reveal),
-    // so suppress both concerns together — withTrackingSuppressed gates telemetry
+    // so suppress both concerns together - withTrackingSuppressed gates telemetry
     // and withPersistSuppressed gates savePanelLayout's persist.
     const withOnboardingSuppressed = (fn: () => void) =>
       withTrackingSuppressed(() => withPersistSuppressed(fn));
@@ -386,7 +386,7 @@ export default function SingleSystemView() {
       const pinnedOpen = mode === 'pin' && open;
 
       if (shouldShow) {
-        // Reveal it (pin-open) and remember the prior state — unless it's already
+        // Reveal it (pin-open) and remember the prior state - unless it's already
         // pinned-open, in which case there's nothing to reveal or restore.
         if (snapRef.current === null && !pinnedOpen) {
           snapRef.current = { mode, open };
@@ -397,7 +397,7 @@ export default function SingleSystemView() {
         snapRef.current = null;
         // Only restore if the panel is still in the pinned-open state onboarding
         // forced it into. If the user changed it during the step (e.g. un-pinned or
-        // closed it), that's a deliberate choice — honor it instead of reverting to
+        // closed it), that's a deliberate choice - honor it instead of reverting to
         // the pre-step snapshot.
         if (pinnedOpen) {
           withOnboardingSuppressed(() => {
@@ -415,7 +415,7 @@ export default function SingleSystemView() {
     syncOnboardingPanel('data-table', singleViewOnboardingStepId === 'data-table', dataTableOnboardingSnapRef);
   }, [singleViewOnboardingStepId]);
 
-  // Shared panel content — each rendered in exactly ONE place (its Dock), so the
+  // Shared panel content - each rendered in exactly ONE place (its Dock), so the
   // heavy instance is never duplicated/remounted across pin/unpin/hover. Memoized
   // so a panel-resize re-render (which fires ~60×/s as the store width/height
   // updates during a drag) doesn't reconcile the heavy DataTable / Sections /
@@ -423,11 +423,11 @@ export default function SingleSystemView() {
   // out of the child render. Dimmed during placement (dim wraps content only,
   // never the tab/handle).
   // NOTE: the `grayscale` filter establishes a containing block for
-  // `position:fixed` descendants — which would re-trap the data-table sub-header
+  // `position:fixed` descendants - which would re-trap the data-table sub-header
   // dropdowns inside the Dock's clip box (the exact #162 bug). It is safe ONLY
   // because the same wrapper is `pointer-events-none`, so those triggers can't be
   // clicked to open a dropdown while the filter is live. Keep `grayscale` paired
-  // with `pointer-events-none` (or move the dim to an overlay) — don't dim the
+  // with `pointer-events-none` (or move the dim to an overlay) - don't dim the
   // panel subtree with a filter while leaving it interactive.
   const dimCls = placementModeActive ? 'pointer-events-none select-none opacity-45 grayscale' : '';
   const sections = project?.sections;
@@ -486,7 +486,7 @@ export default function SingleSystemView() {
 
   // Memoized on `t` (changes only on locale switch): each Dock's `label` and
   // `tabLabels` props must keep a stable identity so the memoized <Dock> can skip
-  // reconciliation during a sibling's resize drag — a fresh object per render
+  // reconciliation during a sibling's resize drag - a fresh object per render
   // would bust the memo every tick.
   const panelLabels = useMemo(() => {
     const name = {
@@ -519,8 +519,8 @@ export default function SingleSystemView() {
   return (
     <div ref={rootRef} className="h-full flex flex-col" data-testid="single-system-view">
       {/* Page heading for screen readers. The toolbar center now shows the
-          active tool name (#51), so the project/focused-section name — the real
-          page heading — lives here, visually hidden but still in the heading
+          active tool name (#51), so the project/focused-section name - the real
+          page heading - lives here, visually hidden but still in the heading
           outline (follows the focused section in focus mode, per #50). */}
       <h1 className="sr-only" data-testid="page-heading">
         {focusedSectionName ?? project.name}
@@ -541,11 +541,11 @@ export default function SingleSystemView() {
           banner (push-unconfirmed / concurrent-session); otherwise nothing. */}
       <SpeleoBanner />
 
-      {/* Main content — the `relative` here is the positioning context for the
+      {/* Main content - the `relative` here is the positioning context for the
           side Docks' overlays + tabs. Each Dock renders a flow spacer (the only
           thing that reflows the map) plus a single absolute panel instance. */}
       <div ref={setMainEl} className="relative flex-1 flex overflow-hidden">
-        {/* Sections (left) — survey-only; Plan/Export show the read-only closure map
+        {/* Sections (left) - survey-only; Plan/Export show the read-only closure map
             with no section-editing affordances. */}
         {appMode === 'survey' && (
         <Dock
@@ -583,7 +583,7 @@ export default function SingleSystemView() {
             {/* Offline indicator - positioned in top-right of map area */}
             <OfflineIndicator className="absolute top-2 right-14 z-10" />
             {/* Export mode: large WYSIWYG preview of the image export, overlaid
-                on the (still-mounted) map. Only for the image export type —
+                on the (still-mounted) map. Only for the image export type -
                 data exports keep the map visible. */}
             {appMode === 'export' && exportPreviewType === 'image' && (
               <div
@@ -597,7 +597,7 @@ export default function SingleSystemView() {
             )}
           </div>
 
-          {/* Data (bottom) — inside the center column so docked side panels push
+          {/* Data (bottom) - inside the center column so docked side panels push
               it (and its tab) for free. Fullscreen renders without reparenting. In
               Plan mode it holds the tabbed plan tables; Export hides it (map only). */}
           {appMode !== 'export' && (
@@ -729,7 +729,7 @@ function SaveStatus({
       break;
   }
 
-  // On a failed save, the status doubles as a retry — clicking it runs the same
+  // On a failed save, the status doubles as a retry - clicking it runs the same
   // save as the burger-menu Save button.
   if (status === 'error') {
     return (

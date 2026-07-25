@@ -38,7 +38,7 @@ async function injectMissingRecent(page: Page): Promise<void> {
   }, [ALPHA, BETA, GAMMA, LOCAL, GHOST]);
 }
 
-test.describe('GlobalView Recent Projects — search, table view, missing files', () => {
+test.describe('GlobalView Recent Projects - search, table view, missing files', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);
     await switchToListTab(page);

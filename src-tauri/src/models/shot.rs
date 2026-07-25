@@ -50,7 +50,7 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
 pub struct Shot {
     /// Internal immutable ID, regenerated on load from sequence order.
     /// Use [`Shot::uuid`] instead when you need an identity that survives
-    /// save/load — the collaboration round-trip with Ariane relies on it.
+    /// save/load - the collaboration round-trip with Ariane relies on it.
     pub id: ShotId,
     /// Persistent v4 UUID minted at shot creation, stable across saves
     /// and reloads.  Emitted into the TML on export so Ariane 26+ can
@@ -142,7 +142,7 @@ where
 ///
 /// Nullable fields use `double_option` + `skip_serializing_if` so the JSON
 /// round-trip is lossless: absent ↔ outer `None`, `null` ↔ `Some(None)`.
-/// Undo relies on this — previous values are stored as serialized `ShotUpdates`
+/// Undo relies on this - previous values are stored as serialized `ShotUpdates`
 /// (`values_json`), so an un-set field must serialize as absent, not `null`.
 #[derive(Debug, Clone, Serialize, Deserialize, Default, TS)]
 pub struct ShotUpdates {
@@ -403,7 +403,7 @@ impl Shot {
         if let Some(v) = &updates.comment {
             // Normalize empty string → None (clear comment). JSON `null` now
             // arrives as Some(None) (see `double_option`), but older callers
-            // (EditShotDialog) send "" to signal "clear" — both must work.
+            // (EditShotDialog) send "" to signal "clear" - both must work.
             self.comment = match v {
                 Some(s) if s.is_empty() => None,
                 _ => v.clone(),
@@ -722,7 +722,7 @@ mod tests {
 
     #[test]
     fn nearly_vertical_shot_small_horizontal_length() {
-        // dz almost equals length — should produce small positive horizontal
+        // dz almost equals length - should produce small positive horizontal
         let shot = Shot::new(
             1,
             ShotData {
@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn horizontal_length_with_dz_greater_than_length() {
-        // Invalid: |dz| > length — should return 0.0 (not NaN/panic)
+        // Invalid: |dz| > length - should return 0.0 (not NaN/panic)
         let h = horizontal_length_from_slope(5.0, 10.0);
         assert_eq!(h, 0.0);
     }

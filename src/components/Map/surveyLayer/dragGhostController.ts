@@ -7,7 +7,7 @@
 //   {@link SurveyGhostLayer} WebGL layer whose vertices are the captured ORIGINAL
 //   positions and whose live drag delta is ONE screen-px uniform, applied in the
 //   vertex shader (surveyGhostLayer.ts / ghostShaders.ts). A pointermove is a
-//   single uniform write + triggerRepaint — zero worker, zero rebuild, so there
+//   single uniform write + triggerRepaint - zero worker, zero rebuild, so there
 //   is no async re-bake to overshoot. A mid-drag zoom stays correct because the
 //   anchored vertices re-project through the frame matrix while the screen-px
 //   offset remains the cursor residual MapCanvas recomputes each frame.

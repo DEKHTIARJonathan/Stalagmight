@@ -67,7 +67,7 @@ async function clickStation(page: Page, index: number): Promise<void> {
   await page.mouse.click(box.x + target.x, box.y + target.y);
 }
 
-test.describe('Measure tool — dual distance + tint (#26)', () => {
+test.describe('Measure tool - dual distance + tint (#26)', () => {
   test.beforeEach(async ({ page }) => {
     await setupTauriMocks(page);
     await page.goto('/');
@@ -95,7 +95,7 @@ test.describe('Measure tool — dual distance + tint (#26)', () => {
     await clickStation(page, 1);
     await expect(page.locator('[data-testid="measure-along-line"]')).toContainText('12.3');
 
-    // Both at least one shot AND at least one station are tinted (#26) — the
+    // Both at least one shot AND at least one station are tinted (#26) - the
     // shots side regressed once (only stations tinted), so assert both.
     await expect.poll(() => countMeasuredShots(page)).toBeGreaterThan(0);
     await expect.poll(() => countMeasuredStations(page)).toBeGreaterThan(0);

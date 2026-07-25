@@ -15,7 +15,7 @@ impl AppState {
     /// Get recent projects list.
     ///
     /// Hot path on every navigation to the global view. Uses SQL aggregates
-    /// to compute metadata without deserializing the full project — the
+    /// to compute metadata without deserializing the full project - the
     /// previous implementation called `db.load_project()` for every entry,
     /// which on a 75k-shot project parsed every shot row only to throw it
     /// all away. That caused a multi-second freeze every time the user hit
@@ -29,7 +29,7 @@ impl AppState {
         recent
             .iter()
             .filter_map(|path| {
-                // open_for_metadata skips PRAGMA quick_check and migrations —
+                // open_for_metadata skips PRAGMA quick_check and migrations -
                 // both are unnecessary when we're only reading aggregate
                 // columns and the user hasn't asked to open the project.
                 let db = Database::open_for_metadata(path).ok()?;
@@ -68,7 +68,7 @@ impl AppState {
         // failure here left that row un-removable forever. Nothing changed on the
         // backend, so skip the re-save and return success; the caller then re-reads the
         // (already-correct) backend config and the stale row drops out. (The normal
-        // case — a missing file whose path is still in the list — takes the resave
+        // case - a missing file whose path is still in the list - takes the resave
         // branch below.)
         if recent.len() == initial_len {
             tracing::debug!(path = ?path, "remove_from_recent: path already absent; treating as success");
@@ -96,7 +96,7 @@ impl AppState {
     /// `delete_collab_sibling` is set, its same-stem `.tml` collab file) are handed
     /// to the OS's own delete via [`send_to_trash`]: on macOS they land in the
     /// Trash, on Linux in the freedesktop trash where one exists. The app keeps no
-    /// undo trail of its own — recovery, if any, is whatever the OS provides.
+    /// undo trail of its own - recovery, if any, is whatever the OS provides.
     ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
@@ -105,14 +105,14 @@ impl AppState {
     ///
     /// The primary `.stalx` is trashed first: if *that* fails the call returns a
     /// failure with recents untouched (nothing was destroyed). Once it succeeds
-    /// the project is gone, so any later problem — the collab `.tml` sibling
-    /// failing to trash, or the recents persist failing — is reported as a
+    /// the project is gone, so any later problem - the collab `.tml` sibling
+    /// failing to trash, or the recents persist failing - is reported as a
     /// non-fatal [`CommandResult::warnings`] entry while the call still returns
     /// success and drops the recents entry. Returning a failure after the file is
     /// already trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf, delete_collab_sibling: bool) -> CommandResult {
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
-        // destructive has happened yet, so abort cleanly — recents stay untouched
+        // destructive has happened yet, so abort cleanly - recents stay untouched
         // and the caller can retry. (Tolerant of a file that's already gone.)
         if path.exists() {
             if let Err(e) = send_to_trash(&path) {
@@ -121,7 +121,7 @@ impl AppState {
         }
 
         // From here on the project IS deleted as far as the user is concerned, so
-        // the rest is best-effort and MUST still drop the recents entry — otherwise
+        // the rest is best-effort and MUST still drop the recents entry - otherwise
         // a later failure (sibling `.tml`, config persist) would strand a
         // "File not found" zombie row, because the frontend skips its refresh on
         // `!success`. Collect non-fatal problems as warnings and still report
@@ -129,7 +129,7 @@ impl AppState {
         let mut warnings: Vec<ValidationWarning> = Vec::new();
 
         // The sibling `.tml` is removed only when the caller confirms it's this
-        // project's collab file — a same-stem `.tml` next to a non-collab project
+        // project's collab file - a same-stem `.tml` next to a non-collab project
         // may be an unrelated/imported Ariane file the user was never warned about,
         // so we leave it alone.
         if delete_collab_sibling {
@@ -202,8 +202,8 @@ impl AppState {
         };
 
         // Read-only edit gate (#191, D-B6): like `set_collab_enabled_for_path`,
-        // this renames a `.stalx` BY PATH — usually NOT the open AppState project
-        // — so the transient `edit_enabled` flag (which describes the *open*
+        // this renames a `.stalx` BY PATH - usually NOT the open AppState project
+        // - so the transient `edit_enabled` flag (which describes the *open*
         // project) can only speak for it when the path IS the currently open
         // project. Compute the open-project identity FIRST, BEFORE the disk write,
         // and gate only on a match so `guard_mutation` aborts a rename of the
@@ -253,11 +253,11 @@ impl AppState {
 
 /// Delete a single file by handing it to the OS's native delete.
 ///
-/// Production prefers the platform trash (`trash::delete`) — macOS Trash, Windows
-/// Recycle Bin, freedesktop trash on most Linux — so deletes are recoverable where
+/// Production prefers the platform trash (`trash::delete`) - macOS Trash, Windows
+/// Recycle Bin, freedesktop trash on most Linux - so deletes are recoverable where
 /// the OS supports it. When there's no usable trash for the file's filesystem (a
 /// NAS / removable mount, `HOME` unset, a read-only FS), the trash call fails and
-/// we fall back to a permanent `fs::remove_file` so the delete still happens — the
+/// we fall back to a permanent `fs::remove_file` so the delete still happens - the
 /// user asked for a real delete, and the OS provides recovery only where it can.
 ///
 /// Test builds (and the Android `cdylib` target, which has no desktop trash and

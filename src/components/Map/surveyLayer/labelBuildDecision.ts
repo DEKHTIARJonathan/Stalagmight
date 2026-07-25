@@ -4,7 +4,7 @@
  * SurveyLayer so it can be unit-tested without a live MapLibre map.
  *
  * Hysteresis: build once zoomed past `buildZoom`, drop only once zoomed out
- * below `dropZoom` — this band prevents thrashing at the threshold.
+ * below `dropZoom` - this band prevents thrashing at the threshold.
  *
  * Camera-settle guard: the guard exists ONLY to avoid MATERIALIZING the whole
  * (~165k-feature) label set against a *transient* zoom during a camera
@@ -12,7 +12,7 @@
  * It must NOT tear labels back down once they are already materialized: an
  * in-place edit commit (station / shot / segment move) re-flushes the survey
  * features through the SYNCHRONOUS drag-commit path, which publishes EMPTY label
- * groups when the build decision is false — blanking the entire shot + station
+ * groups when the build decision is false - blanking the entire shot + station
  * label population for the frames until the idle recheck rebuilds it (the
  * "all labels flash" bug). So the guard is applied to the fresh-build case only;
  * already-built labels are kept through transient camera motion.

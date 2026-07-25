@@ -20,8 +20,8 @@ function endpointCoords(ep: MeasureEndpoint): Coordinates {
   return ep.kind === 'point' ? { x: ep.x, y: ep.y, z: ep.z } : ep.coords;
 }
 
-/** Stable identity for ruler state: a distinct project file — even a duplicate
- *  sharing created_at/modified_at — and any edit (modified_at) yield a different
+/** Stable identity for ruler state: a distinct project file - even a duplicate
+ *  sharing created_at/modified_at - and any edit (modified_at) yield a different
  *  key, so an in-flight along-line reply can't bleed across them (#26). */
 function projectIdentityKey(
   project: { created_at?: string; modified_at?: string; file_path?: string | null } | null | undefined
@@ -75,7 +75,7 @@ interface MapToolsOptions {
 }
 
 /**
- * Pick the nearest reachable station to a point (in metres) — the Plan-mode "set a turnaround
+ * Pick the nearest reachable station to a point (in metres) - the Plan-mode "set a turnaround
  * anywhere" resolver (#236). Restricts to `reachable` station keys when provided, so the pick stays
  * meaningful (an unreachable endpoint would fall back to the deepest point in the engine); with no
  * field loaded yet (`reachable === null`) any station is eligible. Returns null when none match.
@@ -106,7 +106,7 @@ export function nearestReachableStationRef(
 }
 
 export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks {
-  // Performance: exclude hover values from subscription — this hook is called
+  // Performance: exclude hover values from subscription - this hook is called
   // from MapCanvas and would cause full re-renders on every mousemove.
   const {
     activeTool,
@@ -135,7 +135,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
     setDistanceGradientOrigin,
     appMode,
     // measureSnapShot is excluded too: it's rewritten on every mousemove over a
-    // shot (the live `t`), and is only ever read via getState() at click time — so
+    // shot (the live `t`), and is only ever read via getState() at click time - so
     // subscribing here would re-render MapCanvas ~60×/s for nothing (#26).
     // eslint-disable-next-line @typescript-eslint/no-unused-vars
   } = useUIStore(useShallow(({ hoveredStation, hoveredShot, hoveredSectionId, measureSnapShot, ...rest }) => rest));
@@ -263,9 +263,9 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         // Discard the response unless the EXACT measurement it was issued for is
         // still live. We compare the live endpoints by reference against the ones
         // this request was made for: every new click builds fresh endpoint objects,
-        // so a reset/restart — or a different completed measurement that never calls
+        // so a reset/restart - or a different completed measurement that never calls
         // requestAlongLine (e.g. a non-connectable station→raw-point one, which
-        // leaves this hook-local request ref untouched) — fails the check. Without
+        // leaves this hook-local request ref untouched) - fails the check. Without
         // it, a late reply would resurrect a stale readout/path tint over an
         // unrelated measurement (#26, Codex). The project check additionally guards
         // a switch landing before the MapCanvas clearMeasure effect runs.
@@ -339,14 +339,14 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           return;
         }
         if (result.can_merge) {
-          // Merge is allowed — open merge dialog
+          // Merge is allowed - open merge dialog
           setSource('map');
           openDialog('merge', {
             stationA,
             stationB,
           });
         } else if (result.connected || result.reason === 'Both sections have fixed coordinates') {
-          // Connected (or both sections fixed) — redirect to closure dialog
+          // Connected (or both sections fixed) - redirect to closure dialog
           setSource('map');
           openDialog('closure', {
             stationA,
@@ -399,12 +399,12 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             setSelection(sel);
           }
           // Distance gradient (#34): a plain select-click re-roots the overlay to
-          // the clicked station (additive — selection still happens).
+          // the clicked station (additive - selection still happens).
           if (showDistanceGradient && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             setDistanceGradientOrigin(ref);
           }
           // Gas planning (#38): a plain select-click re-roots the reachable overlay
-          // to the clicked station, mirroring the distance gradient (additive —
+          // to the clicked station, mirroring the distance gradient (additive -
           // selection still happens). Mutually exclusive with the distance overlay.
           if (showGasPlan && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             useGasPlanStore.getState().setOrigin(ref);
@@ -496,7 +496,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             (s) => s.station_ref.section_id === ref.section_id && s.station_ref.station_index === ref.station_index
           );
           if (!moveCommentSource) {
-            // First click: pick up source — just record it, don't mutate backend
+            // First click: pick up source - just record it, don't mutate backend
             if (!mcStation?.comment) {
               showToast('No comment to move', 'move-comment-empty');
               break;
@@ -504,16 +504,16 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             setSelection({ type: 'station', stationRef: ref });
             setMoveCommentSource({ type: 'station', stationRef: ref, comment: mcStation.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
           } else {
-            // Second click: target — use atomic move_comment IPC
+            // Second click: target - use atomic move_comment IPC
             const targetComment = mcStation?.comment ?? '';
             if (targetComment) {
-              // Target has comment — open swap dialog
+              // Target has comment - open swap dialog
               openDialog('swap-comments', {
                 source: moveCommentSource,
                 target: { type: 'station', stationRef: ref, comment: targetComment },
               });
             } else {
-              // Target empty — atomic move
+              // Target empty - atomic move
               const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
                 ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
                 : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
@@ -576,7 +576,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             setSelection(sel);
           }
           // Distance gradient (#34): re-root on a shot click too. With stations
-          // hidden — common (and nicer-looking) while the gradient is on — you
+          // hidden - common (and nicer-looking) while the gradient is on - you
           // can't click a station, so re-root to the shot's lower-numbered
           // endpoint station (section_id, shotIndex).
           if (
@@ -589,7 +589,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
             if (shotIndex !== -1) {
               const ref = { section_id: sectionId, station_index: shotIndex };
-              // Mutually exclusive overlays — re-root whichever is active.
+              // Mutually exclusive overlays - re-root whichever is active.
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
               if (showGasPlan) useGasPlanStore.getState().setOrigin(ref);
             }
@@ -662,7 +662,7 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           const mcSection = project?.sections.find((s) => s.id === sectionId);
           const mcShot = mcSection?.shots.find((s) => s.id === shotId);
           if (!moveCommentSource) {
-            // First click: pick up source — just record it, don't mutate backend
+            // First click: pick up source - just record it, don't mutate backend
             if (!mcShot?.comment) {
               showToast('No comment to move', 'move-comment-empty');
               break;
@@ -670,16 +670,16 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             setSelection({ type: 'shot', sectionId, shotId });
             setMoveCommentSource({ type: 'shot', sectionId, shotId, comment: mcShot.comment, screenPos: { x: mouseEvent.clientX, y: mouseEvent.clientY } });
           } else {
-            // Second click: target — use atomic move_comment IPC
+            // Second click: target - use atomic move_comment IPC
             const targetComment = mcShot?.comment ?? '';
             if (targetComment) {
-              // Target has comment — open swap dialog
+              // Target has comment - open swap dialog
               openDialog('swap-comments', {
                 source: moveCommentSource,
                 target: { type: 'shot', sectionId, shotId, comment: targetComment },
               });
             } else {
-              // Target empty — atomic move
+              // Target empty - atomic move
               const source = moveCommentSource.type === 'station' && moveCommentSource.stationRef
                 ? { type: 'station' as const, station_ref: moveCommentSource.stationRef }
                 : { type: 'shot' as const, section_id: moveCommentSource.sectionId!, shot_id: moveCommentSource.shotId! };
@@ -872,11 +872,11 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
 
       // Plan (gas) mode: the only context action is picking a route point. A station target uses
       // that station (handled below); a SHOT target or an empty click snaps to the nearest reachable
-      // station — so right-clicking the prominent gas-coloured shot lines (very likely, since
+      // station - so right-clicking the prominent gas-coloured shot lines (very likely, since
       // stations are often hidden), or empty cave when the whole map is reachable (low RMV / lots of
       // gas → no turn-frontier dots), still opens the route menu instead of silently doing nothing.
       // Match in metres against the click's map coords; restrict to reachable stations (when the
-      // field is loaded) so the pick is meaningful — an unreachable endpoint would fall back to the
+      // field is loaded) so the pick is meaningful - an unreachable endpoint would fall back to the
       // deepest point in the engine. The ContextMenu Plan branch turns it into Set as endpoint. (#236)
       if (showGasPlan && target?.type !== 'station') {
         const reachField = useGasPlanStore.getState().reachField;

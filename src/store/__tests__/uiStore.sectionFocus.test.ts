@@ -77,7 +77,7 @@ describe('uiStore section focus (#50)', () => {
 
   it('re-focusing another section keeps the original pre-focus snapshot', () => {
     useUIStore.getState().enterSectionFocus(7, FOCUS_HEIGHT);
-    // simulate a second enter (e.g., via another path) — must not overwrite snapshot
+    // simulate a second enter (e.g., via another path) - must not overwrite snapshot
     useUIStore.getState().enterSectionFocus(8, 999);
     useUIStore.getState().exitSectionFocus();
     const s = useUIStore.getState();
@@ -145,7 +145,7 @@ describe('uiStore section focus (#50)', () => {
       dataTableMode: 'pin',
     });
     useUIStore.getState().enterSectionFocus(7, FOCUS_HEIGHT);
-    // Open the sections panel via setPanelOpen — this exits focus and persists.
+    // Open the sections panel via setPanelOpen - this exits focus and persists.
     useUIStore.getState().setPanelOpen('sections', true);
     const s = useUIStore.getState();
     // (b) focus cleared
@@ -171,7 +171,7 @@ describe('uiStore section focus (#50)', () => {
       dataTableMode: 'pin',
     });
     useUIStore.getState().enterSectionFocus(7, FOCUS_HEIGHT);
-    // Pin the detail panel via setPanelMode — this exits focus and persists.
+    // Pin the detail panel via setPanelMode - this exits focus and persists.
     useUIStore.getState().setPanelMode('detail', 'pin');
     const s = useUIStore.getState();
     // (b) focus cleared
@@ -197,7 +197,7 @@ describe('uiStore section focus (#50)', () => {
       dataTableMode: 'hover',
     });
     useUIStore.getState().enterSectionFocus(7, FOCUS_HEIGHT);
-    // Toggle the data table — this exits focus and persists.
+    // Toggle the data table - this exits focus and persists.
     useUIStore.getState().toggleDataTable();
     const s = useUIStore.getState();
     // (b) focus cleared

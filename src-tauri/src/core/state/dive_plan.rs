@@ -542,7 +542,7 @@ mod tests {
     #[test]
     fn to_key_uses_stable_anchors_not_positional_index() {
         let (project, sec) = project_3_shots();
-        // An interior station canonicalizes to AfterShot(uuid) — the stable form — never Index.
+        // An interior station canonicalizes to AfterShot(uuid) - the stable form - never Index.
         let key = to_key(&project, Some(StationRef::new(sec, 2))).unwrap();
         assert!(matches!(key.anchor, StationAnchor::AfterShot(_)));
         // Station 0 is the section start.
@@ -578,7 +578,7 @@ mod tests {
         let mut stale = 0;
         let resolved = from_key(&project, Some(key), &mut stale);
         assert_eq!(stale, 0);
-        // Follows the station to its new index — NOT the old positional index 2.
+        // Follows the station to its new index - NOT the old positional index 2.
         assert_eq!(resolved, Some(StationRef::new(sec, 1)));
     }
 

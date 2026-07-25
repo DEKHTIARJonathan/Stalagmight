@@ -5,7 +5,7 @@
  *
  * Centralizing them keeps the New-project unsaved-changes guard and the Save-As
  * + overwrite-confirm flow in exactly one place so the menu and keyboard paths
- * can't drift — they previously each had their own copy (the New-project guard
+ * can't drift - they previously each had their own copy (the New-project guard
  * existed only on the menu path, and Save-As's `closeAfterSave` handling was
  * added to the menu copy but not the keyboard one).
  *
@@ -77,7 +77,7 @@ export async function saveProjectAs(opts?: {
         return null;
       }
     } catch {
-      // exists() failed — proceed with the save (the backend reports real errors).
+      // exists() failed - proceed with the save (the backend reports real errors).
     }
 
     const result = await useProjectStore.getState().saveProject(finalPath);
@@ -88,7 +88,7 @@ export async function saveProjectAs(opts?: {
   } catch (e) {
     // store.saveProject rejects only on an IPC-transport failure (real save
     // failures resolve as CommandResult{success:false}, handled above). Surface
-    // it here rather than letting it escape as an unhandled rejection — the
+    // it here rather than letting it escape as an unhandled rejection - the
     // keyboard (`void saveProjectAs()`) and menu (`void handleSaveProjectAs()`)
     // call sites don't catch. Return null (not a failure result) so the
     // delegating handleSaveProject doesn't surface a second dialog and

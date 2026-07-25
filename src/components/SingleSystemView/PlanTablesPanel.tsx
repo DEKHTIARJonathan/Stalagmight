@@ -7,9 +7,9 @@ type PlanTab = 'cylinders' | 'profile';
 /**
  * The Plan-mode bottom panel (#38): tabbed tabular data that replaces the survey data
  * table while planning. "Cylinders" is the rig editor; "Profile" is the anticipated
- * depth/time/gas profile for handoff to a deco app (Subsurface) — a stub for now, since
+ * depth/time/gas profile for handoff to a deco app (Subsurface) - a stub for now, since
  * the backend doesn't yet return the per-route path (predecessor back-trace is future
- * work — see the PR's PR3). Tab state is local + transient (never persisted).
+ * work - see the PR's PR3). Tab state is local + transient (never persisted).
  */
 export function PlanTablesPanel() {
   const { t } = useTranslation();

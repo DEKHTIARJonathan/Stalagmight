@@ -1,5 +1,5 @@
 // Optional MapLibre / handler instrumentation for the macOS lockup
-// investigation. Off by default — installPanZoomDebug() early-returns unless
+// investigation. Off by default - installPanZoomDebug() early-returns unless
 // the build is run with VITE_DEBUG_MACOS_LOCKUP=true. See
 // docs/debugging-macos-pan-zoom.md for the protocol this enables.
 
@@ -70,7 +70,7 @@ function forEachMethod(
           cb(obj as object, name, v as (...args: unknown[]) => unknown);
         }
       } catch {
-        // Some getters throw when accessed off-instance — ignore.
+        // Some getters throw when accessed off-instance - ignore.
       }
     }
     cur = Object.getPrototypeOf(cur);
@@ -205,7 +205,7 @@ function installSwallowForRunThrow(
 
   if (wrapped.length === 0) {
     log(
-      '[swallow] NO method containing "already running" found on map/handlers/subsystems — re-entry throws WILL still escape and kill rAF',
+      '[swallow] NO method containing "already running" found on map/handlers/subsystems - re-entry throws WILL still escape and kill rAF',
     );
   } else {
     log(`[swallow] wrapped ${wrapped.length} re-entry-throwing method(s): ${wrapped.join(', ')}`);

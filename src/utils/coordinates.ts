@@ -239,7 +239,7 @@ export function getBounds(coords: Coordinates[]): {
 
 /**
  * Bounds over an interleaved `[x,y,z, x,y,z, …]` station-coordinate buffer (the
- * SoA `SurveyData.stationCoords`) — equivalent to `getBounds` but WITHOUT
+ * SoA `SurveyData.stationCoords`) - equivalent to `getBounds` but WITHOUT
  * materializing a `Coordinates[]`. The initial-view sizing used to
  * `stations.map((s) => s.coordinates)` the lazy `Station[]` proxy, which rebuilt
  * the whole ~89k-object graph on load just to read coordinates (#mem). Empty

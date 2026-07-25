@@ -8,7 +8,7 @@
 //! Key Ariane format rules learned from real files:
 //! - Only **one** START shot exists (the root of the entire survey graph).
 //!   Branch sections connect via `FromID` on their first REAL/VIRTUAL shot
-//!   pointing directly to the parent station — no extra START nodes.
+//!   pointing directly to the parent station - no extra START nodes.
 //! - The ID element uses all-caps `<ID>` (not `<Id>`).
 //! - Every shot carries `<Locked>`, `<Name>`, and `<Profiletype>` fields.
 
@@ -212,7 +212,7 @@ pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
 
 /// Export for collaboration mode: writes the file AND returns the per-shot
 /// baseline (for diffing a returned file) plus the sha256 of the inner XML
-/// content (for detecting external edits on open — independent of zip framing).
+/// content (for detecting external edits on open - independent of zip framing).
 pub fn export_tml_with_baseline(
     project: &Project,
     path: &Path,
@@ -272,7 +272,7 @@ fn build_xml(
     // is never a real section. Detect them as the shot section names that (a) are
     // not real exported sections and (b) carry a synthetic suffix. The "not a real
     // section" guard means a section legitimately named "X (reversed)" is never
-    // misflagged — its own forward shots put that name in `real_names`.
+    // misflagged - its own forward shots put that name in `real_names`.
     let real_names: HashSet<&str> = baseline.iter().map(|e| e.section_name.as_str()).collect();
     let synthetic_section_names: Vec<String> = shots
         .iter()
@@ -743,7 +743,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         next_id += 1;
 
                         let prev_id = if shot_idx == child_merge_idx {
-                            -1 // placeholder — resolved in second pass
+                            -1 // placeholder - resolved in second pass
                         } else {
                             shot_ariane_id - 1
                         };
@@ -817,7 +817,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         next_id += 1;
 
                         let prev_id = if shot_idx == child_merge_idx - 1 {
-                            -1 // placeholder — resolved in second pass
+                            -1 // placeholder - resolved in second pass
                         } else {
                             shot_ariane_id - 1
                         };
@@ -880,7 +880,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         next_id += 1;
 
                         let prev_id = if shot_idx == section.shots.len() - 1 {
-                            -1 // placeholder — resolved in second pass
+                            -1 // placeholder - resolved in second pass
                         } else {
                             shot_ariane_id - 1
                         };
@@ -991,7 +991,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     // Chain from the START shot
                     shots[0].id
                 } else {
-                    // Placeholder — will be resolved in second pass
+                    // Placeholder - will be resolved in second pass
                     -1
                 }
             } else {
@@ -1152,7 +1152,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
         // Patch baseline.station_comment so reconcile can diff against the
         // exact text we just wrote. The baseline is keyed by
         // (section_id, shot_index); the shot's to-station is
-        // (section_id, shot_index + 1) — its "primary" attached station.
+        // (section_id, shot_index + 1) - its "primary" attached station.
         // Secondary attachments (e.g. a merged child station that aliases the
         // same Ariane id) aren't captured in the baseline; they round-trip
         // through the primary's slot and the model treats them as the same
@@ -1720,7 +1720,7 @@ mod tests {
         // pre-v6 lookup would assign the existing UUIDs to the WRONG
         // shots.  With `shot.uuid` carried directly on Shot, the
         // pre-existing shots keep their UUIDs and the new shot gets a
-        // fresh one — regardless of where it lands in the section.
+        // fresh one - regardless of where it lands in the section.
         let mut project = simple_project();
         let dir = tempfile::TempDir::new().unwrap();
         let path = dir.path().join("out.tmlu");
@@ -1835,7 +1835,7 @@ mod tests {
         let mut data_xml = String::new();
         std::io::Read::read_to_string(&mut archive.by_name("Data.xml").unwrap(), &mut data_xml)
             .unwrap();
-        // TML uses long names — verify ID is all-caps
+        // TML uses long names - verify ID is all-caps
         assert!(data_xml.contains("<SurveyData>"));
         assert!(data_xml.contains("<ID>"));
         assert!(data_xml.contains("<Azimut>"));
@@ -2009,7 +2009,7 @@ mod tests {
         assert_eq!(start_count, 1, "expected exactly 1 START shot");
 
         // Section A: START(0), REAL(1), REAL(2)
-        // Section B: REAL(3) — no START, first shot links to parent
+        // Section B: REAL(3) - no START, first shot links to parent
         assert_eq!(shots.len(), 4);
 
         assert_eq!(shots[0].shot_type, "START");

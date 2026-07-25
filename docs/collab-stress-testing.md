@@ -57,8 +57,8 @@ sqlite3 /tmp/collab_stress/<stem>.stalx "SELECT state_json FROM collab_state;" |
 
 1. Open a project → **Project details** → toggle **Ariane collaboration** ON (also
    test the toggle in the **recent-projects panel** in the global view).
-2. **Save** (`Ctrl+S`) — seeds the baseline and writes `<stem>.tml`.
-3. Edit the `.tml` — in real Ariane, by hand (§1), or by swapping in another version.
+2. **Save** (`Ctrl+S`) - seeds the baseline and writes `<stem>.tml`.
+3. Edit the `.tml` - in real Ariane, by hand (§1), or by swapping in another version.
 4. **Close and reopen** the project → the review dialog appears if the `.tml` changed.
 5. Review counts/lists → **Apply Changes**.
 6. **Verify** invariants (§0), then `Ctrl+Z` and confirm full revert.
@@ -101,7 +101,7 @@ sqlite3 /tmp/collab_stress/<stem>.stalx "SELECT state_json FROM collab_state;" |
 - **Near-identical geometry** (geo-key collision): positional fallback + the
   "approximate" match-quality banner appears.
 - **Reversed-leg edit**: editing a shot inside a `(reversed)`/`(pre-zero-datum)` leg
-  is ignored by design (v1 limit) — confirm no crash/garble.
+  is ignored by design (v1 limit) - confirm no crash/garble.
 - **Branch split**: a section returning as `Foo (branch 1)`/`(branch 2)` → no false
   rename.
 - **Unicode / very long names**, or names literally ending in `(reversed)` /
@@ -119,18 +119,18 @@ sqlite3 /tmp/collab_stress/<stem>.stalx "SELECT state_json FROM collab_state;" |
 
 Three layers run the above invariants automatically.
 
-### Layer 1 — Rust property fuzzer (`src-tauri/src/core/reconcile_fuzz.rs`)
+### Layer 1 - Rust property fuzzer (`src-tauri/src/core/reconcile_fuzz.rs`)
 
 Dependency-free, deterministic (SplitMix64). A generator bounded to clean-round-trip
 topologies (plain / mid-station datum / merged child / duplicate names) feeds three
 properties, each scaled by `COLLAB_FUZZ_ITERS` (default 64; runs in the normal
 `cargo test` CI gate):
 
-1. `fuzz_clean_roundtrip_is_empty` — UUID-preserving clean round-trip ⇒ empty diff.
-2. `fuzz_degraded_roundtrip_is_empty` — identity stripped (geometry/positional tiers)
+1. `fuzz_clean_roundtrip_is_empty` - UUID-preserving clean round-trip ⇒ empty diff.
+2. `fuzz_degraded_roundtrip_is_empty` - identity stripped (geometry/positional tiers)
    ⇒ empty diff.
-3. `fuzz_edit_converges` — a depth-safe edit (length/azimuth/insert/delete/rename) is
-   detected, applied, and converges (re-diff empty) — the net for the insert-position
+3. `fuzz_edit_converges` - a depth-safe edit (length/azimuth/insert/delete/rename) is
+   detected, applied, and converges (re-diff empty) - the net for the insert-position
    bug.
 
 ```bash
@@ -142,7 +142,7 @@ A failure prints its seed; pin it via `run_seed(seed)` as a permanent regression
 Stalagmight-only-field preservation is a targeted test next to `apply_changeset`
 (`apply_edit_preserves_stalagmight_only_fields`).
 
-### Layer 2 — real-Ariane corpus replay (same file)
+### Layer 2 - real-Ariane corpus replay (same file)
 
 `corpus_replay_real_ariane_history` loads the Naharon `.stalx` and replays each real
 `.tml` version (diff → apply → assert convergence), exercising real Ariane
@@ -154,7 +154,7 @@ COLLAB_CORPUS_DIR=~/src/cave/data/collab_test_data \
   cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz::corpus_replay -- --nocapture
 ```
 
-### Layer 3 — Rust reconcile round-trip (`core/reconcile.rs`, `core/state/collab.rs`)
+### Layer 3 - Rust reconcile round-trip (`core/reconcile.rs`, `core/state/collab.rs`)
 
 Against the real reconcile engine: clean round-trip (no changes), external shot
 edit detected as an edit (with apply/undo via the apply tests), external section

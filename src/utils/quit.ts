@@ -16,7 +16,7 @@ import { useUIStore } from '../store/uiStore';
  * `core:window:allow-close` capability; a rejection is logged so a denied/
  * regressed capability is visible rather than failing silently.
  *
- * Call this only AFTER any unsaved-changes confirmation — it does NOT prompt.
+ * Call this only AFTER any unsaved-changes confirmation - it does NOT prompt.
  */
 export function performQuit(): void {
   getCurrentWindow()
@@ -28,8 +28,8 @@ export function performQuit(): void {
 
 /**
  * Quit the application. If a project has unsaved changes, route through the
- * in-app unsaved-changes dialog (Save / Discard & Quit / Cancel) — the same
- * guard New/Open use — instead of destroying the window and silently dropping
+ * in-app unsaved-changes dialog (Save / Discard & Quit / Cancel) - the same
+ * guard New/Open use - instead of destroying the window and silently dropping
  * the edits. Otherwise quit immediately.
  */
 export function quitApp(): void {

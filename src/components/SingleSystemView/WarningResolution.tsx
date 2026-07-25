@@ -62,9 +62,9 @@ interface ResolutionOption {
   /** Extra context shown below the option only while it is selected (like the
    *  inline manual editors), e.g. the inclination a length was derived from. */
   selectedNote?: string | undefined;
-  /** Destructive option (e.g. delete the shot) — rendered in red. */
+  /** Destructive option (e.g. delete the shot) - rendered in red. */
   danger?: boolean | undefined;
-  /** Disabled (frozen / closure-adjusted view) — applies to data fixes. */
+  /** Disabled (frozen / closure-adjusted view) - applies to data fixes. */
   disabled?: boolean;
   /** Reveals an inline editor when selected. */
   manual?: ManualKind;
@@ -82,9 +82,9 @@ interface WarningResolutionProps {
   position?: { index: number; total: number } | undefined;
   /** ‹ Back (single) / Exit (resolve-all). */
   onExit: () => void;
-  /** A fix was applied or the warning was ignored — advance. */
+  /** A fix was applied or the warning was ignored - advance. */
   onResolved: () => void;
-  /** Skip this warning without changing anything — advance. */
+  /** Skip this warning without changing anything - advance. */
   onSkip: () => void;
 }
 
@@ -92,12 +92,12 @@ const LRUD_FIELDS = ['left', 'right', 'up', 'down'] as const;
 type LrudField = (typeof LRUD_FIELDS)[number];
 
 /**
- * The proposed RAW shot fields for a resolution option — the single source the
+ * The proposed RAW shot fields for a resolution option - the single source the
  * on-map preview and the applied `update_shot` patch are BOTH derived from, so
  * the ghost and the committed change cannot diverge (issue #57).
  *
  * Azimuth is always carried as both legs (`azimuthIn`/`azimuthOut`) so the
- * preview can take their average — for the single-leg options (`use-in`/
+ * preview can take their average - for the single-leg options (`use-in`/
  * `use-out`) both legs are set equal so `averageAzimuth(x, x) === x` reproduces
  * the old preview azimuth; the apply translation still emits only the one
  * changed leg for those. `invalid` reports a rejected manual input, mapped by
@@ -412,9 +412,9 @@ export function WarningResolution({
         // Depth gauges are trusted, so the depth change is never altered here. The
         // implied inclination is signed in the +down convention (DetailPanel's
         // computeInclination), matching the recorded pitch and the backend check.
-        // Offer to adjust the inclination (keep the recorded length — always works,
+        // Offer to adjust the inclination (keep the recorded length - always works,
         // also fixes a reversed sign), adjust the length (keep the recorded
-        // inclination — only when its sign points the same way as the depth change,
+        // inclination - only when its sign points the same way as the depth change,
         // else withheld), or split between them.
         const dz = shot.depth_out - shot.depth_in;
         const implied = impliedInclination(shot);
@@ -496,7 +496,7 @@ export function WarningResolution({
   // (issue #57). Anchored to the real solved endpoint so it shows just the
   // change; returns null (no ghost) for options that don't move stations, or
   // when our planar model can't reproduce the current endpoint (e.g. a
-  // rotated/offset section) — better to show nothing than a misleading ghost.
+  // rotated/offset section) - better to show nothing than a misleading ghost.
   const preview = useMemo<GeometryPreview | null>(() => {
     if (!shot) return null;
     const opt = options.find((o) => o.id === selected);
@@ -521,7 +521,7 @@ export function WarningResolution({
     if (!raw || raw.invalid) return null;
 
     // Pitch-only proposals (incl-from-depth) change neither azimuth, length, nor
-    // depth — no ghost (preserves the old switch's no-case-for-incl-from-depth).
+    // depth - no ghost (preserves the old switch's no-case-for-incl-from-depth).
     if (
       raw.azimuthIn === undefined &&
       raw.azimuthOut === undefined &&
@@ -651,7 +651,7 @@ export function WarningResolution({
       const result = await deleteShot(warning.sectionId, warning.shotId);
       if (result.success) {
         // The shot no longer exists; the resolve flow had it selected, so move
-        // the selection to its parent section — otherwise Details renders
+        // the selection to its parent section - otherwise Details renders
         // "Selection not found" for the now-dangling shot selection.
         setSource('detail-panel');
         setSelection({ type: 'section', sectionId: warning.sectionId });
@@ -847,14 +847,14 @@ export function WarningResolution({
               )}
               {/* Advisory: the proposed length/depth makes the shot shorter than
                   its depth change, which revalidation will flag. Applying is
-                  still allowed (the Apply button stays enabled) — we just warn. */}
+                  still allowed (the Apply button stays enabled) - we just warn. */}
               {selected === opt.id && (opt.manual === 'depth' || opt.manual === 'length') && proposedCreatesError && (
                 <div className="pl-6 pr-1 pb-1 text-xs text-warning" data-testid={`warning-resolution-impossible-${opt.id}`}>
                   {t('detailPanel.warnings.proposedImpossibleGeometry')}
                 </div>
               )}
               {/* Extra context (e.g. the inclination used), shown only while
-                  this option is selected — mirrors the inline manual editors. */}
+                  this option is selected - mirrors the inline manual editors. */}
               {selected === opt.id && opt.selectedNote && (
                 <div className="pl-6 pr-1 pb-1 text-xs text-text-secondary" data-testid={`warning-resolution-note-${opt.id}`}>
                   {opt.selectedNote}

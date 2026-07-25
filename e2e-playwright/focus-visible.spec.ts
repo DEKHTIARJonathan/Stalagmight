@@ -3,7 +3,7 @@ import { setupMockedPage, seedProjectWithSections, waitForMapReady, createProjec
 
 /**
  * The focus ring must only appear during keyboard navigation, not on mouse
- * clicks — while the element is still focused. Because :focus-visible matches on
+ * clicks - while the element is still focused. Because :focus-visible matches on
  * clicks in some engines (WebKit), an input-modality tracker tags <html
  * data-input-modality> and the ring is gated on it (index.css).
  */
@@ -25,7 +25,7 @@ test.describe('Focus ring (keyboard-only)', () => {
     const modality = () => page.evaluate(() => document.documentElement.dataset.inputModality);
 
     // Click → pointer modality; the row is focused (and selected) but the ring is
-    // suppressed — only transparent shadows remain (selection shows via bg tint).
+    // suppressed - only transparent shadows remain (selection shows via bg tint).
     const row0 = page.locator(`[data-testid="section-row-${ids[0]}"]`);
     await row0.click();
     expect(await modality()).toBe('pointer');

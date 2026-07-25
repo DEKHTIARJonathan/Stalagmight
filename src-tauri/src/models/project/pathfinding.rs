@@ -259,7 +259,7 @@ impl Project {
                     let shot_len = section
                         .shots
                         .get(prev_index as usize)
-                        // Clamp negative shot lengths to 0 — Dijkstra requires
+                        // Clamp negative shot lengths to 0 - Dijkstra requires
                         // non-negative edges. Interactive commands reject negative
                         // lengths, but a corrupt import/parse or a deserialized file
                         // can carry them; matches the other graph builders (#176).
@@ -566,23 +566,23 @@ impl Project {
     /// Build the survey distance graph as an adjacency list over the `n` stations
     /// (nodes indexed by position; `station_index` maps refs to those indices).
     /// Edges are **every real topological connection**:
-    /// - every shot — permanent AND jump/reference — weighted by its measured
+    /// - every shot - permanent AND jump/reference - weighted by its measured
     ///   `length` (reference shots are real measured legs / jumps a diver swims);
-    /// - `station_merges` (zero cost — the same physical point);
-    /// - every `loop_closures` entry (zero cost — a closed loop means the two
+    /// - `station_merges` (zero cost - the same physical point);
+    /// - every `loop_closures` entry (zero cost - a closed loop means the two
     ///   stations are the same physical point), **regardless of `is_aligned`**;
     ///   alignment is only a geometry-reconciliation strategy (`Move` vs `Batch`),
     ///   so the topological connection exists either way.
     ///
     /// We deliberately include everything. Distances are shortest-path (Dijkstra
     /// always takes the minimum), so an extra real edge can only ever yield a
-    /// shorter, more correct route — never inflate one. Excluding real
+    /// shorter, more correct route - never inflate one. Excluding real
     /// connections is what hides reachable areas or routes "the long way".
     ///
     /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
     /// survey backsight, not swimmable) creating a false shortcut that understates
     /// distance. Telling those apart from real jumps needs a first-class model;
-    /// until then we favor completeness — real data showed over-exclusion (a
+    /// until then we favor completeness - real data showed over-exclusion (a
     /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
     pub(super) fn build_survey_graph(
         &self,
@@ -610,7 +610,7 @@ impl Project {
     /// weight is supplied by `shot_weight(shot, from_idx, to_idx)`. Shot edges (permanent +
     /// jump/reference) take the closure's weight; station merges and loop closures stay
     /// **zero-cost** (same physical point). The section/shot iteration order is byte-identical
-    /// to `build_survey_graph` — `along_line_between` keys a parallel shot-edge map on that
+    /// to `build_survey_graph` - `along_line_between` keys a parallel shot-edge map on that
     /// edge-emission order, so it must not change here.
     pub(super) fn build_survey_graph_weighted<F>(
         &self,
@@ -647,7 +647,7 @@ impl Project {
                 }
             }
         }
-        // Loop closures: zero-cost, INCLUDING non-aligned ones — a closed loop is
+        // Loop closures: zero-cost, INCLUDING non-aligned ones - a closed loop is
         // a real physical connection no matter the reconciliation strategy.
         for closure in &self.loop_closures {
             if let (Some(a_sr), Some(b_sr)) = (
@@ -666,7 +666,7 @@ impl Project {
 
     /// Multi-source Dijkstra over `adj` from the given `roots` (node indices,
     /// each seeded at distance 0). Returns the shortest-path distance to every
-    /// node; unreachable nodes — and every node when `roots` is empty — stay
+    /// node; unreachable nodes - and every node when `roots` is empty - stay
     /// `f64::INFINITY`. Thin wrapper over [`dijkstra_with_preds`](Self::dijkstra_with_preds)
     /// that drops the predecessor tree (the `dist` half is identical).
     pub(super) fn dijkstra(adj: &[Vec<(usize, f64)>], roots: &[usize]) -> Vec<f64> {
@@ -707,7 +707,7 @@ impl Project {
         let mut heap: BinaryHeap<std::cmp::Reverse<Node>> = BinaryHeap::new();
         for &r in roots {
             // Bounds-guard only; a duplicate root just gets re-popped once and
-            // filtered by the `d > dist[u]` check below — no need to dedup here.
+            // filtered by the `d > dist[u]` check below - no need to dedup here.
             if r < n {
                 dist[r] = 0.0;
                 heap.push(std::cmp::Reverse(Node(0.0, r)));

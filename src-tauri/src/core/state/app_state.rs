@@ -71,7 +71,7 @@ pub struct AppState {
     pub(super) project: Mutex<Option<Project>>,
     /// Database connection (if project is open)
     pub(super) database: Mutex<Option<Database>>,
-    /// True while the open project's initial save is still deferred — created with
+    /// True while the open project's initial save is still deferred - created with
     /// no save path and never written to disk, so it has no `.stalx` and no Recent
     /// Projects entry yet. Tracked explicitly rather than inferred from
     /// `database.is_none()` (ambiguous for dropped handles) or file existence
@@ -303,15 +303,15 @@ impl AppState {
     /// - `resolve_warning`/`unresolve_warning` ARE gated as of #197 (via
     ///   `save_resolved_warning_gated`/`delete_resolved_warning_gated`): a resolved
     ///   warning PROLIFERATES to the server (it is NOT stripped from the push
-    ///   snapshot), so it is a real remote-dirtying edit — gate it AND
+    ///   snapshot), so it is a real remote-dirtying edit - gate it AND
     ///   `mark_remote_dirty` so a read-only project rejects it and an edit-session
     ///   resolve is pushed by `Done` rather than silently dropped on the next pull.
     /// - `save_display_setting` (view prefs) stays UNGATED and that is correct:
     ///   `display_settings` is stripped from the push snapshot and re-applied locally
-    ///   across pull/FF — purely local view state that never proliferates, never lost.
+    ///   across pull/FF - purely local view state that never proliferates, never lost.
     /// - `track_imported_file`/`track_section_hashes` import-dedup bookkeeping stays
     ///   UNGATED for now: the in-import path gates + dirties, but the standalone
-    ///   `track_imported_file` command does not — a deferred follow-up, lower-impact
+    ///   `track_imported_file` command does not - a deferred follow-up, lower-impact
     ///   than a lost annotation (re-import is the worst case, not silent data loss).
     ///
     /// `MUTATION_ENTRYPOINTS` (tests.rs) enumerates the gated set (incl. the two
@@ -330,7 +330,7 @@ impl AppState {
     /// Flip `has_unpushed_edits` `false → true` AND refresh `last_edit_at` on a
     /// successful edit of a remote project (#191, D-B16; v10 last_edit_at). No-op
     /// for local-only (`load_speleo_link → None`). The dirty bit is SET-ONLY in
-    /// #191 — local save/autosave NEVER clears it; only a successful server push
+    /// #191 - local save/autosave NEVER clears it; only a successful server push
     /// (Sync/Release) does. `last_edit_at` is refreshed on EVERY accepted
     /// mutation (not idempotent) because guardrail-7 compares it to push-start to
     /// decide whether a landed-by-ancestry push may clear the dirty bit.
@@ -339,7 +339,7 @@ impl AppState {
             return;
         };
         let Some(db) = db_guard.as_ref() else {
-            return; // no open database (e.g. unsaved project) — nothing to stamp
+            return; // no open database (e.g. unsaved project) - nothing to stamp
         };
         // One targeted UPDATE: set the dirty bit + refresh last_edit_at (the g7
         // push-start comparison needs the LATEST edit time, so this runs every edit,
@@ -400,7 +400,7 @@ impl AppState {
     // === Closure-adjusted geometry (non-destructive derived view) ===
 
     /// Compute (or return cached) closure-adjusted station coordinates for the
-    /// current project. Non-destructive: the measured project is never mutated —
+    /// current project. Non-destructive: the measured project is never mutated -
     /// the adjustment runs on the project clone this method already takes (see
     /// [`Project::into_adjusted_station_coordinates`]) and only the resulting
     /// coordinates are returned.
@@ -457,8 +457,8 @@ impl AppState {
         if let Ok(mut cache) = self.adjusted_cache.lock() {
             // Only store if nothing invalidated the cache while command_lock was
             // released for the heavy, lock-free solve. Otherwise an edit/open/repair
-            // that ran during the solve — including a repair that doesn't bump
-            // modified_at — could be clobbered by this now-stale result.
+            // that ran during the solve - including a repair that doesn't bump
+            // modified_at - could be clobbered by this now-stale result.
             if self
                 .adjusted_cache_generation
                 .load(std::sync::atomic::Ordering::SeqCst)
@@ -477,23 +477,23 @@ impl AppState {
     /// Per-station distance field for the distance-gradient overlay (#34),
     /// computed on the closure-adjusted geometry. Takes ONE reconciled project
     /// snapshot under `command_lock` (so the graph topology and the adjusted
-    /// coordinates come from the same version — no read-skew between two separate
+    /// coordinates come from the same version - no read-skew between two separate
     /// state reads), and reuses the memoized adjusted-stations cache read-only
     /// when it matches that snapshot (keeps re-root instant in the adjusted view).
     pub fn distance_field(&self, from: Option<&StationRef>) -> Option<DistanceField> {
         let project = self.get_project_state()?;
         // Distance uses MEASURED geometry (surveyed shot lengths via the plain
-        // coordinate walk) — instant. The closure-adjusted solve is intentionally
+        // coordinate walk) - instant. The closure-adjusted solve is intentionally
         // NOT used: it dominated the latency (~2s release / ~40s debug on a 6k-
         // station survey; ~O(n^2)) for a sub-meter difference, and reachability is
-        // identical either way (it's topological — shots/merges/closures — not
+        // identical either way (it's topological - shots/merges/closures - not
         // coordinate-dependent). Closure-solve perf is tracked separately (#81).
         let stations = project.compute_station_coordinates();
         Some(project.distance_field_from(&stations, from))
     }
 
     /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
-    /// engine consumes the instant MEASURED geometry (reachability is coordinate-independent —
+    /// engine consumes the instant MEASURED geometry (reachability is coordinate-independent -
     /// never the slow closure-adjusted solve). `None` when no project is open. The diver /
     /// cylinders are assumed already validated and `gas_config` normalized by the command.
     pub fn gas_reach_field(
@@ -521,7 +521,7 @@ impl AppState {
     /// uses the memoized adjusted-stations cache (`get_adjusted_stations`): warm
     /// while the adjusted view is in use, and on a cold cache it pays one closure
     /// solve (then repeat measurements are instant). Falls back to measured
-    /// coordinates only if the adjusted solve is unavailable — without loop
+    /// coordinates only if the adjusted solve is unavailable - without loop
     /// closures the two coincide anyway.
     pub fn along_line_between(
         &self,
@@ -531,7 +531,7 @@ impl AppState {
         let project = self.get_project_state()?;
         // `project` (topology) and `stations` (adjusted coords) are two independent
         // locked reads, so a concurrent edit between them could yield a slightly
-        // skewed snapshot. That's safe here — `along_line_between` looks everything
+        // skewed snapshot. That's safe here - `along_line_between` looks everything
         // up by `StationRef` through guarded `idx.get(..)` and indexes coords only
         // via those resolved indices, so a mismatch drops an edge at worst (never
         // panics) and the ruler re-queries. We deliberately avoid a single
@@ -574,13 +574,13 @@ impl AppState {
     /// that serde skips. THE single place a restored project enters the live slot:
     /// every rollback/undo/redo path routes through here so none can forget to
     /// rebuild a cache and leave a half-populated / stale map behind (which would
-    /// silently mis-resolve sections or merge groups) — see catalog #14/#39.
+    /// silently mis-resolve sections or merge groups) - see catalog #14/#39.
     /// Returns false and leaves `slot` untouched if the snapshot can't be parsed.
     #[must_use]
     pub(super) fn restore_snapshot_into(slot: &mut Option<Project>, snapshot: &str) -> bool {
         // A snapshot persisted by a build predating the per-project `validation`
         // field (#57) has no "validation" key, so serde (the field is
-        // #[serde(default)]) fills ValidationConfig::default() — silently changing
+        // #[serde(default)]) fills ValidationConfig::default() - silently changing
         // the project's thresholds and its warnings when an undo/redo of a legacy
         // persisted entry is restored. Detect that legacy blob and carry the CURRENT
         // project's validation across instead. Undo of a real settings change always
@@ -604,19 +604,19 @@ impl AppState {
                 // `{section_id, station_index}` shape). The live-model invariant is
                 // "no Index anchors": a later shot insert/delete only shifts
                 // AfterShot/SectionStart refs, so a live Index ref would silently start
-                // resolving to the wrong station. Canonicalize such a snapshot — the
-                // same step the load path runs — to AfterShot/SectionStart.
+                // resolving to the wrong station. Canonicalize such a snapshot - the
+                // same step the load path runs - to AfterShot/SectionStart.
                 //
                 // CRITICALLY, gate this on the snapshot actually being LEGACY (an Index
                 // anchor is present). A CURRENT same-session snapshot is already
-                // canonical, so mint/reanchor would be no-ops — but ensure_unique would
+                // canonical, so mint/reanchor would be no-ops - but ensure_unique would
                 // RE-MINT intentional duplicate UUIDs, e.g. the pre-repair state that an
                 // undo of a duplicate_shot_uuid Repair must restore EXACTLY. Skipping
                 // the block when there is no Index anchor keeps current snapshots
                 // byte-for-byte (so undo/redo is a true before/after pair) while legacy
                 // snapshots are still fully canonicalized. (For a legacy snapshot,
                 // ensure_shot_uuids runs FIRST: a pre-v6 blob can have uuid:null shots,
-                // and ensure_unique only dedups existing UUIDs — without minting nulls,
+                // and ensure_unique only dedups existing UUIDs - without minting nulls,
                 // reanchor can't canonicalize the Index anchor of a null-uuid station.)
                 let has_legacy_index = {
                     let mut found = false;

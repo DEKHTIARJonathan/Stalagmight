@@ -10,7 +10,7 @@
  * environment).
  *
  * Depth / severity ramps are OUT of scope for the prototype color path only in
- * the sense that no NEW ramp is invented here — the caller still passes whatever
+ * the sense that no NEW ramp is invented here - the caller still passes whatever
  * `resolveShotDisplayColor` produced (which already folds in the ramps), so
  * fidelity matches the stock layers for whatever mode is active.
  */

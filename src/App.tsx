@@ -109,7 +109,7 @@ function App() {
     if (activeDialog === 'dmp-selection' && dialogData.dmpFile) {
       return true;
     }
-    // Block during the DMP placing wizard — it holds un-finalized, in-memory
+    // Block during the DMP placing wizard - it holds un-finalized, in-memory
     // imported/placed sections that an OS window-close would otherwise drop (#110).
     if (activeDialog === 'dmp-import-new' && dialogData.dmpFile) {
       return true;
@@ -127,7 +127,7 @@ function App() {
 
   // Guard the app close during an import, OR with unsaved dive-plan edits (#244).
   // The gas store persists across mode switches now, so a dirty (loaded + diverged)
-  // plan stays dirty in any mode — closing loses those edits regardless of the current
+  // plan stays dirty in any mode - closing loses those edits regardless of the current
   // mode, so the close guard is correct without an appMode check.
   const planDirty = useGasPlanStore(selectIsPlanDirty);
   useBeforeUnload(
@@ -372,7 +372,7 @@ function App() {
       useUIStore.getState().showToast(message, 'integrity-repair');
       // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
       // (the same integrityIssues the banner and the dialog render-gate use) rather
-      // than the point-in-time `remaining` — a command or undo that interleaved
+      // than the point-in-time `remaining` - a command or undo that interleaved
       // during the repair's awaits could have changed the real issue set, and
       // repairProjectIntegrity awaits its post-repair checkProjectIntegrity before
       // resolving, so integrityIssues is already fresh here.
@@ -382,9 +382,9 @@ function App() {
     } catch {
       // repairProjectIntegrity re-throws on a real failure (e.g. the IPC rejected
       // during teardown) rather than reporting a fake no-op success. Surface it and
-      // keep the dialog open — integrityIssues is untouched, so the banner/save-block
+      // keep the dialog open - integrityIssues is untouched, so the banner/save-block
       // stay correct and the user can retry.
-      useUIStore.getState().showToast('Repair failed — nothing was changed. Please try again.', 'integrity-repair');
+      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair');
     } finally {
       setRepairingIntegrity(false);
     }
@@ -556,7 +556,7 @@ function App() {
           onCancel={closeDialog}
           onBack={() => {
             if (dialogData.zeroDatumConfig) {
-              // Came through zero datum flow — go back to zero datum config
+              // Came through zero datum flow - go back to zero datum config
               openDialog('zero-datum-config', {
                 dmpFile: dialogData.dmpFile,
                 filePath: dialogData.filePath,
@@ -571,8 +571,8 @@ function App() {
             }
           }}
           onComplete={async (newSectionIds?: number[]) => {
-            // Persist the freshly-imported project before anything else (#92) —
-            // including before handing off to orphan placement — so the import
+            // Persist the freshly-imported project before anything else (#92) -
+            // including before handing off to orphan placement - so the import
             // can never be lost. If the save failed, an error/permission dialog is
             // now showing; leave it up instead of dismissing it via closeDialog.
             if (!(await useProjectStore.getState().saveAfterImport())) {

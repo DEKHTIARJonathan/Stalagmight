@@ -5,7 +5,7 @@
 //! output directly). Only the deprecated `/api/v1/` alias is wrapped in a
 //! `{data, success, …}` envelope by `DRFWrapResponseMiddleware`, which
 //! early-returns unless `/api/v1/` is in the path. So a project list is a bare
-//! JSON array and a project detail is a bare JSON object — no envelope to peel.
+//! JSON array and a project detail is a bare JSON object - no envelope to peel.
 //!
 //! Only the fields the spike needs are modelled; serde ignores the rest. Fields
 //! the server *omits* when empty (notably `permission` when the user has no
@@ -20,7 +20,7 @@ use super::contract::SpeleoDbAction;
 /// Project permission level.
 ///
 /// The server serializes the **label string** (e.g. `"READ_AND_WRITE"`), not the
-/// numeric `PermissionLevel` enum — verified in `serializers/project.py`
+/// numeric `PermissionLevel` enum - verified in `serializers/project.py`
 /// (`get_permission` → `str(...level_label)`). Issues #188/#203 describe this as
 /// an integer; that is incorrect for the wire format.
 ///
@@ -71,7 +71,7 @@ pub(crate) struct RevisionCommit {
     /// non-linear → fail closed).
     #[serde(default)]
     pub(crate) parent_ids: Vec<String>,
-    /// Commit author's email — compared against our own to tell "my push
+    /// Commit author's email - compared against our own to tell "my push
     /// landed" from "someone else pushed".
     #[serde(default)]
     pub(crate) author_email: String,
@@ -84,7 +84,7 @@ pub(crate) struct RevisionCommit {
     pub(crate) message: Option<String>,
 }
 
-/// Response of `GET /api/v2/projects/{id}/revisions/` — the project's linear
+/// Response of `GET /api/v2/projects/{id}/revisions/` - the project's linear
 /// commit list. The sibling `project` object the server also returns is ignored.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct RevisionHistory {
@@ -225,7 +225,7 @@ pub(crate) struct UserAutocomplete {
 }
 
 /// IPC-facing summary of a project for the spike dialog's list. Derived from
-/// [`Project`]; carries only display fields — never a token or raw API detail.
+/// [`Project`]; carries only display fields - never a token or raw API detail.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoProjectSummary {
     pub id: String,
@@ -253,7 +253,7 @@ impl SpeleoProjectSummary {
 }
 
 /// Result of a successful login, returned to the webview. Deliberately does NOT
-/// include the token — the token is stored backend-side only (see [`super::auth`]).
+/// include the token - the token is stored backend-side only (see [`super::auth`]).
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoLoginResult {
     pub user_email: String,
@@ -391,7 +391,7 @@ pub struct SpeleoOpenResult {
     /// #193 b8: the server reports a write lock held by THIS account at open time,
     /// i.e. a second same-account session is editing the project. The frontend
     /// surfaces a notice (the ancestry self-heal assumes a single same-account
-    /// session — a concurrent one would misattribute its commits as ours).
+    /// session - a concurrent one would misattribute its commits as ours).
     pub concurrent_session: bool,
 }
 
@@ -447,7 +447,7 @@ pub enum DoneResult {
     /// reconcile (#198).
     DivergenceNeeded,
     /// The push outcome was ambiguous (no confirmed server commit): the dirty bit
-    /// AND the lock are retained so a later retry recovers via ancestry (#193) —
+    /// AND the lock are retained so a later retry recovers via ancestry (#193) -
     /// no edits are lost.
     PushUnconfirmed,
 }
@@ -458,11 +458,11 @@ pub enum DoneResult {
 #[ts(export)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum UpdateResult {
-    /// Already at the server tip — nothing to do.
+    /// Already at the server tip - nothing to do.
     UpToDate,
     /// Fast-forwarded to the server tip (re-pulled + reloaded the project).
     FastForwarded { local_path: String },
-    /// The server diverged from our base AND we hold un-pushed local edits — the
+    /// The server diverged from our base AND we hold un-pushed local edits - the
     /// refresh cannot proceed without reconciliation (#198/#199, next batch).
     DivergenceNeeded,
 }
@@ -470,7 +470,7 @@ pub enum UpdateResult {
 /// Current backend session status, so the dialog can restore its view when
 /// reopened instead of forcing a re-login: the in-memory/keychain token lives in
 /// `AppState` for the whole app run, but the dialog's React state resets on each
-/// remount. Carries no token — only whether one is held and for whom.
+/// remount. Carries no token - only whether one is held and for whom.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoSessionStatus {
     pub logged_in: bool,
@@ -480,7 +480,7 @@ pub struct SpeleoSessionStatus {
     /// in Settings ("signed in as … at …") so the user can see the session is tied
     /// to a specific server - a later endpoint change only affects FUTURE logins.
     pub endpoint: Option<String>,
-    /// False when the token is held in memory only (no OS keychain) — surfaced so
+    /// False when the token is held in memory only (no OS keychain) - surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
     pub keychain_backed: bool,
 }
@@ -649,7 +649,7 @@ mod tests {
         // [Track A] #186/D-B2: the structured error DTO must also never carry a
         // token. (The message deliberately avoids the substring "token" so the
         // guard checks the field SHAPE, not an incidental word in the display
-        // text — the real invariant is that no field name/value is the token.)
+        // text - the real invariant is that no field name/value is the token.)
         let error = serde_json::to_string(&SpeleoErrorDto {
             message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
             action: SpeleoDbAction::ReLogin,
@@ -657,7 +657,7 @@ mod tests {
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
-        // — serialize the field-bearing variants so a future field is caught.
+        // - serialize the field-bearing variants so a future field is caught.
         let start = serde_json::to_string(&StartEditingResult::FastForwarded {
             local_path: "/cache/project.stalx".to_owned(),
         })
@@ -713,7 +713,7 @@ mod tests {
     #[test]
     fn project_parses_full_v2_payload() {
         // Extra server fields (creation_date, message) are ignored; the modelled
-        // fields — including exclude_geojson (#185/D-A-methods) — parse.
+        // fields - including exclude_geojson (#185/D-A-methods) - parse.
         let json = r#"{
             "id": "11111111-1111-1111-1111-111111111111",
             "name": "Test Cave",

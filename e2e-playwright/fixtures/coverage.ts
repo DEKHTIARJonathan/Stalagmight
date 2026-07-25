@@ -29,7 +29,7 @@ export const test = coverageEnabled
           const filePath = path.join(coverageDir, fileName);
           fs.writeFileSync(filePath, JSON.stringify(coverage));
         } catch {
-          // page may already be closed — silently ignore
+          // page may already be closed - silently ignore
         }
       }, { auto: true }],
     })

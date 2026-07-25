@@ -628,11 +628,11 @@ test.describe('Error Handling', () => {
       // with the message, keep the app on the start page, and be dismissable.
       // Use the hamburger "Open Project" item. Open/Import now routes by the
       // chosen file's EXTENSION (unified Open/Import), so we override the mocked
-      // file dialog to return a .stalx path — that routes through loadProject,
+      // file dialog to return a .stalx path - that routes through loadProject,
       // which we force to throw, surfacing the loading-error overlay. (The default
       // mock dialog returns a .dmp, which would route to import instead.)
       // Asserted deterministically (wait for the actual states, no racing
-      // best-effort timeouts) so it can't flake under parallel load — and it now
+      // best-effort timeouts) so it can't flake under parallel load - and it now
       // verifies the error message is shown, which the previous version never did.
       const expectOpenErrorSurfaced = async (message: string) => {
         await setIpcOverrides(page, {

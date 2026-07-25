@@ -1,6 +1,6 @@
 // Fixture tests for the private-reference leak guard (scripts/check-private-leaks.mjs).
 //
-// A guard that never fires proves nothing — so each rule is pinned with a planted
+// A guard that never fires proves nothing - so each rule is pinned with a planted
 // leak it MUST catch, and the load-bearing safety properties are pinned with the
 // exact inputs that must NOT fire: the functional self-hosted-runner tokens kept
 // in ci.yml (`i5-nuc-runner`, `NUC_RUNNER_READ_PAT`), the genericized placeholder
@@ -78,7 +78,7 @@ test('private-cloud-infra fires on provider, env prefix (incl. digit-led), alias
 });
 
 test('private-cloud-infra does NOT fire on boundary lookalikes / bare "cog"', () => {
-  // `\b` boundary on scaleway, and `cog:` requires a path char — a bare cog is fine.
+  // `\b` boundary on scaleway, and `cog:` requires a path char - a bare cog is fine.
   assert.equal(firedIds('the descaleway helper turns a cog in the machine').size, 0);
 });
 
@@ -106,7 +106,7 @@ test('private-tracker fires on the Plane references but not bare "plane"', () =>
 test('SAFETY: functional self-hosted-runner tokens kept in ci.yml do not fire', () => {
   // Intentionally retained in .github/workflows/ci.yml (the picker). `nuc-i5` is the
   // REVERSED tool-dir name, so neither token matches any rule. If a future rule edit
-  // breaks this, the gate would red-CI on its own workflow file — this is the tripwire.
+  // breaks this, the gate would red-CI on its own workflow file - this is the tripwire.
   assert.equal(findLeaks('name=="i5-nuc-runner" and status', 'ci.yml').length, 0);
   assert.equal(findLeaks('GH_TOKEN: ${{ secrets.NUC_RUNNER_READ_PAT }}', 'ci.yml').length, 0);
 });
@@ -122,7 +122,7 @@ test('maintainer-name is suppressed only in ROOT attribution files', () => {
   // Root README/AUTHORS may credit a maintainer by name...
   assert.equal(findLeaks('Built by Nico and Daniel.', 'README.md').length, 0);
   assert.equal(findLeaks('Maintainers: Nico, Daniel.', 'AUTHORS.md').length, 0);
-  // ...but a NESTED code-adjacent README is NOT an attribution file — name fires.
+  // ...but a NESTED code-adjacent README is NOT an attribution file - name fires.
   assert.ok(
     findLeaks('// TODO(daniel): fix this', 'src/components/SpreadsheetGrid/README.md')
       .some((v) => v.ruleId === 'maintainer-name'),
@@ -131,7 +131,7 @@ test('maintainer-name is suppressed only in ROOT attribution files', () => {
   assert.ok(findLeaks('Thanks Nico!', 'docs/AUTHORS.md').some((v) => v.ruleId === 'maintainer-name'));
   // Non-name rules still fire even in a root attribution file.
   assert.ok(
-    findLeaks('credits — built on Scaleway', 'README.md').some((v) => v.ruleId === 'private-cloud-infra'),
+    findLeaks('credits - built on Scaleway', 'README.md').some((v) => v.ruleId === 'private-cloud-infra'),
   );
 });
 
@@ -139,7 +139,7 @@ test('isAttributionFile matches ROOT basenames only, case-insensitively', () => 
   assert.ok(isAttributionFile('README.md'));
   assert.ok(isAttributionFile('AUTHORS.md'));
   assert.ok(isAttributionFile('CHANGELOG.md'));
-  assert.ok(!isAttributionFile('docs/AUTHORS.md')); // nested — not exempt
+  assert.ok(!isAttributionFile('docs/AUTHORS.md')); // nested - not exempt
   assert.ok(!isAttributionFile('src/components/SpreadsheetGrid/README.md'));
   assert.ok(!isAttributionFile('src/store/uiStore.ts'));
 });
@@ -160,9 +160,9 @@ test('isExcluded covers vendor, lockfiles, generated, binary, and self', () => {
 });
 
 test('isExcluded does NOT skip text formats that can carry a leak', () => {
-  assert.ok(!isExcluded('src/assets/icon.svg')); // text — now scanned
-  assert.ok(!isExcluded('e2e-playwright/__snapshots__/x.snap')); // text — now scanned
-  assert.ok(!isExcluded('Makefile')); // extensionless — scanned
+  assert.ok(!isExcluded('src/assets/icon.svg')); // text - now scanned
+  assert.ok(!isExcluded('e2e-playwright/__snapshots__/x.snap')); // text - now scanned
+  assert.ok(!isExcluded('Makefile')); // extensionless - scanned
   assert.ok(!isExcluded('src/store/uiStore.ts'));
   assert.ok(!isExcluded('docs/roadmap.md'));
 });
@@ -171,7 +171,7 @@ test('isExcluded does NOT skip text formats that can carry a leak', () => {
 
 test('gateFails: clean only with zero violations AND zero skips', () => {
   assert.equal(gateFails([], []), false);
-  // An unscanned (oversized/unreadable) file fails the gate even with no markers —
+  // An unscanned (oversized/unreadable) file fails the gate even with no markers -
   // else a marker could be smuggled inside a file the scanner declines to read.
   assert.equal(gateFails([], [{ rel: 'big.md', reason: '9.0 MB > 5 MB cap' }]), true);
   assert.equal(gateFails([{ ruleId: 'maintainer-name' }], []), true);

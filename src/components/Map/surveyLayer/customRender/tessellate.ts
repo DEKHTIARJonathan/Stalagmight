@@ -9,7 +9,7 @@
  * LINES (shots): screen-space-width antialiased lines, MapLibre-style per-segment
  * quads extruded along the segment normal in the vertex shader. Tessellation is
  * SIMPLIFIED vs MapLibre: each valid shot is an INDEPENDENT butt-cap quad (2
- * triangles) — no miter / bevel joins, no round caps. Joins between consecutive
+ * triangles) - no miter / bevel joins, no round caps. Joins between consecutive
  * shots are visually covered by the station circles drawn at each vertex (the
  * same way the stock circle layer sits over the stock line joins), so butt caps
  * read as credible at cave scale. The extrusion + edge-feather math is lifted
@@ -158,11 +158,11 @@ export interface CircleBuffers {
  *
  * Key types are chosen so the SoA iteration can test membership O(1):
  *  - `sectionIds`         : segment drag hides whole connected sections (both
- *                           shots and stations) — tested against `section.id`
+ *                           shots and stations) - tested against `section.id`
  *                           (lines) and `data.stationSectionIds[g]` (circles).
- *  - `stationGlobalIndices`: station / shot move hides specific stations —
+ *  - `stationGlobalIndices`: station / shot move hides specific stations -
  *                           tested against the circle loop's global index `g`.
- *  - `shotGlobalIndices`  : station / shot move hides specific shots — tested
+ *  - `shotGlobalIndices`  : station / shot move hides specific shots - tested
  *                           against the line loop's `section.shotOffset + i`.
  *
  * All fields optional; an absent (or `undefined`) exclusion is the zero-cost
@@ -293,7 +293,7 @@ export function countValidShots(
 // Per-segment vertex template: [endpoint, side] for the 4 corners.
 // v0 A-left, v1 A-right, v2 B-left, v3 B-right. Exported so the drag-ghost
 // tessellator (ghostTessellate.ts) emits capsule quads with the SAME vertex
-// layout — one source of truth for the extrusion the round-cap shaders assume.
+// layout - one source of truth for the extrusion the round-cap shaders assume.
 export const LINE_EP = [0, 0, 1, 1];
 export const LINE_SIDE = [-1, 1, -1, 1];
 
@@ -449,7 +449,7 @@ export function buildLineBuffers(
  * Re-emit ONE section's line vertices in place (incremental edit path). The
  * section's drawn-segment range is stable (unchanged SoA layout is the caller's
  * precondition), so this rewrites exactly the slots {@link buildLineBuffers}
- * wrote for that section — positions, colors, reference/dim/hide flags — leaving
+ * wrote for that section - positions, colors, reference/dim/hide flags - leaving
  * every other section's bytes untouched. Never called with a build-time
  * exclusion (the live path hides via the per-vertex flag), so `exShots` is
  * omitted and the re-emit stays in lock-step with the stored range.
@@ -606,7 +606,7 @@ export interface CircleStationInputs {
  * reading its center/color/size/flags for global station index `g`. The single
  * writer shared by the full build and the incremental station recompute. In the
  * live (unexcluded) path `out === g`, so a station's vertices are always at
- * `[4g, 4g+4)` — the property the incremental path relies on to address a
+ * `[4g, 4g+4)` - the property the incremental path relies on to address a
  * changed station without a compaction map.
  */
 function emitStation(

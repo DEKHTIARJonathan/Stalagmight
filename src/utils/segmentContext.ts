@@ -8,7 +8,7 @@ import { type ContextSectionGeometry, computeStationsFromDmpShots } from '../com
 import { SECTION_COLORS } from './colors';
 export { SECTION_COLORS } from './colors';
 
-/** A virtual connection recorded by the user — no backend import yet. */
+/** A virtual connection recorded by the user - no backend import yet. */
 export type VirtualConnection = {
   importSectionIndex: number;
   importStationIndex: number;
@@ -48,7 +48,7 @@ export function buildAdjacency(
       adj.get(c.importSectionIndex)!.push({ neighbor: c.targetImportIndex, connection: c });
       adj.get(c.targetImportIndex)!.push({ neighbor: c.importSectionIndex, connection: c });
     }
-    // 'existing' connections anchor this node to the project graph — no import neighbor
+    // 'existing' connections anchor this node to the project graph - no import neighbor
   }
   return adj;
 }

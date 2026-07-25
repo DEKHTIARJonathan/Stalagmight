@@ -63,9 +63,9 @@ impl AppState {
         // the shot still maps to a live position (issue #57). The position
         // fallback is what lets a pre-v8 file's ignores survive the first load.
         // A residual edge remains (issue #57 finding #8): a legacy NULL-uuid row
-        // whose position is dead at load — the ignored shot was already gone, so
+        // whose position is dead at load - the ignored shot was already gone, so
         // the backfill cannot upgrade it (or, rarely, the backfill DB write
-        // failed) — can later suppress an unrelated shot if an in-session insert
+        // failed) - can later suppress an unrelated shot if an in-session insert
         // renumbers a different shot onto that stale id. It only affects pre-v8
         // NULL-uuid rows (every fresh ignore is UUID-keyed) and clears once the
         // position is upgraded. We keep the fallback because dropping it would
@@ -139,7 +139,7 @@ impl AppState {
         // Project-level: two or more zero datums in one merge-connected component
         // over-constrain the rigid group, so the offset cascade tears a merge edge
         // apart. Emit ONE error per component (not one per datum, which collided on
-        // the (section, shot, code) key — issue #57, finding #4), attached to the
+        // the (section, shot, code) key - issue #57, finding #4), attached to the
         // first datum's adjacent shot, carrying the FULL datum list so the Resolve
         // view can offer "keep this one, remove the others". (Per-shot
         // ProjectWarning shape: anchor station 0 -> shot 0; station i -> shot i-1.)
@@ -234,7 +234,7 @@ impl AppState {
 
     /// Whether a shot UUID is already persisted on disk (see
     /// `Database::shot_uuid_is_persisted`). Returns false when no database is open
-    /// or the lookup fails — the safe default, which keeps a new ignore
+    /// or the lookup fails - the safe default, which keeps a new ignore
     /// position-keyed rather than binding it to an unpersisted UUID (issue #57).
     pub fn shot_uuid_is_persisted(&self, uuid: &str) -> bool {
         let Ok(db_guard) = self.database.lock() else {
@@ -269,10 +269,10 @@ impl AppState {
     /// User-facing **resolve** (the `resolve_warning` command's persistence step):
     /// the gated + dirtying counterpart of [`Self::save_resolved_warning`]. A resolved
     /// warning PROLIFERATES to the server (`resolved_warnings` is NOT stripped from the
-    /// push snapshot — #197), so it is a real remote-dirtying edit, not local-only view
+    /// push snapshot - #197), so it is a real remote-dirtying edit, not local-only view
     /// state: a read-only remote project must reject it (`guard_mutation`), and a
     /// successful resolve in an edit session must mark the project dirty so `Done`
-    /// pushes it — otherwise it is silently dropped on the next pull. The low-level
+    /// pushes it - otherwise it is silently dropped on the next pull. The low-level
     /// [`Self::save_resolved_warning`] accessor stays ungated for the load-time backfill
     /// and tests.
     pub(crate) fn save_resolved_warning_gated(

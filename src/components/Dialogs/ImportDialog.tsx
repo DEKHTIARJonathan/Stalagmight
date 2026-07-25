@@ -228,7 +228,7 @@ export default function ImportDialog() {
 
     if (e.key === 'Enter') {
       e.preventDefault();
-      // Validate first — if invalid, block
+      // Validate first - if invalid, block
       if (!doValidate(rowIndex, field, input)) return;
 
       const isLastRow = rowIndex === shots.length - 1;
@@ -420,7 +420,7 @@ export default function ImportDialog() {
                             className={`w-full px-2 py-1 bg-transparent border-none focus:bg-panel text-right tabular-nums ${hasError ? 'relative z-10 ring-2 ring-error' : ''}`}
                             step="0.1"
                             title={cellErrors[key] ?? undefined}
-                            placeholder={isLrud ? '—' : undefined}
+                            placeholder={isLrud ? '-' : undefined}
                           />
                         </td>
                       );

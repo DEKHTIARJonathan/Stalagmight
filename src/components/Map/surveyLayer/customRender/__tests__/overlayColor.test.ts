@@ -14,7 +14,7 @@ import { makeColorResolvers } from '../colorResolvers';
  * MapLibre evaluates that ramp per feature on the CPU and packs it with
  * `Math.floor(255 * channel)`. The custom layer resolves the SAME color at
  * build time, so these tests assert byte-identity against a faithful replica of
- * MapLibre's exact float path (the oracle below) — the strongest parity claim.
+ * MapLibre's exact float path (the oracle below) - the strongest parity claim.
  */
 
 // ─── MapLibre data-driven color oracle ─────────────────────────────────────

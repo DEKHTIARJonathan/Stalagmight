@@ -3,22 +3,22 @@
 // The repo went public under AGPL-3.0-or-later. The de-internalization sweep
 // (PR #229) scrubbed maintainer names, private cloud-build infra, personal home
 // paths, and internal planning/coordination docs out of the tracked tree. This
-// guard stops them creeping back in — a leak committed to PUBLIC git history is
+// guard stops them creeping back in - a leak committed to PUBLIC git history is
 // expensive to undo, and `docs/plans/` already re-accumulates (a planning doc was
 // re-added the day after #229 removed the directory).
 //
-// It scans every git-TRACKED text file (`git ls-files` — exactly the set that
+// It scans every git-TRACKED text file (`git ls-files` - exactly the set that
 // gets published) for a small set of high-signal markers:
 //   - maintainer names / handles. These also catch a name-bearing personal path
 //     (`/home/daniel`, `/Users/ndh`). Suppressed only in ROOT attribution files
 //     (README, CONTRIBUTING, AUTHORS, LICENSE, CHANGELOG, SECURITY, …), where
-//     public credit is legitimate — NOT in nested code-adjacent READMEs.
+//     public credit is legitimate - NOT in nested code-adjacent READMEs.
 //   - the private cloud-build provider + its env-var prefix + the SSH-key alias
 //     + the private build host's rsync target.
 //   - the private planning/coordination doc + tool filenames.
 //   - the private issue-tracker references.
 //
-// WHERE IT RUNS — its own workflow (.github/workflows/leak-scan.yml) with NO
+// WHERE IT RUNS - its own workflow (.github/workflows/leak-scan.yml) with NO
 // path filter. This is load-bearing: the `check` job and the `smoke` job BOTH
 // path-ignore `**/*.md` and `docs/**`, which is exactly where a leak lands (a
 // `docs/plans/*.md` change runs NEITHER today). So a gate wired into either of
@@ -26,7 +26,7 @@
 // of scripts/check-e2e-parallel-safe.mjs (it lives in `smoke` because `check`
 // ignores e2e-playwright/**).
 //
-// This is a heuristic tripwire for the common, accidental re-introduction — not a
+// This is a heuristic tripwire for the common, accidental re-introduction - not a
 // secret scanner or a guarantee. DELIBERATE coverage choices / accepted gaps:
 //   - It targets maintainer-NAME-bearing paths, not generic build-box paths
 //     (`/home/ubuntu`, `/home/runner`): those carry no identity and appear all
@@ -42,7 +42,7 @@
 //   - It matches literal markers, so a novel paraphrase ("the maintainer in
 //     Prague") slips; it skips binary files and the vendored crate; and it cannot
 //     judge intent. A file it CANNOT read, or that exceeds the size cap, is NOT a
-//     silent skip — it FAILS the gate (fail-closed), so a marker can't be smuggled
+//     silent skip - it FAILS the gate (fail-closed), so a marker can't be smuggled
 //     past the scan inside a file the scanner declines to read (#232, Copilot).
 // Block on a hit; allow-list a verified-benign match with a written reason.
 //
@@ -75,12 +75,12 @@ export const RULES = [
     // (`daniel_saska`, `nico2`) and path forms (`/home/daniel`) fire, while a
     // letter-adjacent lookalike (`Danielle`, `unicode`→`nico`) does NOT. `ndhailey`
     // (the longer alt) claims that token before the short `ndh` branch can. `ndh`
-    // (the maintainer's home-dir name) is path-anchored — `/Users/ndh` fires, a
-    // standalone `ndh` token does not — to avoid false-firing on an incidental
+    // (the maintainer's home-dir name) is path-anchored - `/Users/ndh` fires, a
+    // standalone `ndh` token does not - to avoid false-firing on an incidental
     // 3-char token.
     re: /(?<![A-Za-z])(nico|daniel|saska|ndhailey)(?![A-Za-z])|(?<=[/\\])ndh(?![A-Za-z0-9])/gi,
     exemptAttribution: true,
-    why: 'maintainer name/handle in a non-attribution file — internal-coordination leak. '
+    why: 'maintainer name/handle in a non-attribution file - internal-coordination leak. '
       + 'Use role-neutral phrasing or an issue link; public credit belongs in AUTHORS/README/CHANGELOG.',
   },
   {
@@ -89,7 +89,7 @@ export const RULES = [
     // incl. digit-led names), the SSH-key alias, and the build host's rsync
     // target (`cog:~/…` / `cog:/…`).
     re: /\bscaleway\b|\bSCW_|\banzu\b|\bcog:[~/]/gi,
-    why: 'private cloud-build infra reference (provider / SCW_ env var / SSH-key alias / build-host rsync target) — '
+    why: 'private cloud-build infra reference (provider / SCW_ env var / SSH-key alias / build-host rsync target) - '
       + 'these live in the maintainer-only private repo, not the public tree.',
   },
   {
@@ -97,18 +97,18 @@ export const RULES = [
     // Filenames of the private coordination/planning docs and personal tool dirs.
     // Substring-matched on purpose (catches them inside paths); each is distinctive.
     re: /personaldocs|workingnotes|stalagmight-inflight|stalagmight-project-notes|coord_board|ns-CLAUDE|stag-private|nico_sm_prioritized|\bnuc-i5\b/gi,
-    why: 'reference to a private/personal coordination doc or tool path — never published.',
+    why: 'reference to a private/personal coordination doc or tool path - never published.',
   },
   {
     id: 'private-tracker',
-    // The private issue tracker (avoid bare "plane" — geometry uses the word).
+    // The private issue tracker (avoid bare "plane" - geometry uses the word).
     re: /\bplane\.so\b|\bplane[ -]id\b/gi,
-    why: 'private issue-tracker reference (Plane) — track work in GitHub issues for the public repo.',
+    why: 'private issue-tracker reference (Plane) - track work in GitHub issues for the public repo.',
   },
 ];
 
 // Verified-benign matches: {file (repo-relative POSIX), ruleId, reason}. Empty by
-// design — the functional self-hosted-runner tokens kept in ci.yml
+// design - the functional self-hosted-runner tokens kept in ci.yml
 // (`i5-nuc-runner`, `NUC_RUNNER_READ_PAT`) are NOT matched by any rule above
 // (the `nuc-i5` marker is the reversed personal tool-dir name), and a regression
 // test pins that. Add a row here only for a real, justified exception.
@@ -126,12 +126,12 @@ const EXCLUDE_EXACT = new Set([
   'scripts/check-private-leaks.test.mjs', // its fixtures plant the markers on purpose
 ]);
 const EXCLUDE_PREFIXES = [
-  'src-tauri/vendor/', // vendored upstream crate — left verbatim (its own author/license)
+  'src-tauri/vendor/', // vendored upstream crate - left verbatim (its own author/license)
   'src/types/ipc/', // generated IPC types
 ];
 // Genuinely-binary extensions (skipped before reading). NOTE: text formats that
-// can carry a leak — `.svg` (title/desc/comments), `.snap` (serialized DOM/paths)
-// — are deliberately NOT here, so they get scanned; the null-byte `looksBinary`
+// can carry a leak - `.svg` (title/desc/comments), `.snap` (serialized DOM/paths)
+// - are deliberately NOT here, so they get scanned; the null-byte `looksBinary`
 // guard + MAX_SCAN_BYTES still protect against a real binary or a huge file.
 const BINARY_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'webp',
@@ -156,8 +156,8 @@ export function isAttributionFile(rel) {
 }
 
 // Scan one file's text. Returns [{ruleId, lineNo, why, match}]. Note: the matched
-// substring (`match`) is the MARKER itself (e.g. "SCW_", "daniel") — never the
-// whole line — so printing it to a public CI log can't publish an adjacent secret.
+// substring (`match`) is the MARKER itself (e.g. "SCW_", "daniel") - never the
+// whole line - so printing it to a public CI log can't publish an adjacent secret.
 export function findLeaks(text, rel) {
   const attribution = isAttributionFile(rel);
   const out = [];
@@ -182,7 +182,7 @@ function isAllowed(rel, ruleId) {
 }
 
 // The gate fails if any marker fired OR any tracked file could not be scanned. A
-// skip (oversized/unreadable) is a FAILURE, not a warning — otherwise a marker
+// skip (oversized/unreadable) is a FAILURE, not a warning - otherwise a marker
 // could be smuggled past the scan inside a file the scanner declines to read
 // (Copilot review on #232).
 export function gateFails(violations, skipped) {
@@ -213,7 +213,7 @@ function main() {
   }
 
   const violations = [];
-  const skipped = []; // {rel, reason} — oversized/unreadable; each FAILS the gate (fail-closed, #232)
+  const skipped = []; // {rel, reason} - oversized/unreadable; each FAILS the gate (fail-closed, #232)
   let scanned = 0;
   for (const rel of files.sort()) {
     if (isExcluded(rel)) continue;
@@ -223,7 +223,7 @@ function main() {
       buf = fs.readFileSync(full);
     } catch (e) {
       // staged-but-absent / submodule pointer / permission / race. Don't drop it
-      // silently — a leak-containing file that fails to read must not pass as clean.
+      // silently - a leak-containing file that fails to read must not pass as clean.
       skipped.push({ rel, reason: `unreadable (${e.code || e.message})` });
       continue;
     }
@@ -254,15 +254,15 @@ function main() {
 
   console.error('\n✗ private-leak scan failed:\n');
   for (const v of violations) {
-    // Print the MARKER and location only — never the surrounding line (a public CI
+    // Print the MARKER and location only - never the surrounding line (a public CI
     // log on a public repo must not echo a secret that sits beside the marker).
     console.error(`  [${v.ruleId}] ${v.rel}:${v.lineNo}  (matched "${v.match}")`);
     console.error(`      ${v.why}\n`);
   }
   // Fail closed on a skip: a file the scanner can't read (or that exceeds the size
-  // cap) must not pass as clean — else a marker could be smuggled inside it (#232).
+  // cap) must not pass as clean - else a marker could be smuggled inside it (#232).
   for (const s of skipped) {
-    console.error(`  [unscanned] ${s.rel} — ${s.reason}`);
+    console.error(`  [unscanned] ${s.rel} - ${s.reason}`);
     console.error('      could not scan this file; failing closed (shrink it, or exclude it deliberately).\n');
   }
   console.error(

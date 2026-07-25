@@ -264,7 +264,7 @@ check_display() {
 # Kill ONLY the app instances this run (or a dead prior run) launched, recorded
 # by e2e/mac-app-wrapper.mjs in a per-run pidfile. Each PID is re-verified as a
 # live stalagmight process before SIGKILL, so PID reuse can't take down an
-# unrelated process — and a real stalagmight you started outside the harness
+# unrelated process - and a real stalagmight you started outside the harness
 # (its PID is in no pidfile) is never touched.
 reap_tracked_stalagmight() {
     local pidfile owner pid comm reaped=0
@@ -275,7 +275,7 @@ reap_tracked_stalagmight() {
         # reaps. The owner shell PID is the filename suffix.
         if [[ "$pidfile" != "$STALAGMIGHT_TEST_PIDFILE" ]]; then
             owner="${pidfile##*.}"
-            # Skip a pidfile a *live* run still owns — UNLESS it's stale. The
+            # Skip a pidfile a *live* run still owns - UNLESS it's stale. The
             # owner PID can be reused by an unrelated process; an hours-old
             # pidfile is never an active run (the wrapper touches it each
             # session), so reap it instead of leaking its windows forever.
@@ -322,7 +322,7 @@ cleanup_ports() {
     # Kill stalagmight app instances. On macOS, scope strictly to this harness's
     # own spawned PIDs so a real dev instance survives (issue #127). On
     # Linux/Windows there's no pidfile to scope by (no wrapper), so the broad
-    # sweep runs ONLY at startup (clearing a prior run's stragglers) — never from
+    # sweep runs ONLY at startup (clearing a prior run's stragglers) - never from
     # the EXIT trap, where it could kill a dev's own instance started meanwhile.
     if $IS_MACOS; then
         reap_tracked_stalagmight
@@ -535,7 +535,7 @@ main() {
     parse_args "$@"
 
     # Reap our spawned processes on ANY exit (success, failure, or Ctrl-C), not
-    # just at start — otherwise tauri-wd's flaky deleteSession leaves orphaned
+    # just at start - otherwise tauri-wd's flaky deleteSession leaves orphaned
     # app windows behind for the user to close by hand (issue #127). EXIT runs
     # cleanup_ports and preserves the test exit code; INT/TERM route through it.
     trap 'rc=$?; cleanup_ports exit; exit $rc' EXIT
