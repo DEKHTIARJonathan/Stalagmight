@@ -4589,3 +4589,220 @@ fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
         "with no depth change to compare against, every pitch must survive verbatim"
     );
 }
+
+/// Write a pre-v12 project to `path` and stamp it v11, so the next
+/// `open_existing` runs the pitch migration over it.
+fn seed_v11_project(path: &Path, project: &Project) {
+    let mut db = Database::open(path).unwrap();
+    db.save_project(project).unwrap();
+    db.set_user_version(11).unwrap();
+}
+
+/// `MIN_VOTING_SHOTS` is 3 and the comparison is `>=`, so a section with exactly
+/// three usable shots is decided rather than skipped. The existing coverage uses
+/// 2 (declined) and 4 (flipped), so a `>=` slipping to `>` would go unnoticed.
+#[test]
+fn migrate_v12_decides_a_section_at_exactly_the_minimum_vote_count() {
+    let temp = TempDir::new().unwrap();
+
+    for (count, expected, why) in [
+        (
+            2usize,
+            -30.0,
+            "two usable shots is below the minimum, so leave it",
+        ),
+        (
+            3usize,
+            30.0,
+            "three usable shots is the minimum and must decide",
+        ),
+    ] {
+        let path = temp.path().join(format!("votes_{count}.stalx"));
+        let mut project = Project::new("Votes".to_string(), None);
+        project.add_section(descending_section("FromDmp", -1.0, count));
+        seed_v11_project(&path, &project);
+
+        let db = Database::open_existing(&path).unwrap();
+        assert_eq!(
+            section_pitches(&db, "FromDmp"),
+            vec![Some(expected); count],
+            "{why}"
+        );
+    }
+}
+
+/// The version stamp is written outside the migration's transaction, so a crash
+/// between the two re-runs the migration against already-flipped rows on the
+/// next open. The verdict is re-derived from the geometry each time, so a second
+/// pass must decline. Asserted explicitly because a future change to the
+/// criterion could silently make the migration flip back and forth.
+#[test]
+fn migrate_v12_is_idempotent_when_run_twice() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("twice.stalx");
+
+    let mut project = Project::new("Twice".to_string(), None);
+    project.add_section(descending_section("FromDmp", -1.0, 4));
+    seed_v11_project(&path, &project);
+
+    let db = Database::open_existing(&path).unwrap();
+    let after_first = section_pitches(&db, "FromDmp");
+    assert_eq!(after_first, vec![Some(30.0); 4], "first pass flips");
+
+    // Simulate the interrupted case: rows are already flipped, but the stamp
+    // never landed, so the migration runs over them again.
+    Database::migrate_pitch_to_down_convention(&db.conn).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        after_first,
+        "a second pass over already-flipped rows must not flip them back"
+    );
+}
+
+/// A leg steeper than vertical is a survey blunder, and validation skips the
+/// inclination cross-check for it. It must not vote in the migration either, or
+/// a single typo can drag a section's verdict in whichever direction its sign
+/// happens to point.
+#[test]
+fn migrate_v12_ignores_out_of_range_legs_when_voting() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("blunder.stalx");
+
+    // Three shots of genuine +down evidence, plus one -120 blunder. The blunder
+    // scores better flipped (|120-30|=90 vs |-120-30|=150), so if it voted it
+    // would drag this already-correct section towards a flip.
+    let mut section = descending_section("FromCompass", 1.0, 3);
+    section.shots.push(ShotData {
+        azimuth_in: 90.0,
+        azimuth_out: 90.0,
+        length: 10.0,
+        depth_in: 15.0,
+        depth_out: 20.0,
+        pitch_in: Some(-120.0),
+        pitch_out: Some(-120.0),
+        ..Default::default()
+    });
+    let mut project = Project::new("Blunder".to_string(), None);
+    project.add_section(section);
+    seed_v11_project(&path, &project);
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(30.0), Some(30.0), Some(30.0), Some(-120.0)],
+        "an out-of-range leg must neither vote nor be rewritten"
+    );
+}
+
+/// Everything outside the `shots` table that still holds a pre-flip pitch is
+/// dropped when the migration flips a section, because the v12 stamp means
+/// there is no second pass to catch it later.
+///
+/// Undo is the sharpest case: the payload carries absolute pitch values, so
+/// replaying one entry writes a +up pitch straight back into a migrated file.
+#[test]
+fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("stale.stalx");
+
+    let mut project = Project::new("Stale".to_string(), None);
+    project.add_section(descending_section("FromDmp", -1.0, 4));
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.save_undo_stack(vec![(
+            r#"{"UpdateShot":{"pitch_in":-30.0}}"#.to_string(),
+            r#"{"PreviousValues":{"pitch_in":-30.0}}"#.to_string(),
+        )])
+        .unwrap();
+        db.save_resolved_warnings_bulk(&[ResolvedWarning {
+            section_id: 0,
+            shot_id: 0,
+            warning_code: "INCLINATION_DEPTH_MISMATCH".to_string(),
+            resolved_at: Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        }])
+        .unwrap();
+        db.conn
+            .execute(
+                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+            )
+            .unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        vec![Some(30.0); 4],
+        "precondition: the migration flipped this section"
+    );
+
+    assert!(
+        db.load_undo_stack_with_timestamps().unwrap().is_empty(),
+        "undo history carrying pre-flip pitch must be dropped, not replayable"
+    );
+    assert!(
+        db.load_resolved_warnings().unwrap().is_empty(),
+        "an inclination dismissal taken under the old convention must be cleared"
+    );
+
+    let state_json: String = db
+        .conn
+        .query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !state_json.contains("last_export_tml_sha256"),
+        "the sidecar hash must be cleared so the .tml is re-exported before any reconcile: {state_json}"
+    );
+    assert!(
+        !state_json.contains("shot_baseline"),
+        "the per-shot baseline still describes the old frame: {state_json}"
+    );
+    assert!(
+        state_json.contains(r#""enabled":true"#),
+        "clearing the baseline must not disable collab: {state_json}"
+    );
+}
+
+/// The mirror of the test above: a project the migration did not need to touch
+/// keeps its undo history. Dropping it unconditionally would cost every user
+/// their undo stack on upgrade for no reason.
+#[test]
+fn migrate_v12_keeps_undo_history_when_no_section_was_flipped() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("untouched.stalx");
+
+    let mut project = Project::new("Untouched".to_string(), None);
+    project.add_section(descending_section("FromCompass", 1.0, 4));
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.save_undo_stack(vec![(
+            r#"{"UpdateShot":{"pitch_in":30.0}}"#.to_string(),
+            r#"{"PreviousValues":{"pitch_in":30.0}}"#.to_string(),
+        )])
+        .unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(30.0); 4],
+        "precondition: nothing was flipped"
+    );
+    assert_eq!(
+        db.load_undo_stack_with_timestamps().unwrap().len(),
+        1,
+        "an untouched project must keep its undo history"
+    );
+}

@@ -155,6 +155,21 @@ fn pitch_to_inclination(pitch: Option<f64>) -> f64 {
     }
 }
 
+/// Pitch for a synthesized reverse leg (the reversed and pre-zero-datum
+/// duplicates Ariane needs, since it carries a single forward azimuth per shot).
+///
+/// Walking a shot backwards turns a descent into an ascent, so the pitch
+/// negates. `pitch_out` is deliberately not used as the reversed reading:
+/// despite the name it is a foresight in the same sense as `pitch_in`, not a
+/// backsight. Checked across the DMP fixtures, counting only shots where both
+/// legs exceed 3 degrees so gauge noise cannot vote: 49 shots agree in sign and
+/// 6 disagree. Validation relies on the same property when it averages the two
+/// legs. So the reverse leg is the negation of the forward pitch, whichever leg
+/// recorded it.
+fn reversed_leg_pitch(shot: &Shot) -> Option<f64> {
+    shot.pitch_in.or(shot.pitch_out).map(|p| -p)
+}
+
 // ============================================================================
 // Internal shot representation for export
 // ============================================================================
@@ -679,9 +694,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         length: shot.length,
                         depth: reversed_depth_out,
                         depth_in: depth_in_val,
-                        inclination: pitch_to_inclination(
-                            shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
-                        ),
+                        inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
                         left: shot.right.unwrap_or(0.0),
                         right: shot.left.unwrap_or(0.0),
                         up: shot.up.unwrap_or(0.0),
@@ -828,9 +841,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: depth_in_val,
-                            inclination: pitch_to_inclination(
-                                shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
-                            ),
+                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
                             left: shot.right.unwrap_or(0.0),
                             right: shot.left.unwrap_or(0.0),
                             up: shot.up.unwrap_or(0.0),
@@ -893,9 +904,7 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                             length: shot.length,
                             depth: reversed_depth_out,
                             depth_in: depth_in_val,
-                            inclination: pitch_to_inclination(
-                                shot.pitch_out.or_else(|| shot.pitch_in.map(|p| -p)),
-                            ),
+                            inclination: pitch_to_inclination(reversed_leg_pitch(shot)),
                             left: shot.right.unwrap_or(0.0),
                             right: shot.left.unwrap_or(0.0),
                             up: shot.up.unwrap_or(0.0),
@@ -1468,6 +1477,91 @@ mod tests {
         assert!(
             back == 0.0 && back.is_sign_positive(),
             "zero inclination must import as plain 0.0, not -0.0"
+        );
+    }
+
+    /// A reverse leg walks the shot backwards, so a descent becomes an ascent
+    /// and the pitch negates. `pitch_out` must not be used as the reversed
+    /// reading: it is a foresight in the same sense as `pitch_in`.
+    #[test]
+    fn reversed_leg_pitch_negates_the_forward_reading() {
+        let project = simple_project();
+        let mut shot = project.sections[0].shots[0].clone();
+        shot.pitch_in = Some(20.0);
+        shot.pitch_out = Some(22.0);
+        assert_eq!(
+            reversed_leg_pitch(&shot),
+            Some(-20.0),
+            "a 20 degree descent reversed is a 20 degree ascent, not +22"
+        );
+
+        // Falls back to the other leg only when the forward one is absent.
+        shot.pitch_in = None;
+        assert_eq!(reversed_leg_pitch(&shot), Some(-22.0));
+
+        shot.pitch_out = None;
+        assert_eq!(reversed_leg_pitch(&shot), None);
+
+        // A flat shot must still export as a plain 0.0, never -0.0.
+        shot.pitch_in = Some(0.0);
+        let inclination = pitch_to_inclination(reversed_leg_pitch(&shot));
+        assert!(
+            inclination == 0.0 && inclination.is_sign_positive(),
+            "reversing a flat shot must not produce -0.0"
+        );
+    }
+
+    /// The helper-level test above pins `pitch_to_inclination` against
+    /// `inclination_to_pitch`, but both could be reverted together, or one of
+    /// the export call sites could stop calling the helper, without it noticing.
+    /// This drives a real project through the file: export to `.tml`, parse it
+    /// back, and require the pitch to return unchanged.
+    ///
+    /// Every `.tml` fixture in the tree carries `Inclination` 0 (Ariane does not
+    /// populate the field), so non-zero inclination is only reachable through a
+    /// file Stalagmight wrote itself, which is exactly the collab sidecar case.
+    #[test]
+    fn tml_inclination_survives_a_file_level_round_trip() {
+        let project = simple_project();
+        // Ariane has no way to say "no inclination recorded", so an absent pitch
+        // necessarily comes back as 0.0. That is format lossiness, not a sign
+        // error, so compare against the value the format can actually carry.
+        let exported: Vec<f64> = project.sections[0]
+            .shots
+            .iter()
+            .map(|s| s.pitch_in.unwrap_or(0.0))
+            .collect();
+        assert!(
+            exported.iter().any(|p| p.abs() > 1.0),
+            "fixture has no recorded inclination, so this test would prove nothing"
+        );
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let path = dir.path().join("round_trip.tmlu");
+        export_tml(&project, &path).unwrap();
+
+        let raw = std::fs::read_to_string(&path).unwrap();
+        // `.tmlu` uses the short element names, so inclination is `<INC>`.
+        assert!(
+            raw.contains("<INC>-5"),
+            "a +5 (down) pitch must leave as -5 in Ariane's +up frame: {raw}"
+        );
+
+        let parsed = crate::parsers::tml::parse_tml(&path).unwrap();
+        let reimported: Vec<f64> = parsed.sections[0]
+            .shots
+            .iter()
+            .map(|s| {
+                crate::parsers::tml::normalize_tml_shot(s, s.depth_in)
+                    .pitch_in
+                    .unwrap_or(0.0)
+            })
+            .collect();
+
+        assert_eq!(
+            reimported, exported,
+            "pitch must survive export and re-import unchanged; a flip applied \
+             zero or two times here is what produces phantom collab diffs"
         );
     }
 

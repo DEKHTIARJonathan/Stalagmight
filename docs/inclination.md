@@ -15,16 +15,27 @@ which fixed a DMP import that skipped the conversion.
 
 | Source | In-file convention | Where it is normalised |
 |---|---|---|
-| mNemo DMP | +up (device: `-90` = straight down) | `DmpShot::to_shot_data` (`src-tauri/src/parsers/dmp.rs`) |
+| mNemo DMP | +up (device: `-90` = straight down) | `parse_section` (`src-tauri/src/parsers/dmp.rs`) |
 | Walls `.srv` | +up | `walls/srv.rs`, negates `inc_up` into `pitch_in`/`pitch_out` |
 | Compass | +up | `compass.rs`, `pitch_in: Some(-inclination)` |
 | Ariane `.tml` / `.tmlu` | +up (inferred, see below) | `parsers::tml::inclination_to_pitch`, inverse `export::tml::pitch_to_inclination` |
 
-`DmpShot` is deliberately the one place that holds a device-frame pitch: it is a
-decode of the file, not a model type, and keeping it byte-faithful is what lets
-`compute_section_hash` stay stable across #296 so re-import deduplication still
-recognises sections imported by an older build. Read pitch off `ShotData`, never
-off `DmpShot`.
+DMP normalises inside `parse_section`, not at the `ShotData` conversion, because
+`DmpShot::to_shot_data` is not on the import path. Real DMP import returns the
+parsed `DmpFile` to the frontend (`import_dmp`), and the import dialog builds
+`ShotData` in TypeScript and sends it to `import_sections`. Normalising at the
+parser is what keeps the preview table, the overlap merge against existing
+project shots, and `to_shot_data` in one frame; a conversion that lived only in
+`to_shot_data` would never run.
+
+The flip is applied after `compute_section_hash`, which therefore still hashes
+the device's own bytes, so re-import deduplication keeps recognising sections
+imported by an older build.
+
+`pitch_out` is a foresight in the same sense as `pitch_in`, not a reversed
+backsight, which is why both legs are negated identically, why validation may
+average them, and why a synthesized reverse leg negates the forward reading
+rather than reusing `pitch_out` (`export::tml::reversed_leg_pitch`).
 
 ## Consumers
 
@@ -78,11 +89,39 @@ section verdict and stays flagged, which is the entire point of the
 A section is only touched when the evidence is lopsided: at least 3 usable
 shots, and a flipped error less than half the as-is error. Real DMP sections
 clear that by 3-7x and already-correct sections fail it by a wide margin.
-Anything in between is left alone rather than guessed at.
+Anything in between is left alone rather than guessed at. Out-of-range legs
+(steeper than vertical) do not vote: validation skips the cross-check for them,
+so a single blunder should not drag a section's verdict. Sections that had
+signal but were not decisive are named in a `warn!` on open, because the v12
+stamp means they are never re-examined.
+
+### What else the migration has to discard
+
+The migration rewrites the `shots` table. Three other stores keep pitch, or a
+verdict derived from it, and none of them is versioned, so a stale copy would
+outlive the migration with no second pass to catch it. When at least one section
+is flipped, `invalidate_pre_pitch_flip_state` drops all three:
+
+- **Persisted undo/redo.** Payloads carry absolute pitch and whole-project
+  snapshots, so one undo of a pre-upgrade edit would write the +up value back
+  into a file already stamped v12. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v11
+  file keeps its stacks by default.
+- **Dismissed inclination warnings.** `resolved_warnings` is keyed by
+  `(section_id, shot_id, warning_code)` with no value component, so a mismatch
+  dismissed under the old convention would keep suppressing the check.
+- **The collab sidecar baseline.** The sibling `.tml` on disk was written by a
+  pre-#296 build in the unflipped convention, so diffing against it reports a
+  phantom inclination edit of twice the pitch on every shot in a section the
+  migration correctly left alone. Clearing the hash and the per-shot baseline
+  forces a fresh export before the next reconcile.
+
+A project where nothing was flipped keeps its undo history.
 
 ## Adding a new importer
 
-Normalise at the import boundary, in the function that builds `ShotData`, and
-say so in a comment naming the source's convention. Do not add a negation to a
-consumer; if a consumer looks like it needs one, the import is wrong. That is
-the bug #296 was.
+Normalise at the import boundary and say so in a comment naming the source's
+convention. Put it in the function the real import path actually calls, which
+is not necessarily the one that builds `ShotData`: for DMP the conversion has
+to sit in the parser, because the dialog builds `ShotData` in TypeScript.
+Do not add a negation to a consumer; if a consumer looks like it needs one, the
+import is wrong. That is the bug #296 was.

@@ -446,7 +446,7 @@ impl Database {
     /// Returns `true` when at least one section was flipped, so the caller can
     /// invalidate the state that still holds pre-flip pitch (persisted undo
     /// history, dismissed inclination warnings, the collab sidecar baseline).
-    fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<bool> {
+    pub(super) fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<bool> {
         /// Below this a shot's implied angle is mostly depth-gauge quantisation.
         const MIN_LENGTH_M: f64 = 0.05;
         /// Same, for the vertical change.
