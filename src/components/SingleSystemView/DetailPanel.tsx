@@ -922,7 +922,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEdit} disabled={editingBlocked}>
+        <Button size="sm" className="w-full" onClick={handleEdit} disabled={editingBlocked} data-testid="station-edit-button">
           {t('common.actions.edit')}
         </Button>
       </div>
@@ -1145,10 +1145,16 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleCycleShotKind} disabled={editingBlocked}>
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={handleCycleShotKind}
+          disabled={editingBlocked}
+          data-testid="shot-kind-cycle-button"
+        >
           {t('detailPanel.shot.markAs', { kind: t(SHOT_KIND_LABEL_KEY[nextShotKind(shot.kind)]) })}
         </Button>
-        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked}>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked} data-testid="shot-delete-button">
           {t('common.actions.delete')}
         </Button>
       </div>
@@ -1372,7 +1378,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked}>
+        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked} data-testid="section-edit-button">
           {t('detailPanel.section.edit')}
         </Button>
       </div>
