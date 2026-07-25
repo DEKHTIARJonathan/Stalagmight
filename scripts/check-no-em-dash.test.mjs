@@ -7,7 +7,7 @@
 // vendored / generated paths the scan never reads.
 //
 // Every banned character is built with String.fromCharCode so this file, like
-// the scanner it tests, stays pure ASCII and does not trip the very scan it
+// the scanner it tests, carries no banned code point and does not trip the scan it
 // pins. Deriving the fixtures from the scanner's own BANNED table would let a
 // dropped entry pass silently, so the code points are re-declared here by hand.
 //
@@ -15,7 +15,9 @@
 // Run: node scripts/check-no-em-dash.test.mjs  (also a CI leak-scan step).
 
 import assert from 'node:assert/strict';
-import { findDashes, isExcluded, BANNED, gateFails, looksBinary } from './check-no-em-dash.mjs';
+import {
+  findDashes, isExcluded, BANNED, gateFails, looksBinary, scan, report, safePath,
+} from './check-no-em-dash.mjs';
 
 let passed = 0;
 const failures = [];
@@ -41,6 +43,8 @@ test('fires on the em dash (U+2014), the character CLAUDE.md names', () => {
 
 test('fires on every other banned code point', () => {
   for (const { code, name } of [
+    [0x2010, 'U+2010 hyphen'],
+    [0x2011, 'U+2011 non-breaking hyphen'],
     [0x2012, 'U+2012 figure dash'],
     [0x2013, 'U+2013 en dash'],
     [0x2015, 'U+2015 horizontal bar'],
@@ -52,6 +56,13 @@ test('fires on every other banned code point', () => {
   }
 });
 
+test('fires on U+2010, which is visually identical to an ASCII hyphen', () => {
+  // The reason this one is banned rather than tolerated: no reviewer can see it.
+  // The #293 sweep edited src-tauri/src/export/tml.rs and left a U+2010 behind on
+  // a line two hunks away from one it did change. Only a scanner catches that.
+  assert.equal(findDashes(`// Element${ch(0x2010)}name map`).length, 1);
+});
+
 test('the en dash fires even in a numeric range (issue #293 q6-B)', () => {
   // En dash IS correct typography for a range, but the house rule is a strictly
   // ASCII tree, so `0-360` is the accepted cost. Pinned so a future "ranges are
@@ -59,10 +70,10 @@ test('the en dash fires even in a numeric range (issue #293 q6-B)', () => {
   assert.equal(findDashes(`azimuth 0${ch(0x2013)}360`).length, 1);
 });
 
-test('BANNED covers exactly the five code points this test pins', () => {
+test('BANNED covers exactly the seven code points this test pins', () => {
   assert.deepEqual(
     BANNED.map((b) => b.code).sort(),
-    [0x2012, 0x2013, 0x2014, 0x2015, 0x2212],
+    [0x2010, 0x2011, 0x2012, 0x2013, 0x2014, 0x2015, 0x2212],
   );
 });
 
@@ -98,11 +109,10 @@ test('does NOT fire on box-drawing characters (ASCII diagrams stay intact)', () 
 });
 
 test('does NOT fire on adjacent non-dash punctuation', () => {
-  // Neighbours of the banned block that carry no dash meaning.
+  // Neighbours of the banned block that carry no dash meaning. Curly quotes and
+  // the ellipsis are out of scope: this guard is about dashes, and widening it
+  // to "all non-ASCII punctuation" is a separate decision nobody has made.
   assert.equal(findDashes(`quote ${ch(0x2018)}x${ch(0x2019)} and ${ch(0x2026)} ellipsis`).length, 0);
-  // Hyphen (U+2010) and non-breaking hyphen (U+2011) are NOT in the banned set:
-  // neither appears in the tree and neither is the em-dash problem this guards.
-  assert.equal(findDashes(`${ch(0x2010)}${ch(0x2011)}`).length, 0);
 });
 
 test('does NOT fire on an empty file or a file with no dashes at all', () => {
@@ -125,6 +135,16 @@ test('excludes lockfiles and binary extensions', () => {
   assert.ok(isExcluded('e2e-playwright/fixtures/sample.stalx'));
 });
 
+test('excludes the survey-DATA formats even though .dmp is plain ASCII', () => {
+  // `.dmp` reads as ASCII text, so it would otherwise be scanned. It is skipped
+  // because it is DATA: a dash inside a golden parser fixture is the input under
+  // test, and "fixing" it would corrupt the case it pins. Pinned so nobody
+  // "corrects" the omission by deleting these from BINARY_EXT.
+  assert.ok(isExcluded('e2e-playwright/fixtures/test_v2.dmp'));
+  assert.ok(isExcluded('e2e-playwright/fixtures/ariane.tml'));
+  assert.ok(isExcluded('e2e-playwright/fixtures/sample.stalx'));
+});
+
 test('does NOT exclude ordinary source, prose, or scanned text fixtures', () => {
   // .md and docs/ are the whole reason this runs in leak-scan rather than check.
   assert.ok(!isExcluded('CLAUDE.md'));
@@ -138,11 +158,102 @@ test('does NOT exclude ordinary source, prose, or scanned text fixtures', () => 
   assert.ok(!isExcluded('src-tauri/src/parsers/fixtures/survey.txt'));
 });
 
-test('this scanner and its own test are scanned, not excluded (they are pure ASCII)', () => {
+test('this scanner and its own test are scanned, not excluded (no banned code point)', () => {
   // No self-exclusion: the code points are written as escapes precisely so the
   // guard can scan itself. If someone pastes a literal dash in here, CI says so.
   assert.ok(!isExcluded('scripts/check-no-em-dash.mjs'));
   assert.ok(!isExcluded('scripts/check-no-em-dash.test.mjs'));
+});
+
+// --- scan(): the wiring, driven through an injected reader ---------------------
+//
+// These exist because unit-testing the helpers in isolation cannot catch a
+// regression that stops `scan`/`report` from CALLING them. Every branch below is
+// otherwise unreachable on a healthy tree, which is exactly why it needs pinning.
+
+const buf = (s) => Buffer.from(s, 'utf8');
+
+test('scan returns a violation for a planted dash and counts scanned files', () => {
+  const r = scan(['a.ts', 'b.ts'], (rel) => buf(rel === 'a.ts' ? `x ${ch(0x2014)} y` : 'clean'));
+  assert.equal(r.scanned, 2);
+  assert.equal(r.violations.length, 1);
+  assert.equal(r.violations[0].rel, 'a.ts');
+  assert.equal(report(r, () => {}, () => {}), 1);
+});
+
+test('scan reports a clean tree and report() exits 0', () => {
+  const r = scan(['a.ts'], () => buf('all ascii - fine'));
+  assert.equal(r.violations.length, 0);
+  assert.equal(r.skipped.length, 0);
+  assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+test('scan never reads an excluded path (exclusion precedes the read)', () => {
+  const read = [];
+  scan(['src-tauri/vendor/x.rs', 'pnpm-lock.yaml', 'ok.ts'], (rel) => {
+    read.push(rel);
+    return buf('clean');
+  });
+  assert.deepEqual(read, ['ok.ts']);
+});
+
+test('an oversized file is skipped AND fails the gate (fail-closed)', () => {
+  const r = scan(['big.md'], () => Buffer.alloc(6 * 1024 * 1024, 0x61));
+  assert.equal(r.violations.length, 0);
+  assert.equal(r.skipped.length, 1);
+  assert.match(r.skipped[0].reason, /cap/);
+  assert.equal(report(r, () => {}, () => {}), 1, 'a file too big to scan must not pass as clean');
+});
+
+test('an unreadable file is skipped AND fails the gate', () => {
+  const r = scan(['gone.ts'], () => {
+    const e = new Error('nope');
+    e.code = 'ENOENT';
+    throw e;
+  });
+  assert.equal(r.skipped.length, 1);
+  assert.equal(report(r, () => {}, () => {}), 1);
+});
+
+test('a NUL-bearing non-binary file is skipped AND fails the gate', () => {
+  const r = scan(['weird.ts'], () => Buffer.from([0x61, 0x00, 0x62]));
+  assert.equal(r.skipped.length, 1);
+  assert.match(r.skipped[0].reason, /NUL/);
+  assert.equal(report(r, () => {}, () => {}), 1);
+});
+
+test('a symlink is not followed, and does NOT fail the gate', () => {
+  // AGENTS.md -> CLAUDE.md is a real tracked symlink. Dereferencing it would let
+  // a fork PR point the scanner outside the repo; failing on it would block a
+  // legitimate link whose target is scanned on its own.
+  const r = scan(['AGENTS.md', 'CLAUDE.md'], (rel) => (rel === 'AGENTS.md' ? null : buf('clean')));
+  assert.deepEqual(r.symlinks, ['AGENTS.md']);
+  assert.equal(r.skipped.length, 0);
+  assert.equal(r.scanned, 1);
+  assert.equal(report(r, () => {}, () => {}), 0);
+});
+
+// --- CI log safety -------------------------------------------------------------
+
+test('safePath escapes a path that would forge a GitHub Actions annotation', () => {
+  // Git allows a newline in a tree entry name; Actions parses `::cmd::` at the
+  // start of a log line. A fork PR must not be able to inject one.
+  const evil = 'a.md\n::error title=CI::approved';
+  const out = safePath(evil);
+  assert.ok(!out.includes('\n'), 'a raw newline must not reach the log');
+  assert.ok(out.includes('\\n'), 'the newline should survive as an escape');
+});
+
+test('both violation and skip rows are capped so a flood cannot bury the log', () => {
+  const many = Array.from({ length: 120 }, (_, i) => `f${i}.ts`);
+  const lines = [];
+  // 120 violations
+  report(scan(many, () => buf(ch(0x2014))), () => {}, (m) => lines.push(m));
+  assert.ok(lines.some((l) => /and 70 more \(120 total\)/.test(l)));
+  // 120 skips (the asymmetry that let a planted-NUL tree flood the log)
+  const skipLines = [];
+  report(scan(many, () => Buffer.from([0x00])), () => {}, (m) => skipLines.push(m));
+  assert.ok(skipLines.some((l) => /and 70 more unscanned \(120 total\)/.test(l)));
 });
 
 // --- gate semantics ------------------------------------------------------------

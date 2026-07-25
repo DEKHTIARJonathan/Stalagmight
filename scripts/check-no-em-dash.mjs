@@ -5,13 +5,17 @@
 // ones on nearly every PR. PR #293 swept them all to ASCII hyphens; this guard
 // keeps them from creeping back.
 //
-// WHAT IT FLAGS - five Unicode dashes, all replaced by a plain ASCII hyphen:
-//   U+2012 figure dash, U+2013 en dash, U+2014 em dash, U+2015 horizontal bar,
-//   U+2212 minus sign.
+// WHAT IT FLAGS - seven Unicode dashes, all replaced by a plain ASCII hyphen:
+//   U+2010 hyphen, U+2011 non-breaking hyphen, U+2012 figure dash,
+//   U+2013 en dash, U+2014 em dash, U+2015 horizontal bar, U+2212 minus sign.
 // The en dash is included deliberately (issue #293 q6-B): it IS the correct
 // glyph for a numeric range, but a strictly-ASCII tree is the house rule and a
 // context-sensitive "ranges are fine" exception would be hard to test and to
 // explain. `0-360` and `Gauss-Newton` are the accepted cost.
+// U+2010/U+2011 are included because they are visually INDISTINGUISHABLE from
+// the ASCII hyphen: a reviewer cannot see one, so only a scanner can. The sweep
+// missed a U+2010 in src-tauri/src/export/tml.rs while editing two lines away,
+// which is exactly the failure mode that argues for banning them.
 //
 // WHAT IT DOES NOT FLAG - box-drawing characters (U+2500..U+257F) and every
 // other non-dash glyph. ASCII diagrams in docs/ rely on those for alignment and
@@ -24,14 +28,18 @@
 // dashes) live, so a gate wired into either would be a no-op for the files that
 // carry the most risk.
 //
-// This file itself is pure ASCII - the dashes are written as \u escapes - so the
+// This file itself contains no BANNED code point - they are built with
+// String.fromCharCode rather than written literally - so the
 // scanner never has to exclude itself, and neither does its test.
 //
-// There is deliberately NO allowlist. Issue #293 settled every edge case with a
-// substitution instead (i18n display strings, the UI N/A glyphs, the glued
-// `-ref-` diagram form), precisely so that no per-site exception table has to be
-// maintained. If a future case genuinely needs one, add an ALLOW table here with
-// a written reason rather than widening the exclusions.
+// There is deliberately no per-SITE allowlist. Issue #293 settled every edge
+// case with a substitution instead (i18n display strings, the UI N/A glyphs, the
+// glued `-ref-` diagram form), precisely so that no exception table has to be
+// maintained. Note what that does and does not mean: whole PATHS are still
+// excluded below (vendored, generated, lockfiles, binaries), so the guard is not
+// unconditional - a file placed under one of those prefixes is not scanned. If a
+// future case genuinely needs a per-site exception, add an ALLOW table here with
+// a written reason rather than widening those prefixes.
 //
 // Usage:  node scripts/check-no-em-dash.mjs   (or: pnpm lint:no-em-dash)
 
@@ -43,8 +51,12 @@ import { fileURLToPath } from 'url';
 export const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 // One entry per banned code point: {char, name}. Written as escapes so this
-// source file stays pure ASCII and does not trip its own scan.
+// source file carries no banned code point and does not trip its own scan.
+// (It is not pure ASCII: the pass/fail lines print U+2713/U+2717, as the sibling
+// guards do. Only the banned set has to be absent for self-scanning to work.)
 export const BANNED = [
+  { code: 0x2010, name: 'U+2010 hyphen' },
+  { code: 0x2011, name: 'U+2011 non-breaking hyphen' },
   { code: 0x2012, name: 'U+2012 figure dash' },
   { code: 0x2013, name: 'U+2013 en dash' },
   { code: 0x2014, name: 'U+2014 em dash' },
@@ -67,10 +79,17 @@ const EXCLUDE_PREFIXES = [
   'src-tauri/vendor/', // vendored upstream crate - left verbatim (its own author/license)
   'src/types/ipc/', // generated IPC types
 ];
-// Genuinely-binary extensions (skipped before reading). Text formats that can
-// legitimately carry a dash - `.svg`, `.snap`, `.json` - are deliberately NOT
-// here, so they get scanned; the null-byte `looksBinary` guard and
-// MAX_SCAN_BYTES still protect against a real binary or a huge file.
+// Extensions skipped before reading. Text formats that can legitimately carry a
+// dash - `.svg`, `.snap`, `.json` - are deliberately NOT here, so they get
+// scanned; the null-byte `looksBinary` guard and MAX_SCAN_BYTES still protect
+// against a real binary or a huge file.
+//
+// `dmp`, `tml` and `stalx` are survey-data formats, not opaque binaries: `.dmp`
+// in particular is plain ASCII (the golden parser fixtures under
+// e2e-playwright/fixtures/ are readable text). They are skipped anyway because
+// they are DATA, where a byte is load-bearing - a dash inside a fixture is the
+// input under test, and "fix" would mean corrupting the case it pins. That is a
+// deliberate carve-out, not an oversight, and the fixture test pins it.
 const BINARY_EXT = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'ico', 'icns', 'pdf', 'webp',
   'woff', 'woff2', 'ttf', 'otf', 'eot', 'zip', 'gz', 'tgz', 'bz2', 'xz', '7z',
@@ -124,27 +143,55 @@ function gitTrackedFiles() {
   return out.toString('utf8').split('\0').filter(Boolean);
 }
 
-function main() {
-  let files;
-  try {
-    files = gitTrackedFiles();
-  } catch (e) {
-    console.error(`check-no-em-dash: could not list tracked files (run from a git repo): ${e.message}`);
-    return 1;
-  }
+// Render a repo-relative path for printing into a PUBLIC CI log.
+//
+// This runs on `pull_request`, so on a fork PR every path comes from an
+// attacker-chosen tree. Git permits a newline and `::` inside a tree entry name,
+// and GitHub Actions parses `::workflow-command::` at the start of a log line -
+// so a file named with an embedded newline plus `::error::` could forge
+// annotations in this job's log. JSON-quoting escapes the control characters and
+// makes the path unambiguous; the leading `::` of any forged command then sits
+// mid-string rather than at line start.
+export function safePath(rel) {
+  return JSON.stringify(rel);
+}
 
+// Cap on printed rows, per category. A reverted sweep (violations) or a tree of
+// planted NUL files (skips) would otherwise flood the CI log; the totals are
+// still reported truthfully in the "... and N more" tail.
+const SHOWN = 50;
+
+// Scan a list of repo-relative paths. `readFile` is injected so the fixture test
+// can drive every branch - the size cap and the unreadable path are otherwise
+// unreachable on a healthy tree, and an untested branch in a fail-closed gate is
+// how a gate silently starts passing everything.
+export function scan(files, readFile) {
   const violations = [];
   const skipped = []; // {rel, reason} - each FAILS the gate (fail-closed)
+  const symlinks = []; // not followed; does NOT fail the gate (see below)
   let scanned = 0;
-  for (const rel of files.sort()) {
+  for (const rel of [...files].sort()) {
     if (isExcluded(rel)) continue;
-    const full = path.join(REPO_ROOT, rel);
     let buf;
     try {
-      buf = fs.readFileSync(full);
+      buf = readFile(rel);
     } catch (e) {
       // staged-but-absent / submodule pointer / permission / race.
       skipped.push({ rel, reason: `unreadable (${e.code || e.message})` });
+      continue;
+    }
+    if (buf === null) {
+      // Symlink. NOT followed: `readFileSync` would dereference it and scan
+      // whatever it points at, which on a CI runner can be a path outside the
+      // repo entirely (a fork PR chooses the link target).
+      //
+      // Unlike the other skips this does NOT fail the gate, because nothing is
+      // hidden by it: a link to a tracked in-repo file (AGENTS.md -> CLAUDE.md)
+      // has its target scanned on its own, and a link OUT of the repo points at
+      // content that is not ours to lint. Either way the bytes we care about are
+      // still covered, so failing closed here would only block a legitimate
+      // symlink.
+      symlinks.push(rel);
       continue;
     }
     if (buf.length > MAX_SCAN_BYTES) {
@@ -161,32 +208,57 @@ function main() {
     scanned++;
     for (const v of findDashes(buf.toString('utf8'))) violations.push({ rel, ...v });
   }
+  return { violations, skipped, scanned, symlinks };
+}
 
+// Read one tracked file, returning null for a symlink so `scan` can skip it
+// without dereferencing. `lstatSync` first: a dangling link would throw from
+// `readFileSync` anyway, but a live one would be silently followed.
+function readTracked(rel) {
+  const full = path.join(REPO_ROOT, rel);
+  if (fs.lstatSync(full).isSymbolicLink()) return null;
+  return fs.readFileSync(full);
+}
+
+export function report(result, log = console.log, err = console.error) {
+  const { violations, skipped, scanned, symlinks = [] } = result;
   if (!gateFails(violations, skipped)) {
-    console.log(`✓ no-em-dash scan: ${scanned} tracked text files, no Unicode dashes.`);
+    const note = symlinks.length ? ` (${symlinks.length} symlink(s) not followed)` : '';
+    log(`✓ no-em-dash scan: ${scanned} tracked text files, no Unicode dashes.${note}`);
     return 0;
   }
 
-  console.error('\n✗ no-em-dash scan failed:\n');
-  // Cap the printed rows: a reverted sweep would otherwise dump thousands of
-  // lines into the CI log. The count below still reports the true total.
-  const SHOWN = 50;
+  err('\n✗ no-em-dash scan failed:\n');
   for (const v of violations.slice(0, SHOWN)) {
-    console.error(`  ${v.rel}:${v.lineNo}:${v.col}  ${v.name}`);
+    err(`  ${safePath(v.rel)}:${v.lineNo}:${v.col}  ${v.name}`);
   }
   if (violations.length > SHOWN) {
-    console.error(`  ... and ${violations.length - SHOWN} more (${violations.length} total)`);
+    err(`  ... and ${violations.length - SHOWN} more (${violations.length} total)`);
   }
-  for (const s of skipped) {
-    console.error(`  [unscanned] ${s.rel} - ${s.reason}`);
-    console.error('      could not scan this file; failing closed (shrink it, or exclude it deliberately).\n');
+  for (const s of skipped.slice(0, SHOWN)) {
+    err(`  [unscanned] ${safePath(s.rel)} - ${s.reason}`);
+    err('      could not scan this file; failing closed (shrink it, or exclude it deliberately).');
   }
-  console.error(
+  if (skipped.length > SHOWN) {
+    err(`  ... and ${skipped.length - SHOWN} more unscanned (${skipped.length} total)`);
+  }
+  err(
     '\nReplace each one with an ASCII hyphen ("-"). CLAUDE.md: "No em-dashes".\n' +
       'See the header of scripts/check-no-em-dash.mjs for what is banned and why\n' +
       '(box-drawing characters in ASCII diagrams are NOT banned).\n',
   );
   return 1;
+}
+
+export function main() {
+  let files;
+  try {
+    files = gitTrackedFiles();
+  } catch (e) {
+    console.error(`check-no-em-dash: could not list tracked files (run from a git repo): ${e.message}`);
+    return 1;
+  }
+  return report(scan(files, readTracked));
 }
 
 const isMainModule =

@@ -26,7 +26,7 @@ use crate::core::comment_split;
 use crate::models::{geo_key, Project, Section, SectionId, Shot, ShotBaselineEntry, StationRef};
 
 // ============================================================================
-// Element‐name map (long vs. short)
+// Element-name map (long vs. short)
 // ============================================================================
 
 /// Provides XML element names matching the target format.

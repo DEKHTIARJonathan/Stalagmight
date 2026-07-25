@@ -19,6 +19,11 @@ name: Leak Scan
 # The same argument applies verbatim to the dash guard: prose carries the most
 # em-dashes and a docs-only PR must not slip past it.
 #
+# "EVERYTHING" is about PATHS, not branches: the triggers below are still scoped
+# to `master`, so a PR onto a long-lived non-master base runs neither gate until
+# it is finally merged toward master. Inherited posture, noted so the sentence
+# above is not read as broader than it is.
+#
 # Pure-Node, no dependencies (only `git ls-files` + the stdlib), no secrets - so
 # it runs on fork PRs too. Sub-second. Safe to block on because `master` is
 # unprotected (no required-check deadlock, per #122).
