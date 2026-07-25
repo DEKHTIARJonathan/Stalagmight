@@ -40,12 +40,28 @@ export type DivergenceOrigin = 'start' | 'update' | 'done' | 'push' | 'reverify'
 /** A banner the shell surfaces above the toolbar (#200/#204). `push_unconfirmed`
     and `concurrent_session` are transient action feedback; `rendering_disabled`
     (server `exclude_geojson`) and `no_anchor` (no georeferenced zero datum on
-    push/unlock) are the #200 non-blocking notices. */
+    push/unlock) are the #200 non-blocking notices; `push_failed` (#260) is the
+    durable surface for a push/unlock that threw (the toast alone auto-clears
+    after 3 s, leaving a failed upload with no trace). */
 export type SpeleoBanner =
   | { kind: 'push_unconfirmed' }
   | { kind: 'concurrent_session' }
   | { kind: 'rendering_disabled' }
-  | { kind: 'no_anchor' };
+  | { kind: 'no_anchor' }
+  | PushFailedBanner;
+
+/** [#260] The last push/unlock failed. Carries the already-humanized error plus
+    enough context for the banner's Retry to re-issue the SAME verb with the SAME
+    commit message the user typed. */
+export interface PushFailedBanner {
+  kind: 'push_failed';
+  /** Humanized error line from the failed attempt (shown in the banner). */
+  message: string;
+  /** Which verb failed, so Retry re-runs push (keep the lock) vs done (release it). */
+  origin: 'push' | 'done';
+  /** The commit message that attempt carried, replayed verbatim by Retry. */
+  pushMessage: string | null;
+}
 
 /** A SpeleoDB project whose write lock the current user holds, surfaced by the
     login/app-open scan so the resume/release prompt can offer to release it (#201). */
@@ -270,6 +286,15 @@ interface SpeleoStore {
       (non-blocking) that the server generated no new map GeoJSON. Only claims a free
       banner slot - never clobbers transient action feedback. */
   raiseNoAnchorBanner: () => void;
+  /** #260: a push/unlock threw. Raise the PERSISTENT failure banner (the toast is
+      immediate but auto-clears), carrying the humanized error + the verb/message so
+      its Retry can replay the same attempt. Always claims the slot - a failed upload
+      outranks the informational notices. */
+  raisePushFailedBanner: (b: Omit<PushFailedBanner, 'kind'>) => void;
+  /** #260: drop the push-failure banner (a new attempt supersedes the old failure;
+      a successful push/release clears the whole slot anyway). No-op for other kinds,
+      so it never wipes an unrelated banner. */
+  clearPushFailedBanner: () => void;
   /** #200 Enable-rendering: PATCH `exclude_geojson = false` so the server resumes
       web-viewer GeoJSON on the NEXT push (not retroactively). Clears the
       rendering-disabled banner and re-seeds link status. Throws on failure so the
@@ -735,6 +760,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   raiseNoAnchorBanner: () =>
     set((state) => (state.banner ? {} : { banner: { kind: 'no_anchor' } })),
+
+  raisePushFailedBanner: ({ message, origin, pushMessage }) =>
+    set({ banner: { kind: 'push_failed', message, origin, pushMessage } }),
+
+  clearPushFailedBanner: () =>
+    set((state) => (state.banner?.kind === 'push_failed' ? { banner: null } : {})),
 
   enableRendering: async () => {
     // Throws on failure so the banner keeps itself open and shows the error.

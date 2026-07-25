@@ -38,34 +38,61 @@ export default function OpenFromSpeleoDbDialog() {
   const [filter, setFilter] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // #270: the last project-list fetch failed, so an empty list means "we could not
+  // load them", NOT "this account has no projects". Keeps the empty state honest.
+  const [listFailed, setListFailed] = useState(false);
   // #214: an Ariane (.tml-only) project the user is being asked to adopt. Set when
   // speleodb_open_project reports SpeleoDbAction::Adopt; cleared on confirm/cancel.
   const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
 
   const refreshProjects = async (isCancelled: () => boolean = () => false) => {
     const list = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
-    if (!isCancelled()) setProjects(list);
+    if (!isCancelled()) {
+      setProjects(list);
+      setListFailed(false);
+    }
   };
 
   useEffect(() => {
     let cancelled = false;
     void (async () => {
+      // Step 1 - the AUTH check. Only THIS deciding we're not signed in may send the
+      // user to the login prompt.
+      let status: SpeleoSessionStatus;
       try {
-        const status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
+        status = await invokeIpc<SpeleoSessionStatus>('speleodb_session');
         if (cancelled) return;
         setSession(status);
-        if (!status.logged_in) {
-          setPhase('logged-out');
-          return;
-        }
-        await refreshProjects(() => cancelled);
-        if (!cancelled) setPhase('list');
       } catch (e) {
         if (cancelled) return;
         // A dead token surfaces here - drop the session and prompt a re-login.
         if (speleoErrorAction(e) === 'ReLogin') clearSession();
         setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
         setPhase('logged-out');
+        return;
+      }
+      if (!status.logged_in) {
+        setPhase('logged-out');
+        return;
+      }
+
+      // Step 2 - the project LIST fetch, kept separate (#270). A flaky list call on a
+      // perfectly valid session used to bounce the user to the login screen; now it
+      // leaves them in the authenticated list phase with the inline error + Refresh.
+      // Only a genuinely dead token (`ReLogin`) surfacing here escalates to logged-out.
+      try {
+        await refreshProjects(() => cancelled);
+        if (!cancelled) setPhase('list');
+      } catch (e) {
+        if (cancelled) return;
+        setListFailed(true);
+        setError(humanizeSpeleoError(e, t('speleodb.errors.listFailed')));
+        if (speleoErrorAction(e) === 'ReLogin') {
+          clearSession();
+          setPhase('logged-out');
+        } else {
+          setPhase('list');
+        }
       }
     })();
     return () => {
@@ -85,6 +112,7 @@ export default function OpenFromSpeleoDbDialog() {
     try {
       await refreshProjects();
     } catch (e) {
+      setListFailed(true);
       if (speleoErrorAction(e) === 'ReLogin') {
         clearSession();
         setPhase('logged-out');
@@ -179,9 +207,11 @@ export default function OpenFromSpeleoDbDialog() {
 
             {filtered.length === 0 ? (
               <p className="text-sm text-text-secondary" data-testid="open-from-speleodb-empty">
-                {projects.length === 0
-                  ? t('speleodb.browser.noProjects')
-                  : t('speleodb.browser.noMatches')}
+                {projects.length > 0
+                  ? t('speleodb.browser.noMatches')
+                  : listFailed
+                    ? t('speleodb.browser.listUnavailable')
+                    : t('speleodb.browser.noProjects')}
               </p>
             ) : (
               <ul

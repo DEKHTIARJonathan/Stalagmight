@@ -18,6 +18,11 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
  *   is always reachable.
  * - `no_anchor` - a push/unlock of a survey with no georeferenced zero datum, so the
  *   server generated no new map geometry (the map may be stale).
+ * - `push_failed` (#260) - the last push/unlock threw. The action toast auto-clears
+ *   after 3 s, which left a failed upload with no durable surface at all; this banner
+ *   keeps the humanized error on screen and offers Retry, which replays the SAME verb
+ *   (push keeps the lock, done releases it) with the same commit message. It clears on
+ *   the next attempt, on a landed push/release, and when the project closes.
  * None of these block editing or pushing.
  *
  * Above all of them sits the #213 force-edit banner (big-red, derived from
@@ -35,7 +40,8 @@ export function SpeleoBanner() {
   const lockHolder = useSpeleoStore((s) => s.link?.lockHolder ?? null);
   const showToast = useUIStore((s) => s.showToast);
   // #213: Reconnect is the existing acquire+reconcile verb (startEditing).
-  const { startEditing, busy } = useSpeleoActions();
+  // #260: Retry re-issues the push/unlock verb that failed.
+  const { startEditing, push, done, busy } = useSpeleoActions();
   // Inline second step for the Enable-rendering action (no single-click side effect
   // on server metadata; the confirm states rendering refreshes on the next push).
   const [confirmingEnable, setConfirmingEnable] = useState(false);
@@ -84,6 +90,10 @@ export function SpeleoBanner() {
 
   if (!banner) return null;
 
+  // #260: keep the failed attempt's own context so Retry replays the same verb with
+  // the same commit message (narrowed once here - the JSX callbacks close over it).
+  const pushFailed = banner.kind === 'push_failed' ? banner : null;
+
   const text =
     banner.kind === 'push_unconfirmed'
       ? t('speleodb.banner.pushUnconfirmed')
@@ -91,7 +101,18 @@ export function SpeleoBanner() {
         ? t('speleodb.banner.renderingDisabled')
         : banner.kind === 'no_anchor'
           ? t('speleodb.banner.noAnchor')
-          : t('speleodb.banner.concurrentSession');
+          : banner.kind === 'push_failed'
+            ? t('speleodb.banner.pushFailed', { message: banner.message })
+            : t('speleodb.banner.concurrentSession');
+
+  // The verbs share the speleoStore `busy` lock, so a Retry while one is in flight
+  // can't double-issue; the guard just stops the click from queueing another.
+  const retry = () => {
+    if (!pushFailed || busy) return;
+    void (pushFailed.origin === 'done'
+      ? done(pushFailed.pushMessage)
+      : push(pushFailed.pushMessage));
+  };
 
   const confirmEnable = async () => {
     setEnabling(true);
@@ -117,6 +138,17 @@ export function SpeleoBanner() {
     >
       <span>{confirmingEnable ? t('speleodb.banner.enableRenderingConfirm') : text}</span>
       <div className="flex items-center gap-3 flex-shrink-0">
+        {pushFailed && (
+          <button
+            type="button"
+            onClick={retry}
+            disabled={busy}
+            className="text-xs underline disabled:opacity-50"
+            data-testid="speleo-banner-retry-push"
+          >
+            {t('speleodb.banner.retryPush')}
+          </button>
+        )}
         {banner.kind === 'rendering_disabled' &&
           (confirmingEnable ? (
             <>

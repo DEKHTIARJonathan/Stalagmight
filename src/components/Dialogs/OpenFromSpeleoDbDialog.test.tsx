@@ -126,7 +126,7 @@ describe('OpenFromSpeleoDbDialog adopt flow (#214)', () => {
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 
-  it('does not close or toast success when the adopted reload fails', async () => {
+  it('does not close or toast success when the adopted reload fails (#214)', async () => {
     mockRoutes();
     loadProjectMock.mockResolvedValue({ success: false });
     render(<OpenFromSpeleoDbDialog />);
@@ -136,5 +136,92 @@ describe('OpenFromSpeleoDbDialog adopt flow (#214)', () => {
 
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalled());
     expect(showToastMock).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-adopted');
+  });
+});
+
+/**
+ * #270 (P1) - a TRANSIENT project-list failure must not log an authenticated user
+ * out of the browser. The mount effect used to wrap the session probe and the list
+ * fetch in one try, so any list hiccup fell into a catch that unconditionally showed
+ * the login prompt. Auth failures still route to logged-out; list failures keep the
+ * authenticated list phase with the inline error + Refresh.
+ */
+describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
+  const clearSession = () => useSpeleoStore.getState().clearSession as ReturnType<typeof vi.fn>;
+
+  it('a flaky list fetch keeps the authenticated list phase (no login prompt)', async () => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await waitFor(() => expect(screen.getByTestId('open-from-speleodb-error')).toBeInTheDocument());
+    expect(screen.queryByTestId('open-from-speleodb-logged-out')).not.toBeInTheDocument();
+    // Still the authenticated surface: the filter + Refresh are reachable.
+    expect(screen.getByTestId('open-from-speleodb-filter')).toBeInTheDocument();
+    expect(clearSession()).not.toHaveBeenCalled();
+  });
+
+  it('the empty state says the list could not load, not that there are no projects', async () => {
+    mockRoutes({
+      speleodb_list_projects: () => Promise.reject({ message: 'boom', action: 'Retry', status: 503 }),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    const empty = await screen.findByTestId('open-from-speleodb-empty');
+    expect(empty.textContent).toContain('could not be loaded');
+  });
+
+  it('Refresh recovers into the list once the fetch succeeds', async () => {
+    let fail = true;
+    mockRoutes({
+      speleodb_list_projects: () =>
+        fail
+          ? Promise.reject({ message: 'boom', action: 'Retry', status: 503 })
+          : Promise.resolve([ARIANE_PROJECT]),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await screen.findByTestId('open-from-speleodb-empty');
+    fail = false;
+    await userEvent.click(screen.getByText('Refresh'));
+
+    expect(await screen.findByTestId('open-from-speleodb-open-p1')).toBeInTheDocument();
+    expect(screen.queryByTestId('open-from-speleodb-error')).not.toBeInTheDocument();
+  });
+
+  it('a dead token surfacing from the list call DOES drop the session', async () => {
+    mockRoutes({
+      speleodb_list_projects: () =>
+        Promise.reject({ message: 'token expired', action: 'ReLogin', status: 401 }),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('open-from-speleodb-logged-out')).toBeInTheDocument(),
+    );
+    expect(clearSession()).toHaveBeenCalled();
+  });
+
+  it('a failing session probe still routes to the login prompt', async () => {
+    mockRoutes({
+      speleodb_session: () => Promise.reject({ message: 'no token', action: 'ReLogin', status: 401 }),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('open-from-speleodb-logged-out')).toBeInTheDocument(),
+    );
+    expect(clearSession()).toHaveBeenCalled();
+  });
+
+  it('a logged-out session still routes to the login prompt', async () => {
+    mockRoutes({ speleodb_session: () => Promise.resolve({ logged_in: false }) });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await waitFor(() =>
+      expect(screen.getByTestId('open-from-speleodb-logged-out')).toBeInTheDocument(),
+    );
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_list_projects')).toBe(false);
   });
 });

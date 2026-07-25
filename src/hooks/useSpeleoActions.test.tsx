@@ -17,7 +17,8 @@ import { renderHook, act } from '@testing-library/react';
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f: string) => f,
+  // The one-arg call (humanizeSpeleoError) must still yield a string.
+  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
 }));
 
 import { useSpeleoActions } from './useSpeleoActions';
@@ -109,6 +110,122 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
     // persisted the same edits).
     expect(outcome).toEqual({ kind: 'released' });
     expect(showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-action-error');
+  });
+});
+
+/**
+ * #260 - a failed push/unlock keeps BOTH surfaces: the immediate toast (which
+ * auto-clears after 3 s) and the durable `push_failed` banner carrying the same
+ * humanized line plus the verb/message its Retry replays.
+ */
+describe('useSpeleoActions - a failed push/unlock raises the persistent banner (#260)', () => {
+  beforeEach(() => {
+    // Use the REAL banner reducers (the outer beforeEach only stubs the apply* verbs).
+    useSpeleoStore.setState({ banner: null });
+  });
+
+  it('push failure raises push_failed with the push origin + message, and still toasts', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('my message');
+    });
+
+    expect(useSpeleoStore.getState().banner).toEqual({
+      kind: 'push_failed',
+      message: expect.any(String),
+      origin: 'push',
+      pushMessage: 'my message',
+    });
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error');
+  });
+
+  it('done failure raises push_failed with the done origin', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null);
+    });
+
+    expect(useSpeleoStore.getState().banner).toMatchObject({
+      kind: 'push_failed',
+      origin: 'done',
+      pushMessage: null,
+    });
+  });
+
+  it('a retry clears the stale failure banner before the new attempt lands', async () => {
+    useSpeleoStore.setState({
+      banner: { kind: 'push_failed', message: 'old', origin: 'push', pushMessage: null },
+    });
+    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push();
+    });
+
+    // Even on a non-success outcome that leaves the banner slot alone, the previous
+    // failure must not linger (it described an attempt that has been superseded).
+    expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+});
+
+/**
+ * #260 - "Changes uploaded and lock released." used to fire even when nothing was
+ * uploaded. The remote dirty bit (`link.hasUnpushedEdits`) captured BEFORE the call
+ * picks the wording.
+ */
+describe('useSpeleoActions - the release toast reflects whether anything was uploaded (#260)', () => {
+  const seedLink = (hasUnpushedEdits: boolean) =>
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE',
+        editState: 'editing',
+        lockHolder: null,
+        lockedByOther: false,
+        hasUnpushedEdits,
+        forceEditing: false,
+        forceEditAllowed: false,
+        remoteState: 'up_to_date',
+        noAccess: false,
+        serverError: null,
+      },
+    });
+
+  it('says the changes were uploaded when there were unpushed edits', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    seedLink(true);
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(
+      'Changes uploaded and lock released.',
+      'speleodb-released',
+    );
+  });
+
+  it('says nothing was uploaded when the session had no unpushed edits', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    seedLink(false);
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith('Lock released. Nothing to upload.', 'speleodb-released');
   });
 });
 

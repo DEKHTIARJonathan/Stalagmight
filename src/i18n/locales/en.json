@@ -2857,6 +2857,7 @@
         "lockedBy": "Unable to lock the project right now - it's being edited by {{email}}. Please try again later.",
         "upToDate": "Already up to date.",
         "released": "Changes uploaded and lock released.",
+        "releasedNothingToUpload": "Lock released. Nothing to upload.",
         "pushed": "Changes pushed to SpeleoDB.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
@@ -2892,6 +2893,8 @@
       "enableRenderingConfirmAction": "Enable rendering",
       "enableRenderingBusy": "Enabling…",
       "enableRenderingFailed": "Could not enable rendering",
+      "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
+      "retryPush": "Retry upload",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {
@@ -2922,6 +2925,7 @@
       "goToSettings": "Open Settings",
       "filterPlaceholder": "Filter projects…",
       "noProjects": "No projects visible to this account.",
+      "listUnavailable": "Your projects could not be loaded. Check your connection and use Refresh to try again.",
       "noMatches": "No projects match your filter.",
       "noAccess": "NO ACCESS",
       "lockedBy": "Locked by {{email}}",

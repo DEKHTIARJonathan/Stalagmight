@@ -63,6 +63,8 @@ export function useSpeleoActions(): SpeleoActions {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
+  const raisePushFailedBanner = useSpeleoStore((s) => s.raisePushFailedBanner);
+  const clearPushFailedBanner = useSpeleoStore((s) => s.clearPushFailedBanner);
 
   // #200 (D2): a push/unlock of a survey with NO georeferenced zero datum means the
   // server generates no new web-viewer GeoJSON. Surface the non-blocking notice; the
@@ -91,12 +93,16 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, []);
 
+  /** Toast the failure and return the humanized line, so a caller that also wants a
+      durable surface (#260's push-failure banner) reuses the exact same wording. */
   const handleError = useCallback(
-    (e: unknown, prefixKey: string) => {
+    (e: unknown, prefixKey: string): string => {
       // A dead token collapses the shell to read-only (mirrors the backend gate
       // drop); other errors are transient - surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
-      showToast(humanizeSpeleoError(e, t(prefixKey)), 'speleodb-action-error');
+      const message = humanizeSpeleoError(e, t(prefixKey));
+      showToast(message, 'speleodb-action-error');
+      return message;
     },
     [clearSession, showToast, t],
   );
@@ -205,6 +211,9 @@ export function useSpeleoActions(): SpeleoActions {
   const push = useCallback(
     async (message?: string | null): Promise<PushResult | null> => {
       setBusy(true);
+      // A fresh attempt supersedes the previous failure banner (#260); a landed push
+      // clears the whole slot via applyPush, and a new throw re-raises it below.
+      clearPushFailedBanner();
       try {
         const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
         applyPush(result);
@@ -217,7 +226,14 @@ export function useSpeleoActions(): SpeleoActions {
         // the returned kind lets the dialog stay open to resolve them.
         return result;
       } catch (e) {
-        handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        // Toast (immediate) AND banner (durable): the toast auto-clears after 3 s, so
+        // without the banner a failed upload left no surface at all (#260).
+        const humanized = handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        raisePushFailedBanner({
+          message: humanized,
+          origin: 'push',
+          pushMessage: message ?? null,
+        });
         return null;
       } finally {
         bumpPoll();
@@ -233,18 +249,32 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
+      raisePushFailedBanner,
+      clearPushFailedBanner,
     ],
   );
 
   const done = useCallback(
     async (message?: string | null): Promise<DoneResult | null> => {
       setBusy(true);
+      clearPushFailedBanner();
+      // #260: "Changes uploaded and lock released." lied whenever there was nothing to
+      // upload (releasing a lock taken but never edited against). The remote dirty bit
+      // is the one that means "local edits not yet on the server" - projectStore's
+      // `isDirty` is the unrelated unsaved-to-disk flag - and `done` clears it, so read
+      // it BEFORE the call.
+      const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
         const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
         applyDone(result);
         switch (result.kind) {
           case 'released':
-            showToast(t('speleodb.editBar.toasts.released'), 'speleodb-released');
+            showToast(
+              hadUnpushedEdits
+                ? t('speleodb.editBar.toasts.released')
+                : t('speleodb.editBar.toasts.releasedNothingToUpload'),
+              'speleodb-released',
+            );
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
             break;
@@ -257,7 +287,12 @@ export function useSpeleoActions(): SpeleoActions {
         }
         return result;
       } catch (e) {
-        handleError(e, 'speleodb.editBar.toasts.doneFailed');
+        const humanized = handleError(e, 'speleodb.editBar.toasts.doneFailed');
+        raisePushFailedBanner({
+          message: humanized,
+          origin: 'done',
+          pushMessage: message ?? null,
+        });
         return null;
       } finally {
         bumpPoll();
@@ -273,6 +308,8 @@ export function useSpeleoActions(): SpeleoActions {
       bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
+      raisePushFailedBanner,
+      clearPushFailedBanner,
     ],
   );
 
