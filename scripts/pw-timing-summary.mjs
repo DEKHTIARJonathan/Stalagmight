@@ -32,39 +32,50 @@ if (!file) {
 
 const report = JSON.parse(readFileSync(file, 'utf8'));
 
-/** Sum the duration of hook-category steps (beforeEach/afterEach and their children). */
-function hookMs(steps) {
-  if (!Array.isArray(steps)) return 0;
-  return steps.reduce(
-    (sum, s) => sum + (s.category === 'hook' ? (s.duration ?? 0) : hookMs(s.steps)),
-    0
-  );
-}
-
+// Two input shapes are accepted:
+//  - scripts/pw-timing-reporter.mjs output ({tests:[…]}) - HAS hook timings.
+//  - the built-in `json` reporter ({suites:[…]}) - has NO hook timings, because
+//    that reporter does not emit `steps` at all. Report that as unavailable
+//    rather than silently printing 0%, which reads as "setup is free" and is the
+//    opposite of the truth.
 const rows = [];
-/** Playwright nests suites arbitrarily deep (file suite -> describe -> describe). */
-function walk(suite, fileName) {
-  const f = suite.file ?? fileName;
-  for (const spec of suite.specs ?? []) {
-    for (const t of spec.tests ?? []) {
-      // Retries produce multiple results; charge the test for all attempts,
-      // since that is what CI actually spends.
-      const results = t.results ?? [];
-      const duration = results.reduce((s, r) => s + (r.duration ?? 0), 0);
-      const hook = results.reduce((s, r) => s + hookMs(r.steps), 0);
-      rows.push({
-        file: f,
-        line: spec.line,
-        title: spec.title,
-        duration,
-        hook,
-        attempts: results.length,
-      });
-    }
+let hooksAvailable = false;
+
+if (Array.isArray(report.tests)) {
+  hooksAvailable = true;
+  for (const t of report.tests) {
+    rows.push({
+      file: t.file,
+      line: t.line,
+      title: t.title,
+      duration: t.duration ?? 0,
+      hook: (t.before ?? 0) + (t.after ?? 0),
+      attempts: t.attempts ?? 1,
+    });
   }
-  for (const child of suite.suites ?? []) walk(child, f);
+} else {
+  /** Playwright nests suites arbitrarily deep (file suite -> describe -> describe). */
+  const walk = (suite, fileName) => {
+    const f = suite.file ?? fileName;
+    for (const spec of suite.specs ?? []) {
+      for (const t of spec.tests ?? []) {
+        // Retries produce multiple results; charge the test for all attempts,
+        // since that is what CI actually spends.
+        const results = t.results ?? [];
+        rows.push({
+          file: f,
+          line: spec.line,
+          title: spec.title,
+          duration: results.reduce((s, r) => s + (r.duration ?? 0), 0),
+          hook: null,
+          attempts: results.length,
+        });
+      }
+    }
+    for (const child of suite.suites ?? []) walk(child, f);
+  };
+  for (const s of report.suites ?? []) walk(s, s.file);
 }
-for (const s of report.suites ?? []) walk(s, s.file);
 
 if (rows.length === 0) {
   console.log('No tests found in report.');
@@ -72,15 +83,17 @@ if (rows.length === 0) {
 }
 
 const fmt = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
+const hcell = (ms) => (hooksAvailable ? fmt(ms) : 'n/a');
 const total = rows.reduce((s, r) => s + r.duration, 0);
-const totalHook = rows.reduce((s, r) => s + r.hook, 0);
+const totalHook = rows.reduce((s, r) => s + (r.hook ?? 0), 0);
 const wall = report.stats?.duration ?? 0;
+const share = (part, whole) => (whole ? `${Math.round((part / whole) * 100)}%` : '0%');
 
 const byFile = new Map();
 for (const r of rows) {
   const e = byFile.get(r.file) ?? { file: r.file, duration: 0, hook: 0, count: 0 };
   e.duration += r.duration;
-  e.hook += r.hook;
+  e.hook += r.hook ?? 0;
   e.count += 1;
   byFile.set(r.file, e);
 }
@@ -89,18 +102,21 @@ const out = [];
 out.push('## Playwright timing');
 out.push('');
 out.push(
-  `${rows.length} tests | test-time total ${fmt(total)} | hook (setup) ${fmt(totalHook)} ` +
-    `(**${total ? Math.round((totalHook / total) * 100) : 0}%** of test time) | wall clock ${fmt(wall)}`
+  `${rows.length} tests | test-time total ${fmt(total)} | ` +
+    (hooksAvailable
+      ? `hook (setup) ${fmt(totalHook)} (**${share(totalHook, total)}** of test time)`
+      : 'hook (setup) **n/a** (json reporter emits no steps - use scripts/pw-timing-reporter.mjs)') +
+    ` | wall clock ${fmt(wall)}`
 );
 out.push('');
 out.push('### Cost by file');
 out.push('');
-out.push('| file | tests | total | hook | hook % | avg/test |');
-out.push('|---|---:|---:|---:|---:|---:|');
+out.push('| file | tests | total | % of total | hook | hook % | avg/test |');
+out.push('|---|---:|---:|---:|---:|---:|---:|');
 for (const e of [...byFile.values()].sort((a, b) => b.duration - a.duration)) {
-  const pct = e.duration ? Math.round((e.hook / e.duration) * 100) : 0;
   out.push(
-    `| ${e.file} | ${e.count} | ${fmt(e.duration)} | ${fmt(e.hook)} | ${pct}% | ${fmt(e.duration / e.count)} |`
+    `| ${e.file} | ${e.count} | ${fmt(e.duration)} | ${share(e.duration, total)} | ${hcell(e.hook)} | ` +
+      `${hooksAvailable ? share(e.hook, e.duration) : 'n/a'} | ${fmt(e.duration / e.count)} |`
   );
 }
 out.push('');
@@ -111,7 +127,7 @@ out.push('|---|---:|---:|---:|');
 for (const r of [...rows].sort((a, b) => b.duration - a.duration).slice(0, top)) {
   const title = r.title.replace(/\|/g, '\\|');
   out.push(
-    `| \`${r.file}:${r.line}\` ${title} | ${fmt(r.duration)} | ${fmt(r.hook)} | ${r.attempts} |`
+    `| \`${r.file}:${r.line}\` ${title} | ${fmt(r.duration)} | ${hcell(r.hook ?? 0)} | ${r.attempts} |`
   );
 }
 

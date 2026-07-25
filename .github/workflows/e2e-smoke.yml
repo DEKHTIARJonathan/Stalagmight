@@ -58,7 +58,7 @@ jobs:
       # TEMPORARY INSTRUMENTATION (remove once the @smoke pare-down lands).
       # CI gives no per-test timing: the `github` reporter prints a line only for
       # tests that failed or flaked, so a green run tells us the suite took ~6.5
-      # min but not which tests spent it. `--reporter=github,json` adds a
+      # min but not which tests spent it. A second reporter adds a
       # machine-readable per-test report; per the nightly's note, passing
       # --reporter on the CLI overrides the config reporter WITHOUT touching the
       # shared playwright.config.ts and WITHOUT wrapping the command, so the exit
@@ -66,11 +66,15 @@ jobs:
       # NB: `pnpm exec playwright test`, NOT `pnpm test:ui:smoke -- …` - pnpm
       # forwards the `--` literally and playwright reads it as a positional test
       # filter ("No tests found"). Keep the --grep in sync with test:ui:smoke.
+      # NB: the custom reporter, NOT the built-in `json` one - `json` does not emit
+      # `steps`, so it cannot separate beforeEach cost from test-body cost. That
+      # split is the whole point: measured locally, hooks are ~64% of smoke test
+      # time, so the suite is slow because of per-test setup, not slow assertions.
       - name: Run Playwright (@smoke)
-        run: pnpm exec playwright test --grep @smoke --reporter=github,json
+        run: pnpm exec playwright test --grep @smoke --reporter=github,./scripts/pw-timing-reporter.mjs
         env:
           # CI=true already gives 2 retries via playwright.config.ts.
-          PLAYWRIGHT_JSON_OUTPUT_NAME: playwright-report/results.json
+          PW_TIMING_OUTPUT: playwright-report/timing.json
       # Ranked cost table on the run summary page. Unlike the nightly (which keeps
       # its report only on failure/flake), timing is wanted on GREEN runs - that
       # is the normal case - so this always runs and writes to the run page,
@@ -79,7 +83,7 @@ jobs:
       - name: Smoke timing summary (run page)
         if: always()
         run: |
-          f="playwright-report/results.json"
+          f="playwright-report/timing.json"
           if [ ! -f "$f" ]; then
             echo "⏱️ **Smoke timing** - results file not found (see job log)." >> "$GITHUB_STEP_SUMMARY"
             exit 0
@@ -94,6 +98,6 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: smoke-timing
-          path: playwright-report/results.json
+          path: playwright-report/timing.json
           retention-days: 7
           if-no-files-found: ignore
