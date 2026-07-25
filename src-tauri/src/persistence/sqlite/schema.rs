@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use anyhow::Result;
 use rusqlite::{params, Connection};
 
@@ -416,6 +418,120 @@ impl Database {
         Ok(())
     }
 
+    /// Normalise stored pitch to the +down convention (schema v11→v12, #296).
+    ///
+    /// DMP import used to keep the mNemo's +up reading, so shots from a DMP
+    /// were stored with a pitch that contradicted their own depth change while
+    /// Walls- and Compass-sourced shots were already +down. Nothing on a shot
+    /// or a section records which importer produced it, so the origin cannot be
+    /// looked up — it has to be inferred from the numbers.
+    ///
+    /// Decided per SECTION, never per shot. A single shot is often ambiguous:
+    /// near-horizontal and very short shots carry almost no signal (1 cm depth
+    /// resolution swamps the implied angle), and on real data individual shots
+    /// do score better in the wrong direction. A section is decisive because
+    /// the convention is a property of the file it was imported from, uniform
+    /// across it. Deciding per section also means a genuinely blundered shot
+    /// cannot flip itself into agreement with its own depth change: it inherits
+    /// the section verdict and stays flagged by validation, which is the whole
+    /// point of the cross-check.
+    ///
+    /// A section is only flipped when the evidence is lopsided — at least
+    /// `MIN_VOTING_SHOTS` usable shots and a flipped error less than half the
+    /// as-is error. On real DMP data the flipped error is 3-7x smaller, and on
+    /// already-correct Walls/Compass data it is far larger, so the gap is wide.
+    /// Anything in between is left alone rather than guessed at; sections whose
+    /// pitch is entirely zero (Ariane never populates inclination) produce no
+    /// signal at all and are untouched.
+    fn migrate_pitch_to_down_convention(conn: &Connection) -> Result<()> {
+        /// Below this a shot's implied angle is mostly depth-gauge quantisation.
+        const MIN_LENGTH_M: f64 = 0.05;
+        /// Same, for the vertical change.
+        const MIN_DZ_M: f64 = 0.05;
+        /// Fewer usable shots than this is not a section-wide verdict.
+        const MIN_VOTING_SHOTS: usize = 3;
+        /// Flipped must beat as-is by this factor to count as decisive.
+        const DECISIVE_RATIO: f64 = 2.0;
+
+        let mut stmt = conn.prepare(
+            "SELECT section_id, length, depth_in, depth_out, pitch_in, pitch_out
+             FROM shots
+             WHERE pitch_in IS NOT NULL OR pitch_out IS NOT NULL",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+                row.get::<_, Option<f64>>(4)?,
+                row.get::<_, Option<f64>>(5)?,
+            ))
+        })?;
+
+        // section_id -> (as-is error, flipped error, usable shot count)
+        let mut tally: HashMap<i64, (f64, f64, usize)> = HashMap::new();
+        for row in rows {
+            let (section_id, length, depth_in, depth_out, pitch_in, pitch_out) = row?;
+            let recorded = match (pitch_in, pitch_out) {
+                (Some(a), Some(b)) => (a + b) / 2.0,
+                (Some(a), None) | (None, Some(a)) => a,
+                (None, None) => continue,
+            };
+            let dz = depth_out - depth_in;
+            // Skip shots the geometry cannot speak to, and impossible ones.
+            if length <= MIN_LENGTH_M || dz.abs() <= MIN_DZ_M || length < dz.abs() {
+                continue;
+            }
+            if !recorded.is_finite() || !dz.is_finite() || !length.is_finite() {
+                continue;
+            }
+            let horizontal = (length * length - dz * dz).max(0.0).sqrt();
+            let implied = dz.atan2(horizontal).to_degrees();
+
+            let entry = tally.entry(section_id).or_insert((0.0, 0.0, 0));
+            entry.0 += (recorded - implied).abs();
+            entry.1 += (-recorded - implied).abs();
+            entry.2 += 1;
+        }
+        drop(stmt);
+
+        let flip: Vec<i64> = tally
+            .iter()
+            .filter(|(_, (as_is, flipped, count))| {
+                *count >= MIN_VOTING_SHOTS && *flipped * DECISIVE_RATIO < *as_is
+            })
+            .map(|(section_id, _)| *section_id)
+            .collect();
+
+        if flip.is_empty() {
+            tracing::info!(
+                sections_examined = tally.len(),
+                "No sections needed pitch-convention normalisation (v11→v12)"
+            );
+            return Ok(());
+        }
+
+        let tx = conn.unchecked_transaction()?;
+        for section_id in &flip {
+            tx.execute(
+                "UPDATE shots
+                 SET pitch_in  = CASE WHEN pitch_in  IS NULL THEN NULL ELSE -pitch_in  END,
+                     pitch_out = CASE WHEN pitch_out IS NULL THEN NULL ELSE -pitch_out END
+                 WHERE section_id = ?1",
+                [section_id],
+            )?;
+        }
+        tx.commit()?;
+
+        tracing::info!(
+            sections_flipped = flip.len(),
+            sections_examined = tally.len(),
+            "Normalised stored pitch to the +down convention (v11→v12)"
+        );
+        Ok(())
+    }
+
     /// Migrate undo/redo tables from TEXT to BLOB columns (schema v2→v3).
     /// Existing TEXT data is CAST to BLOB; on read, `decompress_json` detects
     /// whether content is gzip-compressed or plain UTF-8, so old entries remain
@@ -605,6 +721,9 @@ impl Database {
         }
         if current < UNDO_FORMAT_SAFE_VERSION {
             self.drop_legacy_undo_history()?;
+        }
+        if current < 12 {
+            Self::migrate_pitch_to_down_convention(&self.conn)?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.

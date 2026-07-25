@@ -3563,7 +3563,11 @@ fn init_schema_creates_speleo_link_v11() {
         )
         .unwrap();
     assert_eq!(exists, 1, "init_schema created speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "stamped at v11");
+    assert_eq!(
+        db.get_user_version().unwrap(),
+        SCHEMA_VERSION,
+        "stamped at current"
+    );
 }
 
 #[test]
@@ -3606,7 +3610,11 @@ fn migrate_creates_speleo_link_on_legacy_v8() {
         )
         .unwrap();
     assert_eq!(exists, 1, "migrate_schema recreated speleo_link");
-    assert_eq!(db.get_user_version().unwrap(), 11, "bumped to v11");
+    assert_eq!(
+        db.get_user_version().unwrap(),
+        SCHEMA_VERSION,
+        "bumped to current"
+    );
 }
 
 #[test]
@@ -3864,7 +3872,7 @@ fn migrate_v9_dirty_speleo_link_backfills_last_edit_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing row preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 }
 
 #[test]
@@ -3974,7 +3982,7 @@ fn migrate_v10_speleo_link_adds_last_verify_at() {
     );
     assert_eq!(link.base_commit_sha.as_deref(), Some("abc"));
     assert!(link.has_unpushed_edits, "existing dirty bit preserved");
-    assert_eq!(db.get_user_version().unwrap(), 11);
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
 }
 
 #[test]
@@ -4075,7 +4083,7 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
     // First open_existing: already at HEAD, fast-path early return.
     {
         let db = Database::open_existing(&path).unwrap();
-        assert_eq!(db.get_user_version().unwrap(), 11);
+        assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
         assert!(db.load_speleo_link().unwrap().is_some());
     }
     // Second reopen: still intact, dirty bit preserved.
@@ -4378,5 +4386,206 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         snap.load_project().unwrap().name,
         "Push",
         "survey project preserved in the push snapshot"
+    );
+}
+
+/// Build a section of shots that all descend at ~30°, with `sign` applied to the
+/// recorded pitch: `-1.0` reproduces the pre-#296 DMP storage (+up), `1.0` the
+/// already-correct Walls/Compass storage (+down).
+fn descending_section(name: &str, sign: f64, count: usize) -> SectionData {
+    // length 10 with dz 5 is a 30° descent, well clear of the migration's
+    // near-horizontal and short-shot floors.
+    let shots = (0..count)
+        .map(|i| ShotData {
+            azimuth_in: 90.0,
+            azimuth_out: 90.0,
+            length: 10.0,
+            depth_in: 5.0 * i as f64,
+            depth_out: 5.0 * (i + 1) as f64,
+            pitch_in: Some(sign * 30.0),
+            pitch_out: Some(sign * 30.0),
+            ..Default::default()
+        })
+        .collect();
+    SectionData {
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff5733".to_string(),
+        direction: Some(SurveyDirection::In),
+        quality: 1.0,
+        shots,
+    }
+}
+
+fn section_pitches(db: &Database, section_name: &str) -> Vec<Option<f64>> {
+    let mut stmt = db
+        .conn
+        .prepare(
+            "SELECT s.pitch_in FROM shots s
+             JOIN sections sec ON sec.id = s.section_id
+             WHERE sec.name = ?1 ORDER BY s.sequence_order",
+        )
+        .unwrap();
+    stmt.query_map([section_name], |r| r.get::<_, Option<f64>>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect()
+}
+
+/// Opening a pre-v12 project normalises only the sections whose pitch is stored
+/// in the old +up convention, and leaves everything else exactly as it was (#296).
+///
+/// The verdict has to be per section because nothing records which importer
+/// produced a section — a project can hold a DMP section and a Compass section
+/// side by side, and only the DMP one may be touched.
+#[test]
+fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v11.stalx");
+
+    let mut project = Project::new("Mixed".to_string(), None);
+    // Pre-#296 DMP: descending shots recorded negative. Must be flipped.
+    project.add_section(descending_section("FromDmp", -1.0, 4));
+    // Walls/Compass: already +down. Must be left alone.
+    project.add_section(descending_section("FromCompass", 1.0, 4));
+    // Ariane never populates inclination, so there is no signal to act on.
+    project.add_section(descending_section("FromAriane", 0.0, 4));
+    // Too few usable shots to call a section-wide verdict, even though each
+    // individual shot looks reversed.
+    project.add_section(descending_section("TooShort", -1.0, 2));
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    // open_existing runs ensure_schema_version → the v11→v12 migration.
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+    assert_eq!(
+        section_pitches(&db, "FromDmp"),
+        vec![Some(30.0); 4],
+        "a section stored +up is negated into +down"
+    );
+    assert_eq!(
+        section_pitches(&db, "FromCompass"),
+        vec![Some(30.0); 4],
+        "a section already +down must not be double-flipped"
+    );
+    assert_eq!(
+        section_pitches(&db, "FromAriane"),
+        vec![Some(0.0); 4],
+        "all-zero pitch carries no signal and is left untouched"
+    );
+    assert_eq!(
+        section_pitches(&db, "TooShort"),
+        vec![Some(-30.0); 2],
+        "too few usable shots is not a verdict; left alone rather than guessed"
+    );
+}
+
+/// The migration must not invent a pitch where none was recorded, and a shot
+/// whose recorded pitch genuinely contradicts its depth change must stay
+/// contradictory — that disagreement is a real survey blunder and validation
+/// exists to surface it (#296).
+#[test]
+fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_nulls.stalx");
+
+    let mut project = Project::new("Nulls".to_string(), None);
+    let mut section = descending_section("FromDmp", -1.0, 6);
+    // One shot never had an inclination recorded.
+    section.shots[1].pitch_in = None;
+    section.shots[1].pitch_out = None;
+    // One shot is a genuine blunder: it disagrees with the rest of its own
+    // section about which way it points. The section verdict flips it along
+    // with everything else, so it comes out still disagreeing with its depth
+    // change — which is exactly right.
+    section.shots[5].pitch_in = Some(30.0);
+    section.shots[5].pitch_out = Some(30.0);
+    project.add_section(section);
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let pitches = section_pitches(&db, "FromDmp");
+    assert_eq!(pitches[0], Some(30.0), "ordinary shot normalised");
+    assert_eq!(pitches[1], None, "an unrecorded pitch stays unrecorded");
+    assert_eq!(pitches[2], Some(30.0), "ordinary shot normalised");
+    assert_eq!(
+        pitches[5],
+        Some(-30.0),
+        "the outlier inherits the section verdict and stays wrong, so validation \
+         still flags it instead of the migration silently agreeing with it"
+    );
+}
+
+/// Real device bytes with no vertical signal must be left exactly as they are.
+///
+/// `test_v5.dmp` records no depth change on any shot, so the geometry cannot say
+/// which convention its inclinations are in. The migration has to decline rather
+/// than guess: silently negating a section it cannot reason about would corrupt
+/// it, and unlike a wrong warning that is not something the user can see.
+#[test]
+fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
+    let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/test_v5.dmp");
+    assert!(fixture.exists(), "Fixture missing: {}", fixture.display());
+    let dmp = crate::parsers::dmp::parse_dmp(&fixture).unwrap();
+
+    let mut project = Project::new("Flat".to_string(), None);
+    let mut stored: Vec<Option<f64>> = Vec::new();
+    for section in &dmp.sections {
+        let mut data = section.to_section_data(String::new());
+        if data.shots.len() < 4 {
+            continue;
+        }
+        // Precondition: this fixture really is flat, so there is nothing to infer
+        // from. If a future fixture gains depth changes this assert fires rather
+        // than the test quietly stopping to cover anything.
+        for shot in &data.shots {
+            assert!(
+                (shot.depth_out - shot.depth_in).abs() <= 0.05,
+                "fixture gained a depth change; this test no longer covers the \
+                 no-signal path"
+            );
+        }
+        data.name = Some(format!("S{}", stored.len()));
+        stored.extend(data.shots.iter().map(|s| s.pitch_in));
+        project.add_section(data);
+    }
+    assert!(!stored.is_empty(), "fixture yielded no usable section");
+    assert!(
+        stored.iter().any(|p| p.is_some_and(|v| v.abs() > 1.0)),
+        "fixture has no recorded inclination, so there would be nothing to leave alone"
+    );
+
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("flat.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(11).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+    let after: Vec<Option<f64>> = db
+        .load_project()
+        .unwrap()
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter().map(|sh| sh.pitch_in))
+        .collect();
+    assert_eq!(
+        after, stored,
+        "with no depth change to compare against, every pitch must survive verbatim"
     );
 }

@@ -40,7 +40,13 @@ use std::path::Path;
 /// most recent accepted edit; #193 guardrail-7 push-start comparison). Added in
 /// BOTH `init_schema` and `migrate_schema` (a conditional `ALTER` for existing v9
 /// tables, mirroring the shot-uuid pattern); carried forward by the fence.
-const SCHEMA_VERSION: i32 = 11;
+/// v12 normalises stored pitch to the +down convention (#296). DMP import used
+/// to keep the mNemo's +up reading, so pre-v12 files mix conventions: DMP-sourced
+/// shots are +up while Walls/Compass-sourced shots are already +down, and nothing
+/// records which importer produced a section. `migrate_pitch_to_down_convention`
+/// infers it from the geometry and negates only the sections that need it. No
+/// column changes, so the carry-forward fence is unaffected.
+const SCHEMA_VERSION: i32 = 12;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///
