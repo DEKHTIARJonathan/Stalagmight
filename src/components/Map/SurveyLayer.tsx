@@ -886,15 +886,12 @@ export default class SurveyLayer {
         // Update cursor - suppress for anchored/immovable features
         let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
         let suppressReason: string | null = null;
-        if (showPointer && this.activeTool === 'move_segment' && this.anchoredSectionIds.size > 0) {
+        const hoveredId = newHoveredStationId || newHoveredShotId;
+        if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
           // Check if hovered feature belongs to an anchored section
-          const hoveredId = newHoveredStationId || newHoveredShotId;
-          if (hoveredId) {
-            const sectionId = parseInt(hoveredId.split(':')[0]!, 10);
-            if (this.anchoredSectionIds.has(sectionId)) {
-              showPointer = false;
-              suppressReason = 'anchored_section';
-            }
+          if (this.isSectionAnchored(parseInt(hoveredId.split(':')[0]!, 10))) {
+            showPointer = false;
+            suppressReason = 'anchored_section';
           }
         }
         // Suppress cursor for immovable features in Move Station / Move Shot tools
@@ -1395,10 +1392,17 @@ export default class SurveyLayer {
     return sectionId! * FEATURE_ID_STRIDE + index!;
   }
 
-  // Check if a feature belongs to an anchored section (suppresses hover/interaction)
-  private isFeatureAnchored(featureId: number): boolean {
-    return this.anchoredSectionIds.size > 0 &&
-      this.anchoredSectionIds.has(Math.floor(featureId / FEATURE_ID_STRIDE));
+  // Section id out of a "sectionId:scopedId" feature key (NaN if malformed).
+  private sectionOfId(id: string): number {
+    return Number(id.split(':')[0]);
+  }
+
+  // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
+  // Takes the SECTION id, never a featureId: a shot's featureId is not decodable back
+  // to one (shot.id is itself section-encoded, so floor(fid / STRIDE) yields 2*sectionId
+  // for shots - #301). Every caller already holds the real section id.
+  private isSectionAnchored(sectionId: number): boolean {
+    return this.anchoredSectionIds.size > 0 && this.anchoredSectionIds.has(sectionId);
   }
 
   // Check if a station feature is individually immovable (zero-datum or transitively connected)
@@ -1467,7 +1471,7 @@ export default class SurveyLayer {
     if (hoveredShot) {
       const fid = this.parseFeatureId(hoveredShot);
       // Old behavior: no hover feedback for anchored/immovable shots.
-      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isShotImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(this.sectionOfId(hoveredShot)) && !this.isShotImmovable(fid))) {
         const f = this.shotOverlayFeature(hoveredShot, this.getShotHoverWidth());
         if (f) features.push(f);
       }
@@ -1483,7 +1487,7 @@ export default class SurveyLayer {
       keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
     if (hoveredStation) {
       const fid = this.parseFeatureId(hoveredStation);
-      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isStationImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(this.sectionOfId(hoveredStation)) && !this.isStationImmovable(fid))) {
         const f = this.stationOverlayFeature(hoveredStation, 'hover');
         if (f) features.push(f);
       }
@@ -1554,7 +1558,7 @@ export default class SurveyLayer {
           geo.globalIdx,
           this.displayColorContext(),
         );
-    const opacity = fid !== null && this.isFeatureAnchored(fid) ? 0.25 : geo.isReference ? 0.5 : 1;
+    const opacity = this.isSectionAnchored(sectionId) ? 0.25 : geo.isReference ? 0.5 : 1;
     const properties: Record<string, unknown> = {
       kind: measured ? 'shotMeasured' : 'shot',
       color,
@@ -1618,7 +1622,7 @@ export default class SurveyLayer {
       strokeWidth: style === 'hover' ? 4 : 2.5,
       strokeColor:
         style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
-      opacity: fid !== null && this.isFeatureAnchored(fid) ? 0.25 : 1,
+      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : 1,
     };
     if (this.distanceMode && fid !== null) {
       properties.dist = this.distanceState?.stations.get(fid) ?? -1;
@@ -2522,7 +2526,7 @@ export default class SurveyLayer {
       movingEndForShot: (id) => this.dragMovingShots.get(id),
       isMovingStation: (id) => this.dragMovingStationKeys.has(id),
       parseFid: (id) => this.parseFeatureId(id),
-      isAnchored: (fid) => this.isFeatureAnchored(fid),
+      isAnchored: (id) => this.isSectionAnchored(this.sectionOfId(id)),
       isShotImmovable: (fid) => this.isShotImmovable(fid),
       isStationImmovable: (fid) => this.isStationImmovable(fid),
       shotFeature: (id, w) => this.shotOverlayFeature(id, w),
