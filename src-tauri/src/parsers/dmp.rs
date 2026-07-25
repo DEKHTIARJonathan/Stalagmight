@@ -203,7 +203,16 @@ impl TryFrom<u8> for DmpShotType {
     }
 }
 
-/// A shot from a DMP file
+/// A shot from a DMP file, in the device's own frame.
+///
+/// Every field here is what the mNemo wrote, decoded but not reinterpreted.
+/// That matters for `pitch_in` / `pitch_out`, which the device records
+/// positive-UP while the rest of the codebase is positive-DOWN: a `DmpShot`
+/// pitch is the negative of the same shot's `ShotData` pitch.  Normalisation
+/// happens once, in [`DmpShot::to_shot_data`]; read pitch off `ShotData`, not
+/// off this type.  Keeping this type device-faithful is also what lets
+/// [`compute_section_hash`] stay stable across the fix in issue #296, so
+/// re-import deduplication still recognises already-imported sections.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DmpShot {
     /// Shot type
@@ -218,9 +227,9 @@ pub struct DmpShot {
     pub depth_in: f64,
     /// Depth at end (meters)
     pub depth_out: f64,
-    /// Pitch when entering (degrees)
+    /// Pitch when entering (degrees), device frame: positive is UP
     pub pitch_in: f64,
-    /// Pitch when exiting (degrees)
+    /// Pitch when exiting (degrees), device frame: positive is UP
     pub pitch_out: f64,
     /// Left passage dimension (meters), v4+
     pub left: f64,
@@ -607,7 +616,14 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
 // ============================================================================
 
 impl DmpShot {
-    /// Convert to our internal ShotData format
+    /// Convert to our internal ShotData format.
+    ///
+    /// This is the boundary where the mNemo's device frame becomes the model's
+    /// frame, so it is also where inclination is normalised: the device reports
+    /// pitch positive-UP (-90 = straight down) while the model — and the
+    /// `depth_in` / `depth_out` carried alongside it — is positive-DOWN.  Both
+    /// legs are negated here so the pitch that lands in `ShotData` agrees in
+    /// sign with the depth change beside it.  See `docs/inclination.md`.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
             azimuth_in: self.heading_in,
@@ -615,8 +631,8 @@ impl DmpShot {
             length: self.length,
             depth_in: self.depth_in,
             depth_out: self.depth_out,
-            pitch_in: Some(self.pitch_in),
-            pitch_out: Some(self.pitch_out),
+            pitch_in: Some(-self.pitch_in),
+            pitch_out: Some(-self.pitch_out),
             left: Some(self.left),
             right: Some(self.right),
             up: Some(self.up),
@@ -1573,6 +1589,62 @@ mod tests {
         );
     }
 
+    /// The mNemo records inclination positive-UP, but `depth_in` / `depth_out`
+    /// are positive-DOWN.  Left unreconciled the two disagree, and every
+    /// downstream consumer has to guess which frame a pitch is in.  Conversion
+    /// into `ShotData` is where the device frame is normalised to the model's
+    /// +down convention, so the pitch that comes out must agree in sign with
+    /// the depth change that came out beside it.
+    #[test]
+    fn to_shot_data_pitch_agrees_with_depth_geometry() {
+        // Real shot from 9_20260522-naharon.dmp: a 12.50 m slope descending
+        // 3.64 m, which the depth fields already describe as +16.9° in the
+        // +down frame.  The device stores the negative of that.
+        let dmp_shot = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 0.0,
+            heading_out: 0.0,
+            length: 12.50,
+            depth_in: 14.51,
+            depth_out: 18.15,
+            pitch_in: -16.9,
+            pitch_out: -16.9,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            temperature: 0.0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            marker_index: 0,
+            comment: None,
+        };
+
+        let shot_data = dmp_shot.to_shot_data();
+
+        let dz = shot_data.depth_out - shot_data.depth_in;
+        let horizontal = (shot_data.length * shot_data.length - dz * dz)
+            .max(0.0)
+            .sqrt();
+        let implied = crate::models::pitch_from_components(horizontal, dz);
+        assert!(
+            implied > 0.0,
+            "sanity: a descending shot is positive in the +down frame, got {implied}"
+        );
+
+        for (leg, pitch) in [
+            ("in", shot_data.pitch_in.expect("pitch_in")),
+            ("out", shot_data.pitch_out.expect("pitch_out")),
+        ] {
+            assert!(
+                (pitch - implied).abs() < 1.0,
+                "pitch_{leg} {pitch} disagrees with the {implied} implied by depth \
+                 and length; the device's +up reading was not normalised to +down"
+            );
+        }
+    }
+
     #[test]
     fn test_dmp_shot_to_shot_data() {
         let dmp_shot = DmpShot {
@@ -1602,8 +1674,9 @@ mod tests {
         assert_eq!(shot_data.length, 10.0);
         assert_eq!(shot_data.depth_in, 2.0);
         assert_eq!(shot_data.depth_out, 3.0);
-        assert_eq!(shot_data.pitch_in, Some(5.0));
-        assert_eq!(shot_data.pitch_out, Some(-5.0));
+        // Negated out of the device's +up frame into the model's +down frame.
+        assert_eq!(shot_data.pitch_in, Some(-5.0));
+        assert_eq!(shot_data.pitch_out, Some(5.0));
         assert_eq!(shot_data.left, Some(1.5));
         assert_eq!(shot_data.right, Some(2.0));
         assert_eq!(shot_data.up, Some(3.0));
@@ -2775,21 +2848,29 @@ mod tests {
         assert_eq!(shot.heading_out, 359.0);
     }
 
-    /// End-to-end: negative pitch values survive through to ShotData conversion.
+    /// End-to-end: pitch magnitude survives to ShotData, negated into the
+    /// model's +down frame.  The device's negative (descending) readings come
+    /// out positive, matching the depth increase on the same shot.
     #[test]
     fn test_negative_pitch_through_to_shot_data() {
         let content = build_v4_shot_section(
-            *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0°
-            -350, // pitch_out -35.0°
+            *b"E2E", 900, 910, 500, 100, 150, -200, // pitch_in -20.0° (device, +up)
+            -350, // pitch_out -35.0° (device, +up)
         );
         let (_file, path) = create_dmp_file(&content);
         let dmp = parse_dmp(&path).expect("should parse");
         std::fs::remove_file(&path).ok();
 
+        // The parser keeps the device frame verbatim...
+        let shot = &dmp.sections[0].shots[0];
+        assert_eq!(shot.pitch_in, -20.0, "DmpShot stays device-raw");
+        assert_eq!(shot.pitch_out, -35.0, "DmpShot stays device-raw");
+
+        // ...and the conversion boundary is what normalises it.
         let section_data = dmp.sections[0].to_section_data(String::new());
         let shot_data = &section_data.shots[0];
-        assert_eq!(shot_data.pitch_in, Some(-20.0), "ShotData pitch_in");
-        assert_eq!(shot_data.pitch_out, Some(-35.0), "ShotData pitch_out");
+        assert_eq!(shot_data.pitch_in, Some(20.0), "ShotData pitch_in");
+        assert_eq!(shot_data.pitch_out, Some(35.0), "ShotData pitch_out");
     }
 
     /// Cross-validate CaveChef's parser against known values from pytool_mnemo_lib's
