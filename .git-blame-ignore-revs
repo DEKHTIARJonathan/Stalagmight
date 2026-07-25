@@ -10,3 +10,6 @@
 
 # style(rust): cargo fmt --all (no logic changes)
 416ea342a583532aab8260f7af5aa16766db6c01
+
+# chore: sweep Unicode dashes to ASCII hyphens (#293) - no logic changes
+6ddce619b3762550c690e928f9212eb9c81b835c
