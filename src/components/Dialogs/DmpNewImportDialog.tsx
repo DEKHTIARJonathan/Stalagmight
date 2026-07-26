@@ -1090,15 +1090,9 @@ function buildBatchImport(
 
       // #24 / q14: the backend reverses before creating the section, so every
       // placement index must address the post-reverse order - on BOTH sides of a
-      // connection. The target index is passed only for an 'importing'
-      // connection: that is the one case where the target's numbering is decided
-      // by this batch (including an early-imported target the branches above
-      // rewrote into a from_existing placement). A connection to a section that
-      // was already in the project keeps its indices as the user picked them.
-      const mirrorTargetIndex =
-        conn?.targetType === 'importing' ? conn.targetImportIndex : null;
+      // connection (see targetShotCountForMirror for the target side).
       const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length,
-        targetShotCountForMirror(placement, mirrorTargetIndex, sectionEdits));
+        targetShotCountForMirror(placement, conn?.targetType, conn?.targetImportIndex, sectionEdits));
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,

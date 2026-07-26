@@ -1015,7 +1015,11 @@ is the identity. Per shot:
 
 `azimuth_in`/`azimuth_out` are two **forward** readings and geometry uses their
 circular mean, so swapping them alone is a no-op - the reciprocal is what
-actually turns the shot around.
+actually turns the shot around. The exception is a pair exactly 180 degrees
+apart (a gross reading blunder): its circular mean is undefined, and
+reciprocating maps the pair to itself, so such a shot is **swapped** instead.
+That keeps both recorded values and flips the arbitrary tie-break the mean is
+resolved with, which is what turns the bearing around.
 
 Beyond the shots, `section_offsets` gains the section's old total displacement
 (station 0 is now the far end), and every external station ref in the section -
@@ -1031,9 +1035,25 @@ the frozen invariant still holds. Undo is a before/after project snapshot pair.
 multi-selected), and a button in the Edit Section dialog that is disabled while
 that dialog has unsaved edits.
 
+A multi-section reverse is **one action**: it goes through `execute_batch`, so
+either every selected section reverses or none does, and a single Undo restores
+them all.
+
 **On import.** `ImportSectionConfig.reverse` applies the same transform before
 the section is created, so placement and station-comment indices address the
 final order. Left/right is never swapped on the import path (no dialog to ask).
+
+Ticking the toggle changes numbering only, never where the passage lands: the
+section anchor gains the same displacement the in-app reverse applies, because
+station 0 is now the far end. Merge- and datum-based placements re-anchor the
+section anyway; `Origin` and `Manual` position station 0 directly and would
+otherwise land a full end-to-end displacement away.
+
+Both sides of a connection renumber independently. A wizard connection whose
+target is created **by the same batch** has its target index mirrored too - and
+that includes a target the wizard rewrites into a `from_existing` placement
+because it was already created earlier in the run. A connection to a section
+that was already in the project keeps the index the user picked.
 
 #### Merge Stations Dialog
 

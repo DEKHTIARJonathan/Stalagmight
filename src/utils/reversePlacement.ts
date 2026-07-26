@@ -27,17 +27,19 @@ import type { SectionEditState } from './batchImportHelpers';
  * SAME run (early-import), and if that section was created reversed then its
  * stations were mirrored after the user's index was recorded.
  *
- * That exception is the only reason a `from_existing` index ever moves, so it
- * is driven by an explicit `targetImportIndex` from an `importing` connection -
- * never inferred from the placement alone.
+ * That exception is the only reason a `from_existing` index ever moves, so it is
+ * gated on the connection's `targetType` being `importing` - the one case where
+ * this batch decides the target's numbering. A connection to a section that was
+ * already in the project is never mirrored, whatever the placement looks like.
  */
 export function targetShotCountForMirror(
   placement: ImportPlacement,
+  targetType: 'existing' | 'importing' | null | undefined,
   targetImportIndex: number | null | undefined,
   sectionEdits: Map<number, SectionEditState> | undefined
 ): number | null {
   if (placement.type !== 'from_importing' && placement.type !== 'from_existing') return null;
-  if (targetImportIndex == null) return null;
+  if (targetType !== 'importing' || targetImportIndex == null) return null;
   const edits = sectionEdits?.get(targetImportIndex);
   if (!edits?.reverse) return null;
   return edits.shots.filter((s) => !s.isDeleted).length;

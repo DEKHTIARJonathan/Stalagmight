@@ -128,29 +128,36 @@ describe('targetShotCountForMirror', () => {
   };
 
   it('counts a reversed from_importing target, excluding deleted shots', () => {
-    expect(targetShotCountForMirror(fromImporting, 3, edits(true, 5, 2))).toBe(5);
+    expect(targetShotCountForMirror(fromImporting, 'importing', 3, edits(true, 5, 2))).toBe(5);
   });
 
   it('counts a reversed early-imported target reached through from_existing', () => {
-    expect(targetShotCountForMirror(fromExisting, 3, edits(true, 5))).toBe(5);
+    expect(targetShotCountForMirror(fromExisting, 'importing', 3, edits(true, 5))).toBe(5);
   });
 
   it('returns null when the target is not being reversed', () => {
-    expect(targetShotCountForMirror(fromImporting, 3, edits(false, 5))).toBeNull();
-    expect(targetShotCountForMirror(fromExisting, 3, edits(false, 5))).toBeNull();
+    expect(targetShotCountForMirror(fromImporting, 'importing', 3, edits(false, 5))).toBeNull();
+    expect(targetShotCountForMirror(fromExisting, 'importing', 3, edits(false, 5))).toBeNull();
   });
 
-  it('returns null without a target import index - a pre-existing project section', () => {
-    // The caller passes null for a connection to a section already in the
-    // project: its numbering is not decided by this batch.
-    expect(targetShotCountForMirror(fromExisting, null, edits(true, 5))).toBeNull();
-    expect(targetShotCountForMirror(fromExisting, undefined, edits(true, 5))).toBeNull();
+  it('never mirrors a connection to a section already in the project', () => {
+    // targetType 'existing' means the user picked the index off the live
+    // project, where the section already has its final numbering - even if a
+    // section at that import index happens to be reversed in this batch.
+    expect(targetShotCountForMirror(fromExisting, 'existing', 3, edits(true, 5))).toBeNull();
+    expect(targetShotCountForMirror(fromExisting, null, 3, edits(true, 5))).toBeNull();
+    expect(targetShotCountForMirror(fromExisting, undefined, 3, edits(true, 5))).toBeNull();
+  });
+
+  it('returns null without a target import index', () => {
+    expect(targetShotCountForMirror(fromExisting, 'importing', null, edits(true, 5))).toBeNull();
+    expect(targetShotCountForMirror(fromExisting, 'importing', undefined, edits(true, 5))).toBeNull();
   });
 
   it('returns null for placements with no target side', () => {
-    expect(targetShotCountForMirror({ type: 'origin' }, 3, edits(true, 5))).toBeNull();
+    expect(targetShotCountForMirror({ type: 'origin' }, 'importing', 3, edits(true, 5))).toBeNull();
     expect(
-      targetShotCountForMirror({ type: 'manual', align_station_index: 0, offset: null }, 3, edits(true, 5))
+      targetShotCountForMirror({ type: 'manual', align_station_index: 0, offset: null }, 'importing', 3, edits(true, 5))
     ).toBeNull();
   });
 });
