@@ -65,16 +65,23 @@ const sectionSeeds: SectionSeed[] = [
       },
       { azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: -20, depth_out: -5 },
       { azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: -5, depth_out: -20 },
+      { azimuth_in: 90, azimuth_out: 90, length: 10, depth_in: -20, depth_out: -5 },
     ],
   },
 ];
 
 /**
- * The station that owns a comment. NOT station 0: the section-name label anchors
- * there, and station 3 is the survey's free end, so its disc is only crossed by
- * one shot line.
+ * The station that owns a comment. It must be a FREE END so its disc is crossed
+ * by only one shot line - an interior station blends two lines under the probe
+ * and the ramp assertions read a mixed pixel. Station 0 is out (the section-name
+ * label anchors there), which leaves the survey's last station.
+ *
+ * It must ALSO land on a different COMMENT_PALETTE slot than the commented shot,
+ * or the guard in beforeEach trips. With section-encoded shot ids the old free
+ * end collided (`1:st3` and `1:s100000` both hash to yellow), so the seed carries
+ * a fourth shot to push the free end out to station 4 (green).
  */
-const COMMENTED_STATION = 3;
+const COMMENTED_STATION = 4;
 
 /** A station with no comment, used as the "must not be tinted" control. */
 const PLAIN_STATION = 1;
@@ -365,11 +372,11 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
     await createProject(page, 'Comment Palette Test');
     await seedProjectWithSections(page, sectionSeeds);
     await waitForMapReady(page);
-    await waitForDrawnShots(page, 3);
+    await waitForDrawnShots(page, 4);
 
     sectionId = await getSectionId(page);
     shotIds = await getShotIds(page, sectionId);
-    expect(shotIds.length).toBe(3);
+    expect(shotIds.length).toBe(4);
     await setStationComment(page, sectionId, COMMENTED_STATION, 'silt');
 
     shotTint = commentColorForKey(`${sectionId}:s${shotIds[0]!}`);
@@ -528,14 +535,16 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
 
     await toggleDisplay(page, 'showDepthGradient');
     await expect(page.locator('[data-testid="depth-legend"]')).toBeVisible({ timeout: 3000 });
-    // Every seeded shot has different depths at its two ends, so all three ramp.
-    await expect.poll(ramping, { timeout: 4000 }).toBe('ramp,ramp,ramp');
+    // Every seeded shot has different depths at its two ends, so all of them ramp.
+    const allRamp = shotIds.map(() => 'ramp').join(',');
+    const allFlat = shotIds.map(() => 'flat').join(',');
+    await expect.poll(ramping, { timeout: 4000 }).toBe(allRamp);
 
     await setActiveTool(page, 'move_comment');
     await waitForActiveTool(page, 'move_comment');
-    await expect.poll(ramping, { timeout: 4000 }).toBe('flat,flat,flat');
-    // The commented shot went flat because it took the palette tint; the other
-    // two went flat because the depth ramp collapsed to their average-depth
+    await expect.poll(ramping, { timeout: 4000 }).toBe(allFlat);
+    // The commented shot went flat because it took the palette tint; the others
+    // went flat because the depth ramp collapsed to their average-depth
     // color. Pin the first half so "flat" cannot be satisfied by the shots
     // vanishing.
     expect(describePixel(await shotPixelAt(page, sectionId, shotIds[0]!, 0.3), palette)).toBe(
@@ -544,7 +553,7 @@ test.describe('Move-comment tool - palette tint (#52)', () => {
 
     await setActiveTool(page, 'select');
     await waitForActiveTool(page, 'select');
-    await expect.poll(ramping, { timeout: 4000 }).toBe('ramp,ramp,ramp');
+    await expect.poll(ramping, { timeout: 4000 }).toBe(allRamp);
   });
 
   test('switching appMode to plan force-resets the tool and clears the tint', async ({ page }) => {
