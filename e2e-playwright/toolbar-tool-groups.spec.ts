@@ -463,4 +463,128 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForActiveTool(page, 'select');
     expect(await pollMass(page, probes, bg, (mass) => mass === brightMass)).toBe(brightMass);
   });
+
+  // The fade above is painted by the CUSTOM renderer, which dims from the real
+  // section id. This covers the other consumer of the anchored set: the interact
+  // overlay, which must withhold the hover highlight for an anchored shot.
+  //
+  // It also pins that a late-arriving anchored set invalidates the overlay's
+  // id-only cache key, by never moving the pointer after the first hover.
+  //
+  // NOTE (#301): this does NOT pin the floor(fid / STRIDE) decode that #301 fixed.
+  // That bug needed a shot whose id is section-encoded, and the IPC mock does not
+  // reproduce the backend's convention: insert_shot_* allocates max(existing) + 1
+  // (mocks/tauri-ipc.ts), so every section's shots are 1, 2, 3 ..., while the real
+  // backend seeds next_shot_id = section.id * FEATURE_ID_STRIDE
+  // (src-tauri/src/models/section.rs). With flat ids the old decode happened to be
+  // right, so this test passed before the fix too. The decode itself is pinned at
+  // unit level in src/utils/__tests__/ids.test.ts; teaching the mock the real id
+  // convention would make this test cover it too, and is tracked separately.
+  test('anchored section suppresses the shot hover highlight in Move Segment', async ({ page }) => {
+    await createProjectWithSections(page);
+
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              setZeroDatum: (stationRef: unknown, coordinates: unknown) => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) throw new Error('E2E stores not available');
+      await e2e.projectStore.getState().setZeroDatum(
+        { section_id: 1, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
+      );
+    });
+
+    await waitForDrawnStations(page, 1);
+    await zoomInOnSurvey(page);
+    await waitForMapIdle(page);
+    await waitForDrawnStations(page, 3);
+
+    const shot = (await getShotScreenPositions(page)).find((s) => s.sectionId === 1);
+    if (!shot) throw new Error('no section-1 shot to hover');
+
+    // Read the interact-overlay source rather than pixels: it is the exact
+    // collection refreshInteractOverlay builds, so a leaked highlight is a
+    // present feature rather than a brightness delta. getStyle() is used instead
+    // of getSource() because the latter hands back a MapLibre class instance
+    // (see satellite-bug-regression.spec.ts).
+    const overlayShotCount = async (): Promise<number> =>
+      page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+        }).__stalagmight_map__;
+        const src = map?.getStyle().sources['survey-interact'] as
+          | { data?: { features?: { properties?: { kind?: string } | null }[] } }
+          | undefined;
+        const features = src?.data?.features ?? [];
+        return features.filter((f) => f.properties?.kind === 'shot').length;
+      });
+
+    // map.project() is canvas-relative; page.mouse wants viewport coords.
+    const canvasOrigin = await page.getByTestId('map-canvas').boundingBox();
+    if (!canvasOrigin) throw new Error('map canvas has no bounding box');
+    const hoverPoint = { x: canvasOrigin.x + shot.mid.x, y: canvasOrigin.y + shot.mid.y };
+
+    // Non-throwing: expect.poll awaits its generator OUTSIDE its try/catch, so a
+    // throw from here would abort the poll instead of retrying it.
+    const hoverShot = async (): Promise<boolean> => {
+      await page.mouse.move(hoverPoint.x, hoverPoint.y, { steps: 4 });
+      return page
+        .waitForFunction(
+          (expected) => {
+            const ui = (window as unknown as {
+              __E2E_TEST__?: { uiStore: { getState: () => { hoveredShot: { shotId: number } | null } } };
+            }).__E2E_TEST__;
+            return ui?.uiStore.getState().hoveredShot?.shotId === expected;
+          },
+          shot.shotId,
+          { timeout: 2000 }
+        )
+        .then(() => true)
+        .catch(() => false);
+    };
+
+    // Positive control first: with no anchored set (Select tool), hovering that
+    // exact pixel really does produce one shot highlight. Without this the
+    // assertion below could pass simply because the hover never landed.
+    expect(await hoverShot()).toBe(true);
+    await expect.poll(overlayShotCount, { timeout: 5000 }).toBe(1);
+
+    // Switch to Move Segment WITHOUT moving the pointer. The anchored ids arrive
+    // asynchronously, one IPC round-trip after activation, and they are not part
+    // of the interact overlay's cache key - so this also pins that
+    // setAnchoredSections invalidates that cache. If it stops doing so, the
+    // highlight painted above stays bright forever and this poll times out.
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
+    await expect.poll(overlayShotCount, { timeout: 10000 }).toBe(0);
+
+    // And the inverse: leaving the tool empties the anchored set, which must
+    // bring the highlight back with the pointer still held still.
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
+    await expect.poll(overlayShotCount, { timeout: 10000 }).toBe(1);
+
+    // The cursor must agree with the highlight. It is only recomputed when the
+    // hovered id changes, so without a recompute on the dim-set change it stays
+    // as setActiveTool left it and the feature reads as un-grabbable while
+    // painting a hover highlight - the cursor/highlight disagreement #301 is about.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const map = (window as unknown as {
+              __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement };
+            }).__stalagmight_map__;
+            return map?.getCanvas().style.cursor ?? '';
+          }),
+        { timeout: 10000 }
+      )
+      .toBe('pointer');
+  });
 });

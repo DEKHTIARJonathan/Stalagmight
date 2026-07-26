@@ -54,6 +54,27 @@ export function overlayTouchesRemovedSections(
   return false;
 }
 
+/**
+ * Digest of what an interact-overlay build will actually paint: every emitted
+ * feature's visual properties, in emission order.
+ *
+ * Compare one taken BEFORE a dim-set change with one taken AFTER the rebuild. An
+ * unequal pair means the overlay the user is looking at really does change, so its
+ * stale tile must be hidden across the re-tile. An equal pair - the common case,
+ * e.g. a tool switch that sets empty dim sets - means hiding would only introduce
+ * flicker.
+ *
+ * Deliberately derived from the BUILT features rather than from the dim sets plus
+ * a copy of the emission rules. The rules are asymmetric in ways that are easy to
+ * get wrong (hover branches gate on anchored AND immovable, selected branches on
+ * neither; shot and station feature ids share a numeric space, so `1:100000` and
+ * `2:0` both encode to 200000), and a re-derived rule table silently drifts from
+ * the builder. Reading the output cannot drift. Pure.
+ */
+export function overlayPaintDigest(features: readonly GeoJSON.Feature[]): string {
+  return features.map((f) => JSON.stringify(f.properties ?? null)).join('|');
+}
+
 /** Narrow map surface the controller needs (visibility get/set + source-load
  *  events + layer existence). Keeps the controller unit-testable with a stub. */
 export type InteractHideMap = Pick<

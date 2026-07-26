@@ -70,7 +70,7 @@ import {
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
-import { FEATURE_ID_STRIDE } from '../../utils/ids';
+import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
@@ -78,6 +78,7 @@ import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/ma
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import {
   InteractOverlayHideController,
+  overlayPaintDigest,
   overlayTouchesRemovedSections,
 } from './surveyLayer/interactOverlayHide';
 
@@ -339,6 +340,8 @@ export default class SurveyLayer {
   // overlay source when its content actually changes. Reset to '' whenever
   // styling inputs change (rebuild, config, theme, overlay modes).
   private lastInteractKey: string | null = null;
+  /** {@link overlayPaintDigest} of the features the last overlay build emitted. */
+  private lastOverlayDigest = '';
 
   // SoA survey data + geometry resolver for the last applied build (#mem).
   // The resolver serves per-item hit-testing over merged features and the
@@ -801,7 +804,7 @@ export default class SurveyLayer {
       paint: {
         'line-color': ['get', 'color'],
         'line-width': ['get', 'width'],
-        'line-opacity': 1,
+        'line-opacity': ['get', 'opacity'],
       },
     }, this.interactStationsLayerId);
 
@@ -883,50 +886,7 @@ export default class SurveyLayer {
         this.hoveredStationId = newHoveredStationId;
         this.hoveredShotId = newHoveredShotId;
 
-        // Update cursor - suppress for anchored/immovable features
-        let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
-        let suppressReason: string | null = null;
-        if (showPointer && this.activeTool === 'move_segment' && this.anchoredSectionIds.size > 0) {
-          // Check if hovered feature belongs to an anchored section
-          const hoveredId = newHoveredStationId || newHoveredShotId;
-          if (hoveredId) {
-            const sectionId = parseInt(hoveredId.split(':')[0]!, 10);
-            if (this.anchoredSectionIds.has(sectionId)) {
-              showPointer = false;
-              suppressReason = 'anchored_section';
-            }
-          }
-        }
-        // Suppress cursor for immovable features in Move Station / Move Shot tools
-        if (showPointer && (this.activeTool === 'move_station' || this.activeTool === 'move_shot')) {
-          if (newHoveredStationId) {
-            const [secStr, idxStr] = newHoveredStationId.split(':');
-            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isStationImmovable(featureId)) {
-              showPointer = false;
-              suppressReason = 'immovable_station';
-            }
-          } else if (newHoveredShotId) {
-            const [secStr, idxStr] = newHoveredShotId.split(':');
-            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isShotImmovable(featureId)) {
-              showPointer = false;
-              suppressReason = 'immovable_shot';
-            }
-          }
-        }
-        // Move Station/Shot tools: use arrow cursor when not over a movable feature
-        // (prevents MapLibre's default grab cursor from showing through)
-        const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
-        this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
-        if (this.shouldLogInteraction() && suppressReason) {
-          console.debug('[HitDetection] Hover suppressed', {
-            activeTool: this.activeTool,
-            suppressReason,
-            newHoveredStationId,
-            newHoveredShotId,
-          });
-        }
+        this.refreshHoverCursor();
 
         // Update MapLibre visual state
         this.updateVisualState();
@@ -1395,10 +1355,54 @@ export default class SurveyLayer {
     return sectionId! * FEATURE_ID_STRIDE + index!;
   }
 
-  // Check if a feature belongs to an anchored section (suppresses hover/interaction)
-  private isFeatureAnchored(featureId: number): boolean {
-    return this.anchoredSectionIds.size > 0 &&
-      this.anchoredSectionIds.has(Math.floor(featureId / FEATURE_ID_STRIDE));
+  /** Point/arrow cursor for whatever is hovered RIGHT NOW, suppressed for anchored
+   *  or immovable features. Derived purely from current state so it can be re-run
+   *  when a dim set changes, not only when the hovered id changes - the anchored
+   *  and immovable sets arrive asynchronously, and without a recompute the cursor
+   *  disagrees with the highlight until the pointer leaves the feature (#301). */
+  private refreshHoverCursor(): void {
+    let showPointer = Boolean(this.hoveredStationId || this.hoveredShotId);
+    let suppressReason: string | null = null;
+    const hoveredId = this.hoveredStationId || this.hoveredShotId;
+    if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
+      // Check if hovered feature belongs to an anchored section
+      if (this.isSectionAnchored(sectionIdFromKey(hoveredId))) {
+        showPointer = false;
+        suppressReason = 'anchored_section';
+      }
+    }
+    // Suppress cursor for immovable features in Move Station / Move Shot tools
+    const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
+    if (showPointer && useArrowFallback && hoveredId) {
+      const [secStr, idxStr] = hoveredId.split(':');
+      const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
+      const immovable = this.hoveredStationId
+        ? this.isStationImmovable(featureId)
+        : this.isShotImmovable(featureId);
+      if (immovable) {
+        showPointer = false;
+        suppressReason = this.hoveredStationId ? 'immovable_station' : 'immovable_shot';
+      }
+    }
+    // Move Station/Shot tools: use arrow cursor when not over a movable feature
+    // (prevents MapLibre's default grab cursor from showing through)
+    this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
+    if (this.shouldLogInteraction() && suppressReason) {
+      console.debug('[HitDetection] Hover suppressed', {
+        activeTool: this.activeTool,
+        suppressReason,
+        hoveredStationId: this.hoveredStationId,
+        hoveredShotId: this.hoveredShotId,
+      });
+    }
+  }
+
+  // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
+  // Takes the SECTION id, never a featureId: a shot's featureId is not decodable back
+  // to one (shot.id is itself section-encoded, so floor(fid / STRIDE) yields 2*sectionId
+  // for shots - #301). Every caller already holds the real section id.
+  private isSectionAnchored(sectionId: number): boolean {
+    return this.anchoredSectionIds.size > 0 && this.anchoredSectionIds.has(sectionId);
   }
 
   // Check if a station feature is individually immovable (zero-datum or transitively connected)
@@ -1467,7 +1471,7 @@ export default class SurveyLayer {
     if (hoveredShot) {
       const fid = this.parseFeatureId(hoveredShot);
       // Old behavior: no hover feedback for anchored/immovable shots.
-      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isShotImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredShot)) && !this.isShotImmovable(fid))) {
         const f = this.shotOverlayFeature(hoveredShot, this.getShotHoverWidth());
         if (f) features.push(f);
       }
@@ -1483,7 +1487,7 @@ export default class SurveyLayer {
       keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
     if (hoveredStation) {
       const fid = this.parseFeatureId(hoveredStation);
-      if (fid === null || (!this.isFeatureAnchored(fid) && !this.isStationImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredStation)) && !this.isStationImmovable(fid))) {
         const f = this.stationOverlayFeature(hoveredStation, 'hover');
         if (f) features.push(f);
       }
@@ -1511,6 +1515,7 @@ export default class SurveyLayer {
       }
     }
 
+    this.lastOverlayDigest = overlayPaintDigest(features);
     (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
   }
 
@@ -1554,7 +1559,7 @@ export default class SurveyLayer {
           geo.globalIdx,
           this.displayColorContext(),
         );
-    const opacity = fid !== null && this.isFeatureAnchored(fid) ? 0.25 : geo.isReference ? 0.5 : 1;
+    const opacity = this.isSectionAnchored(sectionId) ? 0.25 : geo.isReference ? 0.5 : 1;
     const properties: Record<string, unknown> = {
       kind: measured ? 'shotMeasured' : 'shot',
       color,
@@ -1618,7 +1623,7 @@ export default class SurveyLayer {
       strokeWidth: style === 'hover' ? 4 : 2.5,
       strokeColor:
         style === 'hover' ? this.themeColors.hoverHighlight : this.themeColors.selectHighlight,
-      opacity: fid !== null && this.isFeatureAnchored(fid) ? 0.25 : 1,
+      opacity: this.isSectionAnchored(ref.section_id) ? 0.25 : 1,
     };
     if (this.distanceMode && fid !== null) {
       properties.dist = this.distanceState?.stations.get(fid) ?? -1;
@@ -2356,11 +2361,18 @@ export default class SurveyLayer {
    * Sections in this set get reduced opacity via feature-state.
    */
   setAnchoredSections(sectionIds: Set<number>): void {
+    const before = this.lastOverlayDigest;
     this.anchoredSectionIds = sectionIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
     this.updateClosureAnchoredOpacity(sectionIds);
     // The custom renderer + label layer dim the anchored sections' geometry + labels.
     this.syncCustomDimming();
+    // The anchored set also gates the interact overlay (hover/selection highlight +
+    // its 0.25 opacity), but it is NOT part of the overlay's id-only cache key, and
+    // it lands asynchronously after move_segment activates. Without this the
+    // already-drawn highlight on a held-still pointer stays bright over geometry the
+    // renderer just dimmed - and stays suppressed after leaving the tool.
+    this.applyDimChangeToOverlay(before);
   }
 
   /** Push the current anchored + immovable dim set to the custom-render layers so
@@ -2405,12 +2417,31 @@ export default class SurveyLayer {
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
+    const before = this.lastOverlayDigest;
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
     // Loop closures dim if either endpoint is immovable (kept GeoJSON overlay).
     this.updateImmovableClosureOpacity(stationIds);
     // The custom renderer + label layer dim the immovable geometry + labels.
     this.syncCustomDimming();
+    // Same overlay-cache hazard as setAnchoredSections: these sets gate the
+    // hover/selection highlight but are not in the overlay's cache key.
+    this.applyDimChangeToOverlay(before);
+  }
+
+  /** Re-derive everything a dim-set change feeds, given the {@link overlayPaintDigest}
+   *  captured before the change: the interact overlay (not in its own cache key),
+   *  the hover cursor (otherwise only recomputed when the hovered id changes), and
+   *  - only when the emitted overlay actually changed - a hide across the GeoJSON
+   *  re-tile, which lags the synchronous custom-geometry dim by ~250ms and would
+   *  otherwise flash the old highlight over newly dimmed geometry. Comparing the
+   *  BUILT features, rather than re-deriving which dim rule applies to which id,
+   *  keeps this in lockstep with what is actually painted. */
+  private applyDimChangeToOverlay(before: string): void {
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+    this.refreshHoverCursor();
+    if (this.lastOverlayDigest !== before) this.interactHide.hideUntilRetile();
   }
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
@@ -2522,7 +2553,7 @@ export default class SurveyLayer {
       movingEndForShot: (id) => this.dragMovingShots.get(id),
       isMovingStation: (id) => this.dragMovingStationKeys.has(id),
       parseFid: (id) => this.parseFeatureId(id),
-      isAnchored: (fid) => this.isFeatureAnchored(fid),
+      isAnchored: (id) => this.isSectionAnchored(sectionIdFromKey(id)),
       isShotImmovable: (fid) => this.isShotImmovable(fid),
       isStationImmovable: (fid) => this.isStationImmovable(fid),
       shotFeature: (id, w) => this.shotOverlayFeature(id, w),

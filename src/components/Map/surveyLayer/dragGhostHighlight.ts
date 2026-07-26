@@ -45,7 +45,9 @@ export interface GhostHighlightHost {
   movingEndForShot: (id: string) => MovingEnd | undefined;
   isMovingStation: (id: string) => boolean;
   parseFid: (id: string) => number | null;
-  isAnchored: (fid: number) => boolean;
+  /** Anchored check keyed by the feature's "sectionId:scopedId" id, not its fid:
+   *  a shot fid is not decodable back to a section id (#301). */
+  isAnchored: (id: string) => boolean;
   isShotImmovable: (fid: number) => boolean;
   isStationImmovable: (fid: number) => boolean;
   /** Existing SurveyLayer.shotOverlayFeature / stationOverlayFeature. */
@@ -102,7 +104,7 @@ export function buildGhostHighlights(host: GhostHighlightHost): GhostHighlights 
   const hShotMe = hShot ? host.movingEndForShot(hShot) : undefined;
   if (host.shotsVisible && hShot && hShotMe) {
     const fid = host.parseFid(hShot);
-    if (fid === null || (!host.isAnchored(fid) && !host.isShotImmovable(fid))) {
+    if (fid === null || (!host.isAnchored(hShot) && !host.isShotImmovable(fid))) {
       const p = shotPrim(host, hShot, host.hoverShotWidth, hShotMe);
       if (p) shots.push(p);
     }
@@ -110,7 +112,7 @@ export function buildGhostHighlights(host: GhostHighlightHost): GhostHighlights 
   const sShotMe = sShot ? host.movingEndForShot(sShot) : undefined;
   if (host.shotsVisible && sShot && sShotMe) {
     const fid = host.parseFid(sShot);
-    if (fid === null || (!host.isAnchored(fid) && !host.isShotImmovable(fid))) {
+    if (fid === null || (!host.isAnchored(sShot) && !host.isShotImmovable(fid))) {
       const p = shotPrim(host, sShot, host.selShotWidth, sShotMe);
       if (p) shots.push(p);
     }
@@ -120,14 +122,14 @@ export function buildGhostHighlights(host: GhostHighlightHost): GhostHighlights 
   const sSt = host.selectedStationId !== host.hoveredStationId ? host.selectedStationId : null;
   if (host.stationsVisible && hSt && host.isMovingStation(hSt)) {
     const fid = host.parseFid(hSt);
-    if (fid === null || (!host.isAnchored(fid) && !host.isStationImmovable(fid))) {
+    if (fid === null || (!host.isAnchored(hSt) && !host.isStationImmovable(fid))) {
       const p = stationPrim(host, hSt, 'hover');
       if (p) stations.push(p);
     }
   }
   if (host.stationsVisible && sSt && host.isMovingStation(sSt)) {
     const fid = host.parseFid(sSt);
-    if (fid === null || (!host.isAnchored(fid) && !host.isStationImmovable(fid))) {
+    if (fid === null || (!host.isAnchored(sSt) && !host.isStationImmovable(fid))) {
       const p = stationPrim(host, sSt, 'selected');
       if (p) stations.push(p);
     }

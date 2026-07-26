@@ -33,7 +33,7 @@ export interface GhostRenderContext {
   movingEndForShot: (id: string) => MovingEnd | undefined;
   isMovingStation: (id: string) => boolean;
   parseFid: (id: string) => number | null;
-  isAnchored: (fid: number) => boolean;
+  isAnchored: (id: string) => boolean;
   isShotImmovable: (fid: number) => boolean;
   isStationImmovable: (fid: number) => boolean;
   shotFeature: (id: string, width: number) => GeoJSON.Feature | null;

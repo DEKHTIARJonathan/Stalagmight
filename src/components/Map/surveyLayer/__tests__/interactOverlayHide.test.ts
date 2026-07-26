@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type maplibregl from 'maplibre-gl';
 import {
   overlayTouchesRemovedSections,
+  overlayPaintDigest,
   InteractOverlayHideController,
   INTERACT_HIDE_FALLBACK_MS,
   type InteractHideMap,
@@ -185,5 +186,61 @@ describe('InteractOverlayHideController', () => {
     c.restore();
     expect(f.vis['survey-interact-shots']).toBe('visible');
     expect(f.listenerCount()).toBe(0);
+  });
+});
+
+// #301: a dim-set change must hide the overlay across its ~250ms re-tile ONLY
+// when what is actually painted changes. setAnchoredSections /
+// setImmovableFeatures fire on every tool switch, usually with empty sets, so an
+// unconditional hide would blank the highlight and add flicker where there is none.
+describe('overlayPaintDigest', () => {
+  const shot = (props: Record<string, unknown>): GeoJSON.Feature => ({
+    type: 'Feature',
+    geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+    properties: props,
+  });
+
+  it('is equal for an unchanged build, so no hide is triggered', () => {
+    const a = [shot({ kind: 'shot', opacity: 1, color: '#fff' })];
+    const b = [shot({ kind: 'shot', opacity: 1, color: '#fff' })];
+    expect(overlayPaintDigest(a)).toBe(overlayPaintDigest(b));
+  });
+
+  it('differs when a feature dims', () => {
+    expect(overlayPaintDigest([shot({ kind: 'shot', opacity: 1 })])).not.toBe(
+      overlayPaintDigest([shot({ kind: 'shot', opacity: 0.25 })]),
+    );
+  });
+
+  it('differs when a feature is dropped entirely (hover branch gated out)', () => {
+    expect(overlayPaintDigest([shot({ kind: 'shot', opacity: 1 })])).not.toBe(
+      overlayPaintDigest([]),
+    );
+  });
+
+  it('is empty for an empty build', () => {
+    expect(overlayPaintDigest([])).toBe('');
+  });
+
+  // The properties are what the paint expressions read, so two features that
+  // differ only in geometry (a drag offset) are not a dim change.
+  it('ignores geometry, which no dim rule depends on', () => {
+    const a: GeoJSON.Feature = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [[0, 0], [1, 1]] },
+      properties: { kind: 'shot', opacity: 1 },
+    };
+    const b: GeoJSON.Feature = {
+      type: 'Feature',
+      geometry: { type: 'LineString', coordinates: [[9, 9], [8, 8]] },
+      properties: { kind: 'shot', opacity: 1 },
+    };
+    expect(overlayPaintDigest([a])).toBe(overlayPaintDigest([b]));
+  });
+
+  it('distinguishes order, so a swapped emission is a real change', () => {
+    const a = shot({ kind: 'shot', opacity: 1 });
+    const b = shot({ kind: 'station', opacity: 0.25 });
+    expect(overlayPaintDigest([a, b])).not.toBe(overlayPaintDigest([b, a]));
   });
 });
