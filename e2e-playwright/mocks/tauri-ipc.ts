@@ -154,6 +154,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         section_offsets: Record<string, unknown>;
       } | null = null;
       let projectPath: string | null = null;
+      // `BinaryEnvelope::is_remote` (#270): whether the loaded `.stalx` lives in
+      // the SpeleoDB cache. The frontend resolves the read-only gate from this
+      // SYNCHRONOUSLY at load, so leaving it off the envelope pinned every
+      // Playwright load to `projectLinkKind: 'local'`. Local by default (what
+      // almost every spec means); flip per-spec with __MOCK_SET_PROJECT_IS_REMOTE__.
+      let projectIsRemote = false;
+      // Window teardown calls, so an exit-guard spec can assert the POSITIVE
+      // outcome of an unguarded close instead of only "no dialog appeared".
+      let windowDestroyCount = 0;
+      let windowCloseCount = 0;
       let sectionCounter = 0;
       // Shot ids are section-encoded, exactly as the backend allocates them:
       // `Section::new` seeds `next_shot_id = section.id * FEATURE_ID_STRIDE` and
@@ -295,6 +305,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             __E2E_TEST__?: { projectStore?: { setState: (partial: { databaseOpen: boolean }) => void } };
           }
         ).__E2E_TEST__?.projectStore?.setState({ databaseOpen: path !== null });
+      };
+      // Make the next binary load report the project as a SpeleoDB-cached copy
+      // (or back to local), so a spec can exercise the #270 read-only gate from
+      // the load path itself rather than by poking the speleo store afterwards.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_IS_REMOTE__ = (
+        isRemote: boolean,
+      ) => {
+        projectIsRemote = isRemote;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
+        destroy: windowDestroyCount,
+        close: windowCloseCount,
+      });
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_WINDOW_TEARDOWN_COUNTS__ = () => {
+        windowDestroyCount = 0;
+        windowCloseCount = 0;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
@@ -989,6 +1015,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // discriminant in bits 0-1 rather than a single is_reference bit.
               version: 3,
               loading_id: jsonResult.loadingId,
+              // Added to the envelope at v3 alongside the ShotKind bits
+              // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
+              // it here made every mocked load resolve `isRemote: undefined` and
+              // open the SpeleoDB read-only gate. The version tripwire pins the
+              // NUMBER, not the field set, so it stayed green.
+              is_remote: projectIsRemote,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,
@@ -3317,6 +3349,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:window|set_title':
           case 'plugin:window|current':
             return { label: 'main' };
+
+          // The real teardown the exit flow ends in (`useBeforeUnload`'s
+          // closeWindowNow -> getCurrentWindow().destroy()). Counted, not just
+          // swallowed, so a spec can assert that an UNGUARDED close actually
+          // PROCEEDED - "no dialog appeared" alone also holds when the close
+          // handler silently did nothing.
+          case 'plugin:window|destroy':
+            windowDestroyCount += 1;
+            return null;
+
+          // `performQuit()` asks for a close; the real backend prevents it and
+          // re-emits `tauri://close-requested`, which the app turns into the
+          // destroy above. Counted for the same reason.
+          case 'plugin:window|close':
+            windowCloseCount += 1;
+            return null;
 
           case 'get_stations':
             return [];

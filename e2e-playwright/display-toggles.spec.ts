@@ -482,13 +482,31 @@ test.describe('Toast Notifications', () => {
     }, [message, key, kind] as const);
 
   test('same key refreshes the existing toast instead of stacking a duplicate', async ({ page }) => {
-    await showToast(page, 'First toast', 'test-key');
-    await expect(page.getByTestId('toast')).toHaveCount(1);
-    await expect(page.getByTestId('toast')).toContainText('First toast');
+    // Both pushes go through in ONE round trip. The refresh only applies inside
+    // the 1 s burst window (`TOAST_DEDUP_WINDOW_MS`), and DOM assertions between
+    // the two pushes spent unbounded wall-clock time inside it - on a loaded
+    // runner the second push fell outside and legitimately stacked, failing the
+    // count. The intermediate state is read from the store in the same tick.
+    const afterFirst = await page.evaluate(() => {
+      const ui = (window as unknown as {
+        __E2E_TEST__?: {
+          uiStore: {
+            getState: () => {
+              showToast: (msg: string, key: string) => void;
+              toasts: Array<{ message: string }>;
+            };
+          };
+        };
+      }).__E2E_TEST__?.uiStore;
+      ui?.getState().showToast('First toast', 'test-key');
+      const messages = (ui?.getState().toasts ?? []).map((t) => t.message);
+      // The old behaviour swallowed this outright; the stack shows the newer
+      // wording under the same key, still as a single toast.
+      ui?.getState().showToast('Second toast', 'test-key');
+      return messages;
+    });
+    expect(afterFirst).toEqual(['First toast']);
 
-    // The old behaviour swallowed this outright; the stack shows the newer
-    // wording under the same key, still as a single toast.
-    await showToast(page, 'Second toast', 'test-key');
     await expect(page.getByTestId('toast')).toHaveCount(1);
     await expect(page.getByTestId('toast')).toContainText('Second toast');
   });

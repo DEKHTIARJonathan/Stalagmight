@@ -70,7 +70,19 @@ async function select(page: Page, selection: Record<string, unknown>): Promise<v
   }, selection);
 }
 
-/** Open a remote SpeleoDB link WITHOUT the write lock (the read-only edit state). */
+/**
+ * Toggle the SpeleoDB read-only source.
+ *
+ * READ-ONLY is a remote link opened WITHOUT the write lock: `setLinkOnOpen`
+ * seeds `editState: 'read-only'`, which `selectSpeleoReadOnly` reads as blocked.
+ *
+ * EDITABLE is the confirmed-LOCAL state, `syncProjectLink(false)` - NOT
+ * `clearLink()`. The gate fails closed (#270): `clearLink` drops back to
+ * `projectLinkKind: 'unknown'`, and everything that is not a confirmed-local
+ * project or a held write lock reads as read-only. Clearing the link therefore
+ * does not restore an editable baseline; only the same call `loadProject` makes
+ * on a local open does.
+ */
 async function setSpeleoReadOnly(page: Page, readOnly: boolean): Promise<void> {
   await page.evaluate((on) => {
     const stores = (window as unknown as {
@@ -78,15 +90,68 @@ async function setSpeleoReadOnly(page: Page, readOnly: boolean): Promise<void> {
         speleoStore: {
           getState: () => {
             setLinkOnOpen: (a: { permission: string | null }) => void;
-            clearLink: () => void;
+            syncProjectLink: (isRemote: boolean, forPath?: string | null) => void;
           };
         };
       };
     }).__E2E_TEST__;
     const speleo = stores?.speleoStore.getState();
     if (on) speleo?.setLinkOnOpen({ permission: 'READ_AND_WRITE' });
-    else speleo?.clearLink();
+    else speleo?.syncProjectLink(false);
   }, readOnly);
+}
+
+/**
+ * Give the project one closure the adjustment solve would actually move.
+ *
+ * Without this the closure-adjusted view cannot be entered at all: MapCanvas
+ * reverts it to `measured` on any project with no ELIGIBLE closure (the adjusted
+ * geometry would be identical to measured), so a spec that just flips the mode
+ * silently asserts nothing. `Batch` is one of the two eligible strategies -
+ * see `hasEligibleClosures` in src/utils/closures.ts.
+ */
+async function seedEligibleClosure(page: Page, sectionId: number): Promise<void> {
+  await page.evaluate((secId) => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: {
+        projectStore: {
+          getState: () => { project: { loop_closures: unknown[] } | null };
+          setState: (s: unknown) => void;
+        };
+      };
+    }).__E2E_TEST__;
+    const project = stores?.projectStore.getState().project;
+    if (!project) return;
+    stores?.projectStore.setState({
+      project: {
+        ...project,
+        loop_closures: [
+          ...project.loop_closures,
+          {
+            id: 1,
+            station_a: { section_id: secId, station_index: 0 },
+            station_b: { section_id: secId, station_index: 2 },
+            path_length: 22,
+            misclosure_distance: 0.3,
+            error_percentage: 1.4,
+            horizontal_misclosure: 0.25,
+            vertical_misclosure: 0.15,
+            strategy: 'Batch',
+            is_aligned: false,
+          },
+        ],
+      },
+    });
+  }, sectionId);
+}
+
+async function readGeometryMode(page: Page): Promise<string | undefined> {
+  return page.evaluate(() => {
+    const stores = (window as unknown as {
+      __E2E_TEST__?: { uiStore: { getState: () => { geometryMode: string } } };
+    }).__E2E_TEST__;
+    return stores?.uiStore.getState().geometryMode;
+  });
 }
 
 async function setClosureAdjusted(page: Page, on: boolean): Promise<void> {
@@ -158,7 +223,11 @@ test.describe('DetailPanel footer verbs are gated when editing is blocked', () =
 
   test('the closure-adjusted view disables every footer verb too', async ({ page }) => {
     const { sectionId, shotId } = await seedIds(page);
+    // The mode only STICKS on a project with an eligible closure; without one
+    // MapCanvas reverts it and this test would assert the measured view instead.
+    await seedEligibleClosure(page, sectionId);
     await setClosureAdjusted(page, true);
+    await expect.poll(() => readGeometryMode(page)).toBe('closureAdjusted');
 
     await select(page, {
       type: 'station',
@@ -172,5 +241,10 @@ test.describe('DetailPanel footer verbs are gated when editing is blocked', () =
 
     await select(page, { type: 'section', sectionId });
     await expect(page.getByTestId(SECTION_EDIT)).toBeDisabled();
+
+    // Still the adjusted view at the end: a mid-test revert to `measured` would
+    // leave the SpeleoDB term as the only thing gating these buttons, quietly
+    // turning this case into a duplicate of the ones above.
+    expect(await readGeometryMode(page)).toBe('closureAdjusted');
   });
 });

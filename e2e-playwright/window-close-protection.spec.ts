@@ -385,7 +385,19 @@ test.describe('Window Close Protection', () => {
     await expect(page.getByTestId('speleodb-quit-discard-warning')).toBeVisible();
   });
 
-  test('window X with a clean project raises no guard dialog', async ({ page }) => {
+  /** Window teardown calls the mocked IPC layer has seen so far. */
+  async function windowTeardownCounts(page: Page): Promise<{ destroy: number; close: number }> {
+    return page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __MOCK_GET_WINDOW_TEARDOWN_COUNTS__?: () => { destroy: number; close: number };
+          }
+        ).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__?.() ?? { destroy: -1, close: -1 }
+    );
+  }
+
+  test('window X with a clean project raises no guard dialog and closes', async ({ page }) => {
     await createProject(page, 'Window X Clean Test');
 
     await page.evaluate(() => {
@@ -399,7 +411,15 @@ test.describe('Window Close Protection', () => {
       e2e?.speleoStore?.setState({ link: null });
     });
 
+    expect(await windowTeardownCounts(page)).toEqual({ destroy: 0, close: 0 });
+
     await pressWindowCloseButton(page);
+
+    // The close PROCEEDED: `useBeforeUnload` fell past both guards and ran
+    // `getCurrentWindow().destroy()`. Asserting only that the two dialogs stay
+    // hidden would also pass if the close handler had silently done nothing -
+    // the exact regression that would strand the user in an unclosable window.
+    await expect.poll(async () => (await windowTeardownCounts(page)).destroy).toBe(1);
 
     await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
     await expect(page.getByTestId('speleodb-quit-dialog')).toBeHidden();

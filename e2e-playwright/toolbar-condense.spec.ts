@@ -25,6 +25,24 @@ interface CondenseState {
   historyHidden: boolean;
 }
 
+/** Horizontal overlap of the carousel with each side cluster, or null if a rect is missing. */
+interface OverlapState {
+  left: boolean;
+  right: boolean;
+}
+
+async function readOverlap(page: Page): Promise<OverlapState | null> {
+  return page.evaluate(() => {
+    const box = (sel: string) => document.querySelector(sel)?.getBoundingClientRect() ?? null;
+    const carousel = box('[data-testid="mode-carousel"]');
+    const left = box('[data-testid="toolbar-file-controls"]');
+    const right = box('[data-testid="toolbar-tools-group"]');
+    if (!carousel || !left || !right) return null;
+    const hits = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right;
+    return { left: hits(carousel, left), right: hits(carousel, right) };
+  });
+}
+
 async function readState(page: Page): Promise<CondenseState> {
   return page.evaluate(() => {
     const bar = document.querySelector('[data-testid="toolbar"]');
@@ -83,23 +101,17 @@ test.describe('SingleSystemView Toolbar - progressive condensation', () => {
   test('never overlaps the side clusters, at any width', async ({ page }) => {
     for (const width of [1600, 1100, 860, 720, 620, 540, 460, 400, 360]) {
       await page.setViewportSize({ width, height: 800 });
-      // Let the reset-then-step-up fit pass settle at this width.
-      await expect.poll(async () => page.getByTestId('mode-carousel').isVisible()).toBe(true);
-
-      const overlap = await page.evaluate(() => {
-        const box = (sel: string) =>
-          document.querySelector(sel)?.getBoundingClientRect() ?? null;
-        const carousel = box('[data-testid="mode-carousel"]');
-        const left = box('[data-testid="toolbar-file-controls"]');
-        const right = box('[data-testid="toolbar-tools-group"]');
-        if (!carousel || !left || !right) return null;
-        const hits = (a: DOMRect, b: DOMRect) => a.left < b.right && b.left < a.right;
-        return { left: hits(carousel, left), right: hits(carousel, right) };
-      });
-
-      expect(overlap, `w=${width}`).not.toBeNull();
-      expect(overlap?.left, `carousel over the file cluster at w=${width}`).toBe(false);
-      expect(overlap?.right, `carousel over the tools cluster at w=${width}`).toBe(false);
+      // The reset-then-step-up fit pass runs across several frames after a
+      // resize, so a single sample can read a mid-relayout frame where the
+      // carousel is still sized for the previous width. Poll until the layout
+      // SETTLES: a transient overlap during the pass is not the #260 regression
+      // (which is a stable, painted overlap), and sampling once made this test
+      // fail at a different width on every run.
+      await expect
+        .poll(async () => JSON.stringify(await readOverlap(page)), {
+          message: `carousel overlaps a side cluster at w=${width}`,
+        })
+        .toBe(JSON.stringify({ left: false, right: false }));
     }
   });
 });
