@@ -61,17 +61,21 @@ execution.
 
 ### Local instrumented runs (4 workers, retries off, M1)
 
-Two independent ToT samples, the second taken after #305 landed:
+| Metric | Pre-rebase | ToT run 1 | ToT run 2 (post-#305) | **run 3 (fixed reporter)** |
+|---|---|---|---|---|
+| Tests | 82 passed | 82 passed | 83 passed | **83 passed** |
+| Test-time total | 432.1s | 351.4s | 339.8s | **590.5s** |
+| Hook (setup) time | 277.4s = **64%** | 234.5s = **67%** | 223.2s = **66%** | **377.0s = 64%** |
+| Wall clock | 115.1s | 93.2s | 90.1s | **154.6s** |
 
-| Metric | Pre-rebase | ToT run 1 | **ToT run 2 (post-#305)** |
-|---|---|---|---|
-| Tests | 82 passed | 82 passed | **83 passed** |
-| Test-time total | 432.1s | 351.4s | **339.8s** |
-| Hook (setup) time | 277.4s = **64%** | 234.5s = **67%** | **223.2s = 66%** |
-| Wall clock | 115.1s | 93.2s | **90.1s** |
+Run 3 is the authoritative one: it is the only sample taken with the corrected
+hook attribution (see section 2). Its absolute seconds are inflated because the
+machine was running other work concurrently - which is exactly why the *ratio*
+is the number to carry, not the seconds.
 
-The hook share is stable at 64-67% across three samples and two very different
-trees. That is the one number this plan rests on, and it is not noise.
+The hook share is stable at **64-67% across four samples**, two very different
+trees, and both the buggy and fixed reporters. That is the one number this plan
+rests on, and it is not noise.
 
 ⚠ Run-to-run variance is ~30% and local wall clock is ~4x faster than the hosted
 runner. The *ranking* and the *hook share* transfer; the seconds do not.
