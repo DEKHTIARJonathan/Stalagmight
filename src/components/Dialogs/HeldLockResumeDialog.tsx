@@ -28,19 +28,19 @@ import { DialogWrapper } from './DialogWrapper';
  *   behind a lock the user no longer holds.
  *
  * Dialog-wide:
- * - **Release all locks** is only the blunt server-side `DELETE
- *   /user/release_all_locks/` when nothing is at risk. When some rows have local
- *   edits it becomes "release the rest", releasing only the clean ones one by one and
- *   leaving the rest listed; when the local check FAILED (we do not know), it asks
- *   for a second, explicit confirmation instead of guessing.
  * - **Keep working** - dismiss and leave the locks held.
+ *
+ * There is deliberately NO bulk release. The server verb is all-or-nothing and this
+ * prompt is exactly where locks sitting over un-pushed work show up, so a single
+ * button that frees every lock is the one action most likely to strand the work the
+ * per-row rules exist to protect. Releasing is per project, and only where there is
+ * nothing local to lose.
  * - Closing the dialog (X) is the "do nothing" exit - same as Keep working.
  */
 export default function HeldLockResumeDialog() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
   const heldLocks = useSpeleoStore((s) => s.heldLocks);
-  const releaseAllLocks = useSpeleoStore((s) => s.releaseAllLocks);
   const releaseLock = useSpeleoStore((s) => s.releaseLock);
   const clearHeldLocks = useSpeleoStore((s) => s.clearHeldLocks);
   // Close this OVERLAY only (not the shared `closeDialog`, which would close the
@@ -51,25 +51,19 @@ export default function HeldLockResumeDialog() {
   const { startEditing } = useSpeleoActions();
   // Which project id is being acted on, or 'all' for the Release-all path.
   const [busyId, setBusyId] = useState<string | null>(null);
-  // Release-all is armed for a second click (only when local state is unknown).
-  const [confirmReleaseAll, setConfirmReleaseAll] = useState(false);
 
   const locks = useMemo(() => heldLocks ?? [], [heldLocks]);
   const busy = busyId !== null;
 
   // The local half of the join, fetched once for every listed lock (#270).
   const lockIds = useMemo(() => locks.map((l) => l.projectId), [locks]);
-  const { states, loaded, failed } = useSpeleoLocalStates(lockIds);
+  const { states, failed } = useSpeleoLocalStates(lockIds);
 
   // A row's action is "Continue editing" only on a POSITIVE local-edit report. While
-  // the call is in flight or after it failed nothing is claimed either way - which is
-  // why an unknown result also disarms the bulk release below.
+  // the call is in flight, or after it failed, nothing is claimed either way and the
+  // row keeps its Release - the `failed` note below says so rather than implying the
+  // project is known to be clean.
   const dirty = (projectId: string) => hasUnpushedEdits(states, projectId);
-  const someDirty = locks.some((l) => dirty(l.projectId));
-  // Nothing left for the bulk action to free (every remaining row has local edits).
-  const noneReleasable = someDirty && locks.every((l) => dirty(l.projectId));
-  // We do not KNOW these projects are clean: the call failed, or has not landed yet.
-  const unknown = failed || !loaded;
 
   // Auto-close once the last lock is gone - releasing them one by one shrinks
   // `heldLocks` in the store, and when it empties there is nothing left to resolve.
@@ -83,42 +77,7 @@ export default function HeldLockResumeDialog() {
     closeHeldLockPrompt();
   };
 
-  /** Release exactly `targets`, one request each, stopping at the first failure. */
-  const releaseEach = async (targets: HeldLock[]) => {
-    for (const lock of targets) {
-      await releaseLock(lock.projectId);
-    }
-  };
 
-  const releaseAll = async () => {
-    // Unknown local state: make the user say it twice rather than release locks that
-    // may sit over un-pushed work (the bulk verb is server-wide and irreversible).
-    if (unknown && !confirmReleaseAll) {
-      setConfirmReleaseAll(true);
-      return;
-    }
-    setBusyId('all');
-    try {
-      if (someDirty) {
-        // The server's release-all is all-or-nothing, so "release the rest" is done
-        // per project - the rows with local edits keep their locks and stay listed.
-        await releaseEach(locks.filter((l) => !dirty(l.projectId)));
-      } else {
-        await releaseAllLocks();
-        closeHeldLockPrompt();
-      }
-    } catch (e) {
-      // Release failed: keep the prompt open so the user can retry.
-      showToast(
-        humanizeSpeleoError(e, t('speleodb.heldLocks.releaseFailed')),
-        'speleodb-release-all-error',
-        'error',
-      );
-    } finally {
-      setConfirmReleaseAll(false);
-      setBusyId(null);
-    }
-  };
 
   const releaseOne = async (projectId: string) => {
     setBusyId(projectId);
@@ -255,32 +214,10 @@ export default function HeldLockResumeDialog() {
             {t('speleodb.localEdits.heldLocks.unknown')}
           </p>
         )}
-        {confirmReleaseAll && (
-          <p
-            className="text-xs text-danger"
-            data-testid="speleodb-held-lock-release-all-confirm-note"
-          >
-            {t('speleodb.localEdits.heldLocks.releaseAllConfirmNote')}
-          </p>
-        )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={keep} disabled={busy} data-testid="speleodb-held-lock-keep">
             {t('speleodb.heldLocks.keep')}
-          </Button>
-          <Button
-            variant="danger"
-            onClick={() => void releaseAll()}
-            disabled={busy || noneReleasable}
-            data-testid="speleodb-held-lock-release-all"
-          >
-            {busyId === 'all'
-              ? t('speleodb.heldLocks.releasing')
-              : confirmReleaseAll
-                ? t('speleodb.localEdits.heldLocks.releaseAllConfirm')
-                : someDirty
-                  ? t('speleodb.localEdits.heldLocks.releaseRest')
-                  : t('speleodb.heldLocks.releaseAll')}
           </Button>
         </div>
       </div>

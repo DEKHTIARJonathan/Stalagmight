@@ -2929,7 +2929,6 @@
       "keep": "Keep working",
       "release": "Release",
       "releaseOneAria": "Release the lock on {{name}}",
-      "releaseAll": "Release all locks",
       "releasing": "Releasing…",
       "releaseFailed": "Could not release the locks"
     },
@@ -2941,10 +2940,7 @@
         "continueEditingAria": "Open {{name}} and keep its lock",
         "opening": "Opening…",
         "openFailed": "Could not find the local copy of {{name}} to open. Its lock is left alone so nothing is lost.",
-        "unknown": "Could not check which projects have changes only on this computer. Release with care.",
-        "releaseRest": "Release the others",
-        "releaseAllConfirm": "Release all anyway",
-        "releaseAllConfirmNote": "Some of these projects may hold changes that are only on this computer. Releasing their locks leaves that work behind. Click again to release every lock."
+        "unknown": "Could not check which projects have changes only on this computer. Release with care."
       }
     },
     "recentBadge": {

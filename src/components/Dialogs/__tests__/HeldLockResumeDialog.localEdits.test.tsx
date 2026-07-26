@@ -138,44 +138,21 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
-  it('releases only the clean locks when some rows hold local changes', async () => {
+  it('offers no bulk release at all', async () => {
+    // Removed deliberately, not overlooked. The server verb is all-or-nothing and
+    // this prompt is exactly where locks sitting over un-pushed work surface, so a
+    // single button freeing every lock is the one action most able to strand the
+    // work the per-row rules exist to protect.
     wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
     render(<HeldLockResumeDialog />);
     await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`);
 
-    await userEvent.click(screen.getByTestId('speleodb-held-lock-release-all'));
-
-    // Per-project releases for the clean one; the server-wide verb (which cannot
-    // exclude anything) is never issued.
-    await waitFor(() =>
-      expect(
-        invokeIpcMock.mock.calls.some(
-          (c) => c[0] === 'speleodb_release_lock' && (c[1] as { projectId: string }).projectId === CLEAN,
-        ),
-      ).toBe(true),
+    expect(screen.queryByTestId('speleodb-held-lock-release-all')).not.toBeInTheDocument();
+    expect(invokeIpcMock).not.toHaveBeenCalledWith(
+      'speleodb_release_all_locks',
+      expect.anything(),
     );
-    expect(
-      invokeIpcMock.mock.calls.some(
-        (c) => c[0] === 'speleodb_release_lock' && (c[1] as { projectId: string }).projectId === DIRTY,
-      ),
-    ).toBe(false);
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_release_all_locks')).toBe(false);
-    // The dirty lock is still held and still listed.
-    await waitFor(() =>
-      expect(useSpeleoStore.getState().heldLocks?.map((l) => l.projectId)).toEqual([DIRTY]),
-    );
-  });
-
-  it('uses the single bulk verb when nothing has local changes', async () => {
-    wireIpc({ [DIRTY]: local({ unpushed: false }), [CLEAN]: local({ unpushed: false }) });
-    render(<HeldLockResumeDialog />);
-    await screen.findByTestId(`speleodb-held-lock-release-${DIRTY}`);
-
-    await userEvent.click(screen.getByTestId('speleodb-held-lock-release-all'));
-
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_release_all_locks')).toBe(true),
-    );
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_release_all_locks');
   });
 
   it('falls back to Release when the local-state call fails, and says it does not know', async () => {
@@ -188,20 +165,4 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(screen.getByTestId(`speleodb-held-lock-release-${CLEAN}`)).toBeInTheDocument();
   });
 
-  it('makes Release-all ask twice while the local state is unknown', async () => {
-    wireIpc(new Error('backend down'));
-    render(<HeldLockResumeDialog />);
-    await screen.findByTestId('speleodb-held-lock-local-unknown');
-
-    // ...but the bulk, irreversible action does not fire on a single click, because
-    // we cannot rule out that these locks sit on un-pushed work.
-    await userEvent.click(screen.getByTestId('speleodb-held-lock-release-all'));
-    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_release_all_locks')).toBe(false);
-    await screen.findByTestId('speleodb-held-lock-release-all-confirm-note');
-
-    await userEvent.click(screen.getByTestId('speleodb-held-lock-release-all'));
-    await waitFor(() =>
-      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_release_all_locks')).toBe(true),
-    );
-  });
 });
