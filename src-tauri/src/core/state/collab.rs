@@ -221,6 +221,33 @@ impl AppState {
             return CommandResult::success();
         }
 
+        // Preflight the section budget BEFORE touching anything. A partial apply
+        // is NOT recoverable here: the SHA below is consumed on success, so the
+        // collaborator's remaining sections would be stranded with no way to
+        // re-run the reconcile against the unchanged file, and the next save
+        // could re-export a TML without them. Refuse the whole reconcile instead,
+        // leaving the incoming file unconsumed so it can be retried after the
+        // user frees capacity.
+        {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(p) => p.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return CommandResult::failure("No project open".to_string());
+            };
+            let needed = changeset.sections_added.len() as u64;
+            let capacity = crate::models::MAX_SECTION_ID as u64 + 1;
+            let remaining = project.remaining_section_capacity();
+            if needed > remaining {
+                return CommandResult::failure(format!(
+                    "Cannot reconcile: the collaborator's file adds {needed} section(s) but only \
+                     {remaining} can still be created (limit = {capacity}). No changes were made \
+                     and the file has not been marked as reconciled - free capacity and try again."
+                ));
+            }
+        }
+
         let before = match self.capture_project_snapshot() {
             Ok(s) => s,
             Err(r) => return r,
@@ -580,9 +607,13 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 purpose = "avoid allocating a section id that cannot be reloaded",
                 "Stopped applying collaborator sections at the maximum section count"
             );
+            // apply_collab_changes preflights the budget and refuses the whole
+            // reconcile, so this is unreachable from the production path; it
+            // remains a safety net for direct callers. Deliberately no "reconcile
+            // again" advice - a caller that consumed the SHA cannot honour it.
             skipped.push(format!(
                 "Section limit reached ({}): {remaining} collaborator section(s) were NOT imported, \
-                 starting with '{}'. Remove sections or split the project, then reconcile again.",
+                 starting with '{}'.",
                 crate::models::MAX_SECTION_ID as u64 + 1,
                 s.name
             ));

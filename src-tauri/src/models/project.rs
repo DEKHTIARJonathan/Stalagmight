@@ -596,6 +596,15 @@ impl Project {
         self.next_section_id <= crate::models::MAX_SECTION_ID
     }
 
+    /// How many more section ids can be allocated before [`MAX_SECTION_ID`].
+    ///
+    /// Bulk callers must preflight with this rather than allocating until
+    /// [`Self::can_add_section`] flips: a half-applied bulk import is worse than
+    /// a refused one when the caller marks its input consumed on success.
+    pub fn remaining_section_capacity(&self) -> u64 {
+        (crate::models::MAX_SECTION_ID as u64 + 1).saturating_sub(u64::from(self.next_section_id))
+    }
+
     /// Add a new section to the project
     ///
     /// Callers on a production path must gate this on [`Self::can_add_section`];

@@ -10461,6 +10461,43 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
+fn test_remaining_section_capacity_matches_the_allocation_bound() {
+    // The collab reconcile preflights with this before applying ANY section,
+    // because it marks the incoming TML SHA consumed on success - a half-applied
+    // import would strand the collaborator's remaining sections with no way to
+    // re-run against the unchanged file. So the count has to be exact, not
+    // approximate: off by one either way is a stranded section or a refused
+    // import that would have fitted.
+    let mut project = Project::new("Capacity".to_string(), None);
+
+    project.next_section_id = 0;
+    assert_eq!(
+        project.remaining_section_capacity(),
+        crate::models::MAX_SECTION_ID as u64 + 1,
+        "a fresh project can use every id from 0 to MAX_SECTION_ID inclusive"
+    );
+
+    project.next_section_id = crate::models::MAX_SECTION_ID;
+    assert_eq!(
+        project.remaining_section_capacity(),
+        1,
+        "exactly one id left when next_section_id IS the bound"
+    );
+    assert!(
+        project.can_add_section(),
+        "and it must still be allocatable"
+    );
+
+    project.next_section_id = crate::models::MAX_SECTION_ID + 1;
+    assert_eq!(project.remaining_section_capacity(), 0);
+    assert!(!project.can_add_section());
+
+    // Saturating, not wrapping, for a project loaded with a corrupt id.
+    project.next_section_id = u32::MAX;
+    assert_eq!(project.remaining_section_capacity(), 0);
+}
+
+#[test]
 fn test_split_at_section_limit_refuses_without_mutating() {
     // A refused split must be a no-op. The split paths mutate the original
     // section (rename + truncate) before they allocate section B, and their
