@@ -48,6 +48,7 @@ export * from './ipc/ImportSectionConfig';
 export * from './ipc/ImportPlacement';
 export * from './ipc/Shot';
 export * from './ipc/ShotData';
+export * from './ipc/ShotKind';
 export * from './ipc/ShotUpdates';
 export * from './ipc/Station';
 export * from './ipc/StationRef';

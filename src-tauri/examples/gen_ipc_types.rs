@@ -49,7 +49,8 @@ use stalagmight_lib::models::{
     ImportSectionConfig, LoopClosureWire, PathShot, PlanMode, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
-    ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef, SurveyDirection,
+    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection,
     TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
@@ -144,6 +145,7 @@ fn main() {
     export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
     export::<ShotData>(&out_dir);
+    export::<ShotKind>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
     export::<StationRef>(&out_dir);
@@ -381,6 +383,7 @@ fn main() {
         "ImportPlacement",
         "Shot",
         "ShotData",
+        "ShotKind",
         "ShotUpdates",
         "Station",
         "StationRef",
