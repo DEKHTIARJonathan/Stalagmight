@@ -2425,13 +2425,34 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const commands = (Array.isArray(args?.commands) ? args?.commands : []) as Array<
               Record<string, unknown>
             >;
+            // The real execute_batch is all-or-nothing: it snapshots first and
+            // restores on any sub-command failure. Mirror that, or the mock
+            // would report an error while leaving a half-applied project -
+            // exactly the state the batching exists to prevent.
+            const sectionsBefore = currentProject
+              ? JSON.parse(JSON.stringify(currentProject.sections))
+              : null;
             for (const command of commands) {
+              let result: { success?: boolean; error?: string } | undefined;
               if (command?.type === 'update_shot') {
-                mockHandler('update_shot', {
+                result = mockHandler('update_shot', {
                   sectionId: command.section_id,
                   shotId: command.shot_id,
                   updates: command.updates,
-                });
+                }) as { success?: boolean; error?: string } | undefined;
+              } else if (command?.type === 'reverse_section') {
+                // Multi-section reverse (#24) is batched so it is atomic and
+                // costs one undo, so the batch has to replay it too.
+                result = mockHandler('reverse_section', {
+                  sectionId: command.section_id,
+                  swapLeftRight: command.swap_left_right,
+                }) as { success?: boolean; error?: string } | undefined;
+              }
+              if (result && result.success === false) {
+                if (currentProject && sectionsBefore) {
+                  currentProject.sections = sectionsBefore;
+                }
+                return result;
               }
             }
             return { success: true };

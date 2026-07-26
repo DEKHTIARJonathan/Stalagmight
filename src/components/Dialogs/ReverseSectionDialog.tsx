@@ -17,7 +17,7 @@ import { DialogWrapper } from './DialogWrapper';
  */
 export default function ReverseSectionDialog() {
   const { closeDialog, dialogData } = useUIStore();
-  const { reverseSection, project } = useProjectStore();
+  const { reverseSection, executeBatch, project } = useProjectStore();
 
   const sectionIds = (dialogData.sectionIds as number[] | undefined) ?? [];
   const [swapLeftRight, setSwapLeftRight] = useState(false);
@@ -36,13 +36,25 @@ export default function ReverseSectionDialog() {
     setIsSubmitting(true);
     setError(null);
     try {
-      for (const sectionId of sectionIds) {
-        const result = await reverseSection(sectionId, swapLeftRight);
-        if (!result.success) {
-          setError(result.error ?? 'Failed to reverse section');
-          setIsSubmitting(false);
-          return;
-        }
+      // Reversing a multi-selection is one user action, so it goes through a
+      // batch: the backend rolls the whole thing back if any section fails, and
+      // it lands as a single undo entry. Looping one command per section would
+      // leave the project half-reversed on a mid-loop failure while reporting an
+      // error, and would need one Undo per section to get back.
+      const result =
+        sectionIds.length === 1 && sectionIds[0] !== undefined
+          ? await reverseSection(sectionIds[0], swapLeftRight)
+          : await executeBatch(
+              sectionIds.map((sectionId) => ({
+                type: 'reverse_section' as const,
+                section_id: sectionId,
+                swap_left_right: swapLeftRight,
+              }))
+            );
+      if (!result.success) {
+        setError(result.error ?? 'Failed to reverse section');
+        setIsSubmitting(false);
+        return;
       }
       trackDialogComplete('reverse-section');
       closeDialog();

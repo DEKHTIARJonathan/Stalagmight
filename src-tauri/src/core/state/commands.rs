@@ -708,6 +708,10 @@ impl AppState {
                 | Command::MoveStation { .. }
                 | Command::SetZeroDatum { .. }
                 | Command::UpdateShot { .. }
+                // Reversing a multi-selection is one user action: batching gives
+                // it all-or-nothing rollback and a single undo entry, instead of
+                // N commands that can strand the project half-reversed.
+                | Command::ReverseSection { .. }
         )
     }
 

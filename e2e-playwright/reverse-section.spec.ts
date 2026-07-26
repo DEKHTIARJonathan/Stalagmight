@@ -195,6 +195,39 @@ test.describe('Reverse Section', () => {
     await expect(page.getByTestId('reverse-section-list').locator('li')).toHaveCount(2);
   });
 
+  test('reverses every selected section as one batched action', async ({ page }) => {
+    const ids = await setup(page, 2);
+    const before = await Promise.all(ids.map((id) => readShots(page, id)));
+
+    await page.evaluate((sectionIds) => {
+      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      ui.setSelection({ type: 'section', sectionId: sectionIds[0] });
+      ui.addToSelection({ type: 'section', sectionId: sectionIds[1] });
+    }, ids);
+
+    await openContextMenu(page, { type: 'section', sectionId: ids[0] });
+    await page.getByRole('button', { name: 'Reverse 2 Sections' }).click();
+    await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
+    await page.getByTestId('reverse-confirm').click();
+    await waitForNoDialogs(page);
+
+    // Both sections reversed, not just the first.
+    for (const [i, id] of ids.entries()) {
+      const after = await readShots(page, id);
+      expect(after.map((s) => s.length)).toEqual(
+        [...before[i]!].reverse().map((s) => s.length)
+      );
+    }
+
+    // One batch, carrying both sections - not one command per section, which
+    // would half-apply on failure and need one Undo each.
+    const batches = await page.evaluate(
+      () => (window as any).__MOCK_EXECUTE_BATCH_CALLS__ as unknown[] | undefined
+    );
+    expect(batches).toHaveLength(1);
+    expect(batches![0]).toHaveLength(2);
+  });
+
   test('Edit Section dialog disables Reverse only while dirty', async ({ page }) => {
     const [sectionId] = await setup(page);
 

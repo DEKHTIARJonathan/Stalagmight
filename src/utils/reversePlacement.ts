@@ -15,16 +15,29 @@ import type { ImportPlacement } from '../types/commands';
 import type { SectionEditState } from './batchImportHelpers';
 
 /**
- * Resolve a from_importing target's post-deletion shot count, but only when
- * that target is itself being reversed (otherwise its indices must not move).
+ * Resolve the target section's post-deletion shot count, but only when that
+ * target is itself being reversed (otherwise its indices must not move).
  * Returns `null` when there is nothing to mirror on the target side.
+ *
+ * Both connection shapes need this. A `from_importing` target renumbers when
+ * the batch creates it reversed. A `from_existing` target normally must NOT be
+ * mirrored - the user picked that index off the live project, where the section
+ * already has its final numbering - with one exception: the wizard rewrites a
+ * connection into `from_existing` when its target was created earlier in the
+ * SAME run (early-import), and if that section was created reversed then its
+ * stations were mirrored after the user's index was recorded.
+ *
+ * That exception is the only reason a `from_existing` index ever moves, so it
+ * is driven by an explicit `targetImportIndex` from an `importing` connection -
+ * never inferred from the placement alone.
  */
 export function targetShotCountForMirror(
   placement: ImportPlacement,
   targetImportIndex: number | null | undefined,
   sectionEdits: Map<number, SectionEditState> | undefined
 ): number | null {
-  if (placement.type !== 'from_importing' || targetImportIndex == null) return null;
+  if (placement.type !== 'from_importing' && placement.type !== 'from_existing') return null;
+  if (targetImportIndex == null) return null;
   const edits = sectionEdits?.get(targetImportIndex);
   if (!edits?.reverse) return null;
   return edits.shots.filter((s) => !s.isDeleted).length;
@@ -41,8 +54,9 @@ export function mirrorStationIndex(stationIndex: number, shotCount: number): num
  * @param placement    the placement built against the file's original order
  * @param selfReversed whether THIS section is being reversed
  * @param selfShots    this section's shot count (post-deletion, as sent)
- * @param targetShots  for `from_importing`, the target section's shot count when
- *                     that section is also being reversed; `null` otherwise
+ * @param targetShots  the target section's shot count when that section is also
+ *                     being reversed; `null` otherwise. See
+ *                     {@link targetShotCountForMirror}.
  */
 export function mirrorPlacementForReverse(
   placement: ImportPlacement,
@@ -74,13 +88,28 @@ export function mirrorPlacementForReverse(
     }
   }
 
-  // The target of a from_importing connection renumbers independently: it is a
-  // different section with its own reverse flag and its own shot count.
-  if (next.type === 'from_importing' && targetShots !== null) {
-    next = {
-      ...next,
-      target_station_index: mirrorStationIndex(next.target_station_index, targetShots),
-    };
+  // The target renumbers independently of this section: it is a different
+  // section with its own reverse flag and its own shot count, so this applies
+  // whether or not `selfReversed` is set.
+  if (targetShots !== null) {
+    if (next.type === 'from_importing') {
+      next = {
+        ...next,
+        target_station_index: mirrorStationIndex(next.target_station_index, targetShots),
+      };
+    } else if (next.type === 'from_existing') {
+      // Only reachable for an early-imported target that was created reversed -
+      // see targetShotCountForMirror. Without this the section merges onto
+      // station k of a section whose stations are now numbered N-k, attaching
+      // the passage to the wrong physical end.
+      next = {
+        ...next,
+        existing_station: {
+          ...next.existing_station,
+          station_index: mirrorStationIndex(next.existing_station.station_index, targetShots),
+        },
+      };
+    }
   }
 
   return next;

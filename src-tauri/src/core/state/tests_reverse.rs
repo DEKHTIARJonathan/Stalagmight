@@ -409,6 +409,91 @@ fn import_reverse_lands_the_section_in_the_same_place() {
     }
 }
 
+/// Reversing a multi-selection goes through a batch so it is one user action:
+/// every section or none, and a single Undo to get back.
+#[test]
+fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
+    let (state, first_id) = state_with_section();
+    let second = state.execute(Command::CreateSection {
+        name: Some("Side passage".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(315.0, 6.0, 1.0, 3.0)],
+    });
+    let second_id = second.section_id.unwrap();
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+    let first_lengths = |project: &Project| {
+        project
+            .sections
+            .iter()
+            .find(|s| s.id == first_id)
+            .map(|s| s.shots.iter().map(|shot| shot.length).collect::<Vec<_>>())
+            .unwrap()
+    };
+    let lengths_before = first_lengths(&state.get_project_state().unwrap());
+
+    // A batch whose LAST command names a section that does not exist: the two
+    // good reverses must not survive it.
+    let failed = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id: first_id,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id: second_id,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id: 9999,
+                swap_left_right: false,
+            },
+        ],
+    });
+    assert!(!failed.success, "batch with a missing section should fail");
+    assert_eq!(
+        first_lengths(&state.get_project_state().unwrap()),
+        lengths_before,
+        "a failed batch left a section reversed"
+    );
+
+    // The all-good batch applies to both sections and costs exactly one undo.
+    let ok = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id: first_id,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id: second_id,
+                swap_left_right: false,
+            },
+        ],
+    });
+    assert!(ok.success, "batch failed: {:?}", ok.error);
+
+    let reversed = state.get_project_state().unwrap();
+    let mut expected = lengths_before.clone();
+    expected.reverse();
+    assert_eq!(first_lengths(&reversed), expected);
+
+    assert!(state.undo().success);
+    let restored = state.get_project_state().unwrap();
+    assert_eq!(
+        first_lengths(&restored),
+        lengths_before,
+        "one undo should restore both sections"
+    );
+    let restored_coords = abs_coord_map(&restored);
+    assert_eq!(restored_coords.len(), before.len());
+    for (station_ref, coords) in &before {
+        assert_coords_close(*coords, *restored_coords.get(station_ref).unwrap());
+    }
+}
+
 #[test]
 fn reverse_of_a_missing_section_fails() {
     let (state, _) = state_with_section();
