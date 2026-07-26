@@ -90,7 +90,10 @@ export default function SpeleoCloseDialog() {
   return (
     <DialogWrapper
       title={t('speleodb.close.title')}
-      onClose={closeDialog}
+      // Not dismissable mid-verb, for the same reason as the quit dialog: the
+      // in-flight push/release outlives the dismissal and goes on to act on a
+      // decision the user can no longer see.
+      onClose={busyAny ? () => {} : closeDialog}
       size="md"
       data-testid="speleodb-close-dialog"
     >

@@ -759,7 +759,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // its own edit gate from - so the two gates cannot disagree, and it costs
         // no round trip: a remote project is read-only from the first frame and a
         // local one is editable from the first frame (no read-only flash).
-        useSpeleoStore.getState().syncProjectLink(result.isRemote);
+        // `path` identifies WHICH project this link is for, so a link left over
+        // from the previously-open remote project is replaced rather than reused.
+        useSpeleoStore.getState().syncProjectLink(result.isRemote, path);
 
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);

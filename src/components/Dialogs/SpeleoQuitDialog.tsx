@@ -40,6 +40,16 @@ export default function SpeleoQuitDialog() {
   const saveProject = useProjectStore((s) => s.saveProject);
   const isDirtyLocal = useProjectStore((s) => s.isDirty);
   const { busy, done } = useSpeleoActions();
+  const link = useSpeleoStore((s) => s.link);
+  // Do we still hold the write lock? `forceEditing` is the #213 state of editing
+  // WITHOUT one, so there is nothing to push/keep/release there either.
+  //
+  // The guard now fires on unpushed edits alone, so this dialog is also reached
+  // read-only - after a re-verify divergence, or once a token loss ran
+  // `clearSession()`. Every lock verb below would fail in that state, so it
+  // collapses to the one honest choice: save locally, then leave, with the work
+  // still only on this computer.
+  const holdsLock = link?.editState === 'editing' && !link.forceEditing;
 
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
@@ -121,12 +131,21 @@ export default function SpeleoQuitDialog() {
   return (
     <DialogWrapper
       title={t('speleodb.quit.title')}
-      onClose={closeDialog}
+      // Not dismissable while a verb is in flight. Escape / X / the backdrop used
+      // to close this dialog mid-push, and the in-flight `pushReleaseThenQuit`
+      // then went on to resolve `released` and call `performQuit()` - which arms
+      // the one-shot confirmation, so the resulting close request skips
+      // `guardQuit` entirely and the window goes away with no prompt, dropping
+      // anything edited in that window. Same idiom as the other dialogs whose
+      // work outlives their own dismissal (BulkDelete / DeleteShotChoice).
+      onClose={busyAny ? () => {} : closeDialog}
       size="md"
       data-testid="speleodb-quit-dialog"
     >
       <div className="space-y-4">
-        <p className="text-sm text-text-secondary">{t('speleodb.quit.message')}</p>
+        <p className="text-sm text-text-secondary">
+          {holdsLock ? t('speleodb.quit.message') : t('speleodb.quit.messageNoLock')}
+        </p>
 
         {isDirtyLocal ? (
           <label className="flex items-center gap-2 text-sm">
@@ -145,7 +164,9 @@ export default function SpeleoQuitDialog() {
           </p>
         )}
 
-        <p className="text-xs text-text-secondary">{t('speleodb.quit.keepLockHint')}</p>
+        {holdsLock && (
+          <p className="text-xs text-text-secondary">{t('speleodb.quit.keepLockHint')}</p>
+        )}
 
         {discardArmed && (
           <div
@@ -166,40 +187,60 @@ export default function SpeleoQuitDialog() {
           <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-quit-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button
-            variant="danger"
-            onClick={() => {
-              if (!discardArmed) {
-                setDiscardArmed(true);
-                return;
-              }
-              void discardReleaseThenQuit();
-            }}
-            disabled={busyAny}
-            data-testid="speleodb-quit-discard-release"
-          >
-            {discardArmed ? t('speleodb.quit.discardConfirm') : t('speleodb.quit.discardRelease')}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void keepLockAndQuit()}
-            disabled={busyAny}
-            data-testid="speleodb-quit-keep-lock"
-          >
-            {t('speleodb.quit.keepLock')}
-          </Button>
-          {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
-              heuristic lands here, so a stray Enter pushes - it can never discard
-              or release. */}
-          <Button
-            variant="primary"
-            onClick={() => void pushReleaseThenQuit()}
-            disabled={busyAny}
-            data-primary-action=""
-            data-testid="speleodb-quit-push-release"
-          >
-            {t('speleodb.quit.pushRelease')}
-          </Button>
+          {holdsLock ? (
+            <>
+              <Button
+                variant="danger"
+                onClick={() => {
+                  if (!discardArmed) {
+                    setDiscardArmed(true);
+                    return;
+                  }
+                  void discardReleaseThenQuit();
+                }}
+                disabled={busyAny}
+                data-testid="speleodb-quit-discard-release"
+              >
+                {discardArmed
+                  ? t('speleodb.quit.discardConfirm')
+                  : t('speleodb.quit.discardRelease')}
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={() => void keepLockAndQuit()}
+                disabled={busyAny}
+                data-testid="speleodb-quit-keep-lock"
+              >
+                {t('speleodb.quit.keepLock')}
+              </Button>
+              {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
+                  heuristic lands here, so a stray Enter pushes - it can never
+                  discard or release. */}
+              <Button
+                variant="primary"
+                onClick={() => void pushReleaseThenQuit()}
+                disabled={busyAny}
+                data-primary-action=""
+                data-testid="speleodb-quit-push-release"
+              >
+                {t('speleodb.quit.pushRelease')}
+              </Button>
+            </>
+          ) : (
+            // No lock: every verb above needs one. The only thing left to do is
+            // flush the .stalx (the checkbox) and leave, knowing the work is still
+            // only local. Not `danger` - nothing is destroyed, and the edits are
+            // still here on the next launch.
+            <Button
+              variant="primary"
+              onClick={() => void keepLockAndQuit()}
+              disabled={busyAny}
+              data-primary-action=""
+              data-testid="speleodb-quit-anyway"
+            >
+              {t('speleodb.quit.quitAnyway')}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>

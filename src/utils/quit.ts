@@ -80,12 +80,18 @@ export function guardQuit(): boolean {
   if (!project) return false;
 
   const link = useSpeleoStore.getState().link;
-  // Only when we actually HOLD the write lock (`forceEditing` is the #213 state
-  // of editing WITHOUT one, so there is no lock to push/keep/release) and there
-  // are edits the server has not seen. Holding the lock with nothing unpushed
-  // needs no prompt: the backend's exit-time release is safe in that case, and
-  // vetoes itself in the other (aab5121d).
-  if (link?.editState === 'editing' && !link.forceEditing && link.hasUnpushedEdits) {
+  // Keyed on the WORK AT RISK, not on the lock. Edits the server has not seen are
+  // what quitting can strand; whether we still hold the write lock only changes
+  // which choices the dialog can offer (it adapts), not whether the user should
+  // be told.
+  //
+  // Requiring `editState === 'editing'` silently disarmed this guard in exactly
+  // the states where the work is MOST stranded: `notifyReverifyDivergence()` sets
+  // read-only while keeping the unpushed edits, and any `ReLogin` error runs
+  // `clearSession()`, which also drops to read-only. Holding the lock with
+  // nothing unpushed still needs no prompt - the backend's exit-time release is
+  // safe then, and vetoes itself otherwise (aab5121d).
+  if (link?.hasUnpushedEdits) {
     useUIStore.getState().openDialog('speleodb-quit');
     return true;
   }

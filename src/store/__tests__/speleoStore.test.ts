@@ -87,7 +87,12 @@ describe('speleoStore', () => {
       expect(s.link?.editState).toBe('read-only');
       expect(s.link?.lockHolder).toBeNull();
       expect(s.link?.lockedByOther).toBe(false);
-      expect(s.link?.hasUnpushedEdits).toBe(false);
+      // NOT reset: `hasUnpushedEdits` is a fact about the local `.stalx` - edits
+      // that never reached the server - and losing the token does not upload them.
+      // Clearing it claimed "nothing outstanding" at the exact moment the work
+      // became most stranded, which disarmed the quit guard and hid the Toolbar's
+      // unpushed-edits warning. The next authenticated poll re-seeds it.
+      expect(s.link?.hasUnpushedEdits).toBe(true);
       expect(s.link?.remoteState).toBe('unknown');
       expect(s.link?.noAccess).toBe(false);
       expect(s.link?.serverError).toBeNull();

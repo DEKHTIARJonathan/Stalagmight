@@ -69,7 +69,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (result.concurrent_session) {
         showToast(t('speleodb.browser.concurrentSession'), 'speleodb-concurrent-session', 'warning');
       }
-      setLinkOnOpen({ permission });
+      // `forPath` is the exact string handed to `loadProject` below, so the
+      // `syncProjectLink` inside that load recognises this seed as belonging to
+      // the project being opened rather than to whatever was open before.
+      setLinkOnOpen({ permission, forPath: result.local_path });
       onBeforeLoad?.();
       const loaded = await loadProject(result.local_path);
       if (!loaded.success) {

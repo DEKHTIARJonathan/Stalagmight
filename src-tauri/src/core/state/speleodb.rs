@@ -1420,18 +1420,21 @@ impl AppState {
                 // so before `forget`), then drop the gates. #213: a force-editor holds
                 // NO lock, so skip the release but still drop the gates (a token-less
                 // session must not keep force-editing a project it can never push).
-                Ok(link) => {
-                    if !self.force_editing() {
-                        if let Ok((endpoint, token)) = self.speleodb_active_token() {
-                            let insecure_http = self.speleodb_insecure_http();
-                            self.speleodb_release_best_effort(
-                                &endpoint,
-                                &token,
-                                insecure_http,
-                                &link.project_id,
-                            );
-                        }
-                    }
+                Ok(_) => {
+                    // Through the SHARED gate, which vetoes the release when the
+                    // project still has un-pushed edits (it also re-checks the
+                    // force-edit case, which holds no lock).
+                    //
+                    // Logging out is not the same act as giving up the lock. Unlike
+                    // unlink / take-remote - the two verbs that legitimately bypass
+                    // the veto - a logout neither deletes the link row nor discards
+                    // the local edits, so the asymmetry the veto exists for applies
+                    // in full: a lock left held is recoverable (the re-login scan
+                    // raises the held-lock prompt, which offers to resume it),
+                    // whereas a lock freed over stranded edits lets a colleague lock
+                    // and push, leaving weeks of local survey reachable only through
+                    // a divergence.
+                    self.speleodb_release_held_lock_best_effort();
                     self.set_edit_enabled(false);
                     self.set_force_editing(false);
                 }
@@ -4255,6 +4258,91 @@ mod tests {
             "and the edits are still marked un-pushed for the next session"
         );
         let _ = handle.join();
+    }
+
+    /// A loopback stub that only COUNTS connections, for asserting that a request
+    /// was never made. `release_stub` answers but records nothing, so a test built
+    /// on it passes whether or not the release went out.
+    ///
+    /// The listener is returned so the caller keeps the port bound for the whole
+    /// test: dropping it would free the port and a later connect would fail for the
+    /// wrong reason.
+    fn counting_stub() -> (
+        String,
+        std::net::TcpListener,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let accept_on = listener.try_clone().expect("clone listener");
+        let counter = std::sync::Arc::clone(&hits);
+        std::thread::spawn(move || {
+            while let Ok((stream, _)) = accept_on.accept() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                drop(stream);
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener, hits)
+    }
+
+    #[test]
+    fn logout_does_not_release_a_lock_over_unpushed_edits() {
+        // Logging out is not the same act as surrendering the lock. Unlike unlink /
+        // take-remote - the verbs that legitimately bypass the veto - a logout
+        // neither deletes the link row nor discards the edits, so releasing here
+        // leaves the project free for a colleague to lock and push while the work
+        // is still only on this machine. The lock left held is recoverable: the
+        // next login's scan raises the held-lock prompt over this very project.
+        //
+        // Asserted by CONTRADICTION: the endpoint is a live listener that counts
+        // connections, so a release that still went out is observable as a hit.
+        let (base, _listener, hits) = counting_stub();
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "fixture is dirty"
+        );
+
+        let _ = state.speleodb_logout();
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "logout must not issue ANY request to release a lock over un-pushed edits"
+        );
+        assert!(
+            !state.edit_enabled(),
+            "a logged-out session must not keep editing a project it cannot push"
+        );
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "the edits stay marked un-pushed for the next session"
+        );
+    }
+
+    #[test]
+    fn logout_still_releases_a_clean_held_lock() {
+        // The veto is about stranded work, not about logout: a CLEAN edit session
+        // has nothing to protect, so logging out should still hand the server mutex
+        // back rather than leave it held for every other editor.
+        let (base, _listener, hits) = counting_stub();
+        let (_temp, state) = editing_fixture(&base);
+        assert!(
+            !state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "fixture starts clean"
+        );
+
+        let _ = state.speleodb_logout();
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a clean held lock is still released on logout"
+        );
+        assert!(!state.edit_enabled(), "and the edit gate drops either way");
     }
 
     #[test]

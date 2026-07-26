@@ -10,11 +10,17 @@
 //! The DELIBERATE (explicit) release verbs do NOT go through the veto:
 //! `speleodb_done` (push, then release once the push is confirmed),
 //! `speleodb_release_lock` / `speleodb_release_all_locks` (the held-lock prompt's
-//! per-project / release-all), `speleodb_release_current_lock`, `speleodb_logout`
-//! (which releases inline, with the token it is about to forget), and the two
+//! per-project / release-all), `speleodb_release_current_lock`, and the two
 //! ABANDON verbs - `speleodb_unlink` and `speleodb_take_remote` - via
 //! [`AppState::speleodb_release_held_lock_abandoning`]. A user who asks to drop
 //! the lock still gets to drop it, un-pushed edits or not.
+//!
+//! `speleodb_logout` is NOT in that list: it releases through
+//! [`AppState::speleodb_release_held_lock_best_effort`], veto included. Logging
+//! out is not the same act as surrendering the lock - unlike the abandon verbs it
+//! neither deletes the link row nor discards the edits - and the lock it leaves
+//! held is recoverable, because the next login's scan raises the held-lock prompt
+//! over exactly that project.
 //!
 //! The abandon variant exists because those two verbs are only ever reached WITH
 //! un-pushed edits and deliberately walk away from them: unlink deletes the link

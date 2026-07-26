@@ -180,6 +180,12 @@ interface SpeleoStore {
    */
   projectLinkKind: ProjectLinkKind;
   /**
+   * Which file's `.stalx` the current `link` describes, so a leftover link can be
+   * told from one seeded for the project now being opened. `null` when no link is
+   * seeded, or when it was seeded by a path-less caller.
+   */
+  linkPath: string | null;
+  /**
    * [#218] The open remote project's SpeleoDB project id (from the poll'd status),
    * so the in-project menu can open its revision history. `null` for a local project
    * / none open / before the first status seed.
@@ -308,14 +314,26 @@ interface SpeleoStore {
    * - local: drops any link left over from a previously-open remote project
    *   (same shape as `seedFromStatus` on a non-remote status), so a local
    *   project is fully editable from the first frame with no read-only flash.
+   *
+   * `forPath` is the file being loaded, and it is what makes "keep an
+   * already-seeded link" safe. Without it, the remote branch kept ANY existing
+   * link - including the previous project's - so opening remote project B while
+   * A's link was live rendered B with A's lock holder, A's permission and A's
+   * dirty bit (File > Open never cleared it, and `refreshLinkStatus` swallows its
+   * errors, so offline the wrong state simply persisted). The link is kept only
+   * when it was seeded FOR this path: the optimistic `setLinkOnOpen` seed
+   * immediately before the load, or a reload of the same file (fast-forward /
+   * revision swap).
    */
-  syncProjectLink: (isRemote: boolean) => void;
+  syncProjectLink: (isRemote: boolean, forPath?: string | null) => void;
   /** Query `speleodb_link_status` and seed the link (best-effort; runs post-load). */
   refreshLinkStatus: () => Promise<void>;
   /** Seed the link from the backend status command (authoritative; runs post-load). */
   seedFromStatus: (s: SpeleoLinkStatus) => void;
-  /** Optimistic seed from the browser's summary before `loadProject` settles. */
-  setLinkOnOpen: (a: { permission: Permission | null }) => void;
+  /** Optimistic seed from the browser's summary before `loadProject` settles.
+      `forPath` is the local `.stalx` about to be loaded, so `syncProjectLink` can
+      tell this fresh seed from a previous project's leftover link. */
+  setLinkOnOpen: (a: { permission: Permission | null; forPath?: string | null }) => void;
   clearLink: () => void;
   applyStartEditing: (r: StartEditingResult) => void;
   applyUpdate: (r: UpdateResult) => void;
@@ -359,6 +377,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
+  linkPath: null,
   remoteProjectId: null,
   divergence: null,
   banner: null,
@@ -428,7 +447,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     get().clearSession();
   },
 
-  syncProjectLink: (isRemote) =>
+  syncProjectLink: (isRemote, forPath = null) =>
     set((state) => {
       if (!isRemote) {
         // Confirmed local: no link, and none of a previous remote project's
@@ -438,17 +457,30 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           : {
               projectLinkKind: 'local',
               link: null,
+              linkPath: null,
               remoteProjectId: null,
               divergence: null,
               banner: null,
             };
       }
-      // Remote. Keep an already-seeded link (the browser's `setLinkOnOpen`, or a
-      // reload that kept the previous status) - only fill the gap left by the
-      // paths that never seeded one (reopen-from-recents, fast-forward reload).
-      if (state.link) return { projectLinkKind: 'remote' };
+      // Remote. Keep an already-seeded link only when it was seeded for THIS
+      // file - the browser's `setLinkOnOpen` immediately before this load, or a
+      // reload of the same path (fast-forward / revision swap).
+      //
+      // Keeping any link at all was the bug: opening remote project B while A's
+      // link was still live rendered B with A's lock holder, A's permission and
+      // A's dirty bit. File > Open never clears the link, and `refreshLinkStatus`
+      // swallows its errors, so offline (or on any failed status call) the
+      // previous project's state simply stayed on screen.
+      if (state.link && forPath !== null && state.linkPath === forPath) {
+        return { projectLinkKind: 'remote' };
+      }
       return {
         projectLinkKind: 'remote',
+        linkPath: forPath,
+        remoteProjectId: null,
+        divergence: null,
+        banner: null,
         link: {
           // Read-only until the status confirms we hold the write lock. The
           // backend agrees: `project_load` re-derives its edit gate as
@@ -626,7 +658,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             editState: 'read-only',
             lockHolder: null,
             lockedByOther: false,
-            hasUnpushedEdits: false,
+            // `hasUnpushedEdits` is deliberately CARRIED THROUGH, not zeroed. It is
+            // a fact about the local .stalx - edits that never reached the server -
+            // and losing the token does not upload them. Clearing it here claimed
+            // "nothing outstanding" at the exact moment the work became most
+            // stranded, which disarmed the quit guard and hid the Toolbar's
+            // unpushed-edits warning; the next authenticated poll re-seeds it.
             // The backend drops the edit gate (and any force-edit) on a token loss,
             // so mirror that here or the shell would keep offering Reconnect.
             forceEditing: false,
@@ -712,11 +749,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission }) =>
+  setLinkOnOpen: ({ permission, forPath = null }) =>
     set({
       // We just pulled it from SpeleoDB, so it is remote by construction - and
       // saying so keeps the gate closed even if the load never completes.
       projectLinkKind: 'remote',
+      // Whose link this is, so the `syncProjectLink` that runs inside the load
+      // that follows recognises it as THIS project's seed and keeps it.
+      linkPath: forPath,
       // A freshly pulled project always opens read-only + up-to-date;
       // `seedFromStatus` refines lock holder / dirty bit / remote state on load.
       link: {
@@ -748,6 +788,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearLink: () =>
     set({
       link: null,
+      linkPath: null,
       projectLinkKind: 'unknown',
       remoteProjectId: null,
       divergence: null,

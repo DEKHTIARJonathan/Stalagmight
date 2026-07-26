@@ -2772,6 +2772,8 @@
     "quit": {
       "title": "Quit with changes not on SpeleoDB",
       "message": "You still hold the SpeleoDB write lock, and you have changes that have not been uploaded to SpeleoDB yet.",
+      "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
+      "quitAnyway": "Quit anyway",
       "saveLocally": "Save changes locally before quitting",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
       "keepLockHint": "Keeping the lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",

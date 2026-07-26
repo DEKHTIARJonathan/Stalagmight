@@ -93,24 +93,47 @@ describe('guardQuit', () => {
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT block a force-edit session - there is no lock to push, keep or release', () => {
+  // The guard keys off the WORK AT RISK, not the lock: edits the server has never
+  // seen are what quitting can strand, and whether we still hold the write lock
+  // only changes which choices the dialog offers (it adapts to a lock-less state).
+  it('blocks a force-edit session with unpushed edits - they are the most stranded of all', () => {
+    // A force-editor edits WITHOUT the lock (#213), so there is nothing to
+    // push/keep/release - which is exactly why walking away silently is wrong: the
+    // edits cannot reach the server until a reconnect.
     useSpeleoStore.setState({ link: link({ forceEditing: true }) });
+    quitApp();
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
+    expect(closeMock).not.toHaveBeenCalled();
+  });
+
+  it('blocks a read-only remote project that still has unpushed edits', () => {
+    // How this is reached: `notifyReverifyDivergence()` drops to read-only while
+    // KEEPING the unpushed edits, and any ReLogin error runs `clearSession()`,
+    // which also drops to read-only. Requiring editState === 'editing' disarmed
+    // the guard in precisely those states.
+    useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
+    quitApp();
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
+    expect(closeMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT block a read-only remote project with nothing unpushed', () => {
+    useSpeleoStore.setState({
+      link: link({ editState: 'read-only', hasUnpushedEdits: false }),
+    });
     quitApp();
     expect(openDialog).not.toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
-  it('does NOT block a read-only remote project', () => {
-    useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
-    quitApp();
-    expect(openDialog).not.toHaveBeenCalled();
-  });
-
-  it('falls back to the unsaved-changes prompt when a force-edit session is also disk-dirty', () => {
+  it('uses the SpeleoDB prompt (not the disk one) when a force-edit session is also disk-dirty', () => {
+    // The SpeleoDB prompt subsumes the disk one - it carries its own "save
+    // locally" checkbox - so it must be the one that runs, or "Discard & Quit"
+    // would walk straight past the unpushed edits.
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link({ forceEditing: true }) });
     quitApp();
-    expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
     expect(closeMock).not.toHaveBeenCalled();
   });
 

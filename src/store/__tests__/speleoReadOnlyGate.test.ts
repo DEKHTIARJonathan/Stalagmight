@@ -113,12 +113,44 @@ describe('a remote project without the write lock (#270)', () => {
     expect(link?.permission).toBeNull();
   });
 
-  it('does not clobber a link the browser already seeded (setLinkOnOpen)', () => {
-    useSpeleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE' });
+  it('does not clobber a link the browser already seeded for THIS project', () => {
+    useSpeleoStore
+      .getState()
+      .setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/cache/a.stalx' });
     expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
-    useSpeleoStore.getState().syncProjectLink(true);
+    useSpeleoStore.getState().syncProjectLink(true, '/cache/a.stalx');
     expect(useSpeleoStore.getState().link?.permission).toBe('READ_AND_WRITE');
     expect(readOnly()).toBe(true);
+  });
+
+  it('DOES replace a link left over from a different project', () => {
+    // The leak: opening remote project B while A's link was still live rendered B
+    // with A's permission, A's lock holder and A's dirty bit. File > Open never
+    // clears the link, and `refreshLinkStatus` swallows its errors, so offline the
+    // previous project's state simply stayed on screen.
+    useSpeleoStore
+      .getState()
+      .setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/cache/a.stalx' });
+    useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+    expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+
+    useSpeleoStore.getState().syncProjectLink(true, '/cache/b.stalx');
+
+    expect(useSpeleoStore.getState().link?.permission).toBeNull();
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    expect(useSpeleoStore.getState().link?.remoteState).toBe('unknown');
+    expect(useSpeleoStore.getState().remoteProjectId).toBeNull();
+    expect(readOnly()).toBe(true);
+  });
+
+  it('keeps the link across a reload of the SAME file (fast-forward / revision swap)', () => {
+    useSpeleoStore
+      .getState()
+      .setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/cache/a.stalx' });
+    useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+    useSpeleoStore.getState().syncProjectLink(true, '/cache/a.stalx');
+    expect(useSpeleoStore.getState().link?.editState).toBe('editing');
+    expect(readOnly()).toBe(false);
   });
 
   it('becomes editable once the status confirms the write lock is held', () => {

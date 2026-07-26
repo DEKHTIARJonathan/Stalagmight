@@ -252,3 +252,68 @@ describe('SpeleoQuitDialog - cancel', () => {
     expect(useUIStore.getState().activeDialog).toBeNull();
   });
 });
+
+describe('SpeleoQuitDialog - reached without the write lock', () => {
+  // The guard now fires on unpushed edits alone, so this dialog is also reached
+  // read-only: after a re-verify divergence, or once a ReLogin error ran
+  // `clearSession()`. Every lock verb would fail there, so it must collapse to the
+  // one honest choice rather than offering buttons that cannot work.
+  it('offers only save-locally and Quit anyway, with no lock verbs', () => {
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' } });
+    render(<SpeleoQuitDialog />);
+
+    expect(screen.getByTestId('speleodb-quit-anyway')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-push-release')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-keep-lock')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-discard-release')).not.toBeInTheDocument();
+  });
+
+  it('does the same for a force-edit session, which holds no lock either', () => {
+    useSpeleoStore.setState({ link: { ...LINK, forceEditing: true } });
+    render(<SpeleoQuitDialog />);
+
+    expect(screen.getByTestId('speleodb-quit-anyway')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-quit-push-release')).not.toBeInTheDocument();
+  });
+
+  it('Quit anyway saves the .stalx first and releases nothing', async () => {
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'read-only' } });
+    useProjectStore.setState({ isDirty: true });
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-quit-anyway'));
+
+    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
+    expect(saveProject).toHaveBeenCalled();
+    expect(calledCommands().filter((c) => RELEASE_COMMANDS.includes(c))).toEqual([]);
+  });
+});
+
+describe('SpeleoQuitDialog - not dismissable mid-verb', () => {
+  it('ignores Escape while a push is in flight, so the quit cannot slip through', async () => {
+    // Dismissing mid-push used to close the dialog while `pushReleaseThenQuit` was
+    // still awaiting; it then resolved `released` and called `performQuit()`, which
+    // arms the one-shot confirmation - so the resulting close request skipped
+    // `guardQuit` entirely and the window went away with no prompt.
+    let releaseDone: (v: unknown) => void = () => {};
+    invokeIpcMock.mockImplementation((command: string) => {
+      if (command === 'speleodb_done') {
+        return new Promise((resolve) => {
+          releaseDone = resolve;
+        });
+      }
+      return Promise.resolve(null);
+    });
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
+    await waitFor(() => expect(calledCommands()).toContain('speleodb_done'));
+
+    await userEvent.keyboard('{Escape}');
+    expect(useUIStore.getState().activeDialog).toBe('speleodb-quit');
+
+    // Let the verb finish so the test leaves nothing pending.
+    releaseDone({ kind: 'released' });
+    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
+  });
+});
