@@ -589,6 +589,27 @@ impl AppState {
         let current_validation = slot.as_ref().map(|p| p.validation.clone());
         match serde_json::from_str::<Project>(snapshot) {
             Ok(mut restored) => {
+                // Undo/redo history is persisted to SQLite and reloaded across
+                // sessions, so a snapshot written by a build predating
+                // MAX_SECTION_ID can carry a section id the loader now rejects.
+                // Replaying it would reintroduce that section, let it be saved, and
+                // make the NEXT open fail - the save-a-file-we-cannot-load
+                // asymmetry the bound exists to prevent. This is the single restore
+                // chokepoint (rollback, undo and redo all pass through here), and
+                // an in-memory snapshot of a bound-valid project can never trip it.
+                if let Some(bad) = restored
+                    .sections
+                    .iter()
+                    .find(|s| s.id > crate::models::MAX_SECTION_ID)
+                {
+                    tracing::error!(
+                        section_id = bad.id,
+                        limit = crate::models::MAX_SECTION_ID,
+                        purpose = "refuse to replay history that predates the section bound",
+                        "Snapshot restore rejected: section id exceeds the maximum supported id"
+                    );
+                    return false;
+                }
                 if !snapshot_has_validation {
                     if let Some(validation) = current_validation {
                         restored.validation = validation;

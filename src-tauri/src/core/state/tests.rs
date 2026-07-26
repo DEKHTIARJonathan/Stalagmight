@@ -10559,6 +10559,34 @@ fn test_add_section_refuses_past_the_bound_at_the_allocation_point() {
 }
 
 #[test]
+fn test_snapshot_restore_rejects_an_out_of_range_section() {
+    // DeleteSection stores a ProjectSnapshotPair, and undo replays it through
+    // restore_snapshot_into rather than restore_section - so guarding only
+    // restore_section left the snapshot path able to reintroduce a rejected id
+    // from history written before the bound existed. This pins the CHOKEPOINT
+    // every rollback/undo/redo passes through.
+    let mut project = Project::new("Legacy".to_string(), None);
+    project
+        .add_section(SectionData::default())
+        .expect("first section is within the bound");
+    // Forge the out-of-range id a pre-bound build could have persisted.
+    project.sections[0].id = crate::models::MAX_SECTION_ID + 1;
+    let snapshot = serde_json::to_string(&project).expect("snapshot serializes");
+
+    let mut slot: Option<Project> = Some(Project::new("Current".to_string(), None));
+    let restored = AppState::restore_snapshot_into(&mut slot, &snapshot);
+    assert!(
+        !restored,
+        "a snapshot carrying a section past MAX_SECTION_ID must be refused"
+    );
+    assert_eq!(
+        slot.as_ref().map(|p| p.name.as_str()),
+        Some("Current"),
+        "and the refusal must leave the existing project in place"
+    );
+}
+
+#[test]
 fn test_restore_section_rejects_an_out_of_range_persisted_id() {
     // Undo history survives reload, so an entry written before the bound existed
     // can carry an id the loader now rejects. Replaying it would reintroduce the
@@ -10720,22 +10748,24 @@ fn test_section_allocation_never_outruns_what_load_accepts() {
         "past the bound allocation must stop"
     );
 
-    // And the bound is exactly the largest id whose whole shot-id band fits in a
-    // u32 - the property the loader's rejection is derived from.
-    let last_band_end = (crate::models::MAX_SECTION_ID as u64)
-        * crate::models::FEATURE_ID_STRIDE as u64
-        + crate::models::FEATURE_ID_STRIDE as u64
-        - 1;
+    // And the bound is exactly the largest id whose whole shot-id band survives
+    // BOTH representations. i32 is the tighter one: the frontend stores shot ids
+    // in an Int32Array with `| 0`, so a band past i32::MAX reads back negative in
+    // the UI and stops matching the backend's u32 ids.
+    let band_end = |id: u64| {
+        id * crate::models::FEATURE_ID_STRIDE as u64 + crate::models::FEATURE_ID_STRIDE as u64 - 1
+    };
+    let last = band_end(crate::models::MAX_SECTION_ID as u64);
     assert!(
-        last_band_end <= u32::MAX as u64,
-        "MAX_SECTION_ID band must fit in u32, got {last_band_end}"
+        last <= i32::MAX as u64,
+        "MAX_SECTION_ID band must stay representable in the frontend's Int32Array, got {last}"
     );
-    let next_band_end = (crate::models::MAX_SECTION_ID as u64 + 1)
-        * crate::models::FEATURE_ID_STRIDE as u64
-        + crate::models::FEATURE_ID_STRIDE as u64
-        - 1;
     assert!(
-        next_band_end > u32::MAX as u64,
+        last <= u32::MAX as u64,
+        "and in the backend's u32, got {last}"
+    );
+    assert!(
+        band_end(crate::models::MAX_SECTION_ID as u64 + 1) > i32::MAX as u64,
         "MAX_SECTION_ID must be the LARGEST such id, not a conservative guess"
     );
 }

@@ -242,11 +242,12 @@ impl AppState {
             if needed > remaining {
                 return CommandResult::failure(format!(
                     "Cannot reconcile: the collaborator's file adds {needed} section(s) but only \
-                     {remaining} can still be created (limit = {capacity}). No changes were made \
-                     and the file has not been marked as reconciled, so it can be applied later. \
-                     Section ids are re-derived on reopen, so deleting the highest-numbered \
-                     sections and reopening the project frees capacity; deleting them without \
-                     reopening does not."
+                     {remaining} can still be created (limit = {capacity}). Nothing was changed \
+                     and their file has NOT been marked as reconciled. Do not save this project \
+                     before applying it - a save rewrites the sibling .tml and would discard \
+                     their pending changes. Copy their .tml somewhere safe first, then either \
+                     have them combine the additions into fewer sections, or make room in a \
+                     fresh project."
                 ));
             }
         }
