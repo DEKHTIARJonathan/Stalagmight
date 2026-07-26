@@ -31,7 +31,7 @@ const ROSTER: SpeleoCollaborators = {
 };
 
 let refreshLinkStatus: ReturnType<typeof vi.fn>;
-let clearLink: ReturnType<typeof vi.fn>;
+let syncProjectLink: ReturnType<typeof vi.fn>;
 let closeDialog: ReturnType<typeof vi.fn>;
 let showToast: ReturnType<typeof vi.fn>;
 
@@ -48,7 +48,7 @@ const seed = (permission: Permission, lockHolder: string | null = null, editStat
       serverError: null,
     } as never,
     refreshLinkStatus,
-    clearLink,
+    syncProjectLink,
   });
 };
 
@@ -67,7 +67,7 @@ const defaultMock = () =>
 beforeEach(() => {
   invokeIpcMock.mockReset();
   refreshLinkStatus = vi.fn(async () => {});
-  clearLink = vi.fn();
+  syncProjectLink = vi.fn();
   closeDialog = vi.fn();
   showToast = vi.fn();
   useUIStore.setState({ showToast, closeDialog });
@@ -250,7 +250,7 @@ describe('SpeleoProjectAdmin', () => {
     const del = screen.getByTestId('speleodb-delete-button');
     await userEvent.click(del);
     await waitFor(() => expect(showToast).toHaveBeenCalled());
-    expect(clearLink).not.toHaveBeenCalled();
+    expect(syncProjectLink).not.toHaveBeenCalled();
     expect(closeDialog).not.toHaveBeenCalled();
     // The button re-enables so the user can retry / cancel.
     await waitFor(() => expect(del).toBeEnabled());
@@ -295,7 +295,11 @@ describe('SpeleoProjectAdmin', () => {
     await waitFor(() =>
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_delete_project')).toBe(true),
     );
-    await waitFor(() => expect(clearLink).toHaveBeenCalled());
+    // Confirmed LOCAL, not merely unlinked: `clearLink()` would leave
+    // `projectLinkKind: 'unknown'`, which `selectSpeleoReadOnly` reads as
+    // read-only, stranding the still-open (now plain local) project uneditable
+    // with no poll left to re-resolve it.
+    await waitFor(() => expect(syncProjectLink).toHaveBeenCalledWith(false));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
   });
 });

@@ -226,9 +226,35 @@ export function ToastStack() {
   // toast being read (and its dismiss button) would slide out from under the
   // pointer mid-click. Freezing the whole stack keeps the geometry still, and
   // "I am reading this" almost always means the batch, not one line of it.
+  //
+  // The two REASONS to pause are tracked separately, because they end in
+  // completely different ways and neither exit can be trusted to fire:
+  //
+  //   - hover ends on mouseleave, backed up by the pointermove heal below (the
+  //     hovered node can be removed, and a removed node fires no leave).
+  //   - focus ends on blur, backed up by a containment re-check on every tick.
+  //     Pressing Enter on a toast's dismiss button UNMOUNTS the focused element,
+  //     and browsers fire no focusout for a removed node - so `onBlurCapture`
+  //     never runs. Left conflated, that stranded the whole stack frozen (and
+  //     `pointer-events-auto` over the map) for the rest of the session, since
+  //     the empty-stack un-pause needs the stack to actually empty and the
+  //     pointermove heal needs a pointer a keyboard user never moves.
+  //
+  // Keeping them apart also stops one reason from cancelling the other: a
+  // mouseleave used to clear a live keyboard focus pause, and vice versa.
+  //
+  // The REFS are the truth, and the state only mirrors them for rendering. The
+  // tick both reads and clears the pause, so it cannot afford a value that only
+  // catches up on the next render: React batches, and under fake timers a whole
+  // run of ticks executes before any re-render, so a render-synced ref would read
+  // stale for all of them (and re-run the clock reset on every one).
+  const hoverPausedRef = useRef(false);
+  const focusPausedRef = useRef(false);
   const [paused, setPaused] = useState(false);
-  const pausedRef = useRef(paused);
-  pausedRef.current = paused;
+  /** Re-derive the RENDERED pause from the two refs. Every begin/end calls it. */
+  const syncPaused = useCallback(() => {
+    setPaused(hoverPausedRef.current || focusPausedRef.current);
+  }, []);
 
   const reducedMotionRef = useRef(reducedMotion);
   reducedMotionRef.current = reducedMotion;
@@ -238,17 +264,45 @@ export function ToastStack() {
   const stackRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * Leave the paused state and give every surviving toast its FULL dwell back.
+   * Give every surviving toast its FULL dwell back.
    *
    * A reset rather than a resume: having read the stack, the user has spent the
    * time the dwell exists to provide, and dropping them back into the last
    * fraction of a fade means a toast they just looked at vanishes almost
    * immediately.
+   *
+   * Harmless to call while the other pause reason still holds - the clocks are
+   * frozen anyway, and the toasts get the same full dwell whenever it lifts.
    */
-  const resume = useCallback(() => {
+  const resetClocks = useCallback(() => {
     for (const clock of clocks.current.values()) clock.elapsed = 0;
-    setPaused(false);
   }, []);
+
+  // Both ends are idempotent - the tick may call `endFocus` repeatedly, and a
+  // second call must not hand the toasts another full dwell.
+  const beginHover = useCallback(() => {
+    hoverPausedRef.current = true;
+    syncPaused();
+  }, [syncPaused]);
+
+  const endHover = useCallback(() => {
+    if (!hoverPausedRef.current) return;
+    hoverPausedRef.current = false;
+    resetClocks();
+    syncPaused();
+  }, [resetClocks, syncPaused]);
+
+  const beginFocus = useCallback(() => {
+    focusPausedRef.current = true;
+    syncPaused();
+  }, [syncPaused]);
+
+  const endFocus = useCallback(() => {
+    if (!focusPausedRef.current) return;
+    focusPausedRef.current = false;
+    resetClocks();
+    syncPaused();
+  }, [resetClocks, syncPaused]);
 
   /** Live DOM node per toast id, so heights can be re-measured on demand. */
   const nodes = useRef(new Map<number, HTMLElement>());
@@ -338,6 +392,8 @@ export function ToastStack() {
       // pointer (or with the keyboard) unmounts the container, so its
       // mouseleave/blur never fires - leaving `paused` stuck true would mean the
       // NEXT toast arrives pre-frozen and never dismisses itself.
+      hoverPausedRef.current = false;
+      focusPausedRef.current = false;
       setPaused(false);
       return undefined;
     }
@@ -346,6 +402,15 @@ export function ToastStack() {
       const live = store.toasts;
       const map = clocks.current;
 
+      // Focus pause, re-derived rather than remembered: the element that pauses
+      // the stack is usually a dismiss button, and dismissing REMOVES it, so the
+      // blur that would have lifted the pause is never dispatched. Asking the
+      // document where focus actually is cannot be stranded that way, and it
+      // costs one `contains` per tick while a pause is live.
+      if (focusPausedRef.current) {
+        const el = stackRef.current;
+        if (!el || !el.contains(document.activeElement)) endFocus();
+      }
 
       for (const id of [...map.keys()]) {
         if (!live.some((item) => item.id === id)) map.delete(id);
@@ -366,7 +431,7 @@ export function ToastStack() {
           }
           continue;
         }
-        if (pausedRef.current) continue;
+        if (hoverPausedRef.current || focusPausedRef.current) continue;
         clock.elapsed += TICK_MS;
         if (clock.elapsed >= lifetimeOf(item.kind)) store.removeToast(item.id);
       }
@@ -378,7 +443,7 @@ export function ToastStack() {
       bump();
     }, TICK_MS);
     return () => window.clearInterval(handle);
-  }, [hasToasts]);
+  }, [hasToasts, endFocus]);
 
   /**
    * Self-heal a stranded pause.
@@ -389,19 +454,19 @@ export function ToastStack() {
    * `paused` would stay true and nothing would ever dismiss again. That is the
    * "once I have hovered them they never go away" case.
    *
-   * So do not rely solely on the enter/leave pair: while paused, any pointer
-   * movement over something OUTSIDE the stack is positive evidence the pointer
-   * has gone, and resumes. A keyboard pause is exempt, since focus is still held
-   * regardless of where the mouse happens to be.
+   * So do not rely solely on the enter/leave pair: while hover-paused, any
+   * pointer movement over something OUTSIDE the stack is positive evidence the
+   * pointer has gone, and ends the hover. A focus pause is untouched by this -
+   * focus is held regardless of where the mouse happens to be, and the tick
+   * re-check above is what ends that one.
    */
   useEffect(() => {
     if (!paused) return undefined;
     const onMove = (e: Event) => {
       const el = stackRef.current;
-      if (el && el.contains(document.activeElement)) return;
       const target = e.target;
       if (el && target instanceof Node && el.contains(target)) return;
-      resume();
+      endHover();
     };
     document.addEventListener('pointermove', onMove, true);
     document.addEventListener('mousemove', onMove, true);
@@ -409,7 +474,7 @@ export function ToastStack() {
       document.removeEventListener('pointermove', onMove, true);
       document.removeEventListener('mousemove', onMove, true);
     };
-  }, [paused, resume]);
+  }, [paused, endHover]);
 
   // The entrance. A toast renders its first frame below its slot at opacity 0,
   // then flips to its real offset on the next frame, and the CSS transition does
@@ -493,10 +558,10 @@ export function ToastStack() {
           className="absolute bottom-6 left-6 pointer-events-auto"
           style={{ height: stackHeight || undefined, width: stackWidth || undefined }}
           ref={stackRef}
-          onMouseEnter={() => setPaused(true)}
-          onMouseLeave={resume}
-          onFocusCapture={() => setPaused(true)}
-          onBlurCapture={resume}
+          onMouseEnter={beginHover}
+          onMouseLeave={endHover}
+          onFocusCapture={beginFocus}
+          onBlurCapture={endFocus}
         >
           {toasts.map((item) => (
             <Toast

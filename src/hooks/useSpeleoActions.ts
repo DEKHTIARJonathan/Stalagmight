@@ -22,7 +22,13 @@ import type {
  */
 export interface SpeleoActions {
   busy: boolean;
-  startEditing: () => Promise<void>;
+  /** Acquire the write lock + reconcile. Resolves `true` only when we actually
+      hold the lock afterwards (`editing` / `fast_forwarded`); `false` on a
+      contended lock, a reported divergence, or a thrown call - all of which
+      already surface their own toast / routing. Callers that hand the shell over
+      on success (the held-lock prompt) MUST check it: treating a refusal as
+      success there dismisses the prompt and discards the remaining locks. */
+  startEditing: () => Promise<boolean>;
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
@@ -107,7 +113,7 @@ export function useSpeleoActions(): SpeleoActions {
     [clearSession, showToast, t],
   );
 
-  const startEditing = useCallback(async () => {
+  const startEditing = useCallback(async (): Promise<boolean> => {
     setBusy(true);
     try {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
@@ -139,13 +145,17 @@ export function useSpeleoActions(): SpeleoActions {
             'speleodb-locked-by',
             'warning',
           );
-          break;
+          // Someone else holds it - we did NOT get the lock.
+          return false;
         case 'divergence_needed':
-          // #198 seam: applyStartEditing recorded the divergence origin.
-          break;
+          // #198 seam: applyStartEditing recorded the divergence origin. The
+          // divergence dialog decides what happens next; nothing is held yet.
+          return false;
       }
+      return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
+      return false;
     } finally {
       // Reset the poll timer so the next poll is a full interval out - a buffer
       // past the just-issued lock change the server mutex may not yet reflect (1b).

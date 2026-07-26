@@ -28,7 +28,7 @@ export function SpeleoProjectAdmin() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const link = useSpeleoStore((s) => s.link);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
-  const clearLink = useSpeleoStore((s) => s.clearLink);
+  const syncProjectLink = useSpeleoStore((s) => s.syncProjectLink);
   const projectName = useProjectStore((s) => s.project?.name ?? '');
 
   const canManage = permissionAtLeast(link?.permission, 'ADMIN');
@@ -133,16 +133,23 @@ export function SpeleoProjectAdmin() {
     setDeleting(true);
     try {
       await invokeIpc('speleodb_delete_project');
-      // The server soft-deleted it and the backend already unlinked locally; drop
-      // the FE link so the tab collapses to a plain local project, then close.
-      clearLink();
+      // The server soft-deleted it and the backend already unlinked locally, so
+      // the still-open project is now a plain LOCAL one - say that, rather than
+      // just dropping the link.
+      //
+      // `clearLink()` would leave `projectLinkKind: 'unknown'`, and
+      // `selectSpeleoReadOnly` reads unresolved-as-read-only (#270). With the
+      // project still open and nothing left to re-resolve it - the status poll
+      // arms on `link !== null`, which delete just falsified - that stranded the
+      // now-local project permanently read-only until close/reopen.
+      syncProjectLink(false);
       showToast(t('speleodb.delete.deleted'), 'speleodb-delete', 'success');
       closeDialog();
     } catch (e) {
       showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), 'speleodb-delete', 'error');
       setDeleting(false);
     }
-  }, [clearLink, closeDialog, showToast, t]);
+  }, [syncProjectLink, closeDialog, showToast, t]);
 
   const levelLabel = (p: Permission) => t(`speleodb.collaborators.levels.${p}`);
 

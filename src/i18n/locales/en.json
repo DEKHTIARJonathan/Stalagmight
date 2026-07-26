@@ -2950,6 +2950,7 @@
         "continueEditing": "Continue editing",
         "continueEditingAria": "Open {{name}} and keep its lock",
         "opening": "Opening…",
+        "checking": "Checking…",
         "openFailed": "Could not find the local copy of {{name}} to open. Its lock is left alone so nothing is lost.",
         "unknown": "Could not check which projects have changes only on this computer. Release with care."
       }

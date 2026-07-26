@@ -589,6 +589,53 @@ describe('ToastStack - manual dismiss', () => {
     expect(toastFor('a later one')).toBeUndefined();
   });
 
+  it('does not leave the stack stuck paused after a keyboard dismiss while toasts remain', () => {
+    render(<ToastStack />);
+    push('dismiss me', 'a');
+    push('keep me', 'b');
+
+    // Focus the dismiss button (which pauses the stack), then activate it. The
+    // focused element is UNMOUNTED by the removal, and browsers dispatch no
+    // focusout for a removed node - so the blur that would lift the pause never
+    // arrives. The empty-stack un-pause cannot help either: a toast remains.
+    act(() => {
+      within(toastFor('dismiss me')!).getByRole('button').focus();
+    });
+    act(() => {
+      within(toastFor('dismiss me')!).getByRole('button').click();
+    });
+    advance(300);
+    expect(toastFor('dismiss me')).toBeUndefined();
+
+    // The survivor must still expire on its own...
+    advance(20000);
+    expect(toastFor('keep me')).toBeUndefined();
+
+    // ...and so must the next toast, which used to arrive pre-frozen and hold
+    // `pointer-events-auto` over the map for the rest of the session.
+    push('a later one', 'c');
+    advance(20000);
+    expect(toastFor('a later one')).toBeUndefined();
+  });
+
+  it('keeps the stack paused while focus is still inside it', () => {
+    render(<ToastStack />);
+    push('older', 'a');
+    push('newer', 'b');
+
+    // Dismissing one toast must not lift a pause that a STILL-FOCUSED control in
+    // another toast is holding - the re-check is per-tick, not per-removal.
+    act(() => {
+      within(toastFor('newer')!).getByRole('button').focus();
+    });
+    act(() => {
+      within(toastFor('older')!).getByRole('button').click();
+    });
+    advance(20000);
+
+    expect(toastFor('newer')).toBeDefined();
+  });
+
   it('the dismiss control is a real button with an accessible name', () => {
     render(<ToastStack />);
     push('something happened', 'a');

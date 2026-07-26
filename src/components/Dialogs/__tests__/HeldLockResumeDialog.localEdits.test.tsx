@@ -155,14 +155,67 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_release_all_locks');
   });
 
-  it('falls back to Release when the local-state call fails, and says it does not know', async () => {
+  it('withholds Release while the local-state call is still in flight', async () => {
+    // The scan is raised at app-open and walks one cache dir per listed id, so this
+    // window is real - and a Release landing in it acts on a project we have not yet
+    // been told anything about. No row may offer the irreversible action yet.
+    let settle: (v: Record<string, unknown>) => void = () => {};
+    invokeIpcMock.mockImplementation((command: string) => {
+      if (command === 'speleodb_local_project_states') {
+        return new Promise<Record<string, unknown>>((resolve) => {
+          settle = resolve;
+        });
+      }
+      return Promise.resolve(null);
+    });
+    render(<HeldLockResumeDialog />);
+
+    await screen.findByTestId(`speleodb-held-lock-checking-${DIRTY}`);
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${DIRTY}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${CLEAN}`)).not.toBeInTheDocument();
+
+    // ...and it appears only once the clean verdict actually arrives.
+    settle({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    await screen.findByTestId(`speleodb-held-lock-release-${CLEAN}`);
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${DIRTY}`)).not.toBeInTheDocument();
+  });
+
+  it('does not offer Release when the local-state call fails, and says it does not know', async () => {
+    // A failure resets `states` to {}, which reads as "every project is clean" -
+    // so the old fallback flipped even the dirty row to Release, deterministically,
+    // exactly when the local half could not be consulted. Unknown must resolve to
+    // the safe action, not the destructive one.
     wireIpc(new Error('backend down'));
     render(<HeldLockResumeDialog />);
 
     await screen.findByTestId('speleodb-held-lock-local-unknown');
-    // Today's behaviour for every row - the dialog stays usable...
-    expect(screen.getByTestId(`speleodb-held-lock-release-${DIRTY}`)).toBeInTheDocument();
-    expect(screen.getByTestId(`speleodb-held-lock-release-${CLEAN}`)).toBeInTheDocument();
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${DIRTY}`)).not.toBeInTheDocument();
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${CLEAN}`)).not.toBeInTheDocument();
+    // Continue editing keeps the lock held, so nothing can be stranded behind it.
+    expect(screen.getByTestId(`speleodb-held-lock-continue-${DIRTY}`)).toBeInTheDocument();
+    expect(screen.getByTestId(`speleodb-held-lock-continue-${CLEAN}`)).toBeInTheDocument();
   });
 
+  it('keeps the prompt (and the other locks) when the re-acquire is refused', async () => {
+    // A contended lock must not read as success: dismissing here also DISCARDS the
+    // remaining locks, and the prompt cannot be re-raised until the next login scan.
+    invokeIpcMock.mockImplementation((command: string) => {
+      if (command === 'speleodb_local_project_states') {
+        return Promise.resolve({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+      }
+      if (command === 'speleodb_start_editing') {
+        return Promise.resolve({ kind: 'locked_by', email: 'someone@else.test' });
+      }
+      return Promise.resolve(null);
+    });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+  });
 });

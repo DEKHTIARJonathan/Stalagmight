@@ -57,13 +57,34 @@ export default function HeldLockResumeDialog() {
 
   // The local half of the join, fetched once for every listed lock (#270).
   const lockIds = useMemo(() => locks.map((l) => l.projectId), [locks]);
-  const { states, failed } = useSpeleoLocalStates(lockIds);
+  const { states, loaded, failed } = useSpeleoLocalStates(lockIds);
 
-  // A row's action is "Continue editing" only on a POSITIVE local-edit report. While
-  // the call is in flight, or after it failed, nothing is claimed either way and the
-  // row keeps its Release - the `failed` note below says so rather than implying the
-  // project is known to be clean.
+  // The accent + "has changes" line are a POSITIVE report only: an empty `states`
+  // means we have not been told, not that the project is clean.
   const dirty = (projectId: string) => hasUnpushedEdits(states, projectId);
+
+  /**
+   * Which action a row offers. Release is the one irreversible button here - the
+   * server verb has no veto, so releasing a lock that sits over un-pushed work
+   * lets a colleague lock and push over it - so it is offered ONLY on a positive
+   * "this project is clean" report, never on the absence of a report.
+   *
+   * That distinction is the whole point of `loaded`/`failed`:
+   *   - in flight  -> `checking`. The scan is raised at app-open and walks one
+   *     cache dir per listed id, so this window is real, and a click landing in
+   *     it used to release a lock over hours of unsynced survey.
+   *   - failed     -> `continue`. `states` is reset to `{}` on failure, which
+   *     otherwise reads as "every project is clean" and deterministically flips
+   *     every row to Release. Continue editing is the safe read of "unknown": it
+   *     KEEPS the lock and opens the project so the user can look for themselves.
+   *     A genuinely abandoned lock is still releasable from Project Settings, and
+   *     Keep working leaves everything as it was.
+   */
+  const actionFor = (projectId: string): 'release' | 'continue' | 'checking' => {
+    if (!loaded) return 'checking';
+    if (failed) return 'continue';
+    return dirty(projectId) ? 'continue' : 'release';
+  };
 
   // Auto-close once the last lock is gone - releasing them one by one shrinks
   // `heldLocks` in the store, and when it empties there is nothing left to resolve.
@@ -127,8 +148,14 @@ export default function HeldLockResumeDialog() {
         // still resolvable.
         if (!result.success) return;
       }
-      // Acquire + reconcile, with its own toasts / divergence routing.
-      await startEditing();
+      // Acquire + reconcile, with its own toasts / divergence routing. Only hand
+      // the shell over if we actually came away holding the lock: a contended
+      // lock, a reported divergence or a network failure all leave this prompt as
+      // the only place the remaining locks are resolvable, and dismissing it here
+      // would also DISCARD them (`clearHeldLocks` drops the whole list, including
+      // rows that were cleanly releasable) with no way to re-raise the prompt
+      // until the next login scan.
+      if (!(await startEditing())) return;
       // The lock stays held on purpose: hand the shell over to the project.
       clearHeldLocks();
       closeHeldLockPrompt();
@@ -152,12 +179,14 @@ export default function HeldLockResumeDialog() {
         <ul className="max-h-40 overflow-y-auto rounded border border-border divide-y divide-border">
           {locks.map((lock) => {
             const hasEdits = dirty(lock.projectId);
+            const action = actionFor(lock.projectId);
             return (
               <li
                 key={lock.projectId}
                 className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-text-primary"
                 data-testid={`speleodb-held-lock-${lock.projectId}`}
                 data-local-edits={hasEdits ? 'true' : 'false'}
+                data-row-action={action}
               >
                 <span className="min-w-0 truncate">
                   {lock.projectName}
@@ -171,7 +200,14 @@ export default function HeldLockResumeDialog() {
                     </span>
                   )}
                 </span>
-                {hasEdits ? (
+                {action === 'checking' ? (
+                  <span
+                    className="shrink-0 text-xs text-text-secondary"
+                    data-testid={`speleodb-held-lock-checking-${lock.projectId}`}
+                  >
+                    {t('speleodb.localEdits.heldLocks.checking')}
+                  </span>
+                ) : action === 'continue' ? (
                   <button
                     type="button"
                     onClick={() => void continueEditing(lock)}
