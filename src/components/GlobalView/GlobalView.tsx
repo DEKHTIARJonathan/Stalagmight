@@ -36,6 +36,7 @@ import {
   buildRecentListItems,
   filterRecentListItems,
 } from './recentListItems';
+import { canPublishRecent, publishRecentToSpeleoDb } from './publishRecentToSpeleoDb';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { SpeleoAdoptConfirm } from '../Dialogs/SpeleoAdoptConfirm';
@@ -481,6 +482,24 @@ export default function GlobalView() {
     }
     setContextMenu((prev) => ({ ...prev, visible: false }));
   }, [contextMenu.projectPath]);
+
+  // Publish a LOCAL recent to SpeleoDB (context-menu twin of the in-project
+  // hamburger item). The backend publishes the OPEN project and the dialog
+  // prefills from it at mount, so this OPENS the project first and only raises
+  // the dialog once that load has settled - see publishRecentToSpeleoDb.ts. A
+  // failed open raises nothing: loadProject already surfaced the failure (the
+  // loading-error panel / permission / corruption dialog), exactly as the plain
+  // context-menu Open does.
+  const handlePublishToSpeleoDb = useCallback(async () => {
+    const path = contextMenu.projectPath;
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+    if (!path) return;
+    await publishRecentToSpeleoDb(path, {
+      loadProject,
+      openDialog,
+      markSource: () => setProjectActionSource('context-menu'),
+    });
+  }, [contextMenu.projectPath, loadProject, openDialog]);
 
   // Handle search input changes (instant filtering)
   const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
@@ -1107,6 +1126,23 @@ export default function GlobalView() {
           >
             {t('globalView.contextMenu.showInFolder')}
           </button>
+          {/* Publish to SpeleoDB - only for a LOCAL recent, only while signed in,
+              only on a single selection (publishing is per project). Same label
+              and same dialog as the in-project hamburger item. */}
+          {canPublishRecent(
+            recentProjects.find((p) => p.file_path === contextMenu.projectPath),
+            speleoLoggedIn,
+            selectedCount,
+          ) && (
+            <button
+              className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
+              onClick={() => { void handlePublishToSpeleoDb(); }}
+              role="menuitem"
+              data-testid="context-menu-publish-speleodb"
+            >
+              {t('speleodb.publish.menuItem')}
+            </button>
+          )}
           {selectedCount >= 2 && (
             <button
               className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
