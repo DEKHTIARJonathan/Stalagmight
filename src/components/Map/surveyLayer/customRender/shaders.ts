@@ -69,7 +69,7 @@ export const SHOT_ALPHA_BY_KIND: Record<'Normal' | 'Jump' | 'Reference', number>
 /** Render a number as a GLSL float literal: always a decimal point, no trailing
  *  zero padding, so the generated source stays byte-identical to the constants
  *  it was hand-written with. */
-const glslFloat = (n: number): string => (Number.isInteger(n) ? `${n}.0` : String(n));
+export const glslFloat = (n: number): string => (Number.isInteger(n) ? `${n}.0` : String(n));
 
 export const DEFAULT_SHOT_HOVER_WIDTH_MUL = 2;
 export const DEFAULT_SHOT_SELECT_WIDTH_MUL = 1.5;

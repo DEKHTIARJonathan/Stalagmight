@@ -21,7 +21,8 @@
  *  - `system`   : the system's index (matched against the hover uniform).
  *  - `selected` : 1 when the vertex's system is in the selection set.
  *  - `dim`      : 1 when the vertex's system does NOT match the search term.
- *  - `reference`: 1 for reference shots (lines) / all-reference stations (circles).
+ *  - `reference`: for LINES the ShotKind discriminant (0 Normal / 1 Jump /
+ *    2 Reference, #27); for CIRCLES still a 0/1 all-reference flag.
  */
 import type { GeometryShot } from '../../../types/survey';
 import { lngLatToMercator } from '../../Map/surveyLayer/mercatorCoords';
@@ -84,7 +85,7 @@ export interface GlobalLineBuffers {
   side: Float32Array;
   /** Per-vertex RGBA8 (the system color). */
   color: Uint8Array;
-  /** Per-vertex reference flag (1 = reference shot). */
+  /** Per-vertex ShotKind discriminant: 0 Normal / 1 Jump / 2 Reference (#27). */
   reference: Float32Array;
   /** Per-vertex search-dim flag (1 = system does not match the search term). */
   dim: Float32Array;
@@ -244,7 +245,10 @@ export function buildGlobalBuffers(
       const relAy = ay - anchorY;
       const relBx = bx - anchorX;
       const relBy = by - anchorY;
-      const isRef = shot.kind !== 'Normal' ? 1 : 0;
+      // The ShotKind discriminant, not a bool (#27): the global shader dims a
+      // Reference further than a Jump, so collapsing them here would drop the
+      // distinction before the shader ever sees it.
+      const kindBit = shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
       const base = seg * 4;
       for (let c = 0; c < 4; c++) {
         const v = base + c;
@@ -258,7 +262,7 @@ export function buildGlobalBuffers(
         line.color[v * 4 + 1] = cg;
         line.color[v * 4 + 2] = cb;
         line.color[v * 4 + 3] = ca;
-        line.reference[v] = isRef;
+        line.reference[v] = kindBit;
         line.dim[v] = dim;
         line.system[v] = si;
         line.selected[v] = sel;

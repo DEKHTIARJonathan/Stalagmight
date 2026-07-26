@@ -312,7 +312,7 @@
       },
       "jumpMultiplier": {
         "label": "Jump RMV multiplier",
-        "help": "Extra breathing-rate factor on jump/reference legs (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
+        "help": "Extra breathing-rate factor on virtual legs - jumps always, and reference ties when \"Route through reference ties\" is on (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
         "aria": "Jump RMV multiplier"
       },
       "includeReferenceLegs": {

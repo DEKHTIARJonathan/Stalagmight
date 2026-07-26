@@ -2143,6 +2143,53 @@ fn gas_reach_field_excludes_reference_legs() {
     );
 }
 
+/// #27: `include_reference_legs` is documented as restoring the pre-#27
+/// inclusive behaviour, and before the split EVERY virtual leg carried
+/// `jump_rmv_multiplier`. Charging an opted-in Reference at base RMV made a
+/// route cost LESS gas than it did before the migration, which overstates the
+/// reachable frontier - the unsafe direction the module's §6 rule forbids.
+#[test]
+fn opted_in_reference_legs_carry_the_jump_rmv_multiplier() {
+    let (mut project, origin) = project_with_jump_second_leg();
+    let sec = origin.section_id;
+    // Leg 1 (station 1 -> 2) becomes a non-swimmable tie, opted back in below.
+    project.sections[0].shots[1].kind = ShotKind::Reference;
+
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    let gas_to_reach_station_2 = |multiplier: f64| -> f64 {
+        let cfg = GasConfig {
+            include_reference_legs: true,
+            jump_rmv_multiplier: multiplier,
+            ..GasConfig::default()
+        };
+        let field = project.compute_gas_reach_field(
+            Some(&origin),
+            None,
+            &diver,
+            std::slice::from_ref(&big),
+            &cfg,
+        );
+        field_gas(&field, StationRef::new(sec, 2))
+    };
+
+    let plain = gas_to_reach_station_2(1.0);
+    let bumped = gas_to_reach_station_2(2.0);
+    assert!(
+        bumped > plain,
+        "the multiplier must raise an opted-in reference leg's gas: {bumped} vs {plain}"
+    );
+}
+
 #[test]
 fn gas_reach_field_route_legs_flag_jumps() {
     // The route's reference (jump) leg is flagged `is_jump` so the UI can dash it (jumps are

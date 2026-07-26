@@ -161,10 +161,19 @@ impl Project {
                 if !shot.kind.is_swum() && !gas_config.include_reference_legs {
                     return f64::INFINITY;
                 }
-                // Jump legs burn gas at a higher RMV: tying in a jump is extra
-                // task-loading. `normalize` keeps the multiplier ≥1.0, so this can only ever
-                // *raise* a jump's gas - never under-state it (the safe direction, §6).
-                let edge_rmv = if shot.kind == ShotKind::Jump {
+                // Virtual legs burn gas at a higher RMV: tying in a jump is
+                // extra task-loading. `normalize` keeps the multiplier ≥1.0, so
+                // this can only ever *raise* the gas - never under-state it (the
+                // safe direction, §6).
+                //
+                // Keyed on `is_virtual`, not `== Jump`. A Reference only reaches
+                // this line when `include_reference_legs` put it back in the
+                // graph, and that opt-in is documented as restoring the
+                // pre-#27 inclusive behaviour - where every virtual leg carried
+                // the multiplier. Charging it base RMV instead made an opted-in
+                // route cost LESS gas than the same route did before the split,
+                // which overstates the reachable frontier: the unsafe direction.
+                let edge_rmv = if shot.kind.is_virtual() {
                     in_rmv * gas_config.jump_rmv_multiplier
                 } else {
                     in_rmv

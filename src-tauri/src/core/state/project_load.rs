@@ -435,54 +435,52 @@ impl AppState {
             // re-stamping them would be one UPDATE per shot in the project on a
             // load that is already paying for the schema migration.
             //
-            // Skipped entirely for a remote project. `shots.kind` rides along in
-            // the push snapshot, so writing it here - on a plain open, with no
-            // lock held and no dirty bit - would silently diverge the local
-            // .stalx from BASE, which is exactly the reason resolved warnings
-            // are gated (see the note on `guard_mutation` in app_state.rs). The
-            // in-memory classification still stands, so this session's gas,
-            // penetration and ruler are right; the flag simply stays set and a
-            // later writable open persists it.
-            if matches!(db.load_speleo_link(), Ok(Some(_))) {
-                tracing::info!(
+            // Runs for a remote project too, deliberately. Gating it on
+            // `load_speleo_link()` looks safer - `shots.kind` rides in the push
+            // snapshot, so writing on a lock-free open diverges the local .stalx
+            // from BASE - but that predicate is true whether or not the user
+            // holds the lock, so the flag would never clear and this pass would
+            // re-run on EVERY open. Being project-wide, it cannot tell the
+            // migration's Jump seed from a kind the user set by hand, so each
+            // reopen would silently revert their choice and restore exactly the
+            // unsafe shortcut #27 exists to remove. A one-time local write whose
+            // values are what the classifier is meant to land - and which the
+            // v12->v13 migration has already rewritten this file's schema
+            // without a lock to produce - is the smaller hazard by a wide margin.
+            //
+            // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
+            // loader reads `ORDER BY section_id, sequence_order` and pushes
+            // sequentially, so the index is the shot's RANK, while the id
+            // carries the raw stored `sequence_order` (read.rs synthesises
+            // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
+            // differ the moment a legacy file has a gap in the sequence, and
+            // a miss here is permanent because the flag is cleared with it.
+            let verdicts: Vec<_> = project
+                .sections
+                .iter()
+                .flat_map(|section| {
+                    section
+                        .shots
+                        .iter()
+                        .filter(|shot| shot.kind.is_virtual())
+                        .map(|shot| {
+                            (
+                                section.id,
+                                shot.id % crate::models::FEATURE_ID_STRIDE,
+                                shot.kind,
+                            )
+                        })
+                })
+                .collect();
+            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+                // Non-fatal: the flag is cleared in the same transaction as
+                // the writes, so a failure here leaves both undone and the
+                // (idempotent) backfill simply runs again on the next open.
+                tracing::warn!(
+                    error = %e,
                     purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
-                    "Remote project: classified in memory only, leaving the flag set"
+                    "Failed to persist backfilled shot kinds; will retry on next open"
                 );
-            } else {
-                // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
-                // loader reads `ORDER BY section_id, sequence_order` and pushes
-                // sequentially, so the index is the shot's RANK, while the id
-                // carries the raw stored `sequence_order` (read.rs synthesises
-                // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
-                // differ the moment a legacy file has a gap in the sequence, and
-                // a miss here is permanent because the flag is cleared with it.
-                let verdicts: Vec<_> = project
-                    .sections
-                    .iter()
-                    .flat_map(|section| {
-                        section
-                            .shots
-                            .iter()
-                            .filter(|shot| shot.kind.is_virtual())
-                            .map(|shot| {
-                                (
-                                    section.id,
-                                    shot.id % crate::models::FEATURE_ID_STRIDE,
-                                    shot.kind,
-                                )
-                            })
-                    })
-                    .collect();
-                if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
-                    // Non-fatal: the flag is cleared in the same transaction as
-                    // the writes, so a failure here leaves both undone and the
-                    // (idempotent) backfill simply runs again on the next open.
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
-                        "Failed to persist backfilled shot kinds; will retry on next open"
-                    );
-                }
             }
         }
 

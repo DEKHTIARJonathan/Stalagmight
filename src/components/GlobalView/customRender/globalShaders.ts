@@ -14,11 +14,19 @@
  *    uniform update with no buffer re-upload.
  *  - `a_selected` (per-vertex flag): re-uploaded only on a selection change.
  *  - `a_dim` (per-vertex search-dim flag): 0.25 opacity, re-uploaded on search.
- *  - `a_reference` (per-vertex): reference shots draw thinner (0.5x width) and
- *    dimmer (0.5 opacity), and collapse when reference shots are hidden.
+ *  - `a_reference` (per-vertex): the ShotKind discriminant, 0 Normal / 1 Jump /
+ *    2 Reference (#27). Virtual legs draw thinner (0.5x width); a Jump dims to
+ *    0.5 alpha and a Reference to 0.28, matching the single-system renderer.
+ *    Both collapse when reference shots are hidden.
  * Width/radius emphasis mirrors the stock paint cases exactly (hover > select >
  * reference > default). Premultiplied-alpha output matches MapLibre's blend.
  */
+
+import {
+  SHOT_ALPHA_JUMP,
+  SHOT_ALPHA_REFERENCE,
+  glslFloat,
+} from '../../Map/surveyLayer/customRender/shaders';
 
 /** All px sizes are DEVICE pixels; `u_viewport` is the drawing-buffer size.
  *  `u_matrix` maps anchor-relative mercator -> clip (composed from MapLibre's
@@ -45,8 +53,14 @@ out vec4 v_color;
 out float v_edge;
 out float v_outset;
 void main() {
+  // Discriminant, not a bool (#27): 0 Normal / 1 Jump / 2 Reference.
+  bool isJump = a_reference > 0.5 && a_reference < 1.5;
+  bool isRef = a_reference > 1.5;
+  bool isVirtual = isJump || isRef;
   // Reference shots hidden (setShowReferenceShots(false)): collapse the quad.
-  if (a_reference > 0.5 && u_hide_reference > 0.5) {
+  // Global View has one toggle covering both virtual kinds, so this stays
+  // all-or-nothing here - unlike the single-system layer's split toggles.
+  if (isVirtual && u_hide_reference > 0.5) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_color = vec4(0.0);
     v_edge = 0.0;
@@ -57,7 +71,7 @@ void main() {
   bool isSel = a_selected > 0.5;
   // Width emphasis mirrors the stock line-width case order (hover 4 / select 3
   // / reference 1 / else 2, base 2) as a multiplier over u_half_width.
-  float widthMul = isHover ? 2.0 : (isSel ? 1.5 : (a_reference > 0.5 ? 0.5 : 1.0));
+  float widthMul = isHover ? 2.0 : (isSel ? 1.5 : (isVirtual ? 0.5 : 1.0));
   float halfWidth = u_half_width * widthMul;
   vec4 pa = u_matrix * vec4(a_pos_a, 0.0, 1.0);
   vec4 pb = u_matrix * vec4(a_pos_b, 0.0, 1.0);
@@ -73,7 +87,8 @@ void main() {
   // Search-dim wins over the reference 0.5 case (stock: non-matching 0.25).
   v_color = a_color;
   if (a_dim > 0.5) v_color.a *= 0.25;
-  else if (a_reference > 0.5) v_color.a *= 0.5;
+  else if (isRef) v_color.a *= ${glslFloat(SHOT_ALPHA_REFERENCE)};
+  else if (isJump) v_color.a *= ${glslFloat(SHOT_ALPHA_JUMP)};
   v_edge = a_side;
   v_outset = outset;
 }`;
