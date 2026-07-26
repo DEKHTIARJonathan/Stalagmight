@@ -59,6 +59,29 @@ as reducing the mean.
 Setup remains at the floor; every saved minute still has to come out of test
 execution.
 
+### First real-runner sample (PR #312, run 30205889359)
+
+The instrumentation landed and produced this on the hosted runner - **83 tests,
+test-time total 753.6s, hook 453.5s = 60%, wall clock 393.9s** (job 7:20, of
+which the test step is 396s and all setup is 33s).
+
+Three things this says that the M1 could not:
+
+1. **The finding transfers.** Hook share is 60% on the real runner vs 64-67%
+   locally. Lower, but the same order: setup still dominates, and Phase A is
+   still the right first move.
+2. **`gas-planning` is WORSE on CI than locally - 33% of test time** (vs 27-31%
+   on the M1), 248s of the 754s, at 11.8s per test. It is the only file above
+   13%. Phase B's target is confirmed, and if A under-delivers this is where to
+   go.
+3. **⚠ Effective parallelism is only ~1.9x** (753.6s of test time in 393.9s of
+   wall clock), even though CI sets `workers: '100%'`. The hosted runner is
+   2-core, so it is already saturated - there is no free win from raising the
+   worker count, and, more importantly, **every second cut from test time buys
+   only ~half a second of wall clock.** A 25% test-time cut is a ~12% job cut.
+   Size Phase A's target against wall clock, not test time. (The M1 runs 4
+   workers, so local wall-clock deltas overstate the CI win by ~2x.)
+
 ### Local instrumented runs (4 workers, retries off, M1)
 
 | Metric | Pre-rebase | ToT run 1 | ToT run 2 (post-#305) | **run 3 (fixed reporter)** |
@@ -73,9 +96,10 @@ hook attribution (see section 2). Its absolute seconds are inflated because the
 machine was running other work concurrently - which is exactly why the *ratio*
 is the number to carry, not the seconds.
 
-The hook share is stable at **64-67% across four samples**, two very different
-trees, and both the buggy and fixed reporters. That is the one number this plan
-rests on, and it is not noise.
+The hook share is stable at **64-67% across four local samples**, two very
+different trees, and both the buggy and fixed reporters - and **60% on the
+hosted runner** (above). That is the one number this plan rests on, and it is
+not noise.
 
 ⚠ Run-to-run variance is ~30% and local wall clock is ~4x faster than the hosted
 runner. The *ranking* and the *hook share* transfer; the seconds do not.
