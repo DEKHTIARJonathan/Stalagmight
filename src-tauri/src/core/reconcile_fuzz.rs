@@ -416,6 +416,80 @@ fn prop_uuid_survives_local_insert(seed: u64) {
     );
 }
 
+/// Run one iteration of the reverse property (#24): reversing a section must
+/// round-trip through collab as *moved* shots, not delete+add.
+///
+/// A correct reverse changes every shot's `geo_key` (azimuth is reciprocated,
+/// depths swap), so the geometry matching tier cannot help here - the whole
+/// operation leans on UUIDs travelling with their records (q17). This pins
+/// that: the section's UUID set survives the reverse unchanged, the next save
+/// re-exports every one of them, and the collaborator round-trip that follows
+/// diffs clean.
+///
+/// The baseline is re-seeded after the reverse because that mirrors the normal
+/// sequence - a reverse marks the project dirty and the next save re-exports
+/// the sibling .tml, refreshing the baseline before a collaborator sees it.
+///
+/// KNOWN GAP: `compute_collab` diffs whenever the on-disk sibling differs from
+/// our last export, so reversing and *not* saving before a collaborator edits
+/// that sibling does diff against a pre-reverse baseline. That is the generic
+/// unsaved-local-edit case rather than anything specific to reverse, but a
+/// reverse invalidates every shot's `(section_id, shot_index)` slot at once
+/// instead of a few, so it is the worst instance of it. Not covered here.
+fn prop_reverse_roundtrips_through_collab(seed: u64) {
+    let dir = TempDir::new().unwrap();
+    let mut p = gen_project(&mut Rng::new(seed), Kind::Plain);
+    seed_baseline(&mut p, dir.path());
+
+    let section_id = p.sections[0].id;
+    let before: HashSet<String> = p.sections[0]
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone().unwrap_or_default())
+        .collect();
+
+    assert!(
+        p.reverse_section(section_id, false),
+        "seed={seed}: reverse failed"
+    );
+
+    let after: HashSet<String> = p.sections[0]
+        .shots
+        .iter()
+        .map(|s| s.uuid.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        before, after,
+        "seed={seed}: reverse must not mint or drop a shot UUID - reconcile would \
+         see the section as wholesale delete+add"
+    );
+
+    // The save that follows the reverse: re-export and re-seed the baseline.
+    // Every pre-reverse UUID must still be in it - a missing one is exactly the
+    // "reversed section reads as delete+add" failure q6 risks.
+    let (baseline, _sha, _synthetic) =
+        export_tml_with_baseline(&p, &dir.path().join("saved.tmlu")).unwrap();
+    let saved: HashSet<String> = baseline.iter().map(|e| e.uuid.clone()).collect();
+    assert_eq!(
+        before, saved,
+        "seed={seed}: the save after a reverse must re-export exactly the same \
+         shot UUIDs, or the collaborator sees the section as delete+add"
+    );
+    seed_baseline(&mut p, dir.path());
+
+    // The collaborator opens that file and returns it untouched: diff is clean.
+    let ret = returned(&p, dir.path());
+    let cs = diff(&p, &ret);
+    assert!(
+        cs.is_empty(),
+        "seed={seed}: reverse round-trip not empty:\n{cs:#?}\nproject:\n{p:#?}"
+    );
+    assert!(
+        !has_dangling_ref(&p),
+        "seed={seed}: reverse left a dangling cross-reference"
+    );
+}
+
 /// True if any stored cross-reference dangles (its anchoring shot is gone).
 /// With stable identity this is the failure an interleaved insert/delete must
 /// never produce - a missed positional shift used to leave one silently.
@@ -529,6 +603,14 @@ fn fuzz_uuid_survives_local_insert() {
     for i in 0..iters() {
         let seed = i ^ 0xC011AB_0005;
         prop_uuid_survives_local_insert(seed);
+    }
+}
+
+#[test]
+fn fuzz_reverse_roundtrips_through_collab() {
+    for i in 0..iters() {
+        let seed = i ^ 0xC011AB_0007;
+        prop_reverse_roundtrips_through_collab(seed);
     }
 }
 
