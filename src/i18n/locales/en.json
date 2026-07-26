@@ -1961,7 +1961,11 @@
       "key": {
         "turnPoint": "Turn / end point",
         "stageDrop": "Stage drop",
-        "finalTurn": "Final turn"
+        "finalTurn": "Final turn",
+        "route": "Planned route",
+        "routeJump": "Jump leg (swum shortcut)",
+        "waypoint": "Way point",
+        "markedPoint": "Marked point"
       }
     },
     "placement": {
@@ -2161,9 +2165,39 @@
       "label": "Origin",
       "entrance": "Entrance",
       "reset": "Reset",
-      "hint": "Click a station to set the origin, or the ★ to start from a zero datum.",
+      "hint": "Click the ★ to start from a zero datum, or right-click a station and choose \"Set as start point\".",
       "datumAria": "Start the plan from this zero datum",
       "datumTooltip": "Zero datum - click to start the plan here"
+    },
+    "route": {
+      "label": "Route",
+      "endpointLabel": "Endpoint",
+      "endpointAuto": "Farthest in budget",
+      "clearEndpoint": "Clear",
+      "waypointsLabel": "Way points",
+      "waypointsHint": "The dive visits these in order, on the way to the endpoint.",
+      "waypointsEmpty": "None - click a station's context menu to add one.",
+      "moveUp": "Move earlier",
+      "moveDown": "Move later",
+      "remove": "Remove",
+      "unreachable": "unreachable",
+      "warnUnreachable": "Way point {{n}} cannot be reached, so no route can be planned. Remove it, or reconnect the survey.",
+      "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas."
+    },
+    "marked": {
+      "label": "Marked points",
+      "hint": "Spots worth noting on this plan. They do not affect the route or the gas.",
+      "empty": "None - right-click a station to mark it.",
+      "labelPlaceholder": "Note (optional)",
+      "remove": "Remove"
+    },
+    "menu": {
+      "setStart": "Set as start point",
+      "setWaypoint": "Set as way point",
+      "setStageDrop": "Set as stage drop",
+      "setStageNDrop": "Set as stage {{n}} drop",
+      "setMarked": "Set marked point",
+      "setEndpoint": "Set as endpoint"
     },
     "diver": {
       "rmvLabel": "RMV (surface air consumption)",
@@ -2249,7 +2283,12 @@
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
       "turnMarkerTooltip": "Click to set as endpoint",
-      "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint"
+      "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint",
+      "waypointTooltip": "Way point {{n}} - click to remove, right-click for route options",
+      "waypointAria": "Way point {{n}} - activate to remove it from the route",
+      "markedTooltip": "Marked point - click to remove, right-click for route options",
+      "markedAria": "Marked point {{n}} - activate to remove it",
+      "markedLabelledAria": "Marked point: {{label}} - activate to remove it"
     }
   },
   "modeCarousel": {

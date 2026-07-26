@@ -6,10 +6,12 @@ import { defaultConfig } from '../../types/config';
 const baseInputs = (): DivePlanInputs => ({
   origin: { section_id: 1, station_index: 0 },
   endpoint: null,
+  waypoints: [{ section_id: 1, station_index: 2 }],
   diver: { rmv_l_per_min: 20, label: null },
   cylinders: [],
   gasConfig: structuredClone(defaultConfig.gas),
   stageDropOverrides: [null, { section_id: 1, station_index: 3 }],
+  markedPoints: [{ station: { section_id: 2, station_index: 1 }, label: 'photo' }],
 });
 
 describe('divePlanSnapshotOf', () => {
@@ -20,9 +22,22 @@ describe('divePlanSnapshotOf', () => {
     // The nested config + overrides are carried by reference (no copy in the mapper).
     expect(snap.gas_config).toBe(inputs.gasConfig);
     expect(snap.stage_drop_overrides).toBe(inputs.stageDropOverrides);
-    // Exactly the six IPC keys, snake_case.
+    expect(snap.waypoints).toBe(inputs.waypoints);
+    expect(snap.marked_points).toBe(inputs.markedPoints);
+    // Exactly the IPC keys, snake_case. This list is the dirty-tracking contract: a plan input
+    // missing here is silently NOT compared, so an edit to it would read as clean and be lost
+    // past the close guard.
     expect(Object.keys(snap).sort()).toEqual(
-      ['cylinders', 'diver', 'endpoint', 'gas_config', 'origin', 'stage_drop_overrides'].sort()
+      [
+        'cylinders',
+        'diver',
+        'endpoint',
+        'gas_config',
+        'marked_points',
+        'origin',
+        'stage_drop_overrides',
+        'waypoints',
+      ].sort()
     );
   });
 });
@@ -61,6 +76,27 @@ describe('divePlanSnapshotsEqual', () => {
   it('a differing stage-drop override slot makes them unequal', () => {
     const a = divePlanSnapshotOf(baseInputs());
     const b = divePlanSnapshotOf({ ...baseInputs(), stageDropOverrides: [null, null] });
+    expect(divePlanSnapshotsEqual(a, b)).toBe(false);
+  });
+
+  it('a REORDERED way-point list is a real change (order is the route)', () => {
+    const inputs = baseInputs();
+    inputs.waypoints = [
+      { section_id: 1, station_index: 2 },
+      { section_id: 3, station_index: 4 },
+    ];
+    const reordered = { ...inputs, waypoints: [...inputs.waypoints].reverse() };
+    expect(
+      divePlanSnapshotsEqual(divePlanSnapshotOf(inputs), divePlanSnapshotOf(reordered))
+    ).toBe(false);
+  });
+
+  it('re-labelling a marked point makes them unequal', () => {
+    const a = divePlanSnapshotOf(baseInputs());
+    const b = divePlanSnapshotOf({
+      ...baseInputs(),
+      markedPoints: [{ station: { section_id: 2, station_index: 1 }, label: 'restriction' }],
+    });
     expect(divePlanSnapshotsEqual(a, b)).toBe(false);
   });
 });

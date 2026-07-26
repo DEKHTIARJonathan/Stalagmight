@@ -29,6 +29,7 @@ import { getBounds, getBoundsFromStationCoords, metersToMapCoords, mapCoordsToMe
 import { registerTileProtocol, unregisterTileProtocol } from '../../utils/tileProtocol';
 import { getTileConfig } from '../../utils/tileConfig';
 import { useMapTools } from '../../hooks/useMapTools';
+import { useGasPlanPointMarkers } from './useGasPlanPointMarkers';
 import SurveyLayer from './SurveyLayer';
 import { renderFatalMessage } from './surveyLayer/mapErrors';
 import PlacementOverlay from './PlacementOverlay';
@@ -198,7 +199,6 @@ function MapCanvas() {
   const originMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasOriginMarkerRef = useRef<maplibregl.Marker | null>(null);
   const gasTurnMarkersRef = useRef<maplibregl.Marker[]>([]);
-  const gasZeroDatumMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasDropMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasFinalTurnMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Keyboard-picking a turn marker nulls reachField (setEndpoint), which tears down
@@ -469,6 +469,8 @@ function MapCanvas() {
   const {
     origin: gasOrigin,
     endpoint: gasEndpoint,
+    waypoints: gasWaypoints,
+    markedPoints: gasMarkedPoints,
     diver: gasDiver,
     cylinders: gasCylinders,
     gasConfig: gasPlanConfig,
@@ -481,6 +483,8 @@ function MapCanvas() {
     useShallow((s) => ({
       origin: s.origin,
       endpoint: s.endpoint,
+      waypoints: s.waypoints,
+      markedPoints: s.markedPoints,
       diver: s.diver,
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
@@ -1962,6 +1966,9 @@ function MapCanvas() {
       {
         origin: gasOrigin ?? null,
         endpoint: gasEndpoint ?? null,
+        // Ordered way points (#298): the engine re-bases the whole field through them, so this is
+        // a gas input, not a drawing hint.
+        waypoints: gasWaypoints,
         diver: gasDiver,
         cylinders: gasCylinders,
         gasConfig: gasPlanConfig,
@@ -1980,7 +1987,7 @@ function MapCanvas() {
         if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasEndpoint, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOrigin, gasEndpoint, gasWaypoints, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
@@ -2197,54 +2204,19 @@ function MapCanvas() {
     };
   }, [showGasPlan, gasReachField, activeStations, gpsOrigin, mapLoaded, t]);
 
-  // Zero-datum star markers (#38): a black star (white outline) on each zero-datum
-  // station while planning. The gas solve's "Entrance" default already starts from the
-  // zero datum(s); this marks them so the user can SEE where they are and click one to
-  // pick it explicitly as the origin. Plan mode only; bounded by the datum count (≈1).
-  useEffect(() => {
-    for (const m of gasZeroDatumMarkersRef.current) m.remove();
-    gasZeroDatumMarkersRef.current = [];
-    if (!map.current || !mapLoaded || !showGasPlan) return undefined;
-    for (const st of activeStations) {
-      if (!st.is_zero_datum) continue;
-      const lngLat = metersToMapCoords(st.coordinates.x, st.coordinates.y, gpsOrigin) as [
-        number,
-        number,
-      ];
-      const el = document.createElement('div');
-      el.setAttribute('data-testid', 'gas-zero-datum-marker');
-      el.setAttribute('role', 'button');
-      // Keyboard-operable, not just clickable (it carries role="button"): focusable +
-      // Enter/Space activation, so keyboard / AT users can pick the datum origin too.
-      el.setAttribute('tabindex', '0');
-      el.setAttribute('aria-label', t('gasPanel.origin.datumAria'));
-      el.title = t('gasPanel.origin.datumTooltip');
-      el.style.cssText = 'cursor:pointer;line-height:0;filter:drop-shadow(0 0 1px rgba(0,0,0,0.6));';
-      el.innerHTML =
-        '<svg width="22" height="22" viewBox="0 0 24 24" aria-hidden="true">' +
-        '<path d="M12 17.27L18.18 21l-1.64-7.03L22 9.24l-7.19-.61L12 2 9.19 8.63 2 9.24l5.46 4.73L5.82 21z" ' +
-        'fill="#000000" stroke="#ffffff" stroke-width="1.5" stroke-linejoin="round"/></svg>';
-      const ref = st.station_ref;
-      const pick = () => setGasOrigin(ref);
-      el.addEventListener('click', (e) => {
-        e.stopPropagation();
-        pick();
-      });
-      el.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          pick();
-        }
-      });
-      gasZeroDatumMarkersRef.current.push(
-        new maplibregl.Marker({ element: el }).setLngLat(lngLat).addTo(map.current)
-      );
-    }
-    return () => {
-      for (const m of gasZeroDatumMarkersRef.current) m.remove();
-      gasZeroDatumMarkersRef.current = [];
-    };
-  }, [showGasPlan, activeStations, gpsOrigin, mapLoaded, setGasOrigin, t]);
+  // Plan point markers (#38 datum stars, #298 way points + marked points) - simple place/click
+  // pins, extracted to their own hook. The turn-frontier dots and stage drops stay here because
+  // they carry drag + focus-restore machinery tied to this component's refs.
+  useGasPlanPointMarkers({
+    map: map.current,
+    mapLoaded,
+    showGasPlan,
+    activeStations,
+    gpsOrigin,
+    waypoints: gasWaypoints,
+    markedPoints: gasMarkedPoints,
+    setOrigin: setGasOrigin,
+  });
 
   // Staged-strategy route markers (#233): a ▼ drop marker where each stage is dropped along the
   // deepest-penetration route, plus a distinct final-turn marker where the back-gas leg runs out.

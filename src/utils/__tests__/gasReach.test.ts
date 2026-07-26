@@ -46,6 +46,7 @@ describe('buildGasReachFeatureState', () => {
     route_line_length_m: 0,
     route_max_depth_m: null,
     route_avg_depth_m: null,
+    waypoint_gas_litres: [],
   };
 
   it('maps each reachable station to its litres-to-reach, keyed by encodeFeatureId', () => {

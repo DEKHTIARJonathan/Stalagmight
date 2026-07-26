@@ -1,22 +1,31 @@
-import type { Cylinder, Diver, DivePlanSnapshot, GasConfig } from '../types/ipc.generated';
+import type {
+  Cylinder,
+  Diver,
+  DivePlanSnapshot,
+  GasConfig,
+  MarkedPoint,
+} from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 
 /**
- * Dive-plan snapshot helpers (#244). A saved plan captures exactly the six gas
- * inputs that `compute_gas_reach_field` takes; loading one is "set the inputs and
- * recompute". These helpers build the persisted (snake_case IPC) snapshot from the
- * live store fields and compare two snapshots for dirty-tracking.
+ * Dive-plan snapshot helpers (#244). A saved plan captures exactly the gas inputs
+ * that `compute_gas_reach_field` takes, plus the plan-only marked points (#298);
+ * loading one is "set the inputs and recompute". These helpers build the persisted
+ * (snake_case IPC) snapshot from the live store fields and compare two snapshots for
+ * dirty-tracking - so anything added here is dirty-tracked and close-guarded for free.
  * See `git show de8eef91:docs/plans/2026-07-06_dive-plan-persistence.md` (doc removed from master in #229).
  */
 
-/** The six gas inputs a dive plan captures (the store's camelCase view). */
+/** The plan inputs a dive plan captures (the store's camelCase view). */
 export interface DivePlanInputs {
   origin: StationRef | null;
   endpoint: StationRef | null;
+  waypoints: StationRef[];
   diver: Diver;
   cylinders: Cylinder[];
   gasConfig: GasConfig;
   stageDropOverrides: (StationRef | null)[];
+  markedPoints: MarkedPoint[];
 }
 
 /** Build the persisted snapshot (snake_case IPC shape) from the live store inputs. */
@@ -24,10 +33,12 @@ export function divePlanSnapshotOf(i: DivePlanInputs): DivePlanSnapshot {
   return {
     origin: i.origin,
     endpoint: i.endpoint,
+    waypoints: i.waypoints,
     diver: i.diver,
     cylinders: i.cylinders,
     gas_config: i.gasConfig,
     stage_drop_overrides: i.stageDropOverrides,
+    marked_points: i.markedPoints,
   };
 }
 

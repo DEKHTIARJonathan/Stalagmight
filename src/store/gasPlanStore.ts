@@ -8,6 +8,7 @@ import type {
   DivePlanSnapshot,
   GasConfig,
   GasReachField,
+  MarkedPoint,
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
@@ -40,6 +41,13 @@ interface GasPlanState {
   origin: StationRef | null;
   /** Chosen route endpoint (the lead being planned); `null` = the deepest in-budget point. */
   endpoint: StationRef | null;
+  /** #298: ordered intermediate points the dive must visit, in order, between origin and
+   *  endpoint. The engine re-bases the whole reach field through them, so adding one costs
+   *  real gas rather than only re-drawing the route line. */
+  waypoints: StationRef[];
+  /** #298: arbitrary map annotations saved with the plan (a photo stop, a lead, a restriction).
+   *  Never sent to the gas engine - marking a station cannot change the route or the budget. */
+  markedPoints: MarkedPoint[];
   diver: Diver;
   cylinders: Cylinder[];
   /** Working gas config; seeded from `Config.gas`, edited in-mode (units/speeds/reserve). */
@@ -68,6 +76,19 @@ interface GasPlanState {
 
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
+  /** #298: append a way point to the end of the visit order. */
+  addWaypoint: (ref: StationRef) => void;
+  /** #298: drop way point `index`; a stray index is a no-op. */
+  removeWaypoint: (index: number) => void;
+  /** #298: swap way point `index` with its neighbour (`-1` earlier, `+1` later). Out-of-range
+   *  moves are a no-op, so the panel's arrows need no bounds logic of their own. */
+  moveWaypoint: (index: number, delta: number) => void;
+  /** #298: drop a marked point on `ref`. */
+  addMarkedPoint: (ref: StationRef) => void;
+  /** #298: remove marked point `index`. */
+  removeMarkedPoint: (index: number) => void;
+  /** #298: set (or clear, with an empty string) marked point `index`'s label. */
+  setMarkedPointLabel: (index: number, label: string) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -98,6 +119,8 @@ const initialState = (): Pick<
   GasPlanState,
   | 'origin'
   | 'endpoint'
+  | 'waypoints'
+  | 'markedPoints'
   | 'diver'
   | 'cylinders'
   | 'gasConfig'
@@ -110,6 +133,8 @@ const initialState = (): Pick<
 > => ({
   origin: null,
   endpoint: null,
+  waypoints: [],
+  markedPoints: [],
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
   // Deep-clone so editing the working config (incl. nested reserve_profile / dpv) never
@@ -133,6 +158,55 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // overrides no longer line up, clear them alongside the stale field.
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
+  // Way points are a ROUTE input: every edit re-bases the whole field, so they clear the cached
+  // field and the pinned drops exactly like setEndpoint. Marked points are pure annotation and
+  // deliberately do NOT - clearing the field there would flash the overlay off for nothing.
+  addWaypoint: (ref) =>
+    set((s) => ({
+      waypoints: [...s.waypoints, ref],
+      reachField: null,
+      stageDropOverrides: [],
+    })),
+  removeWaypoint: (index) =>
+    set((s) =>
+      index < 0 || index >= s.waypoints.length
+        ? {}
+        : {
+            waypoints: s.waypoints.filter((_w, i) => i !== index),
+            reachField: null,
+            stageDropOverrides: [],
+          },
+    ),
+  moveWaypoint: (index, delta) =>
+    set((s) => {
+      const to = index + delta;
+      if (index < 0 || index >= s.waypoints.length || to < 0 || to >= s.waypoints.length) {
+        return {};
+      }
+      const next = s.waypoints.slice();
+      const moved = next[index]!;
+      next[index] = next[to]!;
+      next[to] = moved;
+      return { waypoints: next, reachField: null, stageDropOverrides: [] };
+    }),
+  addMarkedPoint: (ref) =>
+    set((s) => ({ markedPoints: [...s.markedPoints, { station: ref, label: null }] })),
+  removeMarkedPoint: (index) =>
+    set((s) =>
+      index < 0 || index >= s.markedPoints.length
+        ? {}
+        : { markedPoints: s.markedPoints.filter((_m, i) => i !== index) },
+    ),
+  setMarkedPointLabel: (index, label) =>
+    set((s) => {
+      if (index < 0 || index >= s.markedPoints.length) return {};
+      const next = s.markedPoints.slice();
+      // An all-whitespace label is stored as null, so a cleared input round-trips as "no label"
+      // rather than persisting a blank string the panel would render as an empty row.
+      const trimmed = label.trim();
+      next[index] = { ...next[index]!, label: trimmed === '' ? null : label };
+      return { markedPoints: next };
+    }),
   setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),
   setCylinders: (cylinders) => set({ cylinders, reachField: null, stageDropOverrides: [] }),
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
@@ -155,6 +229,8 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     set({
       origin: snapshot.origin,
       endpoint: snapshot.endpoint,
+      waypoints: snapshot.waypoints,
+      markedPoints: snapshot.marked_points,
       diver: snapshot.diver,
       cylinders: snapshot.cylinders,
       gasConfig: snapshot.gas_config,
