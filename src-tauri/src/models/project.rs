@@ -31,6 +31,7 @@ use super::{Coordinates, GpsCoordinates, Shot, ShotUpdates, Station};
 #[cfg(test)]
 use crate::config::ClosureAdjustmentConfig;
 
+mod classify;
 mod connectivity;
 mod mutations;
 mod shots;

@@ -753,9 +753,10 @@ mod tests {
         assert_eq!(ancient.kind, ShotKind::Jump);
 
         // Absent entirely → Normal.
-        let absent: ShotData =
-            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0}"#)
-                .unwrap();
+        let absent: ShotData = serde_json::from_str(
+            r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0}"#,
+        )
+        .unwrap();
         assert_eq!(absent.kind, ShotKind::Normal);
     }
 
@@ -780,7 +781,10 @@ mod tests {
         // Round-trips: an unset kind serializes as absent, not null, so undo's
         // stored `values_json` never reads back as "clear to Normal".
         let json = serde_json::to_string(&absent).unwrap();
-        assert!(!json.contains("kind"), "unset kind must not serialize: {json}");
+        assert!(
+            !json.contains("kind"),
+            "unset kind must not serialize: {json}"
+        );
     }
 
     #[test]

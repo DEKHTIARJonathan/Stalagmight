@@ -1,4 +1,5 @@
 use super::*;
+use crate::models::ShotKind;
 
 fn shot(azimuth_in: f64, azimuth_out: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -2768,7 +2769,7 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
     // graph edges and get tinted like any shot.
     let mut project = Project::new("RefShot".to_string(), None);
     let mut ref_shot = shot(0.0, 0.0, 7.0, 0.0, 0.0);
-    ref_shot.is_reference = true;
+    ref_shot.kind = ShotKind::Jump;
     let a = project
         .add_section(SectionData {
             shots: vec![ref_shot],
@@ -4549,7 +4550,7 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
 
 #[test]
 fn reachability_keeps_jump_reference_shots() {
-    // A jump/reference shot is a real measured leg: an is_reference shot that is
+    // A jump/reference shot is a real measured leg: a virtual shot that is
     // the only link to a tail station keeps it reachable (it's included in the
     // graph like any other shot).
     let mut project = Project::new("JumpKept".to_string(), None);
@@ -4568,7 +4569,7 @@ fn reachability_keeps_jump_reference_shots() {
         .find(|s| s.id == section_id)
         .unwrap()
         .shots[1]
-        .is_reference = true;
+        .kind = ShotKind::Jump;
 
     let stations = project.compute_station_coordinates();
     let idx = |i: u32| {
@@ -4614,7 +4615,7 @@ fn reachability_uses_reference_shot_shortcut() {
         .find(|s| s.id == b)
         .unwrap()
         .shots[0]
-        .is_reference = true;
+        .kind = ShotKind::Jump;
 
     // Tie B's endpoints onto A's chain so B0-B1 has an alternate route: B0<->A0
     // via a merge, B1<->A2 via an aligned loop closure (merging an already-

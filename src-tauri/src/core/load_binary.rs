@@ -412,8 +412,8 @@ fn hashmap_to_pairs<K: Eq + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V
 #[expect(clippy::unwrap_used)]
 mod tests {
     use super::*;
-    use crate::models::ShotKind;
     use crate::core::loading::DisplaySettings;
+    use crate::models::ShotKind;
     use crate::models::{Coordinates, Project, ProjectStats, Section, Shot, Station, StationRef};
     use chrono::Utc;
     use serde::Deserialize;

@@ -11,7 +11,7 @@ use super::physics::{
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{
-    Coordinates, GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
+    Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };
 
 const EPS: f64 = 1e-9;
@@ -2073,7 +2073,7 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
                     length: 100.0,
                     depth_in: 10.0,
                     depth_out: 20.0,
-                    is_reference: true,
+                    kind: ShotKind::Jump,
                     ..Default::default()
                 },
             ],
@@ -2113,7 +2113,7 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
     // Leg 0 is a permanent shot (avg 5 m → 1.5 ATA → 20·1.5·10 = 300 L); leg 1 is a
     // reference/jump (avg 15 m → 2.5 ATA → base 20·2.5·10 = 500 L). A 1.5× jump multiplier
     // scales ONLY the jump leg's RMV (20 → 30 → 750 L): station 1 is untouched at 300, while
-    // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets is_reference
+    // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets jump
     // legs and nothing else (a misapplied multiplier would also move station 1).
     let (project, origin) = project_with_jump_second_leg();
     let sec = origin.section_id;

@@ -1957,7 +1957,7 @@ fn test_set_shot_kind_undo_restores_previous_kind() {
         ShotKind::Reference,
     ));
 
-    assert_success(&crate::commands::history::undo_impl(state(&app).inner()));
+    assert_success(&history::undo_impl(state(&app).inner()));
 
     let section = get_section(state(&app), id).unwrap();
     assert_eq!(

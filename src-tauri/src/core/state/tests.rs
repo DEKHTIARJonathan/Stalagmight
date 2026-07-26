@@ -8,8 +8,9 @@ use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, CommandResult, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection, MIN_SPLIT_CHILD_LENGTH_M,
+    LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
+    MIN_SPLIT_CHILD_LENGTH_M,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -3456,7 +3457,7 @@ fn test_split_shot_at_distance_happy_path() {
                     up: Some(0.5),
                     down: Some(0.25),
                     comment: Some("mid comment".to_string()),
-                    is_reference: false,
+                    kind: ShotKind::Normal,
                     marker_index: Some(3),
                     temperature: Some(15.0),
                 },
@@ -3506,7 +3507,7 @@ fn test_split_shot_at_distance_happy_path() {
     assert_eq!(head.comment, None);
     assert_eq!(head.marker_index, None);
     assert_eq!(head.temperature, Some(15.0));
-    assert!(!head.is_reference);
+    assert!(!head.kind.is_virtual());
 
     assert_eq!(
         tail.id, target_shot_id,
@@ -4040,7 +4041,7 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
-            is_reference: true,
+            kind: ShotKind::Jump,
             ..test_shot_data(10.0)
         }],
         ..Default::default()
@@ -4057,12 +4058,12 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
     let after = state.get_project_state().unwrap();
     let section = after.get_section(sec).unwrap();
     assert!(
-        section.shots[0].is_reference,
-        "head must inherit is_reference"
+        section.shots[0].kind.is_virtual(),
+        "head must inherit the shot kind"
     );
     assert!(
-        section.shots[1].is_reference,
-        "tail keeps its own is_reference"
+        section.shots[1].kind.is_virtual(),
+        "tail keeps its own kind"
     );
 }
 
@@ -4446,7 +4447,7 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
 }
 
 #[test]
-fn test_set_shot_reference() {
+fn test_set_shot_kind() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -4468,18 +4469,18 @@ fn test_set_shot_reference() {
     let shot_id = project.sections[0].shots[0].id;
 
     // Initially not reference
-    assert!(!project.sections[0].shots[0].is_reference);
+    assert!(!project.sections[0].shots[0].kind.is_virtual());
 
-    let result = state.execute(Command::SetShotReference {
+    let result = state.execute(Command::SetShotKind {
         section_id,
         shot_id,
-        is_reference: true,
+        kind: ShotKind::Jump,
     });
 
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
-    assert!(project.sections[0].shots[0].is_reference);
+    assert!(project.sections[0].shots[0].kind.is_virtual());
 }
 
 // === Undo/Redo Tests ===
@@ -17443,7 +17444,7 @@ fn test_merge_datum_section_does_not_move() {
 }
 
 /// Test 2f: A shot marked as reference (frozen) survives a merge followed by
-/// an undo. After undo the shot must still be marked is_reference=true.
+/// an undo. After undo the shot must still be virtual.
 #[test]
 fn test_reference_shot_survives_merge_then_undo() {
     let state = AppState::new().unwrap();
@@ -17481,12 +17482,12 @@ fn test_reference_shot_survives_merge_then_undo() {
         let proj = state.get_project_state().unwrap();
         proj.sections.iter().find(|s| s.id == a).unwrap().shots[0].id
     };
-    let ref_result = state.execute(Command::SetShotReference {
+    let ref_result = state.execute(Command::SetShotKind {
         section_id: a,
         shot_id: first_shot_id,
-        is_reference: true,
+        kind: ShotKind::Jump,
     });
-    assert!(ref_result.success, "SetShotReference should succeed");
+    assert!(ref_result.success, "SetShotKind should succeed");
 
     // Confirm it's marked before merge
     {
@@ -17500,7 +17501,10 @@ fn test_reference_shot_survives_merge_then_undo() {
             .iter()
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
-        assert!(shot.is_reference, "Shot should be reference before merge");
+        assert!(
+            shot.kind.is_virtual(),
+            "Shot should be virtual before merge"
+        );
     }
 
     // Merge A.2 ↔ B.0
@@ -17523,7 +17527,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
         assert!(
-            shot.is_reference,
+            shot.kind.is_virtual(),
             "Shot must still be reference after merge"
         );
     }
@@ -17542,7 +17546,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
         assert!(
-            shot.is_reference,
+            shot.kind.is_virtual(),
             "Shot must still be reference after undo of merge"
         );
         // Merge should be gone

@@ -1022,7 +1022,7 @@ mod tests {
         assert_eq!(stats.shot_count, 4);
         // total_length still counts everything (#27 keeps this figure raw).
         assert_eq!(stats.total_length, 17.0); // 5 + 3 + 7 + 2
-        // References are not swimmable, so they drop out of the swum figure.
+                                              // References are not swimmable, so they drop out of the swum figure.
         assert_eq!(stats.swum_length, 12.0); // 5 + 7
         assert_eq!(stats.reference_shot_count, 2);
         assert_eq!(stats.jump_shot_count, 0);

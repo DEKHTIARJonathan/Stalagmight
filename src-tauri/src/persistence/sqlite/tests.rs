@@ -1,5 +1,6 @@
 use super::*;
 use crate::models::ShotData;
+use crate::models::ShotKind;
 use crate::models::StationAnchor;
 use crate::models::StationRef;
 use tempfile::TempDir;
@@ -345,7 +346,7 @@ fn test_save_load_multiple_sections() {
             length: 5.0,
             depth_in: 6.0,
             depth_out: 6.5,
-            is_reference: true,
+            kind: ShotKind::Reference,
             marker_index: Some(42),
             temperature: Some(18.5),
             ..Default::default()
@@ -411,7 +412,7 @@ fn test_save_load_multiple_sections() {
     // Verify section 2 (Out direction, reference shot)
     let s2 = &loaded.sections[1];
     assert_eq!(s2.direction, SurveyDirection::Out);
-    assert!(s2.shots[0].is_reference);
+    assert_eq!(s2.shots[0].kind, ShotKind::Reference);
     assert_eq!(s2.shots[0].marker_index, Some(42));
     assert_eq!(s2.shots[0].temperature, Some(18.5));
 
@@ -2925,7 +2926,7 @@ fn test_save_load_round_trip_zero_values() {
             up: None,
             down: None,
             comment: None,
-            is_reference: false,
+            kind: ShotKind::Normal,
             marker_index: None,
             temperature: None,
         }],
@@ -2964,7 +2965,7 @@ fn test_save_load_round_trip_all_metadata() {
             depth_in: 10.0,
             depth_out: 12.0,
             comment: Some("Test shot".to_string()),
-            is_reference: true,
+            kind: ShotKind::Reference,
             marker_index: Some(42),
             ..Default::default()
         }],
@@ -3017,7 +3018,7 @@ fn test_save_load_round_trip_all_metadata() {
     assert_eq!(loaded.sections[0].surveyor.as_deref(), Some("Diver One"));
     assert_eq!(loaded.sections[0].direction.to_string(), "out");
     assert!((loaded.sections[0].quality - 0.75).abs() < 1e-6);
-    assert!(loaded.sections[0].shots[0].is_reference);
+    assert_eq!(loaded.sections[0].shots[0].kind, ShotKind::Reference);
     assert_eq!(loaded.sections[0].shots[0].marker_index, Some(42));
     assert_eq!(loaded.station_merges.len(), 1);
     assert_eq!(loaded.zero_datums.len(), 1);

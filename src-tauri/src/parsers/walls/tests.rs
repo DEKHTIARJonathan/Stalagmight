@@ -1705,7 +1705,7 @@ fn floated_variance_leg_is_kept() {
         1,
         "floated-variance leg must not be dropped as a splay"
     );
-    assert!(!configs[0].shots[0].is_reference);
+    assert!(!configs[0].shots[0].kind.is_virtual());
 }
 
 #[test]
