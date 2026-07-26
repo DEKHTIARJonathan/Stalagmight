@@ -1291,7 +1291,7 @@ case 'get_survey_geometry': {
     total_length: 100.0,
     station_count: 10,
     gps_origin: [-81.78, 24.55],
-    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], is_reference: false }],
+    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], kind: 'Normal' }],
     stations: [[-81.78, 24.55], [-81.77, 24.56]],
   };
 }

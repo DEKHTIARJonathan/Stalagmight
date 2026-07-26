@@ -370,7 +370,9 @@ pub struct ProjectMetadata {
 /// marks an unreachable station (JSON can't carry infinity). `max_reachable` is
 /// the largest finite distance (0.0 if nothing is reachable), for auto-scaling
 /// the gradient legend. Backs the distance-gradient overlay (#34); reuses the
-/// shared reachability graph (jumps in, references out - see `build_survey_graph`).
+/// shared reachability graph. Since #27 that is literally true: jumps are in
+/// (they are swum), references are out (they are not) unless the
+/// `gas.include_reference_legs` opt-in is set - see `build_survey_graph`.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DistanceField {
     pub distances: Vec<Option<f64>>,

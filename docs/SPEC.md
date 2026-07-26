@@ -164,7 +164,9 @@ All formats required:
 | **Shot** | A single survey measurement between two stations. Contains azimuth, length, depth, and optionally LRUD. |
 | **Station** | A point in the cave where a shot measurement is taken. Tied to cave line at physical markers. |
 | **Section** | A group of consecutive shots collected during a single survey session. Has metadata (name, surveyor, date). |
-| **Reference Shot** | A temporary shot used to connect sections that aren't physically connected yet. Displayed with dotted line. |
+| **Virtual Shot** | A shot that is not a permanent surveyed leg. Since #27 it is one of two kinds, and the distinction drives gas and penetration. |
+| **Jump** | A virtual shot a diver **swims**: a shortcut between two mainlines. Counts toward gas (at `jump_rmv_multiplier`) and penetration. Drawn faded. |
+| **Reference Shot** | A virtual shot that is **not swimmable**: a tape tie or backsight used to connect sections that aren't physically connected yet. Excluded from gas, penetration and route distance unless `gas.include_reference_legs` is on. Drawn fainter than a jump. |
 | **Zero Datum** | A station with GPS coordinates assigned. The fixed reference point for the coordinate system. |
 | **LRUD** | Left, Right, Up, Down - passage dimension measurements at a station. |
 | **Loop Closure** | When two survey paths meet at the same physical point, creating a loop. |
@@ -207,7 +209,7 @@ Project (Cave System)
 │       ├── up: Option<f64> (meters)
 │       ├── down: Option<f64> (meters)
 │       ├── comment: Option<String>
-│       ├── is_reference: bool
+│       ├── kind: ShotKind (Normal | Jump | Reference)
 │       ├── marker_index: Option<u32>
 │       └── temperature: Option<f64> (celsius)
 ├── Stations[] (computed from shots)
@@ -1076,13 +1078,20 @@ The Merge Tool connects two stations. The behavior depends on whether the statio
 
 **Connecting Sections with Reference Shots:**
 1. User imports/creates new section with the connection survey
-2. In data table, user marks connecting shots as Reference (checkbox)
+2. In data table, user cycles the connecting shots' J/R cell to Reference
+   (click cycles blank -> J -> R -> blank; shift-click reverses; the fill
+   handle stamps one kind down a whole run)
 3. User places section using "From Station" to connect one end
 4. User uses Merge Tool to connect other end to second section
 5. If sections are unconnected → MergeDialog (simple merge)
 6. If sections are already connected → ClosureDialog (loop closure with error preview)
-7. Reference shots displayed as dotted lines
-8. User can toggle reference shot visibility in display options
+7. Reference shots drawn faded (fainter than jumps)
+8. Jumps and references toggle independently in display options
+
+   Note (#27): this workflow ends with the run merged on BOTH ends, which is
+   exactly what the import-time chain rule reads as a Jump. The rule cannot
+   tell a swum jump from a tape tie, since both bridge two real points, so a
+   run built this way needs its kind set explicitly in the data table.
 
 ### 7.6 Editing Existing Data
 
@@ -1229,7 +1238,7 @@ pub enum Command {
     SetShotReference {
         section_id: SectionId,
         shot_id: ShotId,
-        is_reference: bool,
+        kind: ShotKind,
     },
 
     // Station commands
@@ -2253,7 +2262,7 @@ CREATE TABLE shots (
     up_distance REAL,
     down_distance REAL,
     comment TEXT,
-    is_reference INTEGER NOT NULL DEFAULT 0,
+    kind INTEGER NOT NULL DEFAULT 0,  -- 0 Normal, 1 Jump, 2 Reference (#27)
     marker_index INTEGER,
     temperature REAL,
     UNIQUE(section_id, sequence_order)
@@ -2385,7 +2394,8 @@ All SVG elements use pixel-stable sizing via the `px()` helper function. This en
 | Station radius (Zero Datum) | 6px | Double size for visibility |
 | Station stroke-width | 1px | Black outline |
 | Shot stroke-width | 2px | Section or depth color |
-| Reference shot dasharray | 4px, 2px | Dotted line pattern |
+| Jump opacity | 0.5 | Faded, not dashed (`line-dasharray` is not data-driven; #243) |
+| Reference opacity | 0.28 | Fainter still: not a swimmable leg (#27) |
 | Grid stroke-width | 0.5px | Thin grid lines |
 | Shot-label font-size | 8px | Depth labels when enabled |
 | Shot-label dx/dy | 2px, -2px | Offset from midpoint |
@@ -2399,7 +2409,7 @@ All SVG elements use pixel-stable sizing via the `px()` helper function. This en
 
 **Survey Data (CSV):**
 ```csv
-section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,is_reference,comment
+section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out,left,right,up,down,kind,comment
 0,Main Line,0,3.2,45.0,225.0,5.1,5.8,1.2,0.8,2.1,1.5,false,
 0,Main Line,1,4.1,52.3,232.0,5.8,6.2,1.0,1.1,1.8,1.2,false,
 ```
@@ -2426,7 +2436,7 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
           "depth_in": 5.1,
           "depth_out": 5.8,
           "lrud": [1.2, 0.8, 2.1, 1.5],
-          "is_reference": false
+          "kind": "Normal"
         }
       ]
     }
@@ -2797,7 +2807,8 @@ Section Colors (auto-assigned):
 Map Colors:
 Grid: #333366
 Zero Datum Star: #ffd700 (Gold)
-Reference Shot: #ffffff40 (White, 25% opacity)
+Jump Shot: 50% opacity of the section color (#27)
+Reference Shot: 28% opacity of the section color (#27)
 Selection Highlight: #4ecdc4
 Loop Closure Line: #ffcb77 (dashed)
 ```

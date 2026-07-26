@@ -53,7 +53,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
-| `shot.is_reference` | `Type` / `TY` | `VIRTUAL` vs `REAL` (TML keeps Ariane's naming for compatibility) |
+| `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
 | - | `Profiletype` / `PT` | Always `VERTICAL` |
