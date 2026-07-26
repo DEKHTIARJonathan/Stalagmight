@@ -316,7 +316,6 @@ pub fn execute_compass_import(
     include_excluded: bool,
     apply_corrections: bool,
     comments_on_stations: bool,
-    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -382,7 +381,11 @@ pub fn execute_compass_import(
         file_hash,
         Vec::new(),
         Vec::new(),
-        virtual_shot_mode.unwrap_or_default(),
+        // Auto: no dialog on this path carries a per-file override, so the chain
+        // rule decides. An Option parameter here was unreachable - no frontend
+        // caller ever populated it - which read as "the override works" while
+        // silently always meaning Auto.
+        VirtualShotMode::Auto,
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
@@ -597,7 +600,6 @@ pub fn execute_walls_import(
     comments_on_stations: bool,
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
-    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -666,7 +668,11 @@ pub fn execute_walls_import(
         file_hash,
         Vec::new(),
         Vec::new(),
-        virtual_shot_mode.unwrap_or_default(),
+        // Auto: no dialog on this path carries a per-file override, so the chain
+        // rule decides. An Option parameter here was unreachable - no frontend
+        // caller ever populated it - which read as "the override works" while
+        // silently always meaning Auto.
+        VirtualShotMode::Auto,
     );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 

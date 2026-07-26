@@ -15,7 +15,8 @@ import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
-import { surveyDataFromLegacy } from '../../types/survey-data';
+import { surveyDataFromLegacy, shotKindFromFlags } from '../../types/survey-data';
+import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED } from './surveyLayer/customRender/shaders';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
@@ -1569,7 +1570,15 @@ export default class SurveyLayer {
           geo.globalIdx,
           this.displayColorContext(),
         );
-    const opacity = this.isSectionAnchored(sectionId) ? 0.25 : geo.isReference ? 0.5 : 1;
+    // Per-kind, from the same table the shader is generated from (#27):
+    // `geo.isReference` is "any virtual kind", so a flat 0.5 here drew a
+    // hovered/selected reference tie brighter than its own base geometry.
+    const overlayKind = shotKindFromFlags(
+      this.cachedSurveyData?.shotFlags[geo.globalIdx] ?? 0,
+    );
+    const opacity = this.isSectionAnchored(sectionId)
+      ? SHOT_ALPHA_DIMMED
+      : SHOT_ALPHA_BY_KIND[overlayKind];
     const properties: Record<string, unknown> = {
       kind: measured ? 'shotMeasured' : 'shot',
       color,

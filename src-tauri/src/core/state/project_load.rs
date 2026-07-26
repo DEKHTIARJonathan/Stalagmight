@@ -142,6 +142,13 @@ impl AppState {
                 "open_project: corrected drifted section offsets on load"
             );
         }
+        // The #27 one-shot backfill (see `do_load_project_full`) is deliberately
+        // NOT replicated here. It is the one load-time step that WRITES, and
+        // this path has no remote/read-only context to gate that on. Leaving the
+        // flag set costs nothing: the kinds a migrated file opens with are the
+        // migration's Jump seed either way, and the next open through the real
+        // load path classifies and persists them. Classifying in memory here
+        // without persisting would only make the two paths disagree.
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);

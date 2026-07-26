@@ -1892,9 +1892,14 @@ function MapCanvas() {
   // the old geometry would otherwise survive a setData() rebuild and silently lie.
   // Kept separate from the switch reset above so an edit doesn't also move the
   // distance-gradient origin (intentionally stable across edits) (#26, Codex).
+  //
+  // `gas.include_reference_legs` counts as such a change (#27): the along-line
+  // distance is computed with reference ties either traversable or not, so
+  // flipping the setting invalidates a live readout exactly the way an edit does
+  // - and it does NOT bump modified_at, so it needs its own dep.
   useEffect(() => {
     clearMeasure();
-  }, [project?.modified_at, clearMeasure]);
+  }, [project?.modified_at, config?.gas.include_reference_legs, clearMeasure]);
 
   // In closureAdjusted mode the map first renders the measured fallback, then swaps
   // in the adjusted geometry when it finishes loading (async, with no modified_at
@@ -1911,6 +1916,11 @@ function MapCanvas() {
   // geometry (surveyed lengths), so neither closure-adjustment config nor the
   // display geometryMode affects them - no need to refetch on either. `from` null
   // = the entrance (zero-datum) default.
+  //
+  // `gas.include_reference_legs` IS an input, though (#27): the backend reads it
+  // per call to decide whether a reference tie is traversable, so flipping it in
+  // Settings changes the whole field. It has to be in the deps or the ramp keeps
+  // showing the pre-toggle routing until some unrelated edit bumps modified_at.
   useEffect(() => {
     if (!showDistanceGradient) return undefined;
     let cancelled = false;
@@ -1929,7 +1939,13 @@ function MapCanvas() {
         if (!cancelled) { setDistanceField(null); setDistanceFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
+  }, [
+    showDistanceGradient,
+    distanceGradientOrigin,
+    project?.modified_at,
+    config?.gas.include_reference_legs,
+    setDistanceField,
+  ]);
 
   // Gas reachable-frontier overlay (#38): fetch the reachability field when the
   // sub-mode is on and any input (origin / diver / cylinders / config) or the

@@ -314,6 +314,11 @@
         "label": "Jump RMV multiplier",
         "help": "Extra breathing-rate factor on jump/reference legs (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
         "aria": "Jump RMV multiplier"
+      },
+      "includeReferenceLegs": {
+        "label": "Route through reference ties",
+        "help": "Off (default): reference ties are survey connections nobody swims, so gas, penetration distance and the ruler route around them. On: restores the pre-split behaviour where every marked shot counts as swimmable - useful if a tie in your data really is divable and you would rather not reclassify it.",
+        "aria": "Route through reference ties"
       }
     },
     "units": {

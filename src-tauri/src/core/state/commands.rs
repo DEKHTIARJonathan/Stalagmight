@@ -129,7 +129,24 @@ impl AppState {
 
             // Remove an entity / renumber stations: can dangle refs AND strand a
             // section behind a sole-bridge closure.
-            DeleteSection { .. } | DeleteShot { .. } | Batch { .. } | MergeProjects { .. } => REMOVES,
+            DeleteSection { .. } | DeleteShot { .. } | MergeProjects { .. } => REMOVES,
+
+            // A batch is exactly as dangerous as the worst thing in it. Taking
+            // the union rather than a blanket REMOVES matters for the data
+            // table's fill-drag and paste, which emit a Batch of UpdateShots: a
+            // bulk Jump/Reference reclassify is metadata-only, and grading it
+            // REMOVES would run the reconcile epilogue - healing an
+            // already-drifted project as a side effect of an edit whose undo
+            // does not invert that geometry change (the asymmetric-undo hazard
+            // spelled out for SetStationComment above).
+            Batch { commands } => commands.iter().fold(INERT, |acc, c| {
+                let f = Self::command_integrity(c);
+                CommandIntegrity {
+                    affects_geometry: acc.affects_geometry || f.affects_geometry,
+                    can_dangle_refs: acc.can_dangle_refs || f.can_dangle_refs,
+                    can_orphan_closures: acc.can_orphan_closures || f.can_orphan_closures,
+                }
+            }),
 
             // Inserting a shot renumbers later stations (can dangle a positional
             // ref) but cannot strand a section.
@@ -145,6 +162,11 @@ impl AppState {
             // realign_after_shot_edit no-ops on a merge group with no zero datum, so
             // without the reconcile epilogue a shot edit upstream of a datum-less
             // merge would leave the partners drifted until a later load/repair.
+            // An UpdateShot that changes no station-moving field (a comment, an
+            // LRUD, a Jump/Reference reclassify typed or pasted into the data
+            // table) is metadata, and the rationale below does not apply to it.
+            UpdateShot { updates, .. } if !updates.touches_geometry() => INERT,
+
             CreateSection { .. }
             | UpdateShot { .. }
             | MergeStations { .. }
@@ -798,7 +820,7 @@ impl AppState {
 #[cfg(test)]
 mod integrity_capability_tests {
     use super::*;
-    use crate::models::{Coordinates, ShotData, StationRef};
+    use crate::models::{Coordinates, ShotData, ShotKind, StationRef};
 
     /// Locks the integrity-capability table (one command per profile). The
     /// exhaustive match in `command_integrity` makes a new variant a *compile*
@@ -851,9 +873,77 @@ mod integrity_capability_tests {
             caps(&Command::DeleteSection { section_id: 1 }),
             (true, true, true)
         );
+        // A batch is the UNION of what it contains, not a blanket REMOVES.
+        // Empty batches never reach execute() (it early-returns), so INERT here
+        // is just the identity of the fold.
         assert_eq!(
             caps(&Command::Batch { commands: vec![] }),
-            (true, true, true)
+            (false, false, false)
+        );
+        // Metadata-only bulk edit - the data table's fill-drag / paste over the
+        // Jump-Reference column. Must NOT run the reconcile epilogue.
+        assert_eq!(
+            caps(&Command::Batch {
+                commands: vec![Command::UpdateShot {
+                    section_id: 1,
+                    shot_id: 1,
+                    updates: ShotUpdates {
+                        kind: Some(ShotKind::Jump),
+                        ..Default::default()
+                    },
+                }],
+            }),
+            (false, false, false)
+        );
+        // One geometry-touching member is enough to grade the whole batch.
+        assert_eq!(
+            caps(&Command::Batch {
+                commands: vec![
+                    Command::UpdateShot {
+                        section_id: 1,
+                        shot_id: 1,
+                        updates: ShotUpdates {
+                            kind: Some(ShotKind::Jump),
+                            ..Default::default()
+                        },
+                    },
+                    Command::UpdateShot {
+                        section_id: 1,
+                        shot_id: 2,
+                        updates: ShotUpdates {
+                            length: Some(5.0),
+                            ..Default::default()
+                        },
+                    },
+                ],
+            }),
+            (true, false, false)
+        );
+
+        // An UpdateShot is graded by what it actually changes.
+        assert_eq!(
+            caps(&Command::UpdateShot {
+                section_id: 1,
+                shot_id: 1,
+                updates: ShotUpdates {
+                    kind: Some(ShotKind::Reference),
+                    ..Default::default()
+                },
+            }),
+            (false, false, false),
+            "a kind-only edit is metadata, like a comment edit"
+        );
+        assert_eq!(
+            caps(&Command::UpdateShot {
+                section_id: 1,
+                shot_id: 1,
+                updates: ShotUpdates {
+                    length: Some(5.0),
+                    ..Default::default()
+                },
+            }),
+            (true, false, false),
+            "a length edit still moves stations"
         );
 
         // CREATE_SHOT (renumbers stations → can dangle, but cannot orphan).
@@ -885,11 +975,17 @@ mod integrity_capability_tests {
         );
         // UpdateShot shifts geometry (a measurement edit moves stations) but keeps
         // refs valid and connectivity intact - it must reconcile, not be inert.
+        // The update has to actually carry a measurement: an all-`None`
+        // `ShotUpdates::default()` changes nothing and is graded INERT (above),
+        // so using it here asserted the profile of a no-op, not of an edit.
         assert_eq!(
             caps(&Command::UpdateShot {
                 section_id: 1,
                 shot_id: 0,
-                updates: ShotUpdates::default(),
+                updates: ShotUpdates {
+                    azimuth_in: Some(90.0),
+                    ..Default::default()
+                },
             }),
             (true, false, false)
         );

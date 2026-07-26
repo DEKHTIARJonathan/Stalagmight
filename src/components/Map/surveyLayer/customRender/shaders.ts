@@ -49,6 +49,28 @@
  * etc.) let independent `map.shot.hover_width` / `selection_width` +
  * `map.station.hover_radius` / `selection_radius` config drive the widths (C2).
  */
+/** Per-kind line alpha (#27). Exported because the interact/hover overlay draws
+ *  the SAME leg through MapLibre rather than this shader, and a divergence there
+ *  makes a hovered reference tie pop brighter than its own base rendering. */
+export const SHOT_ALPHA_DIMMED = 0.25;
+export const SHOT_ALPHA_REFERENCE = 0.28;
+export const SHOT_ALPHA_JUMP = 0.5;
+export const SHOT_ALPHA_NORMAL = 1;
+
+/** Base line alpha for a shot of each kind, so the interact/hover overlay and
+ *  the shader cannot drift apart. Does not include the dimmed case, which wins
+ *  over the kind. */
+export const SHOT_ALPHA_BY_KIND: Record<'Normal' | 'Jump' | 'Reference', number> = {
+  Normal: SHOT_ALPHA_NORMAL,
+  Jump: SHOT_ALPHA_JUMP,
+  Reference: SHOT_ALPHA_REFERENCE,
+};
+
+/** Render a number as a GLSL float literal: always a decimal point, no trailing
+ *  zero padding, so the generated source stays byte-identical to the constants
+ *  it was hand-written with. */
+const glslFloat = (n: number): string => (Number.isInteger(n) ? `${n}.0` : String(n));
+
 export const DEFAULT_SHOT_HOVER_WIDTH_MUL = 2;
 export const DEFAULT_SHOT_SELECT_WIDTH_MUL = 1.5;
 export const DEFAULT_STATION_HOVER_SIZE_MUL = 1.5;
@@ -173,7 +195,7 @@ void main() {
   // (immovable 0.25, anchored 0.25, virtual, else 1). A jump keeps the 0.5 it
   // has always had so existing surveys look unchanged; a reference is fainter
   // still, because it is not a leg anyone swims (#27).
-  v_alpha_mul = (a_dim > 0.5) ? 0.25 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0));
+  v_alpha_mul = (a_dim > 0.5) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)}));
   // Signed perpendicular px, along-axis px (from endpoint A; the cap extension
   // shifts each base vert by capSign*outset), and segment length px. The fragment
   // rebuilds the capsule distance and the clamped color fraction from these.

