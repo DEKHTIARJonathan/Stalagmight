@@ -7,7 +7,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
-import { performQuit } from '../../utils/quit';
+import { holdsWriteLock, performQuit } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -49,7 +49,7 @@ export default function SpeleoQuitDialog() {
   // `clearSession()`. Every lock verb below would fail in that state, so it
   // collapses to the one honest choice: save locally, then leave, with the work
   // still only on this computer.
-  const holdsLock = link?.editState === 'editing' && !link.forceEditing;
+  const holdsLock = holdsWriteLock(link);
 
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);

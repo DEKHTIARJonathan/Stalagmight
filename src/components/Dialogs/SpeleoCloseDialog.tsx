@@ -6,6 +6,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
+import { holdsWriteLock } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
@@ -37,7 +38,7 @@ export default function SpeleoCloseDialog() {
   // adapts exactly the way SpeleoQuitDialog does rather than offering two buttons
   // that can only fail. `forceEditing` is the #213 state of editing WITHOUT a lock,
   // which is equally nothing to push or release.
-  const holdsLock = link?.editState === 'editing' && !link.forceEditing;
+  const holdsLock = holdsWriteLock(link);
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
   const busyAny = busy || saving;

@@ -2858,7 +2858,8 @@
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
       "lockToRestore": "The project is read-only, so these buttons View a revision (the SpeleoDB Update returns you to the latest). Lock the project for editing to Restore a revision as a change you can push.",
       "forceEditActive": "You are force-editing without the lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
-      "unknownAuthor": "unknown author"
+      "unknownAuthor": "unknown author",
+      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - lock the project for editing and upload your changes first, or Restore a revision instead (that route asks before replacing them)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",

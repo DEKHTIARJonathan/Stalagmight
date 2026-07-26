@@ -7,6 +7,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
 import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
+import { holdsWriteLock } from '../../utils/quit';
 import { LockIcon, PencilIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
@@ -102,10 +103,9 @@ export function SpeleoStatusButton() {
   // release or a pull would put at risk. It colours the mark in EVERY state, so the
   // "unlocked" state stops being dirty-blind.
   const unpushed = link.hasUnpushedEdits;
-  // We hold the server write lock. `editState === 'editing'` is the app's
-  // hold-lock signal, EXCEPT while force-editing (#213), which is editing with no
-  // lock at all - so a force-editor counts as not holding it.
-  const lockHeld = link.editState === 'editing' && !link.forceEditing;
+  // We hold the server write lock - see `holdsWriteLock` for why force-editing is
+  // excluded, and why the predicate is shared rather than re-spelled here.
+  const lockHeld = holdsWriteLock(link);
   // Local-only changes with no lock to protect them: the state that most needs
   // calling out, so it gets a second, standalone "!" beside the mark.
   const unpushedUnlocked = unpushed && !lockHeld;

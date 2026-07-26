@@ -7,7 +7,8 @@ import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { invokeIpc } from '../../../utils/ipc';
-import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits } from '../../../utils/speleoError';
+import { holdsWriteLock } from '../../../utils/quit';
 import { formatDate } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 
@@ -48,14 +49,22 @@ export function SpeleoRevisionHistory() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
-  const editState = useSpeleoStore((s) => s.link?.editState);
   const isForceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
   // A genuine lock-held session (NOT force-editing, which holds no lock) may Restore;
   // a plain read-only session may View. A force-editor gets neither: swapping the tree
   // would clobber their unsaved, lock-less edits, so the backend refuses both and the
-  // UI offers no action. Mirrors SpeleoStatusButton / the hamburger menu, which also
-  // AND out forceEditing.
-  const iHoldLock = editState === 'editing' && !isForceEditing;
+  // UI offers no action. Shared predicate - see `holdsWriteLock`.
+  const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  // A View is read-only in INTENT, but not in effect: the backend swaps the working
+  // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
+  // does and refuses whenever this copy holds work the server has never seen. That
+  // state is ordinary here - a push that failed, or a lock released without one,
+  // leaves exactly it - so offering a button that can only be refused made the whole
+  // section a dead end: the raw "local edits that were never pushed" line for what
+  // the user asked to be a peek, with nothing said about how to get out of it.
+  // Named up front instead, with the way through (see the hint below).
+  const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
+  const viewBlocked = !iHoldLock && !isForceEditing && hasUnpushedEdits;
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
 
@@ -97,7 +106,17 @@ export function SpeleoRevisionHistory() {
         restore: false,
       });
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.restore.failed')), 'speleodb-restore', 'error');
+      // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
+      // dirty bit can flip between render and click (an auto-save, a poll), so the
+      // race still has to say the same thing the hint does rather than fall through
+      // to the backend's raw line.
+      showToast(
+        unpushedLocalEdits(e)
+          ? t('speleodb.revisions.viewBlockedByUnpushed')
+          : humanizeSpeleoError(e, t('speleodb.restore.failed')),
+        'speleodb-restore',
+        'error',
+      );
     } finally {
       setPendingId(null);
     }
@@ -113,6 +132,14 @@ export function SpeleoRevisionHistory() {
         {isForceEditing ? (
           <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
             {t('speleodb.revisions.forceEditActive')}
+          </p>
+        ) : viewBlocked ? (
+          // Says WHY there are no buttons and WHAT clears it, because the block is
+          // not permanent: locking the project for editing and uploading the changes
+          // resolves it, and a lock-held session can Restore instead (which carries
+          // its own explicit discard route for the same changes).
+          <p className="text-xs text-warning" data-testid="speleodb-revisions-unpushed-hint">
+            {t('speleodb.revisions.viewBlockedByUnpushed')}
           </p>
         ) : (
           !iHoldLock && (
@@ -203,7 +230,7 @@ export function SpeleoRevisionHistory() {
                     {t('speleodb.revisions.restore')}
                   </Button>
                 )}
-                {!isCurrent && !iHoldLock && !isForceEditing && (
+                {!isCurrent && !iHoldLock && !isForceEditing && !viewBlocked && (
                   <Button
                     variant="secondary"
                     size="sm"

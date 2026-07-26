@@ -12,6 +12,7 @@ import {
 } from '../common/icons';
 import { AppMenu, type AppMenuItem } from '../common/AppMenu';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
+import { holdsWriteLock } from '../../utils/quit';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { ToolGlyph, toolAccentVar } from '../common/toolIcons';
 import type { CSSProperties } from 'react';
@@ -270,7 +271,7 @@ export default function Toolbar({
   // cluster's width and must re-run the fit below, exactly like the button
   // appearing at all.
   const speleoUnpushedBadge = useSpeleoStore(
-    (s) => s.link?.hasUnpushedEdits === true && !(s.link.editState === 'editing' && !s.link.forceEditing),
+    (s) => s.link?.hasUnpushedEdits === true && !holdsWriteLock(s.link),
   );
   const CONDENSE_MAX = 5;
   const [condense, setCondense] = useState(0);

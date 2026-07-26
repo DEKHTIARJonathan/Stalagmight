@@ -77,6 +77,23 @@ export function hasUnpushedSpeleoWork(link: SpeleoLinkState | null): boolean {
 }
 
 /**
+ * Do we hold the SpeleoDB write lock?
+ *
+ * `editState === 'editing'` is the app's hold-lock signal (the backend enforces
+ * hold-lock ⟹ edit-enabled), EXCEPT while force-editing (#213), which is editing
+ * with no lock at all - so a force-editor must count as NOT holding it.
+ *
+ * Shared because that second half is the easy half to forget, and forgetting it
+ * is not cosmetic: it offers a force-editor lock-owner actions (release, restore,
+ * push-and-release) that the backend can only refuse. It lived spelled out at six
+ * call sites and one had already drifted - `SpeleoProjectAdmin`'s Lock section
+ * told a force-editor "held by you" and offered them Release.
+ */
+export function holdsWriteLock(link: SpeleoLinkState | null): boolean {
+  return link?.editState === 'editing' && !link.forceEditing;
+}
+
+/**
  * The exit guards, in the order the close flow uses them (see
  * `useProject.handleCloseProject`). Returns `true` when a dialog was opened and
  * the caller must NOT quit; `false` when there is nothing to protect.

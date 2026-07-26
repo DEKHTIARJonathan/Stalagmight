@@ -10,6 +10,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 import { permissionAtLeast, USER_LEVELS, TEAM_LEVELS } from '../../../utils/speleoPermission';
+import { holdsWriteLock } from '../../../utils/quit';
 import type { Permission, SpeleoCollaborators, SpeleoTeamOption } from '../../../types/ipc.generated';
 
 const inputClass =
@@ -177,7 +178,11 @@ export function SpeleoProjectAdmin() {
   }
 
   const holder = link?.lockHolder ?? null;
-  const iHoldLock = link?.editState === 'editing';
+  // Shared predicate, and the force-edit exclusion is load-bearing here: a #213
+  // force-editor is editing WITHOUT the lock, so telling them the lock is "held by
+  // you" and offering Release named a lock they do not have and an action the
+  // backend can only refuse. This copy had drifted to the id-only spelling.
+  const iHoldLock = holdsWriteLock(link);
 
   return (
     <div data-testid="speleodb-project-admin">
