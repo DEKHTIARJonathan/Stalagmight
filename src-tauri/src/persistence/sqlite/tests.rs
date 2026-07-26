@@ -4572,7 +4572,16 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
     // Values OUTSIDE the u8 range have to fail closed too. The column is a
     // plain INTEGER, so -1 and 256 are both storable, and the u8 conversion on
     // the way to `from_u8` is a second place the fail-closed rule can be lost.
-    for bad in [-1_i64, 256, i64::from(i32::MAX)] {
+    // Includes values outside i32: SQLite stores INTEGER as i64, and reading the
+    // column as i32 would ERROR rather than fall back, aborting the whole load.
+    for bad in [
+        -1_i64,
+        256,
+        i64::from(i32::MAX),
+        2_147_483_648,
+        i64::MIN,
+        i64::MAX,
+    ] {
         db.conn
             .execute("UPDATE shots SET kind = ?1 WHERE sequence_order = 1", [bad])
             .unwrap();

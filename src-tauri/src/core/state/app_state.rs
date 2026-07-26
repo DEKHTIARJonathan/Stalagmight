@@ -126,12 +126,19 @@ pub struct AppState {
     pub(super) app_handle: Mutex<Option<AppHandle>>,
     /// Active loading cancellation token (if any load operation is in progress)
     pub(super) active_loading: Mutex<Option<Arc<AtomicBool>>>,
-    /// Shots the last load found carrying a `kind` byte this build does not
-    /// recognise (#27). Transient and per-project: recorded during load, read
-    /// once by the frontend so it can ask the user what each one should be, and
-    /// cleared when it does (or when another project opens). Never persisted -
-    /// the fix is the user's answer, applied as an ordinary `SetShotKind`.
-    pub(super) unrecognised_shot_kinds: Mutex<Vec<crate::models::UnrecognisedShotKind>>,
+    /// Shots a load found carrying a `kind` byte this build does not recognise
+    /// (#27), tagged with the `loading_id` of the load that found them. Never
+    /// persisted - the fix is the user's answer, applied as an ordinary
+    /// `SetShotKind`.
+    ///
+    /// The id is load-bearing, not bookkeeping. Two loads can overlap: switching
+    /// projects cancels the first, but a cancelled load keeps running until its
+    /// next checkpoint, so it can write here AFTER the new project already did.
+    /// An unversioned slot would then hand project B the section and shot ids
+    /// belonging to project A, and applying that resolution would write kinds
+    /// onto whatever shots in B happen to share those ids.
+    pub(super) unrecognised_shot_kinds:
+        Mutex<Option<(u64, Vec<crate::models::UnrecognisedShotKind>)>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -191,7 +198,7 @@ impl AppState {
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
-            unrecognised_shot_kinds: Mutex::new(Vec::new()),
+            unrecognised_shot_kinds: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
         })
@@ -736,27 +743,44 @@ impl AppState {
 }
 
 impl AppState {
-    /// Replace the recorded set of shots with an unreadable `kind` byte (#27).
-    /// Called once per load; an empty vec clears a previous project's set.
+    /// Record the shots a load found with an unreadable `kind` (#27), tagged
+    /// with that load's `loading_id`. Called once per load.
     pub(crate) fn set_unrecognised_shot_kinds(
         &self,
+        loading_id: u64,
         found: Vec<crate::models::UnrecognisedShotKind>,
     ) {
         let mut guard = match self.unrecognised_shot_kinds.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        *guard = found;
+        // Never let an OLDER load clobber a newer one's diagnostics. A cancelled
+        // load runs on to its next checkpoint, so it can reach this line after
+        // the project the user actually opened already stored its own.
+        if guard.as_ref().is_some_and(|(seen, _)| *seen > loading_id) {
+            return;
+        }
+        *guard = Some((loading_id, found));
     }
 
-    /// Take the recorded set, leaving it empty. Taking rather than cloning makes
-    /// the prompt one-shot: the frontend asks the user once per load, and a
-    /// refresh cannot resurrect a dialog they already answered.
-    pub(crate) fn take_unrecognised_shot_kinds(&self) -> Vec<crate::models::UnrecognisedShotKind> {
+    /// Take the recorded set IF it belongs to `loading_id`, leaving the slot
+    /// empty. Taking rather than cloning makes the prompt one-shot: the frontend
+    /// asks once per load, and a refresh cannot resurrect a dialog the user has
+    /// already answered. The id check makes a mismatch return nothing rather
+    /// than another project's shot ids.
+    pub(crate) fn take_unrecognised_shot_kinds(
+        &self,
+        loading_id: u64,
+    ) -> Vec<crate::models::UnrecognisedShotKind> {
         let mut guard = match self.unrecognised_shot_kinds.lock() {
             Ok(g) => g,
             Err(poisoned) => poisoned.into_inner(),
         };
-        std::mem::take(&mut *guard)
+        match guard.as_ref() {
+            Some((seen, _)) if *seen == loading_id => {
+                guard.take().map(|(_, found)| found).unwrap_or_default()
+            }
+            _ => Vec::new(),
+        }
     }
 }

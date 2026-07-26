@@ -4446,6 +4446,50 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
     }
 }
 
+/// #27: unreadable-kind diagnostics belong to the load that found them.
+///
+/// Two loads can overlap - opening B cancels A, but a cancelled load keeps
+/// running to its next checkpoint - so a slower A can reach the setter AFTER B
+/// stored its own. An unversioned slot would then hand B the section and shot
+/// ids of a project the user navigated away from, and applying that resolution
+/// would write kinds onto whatever shots in B happen to share those ids.
+#[test]
+fn unrecognised_shot_kinds_are_scoped_to_their_load() {
+    use crate::models::UnrecognisedShotKind;
+
+    let state = AppState::new().unwrap();
+    let entry = |section_id: u32| UnrecognisedShotKind {
+        section_id,
+        shot_id: section_id * crate::models::FEATURE_ID_STRIDE,
+        shot_number: 1,
+        section_name: Some(format!("s{section_id}")),
+        raw_value: 7,
+    };
+
+    // Load A (id 1), then load B (id 2) - the project the user actually opened.
+    state.set_unrecognised_shot_kinds(1, vec![entry(11)]);
+    state.set_unrecognised_shot_kinds(2, vec![entry(22)]);
+
+    // The cancelled A finally reaches the setter. It must NOT clobber B.
+    state.set_unrecognised_shot_kinds(1, vec![entry(11)]);
+
+    // A asking gets nothing rather than B's list.
+    assert!(
+        state.take_unrecognised_shot_kinds(1).is_empty(),
+        "a stale load must not receive the current load's diagnostics"
+    );
+
+    let for_b = state.take_unrecognised_shot_kinds(2);
+    assert_eq!(for_b.len(), 1);
+    assert_eq!(
+        for_b[0].section_id, 22,
+        "B must get its OWN diagnostics, not the cancelled load's"
+    );
+
+    // One-shot: a second ask returns nothing.
+    assert!(state.take_unrecognised_shot_kinds(2).is_empty());
+}
+
 #[test]
 fn test_set_shot_kind() {
     let state = AppState::new().unwrap();

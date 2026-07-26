@@ -28,6 +28,7 @@ export default function UnrecognisedShotKindDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const setShotKind = useProjectStore((s) => s.setShotKind);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const shots = dialogData.shots as UnrecognisedShotKind[] | undefined;
   // Per-shot choice, keyed by shot_id. Defaults to the safe fallback the
@@ -40,13 +41,24 @@ export default function UnrecognisedShotKindDialog() {
 
   const handleApply = async () => {
     setBusy(true);
+    setError(null);
     try {
       // Only send the ones the user actually changed: the rest are already
       // Reference in memory, so re-setting them would add pointless undo noise.
+      //
+      // `setShotKind` REPORTS failure rather than throwing - a read-only
+      // SpeleoDB project, or a lock re-verification that rejects the edit, comes
+      // back as `success: false`. Closing anyway would lose the user's choices
+      // for good, because the backend list has already been consumed and cannot
+      // be re-offered. So a rejection keeps the dialog open with its state
+      // intact, and says why.
       for (const shot of shots) {
         const chosen = choiceFor(shot);
-        if (chosen !== 'Reference') {
-          await setShotKind(shot.section_id, shot.shot_id, chosen);
+        if (chosen === 'Reference') continue;
+        const res = await setShotKind(shot.section_id, shot.shot_id, chosen);
+        if (!res.success) {
+          setError(res.error ?? t('dialogs.unrecognisedShotKind.applyFailed'));
+          return;
         }
       }
       trackDialogComplete('unrecognised-shot-kind');
@@ -121,6 +133,12 @@ export default function UnrecognisedShotKindDialog() {
         <p className="text-xs text-text-secondary">
           {t('dialogs.unrecognisedShotKind.note')}
         </p>
+
+        {error !== null && (
+          <p className="text-sm text-error" role="alert" data-testid="unrecognised-kind-error">
+            {error}
+          </p>
+        )}
 
         <div className="flex justify-end gap-2">
           <Button variant="secondary" onClick={closeDialog} disabled={busy}>

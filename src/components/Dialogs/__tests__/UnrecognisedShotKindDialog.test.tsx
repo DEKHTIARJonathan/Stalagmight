@@ -92,6 +92,41 @@ describe('UnrecognisedShotKindDialog', () => {
     expect(setShotKind).toHaveBeenCalledWith(0, 1, 'Jump');
   });
 
+  it('stays open and explains when an edit is rejected', async () => {
+    // setShotKind REPORTS failure rather than throwing (read-only SpeleoDB
+    // project, or a lock re-verify that rejects). Closing anyway would lose the
+    // user's choices for good: the backend list is already consumed and cannot
+    // be re-offered.
+    setShotKind.mockResolvedValueOnce({ success: false, error: 'Project is read-only' });
+    render(<UnrecognisedShotKindDialog />);
+    fireEvent.change(screen.getByTestId('unrecognised-kind-select-1'), {
+      target: { value: 'Jump' },
+    });
+    fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('unrecognised-kind-error')).toHaveTextContent(
+        'Project is read-only',
+      ),
+    );
+    expect(closeDialog).not.toHaveBeenCalled();
+    // The user's selection survives, so they can retry once the lock is held.
+    expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveValue('Jump');
+  });
+
+  it('stops at the first rejection rather than firing the rest', async () => {
+    setShotKind.mockResolvedValueOnce({ success: false, error: 'nope' });
+    render(<UnrecognisedShotKindDialog />);
+    for (const id of [1, 2]) {
+      fireEvent.change(screen.getByTestId(`unrecognised-kind-select-${id}`), {
+        target: { value: 'Jump' },
+      });
+    }
+    fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
+    await waitFor(() => expect(screen.getByTestId('unrecognised-kind-error')).toBeInTheDocument());
+    expect(setShotKind).toHaveBeenCalledTimes(1);
+  });
+
   it('dismissing leaves everything as Reference', () => {
     render(<UnrecognisedShotKindDialog />);
     fireEvent.click(screen.getByText('dialogs.unrecognisedShotKind.keepAsReference'));

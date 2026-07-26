@@ -378,8 +378,14 @@ impl Database {
                             // assumes the in-memory value is already the safe
                             // one. Map every failed conversion to a discriminant
                             // `from_u8` rejects, so it lands on `Reference`.
+                            // Read as i64, the width SQLite actually stores (and
+                            // the width `UnrecognisedShotKind::raw_value` reports
+                            // in). An i32 read ERRORS on e.g. 2147483648, which
+                            // would abort the whole load instead of opening the
+                            // project with the shot safely on Reference and
+                            // offering the resolution prompt.
                             kind: ShotKind::from_u8(
-                                u8::try_from(row.get::<_, i32>(14)?).unwrap_or(u8::MAX),
+                                u8::try_from(row.get::<_, i64>(14)?).unwrap_or(u8::MAX),
                             ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,

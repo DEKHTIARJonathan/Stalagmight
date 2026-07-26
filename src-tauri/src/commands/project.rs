@@ -383,11 +383,17 @@ pub fn cancel_loading(state: State<AppState>) {
 ///
 /// Taking rather than peeking makes it one-shot: a project refresh cannot
 /// resurrect a prompt the user already dismissed.
+///
+/// `loading_id` is which load is asking. Two loads can overlap - switching
+/// projects cancels the first, but a cancelled load keeps running to its next
+/// checkpoint - so an unversioned slot could hand this project the shot ids of
+/// one the user navigated away from. A mismatch returns nothing.
 #[tauri::command]
 pub fn take_unrecognised_shot_kinds(
     state: State<'_, AppState>,
+    loading_id: u64,
 ) -> Vec<crate::models::UnrecognisedShotKind> {
-    let found = state.take_unrecognised_shot_kinds();
+    let found = state.take_unrecognised_shot_kinds(loading_id);
     if !found.is_empty() {
         tracing::info!(
             count = found.len(),

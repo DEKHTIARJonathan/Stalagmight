@@ -826,7 +826,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         try {
           const found = await invokeIpc<UnrecognisedShotKind[]>(
             'take_unrecognised_shot_kinds',
-            undefined,
+            // Scoped to THIS load: a cancelled load runs on to its next
+            // checkpoint, so without the id an abandoned project's shot ids
+            // could be handed to the one actually open.
+            { loadingId: result.loadingId },
             { purpose: 'resolve unreadable shot kinds' }
           );
           if (isStillCurrentLoad() && found.length > 0) {

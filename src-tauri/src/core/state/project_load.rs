@@ -428,13 +428,13 @@ impl AppState {
                         "Found shots with an unrecognised kind; defaulted them to Reference"
                     );
                 }
-                self.set_unrecognised_shot_kinds(found);
+                self.set_unrecognised_shot_kinds(progress.loading_id(), found);
             }
             Err(e) => {
                 // Non-fatal: the shots are already safely Reference in memory.
                 // Losing the prompt is better than failing the load.
                 tracing::warn!(error = %e, "Failed to scan for unrecognised shot kinds");
-                self.set_unrecognised_shot_kinds(Vec::new());
+                self.set_unrecognised_shot_kinds(progress.loading_id(), Vec::new());
             }
         }
 

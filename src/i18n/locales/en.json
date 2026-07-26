@@ -1144,6 +1144,7 @@
       "treatAsAria": "Type for shot {{number}}",
       "unnamedSection": "Unnamed section",
       "note": "Whatever you pick is an ordinary edit - undoable, and saved with the project.",
+      "applyFailed": "Could not apply the changes - the project may be read-only. Your selections are still here; close only if you want to leave everything as reference ties.",
       "keepAsReference": "Leave as references",
       "apply": "Apply"
     },
