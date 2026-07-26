@@ -223,7 +223,11 @@ export function ToastStack() {
           // Bottom-anchored, so the column grows UPWARD as toasts arrive: the array
           // is oldest-first and this is a normal (non-reversed) column, which puts
           // the newest at the bottom, nearest where the eye already is.
-          className="absolute bottom-6 left-1/2 -translate-x-1/2 flex flex-col items-center gap-2 pointer-events-auto"
+          //
+          // Left-aligned rather than centered: `items-start` keeps the left edges
+          // of differently-sized toasts flush, so the stack reads as one column
+          // instead of a ragged centered pile.
+          className="absolute bottom-6 left-6 flex flex-col items-start gap-2 pointer-events-auto"
           onMouseEnter={() => setPaused(true)}
           onMouseLeave={() => setPaused(false)}
           onFocusCapture={() => setPaused(true)}
