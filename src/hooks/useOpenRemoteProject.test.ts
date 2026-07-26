@@ -40,7 +40,7 @@ beforeEach(() => {
   clearLinkMock = vi.fn();
   useProjectStore.setState({ loadProject: loadProjectMock });
   useSpeleoStore.setState({ setLinkOnOpen: setLinkOnOpenMock, clearLink: clearLinkMock });
-  useUIStore.setState({ showToast: vi.fn() });
+  useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
 });
 
 const hook = () => renderHook(() => useOpenRemoteProject()).result.current;
@@ -90,6 +90,76 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome.status).toBe('error');
     if (outcome.status === 'error') expect(outcome.reLogin).toBe(true);
+  });
+
+  it('raises the keep-local prompt when the open is refused over unpushed edits', async () => {
+    // GlobalView's shape: no onBeforeLoad, outcome routed straight to its toast/
+    // busy handling. The refusal must NOT come back as `error` (that would toast a
+    // dead-end message) - it raises the prompt and reports `unpushed_local`.
+    const openDialogMock = vi.fn();
+    useUIStore.setState({ openDialog: openDialogMock });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.reject({
+          message: 'refused',
+          action: 'UnpushedLocalEdits',
+          status: null,
+          unpushed_local: {
+            project_id: 'p1',
+            local_path: '/cache/p1.stalx',
+            last_edit_at: '2026-07-20T10:30:00Z',
+          },
+        });
+      return Promise.resolve(null);
+    });
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'unpushed_local' });
+    expect(openDialogMock).toHaveBeenCalledWith('speleodb-unpushed-local', {
+      summary: SUMMARY,
+      unpushedLocal: {
+        project_id: 'p1',
+        local_path: '/cache/p1.stalx',
+        last_edit_at: '2026-07-20T10:30:00Z',
+      },
+    });
+    expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('does not swallow an unrelated failure into the prompt', async () => {
+    const openDialogMock = vi.fn();
+    useUIStore.setState({ openDialog: openDialogMock });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.reject({ message: 'boom', action: 'None', status: 500 });
+      return Promise.resolve(null);
+    });
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome.status).toBe('error');
+    expect(openDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('keepLocalCopy loads the local path without any SpeleoDB command', async () => {
+    const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+    expect(outcome).toEqual({ status: 'opened' });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(invokeIpcMock.mock.calls.filter((c) => String(c[0]).startsWith('speleodb_'))).toEqual([]);
+  });
+
+  it('takeRemoteDiscardingLocal re-issues the refused open with the same arguments', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project_discarding_local')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+    const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+    expect(outcome).toEqual({ status: 'opened' });
+    const call = invokeIpcMock.mock.calls.find(
+      (c) => c[0] === 'speleodb_open_project_discarding_local',
+    );
+    expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', latestCommitSha: 'abc123' });
+    // The shared post-open tail ran, exactly as it does for a plain open.
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith({ permission: 'READ_AND_WRITE' });
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
   it('adoptRemote adopts, loads, and reports opened', async () => {

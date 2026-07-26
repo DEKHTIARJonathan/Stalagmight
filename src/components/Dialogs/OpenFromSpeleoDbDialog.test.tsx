@@ -225,3 +225,45 @@ describe('OpenFromSpeleoDbDialog list-failure resilience (#270)', () => {
     expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_list_projects')).toBe(false);
   });
 });
+
+/**
+ * #270 - the browser is one of the two entry points into `useOpenRemoteProject`
+ * (GlobalView's remote rows are the other). When the backend refuses the open
+ * because the cached .stalx still holds un-pushed edits, the browser must hand off
+ * to the keep-local / take-remote prompt instead of painting its generic error
+ * banner, and must not stay stuck behind its busy flag.
+ */
+describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)', () => {
+  const REFUSAL = {
+    message: 'local copy has unpushed edits',
+    action: 'UnpushedLocalEdits',
+    status: null,
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1/project.stalx',
+      last_edit_at: '2026-07-20T10:30:00Z',
+    },
+  };
+
+  it('raises the prompt instead of a generic error, and releases the busy flag', async () => {
+    const openDialogMock = vi.fn();
+    useUIStore.setState({ openDialog: openDialogMock });
+    mockRoutes({ speleodb_open_project: () => Promise.reject(REFUSAL) });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    await waitFor(() =>
+      expect(openDialogMock).toHaveBeenCalledWith('speleodb-unpushed-local', {
+        summary: expect.objectContaining({ id: 'p1' }),
+        unpushedLocal: REFUSAL.unpushed_local,
+      }),
+    );
+    expect(screen.queryByTestId('open-from-speleodb-error')).not.toBeInTheDocument();
+    // Nothing was downloaded or opened, and the row is clickable again.
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    await waitFor(() =>
+      expect(screen.getByTestId('open-from-speleodb-open-p1')).not.toBeDisabled(),
+    );
+  });
+});

@@ -1,4 +1,9 @@
-import type { SpeleoDbAction, SpeleoErrorDto, TransportCause } from '../types/ipc.generated';
+import type {
+  SpeleoDbAction,
+  SpeleoErrorDto,
+  TransportCause,
+  UnpushedLocalEdits,
+} from '../types/ipc.generated';
 import i18n from '../i18n';
 import { useSpeleoStore } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
@@ -83,4 +88,24 @@ export function speleoErrorAction(e: unknown): SpeleoDbAction | null {
     return typeof action === 'string' ? (action as SpeleoDbAction) : null;
   }
   return null;
+}
+
+/**
+ * [#270] The un-pushed local edits an open was refused over, or `null`.
+ *
+ * `speleodb_open_project` refuses rather than overwrite a cached `.stalx` that
+ * still holds edits the server has never seen; the refusal carries the project
+ * id, the local path and when it was last edited so the UI can name exactly what
+ * is at stake. Read structurally off the DTO (never sniffed from the message),
+ * and only trusted when the payload is actually shaped like the record - a
+ * refusal we cannot describe must fall back to the generic error path rather
+ * than raise a prompt with blanks in it.
+ */
+export function unpushedLocalEdits(e: unknown): UnpushedLocalEdits | null {
+  if (speleoErrorAction(e) !== 'UnpushedLocalEdits') return null;
+  const payload = (e as Partial<SpeleoErrorDto>).unpushed_local;
+  if (!payload || typeof payload !== 'object') return null;
+  const { project_id, local_path } = payload;
+  if (typeof project_id !== 'string' || typeof local_path !== 'string' || !local_path) return null;
+  return payload;
 }

@@ -250,6 +250,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-close",
     "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
+    "action.dialog.speleodb-unpushed-local",
     "action.dialog.speleodb-restore",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
@@ -315,6 +316,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-close",
     "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
+    "dialog-cancel.speleodb-unpushed-local",
     "dialog-cancel.speleodb-restore",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
@@ -406,6 +408,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-close",
     "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
+    "dwell.dialog.speleodb-unpushed-local",
     "dwell.dialog.speleodb-restore",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
@@ -547,6 +550,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-close",
     "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
+    "active-dwell.dialog.speleodb-unpushed-local",
     "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
@@ -901,7 +905,10 @@ mod tests {
         //   + 4 quit-with-unpushed-edits dialog events:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-quit = 667.
-        assert_eq!(EVENT_NAMES.len(), 667);
+        //   + 4 refused-open (unpushed local edits) dialog events:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-unpushed-local = 671.
+        assert_eq!(EVENT_NAMES.len(), 671);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

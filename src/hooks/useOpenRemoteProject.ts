@@ -4,7 +4,7 @@ import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
-import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
+import { speleoErrorAction, humanizeSpeleoError, unpushedLocalEdits } from '../utils/speleoError';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -18,6 +18,10 @@ import type {
  *   adopt confirm (only `openRemote` returns this; `adoptRemote` never does).
  * - `load_failed` - the pull succeeded but loadProject failed; it already surfaced
  *   its own error and the optimistic link seed was rolled back. Caller does nothing.
+ * - `unpushed_local` - the cached copy still holds edits SpeleoDB has never seen, so
+ *   the backend refused to overwrite it; the keep-local / take-remote prompt has
+ *   already been raised (see `speleodb-unpushed-local`). The caller only clears its
+ *   own busy flag - it must NOT surface this as an error.
  * - `error` - the open/adopt call itself failed; `message` is humanized for display
  *   and `reLogin` is set when a dead token means the caller should drop the session.
  */
@@ -25,6 +29,7 @@ export type OpenRemoteOutcome =
   | { status: 'opened' }
   | { status: 'adopt' }
   | { status: 'load_failed' }
+  | { status: 'unpushed_local' }
   | { status: 'error'; message: string; reLogin: boolean };
 
 interface UseOpenRemoteProjectOpts {
@@ -44,6 +49,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const { t } = useTranslation();
   const { onBeforeLoad } = opts;
   const showToast = useUIStore((s) => s.showToast);
+  const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
   const setLinkOnOpen = useSpeleoStore((s) => s.setLinkOnOpen);
   const clearLink = useSpeleoStore((s) => s.clearLink);
@@ -98,6 +104,56 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // #214: an Ariane (.tml-only) project routes here (backend returns the typed
         // Adopt action, not a hard error). Signal the caller to offer adoption.
         if (speleoErrorAction(e) === 'Adopt') return { status: 'adopt' };
+        // #270: re-opening would have overwritten a cached .stalx that still holds
+        // edits the server has never seen, so the backend refused. Raise the binary
+        // keep-local / take-remote prompt HERE rather than at each call site, so both
+        // entry points (the browser dialog and the GlobalView remote rows) get the
+        // choice instead of a dead-end error. Every other failure falls through.
+        const unpushed = unpushedLocalEdits(e);
+        if (unpushed) {
+          openDialog('speleodb-unpushed-local', { summary, unpushedLocal: unpushed });
+          return { status: 'unpushed_local' };
+        }
+        return {
+          status: 'error',
+          message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
+          reLogin: speleoErrorAction(e) === 'ReLogin',
+        };
+      }
+      return finishOpen(result, summary.permission);
+    },
+    [finishOpen, openDialog, t],
+  );
+
+  /**
+   * [#270] "Keep the local copy" - the safe branch of the refused-open prompt.
+   *
+   * Deliberately calls NO SpeleoDB command: nothing is downloaded and nothing is
+   * overwritten. The local `.stalx` named by the refusal is opened through the
+   * SAME tail every successful pull uses (`finishOpen` -> loadProject, with the
+   * link seed + rollback), so the two branches can never drift apart.
+   */
+  const keepLocalCopy = useCallback(
+    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> =>
+      finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission),
+    [finishOpen],
+  );
+
+  /**
+   * [#270] "Take the server copy and discard my local changes" - the destructive
+   * branch. Re-issues the refused open through the discarding command with exactly
+   * the arguments it was given, then runs the same post-open follow-up.
+   */
+  const takeRemoteDiscardingLocal = useCallback(
+    async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+      let result: SpeleoOpenResult;
+      try {
+        result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
+          projectId: summary.id,
+          projectName: summary.name,
+          latestCommitSha: summary.latest_commit_sha ?? null,
+        });
+      } catch (e) {
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
@@ -137,5 +193,5 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     [finishOpen, t],
   );
 
-  return { openRemote, adoptRemote };
+  return { openRemote, adoptRemote, keepLocalCopy, takeRemoteDiscardingLocal };
 }

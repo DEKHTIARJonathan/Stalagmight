@@ -2901,6 +2901,17 @@
       "convert": "Convert to a local file",
       "converting": "Converting…"
     },
+    "unpushedLocal": {
+      "title": "Changes on this computer are not on SpeleoDB",
+      "message": "\"{{name}}\" has already been opened on this computer, and that local copy has changes SpeleoDB has never seen. Downloading the server copy would delete them, so nothing has been downloaded yet.",
+      "lastEdited": "Local copy last edited: {{when}}",
+      "lastEditedUnknown": "We could not tell when the local copy was last edited.",
+      "keepHint": "Keeping the local copy downloads nothing and overwrites nothing: it opens exactly as you left it, with your changes intact, and you can upload them to SpeleoDB later.",
+      "keepLocal": "Keep the local copy & open it",
+      "takeRemote": "Take the server copy & discard my changes",
+      "discardWarning": "Taking the server copy permanently deletes the changes made to \"{{name}}\" on this computer. They are not on SpeleoDB, so there is no other copy and this cannot be undone.",
+      "takeRemoteConfirm": "Yes, discard my changes"
+    },
     "transport": {
       "refused": "Could not reach SpeleoDB at {{endpoint}} - the server refused the connection. Check that it is running and that the address is right.",
       "timeout": "SpeleoDB at {{endpoint}} did not respond in time. Check your network connection and that the server is running.",

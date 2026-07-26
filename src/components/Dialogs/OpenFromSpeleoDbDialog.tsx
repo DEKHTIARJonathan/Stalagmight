@@ -143,6 +143,11 @@ export default function OpenFromSpeleoDbDialog() {
     if (outcome.status === 'adopt') {
       setPendingAdopt(project);
       setBusy(false);
+    } else if (outcome.status === 'unpushed_local') {
+      // #270: the hook raised the keep-local / take-remote prompt, which replaces
+      // this browser as the active dialog. Not an error - just release the busy
+      // flag so this list is usable again if the user backs out of the prompt.
+      setBusy(false);
     } else if (outcome.status === 'error') {
       surfaceOpenError(outcome.message, outcome.reLogin);
     }
