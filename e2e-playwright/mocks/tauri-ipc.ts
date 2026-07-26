@@ -3728,6 +3728,46 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
+          case 'reverse_section': {
+            console.log('[Mock IPC] reverse_section called with:', args);
+            const sectionId = (args?.sectionId ?? args?.section_id) as number;
+            const swapLr = (args?.swapLeftRight ?? args?.swap_left_right ?? false) as boolean;
+            const section = (currentProject?.sections as Array<{
+              id: number;
+              shots: Array<Record<string, unknown>>;
+            }> | undefined)?.find((s) => s.id === sectionId);
+            if (!section) {
+              return { success: false, error: `Section ${sectionId} not found` };
+            }
+            // Mirror the backend transform (#24): reverse the order, reciprocate
+            // the azimuths (they are two FORWARD readings, so swapping alone is a
+            // no-op), swap depths, swap and negate pitch, optionally swap L/R.
+            // Ids stay attached to positions; everything else travels.
+            const ids = section.shots.map((sh) => sh.id);
+            const recip = (a: number) => ((a + 180) % 360 + 360) % 360;
+            const reversed = [...section.shots].reverse().map((sh) => {
+              const next: Record<string, unknown> = { ...sh };
+              next.azimuth_in = recip(sh.azimuth_out as number);
+              next.azimuth_out = recip(sh.azimuth_in as number);
+              next.depth_in = sh.depth_out;
+              next.depth_out = sh.depth_in;
+              const pitchIn = sh.pitch_in as number | null | undefined;
+              const pitchOut = sh.pitch_out as number | null | undefined;
+              next.pitch_in = pitchOut == null ? pitchOut : -pitchOut;
+              next.pitch_out = pitchIn == null ? pitchIn : -pitchIn;
+              if (swapLr) {
+                next.left = sh.right;
+                next.right = sh.left;
+              }
+              return next;
+            });
+            reversed.forEach((sh, i) => {
+              sh.id = ids[i];
+            });
+            section.shots = reversed;
+            return { success: true, section_id: sectionId };
+          }
+
           case 'create_shot': {
             console.log('[Mock IPC] create_shot called with:', args);
             // Record calls for assertions (anchor args), mirroring execute_batch.

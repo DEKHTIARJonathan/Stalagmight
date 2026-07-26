@@ -15,6 +15,7 @@ import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { mirrorPlacementForReverse } from '../../utils/reversePlacement';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
@@ -390,6 +391,7 @@ function applyAllOverlapTreatments(
           color: '',
           direction: section.direction === 'out' ? 'out' : 'in',
           quality: 1.0,
+          reverse: false,
           shots: convertToEditableShots(section.shots),
         };
         sectionEdits.set(importSectionIndex, importEdits);
@@ -624,6 +626,7 @@ function applyAllOverlapTreatments(
             color: '',
             direction: section.direction === 'out' ? 'out' : 'in',
             quality: 1.0,
+            reverse: false,
             shots: convertToEditableShots(section.shots),
           };
           sectionEdits.set(targetImportIndex, targetEdits);
@@ -1083,6 +1086,26 @@ function buildBatchImport(
       const colorValue = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
       const qualityValue = edits?.quality ?? 1.0;
+      const reverseValue = edits?.reverse ?? false;
+
+      // #24 / q14: the backend reverses before creating the section, so every
+      // placement index must address the post-reverse order. Mirror the indices
+      // the wizard collected against the file's order, so the connection stays
+      // on the physical station the user picked. The target of a from_importing
+      // connection renumbers independently - it has its own flag and shot count.
+      const targetIdx =
+        placement.type === 'from_importing' ? conn?.targetImportIndex ?? null : null;
+      const targetEditsForMirror = targetIdx !== null ? sectionEdits?.get(targetIdx) : undefined;
+      const targetShotsForMirror =
+        targetEditsForMirror?.reverse
+          ? targetEditsForMirror.shots.filter((sh) => !sh.isDeleted).length
+          : null;
+      const finalPlacement = mirrorPlacementForReverse(
+        placement,
+        reverseValue,
+        backendShots.length,
+        targetShotsForMirror
+      );
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,
@@ -1093,8 +1116,9 @@ function buildBatchImport(
         direction: directionValue,
         quality: qualityValue,
         shots: backendShots,
-        placement,
+        placement: finalPlacement,
         station_comments: [],
+        reverse: reverseValue,
       };
 
       emittedPosition.set(idx, configs.length);
@@ -1748,6 +1772,7 @@ export default function DmpNewImportDialog({
       color: SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: section.direction === 'out' ? 'out' : 'in',
       quality: 1.0,
+      reverse: false,
       shots,
     };
 
@@ -1889,7 +1914,7 @@ export default function DmpNewImportDialog({
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
   // Section edit callbacks
-  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
+  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number | boolean) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
   }, []);
 
@@ -2275,8 +2300,14 @@ export default function DmpNewImportDialog({
           direction: metadata.direction,
           quality: metadata.quality,
           shots: backendShots,
-          placement,
+          placement: mirrorPlacementForReverse(
+            placement,
+            metadata.reverse ?? false,
+            backendShots.length,
+            null
+          ),
           station_comments: [],
+          reverse: metadata.reverse ?? false,
         };
 
         // 'AllReferences', not Auto (#27): the DMP parser only ever emits
@@ -3898,8 +3929,11 @@ export default function DmpNewImportDialog({
                       onColorChange={(v) => handleMetadataChange('color', v)}
                       onDirectionChange={(v) => handleMetadataChange('direction', v)}
                       onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      reverse={editState.reverse}
+                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
                       showName={false}
                       showDirection
+                      showReverse
                     />
                     <div className="border-t border-border" />
                     <ShotTableEditor
@@ -4222,8 +4256,11 @@ export default function DmpNewImportDialog({
                       onColorChange={(v) => handleMetadataChange('color', v)}
                       onDirectionChange={(v) => handleMetadataChange('direction', v)}
                       onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      reverse={editState.reverse}
+                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
                       showName={false}
                       showDirection
+                      showReverse
                     />
                     <div className="border-t border-border" />
                     <ShotTableEditor

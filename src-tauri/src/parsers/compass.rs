@@ -1425,6 +1425,7 @@ pub fn convert_compass_to_import_configs(
         let chain = &chains[ci];
         let p = placement[ci].clone().unwrap_or(ImportPlacement::Origin);
         configs.push(ImportSectionConfig {
+            reverse: false,
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
             surveyor: chain.surveyor.clone(),

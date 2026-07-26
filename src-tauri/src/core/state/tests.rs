@@ -6472,6 +6472,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     });
 
     let seed = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Existing".to_string()),
         surveyor: None,
@@ -6500,6 +6501,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     let len1 = project.sections[0].shots[1].length;
 
     let incoming = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Incoming".to_string()),
         surveyor: None,
@@ -15531,6 +15533,7 @@ fn test_execute_import_sections_origin_placement() {
 
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("Import1".to_string()),
             surveyor: None,
@@ -15543,6 +15546,7 @@ fn test_execute_import_sections_origin_placement() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("Import2".to_string()),
             surveyor: None,
@@ -15745,6 +15749,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
     });
 
     let seed = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Existing".to_string()),
         surveyor: None,
@@ -15771,6 +15776,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
     let clean_length = project.sections[0].shots[0].length;
 
     let poisoned = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Incoming".to_string()),
         surveyor: None,
@@ -15831,6 +15837,7 @@ fn test_execute_import_sections_from_importing_placement() {
 
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("First".to_string()),
             surveyor: None,
@@ -15843,6 +15850,7 @@ fn test_execute_import_sections_from_importing_placement() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("Second".to_string()),
             surveyor: None,
@@ -15897,6 +15905,7 @@ fn test_execute_import_sections_from_existing_placement() {
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Imported".to_string()),
         surveyor: None,
@@ -15938,6 +15947,7 @@ fn test_execute_import_sections_manual_with_offset() {
     });
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Manual".to_string()),
         surveyor: None,
@@ -15992,6 +16002,7 @@ fn test_execute_import_sections_zero_datum_placement() {
 
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("GPS Section".to_string()),
         surveyor: None,
@@ -16036,6 +16047,7 @@ fn test_execute_import_sections_rollback_on_failure() {
     // First section succeeds, second fails (merge to nonexistent existing section)
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("GoodSection".to_string()),
             surveyor: None,
@@ -16048,6 +16060,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("BadSection".to_string()),
             surveyor: None,
@@ -16112,6 +16125,7 @@ fn test_execute_import_sections_no_project() {
 
     let state = AppState::new().unwrap();
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Test".to_string()),
         surveyor: None,
@@ -16157,6 +16171,7 @@ fn test_execute_import_sections_manual_snap_placement() {
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Snapped".to_string()),
         surveyor: None,
@@ -16848,6 +16863,7 @@ fn kb5_import_overlap_interpolation_integration() {
 
     let result_002 = state.execute_import_sections(
         vec![ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("002".to_string()),
             surveyor: None,
@@ -16960,6 +16976,7 @@ fn kb5_import_overlap_interpolation_integration() {
     // Import 001 merged to 002 at station 182, with existing shot updates
     let result_001 = state.execute_import_sections(
         vec![ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("001".to_string()),
             surveyor: None,
@@ -20735,6 +20752,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "execute_import_sections",
             &state.execute_import_sections(
                 vec![ImportSectionConfig {
+                    reverse: false,
                     section_index: 0,
                     name: Some("Imp".to_string()),
                     surveyor: None,

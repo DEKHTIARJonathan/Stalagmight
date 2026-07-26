@@ -152,6 +152,20 @@ pub struct ImportSectionConfig {
     /// Each tuple is (station_index, comment_text).
     #[serde(default)]
     pub station_comments: Vec<(u32, String)>,
+    /// Reverse this section end-to-end as it is imported (#24), so the file's
+    /// last station becomes station 0.
+    ///
+    /// A one-shot transform, not persisted state: the backend reverses the
+    /// shots *before* creating the section, so `placement` and
+    /// `station_comments` indices resolve against the final (reversed) order.
+    /// Every importer wizard must therefore build those indices against the
+    /// reversed shots when this is set.
+    ///
+    /// Left/right passage dimensions are NOT swapped on the import path - the
+    /// wizard has no dialog moment to ask, and mirroring LRUD without asking
+    /// would silently rewrite measurements.
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 /// Update to apply to an existing section's shot during batch import.

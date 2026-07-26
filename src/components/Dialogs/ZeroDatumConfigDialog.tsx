@@ -26,6 +26,8 @@ export interface ZeroDatumConfigResult {
     color: string;
     direction: 'in' | 'out';
     quality: number;
+    /** Reverse this section end-to-end on import (#24). */
+    reverse: boolean;
   };
   shots: EditableShot[];
 }
@@ -80,6 +82,7 @@ export default function ZeroDatumConfigDialog({
   );
   const [color, setColor] = useState(SECTION_COLORS[colorIndex % SECTION_COLORS.length] ?? '#4ecdc4');
   const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
+  const [reverse, setReverse] = useState(false);
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>(() =>
@@ -260,10 +263,11 @@ export default function ZeroDatumConfigDialog({
         color,
         direction,
         quality: 1.0,
+        reverse,
       },
       shots,
     });
-  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, shots]);
+  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots]);
 
   if (!section) return null;
 
@@ -402,8 +406,11 @@ export default function ZeroDatumConfigDialog({
               onDateChange={setDate}
               onColorChange={setColor}
               onDirectionChange={setDirection}
+              reverse={reverse}
+              onReverseChange={setReverse}
               showName={false}
               showDirection
+              showReverse
             />
 
             {/* Shot table */}

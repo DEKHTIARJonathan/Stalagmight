@@ -9,7 +9,10 @@ use std::collections::HashMap;
 
 use super::AppState;
 use crate::core::Command;
-use crate::models::{Coordinates, GpsCoordinates, Project, SectionId, ShotData, StationRef};
+use crate::models::{
+    Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig, Project, SectionId,
+    ShotData, StationRef,
+};
 
 fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -268,6 +271,67 @@ fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
         project.resolve_key(&project.zero_datums[0].station_ref),
         Some(StationRef::new(section_id, 3)),
         "the zero datum must follow its physical station, not stay on index 0"
+    );
+}
+
+/// q14: the import toggle reverses BEFORE the section is created, so the
+/// wizard's placement and station-comment indices address the final order.
+#[test]
+fn import_reverse_applies_before_placement_and_comments_resolve() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Import".to_string(),
+        location: None,
+    });
+
+    // Three shots; a comment on station 0 of the FINAL (reversed) section.
+    let result = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![
+                shot(0.0, 10.0, 0.0, 2.0),
+                shot(90.0, 5.0, 2.0, 2.0),
+                shot(210.0, 7.5, 2.0, 1.0),
+            ],
+            placement: ImportPlacement::Origin,
+            station_comments: vec![(0, "post-reverse station 0".to_string())],
+            reverse: true,
+        }],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.first().unwrap();
+
+    // The file's last shot is now first, and its readings are reciprocated.
+    assert_eq!(section.shots.len(), 3);
+    assert_eq!(section.shots[0].length, 7.5);
+    assert_eq!(section.shots[2].length, 10.0);
+    assert!((section.shots[2].average_azimuth() - 180.0).abs() < 1e-9);
+
+    // Left/right are untouched on the import path - there is no dialog to ask.
+    assert!(section
+        .shots
+        .iter()
+        .all(|s| s.left.is_none() && s.right.is_none()));
+
+    // The comment landed on station 0 of the reversed section.
+    assert_eq!(project.station_comments.len(), 1);
+    let (key, text) = project.station_comments.iter().next().unwrap();
+    assert_eq!(text, "post-reverse station 0");
+    assert_eq!(
+        project.resolve_key(key),
+        Some(StationRef::new(section.id, 0))
     );
 }
 

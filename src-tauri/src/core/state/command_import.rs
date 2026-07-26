@@ -584,7 +584,16 @@ impl AppState {
 
         for (idx, config) in sections.iter().enumerate() {
             let t_section_start = std::time::Instant::now();
-            // Build SectionData from ImportSectionConfig
+            // Build SectionData from ImportSectionConfig.
+            //
+            // The reverse (#24) is applied HERE, before the section exists, so
+            // placement and station-comment indices below resolve against the
+            // final order - the contract every importer wizard builds against.
+            // Left/right is never swapped on this path (no dialog to ask).
+            let mut shots = config.shots.clone();
+            if config.reverse {
+                crate::models::reverse_shots(&mut shots, false);
+            }
             let section_data = SectionData {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
@@ -592,7 +601,7 @@ impl AppState {
                 color: config.color.clone(),
                 direction: config.direction,
                 quality: config.quality,
-                shots: config.shots.clone(),
+                shots,
             };
 
             // Step 1: Create the section
@@ -634,13 +643,16 @@ impl AppState {
                 }
             }
 
+            // Record the shots as they were actually created (post-reverse), not
+            // the raw config - otherwise a redo would recreate the section in the
+            // file's original order.
             batch_commands.push(Command::CreateSection {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
                 date: config.date,
                 color: config.color.clone(),
                 direction: config.direction,
-                shots: config.shots.clone(),
+                shots: section_data.shots.clone(),
             });
 
             // Step 2: Apply placement

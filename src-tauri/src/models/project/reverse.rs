@@ -37,13 +37,43 @@
 //!   its mirrored station so every relationship stays where the surveyor put
 //!   it.
 
-use crate::models::{SectionId, StationRef};
+use crate::models::{SectionId, Shot, ShotData, StationRef};
 
 use super::Project;
 
 /// Reciprocal of a forward azimuth, normalised to `[0, 360)`.
 fn reciprocal(azimuth: f64) -> f64 {
     (azimuth + 180.0).rem_euclid(360.0)
+}
+
+/// Re-associate one shot's readings with the opposite direction of travel.
+///
+/// Reverses the whole vec of shots as well, so the caller gets a section that
+/// is fully reversed.  This is THE reverse transform: both the in-app action
+/// ([`Project::reverse_section`]) and the import-time toggle route through it,
+/// so the two can never drift apart.
+///
+/// Order-independent per shot, so it is safe to apply before or after the vec
+/// is reversed - and applying it twice is the identity.
+pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
+    shots.reverse();
+    for shot in shots.iter_mut() {
+        let azimuth_in = shot.azimuth_in;
+        shot.azimuth_in = reciprocal(shot.azimuth_out);
+        shot.azimuth_out = reciprocal(azimuth_in);
+
+        std::mem::swap(&mut shot.depth_in, &mut shot.depth_out);
+
+        // Pitch is signed slope, so reversing the traverse flips it as well as
+        // re-associating it with the other end.
+        let pitch_in = shot.pitch_in.map(|p| -p);
+        shot.pitch_in = shot.pitch_out.map(|p| -p);
+        shot.pitch_out = pitch_in;
+
+        if swap_lr {
+            std::mem::swap(&mut shot.left, &mut shot.right);
+        }
+    }
 }
 
 impl Project {
@@ -102,29 +132,23 @@ impl Project {
         };
 
         // Ids belong to positions, not records: the shot that was 1 becomes N.
+        // Identity (uuid) travels with the record instead, so collab reconcile
+        // sees moved shots rather than a wholesale delete+add.
         let ids: Vec<_> = section.shots.iter().map(|s| s.id).collect();
+        let uuids: Vec<_> = section.shots.iter().map(|s| s.uuid.clone()).collect();
 
-        section.shots.reverse();
-        for shot in &mut section.shots {
-            let azimuth_in = shot.azimuth_in;
-            shot.azimuth_in = reciprocal(shot.azimuth_out);
-            shot.azimuth_out = reciprocal(azimuth_in);
+        let mut data: Vec<ShotData> = section.shots.iter().map(Shot::to_shot_data).collect();
+        reverse_shots(&mut data, swap_lr);
 
-            std::mem::swap(&mut shot.depth_in, &mut shot.depth_out);
-
-            // Pitch is signed slope, so reversing the traverse flips it as well
-            // as re-associating it with the other end.
-            let pitch_in = shot.pitch_in.map(|p| -p);
-            shot.pitch_in = shot.pitch_out.map(|p| -p);
-            shot.pitch_out = pitch_in;
-
-            if swap_lr {
-                std::mem::swap(&mut shot.left, &mut shot.right);
-            }
-        }
-        for (shot, id) in section.shots.iter_mut().zip(ids) {
-            shot.id = id;
-        }
+        // `uuids` is still in the OLD order, and so is `data` after the reverse
+        // put record i at position count-1-i - zip them by walking the uuids
+        // backwards alongside the reversed data.
+        section.shots = data
+            .into_iter()
+            .zip(uuids.into_iter().rev())
+            .zip(ids)
+            .map(|((d, uuid), id)| Shot::with_uuid(id, d, uuid))
+            .collect();
 
         // ---- Keep the section where it was ----------------------------------
         // Station 0 is now the far end, so the anchor moves by the displacement

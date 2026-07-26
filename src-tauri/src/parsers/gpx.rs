@@ -810,6 +810,7 @@ pub fn waypoints_to_import_configs(
         }
 
         configs.push(ImportSectionConfig {
+            reverse: false,
             section_index: idx,
             name: wpt.name.clone(),
             surveyor: None,
@@ -845,6 +846,7 @@ fn track_segment_to_config(
         .collect();
 
     ImportSectionConfig {
+        reverse: false,
         section_index,
         name,
         surveyor: None,
@@ -873,6 +875,7 @@ fn route_to_config(
         .collect();
 
     ImportSectionConfig {
+        reverse: false,
         section_index,
         name: rte.name.clone(),
         surveyor: None,

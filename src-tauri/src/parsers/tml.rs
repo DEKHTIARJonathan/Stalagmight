@@ -1275,6 +1275,7 @@ pub fn convert_tml_to_import_configs(
         };
 
         configs.push(ImportSectionConfig {
+            reverse: false,
             section_index,
             name: Some(section.name.clone()),
             surveyor: section.surveyor.clone(),

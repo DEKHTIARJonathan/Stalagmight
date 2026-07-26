@@ -19,6 +19,14 @@ export interface SectionEditState {
   color: string;
   direction: 'in' | 'out';
   quality: number;
+  /**
+   * Reverse this section end-to-end on import (#24), so the file's last station
+   * becomes station 0. A one-shot transform applied by the backend *before* the
+   * section is created, so placement and station-comment indices address the
+   * final order. Independent of `direction`, which keeps its azimuth/averaging
+   * meaning.
+   */
+  reverse: boolean;
   shots: EditableShot[];
 }
 
