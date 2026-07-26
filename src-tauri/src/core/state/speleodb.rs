@@ -3428,6 +3428,57 @@ mod tests {
     }
 
     #[test]
+    fn guarded_close_still_drops_the_handle_when_a_lock_is_poisoned() {
+        // The guard recovers a poisoned lock for the path READ, but the close it
+        // then performs used to be written as `if let Ok(..)` per lock - so on a
+        // poisoned mutex it dropped NOTHING and still reported `true`, and the
+        // caller went on to rename a new file over a live SQLite handle and its
+        // 256 MB mmap. Poisoning only means an earlier call panicked while
+        // holding the lock; the guarded value is an `Option`, and emptying it is
+        // exactly the recovery.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("cache.stalx");
+        seed_stalx(&dest, "Cache");
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        assert!(project_is_open(&state));
+
+        // Poison the database lock the way a real panic would: panic while its
+        // guard is held, and swallow the unwind so the test itself survives.
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = state.database.lock().expect("database lock");
+            panic!("simulated panic while holding the database lock");
+        }));
+        assert!(poisoned.is_err(), "the closure must have panicked");
+        assert!(
+            state.database.is_poisoned(),
+            "the database lock must now be poisoned"
+        );
+
+        assert!(
+            state.close_project_if_open_at(&dest),
+            "the open project IS this file, so it must be closed"
+        );
+        assert!(
+            state
+                .database
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "the live database handle must be gone before the replace, poisoned or not"
+        );
+        assert!(
+            state
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .is_none(),
+            "the project must be dropped too"
+        );
+    }
+
+    #[test]
     fn guarded_close_matches_through_a_non_canonical_spelling() {
         // The open path and `dest` are frequently derived differently (cache-path
         // join vs. the FE's opened path), so the comparison canonicalizes.

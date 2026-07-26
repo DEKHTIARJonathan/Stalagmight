@@ -46,6 +46,23 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// idempotent attempts while a same-size upload (120 s) succeeds. Named separately
 /// from [`UPLOAD_TIMEOUT`] so the two budgets can drift apart later.
 const DUMP_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Body-size ceiling for a dump download (#270).
+///
+/// `Body::read_to_vec()` silently applies ureq's own default ceiling of 10 MiB,
+/// so raising [`DUMP_DOWNLOAD_TIMEOUT`] alone fixed nothing for exactly the
+/// projects it was meant to help: a dump over 10 MiB could never be opened,
+/// restored or fast-forwarded at ANY timeout. Worse, the refusal arrives as an
+/// `io::Error` wrapping `BodyExceedsLimit`, which lands in
+/// [`classify_transport`]'s catch-all - so a healthy `200` was reported to the
+/// user as "Could not reach SpeleoDB at the configured endpoint", and retried
+/// three times first.
+///
+/// The dump is the whole working tree as a ZIP - the same payload the (uncapped)
+/// upload sends back - so the ceiling exists only as a sanity bound against a
+/// runaway response, not as a project-size policy. It is deliberately far above
+/// any plausible survey: the whole body is read into memory either way, and a
+/// real project must never be the thing that trips it.
+const DUMP_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
 /// Transient-transport retries (total attempts = 1 + MAX_RETRIES).
 const MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries (mirrors the tile-fetch idiom).
@@ -153,6 +170,21 @@ fn with_retry(
                 }
                 return Ok((status, body));
             }
+            Err(e) if is_body_limit(&e) => {
+                // Not transient and not a reachability problem: the server
+                // answered fine, the response is just bigger than we will hold.
+                // Retrying re-downloads the whole oversized body to fail again,
+                // and reporting it as "cannot reach the endpoint" sends the user
+                // looking at their network for a payload-size refusal.
+                tracing::error!(
+                    ?endpoint,
+                    limit = DUMP_MAX_BYTES,
+                    "SpeleoDB response body exceeded the download ceiling"
+                );
+                return Err(SpeleoDbError::Parse(format!(
+                    "the response was larger than the {DUMP_MAX_BYTES}-byte download limit"
+                )));
+            }
             Err(e) => {
                 tracing::debug!(error = %e, attempt = i + 1, "SpeleoDB request failed; will retry if attempts remain");
                 last_err = Some((classify_transport(&e), clean_transport(&e.to_string())));
@@ -219,6 +251,31 @@ fn read_status_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), 
     let status = resp.status().as_u16();
     let body = resp.into_body().read_to_vec()?;
     Ok((status, body))
+}
+
+/// [`read_status_body`] for a dump download, on the [`DUMP_MAX_BYTES`] ceiling
+/// instead of the 10 MiB one `read_to_vec()` applies by default.
+fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ureq::Error> {
+    let status = resp.status().as_u16();
+    let body = resp
+        .into_body()
+        .with_config()
+        .limit(DUMP_MAX_BYTES)
+        .read_to_vec()?;
+    Ok((status, body))
+}
+
+/// Whether a transport failure is the body-size ceiling being hit.
+///
+/// ureq reports it as `BodyExceedsLimit` wrapped by `into_io()`, so it arrives as
+/// `Error::Io` and is indistinguishable by kind from a real network fault. It is
+/// neither transient (retrying re-downloads the same oversized body) nor a
+/// reachability problem, so it must not be classified as one - matching on the
+/// Display text is the only handle ureq gives us, and it is ureq's own constant
+/// string rather than a platform `strerror`, so it is stable to match.
+fn is_body_limit(err: &ureq::Error) -> bool {
+    matches!(err, ureq::Error::Io(e)
+        if e.to_string().contains("larger than request limit"))
 }
 
 /// Map a non-2xx response into a [`SpeleoDbError::Status`], extracting a
@@ -501,7 +558,7 @@ pub(crate) fn download_dump(
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
-        read_status_body(resp)
+        read_dump_body(resp)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -533,7 +590,7 @@ pub(crate) fn download_dump_at_hash(
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
-        read_status_body(resp)
+        read_dump_body(resp)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -1214,11 +1271,11 @@ mod tests {
 
     use super::{
         add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        classify_transport, clean_transport, delete_project, download_dump_at_hash, list_teams,
-        list_user_autocomplete, list_user_permissions, mime_for, parse_error_message,
+        classify_transport, clean_transport, delete_project, download_dump, download_dump_at_hash,
+        list_teams, list_user_autocomplete, list_user_permissions, mime_for, parse_error_message,
         parse_upload_auto_response, remove_team_permission, remove_user_permission,
         set_user_permission, with_retry, Endpoint, RevisionHistory, UserInfo,
-        DUMP_DOWNLOAD_TIMEOUT, REQUEST_TIMEOUT,
+        DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES, REQUEST_TIMEOUT,
     };
     use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
@@ -2153,6 +2210,54 @@ mod tests {
                 !body.contains(" agent()"),
                 "{name} must NOT fall back to the shared 30 s agent()"
             );
+            assert!(
+                body.contains("read_dump_body(resp)"),
+                "{name} must read its body on the dump ceiling, not the 10 MiB default \
+                 `read_to_vec()` applies via read_status_body"
+            );
         }
+    }
+
+    #[test]
+    fn dump_download_accepts_a_body_over_ureqs_default_limit() {
+        // The real defect behind the longer dump timeout: `Body::read_to_vec()`
+        // silently caps at ureq's own 10 MiB default, so a dump larger than that
+        // could never be opened, restored or fast-forwarded at ANY timeout - and
+        // the refusal arrived as an io error that classified as "could not reach
+        // the endpoint", for a perfectly healthy 200, after three attempts.
+        //
+        // Serve just over the default and require the whole body to arrive.
+        const SIZE: usize = 10 * 1024 * 1024 + 4096;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // Read the request headers, then answer. A GET has no body, so the
+            // first read is the whole request.
+            use std::io::Read as _;
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+            let mut chunk = vec![0u8; 16 * 1024];
+            let _ = stream.read(&mut chunk);
+            let resp =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {SIZE}\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(&vec![b'z'; SIZE]);
+            let _ = stream.flush();
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let body = download_dump(&base, "tok", false, WIRE_PID).expect("an 10 MiB+ dump downloads");
+        let _ = handle.join();
+        assert_eq!(
+            body.len(),
+            SIZE,
+            "the whole dump must arrive, not ureq's 10 MiB prefix"
+        );
+        assert!(
+            DUMP_MAX_BYTES > 10 * 1024 * 1024,
+            "the dump ceiling must be above the default it exists to replace"
+        );
     }
 }

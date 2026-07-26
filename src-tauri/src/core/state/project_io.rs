@@ -702,23 +702,37 @@ impl AppState {
         Ok(())
     }
 
+    /// Drop the open project's resources.
+    ///
+    /// Every lock here is RECOVERED from poisoning rather than skipped. A poisoned
+    /// mutex means some earlier call panicked while holding it; the guarded values
+    /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
+    /// them to `None`/empty is precisely the recovery - there is no half-written
+    /// state to protect. Skipping the drop, by contrast, is never safe: this
+    /// function is the pre-rename close that `close_project_if_open_at` relies on,
+    /// and it used to report `true` while still holding the live SQLite handle and
+    /// its 256 MB mmap, so the caller went on to rename a new file over it - the
+    /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        if let Ok(mut proj) = self.project.lock() {
+        {
+            let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: dropping project");
             *proj = None;
             tracing::debug!("close_project: project dropped");
         }
 
         tracing::debug!("close_project: acquiring database lock");
-        if let Ok(mut db) = self.database.lock() {
+        {
+            let mut db = self.database.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: dropping database");
             *db = None;
             tracing::debug!("close_project: database dropped");
         }
 
         tracing::debug!("close_project: acquiring undo_stack lock");
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+        {
+            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
             tracing::debug!("close_project: undo stack cleared");
