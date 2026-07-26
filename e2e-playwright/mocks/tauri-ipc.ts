@@ -3768,8 +3768,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const recip = (a: number) => ((a + 180) % 360 + 360) % 360;
             const reversed = [...section.shots].reverse().map((sh) => {
               const next: Record<string, unknown> = { ...sh };
-              next.azimuth_in = recip(sh.azimuth_out as number);
-              next.azimuth_out = recip(sh.azimuth_in as number);
+              const azIn = sh.azimuth_in as number;
+              const azOut = sh.azimuth_out as number;
+              if (((azOut - azIn) % 360 + 360) % 360 === 180) {
+                // Readings exactly opposite: the circular mean is undefined and
+                // reciprocating maps the pair to itself, so the backend swaps
+                // them instead to turn the bearing around.
+                next.azimuth_in = azOut;
+                next.azimuth_out = azIn;
+              } else {
+                next.azimuth_in = recip(azOut);
+                next.azimuth_out = recip(azIn);
+              }
               next.depth_in = sh.depth_out;
               next.depth_out = sh.depth_in;
               const pitchIn = sh.pitch_in as number | null | undefined;
