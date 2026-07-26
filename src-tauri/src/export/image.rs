@@ -259,6 +259,18 @@ pub struct ExportImageOptions {
     /// `false`); black text + white halo.
     #[serde(default)]
     pub show_shot_data: bool,
+    /// Mirror of `gas.include_reference_legs` (#27), so the exported distance
+    /// ramp and penetration labels use the same graph the app is showing.
+    ///
+    /// **Server-populated, not a user-facing export option.** The commands
+    /// overwrite it with the live config value, so it is `ts(skip)`-ed out of
+    /// the generated TS: the frontend has no business setting it, and
+    /// `serde(default)` means it need not send the field at all. It lives here
+    /// rather than as a fourth parameter because it is one more thing the
+    /// renderer needs to know, exactly like the other flags.
+    #[serde(default)]
+    #[ts(skip)]
+    pub include_reference_legs: bool,
 }
 
 impl Default for ExportImageOptions {
@@ -274,6 +286,7 @@ impl Default for ExportImageOptions {
             show_station_comments: false,
             show_shot_comments: false,
             show_shot_data: false,
+            include_reference_legs: false,
         }
     }
 }
@@ -892,7 +905,11 @@ pub fn generate_svg_string_with_stations(
         // measured coords - see `AppState::distance_field`). Match that: distances
         // key by station_ref, so this stays consistent with the adjusted geometry
         // we draw. (It also skips the adjusted solve the map was designed to avoid.)
-        let field = project.distance_field_from(&project.compute_station_coordinates(), None);
+        let field = project.distance_field_from_with(
+            &project.compute_station_coordinates(),
+            None,
+            options.include_reference_legs,
+        );
         let by_ref: HashMap<StationRef, Option<f64>> = field
             .station_refs
             .iter()
@@ -1138,7 +1155,8 @@ pub fn generate_svg_string_with_stations(
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        let pen_dist = project.compute_penetration_distances(&stations);
+        let pen_dist =
+            project.compute_penetration_distances_with(&stations, options.include_reference_legs);
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -3412,6 +3430,58 @@ mod tests {
         assert!(
             !off.contains("<text"),
             "labels off should emit no text: {off}"
+        );
+    }
+
+    /// #27: the export has to route on the same graph the app does. Both
+    /// distance call sites used the non-configurable wrappers, which hardcode
+    /// reference exclusion, so with `gas.include_reference_legs` on the exported
+    /// PNG/SVG showed a different penetration than the Survey panel - breaking
+    /// the promise in this file's own header that the two agree.
+    #[test]
+    fn penetration_labels_follow_include_reference_legs() {
+        // Normal - Reference - Normal, datum at station 0. Excluding the
+        // reference tie strands everything past it; including it does not.
+        let mut project = Project::new("RefRoute".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("S".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![
+                make_shot(10.0, 90.0, false),
+                ShotData {
+                    kind: ShotKind::Reference,
+                    ..make_shot(10.0, 90.0, true)
+                },
+                make_shot(10.0, 90.0, false),
+            ],
+            ..Default::default()
+        });
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+
+        let labels = |include: bool| {
+            generate_svg_string(
+                &project,
+                &ExportImageOptions {
+                    branching_threshold: 1,
+                    show_penetration_labels: true,
+                    include_reference_legs: include,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert!(
+            labels(false).contains("p. 10"),
+            "excluded: the far side is unreachable, so penetration stops at the tie"
+        );
+        assert!(
+            labels(true).contains("p. 30"),
+            "included: the opt-in must restore the pre-#27 route through the tie"
         );
     }
 
