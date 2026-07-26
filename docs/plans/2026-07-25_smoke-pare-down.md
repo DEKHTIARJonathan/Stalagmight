@@ -72,9 +72,14 @@ Worst setup-to-value ratios, i.e. the files that are almost entirely boot cost:
 But **`gas-planning` is the real prize on absolute cost**: 150.3s of the 453.5s
 total hook time, and 33% of all test time, in one file.
 
-`custom-renderer-health.spec.ts` is the counter-example to copy - 6% hook,
-because it drives the app directly instead of going through the shared per-test
-seed.
+⚠ **A low hook % is not automatically a cheap file.** The reporter classifies by
+Playwright step category, so setup done *inside the test body* is billed as body
+time. `custom-renderer-health.spec.ts` reads as 6% hook, but it calls the same
+`setupMockedPage` / `createProject` / `seedProjectWithSections` helpers as
+everyone else - it just calls them in the test rather than in a `beforeEach`. It
+is not a cheaper pattern to copy; moving a `beforeEach` into the test body
+relabels cost without removing a millisecond of it. Judge a file by its total
+seconds, and use hook % only to locate *where* the cost is charged.
 
 ---
 
@@ -148,15 +153,28 @@ whose output decides what gets deleted.
 
 ## 4. Reliability context
 
-- Over a 60-day window: **61 green, 1 red** in 62 smoke runs. The suite is not
-  flaky in aggregate.
-- **The single red run was `dive-plan` catching a real regression** - 6 tests
-  failing together, the "new gate reads state the mock never sets" class
-  (#277). `dive-plan` is the best-evidenced catch in the suite: **de-flake it, do
-  not delete it.** Its `enterPlan` helper carries a sub-default 3000ms
-  `dive-plan-bar` visibility timeout - the first thing to widen if it flakes.
-- To re-derive that: `gh run list --workflow "E2E Smoke" --limit 100 --json
-  conclusion,createdAt` and tally the conclusions.
+- Measured 2026-07-26 over the preceding 60 days: **5 failures in 282 completed
+  runs (1.8%)**, 2 of them on `master`. The suite is not flaky in aggregate, and
+  that is the premise the whole pare-down rests on - a suite that fails often is
+  a reliability problem, not a cost problem.
+- The failures were 2026-06-18 (x3, the Windows/vitest-gate cluster), 2026-07-03
+  (master, #250), and 2026-07-12 (`fix/audit-data-safety`).
+- **The 2026-07-12 red was `dive-plan` catching a real regression** - 6 tests
+  failing together, the "new gate reads state the mock never sets" class (#277).
+  `dive-plan` is the best-evidenced catch in the suite: **de-flake it, do not
+  delete it.** Its `enterPlan` helper (`dive-plan.spec.ts:60`) carries a
+  sub-default 3000ms `dive-plan-bar` visibility timeout - the first thing to
+  widen if it flakes.
+- To re-derive. Two traps: the workflow sets `cancel-in-progress`, so cancelled
+  runs must be excluded, and `--limit` is a run count rather than a date filter -
+  set it well above the number of runs in the window or it silently truncates
+  (200 undercounted this query by a third).
+  ```
+  gh run list --workflow "E2E Smoke" --limit 400 --json conclusion,createdAt \
+    --jq '[.[] | select(.createdAt > "2026-05-27")
+          | select(.conclusion == "success" or .conclusion == "failure")]
+          | group_by(.conclusion) | map({(.[0].conclusion): length}) | add'
+  ```
 
 ---
 
@@ -167,12 +185,18 @@ whose output decides what gets deleted.
 - **A1. Done** - the instrumentation above. Keep it in CI until the pare-down
   lands; it is how Phase A gets measured. Remove it after.
 - **A2. Cut the per-test re-seed - the single biggest lever.**
-  Every smoke file re-seeds a full mocked project in `beforeEach` per test:
+  Most smoke files re-seed a full mocked project in `beforeEach` per test:
   `page.goto('/')` boots the whole SPA, a project is opened through the real
   New-Project UI flow, then MapLibre initializes - all before any assertion runs.
   Several files pay it across many nested describes to run 2-4 smoke tests
   (`settings-dialog` and `display-toggles` have 9 `beforeEach` each,
-  `undo-redo-dropdown` 7). Tracked as **#295**, which also records why the 30s
+  `undo-redo-dropdown` 7).
+  ⚠ **Confirm each target actually runs that three-stage boot before counting it
+  in.** Not every hook second is this seed: `scroll-containment.spec.ts` only
+  installs mocks and calls `goto('/')` - no project, no MapLibre - so a cheaper
+  shared seed does nothing for it. Group the files by the setup path they really
+  execute and size the win from that subset, rather than applying a flat 50% to
+  the whole 453.5s. Tracked as **#295**, which also records why the 30s
   global test timeout exists *because* setup is this heavy.
   A 50% cut in hook time is ~30% of test time, so ~30% off the Playwright step:
   a ~7:15 job becomes ~5:15. That clears the target on its own, before any test
@@ -194,9 +218,15 @@ whose output decides what gets deleted.
   re-grep rather than trusting a list.
 
 **Re-measure on CI after Phase A before cutting anything** - download the
-`smoke-timing` artifact from the PR's own smoke run and diff the hook total.
-Remember the ~1.9x parallelism divisor when converting a test-time saving into a
-job-time saving.
+`smoke-timing` artifact and diff the hook total. Remember the ~1.9x parallelism
+divisor when converting an absolute test-time saving into a job-time saving.
+
+⚠ **Take several samples on each side, not one.** Run-to-run spread on the
+hosted runner is wide enough to swallow the effect being measured - the observed
+job range is 5:59-7:20 - so a single before/after pair can show a 30% improvement
+that is not there, or hide one that is. Getting this wrong decides whether Phase
+B deletes real coverage for nothing. Re-run the smoke job a few times on both the
+base and the change (`gh run rerun <id>`) and compare the medians.
 
 ### Phase B - test count, only as deep as the shortfall requires
 
@@ -236,9 +266,13 @@ Parked until Phase A is done and re-measured. If it is still needed:
 
 ## 6. Gotchas
 
-- **`@smoke` is a plain `--grep` on test titles**, not a describe-level tag. But
-  Playwright still runs a whole file's fixtures if it has >=1 matching test, so
-  the file, not the test, is often the real unit of cost.
+- **`@smoke` is a plain `--grep` on test titles**, not a describe-level tag. An
+  unmatched test does not run, so it does not pay its own `beforeEach`. Since the
+  dominant cost here *is* per-test `beforeEach`, **the test is the unit of cost,
+  and removing a tag really does remove that test's setup.** Only file-level
+  `beforeAll` and worker fixtures are shared, and those survive as long as one
+  test in the file still matches - so a file drops to its floor, not to zero,
+  until the last tag goes.
 - Baseline: **83 `@smoke` tests across 27 files**. Count `test(` lines, not raw
   `@smoke` matches - `custom-renderer-health.spec.ts` also mentions the tag in a
   comment, so a bare `grep -c` overcounts.
