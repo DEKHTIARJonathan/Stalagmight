@@ -609,6 +609,20 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 shots: s.shots.clone(),
             })
             .id;
+        // A wholly new section's virtual shots need the chain rule for the same
+        // reason an added or newly-virtualised one does: `s.shots` came from
+        // `normalize_tml_shot`, which seeds every Ariane VIRTUAL shot as the
+        // provisional Reference. Without this a bounded Normal-Reference-Normal
+        // run inside the new section keeps that seed, so its middle leg gets an
+        // infinite edge weight and the far side drops out of penetration, the
+        // distance gradient and gas reach.
+        if let Some(section) = project.get_section(new_sid) {
+            for shot in &section.shots {
+                if shot.kind.is_virtual() {
+                    newly_virtual.insert((new_sid, shot.id));
+                }
+            }
+        }
         if !s.shot_uuids.is_empty() {
             if let Some(section) = project.get_section_mut(new_sid) {
                 // Adopt each collaborator UUID only if it has not already been
@@ -1022,6 +1036,79 @@ mod tests {
         assert_eq!(
             p.station_comment_for_ref(crate::models::StationRef::new(sid, 1)),
             None
+        );
+    }
+
+    /// #27: every path that can introduce a virtual shot has to hand it to the
+    /// chain rule, including a whole new section. `normalize_tml_shot` seeds
+    /// each Ariane VIRTUAL shot as the provisional `Reference`, so a bounded run
+    /// inside a collaborator's new section would otherwise keep that seed - and
+    /// a Reference gets an infinite edge weight, dropping the far side out of
+    /// penetration, the distance gradient and gas reach.
+    ///
+    /// Regression: `newly_virtual` was populated for edited and individually
+    /// added shots but not for `sections_added`.
+    #[test]
+    fn apply_sections_added_classifies_its_virtual_shots() {
+        use crate::models::ShotKind;
+
+        let mut p = Project::new("Cave".into(), None);
+
+        // Normal - Reference - Normal: bounded by real survey at both ends, so
+        // the chain rule must promote the middle leg to Jump.
+        let virtual_shot = ShotData {
+            kind: ShotKind::Reference,
+            ..shot(20.0, 6.0)
+        };
+        let mut cs = CollabChangeSet::empty();
+        cs.sections_added
+            .push(crate::core::reconcile::AddedSection {
+                name: "New".into(),
+                color: "#000000".into(),
+                surveyor: None,
+                date: None,
+                shots: vec![shot(10.0, 5.0), virtual_shot, shot(30.0, 7.0)],
+                shot_uuids: vec![None, None, None],
+                shot_station_comments: vec![None, None, None],
+            });
+        apply_changeset(&mut p, &cs);
+
+        let kinds: Vec<ShotKind> = p.sections[0].shots.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![ShotKind::Normal, ShotKind::Jump, ShotKind::Normal],
+            "a bounded virtual run in a newly-added section must classify as Jump"
+        );
+    }
+
+    /// The scoped pass must not reach outside the shots the changeset touched:
+    /// a kind the local user set by hand stays put (#27 q14).
+    #[test]
+    fn apply_sections_added_leaves_existing_kinds_alone() {
+        use crate::models::ShotKind;
+
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+        let shot_id = p.sections[0].shots[1].id;
+        p.set_shot_kind(sid, shot_id, ShotKind::Reference);
+
+        let mut cs = CollabChangeSet::empty();
+        cs.sections_added
+            .push(crate::core::reconcile::AddedSection {
+                name: "New".into(),
+                color: "#000000".into(),
+                surveyor: None,
+                date: None,
+                shots: vec![shot(10.0, 5.0)],
+                shot_uuids: vec![None],
+                shot_station_comments: vec![None],
+            });
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(
+            p.sections[0].shots[1].kind,
+            ShotKind::Reference,
+            "the pre-existing hand-set kind must survive a collaborator's new section"
         );
     }
 

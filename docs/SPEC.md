@@ -2388,14 +2388,27 @@ PNG exports are limited to 16384px maximum dimension to prevent out-of-memory er
 
 All SVG elements use pixel-stable sizing via the `px()` helper function. This ensures consistent visual appearance regardless of survey extent.
 
+**Virtual legs are not drawn.** Neither Jumps nor References appear in an image
+export, and they never have. This is not an oversight the per-kind opacities of
+the on-screen map should be copied into: the exporter's whole layout model is
+built on virtual shots being the *segmentation boundary* - a segment is a
+maximal chain of non-virtual shots, and a tie is what links two segments through
+a run of virtual ones. Drawing them would mean there is no boundary left, so
+ties, anchors and the branching-threshold classification would all need
+rethinking.
+
+One asymmetry to be aware of, new with #27: a Jump *is* swum, so it counts in
+the penetration distance the export labels, while its line is still not drawn.
+An exported map can therefore report a distance routed through geometry it does
+not show. Fixing that properly means teaching the exporter to draw jumps while
+keeping references as the boundary - tracked separately, not attempted here.
+
 | Element | Target Pixels | Notes |
 |---------|---------------|-------|
 | Station radius | 3px | Regular stations |
 | Station radius (Zero Datum) | 6px | Double size for visibility |
 | Station stroke-width | 1px | Black outline |
 | Shot stroke-width | 2px | Section or depth color |
-| Jump opacity | 0.5 | Faded, not dashed (`line-dasharray` is not data-driven; #243) |
-| Reference opacity | 0.28 | Fainter still: not a swimmable leg (#27) |
 | Grid stroke-width | 0.5px | Thin grid lines |
 | Shot-label font-size | 8px | Depth labels when enabled |
 | Shot-label dx/dy | 2px, -2px | Offset from midpoint |

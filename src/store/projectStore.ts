@@ -546,6 +546,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   updateConfig: async (config: Config) => {
     try {
+      const routingBefore = get().config?.gas.include_reference_legs;
       // Rust command returns Result<(), String> - success returns nothing, error throws
       await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
@@ -555,6 +556,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // lazily (the backend memo is keyed on the config, so a stale config would
       // otherwise keep rendering the old weighted solve until an unrelated edit).
       set({ stationsAdjusted: null, surveyDataAdjusted: null });
+      // `gas.include_reference_legs` decides whether penetration routes through
+      // reference ties, and `stats.penetration_distance` is computed inside
+      // `get_project_state` - not lazily like the geometry above. Nothing else
+      // here re-runs it, so without this the Detail panel keeps showing the old
+      // figure while the distance overlay and ruler (both keyed on the setting)
+      // have already switched, until some unrelated command refreshes state.
+      // Gated on an actual change: this is a full project refetch, too heavy to
+      // fire on every unrelated settings tweak.
+      if (get().config?.gas.include_reference_legs !== routingBefore) {
+        await get().refreshProjectState();
+      }
       return emptyCommandResult(true, null);
     } catch (e) {
       return emptyCommandResult(false, String(e));
