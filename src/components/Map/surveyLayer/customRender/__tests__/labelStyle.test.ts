@@ -28,6 +28,7 @@ function inputs(over: Partial<LabelStyleInputs> = {}): LabelStyleInputs {
     kindEnabled: [true, true, true, true, true],
     haloColors: resolveHaloColors(THEME),
     hideReference: false,
+  hideJump: false,
     ...over,
   };
 }

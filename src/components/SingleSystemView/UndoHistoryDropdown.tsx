@@ -83,6 +83,9 @@ function getCommandIcon(commandType: string): ReactNode {
       return commandType === 'move_segment' ? <MoveHorizontalIcon size={14} /> : <MoveAllIcon size={14} />;
     case 'unmerge_stations':
       return <LinkOffIcon size={14} />;
+    // `set_shot_reference` is the pre-#27 tag. Persisted undo history is not
+    // rewritten on upgrade, so both spellings have to map to the icon.
+    case 'set_shot_kind':
     case 'set_shot_reference':
       return <DashedLineIcon size={14} />;
     default:

@@ -26,7 +26,7 @@
  * simply pre-filters the descriptor list.
  */
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
-import { type SurveyData, isVirtualKind, shotKindFromFlags } from '../../../../types/survey-data';
+import { type SurveyData, shotKindFromFlags } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -209,7 +209,12 @@ export function buildLabelDescriptors(
       const fromG = inner.get(i);
       const toG = inner.get(i + 1);
       if (fromG === undefined || toG === undefined) continue;
-      const isRef = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
+      const shotKind = shotKindFromFlags(data.shotFlags[shotGlobalIdx]!);
+      // Carry WHICH virtual kind, not just "virtual": the two hide independently
+      // (#27), so a single shared bit orphans one kind's labels over collapsed
+      // geometry whenever only the other kind is hidden.
+      const virtualFlag =
+        shotKind === 'Jump' ? LABEL_FLAG.JUMP : shotKind === 'Reference' ? LABEL_FLAG.REFERENCE : 0;
       const fx = data.stationCoords[fromG * 3]!;
       const fy = data.stationCoords[fromG * 3 + 1]!;
       const fz = data.stationCoords[fromG * 3 + 2]!;
@@ -232,7 +237,7 @@ export function buildLabelDescriptors(
         anchorY: ay,
         color: packCssColor(resolveShotLabelColor(avgDepth, colorCtx)),
         ordinal: globalShotOrdinal,
-        flags: isRef ? LABEL_FLAG.REFERENCE : 0,
+        flags: virtualFlag,
         sectionId: section.id,
         shotGlobal: shotGlobalIdx,
         shotId,
@@ -248,11 +253,11 @@ export function buildLabelDescriptors(
             ? ctx.commentColor(`${section.id}:s${shotId}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
-          // Mirror the shot label: a reference-shot comment carries REFERENCE so
-          // the shader's hide-reference uniform collapses it with its geometry.
-          // Without it the comment orphans (stays visible) when reference shots
-          // are hidden, since flags:0 never matches the hide mask.
-          flags: isRef ? LABEL_FLAG.REFERENCE : 0,
+          // Mirror the shot label: a virtual shot's comment carries its own
+          // kind bit so the matching hide uniform collapses it with its
+          // geometry. Without it the comment orphans (stays visible) when that
+          // kind is hidden, since flags:0 never matches the hide mask.
+          flags: virtualFlag,
           sectionId: section.id,
           shotGlobal: shotGlobalIdx,
           shotId,

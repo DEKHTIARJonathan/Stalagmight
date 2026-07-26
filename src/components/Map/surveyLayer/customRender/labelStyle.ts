@@ -134,8 +134,11 @@ export interface LabelStyleInputs {
   kindEnabled: readonly boolean[];
   /** Per-kind halo color RGBA8 (from {@link resolveHaloColors}). */
   haloColors: readonly Rgba8[];
-  /** setShowReferenceShots(false) → collapse reference / all-reference labels. */
+  /** setShowReferenceShots(false) → collapse Reference-shot labels. */
   hideReference: boolean;
+  /** setShowJumps(false) → collapse Jump-shot labels (#27, independent of the
+   *  reference toggle). An all-reference station/section label needs BOTH. */
+  hideJump: boolean;
 }
 
 /** The full per-kind uniform set the label shader reads (§3 of the design). All
@@ -154,6 +157,7 @@ export interface LabelUniforms {
   haloWidthPx: Float32Array;
   /** `u_hide_reference` scalar (0/1). */
   hideReference: number;
+  hideJump: number;
 }
 
 /**
@@ -187,5 +191,6 @@ export function computeLabelUniforms(zoom: number, inputs: LabelStyleInputs): La
     haloColor,
     haloWidthPx,
     hideReference: inputs.hideReference ? 1 : 0,
+    hideJump: inputs.hideJump ? 1 : 0,
   };
 }

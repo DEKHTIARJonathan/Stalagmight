@@ -412,10 +412,17 @@ export class SurveyLabelController {
     }
   }
 
-  /** True only when every virtual kind is hidden, so no virtual shot is drawn
-   *  and its label is safe to drop. */
-  private hideVirtualLabels(): boolean {
-    return !this.referenceShotsVisible && !this.jumpShotsVisible;
+  /** Per-kind label hiding (#27). A label is dropped with the geometry of ITS
+   *  OWN kind - a single both-off rule left one kind's shot-data and comment
+   *  labels floating over the other kind's collapsed lines. The both-off case
+   *  still applies to ALL_REFERENCE station/section labels, and that rule lives
+   *  in the reveal pass + shader where the flag is read. */
+  private hideReferenceLabels(): boolean {
+    return !this.referenceShotsVisible;
+  }
+
+  private hideJumpLabels(): boolean {
+    return !this.jumpShotsVisible;
   }
 
   /** Mirror setShowJumps (label half), #27. */
@@ -446,7 +453,8 @@ export class SurveyLabelController {
       dpr,
       kindEnabled: this.kindVisible.slice(),
       haloColors,
-      hideReference: this.hideVirtualLabels(),
+      hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
     };
   }
 
@@ -513,7 +521,8 @@ export class SurveyLabelController {
         buildZoom: zoom,
         worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
-        hideReference: this.hideVirtualLabels(),
+        hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
         commentOverlapExempt: this.commentOverlapExempt,
         slack: emitSlack,
       });
@@ -723,7 +732,8 @@ export class SurveyLabelController {
       buildZoom: this.lastBuildZoom,
       worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
-      hideReference: this.hideVirtualLabels(),
+      hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
       commentOverlapExempt: this.commentOverlapExempt,
       slack: this.lastEmitSlack,
     });

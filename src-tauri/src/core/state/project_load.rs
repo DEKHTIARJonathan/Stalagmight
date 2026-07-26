@@ -420,20 +420,62 @@ impl AppState {
             // own would burn the one retry on a result that dies with the
             // process if the user closes without saving - and the next open
             // would then keep the migration's Jump seed for good.
-            let verdicts: Vec<_> = project
-                .sections
-                .iter()
-                .flat_map(|section| section.shots.iter().map(|shot| (shot.id, shot.kind)))
-                .collect();
-            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
-                // Non-fatal: the flag is cleared in the same transaction as the
-                // writes, so a failure here leaves both undone and the
-                // (idempotent) backfill simply runs again on the next open.
-                tracing::warn!(
-                    error = %e,
+            //
+            // Addressed by (section_id, sequence_order), which is what the rows
+            // are keyed by on disk - `Shot::id` is a synthesised in-memory value
+            // and would hit the wrong rows. Virtual shots only: `Normal` is what
+            // the migration already wrote for every non-legacy-reference row, so
+            // re-stamping them would be one UPDATE per shot in the project on a
+            // load that is already paying for the schema migration.
+            //
+            // Skipped entirely for a remote project. `shots.kind` rides along in
+            // the push snapshot, so writing it here - on a plain open, with no
+            // lock held and no dirty bit - would silently diverge the local
+            // .stalx from BASE, which is exactly the reason resolved warnings
+            // are gated (see the note on `guard_mutation` in app_state.rs). The
+            // in-memory classification still stands, so this session's gas,
+            // penetration and ruler are right; the flag simply stays set and a
+            // later writable open persists it.
+            if matches!(db.load_speleo_link(), Ok(Some(_))) {
+                tracing::info!(
                     purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
-                    "Failed to persist backfilled shot kinds; will retry on next open"
+                    "Remote project: classified in memory only, leaving the flag set"
                 );
+            } else {
+                // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
+                // loader reads `ORDER BY section_id, sequence_order` and pushes
+                // sequentially, so the index is the shot's RANK, while the id
+                // carries the raw stored `sequence_order` (read.rs synthesises
+                // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
+                // differ the moment a legacy file has a gap in the sequence, and
+                // a miss here is permanent because the flag is cleared with it.
+                let verdicts: Vec<_> = project
+                    .sections
+                    .iter()
+                    .flat_map(|section| {
+                        section
+                            .shots
+                            .iter()
+                            .filter(|shot| shot.kind.is_virtual())
+                            .map(|shot| {
+                                (
+                                    section.id,
+                                    shot.id % crate::models::FEATURE_ID_STRIDE,
+                                    shot.kind,
+                                )
+                            })
+                    })
+                    .collect();
+                if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+                    // Non-fatal: the flag is cleared in the same transaction as
+                    // the writes, so a failure here leaves both undone and the
+                    // (idempotent) backfill simply runs again on the next open.
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
+                        "Failed to persist backfilled shot kinds; will retry on next open"
+                    );
+                }
             }
         }
 

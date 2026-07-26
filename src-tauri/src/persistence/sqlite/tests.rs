@@ -4511,6 +4511,89 @@ fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
     );
 }
 
+/// The verdicts the one-shot backfill computes have to land on the RIGHT rows
+/// and survive a reopen.
+///
+/// Regression: the first cut wrote `UPDATE shots SET kind = ? WHERE id = ?`
+/// using the in-memory `Shot::id`. That is a different ID space from the
+/// `shots.id` rowid - `write.rs` never stores an id, and `read.rs` synthesises
+/// one as `section_id * FEATURE_ID_STRIDE + sequence_order`. So section 0's
+/// verdicts landed one row early and every later section matched nothing at
+/// all, while the pending flag was cleared in the same transaction - making the
+/// wrong kinds permanent. Two sections here is the point: a single-section
+/// fixture passes even with the rowid bug.
+#[test]
+fn backfilled_shot_kinds_land_on_the_right_rows_and_survive_a_reopen() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("backfill.stalx");
+
+    let mut project = Project::new("Backfill".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("First".to_string()),
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Reference),
+            legacy_shot(ShotKind::Normal),
+        ],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        name: Some("Second".to_string()),
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Reference),
+        ],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+    }
+
+    // Reload so the shots carry the ids the real backfill path sees, then feed
+    // the verdicts through exactly as project_load does.
+    let db = Database::open_existing(&path).unwrap();
+    let loaded = db.load_project().unwrap();
+    // Section 0's virtual shot -> Reference, section 1's -> Jump. Deliberately
+    // different per section, and neither equal to what is on disk, so a write
+    // that lands on the wrong row or no row cannot pass.
+    let verdicts = vec![
+        (loaded.sections[0].id, 1_u32, ShotKind::Reference),
+        (loaded.sections[1].id, 1_u32, ShotKind::Jump),
+    ];
+    db.persist_backfilled_shot_kinds(&verdicts).unwrap();
+    drop(db);
+
+    let db = Database::open_existing(&path).unwrap();
+    let on_disk: Vec<(u32, i64, i64)> = db
+        .conn
+        .prepare("SELECT section_id, sequence_order, kind FROM shots ORDER BY section_id, sequence_order")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+
+    let s0 = loaded.sections[0].id;
+    let s1 = loaded.sections[1].id;
+    assert_eq!(
+        on_disk,
+        vec![
+            (s0, 0, 0), // Normal, untouched
+            (s0, 1, 2), // Reference - the verdict, on the row it was aimed at
+            (s0, 2, 0), // Normal, untouched (the rowid bug shifted this one)
+            (s1, 0, 0), // Normal, untouched
+            (s1, 1, 1), // Jump - the rowid bug never reached this section at all
+        ],
+        "each verdict must land on its own (section_id, sequence_order) row"
+    );
+    assert!(
+        !db.is_kind_classification_pending(),
+        "the flag clears with the writes, in the same transaction"
+    );
+}
+
 /// The backfill flag is one-shot: once cleared it stays cleared, because
 /// classification is import-time only (#27 q14) and must never silently
 /// re-flip a kind after the user has edited it.

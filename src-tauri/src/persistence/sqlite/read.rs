@@ -4,7 +4,7 @@ use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, ShotId,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, SectionId, Shot,
     ShotKind, StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
@@ -987,15 +987,36 @@ impl Database {
     /// without editing, and the kinds were never written but the flag was gone -
     /// so every later open kept the migration's Jump seed and non-swimmable ties
     /// stayed counted as swum in gas, penetration and the ruler. Persisting here
-    /// makes the backfill durable without marking an untouched project dirty;
-    /// pairing it with the DELETE in one transaction means a crash mid-way
-    /// leaves the flag set and the (idempotent) pass simply repeats.
-    pub fn persist_backfilled_shot_kinds(&self, kinds: &[(ShotId, ShotKind)]) -> Result<()> {
+    /// makes the backfill durable without needing a user-visible save; pairing
+    /// it with the DELETE in one transaction means a crash mid-way leaves the
+    /// flag set and the (idempotent) pass simply repeats.
+    ///
+    /// (The in-memory pass does still `touch()` the project, so `modified_at`
+    /// moves on an open the user did not edit. That timestamp is not persisted
+    /// by this write, and the frontend keeps `isDirty: false` after load, so no
+    /// save is provoked.)
+    ///
+    /// Rows are addressed by `(section_id, sequence_order)` - the same tuple the
+    /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
+    /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
+    /// while the in-memory `Shot::id` is synthesised on load as
+    /// `section_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
+    /// silently writes the wrong rows in the first section and matches nothing
+    /// at all in the rest (the v7->v8 migration converts between the same two
+    /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
+    /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
+    /// memory only, so it would persist against a transient identity.
+    pub fn persist_backfilled_shot_kinds(
+        &self,
+        kinds: &[(SectionId, u32, ShotKind)],
+    ) -> Result<()> {
         let tx = self.conn.unchecked_transaction()?;
         {
-            let mut stmt = tx.prepare("UPDATE shots SET kind = ?1 WHERE id = ?2")?;
-            for (shot_id, kind) in kinds {
-                stmt.execute(params![i32::from(kind.as_u8()), *shot_id])?;
+            let mut stmt = tx.prepare(
+                "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
+            )?;
+            for (section_id, seq, kind) in kinds {
+                stmt.execute(params![i32::from(kind.as_u8()), *section_id, *seq])?;
             }
         }
         tx.execute(

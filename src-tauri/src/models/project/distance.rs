@@ -221,6 +221,13 @@ impl Project {
                 t: f64,
                 len: f64,
                 shot: PathShot,
+                /// Whether a diver can actually swim this leg. `build_survey_graph`
+                /// blocks a non-swum reference tie by weighting its from<->to edge
+                /// INFINITY, but the split edges an endpoint adds below bypass that
+                /// edge entirely - so without this the ruler routes across up to one
+                /// partial reference tie per endpoint, contradicting the exclusion
+                /// this function documents (#27).
+                swimmable: bool,
             },
         }
 
@@ -248,6 +255,7 @@ impl Project {
                         section_id: ep.section_id,
                         shot_id,
                     },
+                    swimmable: include_reference || section.shots[pos].kind.is_swum(),
                 });
             }
             // Station endpoint.
@@ -277,12 +285,20 @@ impl Project {
                     t: ta,
                     len,
                     shot: sa,
+                    swimmable,
                     ..
                 },
                 Resolved::Shot {
                     t: tb, shot: sb, ..
                 },
-            ) if sa == sb => Some(((ta - tb).abs() * len, *sa)),
+            ) if sa == sb => Some((
+                if *swimmable {
+                    (ta - tb).abs() * len
+                } else {
+                    f64::INFINITY
+                },
+                *sa,
+            )),
             _ => None,
         };
 
@@ -323,11 +339,20 @@ impl Project {
                     t,
                     len,
                     shot,
+                    swimmable,
                 } => {
                     let v = adj.len();
-                    adj.push(vec![(from, t * len), (to, (1.0 - t) * len)]);
-                    adj[from].push((v, t * len));
-                    adj[to].push((v, (1.0 - t) * len));
+                    // Mirror build_survey_graph: an unswimmable leg's halves cost
+                    // INFINITY rather than being omitted, so the node still exists
+                    // (and still tints) but no route can pass through it.
+                    let (w_from, w_to) = if swimmable {
+                        (t * len, (1.0 - t) * len)
+                    } else {
+                        (f64::INFINITY, f64::INFINITY)
+                    };
+                    adj.push(vec![(from, w_from), (to, w_to)]);
+                    adj[from].push((v, w_from));
+                    adj[to].push((v, w_to));
                     shot_edge.insert((v, from), shot);
                     shot_edge.insert((from, v), shot);
                     shot_edge.insert((v, to), shot);

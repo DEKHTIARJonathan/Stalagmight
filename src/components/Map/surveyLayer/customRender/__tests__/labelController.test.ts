@@ -53,7 +53,12 @@ const h = vi.hoisted(() => {
     private reason: string | null = null;
     updateCalls = 0;
     styleCalls = 0;
-    lastStyle: { kindEnabled: boolean[]; haloColors: unknown[]; hideReference: boolean } | null = null;
+    lastStyle: {
+      kindEnabled: boolean[];
+      haloColors: unknown[];
+      hideReference: boolean;
+      hideJump: boolean;
+    } | null = null;
 
     constructor(id: string, data: unknown, onSelfDisable: ((reason: string) => void) | null = null) {
       this.id = id;
@@ -93,7 +98,12 @@ const h = vi.hoisted(() => {
       if (d?.buffers) d.buffers.revealZoom = revealZoom;
       this.revealCalls++;
     }
-    setStyleInputs(style: { kindEnabled: boolean[]; haloColors: unknown[]; hideReference: boolean }): void {
+    setStyleInputs(style: {
+      kindEnabled: boolean[];
+      haloColors: unknown[];
+      hideReference: boolean;
+      hideJump: boolean;
+    }): void {
       this.lastStyle = style;
       this.styleCalls++;
     }
@@ -377,26 +387,30 @@ describe('SurveyLabelController style wiring', () => {
     expect(layer.lastStyle?.haloColors.length).toBeGreaterThan(0);
   });
 
-  it('hides virtual labels only when BOTH kinds are hidden (#27)', () => {
+  it('hides each virtual kind\'s labels with its own toggle (#27)', () => {
+    // Regression: label flags used to carry a single "virtual" bit and the
+    // controller only hid labels when BOTH kinds were off. Because the LINE
+    // shader is per-kind, hiding References alone collapsed their geometry
+    // while their shot-data and comment labels stayed drawn in empty space -
+    // the orphan-label bug, mirrored for Jumps. The flags now carry the kind.
     const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
     expect(layer.lastStyle?.hideReference).toBe(false);
+    expect(layer.lastStyle?.hideJump).toBe(false);
 
-    // Label flags carry a single "virtual" bit, not the kind, so hiding one
-    // kind alone must NOT drop the labels - that would hide the label of a
-    // jump that is still drawn. Deliberately conservative: the rule can only
-    // ever keep a label visible.
     c.setReferenceShotsVisible(false);
-    expect(layer.lastStyle?.hideReference).toBe(false);
+    expect(layer.lastStyle?.hideReference).toBe(true);
+    expect(layer.lastStyle?.hideJump).toBe(false);
 
     c.setJumpShotsVisible(false);
     expect(layer.lastStyle?.hideReference).toBe(true);
+    expect(layer.lastStyle?.hideJump).toBe(true);
 
-    // Bringing either kind back makes the labels eligible again.
     c.setReferenceShotsVisible(true);
     expect(layer.lastStyle?.hideReference).toBe(false);
+    expect(layer.lastStyle?.hideJump).toBe(true);
   });
 });
 

@@ -94,7 +94,10 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
     new Uint8Array(a.buffer, a.byteOffset, a.byteLength);
 
   return {
-    version: 2,
+    // Keep in sync with BINARY_FORMAT_VERSION / EXPECTED_VERSION. This fixture
+    // feeds buildResult() directly, bypassing the envelope-version gate, so a
+    // stale value here rots silently rather than failing.
+    version: 3,
     loading_id: 1,
     project_header: {
       name: 'fixture',

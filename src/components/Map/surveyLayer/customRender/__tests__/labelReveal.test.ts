@@ -36,6 +36,7 @@ function input(over: Partial<RevealInput> = {}): RevealInput {
     worldPixelScale: 1e6,
     kindVisible: [true, true, true, true, true],
     hideReference: false,
+    hideJump: false,
     ...over,
   };
 }
@@ -148,15 +149,59 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
     expect(reveal[1]).toBe(14); // shot emitted uncontested at its floor
   });
 
-  it('reference/all-reference labels are not contested when reference shots are hidden', () => {
+  it('reference/all-reference labels are not contested when both virtual kinds are hidden', () => {
     const descs = [
       desc(LABEL_KIND.SECTION_NAME, { flags: LABEL_FLAG.ALL_REFERENCE }),
       desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.REFERENCE, ordinal: 0 }),
     ];
-    const reveal = computeRevealZooms(descs, [UNIT_EXT, UNIT_EXT], input({ hideReference: true }));
-    // Both are emitted at their floors (the shader hides them via u_hide_reference).
+    const reveal = computeRevealZooms(
+      descs,
+      [UNIT_EXT, UNIT_EXT],
+      input({ hideReference: true, hideJump: true })
+    );
+    // Both are emitted at their floors (the shader hides them via the uniforms).
     expect(reveal[0]).toBe(10);
     expect(reveal[1]).toBe(14);
+  });
+
+  it('each virtual kind stops being a candidate under ITS OWN toggle (#27)', () => {
+    // Regression: one shared "virtual" bit meant hiding References also
+    // suppressed a Jump's label (and vice versa), while the line shader kept
+    // drawing that jump - text over collapsed geometry, or text missing from a
+    // drawn leg. Contest each against a plain shot label at the same anchor:
+    // a non-candidate yields its floor, a candidate loses and reveals later.
+    const jump = desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.JUMP, ordinal: 1 });
+    const winner = desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 });
+
+    // Jumps hidden -> non-candidate: emitted uncontested at its decimation
+    // floor. References hidden -> still a candidate: it contests the shared
+    // anchor, loses to the lower ordinal, and so reveals strictly later.
+    const jumpsHidden = computeRevealZooms(
+      [winner, jump],
+      [UNIT_EXT, UNIT_EXT],
+      input({ hideJump: true })
+    );
+    const refsHidden = computeRevealZooms(
+      [winner, jump],
+      [UNIT_EXT, UNIT_EXT],
+      input({ hideReference: true })
+    );
+    expect(jumpsHidden[1]).toBeLessThan(refsHidden[1]!);
+    // And hiding references leaves it exactly where hiding nothing does.
+    const nothingHidden = computeRevealZooms([winner, jump], [UNIT_EXT, UNIT_EXT], input());
+    expect(refsHidden[1]).toBe(nothingHidden[1]);
+  });
+
+  it('an all-reference label stays contested while either virtual kind is drawn', () => {
+    const allRef = desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.ALL_REFERENCE, ordinal: 1 });
+    const winner = desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 });
+    const reveal = computeRevealZooms(
+      [winner, allRef],
+      [UNIT_EXT, UNIT_EXT],
+      input({ hideReference: true })
+    );
+    const nothingHidden = computeRevealZooms([winner, allRef], [UNIT_EXT, UNIT_EXT], input());
+    expect(reveal[1]).toBe(nothingHidden[1]);
   });
 
   it('an empty (whitespace) label never reveals - no ink, never emitted', () => {

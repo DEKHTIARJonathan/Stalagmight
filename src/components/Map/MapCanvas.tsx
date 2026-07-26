@@ -783,6 +783,11 @@ function MapCanvas() {
   // longer drawn, so the cyan marker doesn't linger on hidden geometry - the
   // null-ness effect above then removes the marker + ref (#26, Codex).
   useEffect(() => {
+    // Nothing is hidden -> nothing to drop. Bail before the lookup: reading
+    // `section.shots` force-materializes the lazy per-section shot array
+    // (`noteShotMaterialization` in loadProjectBinary.ts), and the default
+    // all-visible state must not pay that on every project refresh.
+    if (showShots && showJumps && showReferenceShots) return;
     const snap = useUIStore.getState().measureSnapShot;
     if (!snap) return;
     const kind = project?.sections
@@ -2675,8 +2680,12 @@ function MapCanvas() {
   // are independent (#27), so this has to run for either going OFF and has to
   // judge each selected shot by its own kind - keying the whole effect off the
   // reference toggle deselected still-visible jumps.
-  // Uses composite identity (file_path or created_at) since Project type has no id field
-  const projectIdentity = project?.file_path ?? project?.created_at;
+  // Keyed on `project?.sections`, not a project-identity string: a shot's kind
+  // is editable (context menu, the J/R table cell, a fill-drag), and those go
+  // through executeCommand, which bumps `modified_at` but never `file_path` /
+  // `created_at`. Keying on identity meant marking the SELECTED shot as a Jump
+  // while Jumps were hidden left it selected and in the Detail panel after it
+  // vanished from the map. The measure-snap effect above already keys this way.
   useEffect(() => {
     if ((showReferenceShots && showJumps) || !project?.sections) return;
     filterSelection((s) => {
@@ -2687,7 +2696,7 @@ function MapCanvas() {
     });
     surveyLayerRef.current?.clearShotHover();
     setHoveredShot(null);
-  }, [showShots, showJumps, showReferenceShots, projectIdentity, filterSelection, setHoveredShot]);
+  }, [showShots, showJumps, showReferenceShots, project?.sections, filterSelection, setHoveredShot]);
 
   // The scale bar is always shown. Add the control once the map is loaded.
   useEffect(() => {
@@ -3389,7 +3398,7 @@ function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [activeStations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
+    [activeStations, project?.sections, config, gpsOrigin, showShots, showJumps, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)

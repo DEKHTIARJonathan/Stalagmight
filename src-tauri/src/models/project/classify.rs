@@ -30,9 +30,12 @@
 //! cell reclassifies in one click (and fill-drags down a run), and that
 //! `gas.include_reference_legs` can restore the old inclusive behaviour.
 //!
-//! This pass runs **only** at import finalize and once at the post-migration
-//! backfill. It deliberately never re-runs, so a later merge cannot silently
-//! flip a kind under the user.
+//! There are exactly three call sites, and each is a point where a shot's
+//! virtualness is *established* rather than edited: import finalize
+//! (`command_import.rs`), the one-shot post-migration backfill
+//! (`project_load.rs`), and collab apply for shots a partner just turned
+//! VIRTUAL in Ariane (`collab.rs`). It deliberately never runs anywhere else,
+//! so a later merge cannot silently flip a kind under the user.
 //!
 //! # Scope
 //!
@@ -66,7 +69,14 @@ pub enum ClassifyScope<'a> {
     /// Rewrite only these individual shots. The collab apply path needs this
     /// granularity: a partner flipping one shot to VIRTUAL in Ariane must not
     /// re-kind the rest of the section around it.
-    Shots(&'a HashSet<ShotId>),
+    ///
+    /// Keyed by `(section_id, shot_id)`, not `shot_id` alone. Shot ids are
+    /// minted as `section_id * FEATURE_ID_STRIDE + seq`, so they are only
+    /// project-unique while no section exceeds `FEATURE_ID_STRIDE` shots - and
+    /// the set this scope is built from comes from a collaborator's `.tml`,
+    /// which is untrusted input. Carrying the section makes the filter correct
+    /// without depending on that invariant.
+    Shots(&'a HashSet<(SectionId, ShotId)>),
 }
 
 impl ClassifyScope<'_> {
@@ -74,7 +84,7 @@ impl ClassifyScope<'_> {
         match self {
             ClassifyScope::WholeProject => true,
             ClassifyScope::Sections(ids) => ids.contains(&section_id),
-            ClassifyScope::Shots(ids) => ids.contains(&shot_id),
+            ClassifyScope::Shots(ids) => ids.contains(&(section_id, shot_id)),
         }
     }
 }
@@ -266,7 +276,6 @@ impl Project {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
 mod tests {
     use chrono::Utc;
 

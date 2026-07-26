@@ -389,7 +389,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     // Shots this changeset flipped from real to virtual. Their kind cannot be
     // settled inline - the chain rule needs the graph the whole changeset
     // produces - so they are collected here and classified at the end.
-    let mut newly_virtual: HashSet<ShotId> = HashSet::new();
+    let mut newly_virtual: HashSet<(SectionId, ShotId)> = HashSet::new();
     // Edits in place, preserving Stalagmight-only fields.
     for e in &cs.shots_edited {
         let Some(section) = project.get_section_mut(e.section_id) else {
@@ -444,7 +444,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 // dropped everything beyond it out of penetration, the distance
                 // gradient and gas reach. Defer to the classifier below, once
                 // the whole changeset has been applied and the graph is final.
-                newly_virtual.insert(shot.id);
+                newly_virtual.insert((e.section_id, shot.id));
             }
         }
         // Preserved (no TML equivalent): azimuth_out, pitch_out,
@@ -577,6 +577,16 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                         project.station_comments.insert(key, text.to_string());
                     }
                 }
+            }
+            // An ADDED virtual shot needs the chain rule for exactly the reason
+            // an edited one does: `a.data.kind` is `normalize_tml_shot`'s
+            // provisional Reference seed, not a verdict, because Ariane only
+            // says VIRTUAL. A partner who draws a NEW jump line (rather than
+            // flipping an existing shot) would otherwise land a permanent
+            // Reference - infinite edge weight, far side gone from penetration,
+            // the distance gradient and gas reach.
+            if a.data.kind.is_virtual() {
+                newly_virtual.insert((sid, nid));
             }
             last_add = Some((sid, a.after_shot_id, nid));
         }

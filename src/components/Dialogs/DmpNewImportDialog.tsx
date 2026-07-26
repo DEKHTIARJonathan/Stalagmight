@@ -2179,6 +2179,7 @@ export default function DmpNewImportDialog({
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: earlyExistingShotUpdates.length > 0 ? earlyExistingShotUpdates : null,
+            virtualShotMode: 'AllReferences',
           }, { purpose: 'import reachable sections (early import)' });
 
           if (!result.success) {
@@ -2278,7 +2279,14 @@ export default function DmpNewImportDialog({
           station_comments: [],
         };
 
-        const result = await importSections([config], selectionConfig.fileHash, selectionConfig.sectionHashes);
+        // 'AllReferences', not Auto (#27): the DMP parser only ever emits
+        // Normal shots, so every virtual shot reaching this import is one the
+        // user marked Reference here - the "Keep both (reference)" overlap
+        // treatment. Auto would re-judge them by the chain rule and promote the
+        // bounded ones to Jump, putting the duplicated geometry back into gas
+        // and penetration, which is the double-count keep-both exists to avoid.
+        // AllReferences leaves Normal shots untouched and preserves the choice.
+        const result = await importSections([config], selectionConfig.fileHash, selectionConfig.sectionHashes, 'AllReferences');
         setIsImporting(false);
 
         if (!result.success) {
@@ -2422,6 +2430,7 @@ export default function DmpNewImportDialog({
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: pendingExistingShotUpdates.length > 0 ? pendingExistingShotUpdates : null,
+            virtualShotMode: 'AllReferences',
           }, { purpose: 'import segment sections' });
 
           if (result.success) {
@@ -2508,6 +2517,7 @@ export default function DmpNewImportDialog({
             fileHash: selectionConfig.fileHash ?? null,
             sectionHashes: selectionConfig.sectionHashes ?? null,
             existingShotUpdates: lateExistingShotUpdates.length > 0 ? lateExistingShotUpdates : null,
+            virtualShotMode: 'AllReferences',
           }, { purpose: 'import remaining sections (late import)' });
 
           if (!result.success) {
@@ -3328,6 +3338,7 @@ export default function DmpNewImportDialog({
         fileHash: selectionConfig.fileHash ?? null,
         sectionHashes: selectionConfig.sectionHashes ?? null,
         existingShotUpdates: segmentExistingShotUpdates.length > 0 ? segmentExistingShotUpdates : null,
+        virtualShotMode: 'AllReferences',
       }, { purpose: 'import placed segment sections' });
 
       if (!result.success) {

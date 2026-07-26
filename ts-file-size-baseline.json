@@ -16,7 +16,7 @@
     "src/components/Dialogs/DeleteShotChoiceDialog.tsx": 117,
     "src/components/Dialogs/DeleteShotImpactDetails.tsx": 120,
     "src/components/Dialogs/DialogWrapper.tsx": 309,
-    "src/components/Dialogs/DmpNewImportDialog.tsx": 3657,
+    "src/components/Dialogs/DmpNewImportDialog.tsx": 3661,
     "src/components/Dialogs/DmpSelectionDialog.tsx": 418,
     "src/components/Dialogs/DrawShotDialog.tsx": 336,
     "src/components/Dialogs/EditSectionDialog.tsx": 455,

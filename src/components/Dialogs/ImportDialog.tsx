@@ -429,9 +429,13 @@ export default function ImportDialog() {
                       <span className="px-2 py-1 flex items-center justify-center">
                         <input
                           type="checkbox"
-                          // Still a virtual-vs-not checkbox. Which virtual kind
-                          // it becomes is the chain classifier's call at import
-                          // finalize (#27), or the per-file override above.
+                          // Still a virtual-vs-not checkbox, and on THIS path the
+                          // Reference it writes is final: the dialog submits via
+                          // createSection / createSectionAndMerge, not
+                          // execute_import_sections, so the #27 chain classifier
+                          // never sees these shots. Ticking it means "exclude
+                          // from gas, penetration and the ruler"; the J/R cell in
+                          // the data table is where it can be changed afterwards.
                           checked={(shot.kind ?? 'Normal') !== 'Normal'}
                           onChange={(e) =>
                             handleShotChange(rowIndex, 'kind', e.target.checked ? 'Reference' : 'Normal')

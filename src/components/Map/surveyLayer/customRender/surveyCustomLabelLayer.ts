@@ -101,6 +101,7 @@ const DEFAULT_STYLE: LabelStyleInputs = {
   kindEnabled: [false, false, false, false, false],
   haloColors: [],
   hideReference: false,
+      hideJump: false,
 };
 
 export class SurveyCustomLabelLayer implements CustomLayerInterface {
@@ -315,6 +316,7 @@ export class SurveyCustomLabelLayer implements CustomLayerInterface {
     gl.uniform4fv(gl.getUniformLocation(prog, 'u_halo_color'), u.haloColor);
     gl.uniform1fv(gl.getUniformLocation(prog, 'u_halo_width_px'), u.haloWidthPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), u.hideReference);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), u.hideJump);
 
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.tex);
