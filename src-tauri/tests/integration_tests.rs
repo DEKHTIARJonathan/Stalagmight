@@ -64,13 +64,15 @@ fn test_station_coordinates_computed_correctly() {
     // Create shots: North 10m, then East 10m
     let shot_a = create_shot_data(0.0, 10.0, 5.0, 5.0);
     let shot_b = create_shot_data(90.0, 10.0, 5.0, 6.0);
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![
-            shot_a,         // North 10m (horizontal)
-            shot_b.clone(), // East 10m (slope)
-        ],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![
+                shot_a,         // North 10m (horizontal)
+                shot_b.clone(), // East 10m (slope)
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let stations = project.compute_station_coordinates();
 
@@ -95,10 +97,12 @@ fn test_station_coordinates_computed_correctly() {
 fn test_zero_datum_propagation() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datum at station 0
     let gps = GpsCoordinates {
@@ -121,14 +125,18 @@ fn test_zero_datum_propagation() {
 fn test_station_id_stability() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let stations = project.compute_station_coordinates();
 
@@ -191,10 +199,12 @@ fn test_station_merge_repositioning() {
     let mut project = create_test_project();
 
     // Section A goes north (with zero datum to anchor it)
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datum on section A to anchor it
     project
@@ -209,10 +219,12 @@ fn test_station_merge_repositioning() {
         .unwrap();
 
     // Section B goes east (starts at origin, will move)
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Merge station 0:1 (end of A at y=10) with station 1:0 (start of B)
     // Since A has zero datum, B will move to align
@@ -241,14 +253,18 @@ fn test_station_merge_repositioning() {
 fn test_unmerge_keeps_position() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Merge then unmerge
     project
@@ -269,14 +285,18 @@ fn test_unmerge_keeps_position() {
 fn test_duplicate_merge_rejection() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // First merge succeeds
     let result1 = project.merge_stations(StationRef::new(0, 1), StationRef::new(1, 0));
@@ -293,14 +313,18 @@ fn test_duplicate_merge_rejection() {
 fn test_delete_section_cleanup() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     project
         .merge_stations(StationRef::new(0, 1), StationRef::new(1, 0))
@@ -321,14 +345,18 @@ fn test_delete_section_cleanup() {
 fn test_multiple_zero_datums_disconnected() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datum on section A
     let gps_a = GpsCoordinates {
@@ -356,10 +384,12 @@ fn test_multiple_zero_datums_disconnected() {
 fn test_merge_nonexistent_station_fails() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Try to merge with non-existent station
     let result = project.merge_stations(
@@ -379,20 +409,24 @@ fn test_loop_detection_simple() {
     let mut project = create_test_project();
 
     // Create a loop: Section A (north), Section B (east), merge to form loop
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-        ],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![
-            create_shot_data(90.0, 10.0, 5.0, 5.0),
-            create_shot_data(90.0, 10.0, 5.0, 5.0),
-        ],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![
+                create_shot_data(90.0, 10.0, 5.0, 5.0),
+                create_shot_data(90.0, 10.0, 5.0, 5.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // First merge end of A to start of B (connects them)
     project
@@ -417,14 +451,18 @@ fn test_loop_closure_error_calculation() {
     let mut project = create_test_project();
 
     // Create sections that form almost-closed loop
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)], // North 10m
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)], // East 10m
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)], // North 10m
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)], // East 10m
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Connect them in a way that creates a loop
     project
@@ -691,14 +729,16 @@ fn test_comprehensive_undo_types() {
 fn test_shot_deletion() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 6.0),
-            create_shot_data(0.0, 10.0, 6.0, 7.0),
-        ],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 6.0),
+                create_shot_data(0.0, 10.0, 6.0, 7.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let section = project.get_section(0).unwrap();
     assert_eq!(section.shots.len(), 3);
@@ -716,7 +756,9 @@ fn test_shot_deletion() {
 fn test_section_metadata_update() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots("Original", vec![]));
+    project
+        .add_section(create_section_with_shots("Original", vec![]))
+        .expect("add_section within MAX_SECTION_ID");
 
     let updates = SectionUpdates {
         name: Some(Some("Updated Name".to_string())),
@@ -744,15 +786,17 @@ fn test_section_colors_unique() {
     let colors = ["#4ecdc4", "#ff6b6b", "#ffd93d", "#6bcb77"];
 
     for (i, color) in colors.iter().enumerate() {
-        project.add_section(SectionData {
-            name: Some(format!("Section {i}")),
-            surveyor: None,
-            date: None,
-            color: (*color).to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![],
-        });
+        project
+            .add_section(SectionData {
+                name: Some(format!("Section {i}")),
+                surveyor: None,
+                date: None,
+                color: (*color).to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![],
+            })
+            .expect("add_section within MAX_SECTION_ID");
     }
 
     let section_colors: HashSet<_> = project.sections.iter().map(|s| &s.color).collect();
@@ -768,15 +812,17 @@ fn test_section_date_storage() {
 
     let date = NaiveDate::from_ymd_opt(2024, 6, 15).unwrap();
 
-    project.add_section(SectionData {
-        name: Some("Dated Section".to_string()),
-        surveyor: None,
-        date: Some(date),
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Dated Section".to_string()),
+            surveyor: None,
+            date: Some(date),
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let section = project.get_section(0).unwrap();
     assert_eq!(section.date, Some(date));
@@ -791,17 +837,21 @@ fn test_section_date_storage() {
 fn test_project_stats() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 6.0),
-            create_shot_data(0.0, 15.0, 6.0, 8.0),
-        ],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 20.0, 10.0, 12.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 6.0),
+                create_shot_data(0.0, 15.0, 6.0, 8.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 20.0, 10.0, 12.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let stats = project.stats();
 
@@ -820,14 +870,16 @@ fn test_penetration_distance() {
     let mut project = create_test_project();
 
     // Create a straight line north: 10m + 10m + 10m = 30m
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-        ],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datum at start
     project
@@ -857,10 +909,12 @@ fn test_penetration_distance() {
 fn test_move_section_offset() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Manually set section offset
     project.section_offsets.insert(0, (10.0, 20.0));
@@ -877,10 +931,12 @@ fn test_move_section_offset() {
 fn test_move_preserves_shot_data() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let original_length = project.get_section(0).unwrap().shots[0].length;
 
@@ -1204,7 +1260,9 @@ fn test_reference_shot_flag() {
     let mut shot_data = create_shot_data(0.0, 10.0, 5.0, 5.0);
     shot_data.is_reference = true;
 
-    project.add_section(create_section_with_shots("Main", vec![shot_data]));
+    project
+        .add_section(create_section_with_shots("Main", vec![shot_data]))
+        .expect("add_section within MAX_SECTION_ID");
 
     let shot = &project.get_section(0).unwrap().shots[0];
     assert!(shot.is_reference);
@@ -1308,7 +1366,9 @@ fn test_large_survey_data_structure() {
         .map(|i| create_shot_data(f64::from(i) % 360.0, 1.0, 5.0, 5.0 + (f64::from(i) * 0.01)))
         .collect();
 
-    project.add_section(create_section_with_shots("Large", shots));
+    project
+        .add_section(create_section_with_shots("Large", shots))
+        .expect("add_section within MAX_SECTION_ID");
 
     let stats = project.stats();
     assert_eq!(stats.shot_count, 1000);
@@ -1327,7 +1387,9 @@ fn test_shot_order_preserved() {
         create_shot_data(270.0, 4.0, 5.0, 5.0),
     ];
 
-    project.add_section(create_section_with_shots("Ordered", shots));
+    project
+        .add_section(create_section_with_shots("Ordered", shots))
+        .expect("add_section within MAX_SECTION_ID");
 
     let section = project.get_section(0).unwrap();
     assert_eq!(section.shots.len(), 4);
@@ -1341,10 +1403,12 @@ fn test_shot_order_preserved() {
 #[test]
 fn test_project_json_roundtrip() {
     let mut project = create_test_project();
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let json = serde_json::to_string(&project).unwrap();
     let restored: Project = serde_json::from_str(&json).unwrap();
@@ -1362,10 +1426,12 @@ fn test_project_json_roundtrip() {
 fn test_zero_datum_removal() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set and then remove zero datum
     project
@@ -1390,10 +1456,12 @@ fn test_zero_datum_removal() {
 fn test_connected_zero_datum_rejection() {
     let mut project = create_test_project();
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datum at station 0
     project
@@ -1435,7 +1503,9 @@ fn test_shot_id_generation() {
         .map(|_| create_shot_data(0.0, 1.0, 5.0, 5.0))
         .collect();
 
-    project.add_section(create_section_with_shots("Large", shots));
+    project
+        .add_section(create_section_with_shots("Large", shots))
+        .expect("add_section within MAX_SECTION_ID");
 
     let section = project.get_section(0).unwrap();
 
@@ -1530,7 +1600,9 @@ fn test_section_stats() {
     ];
     shots[1].is_reference = true;
 
-    project.add_section(create_section_with_shots("Test", shots));
+    project
+        .add_section(create_section_with_shots("Test", shots))
+        .expect("add_section within MAX_SECTION_ID");
 
     let section = project.get_section(0).unwrap();
     let stats = section.stats();
@@ -1586,10 +1658,12 @@ fn test_project_metadata() {
     let mut project = Project::new("Test Cave".to_string(), Some("Location".to_string()));
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 50.0, 5.0, 10.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 50.0, 5.0, 10.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let metadata = project.metadata().unwrap();
 
@@ -1737,14 +1811,18 @@ fn test_negative_lrud_errors() {
 #[test]
 fn test_save_load_with_station_merges() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "B",
-        vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "B",
+            vec![create_shot_data(90.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Add a merge
     project.station_merges.push(StationMerge {
@@ -1766,10 +1844,12 @@ fn test_save_load_with_station_merges() {
 #[test]
 fn test_save_load_with_zero_datums() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     project
         .set_zero_datum(
@@ -1796,10 +1876,12 @@ fn test_save_load_with_zero_datums() {
 #[test]
 fn test_save_load_with_section_offsets() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
     project.section_offsets.insert(0, (15.5, -20.3));
 
     let mut db = Database::in_memory().unwrap();
@@ -1815,10 +1897,12 @@ fn test_save_load_with_section_offsets() {
 #[test]
 fn test_save_load_with_loop_closures() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     project.loop_closures.push(LoopClosure {
         id: 1,
@@ -1947,13 +2031,15 @@ fn test_section_to_section_data() {
 #[test]
 fn test_project_insert_shot_after() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(90.0, 10.0, 5.0, 5.0),
-        ],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(90.0, 10.0, 5.0, 5.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let first_shot_id = project.sections[0].shots[0].id;
     let result = project.insert_shot_after(
@@ -1974,10 +2060,12 @@ fn test_project_insert_shot_after() {
 #[test]
 fn test_project_update_shot() {
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let shot_id = project.sections[0].shots[0].id;
     let updates = ShotUpdates {
@@ -2005,10 +2093,12 @@ fn test_project_update_shot() {
 fn test_gps_metadata_no_datums() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let metadata = project.metadata().unwrap();
 
@@ -2021,10 +2111,12 @@ fn test_gps_metadata_no_datums() {
 fn test_gps_metadata_single_datum() {
     let mut project = Project::new("Test Cave".to_string(), None);
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
-    project.add_section(create_section_with_shots(
-        "Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let gps = GpsCoordinates {
         latitude: 45.5,
@@ -2055,14 +2147,18 @@ fn test_gps_metadata_multiple_datums() {
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datums on different sections (allowed because disconnected)
     let gps_a = GpsCoordinates {
@@ -2105,18 +2201,24 @@ fn test_gps_metadata_dateline_crossing() {
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create three disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section C",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section C",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set zero datums spanning the dateline (179 and -179 are close together)
     let gps_a = GpsCoordinates {
@@ -2162,14 +2264,18 @@ fn test_gps_metadata_center_stability() {
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let gps_a = GpsCoordinates {
         latitude: 45.0,
@@ -2209,14 +2315,18 @@ fn test_gps_metadata_update_preserves_order() {
     project.file_path = Some(std::path::PathBuf::from("/tmp/test.stalx"));
 
     // Create two disconnected sections
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Set first datum
     let gps_a = GpsCoordinates {
@@ -2268,10 +2378,12 @@ fn test_gps_metadata_update_preserves_order() {
 #[test]
 fn test_gps_invalid_coordinates_rejected() {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // NaN latitude should be rejected
     let gps_nan = GpsCoordinates {
@@ -2338,17 +2450,21 @@ fn test_merge_projects_basic() {
     // Create first project with 2 sections
     let path1 = dir.path().join("project1.stalx");
     let mut project1 = Project::new("Cave A".to_string(), Some("Location A".to_string()));
-    project1.add_section(create_section_with_shots(
-        "A-Main",
-        vec![
-            create_shot_data(0.0, 10.0, 5.0, 5.0),
-            create_shot_data(45.0, 8.0, 5.0, 6.0),
-        ],
-    ));
-    project1.add_section(create_section_with_shots(
-        "A-Side",
-        vec![create_shot_data(90.0, 5.0, 6.0, 7.0)],
-    ));
+    project1
+        .add_section(create_section_with_shots(
+            "A-Main",
+            vec![
+                create_shot_data(0.0, 10.0, 5.0, 5.0),
+                create_shot_data(45.0, 8.0, 5.0, 6.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project1
+        .add_section(create_section_with_shots(
+            "A-Side",
+            vec![create_shot_data(90.0, 5.0, 6.0, 7.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db1 = Database::open(&path1).unwrap();
     db1.save_project(&project1).unwrap();
@@ -2357,13 +2473,15 @@ fn test_merge_projects_basic() {
     // Create second project with 1 section
     let path2 = dir.path().join("project2.stalx");
     let mut project2 = Project::new("Cave B".to_string(), Some("Location B".to_string()));
-    project2.add_section(create_section_with_shots(
-        "B-Main",
-        vec![
-            create_shot_data(180.0, 12.0, 4.0, 4.0),
-            create_shot_data(270.0, 6.0, 4.0, 5.0),
-        ],
-    ));
+    project2
+        .add_section(create_section_with_shots(
+            "B-Main",
+            vec![
+                create_shot_data(180.0, 12.0, 4.0, 4.0),
+                create_shot_data(270.0, 6.0, 4.0, 5.0),
+            ],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db2 = Database::open(&path2).unwrap();
     db2.save_project(&project2).unwrap();
@@ -2386,12 +2504,16 @@ fn test_merge_projects_basic() {
 
     // Add sections from project 1
     for section in &loaded1.sections {
-        merged.add_section(section.to_section_data());
+        merged
+            .add_section(section.to_section_data())
+            .expect("add_section within MAX_SECTION_ID");
     }
 
     // Add sections from project 2
     for section in &loaded2.sections {
-        merged.add_section(section.to_section_data());
+        merged
+            .add_section(section.to_section_data())
+            .expect("add_section within MAX_SECTION_ID");
     }
 
     // Save merged project
@@ -2434,10 +2556,12 @@ fn test_merge_projects_preserves_zero_datums() {
     // Create first project with zero datum
     let path1 = dir.path().join("project_zd1.stalx");
     let mut project1 = Project::new("Cave ZD1".to_string(), None);
-    project1.add_section(create_section_with_shots(
-        "ZD1-Main",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
+    project1
+        .add_section(create_section_with_shots(
+            "ZD1-Main",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
     project1
         .set_zero_datum(
             StationRef::new(0, 0),
@@ -2456,10 +2580,12 @@ fn test_merge_projects_preserves_zero_datums() {
     // Create second project with zero datum
     let path2 = dir.path().join("project_zd2.stalx");
     let mut project2 = Project::new("Cave ZD2".to_string(), None);
-    project2.add_section(create_section_with_shots(
-        "ZD2-Main",
-        vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
-    ));
+    project2
+        .add_section(create_section_with_shots(
+            "ZD2-Main",
+            vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
     project2
         .set_zero_datum(
             StationRef::new(0, 1), // End of section
@@ -2487,7 +2613,7 @@ fn test_merge_projects_preserves_zero_datums() {
     for section in &loaded1.sections {
         let old_id = section.id;
         let new_section = merged.add_section(section.to_section_data());
-        let new_id = new_section.id;
+        let new_id = new_section.expect("add_section within MAX_SECTION_ID").id;
 
         // Remap zero datums
         for zd in &loaded1.zero_datums {
@@ -2502,7 +2628,7 @@ fn test_merge_projects_preserves_zero_datums() {
     for section in &loaded2.sections {
         let old_id = section.id;
         let new_section = merged.add_section(section.to_section_data());
-        let new_id = new_section.id;
+        let new_id = new_section.expect("add_section within MAX_SECTION_ID").id;
 
         // Remap zero datums
         for zd in &loaded2.zero_datums {
@@ -2544,14 +2670,18 @@ fn test_merge_projects_preserves_station_merges() {
     let path1 = dir.path().join("project_merge1.stalx");
     let mut project1 = Project::new("Cave Merge".to_string(), None);
 
-    project1.add_section(create_section_with_shots(
-        "Section A",
-        vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
-    ));
-    project1.add_section(create_section_with_shots(
-        "Section B",
-        vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
-    ));
+    project1
+        .add_section(create_section_with_shots(
+            "Section A",
+            vec![create_shot_data(0.0, 10.0, 5.0, 5.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
+    project1
+        .add_section(create_section_with_shots(
+            "Section B",
+            vec![create_shot_data(90.0, 8.0, 4.0, 4.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     // Merge last station of section 0 with first station of section 1
     project1
@@ -2568,10 +2698,12 @@ fn test_merge_projects_preserves_station_merges() {
     // Create second project (empty)
     let path2 = dir.path().join("project_merge2.stalx");
     let mut project2 = Project::new("Empty Cave".to_string(), None);
-    project2.add_section(create_section_with_shots(
-        "Section C",
-        vec![create_shot_data(180.0, 6.0, 3.0, 3.0)],
-    ));
+    project2
+        .add_section(create_section_with_shots(
+            "Section C",
+            vec![create_shot_data(180.0, 6.0, 3.0, 3.0)],
+        ))
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db2 = Database::open(&path2).unwrap();
     db2.save_project(&project2).unwrap();
@@ -2590,7 +2722,10 @@ fn test_merge_projects_preserves_station_merges() {
     for section in &loaded1.sections {
         let old_id = section.id;
         let new_section = merged.add_section(section.to_section_data());
-        section_id_map.insert(old_id, new_section.id);
+        section_id_map.insert(
+            old_id,
+            new_section.expect("add_section within MAX_SECTION_ID").id,
+        );
     }
 
     // Copy station merges from project 1
@@ -2611,7 +2746,9 @@ fn test_merge_projects_preserves_station_merges() {
 
     // Add sections from project 2
     for section in &loaded2.sections {
-        merged.add_section(section.to_section_data());
+        merged
+            .add_section(section.to_section_data())
+            .expect("add_section within MAX_SECTION_ID");
     }
 
     // Verify station merge was preserved with remapped IDs

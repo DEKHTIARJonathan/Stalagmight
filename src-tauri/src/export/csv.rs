@@ -68,22 +68,24 @@ mod tests {
     #[test]
     fn test_export_csv() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                ..Default::default()
-            }],
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#4ecdc4".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 6.0,
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
@@ -127,22 +129,24 @@ mod tests {
     #[test]
     fn test_export_csv_unicode_section_name() {
         let mut project = Project::new("Unicode".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Grotte de l'Ours 🐻".to_string()),
-            surveyor: Some("José García".to_string()),
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                ..Default::default()
-            }],
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Grotte de l'Ours 🐻".to_string()),
+                surveyor: Some("José García".to_string()),
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 6.0,
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_csv(&project, file.path());
@@ -164,19 +168,21 @@ mod tests {
     fn test_export_csv_multiple_sections() {
         let mut project = Project::new("Multi".to_string(), None);
         for i in 0..3 {
-            project.add_section(SectionData {
-                name: Some(format!("Sec{i}")),
-                color: "#ff0000".to_string(),
-                shots: vec![ShotData {
-                    azimuth_in: 0.0,
-                    azimuth_out: 180.0,
-                    length: f64::from(i + 1) * 5.0,
-                    depth_in: 0.0,
-                    depth_out: 1.0,
+            project
+                .add_section(SectionData {
+                    name: Some(format!("Sec{i}")),
+                    color: "#ff0000".to_string(),
+                    shots: vec![ShotData {
+                        azimuth_in: 0.0,
+                        azimuth_out: 180.0,
+                        length: f64::from(i + 1) * 5.0,
+                        depth_in: 0.0,
+                        depth_out: 1.0,
+                        ..Default::default()
+                    }],
                     ..Default::default()
-                }],
-                ..Default::default()
-            });
+                })
+                .unwrap();
         }
 
         let file = NamedTempFile::new().unwrap();

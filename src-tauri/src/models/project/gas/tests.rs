@@ -149,6 +149,7 @@ fn linear_descent_project() -> (Project, StationRef) {
             ],
             ..Default::default()
         })
+        .unwrap()
         .id;
     (project, StationRef::new(sec, 0))
 }
@@ -392,6 +393,7 @@ fn gas_free_places_a_drop_for_every_stage_with_usable() {
                 .collect(),
             ..Default::default()
         })
+        .unwrap()
         .id;
     let origin = StationRef::new(sec, 0);
     let diver = Diver::new(20.0, None).unwrap();
@@ -1580,12 +1582,14 @@ fn gas_reach_field_endpoint_selects_the_route_for_drops() {
             shots: vec![make_shot(150.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![make_shot(100.0, 0.0, 0.0), make_shot(100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     project
         .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
@@ -1822,6 +1826,7 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
             shots: vec![make_shot(100.0, 0.0, 10.0), make_shot(100.0, 10.0, 20.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     // A second, unconnected section (no merge/closure) → separate component.
     let other = project
@@ -1829,6 +1834,7 @@ fn gas_reach_field_monotonic_and_disconnected_is_none() {
             shots: vec![make_shot(50.0, 0.0, 5.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     let origin = StationRef::new(sec, 0);
     let diver = Diver::new(20.0, None).unwrap();
@@ -1874,12 +1880,14 @@ fn gas_reach_field_reaches_across_a_station_merge() {
             shots: vec![make_shot(100.0, 0.0, 10.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![make_shot(100.0, 10.0, 20.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     // Join A's terminal station (index 1) to B's entry station (index 0).
     project
@@ -1954,12 +1962,14 @@ fn gas_reach_field_turn_frontier_crosses_a_station_merge() {
             shots: vec![make_shot(1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![make_shot(2000.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .unwrap()
         .id;
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -2079,6 +2089,7 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
             ],
             ..Default::default()
         })
+        .unwrap()
         .id;
     (project, StationRef::new(sec, 0))
 }

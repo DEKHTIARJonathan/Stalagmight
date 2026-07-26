@@ -363,17 +363,19 @@ mod tests {
     #[test]
     fn test_get_survey_geometry_requires_zero_datum() {
         let mut project = Project::new("No Datum".to_string(), None);
-        project.add_section(SectionData {
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
+        project
+            .add_section(SectionData {
+                shots: vec![ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 10.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
 
         let result = get_survey_geometry_for_project(&project);
         assert!(result.is_err());
@@ -395,6 +397,7 @@ mod tests {
                 }],
                 ..Default::default()
             })
+            .unwrap()
             .id;
 
         project.zero_datums.push(ZeroDatum {
@@ -424,6 +427,7 @@ mod tests {
                 shots: vec![shot.clone()],
                 ..Default::default()
             })
+            .unwrap()
             .id;
 
         let gps = GpsCoordinates::new(0.0, 0.0, 0.0).unwrap();
@@ -490,17 +494,19 @@ mod tests {
         let path = temp_dir.path().join("no-datum.stalx");
 
         let mut project = Project::new("No Datum".to_string(), None);
-        project.add_section(SectionData {
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 10.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
+        project
+            .add_section(SectionData {
+                shots: vec![ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 10.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
 
         let mut db = Database::open(&path).unwrap();
         db.save_project(&project).unwrap();

@@ -127,10 +127,10 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
 
     match kind {
         Kind::Plain => {
-            p.add_section(section("Main", root_shots));
+            p.add_section(section("Main", root_shots)).unwrap();
         }
         Kind::Datum => {
-            p.add_section(section("Main", root_shots));
+            p.add_section(section("Main", root_shots)).unwrap();
             let root_id = p.sections[0].id;
             // Datum on a mid-station (>=1) of the root → pre-zero-datum leg.
             let station = rng.range(1, root_n);
@@ -140,7 +140,7 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             });
         }
         Kind::Merge => {
-            p.add_section(section("Main", root_shots));
+            p.add_section(section("Main", root_shots)).unwrap();
             // Child "Branch" merged at its station 1 (mid) → reversed leg. Its
             // merge station must sit at the parent depth (continuity).
             let child_n = rng.range(2, 4);
@@ -156,7 +156,7 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
                 s.depth_out = d + dz;
                 d += dz;
             }
-            p.add_section(section("Branch", child_shots));
+            p.add_section(section("Branch", child_shots)).unwrap();
             let root_id = p.sections[0].id;
             let child_id = p.sections[1].id;
             p.station_merges.push(StationMerge {
@@ -166,12 +166,12 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             });
         }
         Kind::DupNames => {
-            p.add_section(section("Main", root_shots));
+            p.add_section(section("Main", root_shots)).unwrap();
             // Second "Main" attached at its start to root station 1 (no leg).
             let child_n = rng.range(1, 3);
             let mut child_shots = gen_run(rng, child_n, root_station1_depth).0;
             child_shots[0].depth_in = root_station1_depth;
-            p.add_section(section("Main", child_shots));
+            p.add_section(section("Main", child_shots)).unwrap();
             let root_id = p.sections[0].id;
             let child_id = p.sections[1].id;
             p.station_merges.push(StationMerge {

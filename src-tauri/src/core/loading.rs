@@ -1000,6 +1000,7 @@ mod tests {
                 }],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let b = project
             .add_section(SectionData {
@@ -1009,6 +1010,7 @@ mod tests {
                 }],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         project.ensure_shot_uuids();
         project.record_station_merge(StationMerge {

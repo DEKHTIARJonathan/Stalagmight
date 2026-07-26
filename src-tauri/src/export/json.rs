@@ -117,26 +117,28 @@ mod tests {
     #[test]
     fn test_export_json() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            surveyor: Some("Tester".to_string()),
-            date: None,
-            color: "#4ecdc4".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 10.0,
-                depth_in: 5.0,
-                depth_out: 6.0,
-                left: Some(1.0),
-                right: Some(2.0),
-                up: Some(3.0),
-                down: Some(4.0),
-                ..Default::default()
-            }],
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                surveyor: Some("Tester".to_string()),
+                date: None,
+                color: "#4ecdc4".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 6.0,
+                    left: Some(1.0),
+                    right: Some(2.0),
+                    up: Some(3.0),
+                    down: Some(4.0),
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
@@ -164,23 +166,25 @@ mod tests {
     #[test]
     fn test_export_json_unicode_names() {
         let mut project = Project::new("日本語テスト".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Grotte de l'Ours".to_string()),
-            surveyor: Some("Ñoño".to_string()),
-            date: None,
-            color: "#ff0000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 45.0,
-                azimuth_out: 225.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                comment: Some("特殊なコメント".to_string()),
-                ..Default::default()
-            }],
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Grotte de l'Ours".to_string()),
+                surveyor: Some("Ñoño".to_string()),
+                date: None,
+                color: "#ff0000".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData {
+                    azimuth_in: 45.0,
+                    azimuth_out: 225.0,
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 1.0,
+                    comment: Some("特殊なコメント".to_string()),
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());
@@ -195,23 +199,25 @@ mod tests {
     #[test]
     fn test_export_json_reference_shots_and_optional_fields() {
         let mut project = Project::new("Reference".to_string(), None);
-        project.add_section(SectionData {
-            name: None,
-            surveyor: None,
-            date: None,
-            color: "#000000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 1.0,
-                depth_in: 0.0,
-                depth_out: 0.0,
-                is_reference: true,
-                ..Default::default()
-            }],
-        });
+        project
+            .add_section(SectionData {
+                name: None,
+                surveyor: None,
+                date: None,
+                color: "#000000".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 1.0,
+                    depth_in: 0.0,
+                    depth_out: 0.0,
+                    is_reference: true,
+                    ..Default::default()
+                }],
+            })
+            .unwrap();
 
         let file = NamedTempFile::new().unwrap();
         let result = export_json(&project, file.path());

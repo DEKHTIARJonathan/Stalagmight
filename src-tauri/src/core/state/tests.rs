@@ -130,26 +130,30 @@ fn test_merge_projects_archives_sources_and_adds_extension() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut project_a = Project::new("A".to_string(), None);
-    project_a.add_section(SectionData {
-        name: Some("Section A".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: Some(SurveyDirection::In),
-        quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
-    });
+    project_a
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::In),
+            quality: 1.0,
+            shots: vec![test_shot_data(1.0)],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut project_b = Project::new("B".to_string(), None);
-    project_b.add_section(SectionData {
-        name: Some("Section B".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: Some(SurveyDirection::Out),
-        quality: 1.0,
-        shots: vec![test_shot_data(2.0)],
-    });
+    project_b
+        .add_section(SectionData {
+            name: Some("Section B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: Some(SurveyDirection::Out),
+            quality: 1.0,
+            shots: vec![test_shot_data(2.0)],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let source_a = temp_dir.path().join("a.stalx");
     let source_b = temp_dir.path().join("b.stalx");
@@ -244,6 +248,7 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
             shots: vec![test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.loop_closures.push(LoopClosure {
@@ -339,10 +344,12 @@ fn test_open_project_drops_legacy_null_style_undo_history() {
     let path = temp_dir.path().join("legacy_undo.stalx");
 
     let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot_with_nullable_fields()],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot_with_nullable_fields()],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
@@ -411,10 +418,12 @@ fn test_undo_after_reload_restores_exactly_the_edited_field() {
     let path = temp_dir.path().join("new_format_undo.stalx");
 
     let mut project = Project::new("New Format".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot_with_nullable_fields()],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot_with_nullable_fields()],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
@@ -483,6 +492,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project_a.section_offsets.insert(section_a, (1.0, 2.0));
     project_a
@@ -512,6 +522,7 @@ fn test_merge_projects_preserves_offsets_zero_datums_and_closure_ids() {
             shots: vec![test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project_b.section_offsets.insert(section_b, (3.0, 4.0));
     project_b
@@ -625,6 +636,7 @@ fn test_merge_projects_preserves_station_comments() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project_a.ensure_shot_uuids();
     let key_a = project_a
@@ -641,6 +653,7 @@ fn test_merge_projects_preserves_station_comments() {
             shots: vec![test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project_b.ensure_shot_uuids();
     let key_b = project_b
@@ -720,6 +733,7 @@ fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Dangling station offset: anchors a shot UUID that doesn't exist.
@@ -770,6 +784,7 @@ fn repair_open_project_integrity_is_undoable_and_redoable() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Dangling station offset → unresolvable cross-reference (corrupt project).
@@ -839,6 +854,7 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
             shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -846,6 +862,7 @@ fn redo_batch_preserves_double_anchored_bridge_closure() {
             shots: vec![test_shot_data(3.0), test_shot_data(4.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     state.set_project_for_tests(project);
@@ -920,12 +937,14 @@ fn update_shot_reconciles_datum_less_merge() {
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Merge A:2 (after both shots) ↔ B:0, with NO zero datum anywhere.
     project
@@ -979,12 +998,14 @@ fn metadata_only_update_shot_does_not_heal_drift() {
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
@@ -1058,12 +1079,14 @@ fn metadata_only_update_shot_batch_does_not_heal_drift() {
             shots: vec![test_shot_data(5.0), test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
@@ -1112,10 +1135,12 @@ fn repair_noop_on_clean_project_reports_unchanged() {
     // be permanently true.
     let state = AppState::new().unwrap();
     let mut project = Project::new("Clean".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.ensure_shot_uuids();
     project.resolve_offsets();
     state.set_project_for_tests(project);
@@ -1145,6 +1170,7 @@ fn save_remints_duplicate_shot_uuids_before_persisting() {
             shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Force a within-section duplicate.
@@ -1203,6 +1229,7 @@ fn restore_snapshot_canonicalizes_legacy_index_anchors() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // A station offset stored in the legacy positional (Index) form.
@@ -1238,10 +1265,12 @@ fn repair_serializes_under_command_lock() {
     use std::time::Duration;
     let state = Arc::new(AppState::new().unwrap());
     let mut project = Project::new("LockRepair".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.ensure_shot_uuids();
     state.set_project_for_tests(project);
 
@@ -1273,10 +1302,12 @@ fn save_drops_orphan_section_offset() {
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
     let mut project = Project::new("Orphan".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.ensure_shot_uuids();
     project.section_offsets.insert(99999, (5.0, 6.0)); // no such section
     state.set_project_for_tests(project);
@@ -1304,10 +1335,12 @@ fn save_sanitizes_non_finite_geometry() {
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
     let mut project = Project::new("NonFinite".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.ensure_shot_uuids();
     project.sections[0].shots[0].length = f64::NAN;
     assert!(!project.sections[0].shots[0].all_finite());
@@ -1340,6 +1373,7 @@ fn save_sanitizes_non_finite_section_offset() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     project.section_offsets.insert(a, (f64::NAN, f64::INFINITY));
@@ -1372,6 +1406,7 @@ fn blocked_save_does_not_mutate_non_finite_geometry() {
             shots: vec![test_shot_data(1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // A dangling station offset → unresolvable cross-reference (save-blocking).
@@ -1409,6 +1444,7 @@ fn undo_of_duplicate_uuid_repair_restores_the_duplicates() {
             shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // A within-section duplicate UUID: a current corrupt state (AfterShot anchors).
@@ -1467,6 +1503,7 @@ fn restore_snapshot_mints_null_uuids_before_reanchor() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Force legacy null UUIDs (pre-v6 files load with NULL uuid columns).
     for shot in &mut project.get_section_mut(s).unwrap().shots {
@@ -1503,10 +1540,12 @@ fn finalize_structural_edit_ignores_pre_existing_critical() {
     // rollback only for NEWLY introduced corruption, matching execute()'s guard.
     let state = AppState::new().unwrap();
     let mut project = Project::new("AlreadyCritical".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.ensure_shot_uuids();
     // Inject a non-finite shot value → non_finite_geometry (a Critical violation).
     project.sections[0].shots[0].length = f64::NAN;
@@ -1539,6 +1578,7 @@ fn redo_legacy_prepend_createshot_reanchors_section_start() {
             shots: vec![test_shot_data(1.0), test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Zero datum on station 0 → stored as a SectionStart anchor.
@@ -3233,6 +3273,7 @@ fn test_delete_shot_rejects_frozen_shot() {
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
@@ -3240,6 +3281,7 @@ fn test_delete_shot_rejects_frozen_shot() {
             shots: vec![test_shot_data(5.0), test_shot_data(7.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Close the loop: both ends of A merged onto both ends of B.
@@ -3338,6 +3380,7 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
@@ -3349,6 +3392,7 @@ fn test_delete_shot_and_split_rejects_frozen_shot() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Close the loop: both ends of A merged onto both ends of B (3 shots => the
@@ -3464,6 +3508,7 @@ fn test_split_shot_at_distance_happy_path() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let target = project.sections[0].shots[1].clone();
@@ -3567,6 +3612,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
@@ -3574,6 +3620,7 @@ fn test_split_shot_at_distance_preserves_anchor_on_endpoint_station() {
             shots: vec![test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let target_shot_id = project.sections[0].shots[1].id;
@@ -3666,6 +3713,7 @@ fn test_split_shot_at_distance_preserves_loop_closure_anchor_on_endpoint_station
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let target_shot_id = project.sections[0].shots[1].id;
@@ -3714,6 +3762,7 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
             shots: vec![test_shot_data(10.0), test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
@@ -3721,6 +3770,7 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
             shots: vec![test_shot_data(5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let target_shot_id = project.sections[0].shots[0].id;
 
@@ -3768,11 +3818,13 @@ fn test_split_shot_at_distance_first_shot_keeps_section_start_anchor() {
 #[test]
 fn test_split_shot_at_distance_rejects_invalid_distances() {
     let mut project = Project::new("Invalid".to_string(), None);
-    project.add_section(SectionData {
-        color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(10.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![test_shot_data(10.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
     let before_json = serde_json::to_string(&project).unwrap();
@@ -3801,11 +3853,13 @@ fn test_split_shot_at_distance_accepts_exact_min_child_length_boundary() {
     // A 1m shot split exactly at the MIN_SPLIT_CHILD_LENGTH_M (0.01m) floor
     // must be accepted: both children end up exactly at the floor, not below it.
     let mut project = Project::new("Boundary".to_string(), None);
-    project.add_section(SectionData {
-        color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
@@ -3837,6 +3891,7 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
@@ -3848,6 +3903,7 @@ fn test_split_shot_at_distance_rejects_frozen_shot() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -4037,14 +4093,16 @@ fn test_split_shot_at_distance_preserves_downstream_geometry() {
 #[test]
 fn test_split_shot_at_distance_reference_shot_both_children_reference() {
     let mut project = Project::new("Ref".to_string(), None);
-    project.add_section(SectionData {
-        color: "#ff0000".to_string(),
-        shots: vec![ShotData {
-            is_reference: true,
-            ..test_shot_data(10.0)
-        }],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                is_reference: true,
+                ..test_shot_data(10.0)
+            }],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
@@ -4070,11 +4128,13 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
 fn test_split_shot_at_distance_rejects_at_max_shots_cap() {
     let mut project = Project::new("Cap".to_string(), None);
     let max = crate::models::FEATURE_ID_STRIDE as usize - 1;
-    project.add_section(SectionData {
-        color: "#ff0000".to_string(),
-        shots: vec![test_shot_data(1.0); max],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![test_shot_data(1.0); max],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec = project.sections[0].id;
     let shot_id = project.sections[0].shots[0].id;
 
@@ -4115,10 +4175,12 @@ fn test_legacy_project_seeds_validation_from_global_config() {
         let legacy_path = dir.path().join("legacy.stalx");
         {
             let mut project = Project::new("Legacy".to_string(), None);
-            project.add_section(SectionData {
-                shots: vec![test_shot_data(1.0)],
-                ..Default::default()
-            });
+            project
+                .add_section(SectionData {
+                    shots: vec![test_shot_data(1.0)],
+                    ..Default::default()
+                })
+                .expect("add_section within MAX_SECTION_ID");
             let mut db = Database::open(&legacy_path).unwrap();
             db.save_project(&project).unwrap();
             drop(db);
@@ -4169,10 +4231,12 @@ fn test_legacy_project_seeds_validation_from_global_config() {
                 warn_shot_length_min: 0.1,
                 ..crate::config::ValidationConfig::default()
             };
-            project.add_section(SectionData {
-                shots: vec![test_shot_data(1.0)],
-                ..Default::default()
-            });
+            project
+                .add_section(SectionData {
+                    shots: vec![test_shot_data(1.0)],
+                    ..Default::default()
+                })
+                .expect("add_section within MAX_SECTION_ID");
             let mut db = Database::open(&explicit_path).unwrap();
             db.save_project(&project).unwrap();
         }
@@ -4723,26 +4787,30 @@ fn test_project_snapshot_pair_undo_redo_roundtrip() {
     let state = AppState::new().unwrap();
 
     let mut before = Project::new("Before".to_string(), None);
-    before.add_section(SectionData {
-        name: Some("Before Section".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#ff0000".to_string(),
-        direction: Some(SurveyDirection::In),
-        quality: 1.0,
-        shots: vec![test_shot_data(1.0)],
-    });
+    before
+        .add_section(SectionData {
+            name: Some("Before Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: Some(SurveyDirection::In),
+            quality: 1.0,
+            shots: vec![test_shot_data(1.0)],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut after = Project::new("After".to_string(), None);
-    after.add_section(SectionData {
-        name: Some("After Section".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#00ff00".to_string(),
-        direction: Some(SurveyDirection::Out),
-        quality: 1.0,
-        shots: vec![test_shot_data(2.0), test_shot_data(3.0)],
-    });
+    after
+        .add_section(SectionData {
+            name: Some("After Section".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: Some(SurveyDirection::Out),
+            quality: 1.0,
+            shots: vec![test_shot_data(2.0), test_shot_data(3.0)],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let before_json = serde_json::to_string(&before).unwrap();
     let after_json = serde_json::to_string(&after).unwrap();
@@ -5113,10 +5181,12 @@ fn test_save_project_prefers_database_display_settings_over_cache() {
     let temp_dir = TempDir::new().unwrap();
     let db_path = temp_dir.path().join("source.stalx");
     let mut project = Project::new("Display Settings".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&db_path).unwrap();
     db.save_project(&project).unwrap();
@@ -5149,10 +5219,12 @@ fn test_save_project_failure_does_not_change_existing_file() {
     let original_path = temp_dir.path().join("original.stalx");
 
     let mut project = Project::new("Original".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&original_path).unwrap();
     db.save_project(&project).unwrap();
@@ -5252,10 +5324,12 @@ fn save_into_unwritable_dir_reports_permission_code() {
     }
 
     let mut project = Project::new("Perm".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
 
@@ -5322,10 +5396,12 @@ fn save_into_missing_dir_is_not_a_permission_error() {
     let missing = temp_dir.path().join("gone").join("p.stalx");
 
     let mut project = Project::new("Missing".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let state = AppState::new().unwrap();
     state.set_project_for_tests(project);
 
@@ -10461,6 +10537,55 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
+fn test_add_section_refuses_past_the_bound_at_the_allocation_point() {
+    // The bound is enforced inside add_section, not at each call site, so no
+    // caller can bypass it - that is the whole point of the Result signature.
+    let mut project = Project::new("Bound".to_string(), None);
+    project.next_section_id = crate::models::MAX_SECTION_ID;
+    assert!(project.add_section(SectionData::default()).is_ok());
+    let err = project
+        .add_section(SectionData::default())
+        .expect_err("past the bound add_section must fail, not saturate");
+    assert!(
+        err.contains("section ids"),
+        "the error should explain the id budget, got: {err}"
+    );
+    // And the refusal must not have consumed anything.
+    assert_eq!(
+        project.next_section_id,
+        crate::models::MAX_SECTION_ID + 1,
+        "a refused add must not advance the counter"
+    );
+}
+
+#[test]
+fn test_restore_section_rejects_an_out_of_range_persisted_id() {
+    // Undo history survives reload, so an entry written before the bound existed
+    // can carry an id the loader now rejects. Replaying it would reintroduce the
+    // section, let it be saved, and make the NEXT open fail - the same
+    // save-a-file-we-cannot-load asymmetry the bound exists to prevent.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "OldUndo".to_string(),
+        location: None,
+    });
+    let result = state.restore_section(crate::models::MAX_SECTION_ID + 1, SectionData::default());
+    assert!(
+        !result.success,
+        "replaying an out-of-range persisted section must be refused"
+    );
+    let proj_guard = state.project.lock().unwrap();
+    let project = proj_guard.as_ref().unwrap();
+    assert!(
+        project
+            .sections
+            .iter()
+            .all(|s| s.id <= crate::models::MAX_SECTION_ID),
+        "no out-of-range section may end up in the project"
+    );
+}
+
+#[test]
 fn test_remaining_section_capacity_matches_the_allocation_bound() {
     // The collab reconcile preflights with this before applying ANY section,
     // because it marks the incoming TML SHA consumed on success - a half-applied
@@ -10587,7 +10712,9 @@ fn test_section_allocation_never_outruns_what_load_accepts() {
     );
 
     // Take it, then the project is full.
-    project.add_section(SectionData::default());
+    project
+        .add_section(SectionData::default())
+        .expect("add_section within MAX_SECTION_ID");
     assert!(
         !project.can_add_section(),
         "past the bound allocation must stop"
@@ -15215,15 +15342,19 @@ fn test_merge_projects_output_already_exists() {
 
     // Create two source projects
     let mut proj_a = Project::new("A".to_string(), None);
-    proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    proj_a
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let mut proj_b = Project::new("B".to_string(), None);
-    proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
-        ..Default::default()
-    });
+    proj_b
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let source_a = temp_dir.path().join("a.stalx");
     let source_b = temp_dir.path().join("b.stalx");
@@ -15258,15 +15389,19 @@ fn test_merge_projects_extension_less_output_detects_existing_stalx() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut proj_a = Project::new("A".to_string(), None);
-    proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    proj_a
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let mut proj_b = Project::new("B".to_string(), None);
-    proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
-        ..Default::default()
-    });
+    proj_b
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let source_a = temp_dir.path().join("a.stalx");
     let source_b = temp_dir.path().join("b.stalx");
     let mut db_a = Database::open(&source_a).unwrap();
@@ -15302,10 +15437,12 @@ fn test_merge_projects_source_missing() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut proj_a = Project::new("A".to_string(), None);
-    proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    proj_a
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let source_a = temp_dir.path().join("a.stalx");
     let mut db_a = Database::open(&source_a).unwrap();
     db_a.save_project(&proj_a).unwrap();
@@ -15330,15 +15467,19 @@ fn test_merge_projects_combines_locations() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut proj_a = Project::new("A".to_string(), Some("Cave Alpha".to_string()));
-    proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    proj_a
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let mut proj_b = Project::new("B".to_string(), Some("Cave Beta".to_string()));
-    proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
-        ..Default::default()
-    });
+    proj_b
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let source_a = temp_dir.path().join("a.stalx");
     let source_b = temp_dir.path().join("b.stalx");
@@ -15377,15 +15518,19 @@ fn test_merge_projects_no_archive() {
     let temp_dir = TempDir::new().unwrap();
 
     let mut proj_a = Project::new("A".to_string(), None);
-    proj_a.add_section(SectionData {
-        shots: vec![test_shot_data(1.0)],
-        ..Default::default()
-    });
+    proj_a
+        .add_section(SectionData {
+            shots: vec![test_shot_data(1.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let mut proj_b = Project::new("B".to_string(), None);
-    proj_b.add_section(SectionData {
-        shots: vec![test_shot_data(2.0)],
-        ..Default::default()
-    });
+    proj_b
+        .add_section(SectionData {
+            shots: vec![test_shot_data(2.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let source_a = temp_dir.path().join("a.stalx");
     let source_b = temp_dir.path().join("b.stalx");
@@ -15421,6 +15566,7 @@ fn test_merge_projects_preserves_station_merges() {
             shots: vec![test_shot_data(1.0), test_shot_data(1.5)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_a2 = proj_a
         .add_section(SectionData {
@@ -15428,6 +15574,7 @@ fn test_merge_projects_preserves_station_merges() {
             shots: vec![test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     proj_a
         .merge_stations(StationRef::new(sec_a1, 1), StationRef::new(sec_a2, 0))
@@ -15439,11 +15586,13 @@ fn test_merge_projects_preserves_station_merges() {
     drop(db_a);
 
     let mut proj_b = Project::new("B".to_string(), None);
-    proj_b.add_section(SectionData {
-        name: Some("B1".to_string()),
-        shots: vec![test_shot_data(3.0)],
-        ..Default::default()
-    });
+    proj_b
+        .add_section(SectionData {
+            name: Some("B1".to_string()),
+            shots: vec![test_shot_data(3.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let source_b = temp_dir.path().join("b.stalx");
     let mut db_b = Database::open(&source_b).unwrap();
     db_b.save_project(&proj_b).unwrap();
@@ -19636,22 +19785,24 @@ fn test_collab_section_name_map_includes_empty_sections() {
 
     let mut project = Project::new("Collab".to_string(), None);
     // Two sections: one with shots, one EMPTY (no shots at all).
-    project.add_section(SectionData {
-        name: Some("Filled".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![ShotData {
-            azimuth_in: 10.0,
-            azimuth_out: 10.0,
-            length: 5.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            ..Default::default()
-        }],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Filled".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 10.0,
+                azimuth_out: 10.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            }],
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let empty_id = project
         .add_section(SectionData {
             name: Some("EmptyRoot".to_string()),
@@ -19662,6 +19813,7 @@ fn test_collab_section_name_map_includes_empty_sections() {
             quality: 1.0,
             shots: vec![],
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.collab = Some(crate::models::CollabState::new("empty.tml".to_string()));
     state.set_project_for_tests(project);
@@ -19696,32 +19848,34 @@ fn test_collab_save_writes_sibling_tml_and_baseline() {
     let state = AppState::new().unwrap();
 
     let mut project = Project::new("Collab Cave".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Main".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![
-            ShotData {
-                azimuth_in: 10.0,
-                azimuth_out: 10.0,
-                length: 5.0,
-                depth_in: 0.0,
-                depth_out: 1.0,
-                ..Default::default()
-            },
-            ShotData {
-                azimuth_in: 20.0,
-                azimuth_out: 20.0,
-                length: 6.0,
-                depth_in: 1.0,
-                depth_out: 2.0,
-                ..Default::default()
-            },
-        ],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Main".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![
+                ShotData {
+                    azimuth_in: 10.0,
+                    azimuth_out: 10.0,
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 1.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 20.0,
+                    azimuth_out: 20.0,
+                    length: 6.0,
+                    depth_in: 1.0,
+                    depth_out: 2.0,
+                    ..Default::default()
+                },
+            ],
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project.collab = Some(crate::models::CollabState::new(
         "collab-cave.tml".to_string(),
     ));
@@ -19798,7 +19952,9 @@ fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
     };
 
     let mut project = Project::new("Collab".to_string(), None);
-    project.add_section(mk(6.0, 200.0)); // shot[1] has a distinct backsight (no TML equivalent)
+    project
+        .add_section(mk(6.0, 200.0))
+        .expect("add_section within MAX_SECTION_ID"); // shot[1] has a distinct backsight (no TML equivalent)
     project.collab = Some(crate::models::CollabState::new("c.tml".to_string()));
     state.set_project_for_tests(project);
 
@@ -19816,7 +19972,9 @@ fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
 
     // Simulate Ariane editing the .tml: re-export an edited project (shot[1].length = 99).
     let mut edited = Project::new("Collab".to_string(), None);
-    edited.add_section(mk(99.0, 20.0));
+    edited
+        .add_section(mk(99.0, 20.0))
+        .expect("add_section within MAX_SECTION_ID");
     crate::export::tml::export_tml(&edited, &sibling).unwrap();
 
     let cs = state
@@ -20246,6 +20404,7 @@ fn remote_fixture() -> (AppState, SectionId, ShotId, TempDir) {
             shots: vec![test_shot_data(2.0), test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let mut db = Database::open(&path).unwrap();
@@ -20802,6 +20961,7 @@ fn dirty_bit_noop_for_local_only_project() {
             shots: vec![test_shot_data(2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();

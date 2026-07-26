@@ -602,24 +602,38 @@ impl Project {
     /// [`Self::can_add_section`] flips: a half-applied bulk import is worse than
     /// a refused one when the caller marks its input consumed on success.
     ///
-    /// This counts IDS, not live sections, and `next_section_id` only ever grows -
-    /// [`Self::remove_section`] does not reclaim an id, and undoing a create
-    /// delegates to it. So capacity NEVER goes back up within a project, and no
-    /// error message may tell a user to delete sections to free some.
+    /// This counts IDS, not live sections. Within a session `next_section_id` only
+    /// ever grows - [`Self::remove_section`] does not reclaim an id, and undoing a
+    /// create delegates to it - so deleting sections frees nothing *now*.
+    ///
+    /// It is NOT monotonic across a save/reopen cycle: `persistence::sqlite::write`
+    /// stores only live sections and `persistence::sqlite::read` rebuilds the
+    /// counter as `max(live id) + 1`, so deleting the highest-numbered sections and
+    /// reopening does reclaim their ids. Any user-facing message about capacity has
+    /// to respect both halves of that.
     pub fn remaining_section_capacity(&self) -> u64 {
         (crate::models::MAX_SECTION_ID as u64 + 1).saturating_sub(u64::from(self.next_section_id))
     }
 
-    /// Add a new section to the project
+    /// Add a new section to the project.
     ///
-    /// Callers on a production path must gate this on [`Self::can_add_section`];
-    /// the id allocation below saturates rather than failing, so an unchecked
-    /// caller past the bound would mint a colliding shot-id band.
-    pub fn add_section(&mut self, data: SectionData) -> &Section {
-        debug_assert!(
-            self.can_add_section(),
-            "add_section past MAX_SECTION_ID - gate on can_add_section()"
-        );
+    /// Fails once [`MAX_SECTION_ID`] is exhausted. The bound lives HERE, in the
+    /// one place an id is minted, rather than at each call site: guarding callers
+    /// individually meant a missed path silently minted a colliding shot-id band,
+    /// and shot ids are immutable FKs for merges, closures and comments.
+    ///
+    /// Bulk callers should still preflight with [`Self::remaining_section_capacity`]
+    /// so a multi-section import refuses as a whole instead of stopping halfway.
+    pub fn add_section(&mut self, data: SectionData) -> Result<&Section, String> {
+        if !self.can_add_section() {
+            return Err(format!(
+                "This project has used all {} available section ids. Deleting a section does not \
+                 release its id in this session - ids are re-derived from the surviving sections \
+                 when the project is reopened, so deleting the highest-numbered sections and \
+                 reopening the project will free capacity.",
+                crate::models::MAX_SECTION_ID as u64 + 1
+            ));
+        }
         let section = Section::new(self.next_section_id, data);
         self.next_section_id = self.next_section_id.saturating_add(1);
         let new_idx = self.sections.len();
@@ -642,7 +656,7 @@ impl Project {
         }
         self.sections.push(section);
         self.touch();
-        &self.sections[new_idx]
+        Ok(&self.sections[new_idx])
     }
 
     /// Get a section by ID. First tries the O(1) `section_index_cache`;

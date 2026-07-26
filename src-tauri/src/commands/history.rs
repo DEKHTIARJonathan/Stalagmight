@@ -982,15 +982,17 @@ mod tests {
         let mut project = crate::models::Project::new("Test".to_string(), None);
         // Advance next_section_id to 5
         project.next_section_id = 5;
-        project.add_section(SectionData {
-            name: Some("Deleted Section".to_string()),
-            surveyor: None,
-            date: None,
-            color: "#000".to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![ShotData::default(), ShotData::default()],
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Deleted Section".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#000".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![ShotData::default(), ShotData::default()],
+            })
+            .unwrap();
         let before_json = serde_json::to_string(&project).unwrap();
 
         let entry = UndoEntry {

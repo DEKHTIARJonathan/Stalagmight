@@ -367,6 +367,7 @@ mod tests {
                 shots: vec![make_shot(), make_shot(), make_shot()],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         project.ensure_shot_uuids();
         (project, sec)

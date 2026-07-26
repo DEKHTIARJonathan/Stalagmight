@@ -19,18 +19,21 @@ fn get_connected_section_ids_traverses_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -63,6 +66,7 @@ fn station_key_round_trips_and_tracks_station_across_insert() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids(); // guarantee anchors are available
 
@@ -137,18 +141,21 @@ fn cascade_bfs_does_not_propagate_through_a_non_finite_section() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let n = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let x = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Per-station local coords. Section N is NaN-poisoned at every station.
@@ -203,12 +210,14 @@ fn station_ref_traversals_cover_every_bearing_collection() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // One ref in each of the five collections, all anchored at station a:1.
@@ -312,24 +321,28 @@ fn section_has_zero_datum_with_connected_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let d = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -362,6 +375,7 @@ fn compute_station_raw_coords_applies_offsets_and_bounds() {
             shots: vec![shot_a.clone(), shot_b.clone()],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.section_offsets.insert(section_id, (2.0, -3.0));
@@ -389,6 +403,7 @@ fn set_zero_datum_first_datum_positions_station_at_origin() {
             shots: vec![shot_a.clone()],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Station 1 is at (0, 10, 1) before datum is set
@@ -435,12 +450,14 @@ fn set_zero_datum_connected_sections_move_together() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Align b:0 to a:1 (a:1 is at (0, 10) since shot goes north 10m)
@@ -536,12 +553,14 @@ fn set_zero_datum_subsequent_datum_uses_gps_offset() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum on section a, station 0
@@ -591,6 +610,7 @@ fn set_zero_datum_z_coordinates_preserved() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on station 1 (which has z=5)
@@ -622,6 +642,7 @@ fn remove_zero_datum_keeps_positions_unchanged() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum
@@ -652,6 +673,7 @@ fn update_first_datum_gps_keeps_station_at_origin() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum on station 1 (which is at y=10 before datum)
@@ -708,6 +730,7 @@ fn store_zero_datum_without_repositioning_does_not_modify_offsets() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Pre-set an offset manually (simulating merged project scenario)
@@ -738,6 +761,7 @@ fn coordinate_computation_no_global_datum_subtraction() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Add a datum directly to zero_datums (bypassing set_zero_datum to avoid offset computation)
@@ -778,6 +802,7 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on A.0 (positions A.0 at origin)
@@ -805,6 +830,7 @@ fn merge_stations_propagates_datum_positioning_a_into_b() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge B.0 into A.1 (B merges into datum group)
@@ -863,6 +889,7 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: has datum, shot goes east 5m
@@ -871,6 +898,7 @@ fn merge_stations_propagates_datum_positioning_b_into_a() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on B.0 (positions B.0 at origin)
@@ -943,12 +971,14 @@ fn merge_stations_without_datum_aligns_first_section_to_second() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let a1_before = project
@@ -1003,6 +1033,7 @@ fn merge_stations_transitive_datum_propagation() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on A.0
@@ -1019,6 +1050,7 @@ fn merge_stations_transitive_datum_propagation() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge B.0 into A.1 - B now connected to datum group
@@ -1032,6 +1064,7 @@ fn merge_stations_transitive_datum_propagation() {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Verify B.1 position before merging C
@@ -1092,6 +1125,7 @@ fn set_zero_datum_rejects_duplicate_in_same_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum on station 0
@@ -1124,12 +1158,14 @@ fn set_zero_datum_rejects_duplicate_in_connected_group() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge B.0 to A.1
@@ -1167,12 +1203,14 @@ fn set_zero_datum_allows_disconnected_groups() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on section A
@@ -1204,6 +1242,7 @@ fn set_zero_datum_rejects_across_multi_hop_merge_chain() {
                 shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id
     };
     let (a, b, c, d) = (
@@ -1248,12 +1287,14 @@ fn convert_orphan_closures_leaves_double_anchored_groups_unconverted() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
 
@@ -1332,12 +1373,14 @@ fn detects_two_datums_in_one_merge_component() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -1382,6 +1425,7 @@ fn set_zero_datum_error_includes_section_name() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum
@@ -1413,6 +1457,7 @@ fn set_zero_datum_error_includes_station_number() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum on station 0
@@ -1442,6 +1487,7 @@ fn set_zero_datum_validation_runs_before_state_changes() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum
@@ -1480,6 +1526,7 @@ fn set_zero_datum_allows_resetting_same_station() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum
@@ -1507,6 +1554,7 @@ fn store_zero_datum_without_repositioning_validates_duplicate() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set first datum normally
@@ -1540,6 +1588,7 @@ fn find_connected_zero_datum_uses_station_connectivity() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on station 1 (middle)
@@ -1575,6 +1624,7 @@ fn create_loop_closure_creates_correct_values() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: shot goes east 5m
@@ -1583,6 +1633,7 @@ fn create_loop_closure_creates_correct_values() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge B.0 to A.1 so they're connected
@@ -1652,24 +1703,28 @@ fn create_loop_closures_batch_matches_sequential() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let b = p
             .add_section(SectionData {
                 shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let c = p
             .add_section(SectionData {
                 shots: vec![shot(180.0, 180.0, 8.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let d = p
             .add_section(SectionData {
                 shots: vec![shot(270.0, 270.0, 3.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Tree of merges connecting all four sections.
         p.merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -1753,12 +1808,14 @@ fn create_loop_closures_batch_matches_sequential_zero_datum_unconnected() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let b = p
             .add_section(SectionData {
                 shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Two disconnected sections (no merge between them), each with its own
         // zero datum - the only setup that accepts an unconnected closure pair.
@@ -1840,6 +1897,7 @@ fn create_loop_closure_proportional_is_deferred() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let station_a = StationRef::new(section_id, 0);
@@ -1872,6 +1930,7 @@ fn create_loop_closure_equal_distribution_is_deferred() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let station_a = StationRef::new(section_id, 0);
@@ -1893,12 +1952,14 @@ fn create_loop_closure_rejects_duplicate() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -1949,6 +2010,7 @@ fn create_loop_closure_allows_same_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Stations 0 and 3 are in the same section and connected through shots
@@ -1974,12 +2036,14 @@ fn create_loop_closure_rejects_unconnected_stations() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Don't merge them - they are unconnected
@@ -2001,12 +2065,14 @@ fn merge_stations_rejects_already_connected() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // First merge succeeds
@@ -2032,18 +2098,21 @@ fn unmerge_stations_removes_matching_closure_and_preserves_others() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A-B and B-C
@@ -2111,18 +2180,21 @@ fn unmerge_stations_preserves_unrelated_closures() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A-B and B-C
@@ -2174,18 +2246,21 @@ fn closure_expands_connected_sections_with_existing_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A-B
@@ -2265,6 +2340,7 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -2274,6 +2350,7 @@ fn calculate_path_length_prefers_shorter_weighted_path() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -2328,6 +2405,7 @@ fn along_line_simple_linear_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let shots: Vec<ShotId> = project
         .get_section(a)
@@ -2380,12 +2458,14 @@ fn along_line_cross_section_merge_skips_merge_edge() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -2428,6 +2508,7 @@ fn along_line_routes_through_loop_closure() {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -2437,6 +2518,7 @@ fn along_line_routes_through_loop_closure() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Tie A.0<->B.0 and A.1<->B.2 with loop closures (not merges).
     for (sa, sb) in [
@@ -2500,6 +2582,7 @@ fn along_line_shot_point_partial_length() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
@@ -2530,6 +2613,7 @@ fn along_line_same_shot_endpoints() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
@@ -2563,6 +2647,7 @@ fn along_line_same_shot_prefers_shorter_route_around() {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
@@ -2608,6 +2693,7 @@ fn along_line_parallel_closure_does_not_tint_shot() {
             shots: vec![shot(90.0, 90.0, 100.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.loop_closures.push(LoopClosure {
         id: project.next_closure_id,
@@ -2643,6 +2729,7 @@ fn along_line_zero_length_same_shot_has_empty_path() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
@@ -2664,12 +2751,14 @@ fn along_line_disconnected_returns_none() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let stations = project.compute_station_coordinates();
 
@@ -2689,6 +2778,7 @@ fn along_line_identical_and_degenerate_t() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
@@ -2715,18 +2805,21 @@ fn along_line_skips_merge_and_closure_phantoms() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -2774,6 +2867,7 @@ fn along_line_reference_shot_is_traversed_and_tinted() {
             shots: vec![ref_shot],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s0 = project.get_section(a).unwrap().shots[0].id;
     let stations = project.compute_station_coordinates();
@@ -2809,6 +2903,7 @@ fn along_line_follows_passed_coordinates_not_measured_length() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let s1 = project.get_section(a).unwrap().shots[1].id;
     let mut stations = project.compute_station_coordinates();
@@ -2850,18 +2945,21 @@ fn new_merge_expands_existing_closure_connectivity() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Closure A-B (before any merges)
@@ -2934,18 +3032,21 @@ fn transitive_closure_computation_correct() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A.1 with B.0
@@ -3052,18 +3153,21 @@ fn transitive_closure_both_endpoints_merged() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A.1 ↔ B.0
@@ -3239,18 +3343,21 @@ fn transitive_closure_through_create_loop_closure_api() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -3356,18 +3463,21 @@ fn closure_chain_transitivity_two_closures_shared_endpoint() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -3521,6 +3631,7 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let sec_a = project
@@ -3528,18 +3639,21 @@ fn closure_chain_transitivity_three_closures_shared_endpoint() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_b = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let sec_c = project
         .add_section(SectionData {
             shots: vec![shot(270.0, 270.0, 4.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -3698,18 +3812,21 @@ fn build_project_with_relationships() -> (Project, SectionId, SectionId, Section
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 2.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 3.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge a -> b
@@ -3898,12 +4015,14 @@ fn preview_delete_shot_basic() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let section_b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge station_a:1 with station_b:0
@@ -3959,12 +4078,14 @@ fn preview_delete_shot_with_closure_rewire() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let section_b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge section_a:1 with section_b:0
@@ -4036,6 +4157,7 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B with 1 shot: stations 0,1
@@ -4044,6 +4166,7 @@ fn preview_delete_shot_mid_shot_loop_blocks_shift() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -4095,6 +4218,7 @@ fn remove_shot_with_rewire_first_shot_adjusts_offset() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
@@ -4142,18 +4266,21 @@ fn remove_shot_with_rewire_replaces_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let section_b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let section_c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Align merge points: a:1 is at (0,1), so b:0 and c:0 need offset (0,1)
@@ -4204,6 +4331,7 @@ fn insert_shot_before_at_position_zero_adjusts_offset() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let first_shot_id = project.get_section(section_id).unwrap().shots[0].id;
@@ -4247,12 +4375,14 @@ fn insert_shot_after_shifts_station_refs() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let section_b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Add a merge between section_a:2 (after second shot) and section_b:0
@@ -4328,12 +4458,14 @@ fn insert_upstream_keeps_cross_refs_on_same_physical_station() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Merge A:1 ↔ B:0, then canonicalize anchors as a load would.
     project
@@ -4391,12 +4523,14 @@ fn dangling_anchor_flagged_by_integrity() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(a, 2), StationRef::new(b, 0))
@@ -4429,6 +4563,7 @@ fn calculate_penetration_with_zero_datum() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set a zero datum on station 0
@@ -4453,10 +4588,12 @@ fn calculate_penetration_with_zero_datum() {
 fn calculate_penetration_no_datums_returns_zero() {
     let mut project = Project::new("NoDatums".to_string(), None);
 
-    project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     // No zero datums set
     let stations = project.compute_station_coordinates();
@@ -4480,6 +4617,7 @@ fn compute_distances_from_chosen_station() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let stations = project.compute_station_coordinates();
@@ -4501,10 +4639,12 @@ fn compute_distances_from_chosen_station() {
 #[test]
 fn compute_distances_from_empty_roots_all_infinity() {
     let mut project = Project::new("DistNoRoots".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let stations = project.compute_station_coordinates();
     let dist = project.compute_distances_from(&stations, &[]);
     assert_eq!(dist.len(), stations.len());
@@ -4524,6 +4664,7 @@ fn compute_distances_from_zero_datum_roots_matches_penetration() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(section_id, 0).into(),
@@ -4561,6 +4702,7 @@ fn reachability_keeps_jump_reference_shots() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .sections
@@ -4601,12 +4743,14 @@ fn reachability_uses_reference_shot_shortcut() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)], // B0->B1
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .sections
@@ -4661,12 +4805,14 @@ fn reachability_includes_non_aligned_closures() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)], // A0->A1
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)], // B0->B1, disconnected from A
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -4718,6 +4864,7 @@ fn distance_field_uses_coordinate_distances() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -4755,12 +4902,14 @@ fn create_loop_closure_rejects_merged_stations() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -4786,12 +4935,14 @@ fn create_loop_closure_allows_disconnected_with_both_datums() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Each section gets its own zero datum (disconnected but GPS-anchored)
@@ -4835,6 +4986,7 @@ fn compute_closure_metrics_known_geometry() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going east (90°), 5m → B:0=(0,0), B:1=(5,0)
@@ -4843,6 +4995,7 @@ fn compute_closure_metrics_known_geometry() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -4903,6 +5056,7 @@ fn compute_closure_metrics_zero_misclosure() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going north (0°), 10m → B:0=(0,0), B:1=(0,10)
@@ -4911,6 +5065,7 @@ fn compute_closure_metrics_zero_misclosure() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -4951,6 +5106,7 @@ fn distribute_closure_simple_two_section_loop() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south (180°), 29m → B:1=(0,-29)
@@ -4959,6 +5115,7 @@ fn distribute_closure_simple_two_section_loop() {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -5013,6 +5170,7 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south (180°), 29m
@@ -5021,6 +5179,7 @@ fn distribute_closure_with_zero_datum_at_endpoint() {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set zero datum on A:0 before merging
@@ -5086,6 +5245,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south (180°), 19m → B:1=(0,-19)
@@ -5094,6 +5254,7 @@ fn distribute_closure_with_zero_datum_mid_path() {
             shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -5155,6 +5316,7 @@ fn distribute_closure_both_anchored_fails() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south, slightly different length
@@ -5163,6 +5325,7 @@ fn distribute_closure_both_anchored_fails() {
             shots: vec![shot(180.0, 180.0, 9.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:0 with B:0
@@ -5206,6 +5369,7 @@ fn distribute_closure_equal_distribution() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south, 29m
@@ -5214,6 +5378,7 @@ fn distribute_closure_equal_distribution() {
             shots: vec![shot(180.0, 180.0, 29.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -5255,6 +5420,7 @@ fn distribute_closure_fallback_separate_datums() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going east → B:1=(5+offset,0+offset)
@@ -5263,6 +5429,7 @@ fn distribute_closure_fallback_separate_datums() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set separate zero datums on each (NOT connected by merges)
@@ -5328,6 +5495,7 @@ fn distribute_closure_large_ring_network() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         section_ids.push(id);
     }
@@ -5413,6 +5581,7 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot, same geometry to create a closure path
@@ -5421,6 +5590,7 @@ fn apply_station_move_adjusts_incoming_and_outgoing_shots() {
             shots: vec![shot(180.0, 180.0, 29.5, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -5489,6 +5659,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going south, slightly short - creates misclosure at station 0
@@ -5497,6 +5668,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
             shots: vec![shot(180.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -5519,6 +5691,7 @@ fn apply_station_move_station_zero_uses_section_offset() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(b, 1), StationRef::new(c, 0))
@@ -5569,6 +5742,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // B: connect to create closure path
@@ -5577,6 +5751,7 @@ fn apply_station_move_last_station_only_modifies_incoming() {
             shots: vec![shot(180.0, 180.0, 19.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -5634,6 +5809,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot going east, 5m → B:0=(0,0), B:1=(5,0)
@@ -5642,6 +5818,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section C: 1 shot going west, 5m → C:0=(0,0), C:1=(-5,0)
@@ -5650,6 +5827,7 @@ fn enforce_merge_alignment_conflicted_section_applies_segment_correction() {
             shots: vec![shot(270.0, 270.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on A:0
@@ -5740,6 +5918,7 @@ fn looped_project_with_misclosure() -> (Project, SectionId, SectionId) {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Path B: origin → north 10 → east 10.2  (B:2 = (10.2, 10))
     let b = project
@@ -5750,6 +5929,7 @@ fn looped_project_with_misclosure() -> (Project, SectionId, SectionId) {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -6158,6 +6338,7 @@ fn adjust_line_loop_matches_hand_computed_optimum() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -6167,6 +6348,7 @@ fn adjust_line_loop_matches_hand_computed_optimum() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .set_zero_datum(
@@ -6262,6 +6444,7 @@ fn adjust_random_geometries_are_optimal_and_well_formed() {
                         shots,
                         ..Default::default()
                     })
+                    .expect("add_section within MAX_SECTION_ID")
                     .id,
             );
         }
@@ -6392,6 +6575,7 @@ fn profile_closure_solve_large() {
                     .collect(),
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Path B: same count, slightly longer so the far ends disagree (a real
         // misclosure for the solve to distribute).
@@ -6402,6 +6586,7 @@ fn profile_closure_solve_large() {
                     .collect(),
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
 
         project
@@ -6441,13 +6626,15 @@ fn profile_closure_solve_large() {
 #[test]
 fn compute_adjusted_equals_measured_without_closures() {
     let mut project = Project::new("NoClosures".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 0.0),
-            shot(90.0, 90.0, 10.0, 0.0, 0.0),
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 90.0, 10.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let config = ClosureAdjustmentConfig::default();
 
     let measured = project.compute_station_coordinates();
@@ -6475,6 +6662,7 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -6484,6 +6672,7 @@ fn compute_adjusted_closes_datumless_loop_deterministically() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(a, 0), StationRef::new(b, 0))
@@ -6547,6 +6736,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let y = project
             .add_section(SectionData {
@@ -6556,6 +6746,7 @@ fn compute_adjusted_failed_component_falls_back_sibling_still_adjusts() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         project
             .merge_stations(StationRef::new(x, 0), StationRef::new(y, 0))
@@ -6649,6 +6840,7 @@ fn is_shot_frozen_single_datum_dead_end() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.zero_datums.push(ZeroDatum {
@@ -6674,6 +6866,7 @@ fn is_shot_frozen_loop_with_two_datums() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -6683,6 +6876,7 @@ fn is_shot_frozen_loop_with_two_datums() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -6731,6 +6925,7 @@ fn is_shot_frozen_loop_with_aligned_closure() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -6741,6 +6936,7 @@ fn is_shot_frozen_loop_with_aligned_closure() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -6801,6 +6997,7 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0), shot(0.0, 0.0, 1.0, 1.0, 2.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -6810,6 +7007,7 @@ fn is_shot_frozen_unaligned_closure_not_traversed() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -6901,12 +7099,14 @@ fn update_shot_rejects_frozen_geometry() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 1.0, 0.0, 1.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -7003,13 +7203,15 @@ fn stats_empty_project() {
 #[test]
 fn stats_single_section() {
     let mut project = Project::new("Single".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 0.0, 5.0),
-            shot(90.0, 90.0, 8.0, 5.0, 12.0),
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 0.0, 5.0),
+                shot(90.0, 90.0, 8.0, 5.0, 12.0),
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let stats = project.stats();
     assert_eq!(stats.section_count, 1);
@@ -7025,19 +7227,23 @@ fn stats_multiple_sections() {
     let mut project = Project::new("Multi".to_string(), None);
     // Section 1: depth change = depth_out - depth_in = -5 - (-2) = -3
     // accumulated z: 0 -> -3, so min_depth = -3
-    project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 10.0, -2.0, -5.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 10.0, -2.0, -5.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     // Section 2: dz1 = 1-0 = 1, dz2 = 3-1 = 2, accumulated z: 0 -> 1 -> 3
     // max_depth = 3
-    project.add_section(SectionData {
-        shots: vec![
-            shot(90.0, 90.0, 5.0, 0.0, 1.0),
-            shot(90.0, 90.0, 7.0, 1.0, 3.0),
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(90.0, 90.0, 5.0, 0.0, 1.0),
+                shot(90.0, 90.0, 7.0, 1.0, 3.0),
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let stats = project.stats();
     assert_eq!(stats.section_count, 2);
@@ -7056,12 +7262,14 @@ fn stats_with_loop_closures() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.loop_closures.push(LoopClosure {
@@ -7103,6 +7311,7 @@ fn calculate_penetration_single_datum_measures_max_distance() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum on station 0
@@ -7137,6 +7346,7 @@ fn merge_stations_rejects_nonexistent_station() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let result = project.merge_stations(
@@ -7155,12 +7365,14 @@ fn merge_stations_rejects_already_merged_pair() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // First merge succeeds
@@ -7182,12 +7394,14 @@ fn merge_stations_rejects_both_datums() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -7222,6 +7436,7 @@ fn compute_station_raw_coords_with_individual_station_offset() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Station 1 is at (0, 10, 0) without offset
@@ -7249,6 +7464,7 @@ fn compute_station_raw_coords_station_zero_with_section_offset() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.section_offsets.insert(section_id, (100.0, 200.0));
@@ -7277,6 +7493,7 @@ fn path_length_simple_linear_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let path_len =
@@ -7299,6 +7516,7 @@ fn path_length_partial_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Path from station 1 to station 3 (two shots: 15 + 8 = 23)
@@ -7318,12 +7536,14 @@ fn path_length_through_merge() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge a.1 to b.0 (zero-distance edge)
@@ -7365,6 +7585,7 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // A disconnected second section so the target station exists yet is unreachable
     // from A - this forces the fallback-sum branch, not the early not-found return.
@@ -7373,6 +7594,7 @@ fn path_length_fallback_clamps_negative_shot_lengths() {
             shots: vec![shot(0.0, 0.0, 7.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
 
@@ -7400,6 +7622,7 @@ fn compute_station_coordinates_basic_section() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let stations = project.compute_station_coordinates();
@@ -7470,12 +7693,14 @@ fn compute_station_coordinates_merged_sections_have_merged_with() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -7522,6 +7747,7 @@ fn realign_datum_section_keeps_datum_pinned() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let datum_station = StationRef::new(sec, 3);
@@ -7617,6 +7843,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let sec2 = project
@@ -7628,6 +7855,7 @@ fn realign_merged_section_keeps_merge_point_aligned() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set datum at 1:0
@@ -7751,6 +7979,7 @@ fn realign_noop_without_datums() {
             shots: vec![shot(0.0, 0.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let offsets_before = project.section_offsets.clone();
@@ -7773,6 +8002,7 @@ fn realign_is_idempotent() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let datum_station = StationRef::new(sec, 2);
@@ -7821,6 +8051,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let sec2 = project
@@ -7828,6 +8059,7 @@ fn realign_edit_in_datum_section_propagates_to_merged() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Datum at 1:0
@@ -7938,6 +8170,7 @@ fn penetration_single_section_with_datum() {
             shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let gps = GpsCoordinates::new(45.0, 10.0, 0.0).unwrap();
@@ -7959,6 +8192,7 @@ fn penetration_datum_at_end_station() {
             shots: vec![shot(0.0, 180.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Datum at end of section (station 1)
@@ -7985,18 +8219,21 @@ fn cleanup_removes_merges_referencing_section() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -8028,12 +8265,14 @@ fn cleanup_removes_closures_referencing_section() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.loop_closures.push(LoopClosure {
@@ -8075,12 +8314,14 @@ fn cleanup_removes_offsets_and_datums() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.section_offsets.insert(a, (1.0, 2.0));
@@ -8127,18 +8368,21 @@ fn cleanup_preserves_unrelated_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -8262,13 +8506,15 @@ fn compute_station_depth_from_surrounding_shots() {
     // Station 1 has an incoming shot (depth_out=5.0) and outgoing shot (depth_in=6.0).
     // Average = (5 + 6) / 2 = 5.5
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 5.0),  // shot 0: depth_in=0, depth_out=5
-            shot(0.0, 0.0, 1.0, 6.0, 10.0), // shot 1: depth_in=6, depth_out=10
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 5.0),  // shot 0: depth_in=0, depth_out=5
+                shot(0.0, 0.0, 1.0, 6.0, 10.0), // shot 1: depth_in=6, depth_out=10
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     // Station 1 is between the two shots
@@ -8287,10 +8533,12 @@ fn compute_station_depth_from_surrounding_shots() {
 fn compute_station_depth_first_station() {
     // Station 0 has only an outgoing shot - depth = shot[0].depth_in
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 1.0, 3.0, 7.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 1.0, 3.0, 7.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     let coords = project
@@ -8307,13 +8555,15 @@ fn compute_station_depth_first_station() {
 fn compute_station_depth_last_station() {
     // Station 2 (last) has only an incoming shot - depth = shot[1].depth_out
     let mut project = Project::new("Depth".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 1.0, 0.0, 5.0),
-            shot(0.0, 0.0, 1.0, 5.0, 12.0),
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 1.0, 0.0, 5.0),
+                shot(0.0, 0.0, 1.0, 5.0, 12.0),
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     let coords = project
@@ -8337,6 +8587,7 @@ fn compute_station_depth_with_merge_averages_both_sections() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -8345,6 +8596,7 @@ fn compute_station_depth_with_merge_averages_both_sections() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge A:1 with B:0
@@ -8370,10 +8622,12 @@ fn compute_station_depth_with_merge_averages_both_sections() {
 fn compute_station_depth_no_shots_returns_zero() {
     // Edge case: section with no shots, station 0 has no surrounding shots
     let mut project = Project::new("Empty".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     let coords = project
@@ -8392,10 +8646,12 @@ fn compute_raw_coords_xy_walk_north() {
     // horizontal_length = sqrt(5^2 - 0^2) = 5
     // dx = 5 * sin(0) = 0, dy = 5 * cos(0) = 5
     let mut project = Project::new("Walk".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     let c0 = project
@@ -8419,10 +8675,12 @@ fn compute_raw_coords_xy_walk_north() {
 fn compute_raw_coords_xy_walk_east() {
     // A shot due east (azimuth=90) with length 3m, flat
     let mut project = Project::new("Walk".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot(90.0, 90.0, 3.0, 5.0, 5.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot(90.0, 90.0, 3.0, 5.0, 5.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     let c1 = project
@@ -8445,13 +8703,15 @@ fn compute_raw_coords_depth_independent_of_xy() {
     // Z is computed from absolute depth values, not from XY walk
     // Two shots: shot 0 goes north 10m at depth 5→8, shot 1 goes east 10m at depth 7→12
     let mut project = Project::new("IndepZ".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![
-            shot(0.0, 0.0, 10.0, 5.0, 8.0),
-            shot(90.0, 90.0, 10.0, 7.0, 12.0),
-        ],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![
+                shot(0.0, 0.0, 10.0, 5.0, 8.0),
+                shot(90.0, 90.0, 10.0, 7.0, 12.0),
+            ],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     // Station 0: only outgoing shot → depth_in = 5.0
@@ -8493,6 +8753,7 @@ fn compute_raw_coords_with_section_offset() {
             shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.section_offsets.insert(sec, (100.0, 200.0));
@@ -8518,6 +8779,7 @@ fn compute_raw_coords_with_station_offset() {
             shots: vec![shot(0.0, 0.0, 5.0, 10.0, 10.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project
@@ -8549,6 +8811,7 @@ fn lsq_no_closures_is_noop() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let config = ClosureAdjustmentConfig::default();
@@ -8568,18 +8831,21 @@ fn lsq_preserves_depth_values() {
             shots: vec![shot(0.0, 0.0, 10.0, 5.0, 8.0)], // north, depth 5→8
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 10.0, 8.0, 12.0)], // east, depth 8→12
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(225.0, 225.0, 14.5, 12.0, 5.5)], // south-west back, depth 12→5.5
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge to form a loop: A:1 → B:0, B:1 → C:0
@@ -8645,12 +8911,14 @@ fn lsq_anchor_station_stays_fixed() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(180.0, 180.0, 20.5, 5.0, 5.0)], // slight error for closure
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -8704,12 +8972,14 @@ fn lsq_produces_finite_coordinates() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(225.0, 225.0, 14.0, 5.0, 5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -8773,18 +9043,21 @@ fn lsq_with_zero_datum_fixes_that_group() {
             shots: vec![shot(0.0, 0.0, 10.0, 5.0, 5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 10.0, 5.0, 5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(225.0, 225.0, 14.5, 5.0, 5.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     project.station_merges.push(StationMerge {
@@ -8929,6 +9202,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
             shots: shots_a,
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot heading east, 10m
@@ -8937,6 +9211,7 @@ fn lsq_long_chain_per_shot_changes_are_small() {
             shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Zero datums
@@ -9068,6 +9343,7 @@ fn lsq_realistic_topology_preserves_geometry() {
             shots: shots_a,
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Section B: 1 shot (anchor)
@@ -9076,6 +9352,7 @@ fn lsq_realistic_topology_preserves_geometry() {
             shots: vec![shot(120.0, 120.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Set section A offset (large, like real data)
@@ -9220,6 +9497,7 @@ fn lsq_spur_shots_are_not_modified() {
             shots: shots_a,
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let b = project
@@ -9227,6 +9505,7 @@ fn lsq_spur_shots_are_not_modified() {
             shots: vec![shot(90.0, 90.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let shots_c: Vec<ShotData> = (0..20).map(|_| shot(90.0, 90.0, 3.0, 0.0, 0.0)).collect();
@@ -9235,6 +9514,7 @@ fn lsq_spur_shots_are_not_modified() {
             shots: shots_c,
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Merge C:0 ↔ A:50
@@ -9368,24 +9648,28 @@ fn record_station_merge_rebuilds_cache_when_emptied_with_surviving_merges() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let c = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let d = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Establish two surviving merges A↔B and B↔C via the maintained
@@ -9504,6 +9788,7 @@ fn integrity_flags_non_finite_geometry() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     assert!(p.check_structural_integrity().is_empty());
     // Poison a shot the way a corrupt/older file or unguarded import could.
@@ -9528,12 +9813,14 @@ fn check_closure_alignment_sees_drift_that_merge_check_cannot() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0), shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -9587,6 +9874,7 @@ fn cascade_solves_deep_chain_past_old_iteration_cap() {
                 shots: vec![shot(90.0, 90.0, 3.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         ids.push(id);
     }
@@ -9631,12 +9919,14 @@ fn insert_before_and_after_agree_on_boundary_merge_ref() {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let b = p
             .add_section(SectionData {
                 shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Merge B0 onto A's MIDDLE station (index 1) - the insertion boundary.
         p.record_station_merge(StationMerge {
@@ -9702,12 +9992,14 @@ fn redrive_offsets_after_load_heals_persisted_drift() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -9748,6 +10040,7 @@ fn redrive_dedups_uuids_before_reanchor_preserving_second_duplicate_ref() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Force a duplicate: shots[0] and shots[1] share a UUID, as a corrupt/legacy
@@ -9806,12 +10099,14 @@ fn resolve_offsets_does_not_touch_when_already_consistent() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .merge_stations(StationRef::new(a, 1), StationRef::new(b, 0))
@@ -9850,6 +10145,7 @@ fn section_has_zero_datum_ignores_dangling_datum() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // A dangling datum: anchored on a shot UUID that no shot carries.
@@ -9884,6 +10180,7 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // A second, datum-less section to use as `excluded` (≠ a, so `a` is visited).
     let b = project
@@ -9891,6 +10188,7 @@ fn has_datum_path_excluding_ignores_dangling_datum() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     project.zero_datums.push(ZeroDatum {
@@ -9914,12 +10212,14 @@ fn realign_after_shot_edit_ignores_dangling_datum() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Merge A1 = B0 so A and B share a rigid group, then drift B off the merge.
@@ -9953,6 +10253,7 @@ fn rigid_group_has_datum_ignores_dangling_datum() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     project.zero_datums.push(ZeroDatum {
@@ -9977,12 +10278,14 @@ fn cascade_connection_offsets_ignores_dangling_datum() {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     // Merge A1 = B0 (direct push avoids merge_stations' auto-alignment).
@@ -10023,12 +10326,14 @@ fn check_merge_alignment_detects_and_realign_fixes_drift() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Anchor A at a zero datum so realign has an authority.
     project.zero_datums.push(ZeroDatum {
@@ -10068,12 +10373,14 @@ fn realign_corrects_sub_tolerance_offset_drift() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(90.0, 90.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -10125,6 +10432,7 @@ fn realign_preserves_floating_section_offset() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.adjust_section_offset(a, 12.0, 7.0);
     project.resolve_offsets(); // the unconditional re-solve
@@ -10145,12 +10453,14 @@ fn integrity_fixture() -> (Project, SectionId, SectionId) {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),
@@ -10184,12 +10494,14 @@ fn check_orphan_closures_detects_sole_bridge_closure() {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = p
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // A closure between A and B with NO merge connecting them: a sole bridge.
     p.loop_closures.push(LoopClosure {
@@ -10234,12 +10546,14 @@ fn deleting_shot_converts_orphaned_bridge_closure_to_merge() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 5.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.zero_datums.push(ZeroDatum {
         station_ref: StationRef::new(a, 0).into(),
@@ -10295,12 +10609,14 @@ fn deleting_shot_converts_broken_loop_closure_to_merge() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // A2 is merged with B0 (B hangs off the end of A).
     project.record_station_merge(StationMerge {
@@ -10455,6 +10771,7 @@ fn check_structural_integrity_flags_and_repairs_duplicate_shot_uuid() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     let first_uuid = project.get_section(a).unwrap().shots[0]
@@ -10520,6 +10837,7 @@ fn warm_shot_uuid_index_resolves_duplicate_to_first_occurrence() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0), shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     let first_uuid = project.get_section(a).unwrap().shots[0]
@@ -10566,12 +10884,14 @@ fn dangling_cross_references_are_omitted_from_wire_output() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
 
@@ -10621,6 +10941,7 @@ fn has_unresolvable_cross_references_detects_dangling_offset() {
             shots: vec![shot(0.0, 0.0, 1.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     assert!(
@@ -10697,12 +11018,14 @@ fn golden_symmetric_v_resolves_to_axis_of_symmetry() {
             shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .set_zero_datum(
@@ -10768,6 +11091,7 @@ fn solve_weighted_mean_star(legs: &[(f64, f64, f64)]) -> Coordinates {
                     quality,
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id
         })
         .collect();
@@ -11161,6 +11485,7 @@ fn oblique_loop(len_b: f64) -> Project {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
@@ -11170,6 +11495,7 @@ fn oblique_loop(len_b: f64) -> Project {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project
         .set_zero_datum(
@@ -11206,6 +11532,7 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let zb = zero
         .add_section(SectionData {
@@ -11215,6 +11542,7 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
             ],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     zero.set_zero_datum(
         StationRef::new(za, 0),
@@ -11250,12 +11578,14 @@ fn model_soundness_oracle_reproduces_known_rigorous_optima() {
             shots: vec![shot(80.0, 80.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let vb = v
         .add_section(SectionData {
             shots: vec![shot(100.0, 100.0, 10.0, 0.0, 0.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     v.set_zero_datum(
         StationRef::new(va, 0),
@@ -11371,12 +11701,14 @@ fn fuzz_loop(seed: u64) -> Project {
             shots: mkshots(&mut st, na),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = p
         .add_section(SectionData {
             shots: mkshots(&mut st, nb),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     p.set_zero_datum(
         StationRef::new(a, 0),
@@ -11417,12 +11749,14 @@ fn big_loop(n: usize, seed: u64) -> Project {
             shots: drift_shots(&mut st, n, 60.0),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = p
         .add_section(SectionData {
             shots: drift_shots(&mut st, n, 30.0),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     p.set_zero_datum(
         StationRef::new(a, 0),
@@ -11451,12 +11785,14 @@ fn ladder(segs: usize, seg: usize, seed: u64) -> Project {
             shots: drift_shots(&mut st, n, 90.0),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = p
         .add_section(SectionData {
             shots: drift_shots(&mut st, n, 90.0),
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     p.set_zero_datum(
         StationRef::new(a, 0),
@@ -11489,6 +11825,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
                 shots: drift_shots(&mut st, cols - 1, 90.0),
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id
         })
         .collect();
@@ -11498,6 +11835,7 @@ fn grid(rows: usize, cols: usize, seed: u64) -> Project {
                 shots: drift_shots(&mut st, rows - 1, 0.0),
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id
         })
         .collect();
@@ -11560,6 +11898,7 @@ fn fuzz_paths(seed: u64, paths: usize, max_shots: usize, len_min: f64, len_max: 
                 quality: q,
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id
         })
         .collect();
@@ -11602,6 +11941,7 @@ fn build_star(name: &str, legs: &[(f64, f64, f64)]) -> Project {
                 quality: q,
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id
         })
         .collect();

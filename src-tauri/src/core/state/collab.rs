@@ -244,8 +244,9 @@ impl AppState {
                     "Cannot reconcile: the collaborator's file adds {needed} section(s) but only \
                      {remaining} can still be created (limit = {capacity}). No changes were made \
                      and the file has not been marked as reconciled, so it can be applied later. \
-                     Section ids are never reused, so deleting sections will NOT free capacity - \
-                     reduce the additions in the collaborator's file, or continue in a new project."
+                     Section ids are re-derived on reopen, so deleting the highest-numbered \
+                     sections and reopening the project frees capacity; deleting them without \
+                     reopening does not."
                 ));
             }
         }
@@ -621,17 +622,25 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
             ));
             break;
         }
-        let new_sid = project
-            .add_section(SectionData {
-                name: Some(s.name.clone()),
-                surveyor: s.surveyor.clone(),
-                date: s.date,
-                color: s.color.clone(),
-                direction: None,
-                quality: 1.0,
-                shots: s.shots.clone(),
-            })
-            .id;
+        // Unreachable: apply_collab_changes preflights the whole changeset against
+        // remaining_section_capacity and refuses before mutating. Handled rather
+        // than unwrapped so a direct caller that skipped the preflight stops here
+        // with a reported skip instead of panicking.
+        let new_sid = match project.add_section(SectionData {
+            name: Some(s.name.clone()),
+            surveyor: s.surveyor.clone(),
+            date: s.date,
+            color: s.color.clone(),
+            direction: None,
+            quality: 1.0,
+            shots: s.shots.clone(),
+        }) {
+            Ok(section) => section.id,
+            Err(e) => {
+                skipped.push(e);
+                break;
+            }
+        };
         if !s.shot_uuids.is_empty() {
             if let Some(section) = project.get_section_mut(new_sid) {
                 // Adopt each collaborator UUID only if it has not already been
@@ -746,7 +755,8 @@ mod tests {
                 shot(30.0, 7.0),
                 shot(40.0, 8.0),
             ],
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         p
     }
 
@@ -951,7 +961,8 @@ mod tests {
                 temperature: Some(12.5),
                 ..Default::default()
             }],
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         let sid = p.sections[0].id;
 
         let mut cs = CollabChangeSet::empty();

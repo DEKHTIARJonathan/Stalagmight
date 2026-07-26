@@ -1904,12 +1904,14 @@ mod tests {
 
     fn simple_project() -> Project {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         project
     }
 
@@ -1956,12 +1958,14 @@ mod tests {
         // == 0. Without clamping the viewBox would be 0×0 and usvg
         // would refuse to rasterise it.
         let mut project = Project::new("Single".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Just one station".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Just one station".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         let (_, _, w, h) = parse_viewbox(&svg);
         assert!(w > 0.0, "width should be positive: viewBox w={w}");
@@ -2002,6 +2006,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 90.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let ref_id = project
             .add_section(SectionData {
@@ -2010,6 +2015,7 @@ mod tests {
                 shots: vec![make_shot(1000.0, 90.0, true)], // invisible
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Connect the long ref shot's start to main's end so it lives in
         // the same coordinate frame.
@@ -2205,18 +2211,20 @@ mod tests {
     ///   segment B = shots 3,4 (between stations 3..=5)
     fn project_with_one_ref_separator() -> Project {
         let mut project = Project::new("RefSplit".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("S".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![
-                make_shot(10.0, 0.0, false),  // 0 -> 1
-                make_shot(10.0, 90.0, false), // 1 -> 2
-                make_shot(10.0, 90.0, true),  // 2 -> 3  (reference)
-                make_shot(10.0, 0.0, false),  // 3 -> 4
-                make_shot(10.0, 90.0, false), // 4 -> 5
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("S".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(10.0, 0.0, false),  // 0 -> 1
+                    make_shot(10.0, 90.0, false), // 1 -> 2
+                    make_shot(10.0, 90.0, true),  // 2 -> 3  (reference)
+                    make_shot(10.0, 0.0, false),  // 3 -> 4
+                    make_shot(10.0, 90.0, false), // 4 -> 5
+                ],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         project
     }
 
@@ -2240,6 +2248,7 @@ mod tests {
                 shots: vec![make_shot(100.0, 90.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let side_id = project
             .add_section(SectionData {
@@ -2248,6 +2257,7 @@ mod tests {
                 shots: vec![make_shot(1.0, 0.0, false)], // 1 m only
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let merged_at = chrono::Utc::now();
         for (parent_station, side_station) in [(0u32, 0u32), (1, 1)] {
@@ -2258,6 +2268,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 0.0, true)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             project.station_merges.push(StationMerge {
                 station_a: StationRef::new(stub, 0).into(),
@@ -2333,6 +2344,7 @@ mod tests {
                 shots: vec![make_shot(50.0, 90.0, false), make_shot(50.0, 90.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let child_x = project
             .add_section(SectionData {
@@ -2341,6 +2353,7 @@ mod tests {
                 shots: vec![make_shot(40.0, 0.0, false)], // north
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let child_y = project
             .add_section(SectionData {
@@ -2349,6 +2362,7 @@ mod tests {
                 shots: vec![make_shot(40.0, 180.0, false)], // south
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let child_z = project
             .add_section(SectionData {
@@ -2357,6 +2371,7 @@ mod tests {
                 shots: vec![make_shot(40.0, 45.0, false)], // NE
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
 
         // Stub section per child: one ref shot whose two ends merge into
@@ -2371,6 +2386,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 0.0, true)], // short ref
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             project.station_merges.push(StationMerge {
                 station_a: StationRef::new(stub, 0).into(),
@@ -2462,6 +2478,7 @@ mod tests {
                 shots: vec![make_shot(100.0, 90.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let merged_at = chrono::Utc::now();
         // Three single-shot children dangling off the trunk's east end.
@@ -2474,6 +2491,7 @@ mod tests {
                     shots: vec![make_shot(20.0, az, false)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             let stub = project
                 .add_section(SectionData {
@@ -2482,6 +2500,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 0.0, true)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             project.station_merges.push(StationMerge {
                 station_a: StationRef::new(stub, 0).into(),
@@ -2682,6 +2701,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
 
         let mut leaf_id = |name: &str| -> crate::models::SectionId {
@@ -2692,6 +2712,7 @@ mod tests {
                     shots: vec![make_shot(5.0, 90.0, false)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id
         };
         let a_id = leaf_id("LeafA");
@@ -2706,6 +2727,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 90.0, true)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id
         };
         let stub_a = stub_id();
@@ -2777,6 +2799,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let right_id = project
             .add_section(SectionData {
@@ -2785,6 +2808,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Two-hop reference chain. Stations 0,1,2 - only ref shots in this
         // section, so all three are "free" w.r.t. real segments.
@@ -2795,6 +2819,7 @@ mod tests {
                 shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         // Hook the chain's two outer stations onto the real segments via
         // merges. Chain station 1 stays free in the middle.
@@ -2868,6 +2893,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let mut leaf_id = |name: &str| -> crate::models::SectionId {
             project
@@ -2877,6 +2903,7 @@ mod tests {
                     shots: vec![make_shot(5.0, 90.0, false)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id
         };
         let left_id = leaf_id("Left");
@@ -2897,6 +2924,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 90.0, true)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             project.station_merges.push(StationMerge {
                 station_a: StationRef::new(stub, 0).into(),
@@ -2958,6 +2986,7 @@ mod tests {
                     shots: vec![make_shot(5.0, 0.0, false)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id
         };
         let a_id = real_seg("A");
@@ -2974,6 +3003,7 @@ mod tests {
                     shots: vec![make_shot(1.0, 0.0, true)],
                     ..Default::default()
                 })
+                .expect("add_section within MAX_SECTION_ID")
                 .id;
             project.station_merges.push(StationMerge {
                 station_a: StationRef::new(spoke, 1).into(),
@@ -3113,6 +3143,7 @@ mod tests {
                 shots: vec![make_shot(100.0, 0.0, false), make_shot(150.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
@@ -3200,6 +3231,7 @@ mod tests {
                 shots: vec![make_shot(100.0, 90.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
@@ -3255,6 +3287,7 @@ mod tests {
                 shots: vec![make_shot(100.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let far_id = project
             .add_section(SectionData {
@@ -3263,6 +3296,7 @@ mod tests {
                 shots: vec![make_shot(50.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let chain_id = project
             .add_section(SectionData {
@@ -3271,6 +3305,7 @@ mod tests {
                 shots: vec![make_shot(1.0, 90.0, true), make_shot(1.0, 90.0, true)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let merged_at = chrono::Utc::now();
         project.station_merges.push(StationMerge {
@@ -3314,12 +3349,14 @@ mod tests {
         // Color is opt-in: with the default options (color_mode None) the
         // export stays a monochrome stick map.
         let mut project = Project::new("Colored".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Red".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Red".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(&project, &ExportImageOptions::default()).unwrap();
         assert!(
             !svg.contains("#ff0000"),
@@ -3330,12 +3367,14 @@ mod tests {
     #[test]
     fn section_colors_only_for_raster_when_enabled() {
         let mut project = Project::new("Colored".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Red".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Red".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
 
         // Raster (PNG) + colors on → the shot is drawn in the section color.
         let png = generate_svg_string(
@@ -3424,12 +3463,14 @@ mod tests {
         // The commands pass the closure-adjusted solve here; the renderer must
         // draw from the supplied coordinates, not recompute the measured ones.
         let mut project = Project::new("Coords".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let opts = ExportImageOptions::default();
         let measured = generate_svg_string(&project, &opts).unwrap();
 
@@ -3481,12 +3522,14 @@ mod tests {
     #[test]
     fn depth_color_mode_colors_raster_but_svg_stays_mono() {
         let mut project = Project::new("Depth".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         // Raster + depth mode → shots carry the depth gradient (shallow color here,
         // since make_shot depths are flat).
         let png = generate_svg_string(
@@ -3522,12 +3565,14 @@ mod tests {
     fn distance_color_mode_greys_unreachable_raster_but_svg_stays_mono() {
         // No zero datum → every station is unreachable → shots render grey.
         let mut project = Project::new("Dist".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let png = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -3578,20 +3623,22 @@ mod tests {
         // the per-shot subdivision - not one flat color. Guards the subdivision
         // count, the midpoint-depth formula, and the per-segment coloring.
         let mut project = Project::new("DepthGrad".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                azimuth_in: 0.0,
-                azimuth_out: 0.0,
-                length: 120.0, // >= the 100 m depth change so the geometry is valid
-                depth_in: 0.0,
-                depth_out: 100.0,
-                is_reference: false,
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 120.0, // >= the 100 m depth change so the geometry is valid
+                    depth_in: 0.0,
+                    depth_out: 100.0,
+                    is_reference: false,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let png = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -3620,12 +3667,14 @@ mod tests {
         // With a zero datum every station is reachable → shots get the gold→purple
         // ramp, none grey. Exercises the reachable `Some((a+b)/2)` avg + ramp path.
         let mut project = Project::new("DistReach".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let sid = project.sections[0].id;
         let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
         project
@@ -3672,16 +3721,18 @@ mod tests {
     /// A straight 3-shot line: stations 0 (start), 1, 2 (interior), 3 (end).
     fn three_shot_line_project() -> Project {
         let mut project = Project::new("Line".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![
-                make_shot(10.0, 90.0, false),
-                make_shot(10.0, 90.0, false),
-                make_shot(10.0, 90.0, false),
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    make_shot(10.0, 90.0, false),
+                    make_shot(10.0, 90.0, false),
+                    make_shot(10.0, 90.0, false),
+                ],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         project
     }
 
@@ -3759,6 +3810,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false), make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         project.station_merges.push(StationMerge {
             station_a: StationRef::new(branch_id, 0).into(),
@@ -3837,12 +3889,14 @@ mod tests {
         // nothing is labeled. If that exclusion regressed, both ends of the
         // jump would read as degree-1 endpoints and a group would appear.
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Jump".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 90.0, true)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Jump".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, true)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -3899,12 +3953,14 @@ mod tests {
     #[test]
     fn section_names_present_with_custom_name_and_id_fallback() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 90.0, false)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, false)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let unnamed_id = project
             .add_section(SectionData {
                 name: None,
@@ -3912,6 +3968,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 0.0, false)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         let svg = generate_svg_string(
             &project,
@@ -3955,12 +4012,14 @@ mod tests {
         // stations and must be skipped entirely, not even via the
         // "Section {id}" fallback.
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Jump".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 90.0, true)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Jump".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, true)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4060,7 +4119,8 @@ mod tests {
             color: "#000000".to_string(),
             shots: vec![make_shot(10.0, 90.0, false)],
             ..Default::default()
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &p,
             &ExportImageOptions {
@@ -4110,7 +4170,8 @@ mod tests {
                 ..make_shot(10.0, 90.0, false)
             }],
             ..Default::default()
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &p,
             &ExportImageOptions {
@@ -4138,7 +4199,8 @@ mod tests {
                 ..make_shot(10.0, 90.0, false)
             }],
             ..Default::default()
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &p,
             &ExportImageOptions {
@@ -4217,6 +4279,7 @@ mod tests {
                 shots: vec![make_shot(10.0, 90.0, true)],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         project.station_comments.insert(
             StationRef::new(section_id, 0).into(),
@@ -4298,20 +4361,22 @@ mod tests {
         // pins the label to azimuth_IN specifically -- it can't pass on
         // azimuth_out or the wraparound average_azimuth() (~48.7) the geometry
         // solver uses elsewhere.
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                azimuth_in: 42.5,
-                azimuth_out: 55.0,
-                length: 12.3,
-                depth_in: 3.0,
-                depth_out: 5.0,
-                is_reference: false,
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    azimuth_in: 42.5,
+                    azimuth_out: 55.0,
+                    length: 12.3,
+                    depth_in: 3.0,
+                    depth_out: 5.0,
+                    is_reference: false,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4350,12 +4415,14 @@ mod tests {
     #[test]
     fn shot_data_excludes_reference_shots() {
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Jump".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![make_shot(10.0, 90.0, true)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Jump".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![make_shot(10.0, 90.0, true)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4418,15 +4485,17 @@ mod tests {
     #[test]
     fn shot_comments_present_when_seeded() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                comment: Some("silty".to_string()),
-                ..make_shot(10.0, 90.0, false)
-            }],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    comment: Some("silty".to_string()),
+                    ..make_shot(10.0, 90.0, false)
+                }],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4445,15 +4514,17 @@ mod tests {
     #[test]
     fn shot_comments_absent_when_disabled() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                comment: Some("silty".to_string()),
-                ..make_shot(10.0, 90.0, false)
-            }],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    comment: Some("silty".to_string()),
+                    ..make_shot(10.0, 90.0, false)
+                }],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4488,15 +4559,17 @@ mod tests {
     #[test]
     fn shot_comments_exclude_reference_shots() {
         let mut project = Project::new("Jump".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Jump".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                comment: Some("orphaned".to_string()),
-                ..make_shot(10.0, 90.0, true)
-            }],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Jump".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    comment: Some("orphaned".to_string()),
+                    ..make_shot(10.0, 90.0, true)
+                }],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4514,15 +4587,17 @@ mod tests {
     #[test]
     fn shot_comments_stay_black_regardless_of_color_mode() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                comment: Some("silty".to_string()),
-                ..make_shot(10.0, 90.0, false)
-            }],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    comment: Some("silty".to_string()),
+                    ..make_shot(10.0, 90.0, false)
+                }],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {
@@ -4546,15 +4621,17 @@ mod tests {
     #[test]
     fn shot_comments_share_collision_space_with_shot_data() {
         let mut project = Project::new("Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Trunk".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![ShotData {
-                comment: Some("silty".to_string()),
-                ..make_shot(10.0, 90.0, false)
-            }],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Trunk".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![ShotData {
+                    comment: Some("silty".to_string()),
+                    ..make_shot(10.0, 90.0, false)
+                }],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let svg = generate_svg_string(
             &project,
             &ExportImageOptions {

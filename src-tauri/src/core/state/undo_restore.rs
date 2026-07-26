@@ -128,6 +128,17 @@ impl AppState {
             return CommandResult::failure("No project open".to_string());
         };
 
+        // Undo history survives reload, so an entry written by a build without the
+        // section bound can carry an id the loader now rejects. Replaying it would
+        // reintroduce that section, let it be saved, and make the next open fail.
+        if original_id > crate::models::MAX_SECTION_ID {
+            return CommandResult::failure(format!(
+                "Cannot restore section {original_id}: its id exceeds the maximum supported \
+                 section id ({}). This undo entry came from an older file and cannot be replayed.",
+                crate::models::MAX_SECTION_ID
+            ));
+        }
+
         // Create section with original ID
         let section = Section::new_with_id(original_id, data);
         // Keep section_index_cache in step.  The matching

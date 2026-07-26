@@ -73,9 +73,9 @@ impl AppState {
             // while creating neither section B nor an undo entry.
             if !project.can_add_section() {
                 return CommandResult::failure(format!(
-                    "Cannot split: this project has used all {} available section ids. They are \
-                     not reused when sections are deleted, so this survey must continue in a new \
-                     project.",
+                    "Cannot split: this project has used all {} available section ids. Deleting \
+                     the highest-numbered sections and reopening the project frees capacity; \
+                     deleting them without reopening does not.",
                     crate::models::MAX_SECTION_ID as u64 + 1
                 ));
             }
@@ -167,8 +167,13 @@ impl AppState {
                 shots: shots_after,
             };
 
-            let section_b = project.add_section(section_b_data);
-            let new_id = section_b.id;
+            // Unreachable: the capacity check above runs before any mutation.
+            // Handled rather than unwrapped so a future reordering fails loudly
+            // instead of panicking mid-split.
+            let new_id = match project.add_section(section_b_data) {
+                Ok(section_b) => section_b.id,
+                Err(e) => return CommandResult::failure(e),
+            };
 
             // Set section B offset
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
@@ -348,9 +353,9 @@ impl AppState {
             // creating neither section B nor an undo entry.
             if !project.can_add_section() {
                 return CommandResult::failure(format!(
-                    "Cannot split: this project has used all {} available section ids. They are \
-                     not reused when sections are deleted, so this survey must continue in a new \
-                     project.",
+                    "Cannot split: this project has used all {} available section ids. Deleting \
+                     the highest-numbered sections and reopening the project frees capacity; \
+                     deleting them without reopening does not.",
                     crate::models::MAX_SECTION_ID as u64 + 1
                 ));
             }
@@ -446,8 +451,13 @@ impl AppState {
                 quality,
                 shots: shots_after,
             };
-            let section_b = project.add_section(section_b_data);
-            let new_id = section_b.id;
+            // Unreachable: the capacity check above runs before any mutation.
+            // Handled rather than unwrapped so a future reordering fails loudly
+            // instead of panicking mid-split.
+            let new_id = match project.add_section(section_b_data) {
+                Ok(section_b) => section_b.id,
+                Err(e) => return CommandResult::failure(e),
+            };
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));
 
             // Remap cross-refs across the split: stations at index >= split_station

@@ -125,7 +125,12 @@ impl AppState {
                 // order) so identity survives the merge, deduping across all
                 // sources to guarantee uniqueness within the merged project.
                 let section_data = section.to_section_data();
-                merged_project.add_section(section_data);
+                // Unreachable: the total-count preflight above runs before any
+                // section is appended. Handled so a future change to that check
+                // surfaces as a clean failure rather than a silent short merge.
+                if let Err(e) = merged_project.add_section(section_data) {
+                    return CommandResult::failure(e);
+                }
                 let source_uuids: Vec<Option<String>> =
                     section.shots.iter().map(|s| s.uuid.clone()).collect();
                 if let Some(new_section) = merged_project.get_section_mut(new_section_id) {

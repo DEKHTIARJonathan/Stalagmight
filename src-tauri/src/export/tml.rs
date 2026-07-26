@@ -1567,37 +1567,39 @@ mod tests {
 
     fn simple_project() -> Project {
         let mut project = Project::new("Test Cave".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            surveyor: Some("Alice".to_string()),
-            date: chrono::NaiveDate::from_ymd_opt(2025, 6, 15),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    azimuth_in: 45.0,
-                    azimuth_out: 225.0,
-                    length: 10.0,
-                    depth_in: 0.0,
-                    depth_out: 3.0,
-                    pitch_in: Some(5.0),
-                    left: Some(1.0),
-                    right: Some(2.0),
-                    up: Some(3.0),
-                    down: Some(0.5),
-                    comment: Some("first shot".to_string()),
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 90.0,
-                    azimuth_out: 270.0,
-                    length: 8.0,
-                    depth_in: 3.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                surveyor: Some("Alice".to_string()),
+                date: chrono::NaiveDate::from_ymd_opt(2025, 6, 15),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        azimuth_in: 45.0,
+                        azimuth_out: 225.0,
+                        length: 10.0,
+                        depth_in: 0.0,
+                        depth_out: 3.0,
+                        pitch_in: Some(5.0),
+                        left: Some(1.0),
+                        right: Some(2.0),
+                        up: Some(3.0),
+                        down: Some(0.5),
+                        comment: Some("first shot".to_string()),
+                        ..Default::default()
+                    },
+                    ShotData {
+                        azimuth_in: 90.0,
+                        azimuth_out: 270.0,
+                        length: 8.0,
+                        depth_in: 3.0,
+                        depth_out: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
         project
     }
 
@@ -1927,23 +1929,25 @@ mod tests {
     #[test]
     fn test_virtual_shot_type() {
         let mut project = Project::new("Virtual Test".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Sec".to_string()),
-            color: "#000000".to_string(),
-            shots: vec![
-                ShotData {
-                    is_reference: true,
-                    length: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    is_reference: false,
-                    length: 3.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Sec".to_string()),
+                color: "#000000".to_string(),
+                shots: vec![
+                    ShotData {
+                        is_reference: true,
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        is_reference: false,
+                        length: 3.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         let (shots, _baseline) = build_export_shots(&project);
         // shots[0] = START, shots[1] = VIRTUAL, shots[2] = REAL
@@ -1956,36 +1960,40 @@ mod tests {
         let mut project = Project::new("Multi".to_string(), None);
 
         // Section 0: 2 shots (root)
-        project.add_section(SectionData {
-            name: Some("Sec A".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 10.0,
-                    depth_out: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 8.0,
-                    depth_in: 5.0,
-                    depth_out: 7.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Sec A".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 10.0,
+                        depth_out: 5.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 8.0,
+                        depth_in: 5.0,
+                        depth_out: 7.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Section 1: 1 shot (child, connected to station 1 of section 0)
-        project.add_section(SectionData {
-            name: Some("Sec B".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![ShotData {
-                length: 6.0,
-                depth_out: 2.0,
+        project
+            .add_section(SectionData {
+                name: Some("Sec B".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![ShotData {
+                    length: 6.0,
+                    depth_out: 2.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
 
         // Merge: section 1, station 0 → section 0, station 1
         project.station_merges.push(StationMerge {
@@ -2027,46 +2035,50 @@ mod tests {
         let mut project = Project::new("Child Merge Index".to_string(), None);
 
         // Root section with 3 shots: station IDs become START(0), 1, 2, 3.
-        project.add_section(SectionData {
-            name: Some("Root".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Root".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Child section with 3 shots.
-        project.add_section(SectionData {
-            name: Some("Child".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Child".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Merge child station 1 to root station 2.
         project.station_merges.push(StationMerge {
@@ -2109,31 +2121,35 @@ mod tests {
     fn test_child_station_zero_closure_resolves_to_parent_node() {
         let mut project = Project::new("Child Station Zero".to_string(), None);
 
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 4.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 4.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-
-        project.add_section(SectionData {
-            name: Some("B".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![ShotData {
-                length: 3.0,
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 4.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 4.0,
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
+
+        project
+            .add_section(SectionData {
+                name: Some("B".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![ShotData {
+                    length: 3.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
 
         // B:0 merges to A:1.
         project.station_merges.push(StationMerge {
@@ -2184,21 +2200,23 @@ mod tests {
     #[test]
     fn test_closure_export_uses_ariane_name_and_depth_in() {
         let mut project = Project::new("Closure Name".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 4.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 4.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 4.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 4.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         project.loop_closures.push(LoopClosure {
             id: 7,
@@ -2239,25 +2257,27 @@ mod tests {
     #[test]
     fn test_zero_datum_coordinates_export_to_start_shot() {
         let mut project = Project::new("Datum Node".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 3.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 3.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 3.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 3.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 3.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 3.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
@@ -2282,37 +2302,39 @@ mod tests {
     #[test]
     fn test_nonzero_root_datum_splits_section_into_two_branches() {
         let mut project = Project::new("Split Root".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Main".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    azimuth_in: 10.0,
-                    azimuth_out: 210.0,
-                    length: 1.0,
-                    depth_in: 0.0,
-                    depth_out: 1.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 20.0,
-                    azimuth_out: 15.0,
-                    length: 1.0,
-                    depth_in: 1.0,
-                    depth_out: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    azimuth_in: 30.0,
-                    azimuth_out: 230.0,
-                    length: 1.0,
-                    depth_in: 2.0,
-                    depth_out: 3.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Main".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        azimuth_in: 10.0,
+                        azimuth_out: 210.0,
+                        length: 1.0,
+                        depth_in: 0.0,
+                        depth_out: 1.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        azimuth_in: 20.0,
+                        azimuth_out: 15.0,
+                        length: 1.0,
+                        depth_in: 1.0,
+                        depth_out: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        azimuth_in: 30.0,
+                        azimuth_out: 230.0,
+                        length: 1.0,
+                        depth_in: 2.0,
+                        depth_out: 3.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
         project.zero_datums.push(ZeroDatum {
             station_ref: StationRef {
                 section_id: 0,
@@ -2348,40 +2370,44 @@ mod tests {
     #[test]
     fn test_parent_links_reoriented_when_datum_forces_root() {
         let mut project = Project::new("Datum Root Orientation".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
-        project.add_section(SectionData {
-            name: Some("B".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 2.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        project
+            .add_section(SectionData {
+                name: Some("B".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 2.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
         project.station_merges.push(StationMerge {
             station_a: StationRef {
                 section_id: 0,
@@ -2473,16 +2499,18 @@ mod tests {
     #[test]
     fn test_unicode_section_name() {
         let mut project = Project::new("Grotte de l'Ours".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Galería Principal".to_string()),
-            surveyor: Some("José García".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![ShotData {
-                length: 5.0,
+        project
+            .add_section(SectionData {
+                name: Some("Galería Principal".to_string()),
+                surveyor: Some("José García".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
 
         let file = NamedTempFile::with_suffix(".tmlu").unwrap();
         export_tml(&project, file.path()).unwrap();
@@ -2498,31 +2526,33 @@ mod tests {
     fn test_depth_in_sentinel() {
         // When depth_in equals the previous depth_out, export should use -1.0
         let mut project = Project::new("Depth".to_string(), None);
-        project.add_section(SectionData {
-            name: Some("Sec".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    depth_in: 0.0,
-                    depth_out: 5.0,
-                    length: 10.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    depth_in: 5.0, // equals previous depth_out → should be -1.0
-                    depth_out: 8.0,
-                    length: 7.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    depth_in: 6.0, // different from previous depth_out (8.0) → should be 6.0
-                    depth_out: 10.0,
-                    length: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Sec".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        depth_in: 0.0,
+                        depth_out: 5.0,
+                        length: 10.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        depth_in: 5.0, // equals previous depth_out → should be -1.0
+                        depth_out: 8.0,
+                        length: 7.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        depth_in: 6.0, // different from previous depth_out (8.0) → should be 6.0
+                        depth_out: 10.0,
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         let (shots, _baseline) = build_export_shots(&project);
         // shots[0] = START, shots[1..3] = REAL
@@ -2575,52 +2605,56 @@ mod tests {
         let mut project = Project::new("Split Child".to_string(), None);
 
         // Root: 2 shots → stations 0,1,2
-        project.add_section(SectionData {
-            name: Some("Root".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 90.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 90.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Root".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 90.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 90.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Child: 4 shots → stations 0,1,2,3,4. Merge at station 2.
-        project.add_section(SectionData {
-            name: Some("Branch".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 3.0,
-                    azimuth_in: 10.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 4.0,
-                    azimuth_in: 20.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 30.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 6.0,
-                    azimuth_in: 40.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Branch".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 3.0,
+                        azimuth_in: 10.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 4.0,
+                        azimuth_in: 20.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 30.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 6.0,
+                        azimuth_in: 40.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Merge child station 2 → root station 1.
         project.station_merges.push(StationMerge {
@@ -2682,47 +2716,51 @@ mod tests {
         let mut project = Project::new("End Merge".to_string(), None);
 
         // Root: 2 shots
-        project.add_section(SectionData {
-            name: Some("Root".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 90.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 90.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Root".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 90.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 90.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Child: 3 shots → stations 0,1,2,3. Merge at station 3 (= shots.len()).
-        project.add_section(SectionData {
-            name: Some("Tail".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 3.0,
-                    azimuth_in: 10.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 4.0,
-                    azimuth_in: 20.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    azimuth_in: 30.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("Tail".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 3.0,
+                        azimuth_in: 10.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 4.0,
+                        azimuth_in: 20.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        azimuth_in: 30.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Merge child station 3 (end) → root station 2.
         project.station_merges.push(StationMerge {
@@ -2778,53 +2816,59 @@ mod tests {
         let mut project = Project::new("Downstream".to_string(), None);
 
         // Section A (root): 2 shots → stations 0,1,2
-        project.add_section(SectionData {
-            name: Some("A".to_string()),
-            color: "#ff0000".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("A".to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Section B: 3 shots → stations 0,1,2,3. Merge at station 1 (non-zero).
-        project.add_section(SectionData {
-            name: Some("B".to_string()),
-            color: "#00ff00".to_string(),
-            shots: vec![
-                ShotData {
-                    length: 3.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 4.0,
-                    ..Default::default()
-                },
-                ShotData {
-                    length: 5.0,
-                    ..Default::default()
-                },
-            ],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                name: Some("B".to_string()),
+                color: "#00ff00".to_string(),
+                shots: vec![
+                    ShotData {
+                        length: 3.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 4.0,
+                        ..Default::default()
+                    },
+                    ShotData {
+                        length: 5.0,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
 
         // Section C: 1 shot → stations 0,1. Merge at station 0 (standard child).
-        project.add_section(SectionData {
-            name: Some("C".to_string()),
-            color: "#0000ff".to_string(),
-            shots: vec![ShotData {
-                length: 2.0,
+        project
+            .add_section(SectionData {
+                name: Some("C".to_string()),
+                color: "#0000ff".to_string(),
+                shots: vec![ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            })
+            .unwrap();
 
         // B:1 merges to A:1
         project.station_merges.push(StationMerge {

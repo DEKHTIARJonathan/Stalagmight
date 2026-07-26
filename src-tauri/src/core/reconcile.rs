@@ -1022,7 +1022,8 @@ mod tests {
             direction: None,
             quality: 1.0,
             shots,
-        });
+        })
+        .expect("add_section within MAX_SECTION_ID");
         p
     }
 
@@ -1245,7 +1246,8 @@ mod tests {
         // section (bug_001).
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
-        p.add_section(section_with("Main", three()));
+        p.add_section(section_with("Main", three()))
+            .expect("add_section within MAX_SECTION_ID");
         // Branch's merge station (child station 2) sits at depth 1.0 - the same
         // depth as root station 1 it merges onto (merged points are physically
         // coincident), so the forward leg round-trips without a phantom depth edit.
@@ -1256,7 +1258,8 @@ mod tests {
                 shot(50.0, 5.0, 0.5, 1.0),
                 shot(60.0, 6.0, 1.0, 1.5),
             ],
-        ));
+        ))
+        .expect("add_section within MAX_SECTION_ID");
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
@@ -1326,13 +1329,15 @@ mod tests {
         // no-op rather than mass remove/add (bug_003 duplicate-name half).
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
-        p.add_section(section_with("Main", three()));
+        p.add_section(section_with("Main", three()))
+            .expect("add_section within MAX_SECTION_ID");
         // Second "Main", attached at its start to root station 1 (depth 1.0) so it
         // exports as a clean forward leg with no synthetic reversal.
         p.add_section(section_with(
             "Main",
             vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
-        ));
+        ))
+        .expect("add_section within MAX_SECTION_ID");
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
@@ -1362,13 +1367,15 @@ mod tests {
         // told before applying.
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
-        p.add_section(section_with("Main", three()));
+        p.add_section(section_with("Main", three()))
+            .expect("add_section within MAX_SECTION_ID");
         // Second "Main" - same exported name as the first.  Wire it up
         // as a child merge so the export pipeline succeeds.
         p.add_section(section_with(
             "Main",
             vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
-        ));
+        ))
+        .expect("add_section within MAX_SECTION_ID");
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {
@@ -1404,11 +1411,13 @@ mod tests {
         // changesets.
         let dir = tempfile::TempDir::new().unwrap();
         let mut p = Project::new("Cave".into(), None);
-        p.add_section(section_with("Main", three()));
+        p.add_section(section_with("Main", three()))
+            .expect("add_section within MAX_SECTION_ID");
         p.add_section(section_with(
             "Main",
             vec![shot(40.0, 4.0, 1.0, 1.5), shot(50.0, 5.0, 1.5, 2.0)],
-        ));
+        ))
+        .expect("add_section within MAX_SECTION_ID");
         let root_id = p.sections[0].id;
         let child_id = p.sections[1].id;
         p.station_merges.push(StationMerge {

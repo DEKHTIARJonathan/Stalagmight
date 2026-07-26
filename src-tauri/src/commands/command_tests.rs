@@ -158,15 +158,17 @@ fn create_section_with_shots(app: &tauri::App<MockRuntime>, shots: Vec<ShotData>
 
 fn project_with_section(shots: Vec<ShotData>) -> Project {
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Section A".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots,
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots,
+        })
+        .expect("add_section within MAX_SECTION_ID");
     project
 }
 
@@ -890,10 +892,12 @@ fn test_open_project_updates_recent_projects_when_config_save_fails() {
         let project_path = project_dir.path().join("config-fail.stalx");
 
         let mut project = Project::new("Config Fail".to_string(), None);
-        project.add_section(SectionData {
-            shots: vec![shot_data(1.0)],
-            ..Default::default()
-        });
+        project
+            .add_section(SectionData {
+                shots: vec![shot_data(1.0)],
+                ..Default::default()
+            })
+            .expect("add_section within MAX_SECTION_ID");
         let mut db = Database::open(&project_path).unwrap();
         db.save_project(&project).unwrap();
         drop(db);
@@ -992,10 +996,12 @@ fn test_open_project_updates_recent_projects_order_and_truncates() {
 
             for (path, name) in [(&path_a, "A"), (&path_b, "B"), (&path_c, "C")] {
                 let mut project = Project::new(name.to_string(), None);
-                project.add_section(SectionData {
-                    shots: vec![shot_data(1.0)],
-                    ..Default::default()
-                });
+                project
+                    .add_section(SectionData {
+                        shots: vec![shot_data(1.0)],
+                        ..Default::default()
+                    })
+                    .expect("add_section within MAX_SECTION_ID");
                 let mut db = Database::open(path).unwrap();
                 db.save_project(&project).unwrap();
             }
@@ -2565,14 +2571,18 @@ fn test_get_project_warnings_includes_shot_index() {
 fn test_get_project_warnings_multiple_sections_sorted_by_section_id() {
     let app = app_with_state();
     let mut project = Project::new("Test Cave".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![shot_data(0.0)],
-        ..Default::default()
-    });
-    project.add_section(SectionData {
-        shots: vec![shot_data(0.0)],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            shots: vec![shot_data(0.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(SectionData {
+            shots: vec![shot_data(0.0)],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     set_project_for_tests(&app, project);
     let warnings = validation::get_project_warnings(state(&app));
     assert!(warnings.len() >= 2);
@@ -2919,15 +2929,17 @@ fn test_save_keeps_other_ignores_when_a_section_was_deleted() {
     // row abort the whole transaction and silently drop every other ignore.
     let mut project = Project::new("Test Cave".to_string(), None);
     for (name, color) in [("A", "#4ecdc4"), ("B", "#ff6b6b")] {
-        project.add_section(SectionData {
-            name: Some(name.to_string()),
-            surveyor: None,
-            date: None,
-            color: color.to_string(),
-            direction: None,
-            quality: 1.0,
-            shots: vec![shot_data(0.1)], // short-shot → SHORT_SHOT warning
-        });
+        project
+            .add_section(SectionData {
+                name: Some(name.to_string()),
+                surveyor: None,
+                date: None,
+                color: color.to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: vec![shot_data(0.1)], // short-shot → SHORT_SHOT warning
+            })
+            .expect("add_section within MAX_SECTION_ID");
     }
     project.ensure_shot_uuids();
     let (app_state, _db) = crate::test_helpers::app_state_with_project_db(project).unwrap();
@@ -3256,12 +3268,14 @@ fn test_cross_section_duplicate_uuid_ignore_does_not_cross_suppress() {
             shots: vec![shot_data(0.1)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot_data(0.1)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     // Force the same (cross-section) UUID on both shots - a legal duplicate.
     for section in &mut project.sections {
@@ -3361,12 +3375,14 @@ fn test_over_anchoring_warning_is_never_suppressible() {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     let b = project
         .add_section(SectionData {
             shots: vec![shot_data(10.0)],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.station_merges.push(StationMerge {
         station_a: StationRef::new(a, 1).into(),

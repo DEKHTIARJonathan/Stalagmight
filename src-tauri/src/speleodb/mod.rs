@@ -1360,6 +1360,7 @@ mod live_tests {
                 ],
                 ..Default::default()
             })
+            .expect("add_section within MAX_SECTION_ID")
             .id;
         if let Some((lat, lon)) = anchor {
             project.zero_datums.push(ZeroDatum {

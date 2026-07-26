@@ -253,7 +253,9 @@ fn test_create_and_save_project() {
         }],
     };
 
-    project.add_section(section_data);
+    project
+        .add_section(section_data)
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = db;
     db.save_project(&project).unwrap();
@@ -363,9 +365,15 @@ fn test_save_load_multiple_sections() {
         shots: vec![],
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
-    project.add_section(section3);
+    project
+        .add_section(section1)
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(section2)
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(section3)
+        .expect("add_section within MAX_SECTION_ID");
 
     // Save to file
     {
@@ -470,8 +478,12 @@ fn test_save_load_station_merges() {
         ..Default::default()
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
+    project
+        .add_section(section1)
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(section2)
+        .expect("add_section within MAX_SECTION_ID");
 
     // Add station merges manually (bypassing validation for test)
     let merge1 = StationMerge {
@@ -546,7 +558,9 @@ fn test_save_load_zero_datums() {
         }],
         ..Default::default()
     };
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
 
     // Add zero datums with high-precision GPS coordinates (8+ decimal places)
     let zd1 = ZeroDatum {
@@ -621,7 +635,9 @@ fn test_save_load_section_offsets() {
             }],
             ..Default::default()
         };
-        project.add_section(section);
+        project
+            .add_section(section)
+            .expect("add_section within MAX_SECTION_ID");
     }
 
     // Add section offsets with varying precision
@@ -688,7 +704,9 @@ fn test_update_shot_in_database() {
         ],
         ..Default::default()
     };
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
 
     // Save initial state
     {
@@ -795,9 +813,15 @@ fn test_delete_section_cascades_shots() {
         ..Default::default()
     };
 
-    project.add_section(section1);
-    project.add_section(section2);
-    project.add_section(section3);
+    project
+        .add_section(section1)
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(section2)
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(section3)
+        .expect("add_section within MAX_SECTION_ID");
 
     assert_eq!(project.sections.len(), 3);
 
@@ -854,7 +878,9 @@ fn test_database_transaction_rollback() {
         }],
         ..Default::default()
     };
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
 
     // Save the initial project
     {
@@ -896,18 +922,22 @@ fn test_database_transaction_rollback() {
     // Test that the transaction is atomic - all data is cleared and rewritten
     // If we open for save, it should be a complete replacement
     let mut new_project = Project::new("Completely New".to_string(), None);
-    new_project.add_section(SectionData {
-        name: Some("New Section A".to_string()),
-        color: "#000000".to_string(),
-        shots: vec![],
-        ..Default::default()
-    });
-    new_project.add_section(SectionData {
-        name: Some("New Section B".to_string()),
-        color: "#ffffff".to_string(),
-        shots: vec![],
-        ..Default::default()
-    });
+    new_project
+        .add_section(SectionData {
+            name: Some("New Section A".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
+    new_project
+        .add_section(SectionData {
+            name: Some("New Section B".to_string()),
+            color: "#ffffff".to_string(),
+            shots: vec![],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&db_path).unwrap();
@@ -962,12 +992,14 @@ fn test_open_existing_vs_open_new() {
 
     // Test 4: Save a project, then open_existing should succeed
     let mut project = Project::new("Test Project".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Test".to_string()),
-        color: "#123456".to_string(),
-        shots: vec![],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Test".to_string()),
+            color: "#123456".to_string(),
+            shots: vec![],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&db_path).unwrap();
@@ -994,19 +1026,21 @@ fn test_save_load_loop_closures() {
     let mut project = Project::new("Loop Test".to_string(), None);
 
     // Add sections
-    project.add_section(SectionData {
-        name: Some("Section 1".to_string()),
-        color: "#ff0000".to_string(),
-        shots: vec![ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 180.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 5.0,
+    project
+        .add_section(SectionData {
+            name: Some("Section 1".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 180.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     // Add loop closure data
     project.loop_closures.push(LoopClosure {
@@ -1113,10 +1147,12 @@ fn test_resolved_warnings_persistence() {
 
     // Save project first (to have tables)
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let mut db = db;
     db.save_project(&project).unwrap();
 
@@ -1157,10 +1193,12 @@ fn test_resolved_warning_dedup_and_delete_by_uuid() {
     // it regardless of the shot_id supplied.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     let base = ResolvedWarning {
@@ -1199,10 +1237,12 @@ fn test_resolved_warnings_bulk_tolerates_duplicate_keys() {
     // save must not abort on the legacy UNIQUE constraint.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     let w = ResolvedWarning {
@@ -1231,10 +1271,12 @@ fn test_resolved_warning_uuid_save_does_not_delete_other_shots_ignore() {
     // uuid-X if Y's params happened to target X's position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     // Shot X ignored at position shot_id=1.
@@ -1280,10 +1322,12 @@ fn test_unresolve_with_uuid_clears_same_shots_legacy_position_row_only() {
     // touching a DIFFERENT shot's by-UUID row that occupies the same position.
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     // Legacy NULL-uuid suppression of the shot at position (0, 1).
@@ -1335,10 +1379,12 @@ fn test_backfill_resolved_warning_uuids_upgrades_and_is_idempotent() {
     // Idempotent, and a row with no live shot is left NULL (never mis-keyed).
     let mut db = Database::in_memory().unwrap();
     let mut project = Project::new("Test".to_string(), None);
-    project.add_section(SectionData {
-        color: "#000".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            color: "#000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     // Legacy row keyed by position (no UUID) that maps to a live shot.
@@ -1706,7 +1752,10 @@ fn test_save_load_station_offsets_individual() {
         ],
         ..Default::default()
     };
-    let section_id = project.add_section(section_data).id;
+    let section_id = project
+        .add_section(section_data)
+        .expect("add_section within MAX_SECTION_ID")
+        .id;
 
     // Add individual station offsets
     let ref_a = StationRef::new(section_id, 0);
@@ -1855,17 +1904,19 @@ fn write_legacy_v6_project_with_undo_history(dir: &TempDir, name: &str) -> std::
     let path = dir.path().join(name);
 
     let mut project = Project::new("Legacy Undo".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 2.0,
-            depth_in: 10.0,
-            depth_out: 11.0,
+    project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 2.0,
+                depth_in: 10.0,
+                depth_out: 11.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
@@ -2068,17 +2119,19 @@ fn test_new_format_undo_history_survives_reload() {
     let path = temp_dir.path().join("new_format_undo.stalx");
 
     let mut project = Project::new("New Undo".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 2.0,
-            depth_in: 10.0,
-            depth_out: 11.0,
+    project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 2.0,
+                depth_in: 10.0,
+                depth_out: 11.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
@@ -2195,17 +2248,19 @@ fn test_resolved_warnings_round_trip() {
 
     // Create a project with a section and shot so FK constraints are satisfied
     let mut project = Project::new("Warnings Test".to_string(), None);
-    project.add_section(SectionData {
-        shots: vec![ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            length: 5.0,
-            depth_in: 0.0,
-            depth_out: 0.0,
+    project
+        .add_section(SectionData {
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 5.0,
+                depth_in: 0.0,
+                depth_out: 0.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     // Get the actual section and shot IDs from saved project
@@ -2288,6 +2343,7 @@ fn test_save_load_complex_project_round_trip() {
                 },
             ],
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     let section_b = project
@@ -2306,6 +2362,7 @@ fn test_save_load_complex_project_round_trip() {
             }],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
 
     // Add section offsets
@@ -2605,7 +2662,9 @@ fn test_export_salvageable_from_healthy_db() {
         shots: vec![ShotData::default(), ShotData::default()],
         ..Default::default()
     };
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
     drop(db);
 
@@ -2667,16 +2726,20 @@ fn test_try_read_sections_from_populated_db() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Sections Test".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Passage A".to_string()),
-        color: "#ff0000".to_string(),
-        ..Default::default()
-    });
-    project.add_section(SectionData {
-        name: Some("Passage B".to_string()),
-        color: "#00ff00".to_string(),
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Passage A".to_string()),
+            color: "#ff0000".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(SectionData {
+            name: Some("Passage B".to_string()),
+            color: "#00ff00".to_string(),
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     let sections = db.try_read_sections().unwrap();
@@ -2869,26 +2932,28 @@ fn test_save_load_round_trip_extreme_coordinates() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Extreme".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Deep".to_string()),
-        color: "#ff0000".to_string(),
-        shots: vec![ShotData {
-            azimuth_in: 359.9,
-            azimuth_out: 0.1,
-            length: 999.99,
-            depth_in: 0.0,
-            depth_out: 999.99,
-            pitch_in: Some(-89.9),
-            pitch_out: Some(89.9),
-            left: Some(0.01),
-            right: Some(999.0),
-            up: Some(0.0),
-            down: Some(0.0),
-            temperature: Some(-2.0),
+    project
+        .add_section(SectionData {
+            name: Some("Deep".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 359.9,
+                azimuth_out: 0.1,
+                length: 999.99,
+                depth_in: 0.0,
+                depth_out: 999.99,
+                pitch_in: Some(-89.9),
+                pitch_out: Some(89.9),
+                left: Some(0.01),
+                right: Some(999.0),
+                up: Some(0.0),
+                down: Some(0.0),
+                temperature: Some(-2.0),
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
@@ -2909,28 +2974,30 @@ fn test_save_load_round_trip_zero_values() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Zeros".to_string(), None);
-    project.add_section(SectionData {
-        name: None, // no name
-        color: "#000000".to_string(),
-        shots: vec![ShotData {
-            azimuth_in: 0.0,
-            azimuth_out: 0.0,
-            length: 0.01, // smallest valid length
-            depth_in: 0.0,
-            depth_out: 0.0,
-            pitch_in: None,
-            pitch_out: None,
-            left: None,
-            right: None,
-            up: None,
-            down: None,
-            comment: None,
-            is_reference: false,
-            marker_index: None,
-            temperature: None,
-        }],
-        ..Default::default()
-    });
+    project
+        .add_section(SectionData {
+            name: None, // no name
+            color: "#000000".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 0.01, // smallest valid length
+                depth_in: 0.0,
+                depth_out: 0.0,
+                pitch_in: None,
+                pitch_out: None,
+                left: None,
+                right: None,
+                up: None,
+                down: None,
+                comment: None,
+                is_reference: false,
+                marker_index: None,
+                temperature: None,
+            }],
+            ..Default::default()
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     db.save_project(&project).unwrap();
     let loaded = db.load_project().unwrap();
@@ -2950,41 +3017,45 @@ fn test_save_load_round_trip_all_metadata() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("FullMeta".to_string(), Some("Underwater Cave".to_string()));
-    project.add_section(SectionData {
-        name: Some("Section A".to_string()),
-        surveyor: Some("Diver One".to_string()),
-        date: Some(NaiveDate::from_ymd_opt(2025, 12, 25).unwrap()),
-        color: "#abcdef".to_string(),
-        direction: Some(SurveyDirection::Out),
-        quality: 0.75,
-        shots: vec![ShotData {
-            azimuth_in: 90.0,
-            azimuth_out: 270.0,
-            length: 5.0,
-            depth_in: 10.0,
-            depth_out: 12.0,
-            comment: Some("Test shot".to_string()),
-            is_reference: true,
-            marker_index: Some(42),
-            ..Default::default()
-        }],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Section A".to_string()),
+            surveyor: Some("Diver One".to_string()),
+            date: Some(NaiveDate::from_ymd_opt(2025, 12, 25).unwrap()),
+            color: "#abcdef".to_string(),
+            direction: Some(SurveyDirection::Out),
+            quality: 0.75,
+            shots: vec![ShotData {
+                azimuth_in: 90.0,
+                azimuth_out: 270.0,
+                length: 5.0,
+                depth_in: 10.0,
+                depth_out: 12.0,
+                comment: Some("Test shot".to_string()),
+                is_reference: true,
+                marker_index: Some(42),
+                ..Default::default()
+            }],
+        })
+        .expect("add_section within MAX_SECTION_ID");
 
     // Add station merge, zero datum, section offset, station offset
     let section_id = project.sections[0].id;
-    project.add_section(SectionData {
-        name: Some("Section B".to_string()),
-        color: "#fedcba".to_string(),
-        shots: vec![ShotData {
-            azimuth_in: 45.0,
-            azimuth_out: 225.0,
-            length: 3.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
+    project
+        .add_section(SectionData {
+            name: Some("Section B".to_string()),
+            color: "#fedcba".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 225.0,
+                length: 3.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let section_b_id = project.sections[1].id;
 
     project.station_merges.push(StationMerge {
@@ -3037,14 +3108,16 @@ fn test_save_load_round_trip_loop_closures_with_strategy() {
 
     let mut db = Database::open(&db_path).unwrap();
     let mut project = Project::new("Closures".to_string(), None);
-    project.add_section(SectionData {
-        color: "#ff0000".to_string(),
-        shots: vec![ShotData {
-            length: 5.0,
+    project
+        .add_section(SectionData {
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                length: 5.0,
+                ..Default::default()
+            }],
             ..Default::default()
-        }],
-        ..Default::default()
-    });
+        })
+        .expect("add_section within MAX_SECTION_ID");
     let sec_id = project.sections[0].id;
 
     project.loop_closures.push(LoopClosure {
@@ -3296,6 +3369,7 @@ fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
             }],
             ..Default::default()
         })
+        .expect("add_section within MAX_SECTION_ID")
         .id;
     project.ensure_shot_uuids();
     project.station_offsets.insert(
@@ -4100,22 +4174,24 @@ fn speleo_link_survives_open_then_fast_path_reopen() {
 fn seed_snapshot_source(path: &Path) {
     let mut db = Database::open(path).unwrap();
     let mut project = Project::new("Snap Cave".to_string(), Some("Loc".to_string()));
-    project.add_section(SectionData {
-        name: Some("Line".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#4ecdc4".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![ShotData {
-            azimuth_in: 10.0,
-            azimuth_out: 190.0,
-            length: 5.0,
-            depth_in: 1.0,
-            depth_out: 2.0,
-            ..Default::default()
-        }],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("Line".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 10.0,
+                azimuth_out: 190.0,
+                length: 5.0,
+                depth_in: 1.0,
+                depth_out: 2.0,
+                ..Default::default()
+            }],
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 }
 
@@ -4163,22 +4239,24 @@ fn vacuum_snapshot_under_wal_mode() {
     let mut db = Database::open(&src).unwrap();
     db.conn.execute_batch("PRAGMA journal_mode=WAL;").unwrap();
     let mut project = Project::new("WAL Cave".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("WL".to_string()),
-        surveyor: None,
-        date: None,
-        color: "#abcdef".to_string(),
-        direction: None,
-        quality: 1.0,
-        shots: vec![ShotData {
-            azimuth_in: 1.0,
-            azimuth_out: 181.0,
-            length: 3.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            ..Default::default()
-        }],
-    });
+    project
+        .add_section(SectionData {
+            name: Some("WL".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#abcdef".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![ShotData {
+                azimuth_in: 1.0,
+                azimuth_out: 181.0,
+                length: 3.0,
+                depth_in: 0.0,
+                depth_out: 1.0,
+                ..Default::default()
+            }],
+        })
+        .expect("add_section within MAX_SECTION_ID");
     db.save_project(&project).unwrap();
 
     // Snapshot while `db` is still open (the WAL is NOT checkpointed yet).
@@ -4446,14 +4524,22 @@ fn migrate_v12_flips_only_the_sections_stored_in_the_old_convention() {
 
     let mut project = Project::new("Mixed".to_string(), None);
     // Pre-#296 DMP: descending shots recorded negative. Must be flipped.
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project
+        .add_section(descending_section("FromDmp", -1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
     // Walls/Compass: already +down. Must be left alone.
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project
+        .add_section(descending_section("FromCompass", 1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
     // Ariane never populates inclination, so there is no signal to act on.
-    project.add_section(descending_section("FromAriane", 0.0, 4));
+    project
+        .add_section(descending_section("FromAriane", 0.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
     // Too few usable shots to call a section-wide verdict, even though each
     // individual shot looks reversed.
-    project.add_section(descending_section("TooShort", -1.0, 2));
+    project
+        .add_section(descending_section("TooShort", -1.0, 2))
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -4507,7 +4593,9 @@ fn migrate_v12_preserves_null_pitch_and_does_not_launder_a_blunder() {
     // change, which is exactly right.
     section.shots[5].pitch_in = Some(30.0);
     section.shots[5].pitch_out = Some(30.0);
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -4559,7 +4647,9 @@ fn migrate_v12_leaves_a_section_with_no_vertical_signal_untouched() {
         }
         data.name = Some(format!("S{}", stored.len()));
         stored.extend(data.shots.iter().map(|s| s.pitch_in));
-        project.add_section(data);
+        project
+            .add_section(data)
+            .expect("add_section within MAX_SECTION_ID");
     }
     assert!(!stored.is_empty(), "fixture yielded no usable section");
     assert!(
@@ -4619,7 +4709,9 @@ fn migrate_v12_decides_a_section_at_exactly_the_minimum_vote_count() {
     ] {
         let path = temp.path().join(format!("votes_{count}.stalx"));
         let mut project = Project::new("Votes".to_string(), None);
-        project.add_section(descending_section("FromDmp", -1.0, count));
+        project
+            .add_section(descending_section("FromDmp", -1.0, count))
+            .expect("add_section within MAX_SECTION_ID");
         seed_v11_project(&path, &project);
 
         let db = Database::open_existing(&path).unwrap();
@@ -4642,7 +4734,9 @@ fn migrate_v12_is_idempotent_when_run_twice() {
     let path = temp.path().join("twice.stalx");
 
     let mut project = Project::new("Twice".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project
+        .add_section(descending_section("FromDmp", -1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
@@ -4677,7 +4771,9 @@ fn migrate_v12_flip_is_governed_by_the_callers_transaction() {
     let path = temp.path().join("rollback.stalx");
 
     let mut project = Project::new("Rollback".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project
+        .add_section(descending_section("FromDmp", -1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
 
     let mut db = Database::open(&path).unwrap();
     db.save_project(&project).unwrap();
@@ -4749,7 +4845,9 @@ fn migrate_v12_ignores_out_of_range_legs_when_voting() {
     let mut section = descending_section("FromCompass", 1.0, 1);
     section.shots = shots;
     let mut project = Project::new("Blunder".to_string(), None);
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
@@ -4773,7 +4871,9 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
     let path = temp.path().join("stale.stalx");
 
     let mut project = Project::new("Stale".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
+    project
+        .add_section(descending_section("FromDmp", -1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -4880,7 +4980,9 @@ fn migrate_v12_does_not_let_one_blunder_outvote_the_section() {
     let mut section = descending_section("FromCompass", 1.0, 1);
     section.shots = shots;
     let mut project = Project::new("Outvoted".to_string(), None);
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
@@ -4914,7 +5016,9 @@ fn migrate_v12_still_flips_a_section_that_contains_one_blunder() {
         ..Default::default()
     });
     let mut project = Project::new("BlunderInDmp".to_string(), None);
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
@@ -4972,7 +5076,9 @@ fn migrate_v12_rejects_a_shot_with_one_out_of_range_leg() {
     let mut section = descending_section("FromCompass", 1.0, 1);
     section.shots = shots;
     let mut project = Project::new("HalfBlunder".to_string(), None);
-    project.add_section(section);
+    project
+        .add_section(section)
+        .expect("add_section within MAX_SECTION_ID");
     seed_v11_project(&path, &project);
 
     let db = Database::open_existing(&path).unwrap();
@@ -4997,7 +5103,9 @@ fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
     let path = temp.path().join("collab_no_flip.stalx");
 
     let mut project = Project::new("NoFlip".to_string(), None);
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project
+        .add_section(descending_section("FromCompass", 1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&path).unwrap();
@@ -5048,8 +5156,12 @@ fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
     let path = temp.path().join("dismissals.stalx");
 
     let mut project = Project::new("Dismissals".to_string(), None);
-    project.add_section(descending_section("FromDmp", -1.0, 4));
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project
+        .add_section(descending_section("FromDmp", -1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
+    project
+        .add_section(descending_section("FromCompass", 1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
 
     let flipped_id = project.sections[0].id;
     let untouched_id = project.sections[1].id;
@@ -5111,7 +5223,9 @@ fn migrate_v12_keeps_undo_history_when_no_section_was_flipped() {
     let path = temp.path().join("untouched.stalx");
 
     let mut project = Project::new("Untouched".to_string(), None);
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    project
+        .add_section(descending_section("FromCompass", 1.0, 4))
+        .expect("add_section within MAX_SECTION_ID");
 
     {
         let mut db = Database::open(&path).unwrap();

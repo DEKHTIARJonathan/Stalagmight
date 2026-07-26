@@ -3278,7 +3278,10 @@ mod tests {
                 quality: config.quality,
                 shots: config.shots.clone(),
             };
-            let section_id = project.add_section(section_data).id;
+            let section_id = project
+                .add_section(section_data)
+                .expect("add_section within MAX_SECTION_ID")
+                .id;
             created_ids.insert(config.section_index, section_id);
 
             match &config.placement {
