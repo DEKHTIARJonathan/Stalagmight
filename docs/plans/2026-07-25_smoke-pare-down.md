@@ -5,9 +5,11 @@
 on the post-#297 tree. No test has been cut yet. **Phase B is parked** until
 Phase A is done and re-measured.
 
-**Branch:** `chore/smoke-timing-instrumentation`, commits `a60494ed`, `547688d8`,
-`5609f5ee` (rebased, clean, no conflicts). **Not pushed, no PR.** Repo rules
-require the pre-PR review before any PR, and do not self-merge.
+**Branch:** `chore/smoke-timing-instrumentation` (rebased onto `2ab85459`, clean,
+no conflicts). Commit hashes are deliberately not listed here - a rebase rewrites
+them, and a stale list sends the next reader to dangling objects. Use
+`git log master..HEAD`. Repo rules require the pre-PR review before any PR, and
+do not self-merge.
 
 ---
 
@@ -119,9 +121,33 @@ The small files remain not worth cutting: the bottom 12 files carry 21 tests for
 | `scripts/pw-timing-summary.mjs` | Renders that into a ranked markdown table (by file and by test). Accepts either the reporter's output (has hooks) or a built-in json report (reports hooks as `n/a`). Appends to `$GITHUB_STEP_SUMMARY` when set. |
 | `.github/workflows/e2e-smoke.yml` | Runs `--reporter=github,./scripts/pw-timing-reporter.mjs`, prints the ranked table on the run summary page, uploads `timing.json` as the `smoke-timing` artifact (7-day retention). Marked **TEMPORARY**; remove when the pare-down lands. |
 
-Gates re-run on the rebased branch: `lint:e2e-parallel` clean (103 files),
-`lint:ts-file-size` clean (354 files), `lint:private-leaks` clean,
-`lint:no-em-dash` clean (1094 files).
+| `scripts/pw-timing-reporter.test.mjs`, `scripts/pw-timing-summary.test.mjs` | Fixture tests for the two above, in the repo's pure-Node `lint:*:test` style. Wired as `pnpm lint:pw-timing:test` and run in the smoke job before the browser install. Each pins a bug that produced a confident WRONG number rather than an error - see below. |
+
+Gates re-run on the rebased branch: `lint:e2e-parallel` clean (104 files),
+`lint:ts-file-size` clean (354 files), `lint:private-leaks` clean (1094 files),
+`lint:no-em-dash` clean (1095 files), `lint:pw-timing:test` 26 passed.
+
+### Two attribution bugs the pre-PR review caught (both now fixed + pinned)
+
+Both produced a confident, plausible number rather than an error, which is the
+dangerous failure mode for a tool whose output decides what gets deleted:
+
+1. **`Worker Cleanup` was counted as setup time.** Playwright emits it as a
+   *sibling* of `Before Hooks`/`After Hooks` and charges it to whichever test ran
+   last on that worker; `testInfo.duration` excludes it. Counting it as `before`
+   inflated the last test of every worker and every test adjacent to a failure -
+   exactly the population a cost investigation looks at - and could push a row's
+   hook share above 100%. **This explains the `hook % = 101-105%` seen in the
+   broken run below.** Now tracked in its own `worker` field and excluded from
+   hook totals.
+2. **Test status never reached the output.** A timed-out test bills the full
+   30s timeout, so it sorted to the top of the ranking looking like an expensive
+   but legitimate test. The summary now flags any non-green run and marks each
+   non-passing row.
+
+Neither bug affects the headline finding: the 64-67% hook share was measured on
+green runs, where `Worker Cleanup` is a small tail. But re-measure with the fixed
+reporter before acting on any per-file number.
 
 ### Why a custom reporter (do not undo this)
 
@@ -145,11 +171,12 @@ node scripts/pw-timing-summary.mjs <abs-path>/timing.json --top 25
 ⚠ Always pass a **second, human-readable reporter** (`line`). With only the
 timing reporter there is no pass/fail output, and a fully-red run looks like a
 valid measurement. That happened on the first ToT attempt: a missed
-`pnpm install` after the 180-commit rebase left `@mapbox/tiny-sdf` unresolved,
+`pnpm install` after the 182-commit rebase left `@mapbox/tiny-sdf` unresolved,
 every test timed out in `beforeEach`, and the table read "hook = 98% of test
-time" - garbage that superficially confirmed the thesis. **Check the pass count
-before trusting a timing table.** (Also: `pnpm install` run under the Bash
-sandbox silently no-ops here; run it with the sandbox disabled.)
+time" - garbage that superficially confirmed the thesis. The summary now flags a
+non-green run explicitly, but **check the pass count anyway.** (Also: `pnpm
+install` run under the Bash sandbox silently no-ops here; run it with the sandbox
+disabled.)
 
 ---
 
@@ -197,8 +224,8 @@ sandbox silently no-ops here; run it with the sandbox disabled.)
   pare-down lands, so we measure on the real runner and not just an M1.
 - **A2. Cut the per-test re-seed. This is the single biggest lever.** Every smoke
   file re-seeds a full mocked project in `beforeEach` per test; several pay it
-  across many nested describes to run 2-4 smoke tests (`settings-dialog` has 8
-  `beforeEach`, `display-toggles` 9, `undo-redo-dropdown` 6). Ties to already-filed
+  across many nested describes to run 2-4 smoke tests (`settings-dialog` and
+  `display-toggles` have 9 `beforeEach` each, `undo-redo-dropdown` 7). Ties to already-filed
   **#295**. Worst ratios first on ToT: `panel-reveal` (99%),
   `scroll-containment` / `corruption-recovery` / `merge-closure-dialogs` /
   `section-shot-editing` (94-97%), `walls-import-dialog` (93%), `zoom-tool` (87%),

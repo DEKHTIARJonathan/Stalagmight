@@ -39,6 +39,13 @@ jobs:
       # changes (`check` path-ignores them), so the gate lives here. See docs/TESTING.md.
       - name: Check e2e-playwright parallel-safety
         run: pnpm lint:e2e-parallel
+      # The timing instrumentation below decides which tests get cut, so its
+      # arithmetic is pinned by fixture tests (hook attribution, Worker Cleanup
+      # exclusion, failed-run flagging, workflow-command sanitizing). Cheap, and
+      # it fails before the slow browser install. TEMPORARY, with the rest of the
+      # instrumentation.
+      - name: Timing reporter - fixture tests
+        run: pnpm lint:pw-timing:test
       # Cache the Chromium browser (~120 MB) so it isn't re-downloaded each run.
       - name: Resolve Playwright version
         id: pw

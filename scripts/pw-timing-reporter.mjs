@@ -15,7 +15,7 @@
 // Render it with scripts/pw-timing-summary.mjs.
 
 import { mkdirSync, writeFileSync } from 'node:fs';
-import { dirname } from 'node:path';
+import { dirname, relative } from 'node:path';
 
 export default class TimingReporter {
   constructor() {
@@ -35,25 +35,38 @@ export default class TimingReporter {
 
   onStepEnd(test, result, step) {
     if (step.category !== 'hook') return;
-    const k = this.#key(test, result);
-    const e = this.hooks.get(k) ?? { before: 0, after: 0 };
-    // Playwright titles these "Before Hooks" / "After Hooks". Only top-level hook
-    // steps are counted; nested steps are already inside the parent's duration.
+    // Only top-level hook steps are counted; nested steps are already inside the
+    // parent's duration, so adding them would double-count.
     if (step.parent?.category === 'hook') return;
-    if (/^After/i.test(step.title)) e.after += step.duration ?? 0;
-    else e.before += step.duration ?? 0;
+    // Playwright emits three top-level hook steps: "Before Hooks", "After Hooks",
+    // and "Worker Cleanup". The last is a SIBLING of the other two, not a child,
+    // and it is charged to whichever test happened to run last on that worker
+    // (see workerMain's _runAsStep on the stopped path). It is neither this test's
+    // setup nor its teardown, and testInfo.duration excludes it - counting it as
+    // `before` inflated the last test of every worker, and every test adjacent to
+    // a failure, which is exactly the population a cost investigation looks at.
+    // Track it separately so it can never masquerade as per-test setup cost.
+    const k = this.#key(test, result);
+    const e = this.hooks.get(k) ?? { before: 0, after: 0, worker: 0 };
+    const ms = step.duration ?? 0;
+    if (/^Worker/i.test(step.title)) e.worker += ms;
+    else if (/^After/i.test(step.title)) e.after += ms;
+    else e.before += ms;
     this.hooks.set(k, e);
   }
 
   onTestEnd(test, result) {
-    const h = this.hooks.get(this.#key(test, result)) ?? { before: 0, after: 0 };
+    const h = this.hooks.get(this.#key(test, result)) ?? { before: 0, after: 0, worker: 0 };
     this.rows.push({
-      file: test.location.file.split('/').pop(),
+      // Repo-relative, not a basename: two specs in different directories can
+      // share a name, and the onEnd merge key is built from this.
+      file: relative(process.cwd(), test.location.file),
       line: test.location.line,
       title: test.title,
       duration: result.duration ?? 0,
       before: h.before,
       after: h.after,
+      worker: h.worker ?? 0,
       status: result.status,
       retry: result.retry,
     });
@@ -65,12 +78,18 @@ export default class TimingReporter {
     const merged = new Map();
     for (const r of this.rows) {
       const k = `${r.file}:${r.line}:${r.title}`;
-      const e = merged.get(k) ?? { ...r, duration: 0, before: 0, after: 0, attempts: 0 };
+      const e =
+        merged.get(k) ?? { ...r, duration: 0, before: 0, after: 0, worker: 0, attempts: 0 };
       e.duration += r.duration;
       e.before += r.before;
       e.after += r.after;
+      e.worker += r.worker;
       e.attempts += 1;
+      // Last attempt wins, matching how Playwright decides a retried test's fate,
+      // but a test that ever failed keeps that on record - a row whose timings are
+      // inflated by a failed attempt must not read as a clean, merely-slow test.
       e.status = r.status;
+      e.everFailed = (e.everFailed ?? false) || r.status !== 'passed';
       merged.set(k, e);
     }
     const out = {

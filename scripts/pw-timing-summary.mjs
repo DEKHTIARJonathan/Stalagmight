@@ -20,24 +20,13 @@
 
 import { appendFileSync, readFileSync } from 'node:fs';
 
-const args = process.argv.slice(2);
-const file = args.find((a) => !a.startsWith('--'));
-const topIdx = args.indexOf('--top');
-const top = topIdx === -1 ? 30 : Number(args[topIdx + 1]) || 30;
-
-if (!file) {
-  console.error('usage: pw-timing-summary.mjs <results.json> [--top N]');
-  process.exit(2);
-}
-
-const report = JSON.parse(readFileSync(file, 'utf8'));
-
 // Two input shapes are accepted:
 //  - scripts/pw-timing-reporter.mjs output ({tests:[…]}) - HAS hook timings.
 //  - the built-in `json` reporter ({suites:[…]}) - has NO hook timings, because
 //    that reporter does not emit `steps` at all. Report that as unavailable
 //    rather than silently printing 0%, which reads as "setup is free" and is the
 //    opposite of the truth.
+export function buildRows(report) {
 const rows = [];
 let hooksAvailable = false;
 
@@ -49,8 +38,13 @@ if (Array.isArray(report.tests)) {
       line: t.line,
       title: t.title,
       duration: t.duration ?? 0,
+      // `worker` is deliberately excluded: Playwright charges its "Worker Cleanup"
+      // step to whichever test ran last on that worker, so it is not this test's
+      // setup. Counting it would inflate a near-arbitrary row above 100% hook.
       hook: (t.before ?? 0) + (t.after ?? 0),
       attempts: t.attempts ?? 1,
+      status: t.status ?? 'unknown',
+      everFailed: t.everFailed ?? (t.status ?? 'passed') !== 'passed',
     });
   }
 } else {
@@ -62,6 +56,7 @@ if (Array.isArray(report.tests)) {
         // Retries produce multiple results; charge the test for all attempts,
         // since that is what CI actually spends.
         const results = t.results ?? [];
+        const last = results[results.length - 1];
         rows.push({
           file: f,
           line: spec.line,
@@ -69,6 +64,8 @@ if (Array.isArray(report.tests)) {
           duration: results.reduce((s, r) => s + (r.duration ?? 0), 0),
           hook: null,
           attempts: results.length,
+          status: last?.status ?? t.status ?? 'unknown',
+          everFailed: results.some((r) => (r.status ?? 'passed') !== 'passed'),
         });
       }
     }
@@ -76,11 +73,24 @@ if (Array.isArray(report.tests)) {
   };
   for (const s of report.suites ?? []) walk(s, s.file);
 }
-
-if (rows.length === 0) {
-  console.log('No tests found in report.');
-  process.exit(0);
+  return { rows, hooksAvailable };
 }
+
+// Workflow-command sanitizer. This text is printed to a `run:` step's stdout,
+// and the Actions runner interprets `::something::` there as a command
+// (`::error::`, `::add-mask::`, `::stop-commands::`). Test titles come from
+// `e2e-playwright/**`, which any PR can edit, so they are untrusted input to
+// that parser - neutralize the marker before it is ever echoed. A zero-width
+// space between the colons defeats the parser while staying readable.
+export const safe = (s) => String(s).replace(/::/g, ':​:');
+
+export const NO_TESTS = '## Playwright timing\n\nNo tests found in report.';
+
+/** Render the markdown report. Pure: returns the text, writes nothing. */
+export function render(report, { top = 30 } = {}) {
+const { rows, hooksAvailable } = buildRows(report);
+
+if (rows.length === 0) return NO_TESTS;
 
 const fmt = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${Math.round(ms)}ms`);
 const hcell = (ms) => (hooksAvailable ? fmt(ms) : 'n/a');
@@ -98,6 +108,8 @@ for (const r of rows) {
   byFile.set(r.file, e);
 }
 
+const bad = rows.filter((r) => r.everFailed);
+
 const out = [];
 out.push('## Playwright timing');
 out.push('');
@@ -109,28 +121,62 @@ out.push(
     ` | wall clock ${fmt(wall)}`
 );
 out.push('');
+// A timed-out test bills the full test timeout, so it lands at the top of a
+// cost ranking looking exactly like an expensive-but-legitimate test. Ranking a
+// broken run is meaningless; say so loudly rather than letting the table be read
+// as a cost measurement.
+if (bad.length > 0) {
+  out.push(
+    `> ⚠️ **${bad.length} of ${rows.length} tests did not pass.** Their durations are ` +
+      'timeout/failure cost, not real work - treat this ranking as invalid until the ' +
+      'run is green.'
+  );
+  out.push('');
+}
 out.push('### Cost by file');
 out.push('');
 out.push('| file | tests | total | % of total | hook | hook % | avg/test |');
 out.push('|---|---:|---:|---:|---:|---:|---:|');
 for (const e of [...byFile.values()].sort((a, b) => b.duration - a.duration)) {
   out.push(
-    `| ${e.file} | ${e.count} | ${fmt(e.duration)} | ${share(e.duration, total)} | ${hcell(e.hook)} | ` +
+    `| ${safe(e.file)} | ${e.count} | ${fmt(e.duration)} | ${share(e.duration, total)} | ${hcell(e.hook)} | ` +
       `${hooksAvailable ? share(e.hook, e.duration) : 'n/a'} | ${fmt(e.duration / e.count)} |`
   );
 }
 out.push('');
 out.push(`### Slowest ${Math.min(top, rows.length)} tests`);
 out.push('');
-out.push('| test | total | hook | attempts |');
-out.push('|---|---:|---:|---:|');
+out.push('| test | total | hook | attempts | status |');
+out.push('|---|---:|---:|---:|---|');
 for (const r of [...rows].sort((a, b) => b.duration - a.duration).slice(0, top)) {
-  const title = r.title.replace(/\|/g, '\\|');
+  const title = safe(r.title).replace(/\|/g, '\\|');
+  const status = r.status === 'passed' ? '' : `⚠️ ${safe(r.status)}`;
   out.push(
-    `| \`${r.file}:${r.line}\` ${title} | ${fmt(r.duration)} | ${hcell(r.hook ?? 0)} | ${r.attempts} |`
+    `| \`${safe(r.file)}:${r.line}\` ${title} | ${fmt(r.duration)} | ${hcell(r.hook ?? 0)} | ` +
+      `${r.attempts} | ${status} |`
   );
 }
 
-const text = out.join('\n');
-console.log(text);
-if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, text + '\n');
+return out.join('\n');
+}
+
+// --- CLI ----------------------------------------------------------------------
+// Guarded so the test file can import the pure functions above without this
+// running (and without exiting the test process).
+if (process.argv[1] && process.argv[1].endsWith('pw-timing-summary.mjs')) {
+  const args = process.argv.slice(2);
+  const file = args.find((a) => !a.startsWith('--'));
+  const topIdx = args.indexOf('--top');
+  const top = topIdx === -1 ? 30 : Number(args[topIdx + 1]) || 30;
+
+  if (!file) {
+    console.error('usage: pw-timing-summary.mjs <results.json> [--top N]');
+    process.exit(2);
+  }
+
+  const text = render(JSON.parse(readFileSync(file, 'utf8')), { top });
+  console.log(text);
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, text + '\n');
+  }
+}
