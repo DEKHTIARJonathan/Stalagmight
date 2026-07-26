@@ -10461,6 +10461,81 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
+fn test_split_at_section_limit_refuses_without_mutating() {
+    // A refused split must be a no-op. The split paths mutate the original
+    // section (rename + truncate) before they allocate section B, and their
+    // failure returns do NOT restore the snapshot - so a capacity check placed at
+    // the allocation would delete the selected shot and everything after it while
+    // creating neither section B nor an undo entry. Pins that the check runs
+    // first.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "SplitLimit".to_string(),
+        location: None,
+    });
+    let sid = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![
+                test_shot_data(5.0),
+                test_shot_data(5.0),
+                test_shot_data(5.0),
+            ],
+        })
+        .section_id
+        .unwrap();
+
+    let (shot_ids_before, names_before) = {
+        let proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_ref().unwrap();
+        let section = project.get_section(sid).unwrap();
+        (
+            section.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+            section.name.clone(),
+        )
+    };
+    assert_eq!(shot_ids_before.len(), 3);
+    let middle_shot = shot_ids_before[1];
+
+    // Drive the project to the bound so the next allocation must be refused.
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        project.next_section_id = crate::models::MAX_SECTION_ID + 1;
+        assert!(!project.can_add_section());
+    }
+
+    let result = state.execute_delete_shot_and_split(
+        sid,
+        middle_shot,
+        "A-part".to_string(),
+        "B-part".to_string(),
+    );
+    assert!(
+        !result.success,
+        "split past the section bound must be refused"
+    );
+
+    // The section must be exactly as it was: same shots, same name.
+    let proj_guard = state.project.lock().unwrap();
+    let project = proj_guard.as_ref().unwrap();
+    let section = project.get_section(sid).unwrap();
+    assert_eq!(
+        section.shots.iter().map(|s| s.id).collect::<Vec<_>>(),
+        shot_ids_before,
+        "a refused split must not delete or truncate any shot"
+    );
+    assert_eq!(
+        section.name, names_before,
+        "a refused split must not rename the original section"
+    );
+}
+
+#[test]
 fn test_section_allocation_never_outruns_what_load_accepts() {
     // The load path rejects section ids above MAX_SECTION_ID, so every PRODUCTION
     // allocation path has to stop at the same bound - otherwise the app saves a

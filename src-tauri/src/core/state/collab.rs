@@ -565,15 +565,27 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     // the newly-added section's shots after add_section runs.  Shots
     // without a returned UUID (Ariane ≤25 or shot lacked `<UUID>`)
     // keep the fresh UUID `Shot::new` minted.
-    for s in &cs.sections_added {
+    for (added_idx, s) in cs.sections_added.iter().enumerate() {
         // Reconciling a collaborator's file can add sections in bulk; stop at the
         // bound rather than minting a colliding shot-id band that would not reload.
+        // This MUST report through `skipped` (which the caller surfaces as command
+        // warnings): apply_collab_changes marks the incoming hash consumed on
+        // success, so a silent drop would lose the collaborator's sections with no
+        // sign to the user and no second chance to reconcile the same file.
         if !project.can_add_section() {
+            let remaining = cs.sections_added.len() - added_idx;
             tracing::warn!(
+                remaining,
                 limit = crate::models::MAX_SECTION_ID as u64 + 1,
                 purpose = "avoid allocating a section id that cannot be reloaded",
                 "Stopped applying collaborator sections at the maximum section count"
             );
+            skipped.push(format!(
+                "Section limit reached ({}): {remaining} collaborator section(s) were NOT imported, \
+                 starting with '{}'. Remove sections or split the project, then reconcile again.",
+                crate::models::MAX_SECTION_ID as u64 + 1,
+                s.name
+            ));
             break;
         }
         let new_sid = project
