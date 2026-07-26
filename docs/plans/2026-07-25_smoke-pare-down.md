@@ -141,9 +141,14 @@ dangerous failure mode for a tool whose output decides what gets deleted:
    last on that worker; `testInfo.duration` excludes it. Counting it as `before`
    inflated the last test of every worker and every test adjacent to a failure -
    exactly the population a cost investigation looks at - and could push a row's
-   hook share above 100%. **This explains the `hook % = 101-105%` seen in the
-   broken run below.** Now tracked in its own `worker` field and excluded from
-   hook totals.
+   hook share above 100%. That was the visible tell: the all-timed-out run
+   described in section 2 reported a `hook %` of **101-112% on 24 of 26 files**
+   (`gas-planning` 101%, `back-button-navigation` 102%, `theme` 104%,
+   `scroll-containment` 112%) - arithmetically impossible for setup time that is
+   a subset of test time, and a signal that was there to be read before the
+   numbers were trusted. Now tracked in its own `worker` field and excluded from
+   hook totals. An unrecognized future hook title goes to a separate `unknown`
+   bucket with a warning rather than defaulting into setup.
 2. **Test status never reached the output.** A timed-out test bills the full
    30s timeout, so it sorted to the top of the ranking looking like an expensive
    but legitimate test. The summary now flags any non-green run and marks each

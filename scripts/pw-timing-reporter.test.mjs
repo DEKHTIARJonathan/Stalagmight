@@ -128,6 +128,21 @@ test('retries are collapsed into one row charging every attempt, and keep the fa
   assert.equal(rep.tests[0].everFailed, true, 'the failed attempt must stay on record');
 });
 
+test('an unrecognized top-level hook step is NOT silently absorbed as setup', () => {
+  // The bare-else version of this dispatch is how "Worker Cleanup" became setup
+  // time in the first place. A future fourth hook title must not repeat it.
+  const rep = run([step('Before Hooks', 100), step('Teardown Something New', 4000)]);
+  assert.equal(rep.tests[0].before, 100, 'unknown hook step leaked into setup time');
+  assert.equal(rep.tests[0].unknown, 4000, 'unknown hook time should still be recorded');
+});
+
+test('the merged row carries no stale retry index', () => {
+  // `retry` used to freeze to the first attempt while `attempts` counted them
+  // all, so an artifact reader saw retry:0 on a test that plainly retried.
+  const rep = run([step('Before Hooks', 10)]);
+  assert.ok(!('retry' in rep.tests[0]), 'retry should not be persisted; attempts carries it');
+});
+
 // --- output shape --------------------------------------------------------------
 
 test('a missing step duration is treated as zero, not NaN', () => {
