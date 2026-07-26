@@ -159,6 +159,11 @@ fn field_gas(field: &GasReachField, sr: StationRef) -> f64 {
     field.gas_to_reach[idx].unwrap()
 }
 
+fn field_reachable(field: &GasReachField, sr: StationRef) -> bool {
+    let idx = field.station_refs.iter().position(|r| *r == sr).unwrap();
+    field.reachable[idx]
+}
+
 #[test]
 fn required_stages_matches_presets() {
     assert_eq!(required_stages(ReservePreset::AllThirds), 0);
@@ -2561,8 +2566,12 @@ fn gas_reach_field_waypoint_forces_the_detour_and_rebases_the_field() {
     assert!(side_at < tip_at, "the way point must be visited first");
     // The detour costs 300 L out + 300 L back, so every trunk station is 600 L dearer than before.
     assert!((field_gas(&via_side, trunk_tip) - field_gas(&plain, trunk_tip) - 600.0).abs() < 1e-6);
-    // Even the entrance is no longer free: you must do the side branch first.
-    assert!((field_gas(&via_side, entrance) - 600.0).abs() < 1e-6);
+    // But a station the route merely SWIMS THROUGH is still reported at the gas burned when it is
+    // passed - the entrance is where the dive starts, so it stays free. Pricing it as an out-and-back
+    // from the way point (600 L here) would push it out of budget on a modest rig and manufacture a
+    // turn-frontier dot - a red "candidate endpoint" - in the middle of the diver's own route.
+    assert!(field_gas(&via_side, entrance).abs() < 1e-6);
+    assert!((field_gas(&via_side, side_tip) - 300.0).abs() < 1e-6);
     // The cumulative gas AT the way point is reported for the readout.
     assert_eq!(via_side.waypoint_gas_litres.len(), 1);
     assert!((via_side.waypoint_gas_litres[0].unwrap() - 300.0).abs() < 1e-6);
@@ -2667,9 +2676,11 @@ fn gas_reach_field_unresolvable_waypoint_stalls_rather_than_being_skipped() {
 
 #[test]
 fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
-    // When the mandated detour alone exceeds the budget nothing is reachable, but the route drawn so
-    // far is kept so the diver can SEE which way point blew the gas (the panel compares
-    // waypoint_gas_litres against budget_litres).
+    // When the mandated detour alone exceeds the budget there is no turnaround and the way point
+    // itself is out of reach, but the route drawn so far is kept so the diver can SEE which way point
+    // blew the gas (the panel compares waypoint_gas_litres against budget_litres). The near end of
+    // the chain stays reachable - the diver really can swim that far, they just cannot finish - and
+    // showing how far along the mandated route the gas lasts is the whole diagnostic.
     let (project, entrance, side_tip, trunk_tip) = branching_project();
     let diver = Diver::new(20.0, None).unwrap();
     // 20 bar x 10 L water, all-thirds ⇒ budget ≈ 66 L, far under the 300 L to the side tip.
@@ -2692,8 +2703,11 @@ fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
         &[],
     );
     assert!(field.waypoint_gas_litres[0].unwrap() > field.budget_litres);
-    assert!(!field.reachable.iter().any(|&r| r));
+    // The way point is unaffordable, so there is no route target at all...
+    assert!(!field_reachable(&field, side_tip));
     assert!(field.final_turn_ref.is_none());
+    // ...but the diver can still swim off the entrance, which is where the plan starts.
+    assert!(field_reachable(&field, entrance));
     // The chain the way point committed is still drawn - entrance → … → side tip - even though
     // nothing on it is in budget.
     let route = route_stations(&field);
@@ -3000,4 +3014,58 @@ fn gas_reach_field_disconnected_endpoint_still_falls_back_to_deepest() {
     );
     assert!(field.final_turn_ref.is_some());
     assert_eq!(field.final_turn_ref, Some(deepest_reachable(&field)));
+}
+
+#[test]
+fn gas_reach_field_waypoint_does_not_put_a_turn_candidate_inside_the_endpoint() {
+    // Reported from manual inspection: with a way point set, a red turn-frontier dot - which the map
+    // offers as a CANDIDATE ENDPOINT - appeared on the route, nearer the exit than the endpoint the
+    // diver had already chosen. Cause: `gas_in` prices a swum-through station as an out-and-back
+    // detour from the last way point, so the entrance cost 2 x d(origin, W) (800 L here), fell out of
+    // a 719 L budget, and the first station outboard of it became a frontier.
+    let (project, entrance, north, _east, north_tip, _east_mid) = two_branch_project();
+    let waypoint = StationRef::new(north, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    // 170 bar in a 13 L steel ⇒ ~719 L of All-thirds budget: the endpoint (600 L) is affordable,
+    // while the entrance's old out-and-back price (800 L) was not. That gap is what produced the dot.
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        170.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&north_tip),
+        &[waypoint],
+        &diver,
+        std::slice::from_ref(&bg),
+        &GasConfig::default(),
+        &[],
+    );
+
+    // SETUP: the endpoint really is affordable, so the turnaround must be the endpoint itself. If
+    // this ever fails the test is measuring the out-of-budget path instead.
+    assert!(field.budget_litres > 600.0 && field.budget_litres < 800.0);
+    assert_eq!(field.final_turn_ref, Some(north_tip));
+
+    // The dive STARTS at the entrance, so it is free and in reach. Both assertions failed before the
+    // fix (0 L vs 800 L, reachable vs not), which is what makes this test non-vacuous.
+    assert!(field_gas(&field, entrance).abs() < 1e-6);
+    assert!(field_reachable(&field, entrance));
+
+    // THE PROPERTY: nothing the route swims through on the way out is offered as a turn candidate.
+    // Those dots mean "this is as far as you get" - on your own route, inside your own endpoint,
+    // they read as the plan proposing a second, nearer endpoint.
+    let route = route_stations(&field);
+    let target_at = route.iter().position(|r| *r == north_tip).unwrap();
+    for r in &route[..target_at] {
+        assert!(
+            !field.turn_frontier.contains(r),
+            "{r:?} is on the route inside the endpoint but is offered as a turn candidate"
+        );
+    }
 }

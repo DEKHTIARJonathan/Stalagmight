@@ -14,6 +14,8 @@ mod physics;
 #[cfg(test)]
 mod tests;
 
+use std::collections::VecDeque;
+
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{Coordinates, ShotKind, StationKey, StationRef};
 
@@ -207,7 +209,6 @@ impl Project {
             })
             .collect();
         let walk = waypoint_walk(&adj, &roots, &resolved_waypoints, degenerate);
-        let gas_in = &walk.gas_in;
 
         // The strategy actually applied (a stage-short staged request falls back to All-thirds; Free
         // and All-thirds never fall back). Drives the drops AND the gauges so they agree.
@@ -462,7 +463,21 @@ struct WaypointWalk {
     /// Gas-to-reach every station AFTER visiting every way point in order: the last leg's Dijkstra
     /// distance offset by the gas already spent getting to the last way point. All-infinite when the
     /// chain stalls, so nothing reads as reachable on a route that cannot be flown.
+    ///
+    /// This is the cost of being at a station as the route's FINAL destination, which is what the
+    /// route tail and the post-chain stage-drop basis need. It is NOT what the overlay shows - see
+    /// [`WaypointWalk::reach_gas`].
     gas_in: Vec<f64>,
+    /// What the OVERLAY reports: `gas_in`, but lowered to the pass-through gas at any station the
+    /// committed chain actually swims through (then settled across zero-cost merge/closure ties).
+    ///
+    /// The two differ only with way points, and only for chain stations. `gas_in` prices a
+    /// pass-through as an out-and-back detour from the last way point, so the entrance itself would
+    /// cost 2 x d(origin, W1), read as out of budget, and put a spurious turn-frontier dot in the
+    /// middle of the diver's own route. They must stay separate: on a route that doubles back, a
+    /// revisited station is passed cheaply the first time and expensively the second, and the route's
+    /// own cumulative gas has to keep the higher number or the stage drops slide.
+    reach_gas: Vec<f64>,
     /// Predecessor tree of the LAST leg - rooted at the final way point, or at the origin roots when
     /// there are none. Walk it back from the route target to finish the route.
     pred: Vec<usize>,
@@ -490,6 +505,7 @@ fn waypoint_walk(
     if degenerate {
         return WaypointWalk {
             gas_in: vec![f64::INFINITY; n],
+            reach_gas: vec![f64::INFINITY; n],
             pred: vec![usize::MAX; n],
             chain: Vec::new(),
             chain_gas: Vec::new(),
@@ -524,17 +540,53 @@ fn waypoint_walk(
         leg = Project::dijkstra_with_preds(adj, &[w]);
     }
     let (dist, pred) = leg;
-    let gas_in = if stalled {
+    let gas_in: Vec<f64> = if stalled {
         vec![f64::INFINITY; n]
     } else {
         dist.iter().map(|d| cum + *d).collect()
     };
+    // No way points means no chain, hence nothing to lower - the overlay reads the plain
+    // single-Dijkstra field untouched (what
+    // `gas_reach_field_no_waypoints_is_identical_to_the_plain_field` pins).
+    let mut reach_gas = gas_in.clone();
+    if !stalled && !chain.is_empty() {
+        // A station the plan SWIMS THROUGH is reached at the moment it is passed, not after the
+        // whole chain. Lowering these is the SAFE direction; it only ever reports less gas for a
+        // station the route provably visits. Everything off the chain keeps the conservative
+        // after-chain cost, so an off-route station can never look cheaper than picking it would be.
+        for (pos, &node) in chain.iter().enumerate() {
+            let passed = chain_gas[pos];
+            if passed < reach_gas[node] {
+                reach_gas[node] = passed;
+            }
+        }
+        relax_zero_cost(adj, &mut reach_gas);
+    }
     WaypointWalk {
         gas_in,
+        reach_gas,
         pred,
         chain,
         chain_gas,
         waypoint_gas,
+    }
+}
+
+/// Settle gas-to-reach across zero-cost edges. Station merges and loop closures join nodes that are
+/// the SAME physical point, so they must report the same gas - otherwise lowering one chain node
+/// leaves its co-located twin on the old (higher) number, which reads as an unreachable station
+/// sitting exactly on top of a reachable one and puts a spurious dot on the frontier. A real shot
+/// always costs gas, so a zero-weight relaxation can never leak into a different place.
+fn relax_zero_cost(adj: &[Vec<(usize, f64)>], gas: &mut [f64]) {
+    let mut queue: VecDeque<usize> = (0..gas.len()).filter(|&i| gas[i].is_finite()).collect();
+    while let Some(u) = queue.pop_front() {
+        let gu = gas[u];
+        for &(v, w) in &adj[u] {
+            if w <= 0.0 && gu < gas[v] {
+                gas[v] = gu;
+                queue.push_back(v);
+            }
+        }
     }
 }
 
@@ -587,33 +639,32 @@ fn route_target(
         .or(deepest)
 }
 fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64) -> BudgetView {
+    // What the OVERLAY shows: can the diver be at this station, within budget, on this dive.
     let reachable: Vec<bool> = walk
+        .reach_gas
+        .iter()
+        .map(|&g| g.is_finite() && g <= budget_litres)
+        .collect();
+    // Whether a station can be the route's DESTINATION, which is a different (never cheaper)
+    // question: ending there costs the after-chain price, not the pass-through price. Only the
+    // target choice may read this, so a station the route merely swims past can never be picked as
+    // a turnaround it cannot actually afford. Identical to `reachable` without way points.
+    let can_end_at: Vec<bool> = walk
         .gas_in
         .iter()
         .map(|&g| g.is_finite() && g <= budget_litres)
         .collect();
 
     // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
-    // `deepest` (the route fallback target) tracks the same arg-max but seeds at -∞ so a
-    // degenerate all-at-0 reachable set (only a root in budget) still yields a target.
     let mut max_reachable_gas = 0.0_f64;
-    let mut deepest: Option<usize> = None;
-    let mut deepest_gas = f64::NEG_INFINITY;
     let gas_to_reach: Vec<Option<f64>> = walk
-        .gas_in
+        .reach_gas
         .iter()
         .zip(&reachable)
-        .enumerate()
-        .map(|(i, (&g, &ok))| {
+        .map(|(&g, &ok)| {
             if g.is_finite() {
-                if ok {
-                    if g > max_reachable_gas {
-                        max_reachable_gas = g;
-                    }
-                    if g > deepest_gas {
-                        deepest_gas = g;
-                        deepest = Some(i);
-                    }
+                if ok && g > max_reachable_gas {
+                    max_reachable_gas = g;
                 }
                 Some(g)
             } else {
@@ -622,7 +673,19 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
         })
         .collect();
 
-    let target = route_target(endpoint, walk, &reachable, deepest);
+    // `deepest` (the route fallback target) is the farthest station the diver could actually END at,
+    // so it is an arg-max over `gas_in`/`can_end_at`. Seeded at -∞ so a degenerate all-at-0 set
+    // (only a root in budget) still yields a target.
+    let mut deepest: Option<usize> = None;
+    let mut deepest_gas = f64::NEG_INFINITY;
+    for (i, (&g, &ok)) in walk.gas_in.iter().zip(&can_end_at).enumerate() {
+        if ok && g.is_finite() && g > deepest_gas {
+            deepest_gas = g;
+            deepest = Some(i);
+        }
+    }
+
+    let target = route_target(endpoint, walk, &can_end_at, deepest);
     // The committed way-point chain, then the last leg's path to the target. That path starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
     // way points the chain is empty and the route is exactly the origin→target path.
