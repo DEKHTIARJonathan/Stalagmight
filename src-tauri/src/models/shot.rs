@@ -218,7 +218,7 @@ pub struct ShotData {
 /// load. A legacy `true` becomes [`ShotKind::Jump`] (issue #27 q2: most
 /// user-toggled reference shots are swum shortcuts in practice); the chain
 /// classifier then refines that once, at the post-migration pass.
-fn de_shot_kind<'de, D>(de: D) -> Result<ShotKind, D::Error>
+pub(crate) fn de_shot_kind<'de, D>(de: D) -> Result<ShotKind, D::Error>
 where
     D: Deserializer<'de>,
 {

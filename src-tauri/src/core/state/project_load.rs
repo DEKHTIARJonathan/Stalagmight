@@ -401,6 +401,26 @@ impl AppState {
                 "Re-derived drifted section offsets while opening project"
             );
         }
+        // One-shot #27 backfill. The v12->v13 migration seeded every legacy
+        // `is_reference` row as Jump, which is only q2's guess; the real verdict
+        // needs sections + merges + closures assembled, which is exactly what we
+        // have now and the bare migration connection did not. Runs once, then
+        // clears its own flag: classification is import-time only (q14), so a
+        // later merge must never silently re-flip a kind.
+        if db.is_kind_classification_pending() {
+            let reclassified = project.classify_virtual_shots();
+            tracing::info!(
+                reclassified,
+                purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
+                "Classified virtual shots on first open after migration"
+            );
+            if let Err(e) = db.clear_pending_kind_classification() {
+                // Non-fatal: the worst case is the backfill repeating on the
+                // next open, which is idempotent.
+                tracing::warn!(error = %e, "Failed to clear pending_kind_classification flag");
+            }
+        }
+
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);

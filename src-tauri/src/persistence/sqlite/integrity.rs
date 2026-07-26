@@ -162,7 +162,7 @@ impl Database {
                 up_distance REAL,
                 down_distance REAL,
                 comment TEXT,
-                is_reference INTEGER NOT NULL DEFAULT 0,
+                kind INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
                 uuid TEXT,
@@ -249,15 +249,20 @@ impl Database {
         )?;
 
         if has_shots {
-            // The old table may have `is_virtual` (pre-v4) or `is_reference` (v4+).
-            // Use COALESCE to handle either column name gracefully.
-            let old_has_is_reference = tx
+            // The old table may carry any of the three historical spellings:
+            // `kind` (v13+, already a 0/1/2 discriminant), `is_reference` (v4+)
+            // or `is_virtual` (pre-v4). The two boolean forms are widened to the
+            // discriminant with `!= 0` -> 1 == ShotKind::Jump, matching the
+            // v12->v13 migration's seed.
+            let virtual_col = if tx.prepare("SELECT kind FROM shots_old LIMIT 0").is_ok() {
+                "kind".to_string()
+            } else if tx
                 .prepare("SELECT is_reference FROM shots_old LIMIT 0")
-                .is_ok();
-            let virtual_col = if old_has_is_reference {
-                "is_reference"
+                .is_ok()
+            {
+                "CASE WHEN is_reference != 0 THEN 1 ELSE 0 END".to_string()
             } else {
-                "is_virtual"
+                "CASE WHEN is_virtual != 0 THEN 1 ELSE 0 END".to_string()
             };
             tx.execute(
                 &format!(
@@ -265,7 +270,7 @@ impl Database {
                         id, section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                        comment, is_reference, marker_index, temperature
+                        comment, kind, marker_index, temperature
                     )
                     SELECT
                         id, section_id, sequence_order,

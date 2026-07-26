@@ -13,7 +13,7 @@ use stalagmight_lib::config::{CacheConfig, Config, ValidationConfig};
 use stalagmight_lib::core::{Command, UndoData, UndoEntry, UndoStack, Validator};
 use stalagmight_lib::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, LoopClosure, Project, Section, SectionData,
-    SectionUpdates, Shot, ShotData, ShotUpdates, StationMerge, StationRef,
+    SectionUpdates, Shot, ShotData, ShotKind, ShotUpdates, StationMerge, StationRef,
 };
 use stalagmight_lib::persistence::Database;
 use std::collections::{HashMap, HashSet};
@@ -1202,12 +1202,12 @@ fn test_reference_shot_flag() {
     let mut project = create_test_project();
 
     let mut shot_data = create_shot_data(0.0, 10.0, 5.0, 5.0);
-    shot_data.is_reference = true;
+    shot_data.kind = ShotKind::Jump;
 
     project.add_section(create_section_with_shots("Main", vec![shot_data]));
 
     let shot = &project.get_section(0).unwrap().shots[0];
-    assert!(shot.is_reference);
+    assert_eq!(shot.kind, ShotKind::Jump);
 }
 
 /// Test 21: Shot LRUD persistence - verify all 4 values
@@ -1456,7 +1456,7 @@ fn test_shot_updates() {
     let updates = ShotUpdates {
         length: Some(20.0),
         comment: Some(Some("Updated".to_string())),
-        is_reference: Some(true),
+        kind: Some(ShotKind::Jump),
         ..Default::default()
     };
 
@@ -1464,7 +1464,7 @@ fn test_shot_updates() {
 
     assert!((shot.length - 20.0).abs() < 0.001);
     assert_eq!(shot.comment, Some("Updated".to_string()));
-    assert!(shot.is_reference);
+    assert_eq!(shot.kind, ShotKind::Jump);
     // Unchanged fields
     assert!((shot.azimuth_in - 0.0).abs() < 0.001);
 }
@@ -1528,7 +1528,7 @@ fn test_section_stats() {
         create_shot_data(0.0, 10.0, 5.0, 8.0),
         create_shot_data(0.0, 15.0, 8.0, 12.0),
     ];
-    shots[1].is_reference = true;
+    shots[1].kind = ShotKind::Jump;
 
     project.add_section(create_section_with_shots("Test", shots));
 
@@ -1983,7 +1983,7 @@ fn test_project_update_shot() {
     let updates = ShotUpdates {
         length: Some(20.0),
         comment: Some(Some("Updated comment".to_string())),
-        is_reference: Some(true),
+        kind: Some(ShotKind::Jump),
         ..Default::default()
     };
 
@@ -1993,7 +1993,7 @@ fn test_project_update_shot() {
     let shot = project.get_section(0).unwrap().get_shot(shot_id).unwrap();
     assert!((shot.length - 20.0).abs() < 0.001);
     assert_eq!(shot.comment, Some("Updated comment".to_string()));
-    assert!(shot.is_reference);
+    assert_eq!(shot.kind, ShotKind::Jump);
 }
 
 // ============================================================================

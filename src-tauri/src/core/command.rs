@@ -99,14 +99,25 @@ pub enum Command {
         shot_id: ShotId,
     },
     /// Set a shot's [`ShotKind`] (#27). Replaces the old boolean
-    /// `SetShotReference`. Persisted undo history written before #27 carries
-    /// the `set_shot_reference` tag with an `is_reference` bool; those stacks
-    /// are dropped on migration by `UNDO_FORMAT_SAFE_VERSION`, so no legacy
-    /// variant is needed here. The aliases stay only for in-flight payloads.
+    /// `SetShotReference`.
+    ///
+    /// Reads pre-#27 persisted undo history **losslessly** rather than forcing
+    /// it to be discarded: the variant aliases the old `set_shot_reference` /
+    /// `set_shot_virtual` tags, and the `kind` field aliases the old
+    /// `is_reference` bool through `models::shot::de_shot_kind`, which
+    /// maps `true` to [`ShotKind::Jump`] per q2. An old entry's inverse
+    /// (`SetShotReference { is_reference: !x }`) therefore still round-trips, so
+    /// upgrading does not cost the user their undo stack.
     #[serde(alias = "set_shot_virtual", alias = "set_shot_reference")]
     SetShotKind {
         section_id: SectionId,
         shot_id: ShotId,
+        #[serde(
+            default,
+            alias = "is_reference",
+            alias = "is_virtual",
+            deserialize_with = "crate::models::shot::de_shot_kind"
+        )]
         kind: ShotKind,
     },
 
@@ -493,6 +504,52 @@ mod tests {
         StationRef,
     };
     use chrono::NaiveDate;
+
+    #[test]
+    fn legacy_set_shot_reference_undo_entries_still_deserialize() {
+        // Pre-#27 persisted undo history is JSON-tagged `set_shot_reference`
+        // with an `is_reference` bool. It must still load, otherwise upgrading
+        // would silently throw away the user's undo stack.
+        let legacy =
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":true}"#;
+        let parsed: Command = serde_json::from_str(legacy).unwrap();
+        match parsed {
+            Command::SetShotKind {
+                section_id,
+                shot_id,
+                kind,
+            } => {
+                assert_eq!(section_id, 1);
+                assert_eq!(shot_id, 2);
+                // q2: a legacy virtual shot reads as a Jump.
+                assert_eq!(kind, ShotKind::Jump);
+            }
+            other => panic!("expected SetShotKind, got {other:?}"),
+        }
+
+        // The false case, which is what an old inverse command carried.
+        let legacy_false =
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":false}"#;
+        let parsed: Command = serde_json::from_str(legacy_false).unwrap();
+        assert!(matches!(
+            parsed,
+            Command::SetShotKind {
+                kind: ShotKind::Normal,
+                ..
+            }
+        ));
+
+        // And the even older `set_shot_virtual` tag.
+        let ancient = r#"{"type":"set_shot_virtual","section_id":1,"shot_id":2,"is_virtual":true}"#;
+        let parsed: Command = serde_json::from_str(ancient).unwrap();
+        assert!(matches!(
+            parsed,
+            Command::SetShotKind {
+                kind: ShotKind::Jump,
+                ..
+            }
+        ));
+    }
     use std::path::PathBuf;
 
     // Re-import CommentHolder so tests can use it without qualification

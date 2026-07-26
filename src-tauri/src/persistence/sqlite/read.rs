@@ -947,6 +947,33 @@ impl Database {
     /// caller seed from the live global config (the "defaults for new projects")
     /// instead of the hardcoded ValidationConfig::default(); a present-but-
     /// unparseable row is treated as legacy too (`None`).
+    /// Whether the v12->v13 migration (#27) left a one-shot chain
+    /// classification pending. The migration seeds every legacy `is_reference`
+    /// row as Jump, which is only a guess; the real verdict needs the project
+    /// graph, so the flag defers it to the next load.
+    pub fn is_kind_classification_pending(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'pending_kind_classification'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .is_some_and(|v| v == "1")
+    }
+
+    /// Clear the flag set by the v12->v13 migration once the classification has
+    /// run, so it never runs a second time. Classification is import-time only
+    /// by design (#27 q14): re-running it later could flip a kind under the user.
+    pub fn clear_pending_kind_classification(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
+            [],
+        )?;
+        Ok(())
+    }
+
     pub fn load_project_validation(&self) -> Result<Option<crate::config::ValidationConfig>> {
         let json: Option<String> = self
             .conn

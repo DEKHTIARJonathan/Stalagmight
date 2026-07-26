@@ -4434,6 +4434,120 @@ fn section_pitches(db: &Database, section_name: &str) -> Vec<Option<f64>> {
         .collect()
 }
 
+/// Opening a pre-v13 project converts the boolean `is_reference` column into the
+/// 3-way `kind`, seeds every virtual shot as Jump (#27 q2), and then lets the
+/// one-shot backfill flag re-decide via the chain rule (#27 q16).
+#[test]
+fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v12.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    // R V R  -> bounded, so the backfill should settle on Jump.
+    // R V V  -> one-sided, so the backfill should settle on Reference.
+    project.add_section(SectionData {
+        name: Some("Bounded".to_string()),
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Reference),
+            legacy_shot(ShotKind::Normal),
+        ],
+        ..Default::default()
+    });
+    project.add_section(SectionData {
+        name: Some("Dangling".to_string()),
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Reference),
+            legacy_shot(ShotKind::Reference),
+        ],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // Reshape the table back to the v12 form: a boolean is_reference where
+        // every virtual shot reads 1, which is what a real pre-#27 file holds.
+        db.conn
+            .execute_batch(
+                "ALTER TABLE shots ADD COLUMN is_reference INTEGER NOT NULL DEFAULT 0;
+                 UPDATE shots SET is_reference = CASE WHEN kind != 0 THEN 1 ELSE 0 END;
+                 ALTER TABLE shots DROP COLUMN kind;",
+            )
+            .unwrap();
+        db.set_user_version(12).unwrap();
+    }
+
+    // open_existing runs ensure_schema_version → the v12→v13 migration.
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+    assert!(
+        db.conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok(),
+        "kind column must exist after migration"
+    );
+    assert!(
+        db.conn
+            .prepare("SELECT is_reference FROM shots LIMIT 0")
+            .is_err(),
+        "the boolean column must be gone"
+    );
+
+    // The migration itself only seeds Jump (discriminant 1) per q2.
+    let seeded: Vec<i64> = db
+        .conn
+        .prepare("SELECT kind FROM shots ORDER BY section_id, sequence_order")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(seeded, vec![0, 1, 0, 0, 1, 1]);
+
+    // And it hands the real verdict to the one-shot backfill on next load.
+    assert!(
+        db.is_kind_classification_pending(),
+        "migration must flag the chain-rule backfill"
+    );
+}
+
+/// The backfill flag is one-shot: once cleared it stays cleared, because
+/// classification is import-time only (#27 q14) and must never silently
+/// re-flip a kind after the user has edited it.
+#[test]
+fn pending_kind_classification_flag_clears_once() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("flag.stalx");
+    let db = Database::open(&path).unwrap();
+
+    assert!(!db.is_kind_classification_pending());
+    db.conn
+        .execute_batch(
+            "INSERT OR REPLACE INTO project_settings (key, value)
+             VALUES ('pending_kind_classification', '1');",
+        )
+        .unwrap();
+    assert!(db.is_kind_classification_pending());
+
+    db.clear_pending_kind_classification().unwrap();
+    assert!(!db.is_kind_classification_pending());
+    // Idempotent: clearing an already-clear flag is not an error.
+    db.clear_pending_kind_classification().unwrap();
+    assert!(!db.is_kind_classification_pending());
+}
+
+fn legacy_shot(kind: ShotKind) -> ShotData {
+    ShotData {
+        azimuth_in: 0.0,
+        azimuth_out: 0.0,
+        length: 10.0,
+        depth_in: 0.0,
+        depth_out: 0.0,
+        kind,
+        ..Default::default()
+    }
+}
+
 /// Opening a pre-v12 project normalises only the sections whose pitch is stored
 /// in the old +up convention, and leaves everything else exactly as it was (#296).
 ///

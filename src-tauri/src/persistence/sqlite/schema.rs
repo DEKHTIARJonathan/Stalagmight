@@ -418,6 +418,45 @@ impl Database {
         Ok(())
     }
 
+    /// Replace the boolean `is_reference` column with a 3-way `kind`
+    /// (schema v12→v13, #27).
+    ///
+    /// Every legacy `is_reference = 1` row becomes [`ShotKind::Jump`] (issue #27
+    /// q2: most user-toggled reference shots are swum shortcuts in practice).
+    /// That is only a seed: `pending_kind_classification` is set so the next
+    /// project load runs the chain classifier once and demotes the runs that are
+    /// not actually bounded, landing existing files where a fresh import would.
+    /// The classifier needs sections, merges and closures assembled into a
+    /// `Project`, which is not available on this bare connection, hence the flag
+    /// rather than doing it inline.
+    ///
+    /// Idempotent: guarded on the old column still existing.
+    fn migrate_is_reference_to_kind(conn: &Connection) -> Result<()> {
+        let needs_migration = conn
+            .prepare("SELECT is_reference FROM shots LIMIT 0")
+            .is_ok();
+        if !needs_migration {
+            return Ok(());
+        }
+        tracing::info!("Converting shots.is_reference → shots.kind (v12→v13, #27)");
+
+        let has_kind = conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
+        if !has_kind {
+            conn.execute_batch("ALTER TABLE shots ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;")?;
+        }
+        // 1 == ShotKind::Jump. Kept as a literal because this migration must
+        // stay pinned to the v13 encoding even if the enum grows later.
+        conn.execute_batch(
+            r"
+            UPDATE shots SET kind = 1 WHERE is_reference = 1;
+            ALTER TABLE shots DROP COLUMN is_reference;
+            INSERT OR REPLACE INTO project_settings (key, value)
+                VALUES ('pending_kind_classification', '1');
+            ",
+        )?;
+        Ok(())
+    }
+
     /// Normalise stored pitch to the +down convention (schema v11→v12, #296).
     ///
     /// DMP import used to keep the mNemo's +up reading, so shots from a DMP
@@ -876,6 +915,9 @@ impl Database {
             self.invalidate_collab_tml_baseline()?;
             tx.commit()?;
         }
+        if current < 13 {
+            Self::migrate_is_reference_to_kind(&self.conn)?;
+        }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
         let _ = self.conn.execute(
@@ -930,7 +972,7 @@ impl Database {
                 up_distance REAL,
                 down_distance REAL,
                 comment TEXT,
-                is_reference INTEGER NOT NULL DEFAULT 0,
+                kind INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
                 uuid TEXT,

@@ -2418,12 +2418,15 @@ fn test_export_roundtrip_includes_reference_and_comment() {
     let csv_contents = fs::read_to_string(&csv_path).unwrap();
     assert!(csv_contents.contains("section_id,section_name"));
     assert!(csv_contents.contains("\"note,with comma\""));
-    assert!(csv_contents.contains("true"));
+    // #27 replaced the boolean `is_reference` column with the 3-way `kind`,
+    // so the export now names the kind instead of emitting "true".
+    assert!(csv_contents.contains(",kind,comment"));
+    assert!(csv_contents.contains("Jump"));
 
     let json_contents = fs::read_to_string(&json_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
     let shot_json = &parsed["sections"][0]["shots"][0];
-    assert_eq!(shot_json["is_reference"], true);
+    assert_eq!(shot_json["kind"], "Jump");
     assert_eq!(shot_json["comment"], "note,with comma");
     assert!(shot_json["lrud"].is_array());
 }
