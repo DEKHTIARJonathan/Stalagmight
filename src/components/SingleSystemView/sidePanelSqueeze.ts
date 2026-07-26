@@ -28,13 +28,15 @@ export interface SidePanelInput {
   /** Rendered at all? The Sections Dock is survey-only, so it can be absent. */
   present: boolean;
   /** Pinned open, i.e. it reflows the map. A hover-floating panel overlays the
-   *  map instead of taking layout space, so it never needs squeezing. */
+   *  map instead of taking layout space, so it is never squeezed FOR THE MAP -
+   *  it is still capped at the container it floats inside. */
   pinnedOpen: boolean;
 }
 
 /** One side panel's decision. */
 export interface SidePanelLayout {
-  /** Width to RENDER at. Equals the input width unless squeezed. */
+  /** Width to RENDER at. Equals the input width unless squeezed, and never
+   *  exceeds the measured viewport (see `fit` in computeSidePanelLayout). */
   width: number;
   /** Force the panel to its closed / hover-tab state for this viewport. */
   collapsed: boolean;
@@ -107,8 +109,20 @@ function attempt(
   // Round the sections share, give the exact remainder to detail, then clamp both
   // to their own slack - so rounding can never push a panel below its minimum and
   // the two shares still add up to `take`.
+  //
+  // The lower clamp on `takeD` is load-bearing, not defensive: rounding UP the
+  // sections share can make it exceed `take` itself (slackD === 0 and a `take`
+  // whose fraction is >= 0.5 - e.g. a hover-mode Details panel at viewport
+  // 555.5), which left `take - takeS` negative and `detailWidth -= takeD` then
+  // WIDENED Details by up to half a pixel past the width the user set.
   let takeS = Math.min(Math.round((take * slackS) / total), slackS);
-  let takeD = Math.min(take - takeS, slackD);
+  let takeD = Math.max(0, Math.min(take - takeS, slackD));
+  // Rounding the other way (down) can leave a sliver unassigned once detail is
+  // already at its own slack ceiling. Only reachable on a FRACTIONAL viewport -
+  // with integer inputs the shortfall is an integer below 0.5, i.e. zero - which
+  // is exactly what a non-integer UI-zoom step produces (measured: viewport
+  // 710.9 leaves 0.1px unassigned). Hand it to whichever panel can still take it,
+  // or the map ends up a fraction short of its floor.
   const unassigned = take - takeS - takeD;
   if (unassigned > 0) {
     const extraS = Math.min(unassigned, slackS - takeS);
@@ -129,8 +143,10 @@ function attempt(
  *   1. Nothing changes if the map already clears its floor.
  *   2. Shrink the open panels toward their PANEL_SIZE_BOUNDS minimums.
  *   3. Still short -> collapse DETAILS (a view of the current selection, one
- *      click away again from that selection) and re-solve, which may let Sections
- *      keep more than its minimum.
+ *      click away again from that selection) and re-solve. Sections cannot gain
+ *      from that: reaching this step means the both-open squeeze already ran out
+ *      of slack, so Sections is at its minimum and the freed width goes to the
+ *      map (see the carry-forward below).
  *   4. Still short -> collapse SECTIONS too (primary navigation, so it goes last).
  * A collapsed panel is still reachable: its opener tab floats it over the map,
  * which costs no layout width.
@@ -142,6 +158,27 @@ function attempt(
 export function computeSidePanelLayout(opts: SidePanelSqueezeOpts): SidePanelSqueeze {
   const { viewportWidth, sections, detail } = opts;
 
+  // Ceiling applied to EVERY branch, squeezed or not. The reported width is what
+  // the panel RENDERS at (the Dock's `size`) and where the Data overlay's inset
+  // stops, and both live inside this same container - but the two branches that
+  // skip the squeeze (a collapsed panel, reporting the user's own width so it
+  // returns intact, and a hover-mode panel, which is never squeezed at all) can
+  // still be FLOATED open at that width. Unclamped, a persisted 284px panel
+  // floated over a 200px container puts its edge - and the Data overlay inset
+  // that tracks it - outside the box, which is the same class of failure the
+  // squeeze exists to prevent. Floating deliberately still doesn't reflow the
+  // map; this only stops it exceeding the container.
+  //
+  // Flooring makes the two axes agree (the vertical path already floors): a
+  // non-integer UI-zoom step yields a fractional viewport, and the shares above
+  // are only rounded on the sections side, so detail could emit a half-pixel
+  // width straight into `style.width`. Flooring alone cannot breach a panel's
+  // resize minimum (the minimums are integers and the width is >= its minimum
+  // first); the CONTAINER can, when it is itself narrower than the minimum - and
+  // there the container has to win, since a panel wider than the box it is
+  // positioned in has nowhere to put the surplus.
+  const fit = (w: number) => Math.floor(Math.min(w, viewportWidth));
+
   const build = (
     r: Attempt,
     sectionsCollapsed: boolean,
@@ -150,11 +187,11 @@ export function computeSidePanelLayout(opts: SidePanelSqueezeOpts): SidePanelSqu
     // Report `collapsed` only for a panel that actually had layout width to give
     // up, so the flag always means "this viewport took it away from you".
     sections: {
-      width: sectionsCollapsed ? sections.width : r.sectionsWidth,
+      width: fit(sectionsCollapsed ? sections.width : r.sectionsWidth),
       collapsed: sectionsCollapsed && sections.present && sections.pinnedOpen,
     },
     detail: {
-      width: detailCollapsed ? detail.width : r.detailWidth,
+      width: fit(detailCollapsed ? detail.width : r.detailWidth),
       collapsed: detailCollapsed && detail.present && detail.pinnedOpen,
     },
   });
@@ -213,7 +250,9 @@ export interface DataPanelSqueezeOpts {
 }
 
 export interface DataPanelLayout {
-  /** Height to RENDER at. Equals the input height unless squeezed. */
+  /** Height to RENDER at. Equals the input height unless squeezed, and never
+   *  exceeds the measured viewport - a floating or viewport-collapsed panel is
+   *  not squeezed but is still capped (see computeDataPanelLayout). */
   height: number;
   /** Force the panel to its closed / hover-tab state for this viewport. */
   collapsed: boolean;
@@ -233,14 +272,25 @@ export interface DataPanelLayout {
  */
 export function computeDataPanelLayout(opts: DataPanelSqueezeOpts): DataPanelLayout {
   const { viewportHeight, height, min, mapMinHeight, pinnedOpen } = opts;
-  const untouched: DataPanelLayout = { height, collapsed: false };
-  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return untouched;
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return { height, collapsed: false };
+  // Ceiling applied to EVERY branch below, whether the panel reflows the map or
+  // not. The reported height renders the panel (the Dock's `size`) AND feeds both
+  // side Docks' `closedBottomInset`, which raises a minimized side bar's bottom
+  // edge - and that inset is taken from the SAME container. Once it reaches the
+  // container's height the side bar computes to height 0, the Data tab is clipped
+  // above Main's top, and the panel can no longer be closed: precisely the
+  // failure MAP_MIN_HEIGHT exists to prevent, reached through the two branches
+  // that skip the squeeze. Both are reachable with the panel visibly OPEN - a
+  // hover-mode panel floats at its persisted height, and a viewport-collapsed one
+  // reports the user's height and can still be floated open at it - so the cap
+  // cannot be conditional on `pinnedOpen` or on `collapsed`.
+  const fits = Math.min(height, Math.floor(viewportHeight));
   // A floating (hover) panel overlays the map instead of taking layout height, so
-  // there is nothing to squeeze.
-  if (!pinnedOpen) return untouched;
+  // there is nothing to squeeze FOR THE MAP: it is only capped at the container.
+  if (!pinnedOpen) return { height: fits, collapsed: false };
 
   const available = viewportHeight - mapMinHeight;
-  if (height <= available) return untouched;
+  if (height <= available) return { height, collapsed: false };
   // Shrink toward the resize minimum. Note `min` is a floor on the RENDERED
   // height, not on what fits: below it the panel is unusable, so collapsing to the
   // opener bar is the honest outcome rather than a stub the user cannot read.
@@ -248,17 +298,27 @@ export function computeDataPanelLayout(opts: DataPanelSqueezeOpts): DataPanelLay
   // Even the minimum starves the map: fall back to the opener bar, which is
   // reachable (its tab floats the panel over the map at no layout cost) and is the
   // floor - if the map still cannot reach its minimum beside a bar, there is
-  // nothing further to give. `height` is reported unchanged so the user's value is
-  // what returns when the viewport grows again.
-  return { height, collapsed: true };
+  // nothing further to give. The height is reported un-squeezed (only capped at
+  // the container) so the user's value is what returns when the viewport grows.
+  return { height: fits, collapsed: true };
 }
 
 /** Stable "not measured yet" value, so the first render has one object identity. */
 const ZERO_SIZE = { width: 0, height: 0 };
 
 /**
- * Observe an element's content-box size. Returns 0 for either axis until the first
+ * Observe an element's BORDER-box size. Returns 0 for either axis until the first
  * measurement, which the compute functions read as "not measured yet".
+ *
+ * Both readings (the initial one-shot and every ResizeObserver callback) go
+ * through `getBoundingClientRect` on purpose. The first cut mixed boxes - a
+ * border box on mount and `entry.contentRect` (a CONTENT box) afterwards - which
+ * agreed only because the observed element happens to have no padding or border;
+ * an unenforced precondition is not something a pixel-accounting module should
+ * rest on, and adding a 1px border to Main would have silently shifted every
+ * squeeze decision by 2px on the resize path only. The border box is also the
+ * closer match to what the callers need: the panels are absolutely positioned
+ * inside this element, so what they can occupy is its padding box.
  */
 export function useElementSize(el: HTMLElement | null): { width: number; height: number } {
   const [size, setSize] = useState(ZERO_SIZE);
@@ -279,13 +339,16 @@ export function useElementSize(el: HTMLElement | null): { width: number; height:
     }
     // ResizeObserver is absent in the node test tier; fall back to the one-shot
     // measurement so the hook degrades to "measured once" instead of throwing.
-    const rect = el.getBoundingClientRect();
-    apply(rect.width, rect.height);
+    const read = () => {
+      const rect = el.getBoundingClientRect();
+      apply(rect.width, rect.height);
+    };
+    read();
     if (typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver((entries) => {
-      const box = entries[0]?.contentRect;
-      if (box) apply(box.width, box.height);
-    });
+    // Re-read the rect rather than trusting `entry.contentRect`: same box on
+    // every path (see the doc comment). Layout is already settled when the
+    // callback runs, so this forces no extra reflow.
+    const ro = new ResizeObserver(read);
     ro.observe(el);
     return () => ro.disconnect();
   }, [el, apply]);
@@ -293,7 +356,7 @@ export function useElementSize(el: HTMLElement | null): { width: number; height:
 }
 
 /**
- * Observe an element's content-box width. Returns 0 until the first measurement,
+ * Observe an element's border-box width. Returns 0 until the first measurement,
  * which `computeSidePanelLayout` reads as "not measured yet".
  */
 export function useElementWidth(el: HTMLElement | null): number {

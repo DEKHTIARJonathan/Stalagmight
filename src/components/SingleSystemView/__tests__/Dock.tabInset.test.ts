@@ -43,9 +43,24 @@ describe('clampTabInset', () => {
   });
 
   it('passes the request through unchanged while the container is unmeasured', () => {
-    // 0 means "no layout yet" (first paint / zero-layout test env) - clamping to it
-    // would yank every tab to 0 for a frame.
-    expect(clampTabInset(40, 0, 28)).toBe(40);
-    expect(clampTabInset(79, 0, 0)).toBe(79);
+    // `null` means "no layout yet" (first paint / zero-layout test env) - clamping
+    // to it would yank every tab to 0 for a frame.
+    expect(clampTabInset(40, null, 28)).toBe(40);
+    expect(clampTabInset(79, null, 0)).toBe(79);
+  });
+
+  it('clamps a MEASURED zero instead of opting out of it', () => {
+    // The two readings used to be conflated on `container > 0`, so the clamp opted
+    // out in exactly the case it exists for: an open Data panel taller than Main
+    // raises a minimized side bar's bottom past its top, the bar's overlay computes
+    // to height 0 - a real measurement, not a missing one - and passing `top: 79`
+    // through put the tab 79px below a zero-height container.
+    expect(clampTabInset(40, 0, 28)).toBe(0);
+    expect(clampTabInset(79, 0, 0)).toBe(0);
+    expect(clampTabInset(79, 0, 30)).toBe(0);
+  });
+
+  it('treats a non-finite reading as unmeasured rather than clamping to NaN', () => {
+    expect(clampTabInset(40, Number.NaN, 28)).toBe(40);
   });
 });

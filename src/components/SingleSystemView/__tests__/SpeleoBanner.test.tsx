@@ -215,3 +215,58 @@ describe('SpeleoBanner push failure (#260)', () => {
     expect(useSpeleoStore.getState().banner).toEqual({ kind: 'no_anchor' });
   });
 });
+
+/**
+ * #270 - "Retry upload" is only honest while the edit gate is open.
+ *
+ * Both retry verbs (push / done) upload nothing when no lock is held: the backend
+ * answers `not_editing`. The banner offered Retry gated on `busy` ALONE, and a 401 is
+ * the very thing that gets a project into this state - `clearSession()` drops to
+ * read-only while keeping the unpushed edits, which is also what raised the banner.
+ * So the one control on screen was a button that could only ever no-op.
+ */
+describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
+  const seedReadOnlyFailure = () => {
+    seedLink({ forceEditing: false, editState: 'read-only' });
+    useSpeleoStore.setState({
+      banner: {
+        kind: 'push_failed',
+        message: 'Could not push changes: unauthorized',
+        origin: 'push',
+        pushMessage: 'm',
+      },
+    });
+  };
+
+  it('offers Start-editing instead of Retry while read-only', () => {
+    seedReadOnlyFailure();
+    render(<SpeleoBanner />);
+    expect(screen.queryByTestId('speleo-banner-retry-push')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleo-banner-start-editing-to-retry')).toBeInTheDocument();
+  });
+
+  it('that action acquires the lock rather than re-issuing the doomed push', async () => {
+    seedReadOnlyFailure();
+    invokeIpcMock.mockResolvedValue({ kind: 'editing' });
+    render(<SpeleoBanner />);
+
+    await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_push')).toBe(false);
+  });
+
+  it('still offers Retry once the gate is open again', () => {
+    seedLink({ forceEditing: false, editState: 'editing' });
+    useSpeleoStore.setState({
+      banner: { kind: 'push_failed', message: 'boom', origin: 'push', pushMessage: 'm' },
+    });
+    render(<SpeleoBanner />);
+    expect(screen.getByTestId('speleo-banner-retry-push')).toBeInTheDocument();
+    expect(
+      screen.queryByTestId('speleo-banner-start-editing-to-retry'),
+    ).not.toBeInTheDocument();
+  });
+});

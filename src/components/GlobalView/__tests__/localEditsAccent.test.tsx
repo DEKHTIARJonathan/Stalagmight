@@ -9,7 +9,7 @@
  * a failed call must simply leave the list unaccented, never break it.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, waitFor, renderHook } from '@testing-library/react';
+import { act, render, screen, waitFor, renderHook } from '@testing-library/react';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../../../utils/ipc', () => ({
@@ -52,12 +52,14 @@ const STATES: SpeleoLocalStateMap = {
     has_unpushed_edits: true,
     last_edit_at: '2026-07-26T00:00:00Z',
     is_open: false,
+    state_unknown: false,
   },
   [CLEAN]: {
     has_local_copy: true,
     has_unpushed_edits: false,
     last_edit_at: null,
     is_open: false,
+    state_unknown: false,
   },
 };
 
@@ -176,5 +178,55 @@ describe('useSpeleoLocalStates (#270)', () => {
     expect(result.current.states).toEqual({});
     // `failed` is what stops a caller reading the empty map as "everything is clean".
     expect(result.current.failed).toBe(true);
+  });
+
+  it('goes back to "checking" when the id set GROWS while mounted', async () => {
+    // Only the initial state used to carry loaded:false, so the flag guarded the
+    // FIRST fetch and nothing after it. An id added while mounted (a second lock
+    // scan landing while the held-lock prompt is up) left `loaded` true over the OLD
+    // map: the new id read as absent, i.e. clean, and HeldLockResumeDialog offered
+    // an irreversible "Release lock" for work it had never actually checked.
+    invokeIpcMock.mockReset();
+    // One resolver per in-flight call, so each fetch can be settled on demand.
+    const pending: Array<(states: SpeleoLocalStateMap) => void> = [];
+    invokeIpcMock.mockImplementation(
+      () => new Promise<SpeleoLocalStateMap>((resolve) => pending.push(resolve)),
+    );
+
+    const { result, rerender } = renderHook(({ ids }: { ids: string[] }) => useSpeleoLocalStates(ids), {
+      initialProps: { ids: [CLEAN] },
+    });
+    expect(result.current.loaded).toBe(false);
+    await act(async () => pending[0]?.({ [CLEAN]: STATES[CLEAN]! }));
+    expect(result.current.loaded).toBe(true);
+
+    // The set grows: until the answer covering DIRTY arrives, callers must be told
+    // we do not know yet.
+    rerender({ ids: [CLEAN, DIRTY] });
+    expect(result.current.loaded).toBe(false);
+
+    await act(async () => pending[1]?.(STATES));
+    expect(result.current.loaded).toBe(true);
+    expect(result.current.states).toEqual(STATES);
+  });
+
+  it('re-issues the call on reload(), even for an unchanged id set', async () => {
+    // The GlobalView refresh button re-scans the LOCKS; the un-pushed accent is
+    // LOCAL state, which the effect keys on the id SET - so over an unchanged
+    // recents list nothing re-issued it and the accent stayed at mount-time state.
+    invokeIpcMock.mockReset();
+    invokeIpcMock.mockResolvedValue({});
+    const { result } = renderHook(() => useSpeleoLocalStates([DIRTY]));
+    await waitFor(() => expect(result.current.loaded).toBe(true));
+    const callsOf = () =>
+      invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_local_project_states').length;
+    expect(callsOf()).toBe(1);
+
+    invokeIpcMock.mockResolvedValue(STATES);
+    await act(async () => {
+      result.current.reload();
+    });
+    await waitFor(() => expect(result.current.states).toEqual(STATES));
+    expect(callsOf()).toBe(2);
   });
 });

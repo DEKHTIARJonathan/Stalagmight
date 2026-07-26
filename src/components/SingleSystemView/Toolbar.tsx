@@ -149,6 +149,59 @@ export const READ_ONLY_TOOLBAR_ITEMS: ToolbarItem[] = (() => {
   return collapsed;
 })();
 
+/** What one condense stage turns off, and the classes that stage implies. */
+export interface ToolbarCondenseLayout {
+  displayCondensed: boolean;
+  importCondensed: boolean;
+  historyCondensed: boolean;
+  tight: boolean;
+  centerInFlow: boolean;
+  /** Both side clusters (file/history on the left, tools/display on the right). */
+  clusterCls: string;
+  /** The center slot: the mode carousel, or the fullscreen table title. */
+  centerCls: string;
+}
+
+/**
+ * The condense ladder as a pure function of the stage. Extracted so the policy is
+ * testable: jsdom cannot measure the rects the ladder reacts to (that sweep is an
+ * e2e), but it can pin that the stages are cumulative and that the final one
+ * leaves the browser a layout it can actually satisfy.
+ */
+export function toolbarCondenseLayout(condense: number): ToolbarCondenseLayout {
+  // Final stage: the carousel stops being absolutely positioned and becomes a
+  // normal, shrinkable flex item between the two clusters - flexbox then makes
+  // overlap structurally impossible - and degrades to icon-only so it asks for as
+  // little of the remaining width as possible.
+  const centerInFlow = condense >= 5;
+  return {
+    displayCondensed: condense >= 1,
+    importCondensed: condense >= 2,
+    historyCondensed: condense >= 3,
+    // Squeeze the padding around the icon buttons when even the all-icons toolbar
+    // still can't clear the carousel.
+    tight: condense >= 4,
+    centerInFlow,
+    // The clusters are PINNED at every stage, in flow and out of it. They are not
+    // merely "things we'd rather not squash": both own absolutely-positioned
+    // popovers anchored to their own buttons (DisplayMenu's panel, the tool and
+    // tool-group flyouts), so making either one shrinkable-and-scrollable - or
+    // clipping the header - would clip those menus to a ~40px-tall strip. The
+    // carousel's slot is therefore the only thing that gives, and the carousel
+    // itself is bounded to that slot (see ModeCarousel's max-w-full).
+    clusterCls: 'flex-shrink-0',
+    // Positioning, plus how far the in-flow slot may give. It SHRINKS (so the
+    // clusters reclaim width before they start running past the header's edge) but
+    // never below one mode button: the carousel caps its own box at the slot, so a
+    // slot allowed to reach 0 - which `min-w-0` permits, and which the carousel's
+    // own scroll container makes its automatic minimum anyway - renders a
+    // zero-width carousel. That is not "cramped", it is the mode switcher GONE,
+    // and it is the app's only way into Plan/Export. With a floor the worst case is
+    // one visible mode plus a scroll to the others.
+    centerCls: centerInFlow ? 'min-w-[3rem] shrink px-1' : 'absolute -translate-x-1/2',
+  };
+}
+
 export default function Toolbar({
   menuItems,
   saveFailed = false,
@@ -193,9 +246,22 @@ export default function Toolbar({
   // positioned on top of a cluster, and stages 1-4 can run out of labels to drop
   // before the gap is wide enough - which is how "Export" ended up rendering
   // underneath the select-tool button. As a normal flex item it is laid out BESIDE
-  // the clusters, so overlap stops being expressible in the layout at all; if the
-  // header is narrower still, the shrinkable slot clips the carousel instead of
-  // pushing the tool buttons off-screen.
+  // the clusters, so overlap stops being expressible in the layout at all.
+  //
+  // That only holds if the carousel actually FITS the slot it is given, which is
+  // why ModeCarousel caps its own box at `max-w-full` and scrolls inside it. A flex
+  // item's box is not clipped by its parent's width: with the slot shrunk to a few
+  // px the carousel's own box still measured its full intrinsic width and was laid
+  // out straight across the tool cluster - a PERSISTENT overlap (surviving a 1.5s
+  // settle) at 540 CSS px and below, i.e. reachable by the UI zoom alone. The slot
+  // keeps a one-button floor so that cap can never reduce the carousel to nothing.
+  //
+  // Below roughly 460 CSS px the two clusters' intrinsic widths alone exceed the
+  // header, and the surplus has to go somewhere: it stays inside the clusters (the
+  // rightmost controls run past the header's right edge) rather than being clipped,
+  // because both clusters own absolutely-positioned popovers that a clipping
+  // context would cut off. Reclaiming that width needs a stage that REMOVES tool
+  // controls (folding them into a menu), not one that resizes them.
   // The SpeleoStatusButton's presence widens the left cluster, so its visibility
   // gates re-measurement too.
   const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
@@ -308,33 +374,8 @@ export default function Toolbar({
     setCarouselLeft(Math.max(minCenter, Math.min(maxCenter, windowCenter)));
   });
 
-  const displayCondensed = condense >= 1;
-  const importCondensed = condense >= 2;
-  const historyCondensed = condense >= 3;
-  // Squeeze the padding around the icon buttons when even the all-icons toolbar
-  // still can't clear the carousel.
-  const tight = condense >= 4;
-  // Final stage: the carousel stops being absolutely positioned and becomes a
-  // normal, shrinkable flex item between the two clusters - flexbox then makes
-  // overlap structurally impossible - and degrades to icon-only so it asks for as
-  // little of the remaining width as possible.
-  const centerInFlow = condense >= 5;
-  // Out of flow, the clusters are the only flex items and shrinking them would
-  // squash the tool buttons; in flow they must not steal room from the carousel's
-  // slot either. Pinned in both cases so the carousel's slot is what gives.
-  const clusterCls = 'flex-shrink-0';
-  // Positioning only. The two center consumers want OPPOSITE overflow policies, so
-  // each adds its own below rather than sharing one that silently suits neither.
-  const centerCls = centerInFlow ? 'min-w-0 shrink px-2' : 'absolute -translate-x-1/2';
-  // The carousel SCROLLS, never clips. `overflow-hidden` here silently ATE the
-  // right-hand modes when the gap was narrower than even the compact carousel -
-  // Export first, then Plan - and `ModeCarousel` is the only `setAppMode` caller in
-  // the app (no menu item, no shortcut), so those workspaces became unreachable
-  // rather than merely cramped. That is worse than the overlap this ladder
-  // replaced, which at least stayed clickable. The slot still gives up width, but
-  // every mode stays reachable: by wheel/trackpad, and by Tab, since focusing a
-  // scrolled-out button brings it into view.
-  const carouselOverflowCls = centerInFlow ? 'overflow-x-auto' : '';
+  const { displayCondensed, importCondensed, historyCondensed, tight, centerInFlow, clusterCls, centerCls } =
+    toolbarCondenseLayout(condense);
   const centerStyle: CSSProperties | undefined = centerInFlow
     ? undefined
     : { left: carouselLeft ?? '50%' };
@@ -474,7 +515,7 @@ export default function Toolbar({
            it joins the flex flow instead, where overlap cannot happen at all. */
         <div
           ref={centerRef}
-          className={`${centerCls} ${carouselOverflowCls}`}
+          className={centerCls}
           style={centerStyle}
         >
           <ModeCarousel disabled={placementModeActive} compact={centerInFlow} />

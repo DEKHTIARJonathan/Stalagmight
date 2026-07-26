@@ -53,8 +53,12 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
     // map, so the honest outcome is the opener bar rather than an unreadable stub.
     const r = computeDataPanelLayout(opts({ viewportHeight: MIN + MAP_MIN_HEIGHT - 1 }));
     expect(r.collapsed).toBe(true);
-    // The user's own value is reported unchanged, so it returns when the viewport does.
-    expect(r.height).toBe(USER_HEIGHT);
+    // Un-squeezed (so the user's value returns when the viewport does), but still
+    // capped at the container it would be floated open inside - see the cap tests.
+    expect(r.height).toBe(MIN + MAP_MIN_HEIGHT - 1);
+    expect(computeDataPanelLayout(opts({ viewportHeight: 900, height: USER_HEIGHT })).height).toBe(
+      USER_HEIGHT,
+    );
   });
 
   it('collapses at the exact boundary and not one pixel above it', () => {
@@ -79,10 +83,47 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
   });
 
   it('does not squeeze a hover-floating panel, which takes no layout height', () => {
-    expect(computeDataPanelLayout(opts({ pinnedOpen: false }))).toEqual({
+    // It overlays the map rather than reflowing it, so the map floor does not apply:
+    // at a viewport that can afford the height, nothing changes.
+    expect(computeDataPanelLayout(opts({ pinnedOpen: false, viewportHeight: 900 }))).toEqual({
       height: USER_HEIGHT,
       collapsed: false,
     });
+    // ...and it is never reported as collapsed-by-the-viewport either.
+    expect(computeDataPanelLayout(opts({ pinnedOpen: false, viewportHeight: 120 })).collapsed).toBe(
+      false,
+    );
+  });
+
+  it('caps a FLOATING panel at the container even though it is not squeezed', () => {
+    // The #260 hole: `closedBottomInset` on BOTH side Docks is fed this height
+    // whenever the Data panel is open - and `isOpen` includes hover-floating open.
+    // A 500px persisted height against a 330px Main therefore raised each side
+    // bar's bottom to 500 in a 330px box, computing the bar's overlay to height 0
+    // and clipping the Data tab above Main's top: the exact failure MAP_MIN_HEIGHT
+    // was added to remove, reached through the branch that skips the squeeze.
+    const r = computeDataPanelLayout(opts({ pinnedOpen: false }));
+    expect(r.height).toBeLessThanOrEqual(MEASURED_MAIN_HEIGHT);
+    expect(r.height).toBe(MEASURED_MAIN_HEIGHT);
+  });
+
+  it('caps the height in EVERY branch, floating or collapsed, at every viewport', () => {
+    for (const pinnedOpen of [true, false]) {
+      for (const viewportHeight of [1, 50, 120, 299, 330, 400, 500, 900]) {
+        const r = computeDataPanelLayout(opts({ pinnedOpen, viewportHeight }));
+        expect(r.height, `pinned=${pinnedOpen} vh=${viewportHeight}`).toBeLessThanOrEqual(
+          viewportHeight,
+        );
+      }
+    }
+  });
+
+  it('still returns an integer height when the cap is what binds', () => {
+    // Same half-pixel-border argument as the squeeze path below: a fractional
+    // viewport must not become a fractional style value.
+    expect(computeDataPanelLayout(opts({ pinnedOpen: false, viewportHeight: 330.7 })).height).toBe(
+      330,
+    );
   });
 
   it('passes an unmeasured viewport through untouched', () => {

@@ -661,6 +661,61 @@ describe('ToastStack - accessibility', () => {
     expect(screen.getByRole('status')).toBeInTheDocument();
     expect(screen.getByRole('alert')).toBeInTheDocument();
   });
+
+  it('does not re-announce an older message when the newest one expires', () => {
+    // A live region announces whenever its text CHANGES. Publishing "the newest
+    // message" therefore re-read the PREVIOUS toast on every removal: drop the
+    // newest, the one before it becomes newest, the text changes, and the screen
+    // reader repeats something the user has already been told - every five seconds
+    // with info toasts on screen.
+    render(<ToastStack />);
+    push('first thing', 'a');
+    advance(3000);
+    push('second thing', 'b');
+    expect(screen.getByRole('status')).toHaveTextContent('second thing');
+
+    // 'first thing' expires first (it is older), which changes nothing.
+    advance(4000);
+    expect(toastFor('first thing')).toBeUndefined();
+    expect(toastFor('second thing')).toBeDefined();
+    expect(screen.getByRole('status')).toHaveTextContent('second thing');
+
+    // Now dismiss the NEWEST while an older sibling is still on screen - the case
+    // that used to revert the region's text to the older message.
+    push('third thing', 'c');
+    expect(screen.getByRole('status')).toHaveTextContent('third thing');
+    act(() => {
+      within(toastFor('third thing')!).getByRole('button').click();
+    });
+    advance(300);
+    expect(toastFor('third thing')).toBeUndefined();
+    expect(toastFor('second thing')).toBeDefined();
+    expect(screen.getByRole('status')).toHaveTextContent('third thing');
+  });
+
+  it('announces a NEW toast, and a refresh in place, but never a removal', () => {
+    render(<ToastStack />);
+    push('working', 'job');
+    expect(screen.getByRole('status')).toHaveTextContent('working');
+
+    // Same key inside the de-dup window refreshes the toast in place (same id, new
+    // revision). The message can have changed, so that IS a new announcement.
+    push('working harder', 'job');
+    expect(screen.getByRole('status')).toHaveTextContent('working harder');
+
+    // The urgent region is latched independently of the polite one.
+    push('it broke', 'e', 'error');
+    expect(screen.getByRole('alert')).toHaveTextContent('it broke');
+    expect(screen.getByRole('status')).toHaveTextContent('working harder');
+
+    // Emptying the stack clears both, so an identical message pushed later is
+    // still a text CHANGE and is therefore still announced.
+    advance(20000);
+    expect(toasts()).toHaveLength(0);
+    expect(screen.getByRole('status').textContent).toBe('');
+    push('working harder', 'job');
+    expect(screen.getByRole('status')).toHaveTextContent('working harder');
+  });
 });
 
 describe('ToastStack - prefers-reduced-motion', () => {

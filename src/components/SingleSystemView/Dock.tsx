@@ -18,12 +18,19 @@ export const BAR = 12;
  * off the left edge of a narrow map column and rendered on top of the Sections
  * panel, and a side tab drops below its bar when an open Data panel shortens it.
  *
- * `container === 0` means "not measured yet" (first paint, or a zero-layout test
- * environment) and passes the requested inset through unchanged, so a degenerate
- * measurement can't yank the tab to 0.
+ * `container === null` means "not measured yet" (first paint, or a zero-layout
+ * test environment) and passes the requested inset through unchanged, so a
+ * degenerate measurement can't yank the tab to 0.
+ *
+ * A MEASURED zero is not that case and is clamped like any other reading. The two
+ * used to be conflated on `container > 0`, which opted out in exactly the
+ * situation the clamp exists for: a side bar whose overlay computes to height 0
+ * (`closedBottomInset` >= the container height) is a real measurement, and
+ * passing `top: 79` through then put the tab 79px below a zero-height bar -
+ * outside the container, which is the escape being prevented.
  */
-export function clampTabInset(requested: number, container: number, tab: number): number {
-  if (!(container > 0)) return requested;
+export function clampTabInset(requested: number, container: number | null, tab: number): number {
+  if (container === null || !Number.isFinite(container)) return requested;
   return clamp(requested, 0, Math.max(0, container - tab));
 }
 
@@ -121,8 +128,15 @@ function DockComponent({
   // container and the tab so the inset can be clamped to what actually fits.
   const [outerEl, setOuterEl] = useState<HTMLDivElement | null>(null);
   const [tabEl, setTabEl] = useState<HTMLDivElement | null>(null);
-  const [outerBox, setOuterBox] = useState({ width: 0, height: 0 });
-  const [tabBox, setTabBox] = useState({ width: 0, height: 0 });
+  // Only ONE dimension of each box feeds the anchor: the bottom tab is inset from
+  // its container's RIGHT edge (so: width), the side tabs from the TOP edge (so:
+  // height). Track that single number rather than the whole box - see the
+  // observer below for why the other dimension must not be in the loop at all.
+  // `null` (not 0) is "not measured yet", so a measured zero clamps like any
+  // other reading (see clampTabInset).
+  const anchorAxis: 'width' | 'height' = edge === 'bottom' ? 'width' : 'height';
+  const [outerExtent, setOuterExtent] = useState<number | null>(null);
+  const [tabExtent, setTabExtent] = useState<number | null>(null);
   const setOuterNode = useCallback((node: HTMLDivElement | null) => {
     outerRef.current = node;
     setOuterEl(node);
@@ -177,25 +191,24 @@ function DockComponent({
   // border counts (its box is what must stay inside).
   useEffect(() => {
     if (typeof ResizeObserver === 'undefined') return undefined;
-    const read = (el: Element) => {
-      const r = el.getBoundingClientRect();
-      return { width: r.width, height: r.height };
-    };
-    // Bail on an unchanged box: a resize drag fires this ~60x/s and only one of
-    // the two dimensions feeds the anchor, so a fresh object every tick would add
-    // a re-render of an already-busy Dock for nothing.
-    const keep = (prev: { width: number; height: number }, next: { width: number; height: number }) =>
-      prev.width === next.width && prev.height === next.height ? prev : next;
+    // ONLY the anchor's own axis. This previously stored the whole box and kept the
+    // previous object when NEITHER dimension had moved - which a resize drag makes
+    // useless: it fires ~60x/s and the dragged dimension moves every tick, so the
+    // "unchanged" test was never true and the Dock re-rendered at observer rate for
+    // a number its anchor does not even read. One number per element also hands the
+    // bail-out to React itself: setting state to an identical primitive re-renders
+    // nothing, so no hand-written comparison is needed.
+    const read = (el: Element) => el.getBoundingClientRect()[anchorAxis];
     const sync = () => {
-      if (outerEl) setOuterBox((prev) => keep(prev, read(outerEl)));
-      if (tabEl) setTabBox((prev) => keep(prev, read(tabEl)));
+      if (outerEl) setOuterExtent(read(outerEl));
+      if (tabEl) setTabExtent(read(tabEl));
     };
     sync();
     const ro = new ResizeObserver(sync);
     if (outerEl) ro.observe(outerEl);
     if (tabEl) ro.observe(tabEl);
     return () => ro.disconnect();
-  }, [outerEl, tabEl]);
+  }, [outerEl, tabEl, anchorAxis]);
 
   useEffect(() => {
     onResizingChange?.(isResizing);
@@ -290,15 +303,13 @@ function DockComponent({
   // that escapes when the container shrinks - `right: tabInset` walks the bottom
   // tab off the left edge and over the Sections panel once the map column is
   // narrower than the inset, and `top: tabTop` pushes a side tab below its bar
-  // once an open Data panel has shortened it. A zero measurement means "not
-  // measured yet", so the requested inset is used unclamped until it is (see
-  // clampTabInset).
+  // once an open Data panel has shortened it. Until the first measurement the
+  // extent is null and the requested inset is used unclamped; a measured zero is
+  // clamped like any other reading (see clampTabInset).
   const tabAnchor: CSSProperties = (() => {
-    if (edge === 'bottom') {
-      return { bottom: '100%', right: clampTabInset(tabInset, outerBox.width, tabBox.width) };
-    }
-    const top = clampTabInset(tabTop, outerBox.height, tabBox.height);
-    return edge === 'left' ? { left: '100%', top } : { right: '100%', top };
+    const inset = clampTabInset(edge === 'bottom' ? tabInset : tabTop, outerExtent, tabExtent ?? 0);
+    if (edge === 'bottom') return { bottom: '100%', right: inset };
+    return edge === 'left' ? { left: '100%', top: inset } : { right: '100%', top: inset };
   })();
 
   // Resize handle on the inner edge (only while docked).

@@ -293,8 +293,12 @@ export default function SingleSystemView() {
   // is neither a panel nor a closed bar on the left to stop at - the bottom panel must reach the
   // window edge. `sectionsReveal.isOpen` still reports the PERSISTED survey-mode state, which is
   // exactly why Plan's cylinders bar used to sit indented by a panel that was not there (#298).
-  // Inside Survey it is the display width (post-squeeze), so the Data overlay stops at the panel
-  // edge the user actually sees rather than at its unsqueezed persisted width.
+  // Inside Survey it is the display width, i.e. the width each Dock is actually RENDERING at in
+  // its current state - squeezed while it reflows the map, and the user's own width (capped at
+  // Main, never the raw persisted value) while it floats over it - so the Data overlay stops at
+  // the panel edge the user can see rather than at a width nothing on screen has. Note a
+  // viewport-collapsed panel still reports that same width: it is what the panel renders at if
+  // the user floats it open, and while it is NOT open neither branch below reads it.
   const dataOverlayLeft =
     appMode !== 'survey'
       ? 0

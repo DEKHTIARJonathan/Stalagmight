@@ -209,6 +209,93 @@ describe('computeSidePanelLayout - panels that cost no layout width', () => {
   });
 });
 
+describe('computeSidePanelLayout - the reported width never exceeds the container', () => {
+  /**
+   * The two branches that skip the squeeze - a COLLAPSED panel (which reports the
+   * user's own width so it comes back intact) and a HOVER-mode one (never squeezed,
+   * because it overlays the map rather than reflowing it) - both still render at the
+   * reported width when the user floats them open, and it is also where the Data
+   * overlay's left/right insets stop. Reported unclamped, a persisted 284px panel in
+   * a 200px container puts that edge outside the box it is positioned in.
+   */
+  it('clamps a collapsed panel to the viewport', () => {
+    const r = computeSidePanelLayout(opts({ viewportWidth: 200 }));
+    expect(r.sections.collapsed).toBe(true);
+    expect(r.detail.collapsed).toBe(true);
+    expect(r.sections.width).toBeLessThanOrEqual(200);
+    expect(r.detail.width).toBeLessThanOrEqual(200);
+  });
+
+  it('clamps a hover-mode panel to the viewport', () => {
+    const r = computeSidePanelLayout(
+      opts({ viewportWidth: 200, sections: { pinnedOpen: false }, detail: { pinnedOpen: false } }),
+    );
+    expect(r.sections.width).toBeLessThanOrEqual(200);
+    expect(r.detail.width).toBeLessThanOrEqual(200);
+  });
+
+  it('holds for every panel state across a full sweep', () => {
+    for (const sPin of [true, false]) {
+      for (const dPin of [true, false]) {
+        for (let viewportWidth = 1; viewportWidth <= 700; viewportWidth += 1) {
+          const r = computeSidePanelLayout(
+            opts({ viewportWidth, sections: { pinnedOpen: sPin }, detail: { pinnedOpen: dPin } }),
+          );
+          const where = `w=${viewportWidth} s=${sPin} d=${dPin}`;
+          expect(r.sections.width, where).toBeLessThanOrEqual(viewportWidth);
+          expect(r.detail.width, where).toBeLessThanOrEqual(viewportWidth);
+        }
+      }
+    }
+  });
+});
+
+describe('computeSidePanelLayout - fractional viewports', () => {
+  /**
+   * Every other case here uses an integer viewport, but the UI zoom does not: a
+   * non-integer zoom step leaves Main a fractional CSS width, and only the sections
+   * share of the shortfall is rounded - so the detail side used to emit half-pixel
+   * widths, and the rounding could even hand a panel MORE width than the user set.
+   */
+  it('never emits a fractional width', () => {
+    for (let viewportWidth = 520; viewportWidth <= 760; viewportWidth += 0.1) {
+      const w = Math.round(viewportWidth * 10) / 10;
+      for (const dPin of [true, false]) {
+        const r = computeSidePanelLayout(opts({ viewportWidth: w, detail: { pinnedOpen: dPin } }));
+        expect(Number.isInteger(r.sections.width), `w=${w} d=${dPin}`).toBe(true);
+        expect(Number.isInteger(r.detail.width), `w=${w} d=${dPin}`).toBe(true);
+      }
+    }
+  });
+
+  it('never WIDENS a panel past the width the user set', () => {
+    // Rounding the sections share UP could push it past the whole shortfall when
+    // detail offers no slack (a hover-mode Details panel), and `detailWidth -= takeD`
+    // with a negative takeD then grew Details by up to half a pixel.
+    for (let viewportWidth = 400; viewportWidth <= 800; viewportWidth += 0.1) {
+      const w = Math.round(viewportWidth * 10) / 10;
+      const r = computeSidePanelLayout(opts({ viewportWidth: w, detail: { pinnedOpen: false } }));
+      expect(r.detail.width, `w=${w}`).toBeLessThanOrEqual(USER_DETAIL);
+      expect(r.sections.width, `w=${w}`).toBeLessThanOrEqual(USER_SECTIONS);
+    }
+  });
+
+  it('assigns the whole shortfall when rounding leaves a sliver over', () => {
+    // The rebalance branch: reachable ONLY on a fractional viewport (with integer
+    // inputs the leftover is an integer strictly below 0.5, i.e. zero). At 710.9 the
+    // detail side is already at its slack ceiling and 0.1px is left unassigned, which
+    // the map would otherwise be short of its floor.
+    const o = opts({ viewportWidth: 710.9 });
+    const r = computeSidePanelLayout(o);
+    expect(r.sections.collapsed).toBe(false);
+    expect(r.detail.collapsed).toBe(false);
+    expect(r.detail.width).toBe(PANEL_SIZE_BOUNDS.detail.min);
+    // Sections lands on 150.9 before the floor, i.e. its minimum after it.
+    expect(r.sections.width).toBe(PANEL_SIZE_BOUNDS.sections.min);
+    expect(mapWidth(o, r)).toBeGreaterThanOrEqual(MAP_MIN_WIDTH);
+  });
+});
+
 describe('computeSidePanelLayout - monotonicity', () => {
   /**
    * The invariant that actually matters to a user turning the zoom up: a SMALLER

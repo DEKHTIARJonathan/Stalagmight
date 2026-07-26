@@ -31,10 +31,10 @@ import { useTranslation } from 'react-i18next';
 
 import { useUIStore, type ToastItem, type ToastKind } from '../../store/uiStore';
 import {
-  ESTIMATED_TOAST_HEIGHT_PX,
   fitToastCapacity,
   toastStackHeight,
   toastStackOffsets,
+  usableToastHeight,
 } from '../../utils/toastCapacity';
 import { UI_SCALE_EVENT } from '../../utils/uiScale';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, CloseIcon, InfoIcon } from './icons';
@@ -194,6 +194,48 @@ function useViewportHeight(): number {
   }, []);
 
   return height;
+}
+
+/**
+ * The text one screen-reader live region should carry.
+ *
+ * LATCHED, not derived from the current stack. A live region announces whenever
+ * its text CHANGES, so publishing "the newest message" re-read the PREVIOUS toast
+ * every time the newest one expired: remove the newest, the one before it becomes
+ * newest, the region's text changes, and assistive tech reads a message the user
+ * was already told about - on every natural expiry, which for an info toast is
+ * every five seconds.
+ *
+ * So the text only moves FORWARD: it updates when a toast id/revision this hook
+ * has not announced yet becomes the newest, and holds otherwise. A refresh in
+ * place (same id, bumped revision) is a new event and does announce - the message
+ * can have changed. The latch is cleared once the stack empties, so an identical
+ * message pushed later is still a text CHANGE and therefore still announced.
+ */
+function useLiveRegionMessage(items: readonly ToastItem[]): string {
+  /** id -> the revision of that toast this region has already announced. */
+  const announced = useRef(new Map<number, number>());
+  const [message, setMessage] = useState('');
+  const newest = items[items.length - 1];
+  // No dependency list: the decision is about the newest item's (id, revision),
+  // which is cheap to re-check, and setting the same string re-renders nothing.
+  useEffect(() => {
+    const seen = announced.current;
+    if (!newest) {
+      seen.clear();
+      setMessage('');
+      return;
+    }
+    // Forget ids that have left, so the map cannot grow for the session's life.
+    // Ids are monotonic, so a pruned id can never come back and be re-announced.
+    for (const id of [...seen.keys()]) {
+      if (!items.some((item) => item.id === id)) seen.delete(id);
+    }
+    if (seen.get(newest.id) === newest.revision) return;
+    seen.set(newest.id, newest.revision);
+    setMessage(newest.message);
+  });
+  return message;
 }
 
 /** Per-toast clock bookkeeping, keyed by toast id. */
@@ -504,8 +546,13 @@ export function ToastStack() {
   // Geometry. Leaving toasts are excluded from the stack so the survivors close
   // the gap smoothly; each leaver keeps the offset it last held and drifts up
   // from there.
+  //
+  // `usableToastHeight`, not `?? ESTIMATED`: `measure` stores `rect.height ||
+  // offsetHeight || 0`, so a zero-layout environment stores a real 0 that `??`
+  // waves through - and a column of zeroes stacks at one gap per toast, i.e. all
+  // of them on top of each other. The geometry module applies the same rule.
   const live = toasts.filter((item) => !item.leaving);
-  const liveHeights = live.map((item) => sizes.current.get(item.id)?.height ?? ESTIMATED_TOAST_HEIGHT_PX);
+  const liveHeights = live.map((item) => usableToastHeight(sizes.current.get(item.id)?.height));
   const offsets = toastStackOffsets(liveHeights);
   live.forEach((item, index) => lastOffsets.current.set(item.id, offsets[index] ?? 0));
   const stackHeight = toastStackHeight(liveHeights);
@@ -523,6 +570,8 @@ export function ToastStack() {
 
   const urgent = toasts.filter((item) => isUrgent(item.kind));
   const polite = toasts.filter((item) => !isUrgent(item.kind));
+  const politeMessage = useLiveRegionMessage(polite);
+  const urgentMessage = useLiveRegionMessage(urgent);
 
   return createPortal(
     <div className="fixed inset-0 pointer-events-none z-[99999]">
@@ -531,14 +580,16 @@ export function ToastStack() {
         split off from presentation: two permanently-mounted screen-reader regions
         carry the text (polite for info/success, assertive for error/warning),
         while the visible stack below marks its message `aria-hidden` so nothing is
-        read twice. Each region shows only its newest message, so it never re-reads
-        older ones when the stack changes.
+        read twice. Each region carries the newest message it has not yet
+        announced and HOLDS it (see useLiveRegionMessage) - reading the newest
+        message straight off the stack re-announced the previous one on every
+        removal.
       */}
       <div className="sr-only" role="status" aria-live="polite">
-        {polite[polite.length - 1]?.message ?? ''}
+        {politeMessage}
       </div>
       <div className="sr-only" role="alert" aria-live="assertive">
-        {urgent[urgent.length - 1]?.message ?? ''}
+        {urgentMessage}
       </div>
 
       {hasToasts && (

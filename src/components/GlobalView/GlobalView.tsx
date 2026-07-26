@@ -208,18 +208,8 @@ export default function GlobalView() {
     void scanLocksOnOpen();
   }, [scanLocksOnOpen]);
 
-  // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
-  // for the recents badges. `prompt`-less, so it never re-raises the held-lock
-  // dialog (that is reserved for login / app-open).
-  const [refreshingLocks, setRefreshingLocks] = useState(false);
-  const handleRefreshLocks = useCallback(async () => {
-    setRefreshingLocks(true);
-    try {
-      await scanLocksOnOpen();
-    } finally {
-      setRefreshingLocks(false);
-    }
-  }, [scanLocksOnOpen]);
+  // (The manual re-scan button's handler lives further down, next to the
+  // local-state hook it also has to refresh - see handleRefreshLocks.)
 
   // Close on outside mousedown / external scroll / resize (shared hook, same as
   // Select/AppMenu). Escape is handled in the global-view keyboard handler.
@@ -628,7 +618,28 @@ export default function GlobalView() {
     ],
     [recentProjects, remoteSummaries]
   );
-  const { states: localStates } = useSpeleoLocalStates(localStateIds);
+  const { states: localStates, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
+
+  // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
+  // for the recents badges. `prompt`-less, so it never re-raises the held-lock
+  // dialog (that is reserved for login / app-open).
+  //
+  // The local (un-pushed) states are refreshed alongside the locks, or the button
+  // would only be half a refresh: the accent that marks work existing solely on
+  // this computer is LOCAL state, which the lock scan does not touch, and the hook
+  // keys its fetch on the id SET - so over an unchanged recents list nothing
+  // re-issued it and the accent stayed at whatever it was when GlobalView mounted.
+  const [refreshingLocks, setRefreshingLocks] = useState(false);
+  const handleRefreshLocks = useCallback(async () => {
+    setRefreshingLocks(true);
+    reloadLocalStates();
+    try {
+      await scanLocksOnOpen();
+    } finally {
+      setRefreshingLocks(false);
+    }
+  }, [scanLocksOnOpen, reloadLocalStates]);
+
   const isSearching = searchTerm.trim().length > 0;
   // Gate the tabs and content area on the combined count (loaded + missing) so
   // an all-missing recent list still renders its removable rows instead of the
