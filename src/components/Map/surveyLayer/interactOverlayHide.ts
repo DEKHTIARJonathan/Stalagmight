@@ -54,22 +54,46 @@ export function overlayTouchesRemovedSections(
   return false;
 }
 
+/** The four ids `refreshInteractOverlay` can paint. */
+export interface OverlayHighlightIds {
+  hoveredShotId: string | null;
+  selectedShotId: string | null;
+  hoveredStationId: string | null;
+  selectedStationId: string | null;
+}
+
 /**
- * Compact signature of how the currently-highlighted overlay ids are dimmed /
+ * Compact signature of how the currently-painted overlay ids are dimmed /
  * suppressed. Compare one taken BEFORE a dim-set change with one taken AFTER: an
  * unequal pair means the overlay the user is looking at right now really does
  * change, so its stale tile must be hidden across the re-tile. An equal pair -
  * the common case, e.g. a tool switch that sets empty dim sets while nothing is
  * hovered - means hiding would only introduce flicker. Pure.
+ *
+ * The two dim inputs are NOT symmetric, because the overlay does not treat them
+ * symmetrically:
+ * - anchored changes what every id paints (the HOVER branches gate on it, and
+ *   both overlay-feature builders key their 0.25 opacity off it), so it counts
+ *   for all four ids;
+ * - immovable only gates the HOVER branches. The selected branches are emitted
+ *   unconditionally and no builder applies an immovable opacity, so an immovable
+ *   flip on a SELECTED id changes nothing on screen and must not trigger a hide -
+ *   otherwise entering Move Station / Move Shot with an immovable feature already
+ *   selected blanks an unchanged selection highlight for the re-tile interval.
  */
 export function overlayDimSignature(
-  highlightedIds: readonly (string | null | undefined)[],
+  ids: OverlayHighlightIds,
   isAnchored: (id: string) => boolean,
   isImmovable: (id: string) => boolean,
 ): string {
-  return highlightedIds
-    .map((id) => (id ? `${isAnchored(id) ? 'a' : ''}${isImmovable(id) ? 'i' : ''}` : '-'))
-    .join(',');
+  const mark = (id: string | null, immovableMatters: boolean): string =>
+    id ? `${isAnchored(id) ? 'a' : ''}${immovableMatters && isImmovable(id) ? 'i' : ''}` : '-';
+  return [
+    mark(ids.hoveredShotId, true),
+    mark(ids.hoveredStationId, true),
+    mark(ids.selectedShotId, false),
+    mark(ids.selectedStationId, false),
+  ].join(',');
 }
 
 /** Narrow map surface the controller needs (visibility get/set + source-load

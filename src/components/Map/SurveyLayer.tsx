@@ -1399,7 +1399,12 @@ export default class SurveyLayer {
    *  decide whether a dim-set change actually alters what is on screen. */
   private dimSignature(): string {
     return overlayDimSignature(
-      [this.hoveredShotId, this.selectedShotId, this.hoveredStationId, this.selectedStationId],
+      {
+        hoveredShotId: this.hoveredShotId,
+        selectedShotId: this.selectedShotId,
+        hoveredStationId: this.hoveredStationId,
+        selectedStationId: this.selectedStationId,
+      },
       (id) => this.isSectionAnchored(sectionIdFromKey(id)),
       (id) => {
         const fid = this.parseFeatureId(id);

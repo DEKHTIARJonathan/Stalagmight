@@ -3,6 +3,7 @@ import type maplibregl from 'maplibre-gl';
 import {
   overlayTouchesRemovedSections,
   overlayDimSignature,
+  type OverlayHighlightIds,
   InteractOverlayHideController,
   INTERACT_HIDE_FALLBACK_MS,
   type InteractHideMap,
@@ -196,33 +197,59 @@ describe('InteractOverlayHideController', () => {
 describe('overlayDimSignature', () => {
   const none = (): boolean => false;
   const all = (): boolean => true;
+  const ids = (over: Partial<OverlayHighlightIds> = {}): OverlayHighlightIds => ({
+    hoveredShotId: null,
+    selectedShotId: null,
+    hoveredStationId: null,
+    selectedStationId: null,
+    ...over,
+  });
 
   it('is stable when nothing is highlighted, whatever the dim sets say', () => {
-    const ids = [null, null, null, null];
-    expect(overlayDimSignature(ids, none, none)).toBe(overlayDimSignature(ids, all, all));
+    expect(overlayDimSignature(ids(), none, none)).toBe(overlayDimSignature(ids(), all, all));
   });
 
   it('changes when a highlighted feature becomes anchored', () => {
-    const ids = ['1:100000', null, null, null];
-    const before = overlayDimSignature(ids, none, none);
-    const after = overlayDimSignature(ids, (id) => id === '1:100000', none);
-    expect(after).not.toBe(before);
+    const painted = ids({ hoveredShotId: '1:100000' });
+    const before = overlayDimSignature(painted, none, none);
+    expect(overlayDimSignature(painted, (id) => id === '1:100000', none)).not.toBe(before);
   });
 
-  it('changes when a highlighted feature becomes immovable', () => {
-    const ids = [null, null, '2:0', null];
-    expect(overlayDimSignature(ids, none, all)).not.toBe(overlayDimSignature(ids, none, none));
+  it('changes when a HOVERED feature becomes immovable', () => {
+    const painted = ids({ hoveredStationId: '2:0' });
+    expect(overlayDimSignature(painted, none, all)).not.toBe(
+      overlayDimSignature(painted, none, none),
+    );
   });
 
-  it('does not change when the dim set only covers features that are NOT highlighted', () => {
-    const ids = ['1:100000', null, null, null];
-    const before = overlayDimSignature(ids, none, none);
-    const after = overlayDimSignature(ids, (id) => id === '7:700000', none);
-    expect(after).toBe(before);
+  // refreshInteractOverlay emits the selected branches unconditionally and no
+  // overlay-feature builder applies an immovable opacity, so an immovable flip on
+  // a selected id paints identically. Reporting a change here would blank an
+  // unchanged selection highlight on entering Move Station / Move Shot.
+  it('does NOT change when a SELECTED feature becomes immovable', () => {
+    const painted = ids({ selectedShotId: '1:100000', selectedStationId: '1:0' });
+    expect(overlayDimSignature(painted, none, all)).toBe(
+      overlayDimSignature(painted, none, none),
+    );
+  });
+
+  it('still changes when a SELECTED feature becomes anchored (0.25 opacity keys off it)', () => {
+    const painted = ids({ selectedShotId: '1:100000' });
+    expect(overlayDimSignature(painted, all, none)).not.toBe(
+      overlayDimSignature(painted, none, none),
+    );
+  });
+
+  it('does not change when the dim set only covers features that are NOT painted', () => {
+    const painted = ids({ hoveredShotId: '1:100000' });
+    const before = overlayDimSignature(painted, none, none);
+    expect(overlayDimSignature(painted, (id) => id === '7:700000', none)).toBe(before);
   });
 
   it('distinguishes anchored from immovable rather than collapsing both to "dimmed"', () => {
-    const ids = ['1:100000', null, null, null];
-    expect(overlayDimSignature(ids, all, none)).not.toBe(overlayDimSignature(ids, none, all));
+    const painted = ids({ hoveredShotId: '1:100000' });
+    expect(overlayDimSignature(painted, all, none)).not.toBe(
+      overlayDimSignature(painted, none, all),
+    );
   });
 });
