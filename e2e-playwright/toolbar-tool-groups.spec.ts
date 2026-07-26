@@ -463,4 +463,108 @@ test.describe('Toolbar Tool Groups', () => {
     await waitForActiveTool(page, 'select');
     expect(await pollMass(page, probes, bg, (mass) => mass === brightMass)).toBe(brightMass);
   });
+
+  // The fade above is painted by the CUSTOM renderer, which dims from the real
+  // section id. This covers the other consumer of the anchored set: the interact
+  // overlay, which must withhold the hover highlight for an anchored shot.
+  //
+  // NOTE (#301): this does NOT pin the floor(fid / STRIDE) decode that #301 fixed.
+  // That bug needed a shot whose id is section-encoded, and the IPC mock does not
+  // reproduce the backend's convention: add_shot allocates max(existing) + 1
+  // (mocks/tauri-ipc.ts), so every section's shots are 1, 2, 3 ..., while the real
+  // backend seeds next_shot_id = section.id * FEATURE_ID_STRIDE
+  // (src-tauri/src/models/section.rs). With flat ids the old decode happened to be
+  // right, so this test passed before the fix too. The decode contract is pinned
+  // at unit level in surveyLayer/__tests__/dragGhostHighlight.test.ts; teaching
+  // the mock the real id convention is tracked separately.
+  test('anchored section suppresses the shot hover highlight in Move Segment', async ({ page }) => {
+    await createProjectWithSections(page);
+
+    await page.evaluate(async () => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore: {
+            getState: () => {
+              setZeroDatum: (stationRef: unknown, coordinates: unknown) => Promise<void>;
+            };
+          };
+        };
+      }).__E2E_TEST__;
+      if (!e2e) throw new Error('E2E stores not available');
+      await e2e.projectStore.getState().setZeroDatum(
+        { section_id: 1, station_index: 0 },
+        { latitude: 24.55, longitude: -81.78, depth_reference: 0 }
+      );
+    });
+
+    await waitForDrawnStations(page, 1);
+    await zoomInOnSurvey(page);
+    await waitForMapIdle(page);
+    await waitForDrawnStations(page, 3);
+
+    const shot = (await getShotScreenPositions(page)).find((s) => s.sectionId === 1);
+    if (!shot) throw new Error('no section-1 shot to hover');
+
+    // Read the interact-overlay source rather than pixels: it is the exact
+    // collection refreshInteractOverlay builds, so a leaked highlight is a
+    // present feature rather than a brightness delta. getStyle() is used instead
+    // of getSource() because the latter hands back a MapLibre class instance
+    // (see satellite-bug-regression.spec.ts).
+    const overlayShotCount = async (): Promise<number> =>
+      page.evaluate(() => {
+        const map = (window as unknown as {
+          __stalagmight_map__?: { getStyle: () => { sources: Record<string, unknown> } };
+        }).__stalagmight_map__;
+        const src = map?.getStyle().sources['survey-interact'] as
+          | { data?: { features?: { properties?: { kind?: string } | null }[] } }
+          | undefined;
+        const features = src?.data?.features ?? [];
+        return features.filter((f) => f.properties?.kind === 'shot').length;
+      });
+
+    // map.project() is canvas-relative; page.mouse wants viewport coords.
+    const canvasOrigin = await page.getByTestId('map-canvas').boundingBox();
+    if (!canvasOrigin) throw new Error('map canvas has no bounding box');
+    const hoverPoint = { x: canvasOrigin.x + shot.mid.x, y: canvasOrigin.y + shot.mid.y };
+
+    const hoverShot = async (): Promise<void> => {
+      await page.mouse.move(hoverPoint.x, hoverPoint.y, { steps: 4 });
+      await page.waitForFunction(
+        (expected) => {
+          const ui = (window as unknown as {
+            __E2E_TEST__?: { uiStore: { getState: () => { hoveredShot: { shotId: number } | null } } };
+          }).__E2E_TEST__;
+          return ui?.uiStore.getState().hoveredShot?.shotId === expected;
+        },
+        shot.shotId,
+        { timeout: 5000 }
+      );
+    };
+
+    // Positive control first: with no anchored set (Select tool), hovering that
+    // exact pixel really does produce one shot highlight. Without this the
+    // assertion below could pass simply because the hover never landed.
+    await hoverShot();
+    await expect.poll(overlayShotCount, { timeout: 5000 }).toBe(1);
+
+    // Now Move Segment, with the whole section anchored by the zero datum.
+    await page.mouse.move(0, 0);
+    await page.keyboard.press('v');
+    await waitForActiveTool(page, 'move_segment');
+
+    // The anchored-id fetch resolves after the tool activates, and
+    // setAnchoredSections does not itself rebuild the interact overlay, so
+    // re-hover on every attempt: a fresh hover is what recomputes the overlay
+    // under the new anchored set.
+    await expect
+      .poll(
+        async () => {
+          await page.mouse.move(0, 0);
+          await hoverShot();
+          return overlayShotCount();
+        },
+        { timeout: 10000 }
+      )
+      .toBe(0);
+  });
 });
