@@ -164,14 +164,29 @@ impl AppState {
     ///
     /// Reads through the SAME `local_state_at` the listing uses - one reader, one
     /// set of degradation rules - and applies the same live-link rule: the OPEN
-    /// project's in-memory link is consulted for this project id because the file
-    /// on disk can be staler than the session.
+    /// project's in-memory link is consulted because the file on disk can be staler
+    /// than the session.
     ///
-    /// The two are ORed rather than one winning: a live dirty bit and a dirty copy
-    /// at `dest` are BOTH un-pushed work on this machine (they coincide for the
-    /// normal case, where the open project IS the cache file), and the guard must
-    /// never under-report. `is_open`/`last_edit_at` follow the live link when there
-    /// is one, falling back to the file's.
+    /// That consultation is gated on the live link being FIRST-HAND knowledge of
+    /// `dest`: the right project id AND the very same file. The id alone is not
+    /// enough, because the same project can be open from outside the cache - Save-As
+    /// carries the `speleo_link` row forward - so id-only matching let one copy of
+    /// project P speak for a different copy of P, and it was wrong in both
+    /// directions at once:
+    ///
+    /// - a CLEAN live link waived the guard over an unreadable cache copy that a
+    ///   read-write open might have recovered, and the replace went ahead;
+    /// - a DIRTY live link blocked a perfectly clean cache copy, and did it while
+    ///   naming `dest` and the other file's edit time - so the refusal described
+    ///   work living in a file it did not name, and its "take the server copy and
+    ///   discard my local changes" route would have destroyed the clean copy while
+    ///   leaving the dirty edits untouched.
+    ///
+    /// When the live link does speak for this file the two are ORed rather than one
+    /// winning (both are un-pushed work on the same file, and the guard must never
+    /// under-report); `is_open`/`last_edit_at` then follow it, falling back to the
+    /// file's. When it does not, `dest`'s own state is the whole answer.
+    ///
     /// Returns `None` when the file at `dest` exists but could not be read AND the
     /// open project cannot vouch for it - the guard must refuse there rather than
     /// read the silence as "clean" (see [`LocalRead`]).
@@ -181,28 +196,22 @@ impl AppState {
         dest: &Path,
     ) -> Option<SpeleoLocalProjectState> {
         let read = read_local_state_at(dest);
+        // Both halves - this project AND this very file - or the live link does not
+        // speak here at all.
         let live = self
             .speleodb_open_link()
             .ok()
-            .filter(|l| l.project_id == project_id);
+            .filter(|l| l.project_id == project_id)
+            .filter(|_| {
+                self.open_project_path()
+                    .is_some_and(|open| super::project_io::same_file(&open, dest))
+            });
         let on_disk = match read {
             LocalRead::Known(state) => state,
             LocalRead::Unreadable => {
-                // The LIVE link stands in for a file we cannot read - but ONLY when
-                // it is first-hand knowledge of THIS file. Matching on the project id
-                // alone was not enough: the same project can be open from outside the
-                // cache (Save-As carries the `speleo_link` row forward), so a clean
-                // live link for project P waived the guard over an unreadable CACHE
-                // copy of P that a read-write open might have recovered. Two
-                // different files, one of them unread, and the replace went ahead.
-                //
-                // Both halves have to hold - the id (this project) and the path (this
-                // very file) - or the answer is genuinely unknown and the guard fails
-                // closed.
-                let live = live.filter(|_| {
-                    self.open_project_path()
-                        .is_some_and(|open| super::project_io::same_file(&open, dest))
-                })?;
+                // Nothing readable and nothing entitled to stand in for it: genuinely
+                // unknown, so the guard fails closed.
+                let live = live?;
                 return Some(SpeleoLocalProjectState {
                     has_local_copy: true,
                     has_unpushed_edits: live.has_unpushed_edits,
@@ -624,6 +633,80 @@ mod tests {
                 .local_copy_state(ID_A, &open_path)
                 .is_some_and(|s| !s.has_unpushed_edits),
             "the live link still answers for its own file"
+        );
+    }
+
+    #[test]
+    fn a_dirty_copy_open_elsewhere_does_not_speak_for_a_clean_cache_copy() {
+        // The same Save-As shape as the test above, pointed the OTHER way. The
+        // readable branch ORed the live dirty bit in on a project-id match with no
+        // path check, so a dirty copy of P open from the user's own folder refused
+        // every pull / fast-forward / revision-restore against the CLEAN cache copy
+        // of P - and refused it while naming the cache path and the OTHER file's edit
+        // time. The prompt therefore described work that lives in a file it did not
+        // name, and its "take the server copy and discard my local changes" route
+        // would have destroyed the clean cache copy without touching the edits the
+        // warning was actually about.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        // The CACHE copy of A: present, readable, CLEAN.
+        let cached = seed_cache(&root, ID_A, false);
+
+        // A DIRTY copy of the same project, open from elsewhere (the Save-As shape).
+        let open_path = temp.path().join("my-copy.stalx");
+        let mut db = Database::open(&open_path).expect("open db");
+        db.save_project(&Project::new("Mine".to_owned(), None))
+            .expect("save project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://x/".to_owned(),
+            project_id: ID_A.to_owned(),
+            project_name: "Mine".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: true,
+            last_edit_at: Some("2026-07-26T12:00:00Z".to_owned()),
+            last_verify_at: None,
+        }))
+        .expect("save link");
+        drop(db);
+
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(open_path.clone()).success,
+            "open the dirty copy from outside the cache"
+        );
+
+        let cache_row = state
+            .local_copy_state(ID_A, &cached)
+            .expect("the cache copy is readable, so its state is known");
+        assert!(
+            !cache_row.has_unpushed_edits,
+            "a DIFFERENT file's dirty bit must not be attributed to the cache copy: {cache_row:?}"
+        );
+        assert!(
+            cache_row.last_edit_at.is_none(),
+            "and neither must its edit time: {cache_row:?}"
+        );
+        assert!(
+            !cache_row.is_open,
+            "the cache copy is not the open project: {cache_row:?}"
+        );
+        assert!(
+            state.guard_local_edits(ID_A, &cached).is_ok(),
+            "so the guard lets a re-pull of the clean cache copy through"
+        );
+
+        // The open file itself still reports its own un-pushed work, and is still
+        // protected - the fix narrows WHO the live link speaks for, not whether it
+        // speaks at all.
+        assert!(
+            state
+                .local_copy_state(ID_A, &open_path)
+                .is_some_and(|s| s.has_unpushed_edits && s.is_open),
+            "the live link still answers for its own file"
+        );
+        assert!(
+            state.guard_local_edits(ID_A, &open_path).is_err(),
+            "and that file's own un-pushed edits are still guarded"
         );
     }
 }

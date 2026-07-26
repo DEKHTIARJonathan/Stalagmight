@@ -293,29 +293,44 @@ fn read_status_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), 
     Ok((status, body))
 }
 
+/// [`read_status_body`] on an explicit body ceiling.
+///
+/// The limit is a parameter purely so the over-limit path can be exercised for
+/// real in a test - see `an_over_limit_read_is_reported_as_a_size_refusal`, which
+/// is what pins [`is_body_limit`]'s Display match to ureq's actual wording. In
+/// production there is exactly one caller and one limit.
+fn read_body_limited(
+    resp: http::Response<ureq::Body>,
+    limit: u64,
+) -> Result<(u16, Vec<u8>), ureq::Error> {
+    let status = resp.status().as_u16();
+    let body = resp.into_body().with_config().limit(limit).read_to_vec()?;
+    Ok((status, body))
+}
+
 /// [`read_status_body`] for a dump download, on the [`DUMP_MAX_BYTES`] ceiling
 /// instead of the 10 MiB one `read_to_vec()` applies by default.
 fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ureq::Error> {
-    let status = resp.status().as_u16();
-    let body = resp
-        .into_body()
-        .with_config()
-        .limit(DUMP_MAX_BYTES)
-        .read_to_vec()?;
-    Ok((status, body))
+    read_body_limited(resp, DUMP_MAX_BYTES)
 }
 
 /// Whether a transport failure is the body-size ceiling being hit.
 ///
-/// ureq reports it as `BodyExceedsLimit` wrapped by `into_io()`, so it arrives as
-/// `Error::Io` and is indistinguishable by kind from a real network fault. It is
-/// neither transient (retrying re-downloads the same oversized body) nor a
-/// reachability problem, so it must not be classified as one - matching on the
-/// Display text is the only handle ureq gives us, and it is ureq's own constant
-/// string rather than a platform `strerror`, so it is stable to match.
+/// It is neither transient (retrying re-downloads the same oversized body) nor a
+/// reachability problem, so it must not be classified as one.
+///
+/// Matched STRUCTURALLY on ureq's own variant. This used to test
+/// `Error::Io(e) if e.to_string().contains("larger than request limit")`, on the
+/// premise that the limit reader's `Error::BodyExceedsLimit(_).into_io()` meant
+/// the failure surfaced as an `Io`. It does not: `From<io::Error> for ureq::Error`
+/// detects its own boxed error and unwraps it, so what arrives here is
+/// `BodyExceedsLimit` again - and the arm never matched. Every oversized response
+/// therefore fell through to the retry-then-"could not reach SpeleoDB" path this
+/// exists to prevent, after three full re-downloads of the payload. Nothing caught
+/// it because nothing provoked a real over-limit read; the test below now does
+/// (`an_over_limit_read_is_reported_as_a_size_refusal_not_a_retried_transport_failure`).
 fn is_body_limit(err: &ureq::Error) -> bool {
-    matches!(err, ureq::Error::Io(e)
-        if e.to_string().contains("larger than request limit"))
+    matches!(err, ureq::Error::BodyExceedsLimit(_))
 }
 
 /// Which body ceiling actually applied to `endpoint`.
@@ -1835,6 +1850,13 @@ mod tests {
 
     impl LoopbackStub {
         fn start(statuses: Vec<u16>) -> Self {
+            Self::start_with_body_len(statuses, 2)
+        }
+
+        /// [`Self::start`] with a body of `body_len` bytes instead of the default
+        /// `{}` - for the over-limit read, which needs a response bigger than the
+        /// ceiling it is read under.
+        fn start_with_body_len(statuses: Vec<u16>, body_len: usize) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
             let port = listener.local_addr().expect("addr").port();
             let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1863,13 +1885,17 @@ mod tests {
                         }
                     }
                     cap.lock().expect("capture lock").push(captured_bytes);
-                    let body = b"{}";
+                    let body = if body_len == 2 {
+                        b"{}".to_vec()
+                    } else {
+                        vec![b'x'; body_len]
+                    };
                     let resp = format!(
                         "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
                     let _ = stream.write_all(resp.as_bytes());
-                    let _ = stream.write_all(body);
+                    let _ = stream.write_all(&body);
                     let _ = stream.flush();
                 }
             });
@@ -1889,6 +1915,57 @@ mod tests {
                 let _ = h.join();
             }
         }
+    }
+
+    #[test]
+    fn an_over_limit_read_is_reported_as_a_size_refusal_not_a_retried_transport_failure() {
+        // #270's oversized-dump fix rests on `is_body_limit` recognising ureq's
+        // BodyExceedsLimit, which ureq only exposes as Display text on an
+        // `Error::Io` - so a ureq bump that rephrases it would silently un-fix the
+        // bug. Nothing else in the suite provokes the condition, so this does: a
+        // REAL over-limit read of a REAL socket response, asserted on the two
+        // behaviours that flip together if the match stops working.
+        //
+        // The limit is passed in rather than using DUMP_MAX_BYTES so the test costs
+        // 4 KiB instead of 640 MiB; it is the same `read_body_limited` the dump
+        // download uses, and the same ureq error.
+        let stub = LoopbackStub::start_with_body_len(vec![200, 200, 200], 4096);
+        let url = format!("{}/api/v2/projects/x/dump/", stub.base);
+        let base = stub.base.clone();
+        let err = with_retry(&base, false, true, Endpoint::DownloadDump, || {
+            let resp = super::agent().get(&url).call()?;
+            super::read_body_limited(resp, 1024)
+        })
+        .expect_err("a body over the ceiling cannot be read");
+
+        // 1. It is a size refusal, naming the ceiling - NOT a transport failure.
+        //    Misclassified, this read "Could not reach SpeleoDB at the configured
+        //    endpoint", pointing the user at their network for a payload-size
+        //    problem the server answered perfectly.
+        match &err {
+            SpeleoDbError::Parse(message) => assert!(
+                message.contains("larger than the 640 MiB"),
+                "the refusal names the ceiling that applied: {message}"
+            ),
+            other => panic!("expected a Parse size refusal, got: {other:?}"),
+        }
+
+        // 2. It did NOT retry. An oversized body is not transient, so retrying only
+        //    re-downloads the whole payload to fail again - three times over, on the
+        //    one response big enough for that to hurt. One served connection is the
+        //    observable proof the non-transient branch was taken, and the stub is
+        //    armed for three so a regression can actually show them.
+        //
+        //    Read WITHOUT joining: the stub is still parked in `accept()` for the two
+        //    connections that must never come, so joining would hang the suite. Every
+        //    attempt `with_retry` makes is captured before it returns, so the count is
+        //    settled by the time we read it.
+        assert_eq!(
+            stub.captured().len(),
+            1,
+            "an over-limit body must be refused on the first read, not re-downloaded"
+        );
+        drop(stub);
     }
 
     #[test]
