@@ -54,7 +54,12 @@ describe('useOpenRemoteProject (#218)', () => {
     });
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome).toEqual({ status: 'opened' });
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith({ permission: 'READ_AND_WRITE' });
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
+      permission: 'READ_AND_WRITE',
+      // The path the seed belongs to, so the `syncProjectLink` inside the load
+      // that follows keeps THIS project's link instead of the previous one's.
+      forPath: '/cache/p1.stalx',
+    });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
@@ -158,7 +163,12 @@ describe('useOpenRemoteProject (#218)', () => {
     );
     expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', latestCommitSha: 'abc123' });
     // The shared post-open tail ran, exactly as it does for a plain open.
-    expect(setLinkOnOpenMock).toHaveBeenCalledWith({ permission: 'READ_AND_WRITE' });
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
+      permission: 'READ_AND_WRITE',
+      // The path the seed belongs to, so the `syncProjectLink` inside the load
+      // that follows keeps THIS project's link instead of the previous one's.
+      forPath: '/cache/p1.stalx',
+    });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
