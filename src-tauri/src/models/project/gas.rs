@@ -320,6 +320,15 @@ impl Project {
             .iter()
             .filter_map(|&j| route_refs.get(j).copied())
             .collect();
+        // `place_stage_drops` only ever returns in-range indices, so the filter_map above cannot
+        // drop one. Assert it loudly rather than let a future change silently shorten
+        // `stage_drop_refs` and misalign it from the per-stage gauges and distances, which are
+        // built from `drop_indices` unfiltered.
+        debug_assert_eq!(
+            stage_drop_refs.len(),
+            drop_indices.len(),
+            "a stage drop fell off the route - refs would misalign with the gauges"
+        );
         let route = self.route_legs(&route_refs);
 
         // Physical route metrics from the route's measured coordinates: the one-way swum line length
