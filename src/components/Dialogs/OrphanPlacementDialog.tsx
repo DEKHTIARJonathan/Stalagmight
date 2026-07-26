@@ -87,7 +87,7 @@ function sectionToDmpSection(section: Section): DmpSection {
 }
 
 export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDialogProps) {
-  const { mergeStations, updateShot, setShotReference, refreshProjectState, project } = useProjectStore();
+  const { mergeStations, updateShot, setShotKind, refreshProjectState, project } = useProjectStore();
   const { closeDialog, setView, triggerFitToBounds } = useUIStore();
 
   const [processing, setProcessing] = useState(false);
@@ -356,8 +356,9 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
       const orphanShot = oSection.shots[overlapId];
       if (!orphanShot) continue;
 
-      // Mark orphan overlap shot as reference (all modes)
-      await setShotReference(suggestion.orphanSectionId, orphanShot.id, true);
+      // Mark the orphan overlap shot as a Reference in every mode: it is a
+      // duplicate of the target's geometry, not a leg anyone swims (#27).
+      await setShotKind(suggestion.orphanSectionId, orphanShot.id, 'Reference');
 
       // For interpolate and import_data, also update the target shot
       if (mode === 'interpolate' || mode === 'import_data') {
@@ -371,7 +372,7 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
 
         if (mode === 'interpolate') {
           const interp = interpolateShots(
-            { ...targetShot, comment: targetShot.comment ?? null, is_reference: targetShot.is_reference },
+            { ...targetShot, comment: targetShot.comment ?? null, kind: targetShot.kind },
             orphanAsTarget,
           );
           await updateShot(suggestion.targetSectionId, targetShot.id, {
@@ -405,7 +406,7 @@ export default function OrphanPlacementDialog({ suggestions }: OrphanPlacementDi
         }
       }
     }
-  }, [setShotReference, updateShot]);
+  }, [setShotKind, updateShot]);
 
   const handleAccept = useCallback(async () => {
     if (!currentSuggestion) return;

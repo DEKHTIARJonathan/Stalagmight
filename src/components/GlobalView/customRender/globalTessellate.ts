@@ -58,7 +58,7 @@ export function extractSystemStations(shots: GeometryShot[]): [number, number, b
       if (!stationCoords.has(toKey)) stationCoords.set(toKey, [toX, toY]);
     }
 
-    if (!shot.is_reference) {
+    if (shot.kind === 'Normal') {
       if (fromKey) stationsWithNonReferenceShot.add(fromKey);
       if (toKey) stationsWithNonReferenceShot.add(toKey);
     }
@@ -244,7 +244,7 @@ export function buildGlobalBuffers(
       const relAy = ay - anchorY;
       const relBx = bx - anchorX;
       const relBy = by - anchorY;
-      const isRef = shot.is_reference ? 1 : 0;
+      const isRef = shot.kind !== 'Normal' ? 1 : 0;
       const base = seg * 4;
       for (let c = 0; c < 4; c++) {
         const v = base + c;

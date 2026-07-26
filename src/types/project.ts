@@ -7,6 +7,7 @@ export type {
   SurveyDirection,
   Shot,
   ShotData,
+  ShotKind,
   ShotUpdates,
   Section,
   SectionData,

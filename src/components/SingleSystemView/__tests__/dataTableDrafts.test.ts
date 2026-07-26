@@ -28,7 +28,7 @@ const shot = (id: number, over: Partial<Shot> = {}): Shot => ({
   up: null,
   down: null,
   comment: null,
-  is_reference: false,
+  kind: 'Normal' as const,
   marker_index: null,
   temperature: null,
   ...over,
@@ -157,7 +157,7 @@ describe('materializeDraft', () => {
     expect(row.length).toBe(5);
     expect(Number.isNaN(row.depth_in)).toBe(true);
     expect(row.pitch_in).toBeNull();
-    expect(row.is_reference).toBe(false);
+    expect(row.kind).toBe('Normal');
   });
 });
 
@@ -223,7 +223,7 @@ describe('completeDraftData', () => {
 
   it('carries optional fields and defaults through', () => {
     const data = completeDraftData(draft(-2, 'end', { ...required, left: 2, comment: 'x' }));
-    expect(data).toMatchObject({ ...required, left: 2, comment: 'x', pitch_in: null, is_reference: false });
+    expect(data).toMatchObject({ ...required, left: 2, comment: 'x', pitch_in: null, kind: 'Normal' as const });
   });
 });
 

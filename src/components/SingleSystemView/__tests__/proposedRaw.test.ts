@@ -52,7 +52,7 @@ function makeShot(overrides: Partial<Shot> = {}): Shot {
     up: -3,
     down: null,
     comment: null,
-    is_reference: false,
+    kind: 'Normal' as const,
     marker_index: null,
     temperature: null,
     ...overrides,

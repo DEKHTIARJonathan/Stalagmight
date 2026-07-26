@@ -25,7 +25,7 @@ import {
 import type { Rgba8 } from '../colorPack';
 import {
   emptySurveyData,
-  SHOT_FLAG_IS_REFERENCE,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -443,7 +443,7 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
   /** makeFixture with shot global 0 (section 1, shot idx0) flagged reference. */
   function refFixture(): SurveyData {
     const d = makeFixture();
-    d.shotFlags = new Uint8Array([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    d.shotFlags = new Uint8Array([shotKindToFlags('Reference'), 0, 0]);
     return d;
   }
 
@@ -960,7 +960,7 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
       for (let i = 0; i < nShots; i++) {
         shotIds.push(i);
         shotSectionIds.push(id);
-        shotFlags.push(rng() < 0.25 ? SHOT_FLAG_IS_REFERENCE : 0);
+        shotFlags.push(rng() < 0.25 ? shotKindToFlags('Reference') : 0);
       }
       sections.push({
         id, name: `S${id}`, surveyor: null, date: null, color: '#abcdef',
@@ -1077,7 +1077,7 @@ describe('planColorOnlyUpdate gate', () => {
   it('falls back when a shot reference flag changed (feeds reference/all-reference)', () => {
     const prev = makeFixture();
     const next = makeFixture();
-    next.shotFlags = Uint8Array.from([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    next.shotFlags = Uint8Array.from([shotKindToFlags('Reference'), 0, 0]);
     const [ax, ay] = computeMercatorAnchor(prev, null);
     expect(planColorOnlyUpdate(prev, next, baseCtx(), baseCtx({ showIssueSeverity: true }), null, null, ax, ay)).toBe(false);
   });

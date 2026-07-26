@@ -12,6 +12,7 @@ import { setSource, trackContextMenuAction, trackDialogComplete } from '../../ut
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
 import { ArrowUpRightIcon } from './icons';
+import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
 import {
   EntityDeleteSymbol,
   EntityEditSymbol,
@@ -48,7 +49,7 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
@@ -305,15 +306,20 @@ export default function ContextMenu() {
           },
           disabled: !sourceShot || !canSplitShot(sourceShot.length),
         },
-        {
-          label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
+        // A context menu has room to offer all three kinds outright, which is
+        // clearer than the table cell's cycle (#27). Only the kinds the shot is
+        // not already are listed.
+        ...SHOT_KIND_CYCLE.filter((kind) => kind !== (shot?.kind ?? 'Normal')).map((kind) => ({
+          // Hardcoded English to match every other label in this file; the
+          // menu has no i18n wiring (tracked separately).
+          label: `Mark as ${SHOT_KIND_MENU_LABEL[kind]}`,
           action: async () => {
-            trackContextMenuAction('toggle-reference', 'context-menu');
-            await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
+            trackContextMenuAction('set-shot-kind', 'context-menu');
+            await setShotKind(target.sectionId, target.shotId, kind);
             trackDialogComplete('context-menu');
             closeDialog();
           },
-        },
+        })),
       ];
 
       // "Add Shot Before" - only for first shot (prepend mode)

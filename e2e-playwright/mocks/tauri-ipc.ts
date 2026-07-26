@@ -500,7 +500,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           up: null,
           down: null,
           comment: null,
-          is_reference: false,
+          kind: 'Normal',
           marker_index: null,
           temperature: null,
         };
@@ -618,8 +618,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: mockShotId(sectionCounter, 0), azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_reference: false },
-                  { id: mockShotId(sectionCounter, 1), azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_reference: false },
+                  { id: mockShotId(sectionCounter, 0), azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, kind: 'Normal' },
+                  { id: mockShotId(sectionCounter, 1), azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, kind: 'Normal' },
                 ],
               },
             ];
@@ -866,7 +866,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     up?: number | null; down?: number | null;
                     temperature?: number | null;
                     comment?: string | null;
-                    is_reference?: boolean;
+                    kind?: string;
                     marker_index?: number | null;
                   }>;
                 }>;
@@ -931,7 +931,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     : shot.marker_index >>> 0,
                   true,
                 );
-                shotsFlags[shotCursor] = shot.is_reference ? 1 : 0;
+                // Binary wire v3: bits 0-1 carry the ShotKind discriminant (#27).
+                shotsFlags[shotCursor] =
+                  shot.kind === 'Jump' ? 1 : shot.kind === 'Reference' ? 2 : 0;
                 if (shot.comment) shotComments.push([shotCursor, shot.comment]);
                 shotCursor++;
               }
@@ -1628,7 +1630,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               up: (shot.up as number | null | undefined) ?? null,
               down: (shot.down as number | null | undefined) ?? null,
               comment: (shot.comment as string | null | undefined) ?? null,
-              is_reference: (shot.is_reference as boolean | undefined) ?? false,
+              kind: (shot.kind as string | undefined) ?? 'Normal',
               marker_index: (shot.marker_index as number | null | undefined) ?? null,
               temperature: (shot.temperature as number | null | undefined) ?? null,
             }));
@@ -1681,7 +1683,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 up: (shot.up as number | null | undefined) ?? null,
                 down: (shot.down as number | null | undefined) ?? null,
                 comment: (shot.comment as string | null | undefined) ?? null,
-                is_reference: (shot.is_reference as boolean | undefined) ?? false,
+                kind: (shot.kind as string | undefined) ?? 'Normal',
                 marker_index: (shot.marker_index as number | null | undefined) ?? null,
                 temperature: (shot.temperature as number | null | undefined) ?? null,
               }));
@@ -3601,7 +3603,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               up: (shotData.up as number | null | undefined) ?? null,
               down: (shotData.down as number | null | undefined) ?? null,
               comment: (shotData.comment as string | null | undefined) ?? null,
-              is_reference: (shotData.is_reference as boolean | undefined) ?? false,
+              kind: (shotData.kind as string | undefined) ?? 'Normal',
               marker_index: (shotData.marker_index as number | null | undefined) ?? null,
               temperature: (shotData.temperature as number | null | undefined) ?? null,
             };
@@ -3689,11 +3691,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] merge_projects called with:', args);
             return { success: true };
 
-          case 'set_shot_reference': {
-            console.log('[Mock IPC] set_shot_reference called with:', args);
+          case 'set_shot_kind': {
+            console.log('[Mock IPC] set_shot_kind called with:', args);
             const sectionId = (args?.sectionId ?? args?.section_id) as number;
             const shotId = (args?.shotId ?? args?.shot_id) as number;
-            const isReference = (args?.isReference ?? args?.is_reference) as boolean;
+            const kind = (args?.kind ?? 'Normal') as string;
             if (currentProject && sectionId && shotId !== undefined) {
               const section = (
                 currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
@@ -3701,7 +3703,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               if (section) {
                 const shot = section.shots.find((s) => s.id === shotId);
                 if (shot) {
-                  (shot as { is_reference?: boolean }).is_reference = isReference;
+                  (shot as { kind?: string }).kind = kind;
                 }
               }
             }
@@ -3772,7 +3774,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 columns = [
                   'id', 'section_id', 'sequence_order', 'azimuth_in', 'azimuth_out', 'length',
                   'depth_in', 'depth_out', 'pitch_in', 'pitch_out', 'left_distance', 'right_distance',
-                  'up_distance', 'down_distance', 'comment', 'is_reference', 'marker_index', 'temperature', 'uuid',
+                  'up_distance', 'down_distance', 'comment', 'kind', 'marker_index', 'temperature', 'uuid',
                 ];
                 allRows = rawSections.flatMap((section) =>
                   (section.shots ?? []).map((shot, index) => [
@@ -3791,7 +3793,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                     str(shot.up),
                     str(shot.down),
                     str(shot.comment),
-                    shot.is_reference ? '1' : '0',
+                    shot.kind === 'Jump' ? '1' : shot.kind === 'Reference' ? '2' : '0',
                     str(shot.marker_index),
                     str(shot.temperature),
                     'NULL',
@@ -3905,8 +3907,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const mockGeometry = {
               origin: [-82.46, 24.93] as [number, number],
               shots: [
-                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], is_reference: false, section_id: 1 },
-                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], is_reference: false, section_id: 1 },
+                { from: [-82.46, 24.93] as [number, number], to: [-82.4599, 24.9301] as [number, number], kind: 'Normal', section_id: 1 },
+                { from: [-82.4599, 24.9301] as [number, number], to: [-82.4598, 24.9302] as [number, number], kind: 'Normal', section_id: 1 },
               ],
             };
 

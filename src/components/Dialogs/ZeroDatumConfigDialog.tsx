@@ -170,7 +170,7 @@ export default function ZeroDatumConfigDialog({
         up: null,
         down: null,
         comment: null,
-        is_reference: false,
+        kind: 'Normal' as const,
         isNew: true,
         tempId: nextTempId,
       },
@@ -207,7 +207,7 @@ export default function ZeroDatumConfigDialog({
           up: null,
           down: null,
           comment: null,
-          is_reference: false,
+          kind: 'Normal' as const,
           isNew: true,
           tempId: nextTempId,
         });
@@ -236,7 +236,7 @@ export default function ZeroDatumConfigDialog({
           up: null,
           down: null,
           comment: null,
-          is_reference: false,
+          kind: 'Normal' as const,
           isNew: true,
           tempId: nextTempId,
         });

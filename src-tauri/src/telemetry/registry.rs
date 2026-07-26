@@ -269,7 +269,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.panel-unpin.sections",
     // ── Action: context menu (174-176) ──
     "action.remove-closure",
-    "action.toggle-reference",
+    "action.set-shot-kind",
+    "action.cycle-shot-kind",
     "action.unmerge",
     // ── Dialog cancellations (177-210) ──
     "dialog-cancel.adjust-closures",
@@ -871,7 +872,9 @@ mod tests {
         //       command.split_shot_at_distance, undo-after.split_shot_at_distance,
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .insert-station = 654.
-        assert_eq!(EVENT_NAMES.len(), 654);
+        //   + 1 net for the Jump/Reference split (#27): action.toggle-reference
+        //       retired, action.{set-shot-kind,cycle-shot-kind} added = 655.
+        assert_eq!(EVENT_NAMES.len(), 655);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

@@ -18,7 +18,7 @@ import {
 } from '../globalTessellate';
 
 function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
-  return { from, to, is_reference: isReference, section_id: 0 };
+  return { from, to, kind: isReference ? ('Reference' as const) : ('Normal' as const), section_id: 0 };
 }
 
 function makeSystem(filePath: string, name: string, shots: GeometryShot[]): SystemGeometry {

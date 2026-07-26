@@ -29,7 +29,8 @@ import type { StationRef } from '../../../types/project';
 import {
   type SurveyData,
   type SectionMetadata,
-  SHOT_FLAG_IS_REFERENCE,
+  isVirtualKind,
+  shotKindFromFlags,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../types/survey-data';
 import { metersToMapCoords } from '../../../utils/coordinates';
@@ -247,7 +248,7 @@ export class SurveyGeometryIndex {
     if (section && lookup) {
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
-        if ((this.data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0) continue;
+        if (isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!))) continue;
         if (lookup.get(i) === undefined || lookup.get(i + 1) === undefined) continue;
         cached.add(i);
         cached.add(i + 1);
@@ -313,7 +314,7 @@ export class SurveyGeometryIndex {
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
         const isReference =
-          (this.data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+          isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!));
         if (isReference && !opts.includeReference) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
@@ -460,7 +461,7 @@ export class SurveyGeometryIndex {
         from: this.stationLngLat(fromGlobal),
         to: this.stationLngLat(toGlobal),
         globalIdx: shotGlobalIdx,
-        isReference: (this.data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0,
+        isReference: isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!)),
       };
     }
     return null;
@@ -495,7 +496,7 @@ export class SurveyGeometryIndex {
       for (let i = 0; i < section.shotCount; i++) {
         const gi = section.shotOffset + i;
         if (!fids.has(encodeFeatureId(section.id, this.data.shotIds[gi]!))) continue;
-        if (!includeReference && (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0) continue;
+        if (!includeReference && isVirtualKind(shotKindFromFlags(this.data.shotFlags[gi]!))) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -547,7 +548,7 @@ export class SurveyGeometryIndex {
       if (!lookup) continue;
       for (let i = 0; i < section.shotCount; i++) {
         const gi = section.shotOffset + i;
-        if (!includeReference && (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0) continue;
+        if (!includeReference && isVirtualKind(shotKindFromFlags(this.data.shotFlags[gi]!))) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -622,7 +623,7 @@ export class SurveyGeometryIndex {
         index: i,
         shotId: this.data.shotIds[gi]!,
         globalIdx: gi,
-        isReference: (this.data.shotFlags[gi]! & SHOT_FLAG_IS_REFERENCE) !== 0,
+        isReference: isVirtualKind(shotKindFromFlags(this.data.shotFlags[gi]!)),
         from: this.stationLngLat(fromGlobal),
         to: this.stationLngLat(toGlobal),
       });

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Map as MaplibreMap } from 'maplibre-gl';
 import {
   emptySurveyData,
-  SHOT_FLAG_IS_REFERENCE,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -77,7 +77,7 @@ function buildSurvey(specs: SecSpec[]): SurveyData {
     for (let i = 0; i < shotCount; i++) {
       shotIds.push(i);
       shotSectionIds.push(s.id);
-      shotFlags.push(s.refShots?.has(i) ? SHOT_FLAG_IS_REFERENCE : 0);
+      shotFlags.push(s.refShots?.has(i) ? shotKindToFlags('Reference') : 0);
       shotDepthIn.push(-i);
       shotDepthOut.push(-(i + 1));
     }

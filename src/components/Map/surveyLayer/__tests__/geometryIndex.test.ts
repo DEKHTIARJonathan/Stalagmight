@@ -29,7 +29,7 @@ const fakeMap = { project: (c: [number, number]) => project(c) } as unknown as M
 const eventAt = (x: number, y: number) => ({ point: { x, y } }) as MapMouseEvent;
 
 function fixture(): { sections: Section[]; stations: Station[] } {
-  const shot = (id: number, is_reference = false) => ({
+  const shot = (id: number, isVirtual = false) => ({
     id,
     azimuth_in: 0,
     azimuth_out: 0,
@@ -43,7 +43,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
     up: null,
     down: null,
     comment: null,
-    is_reference,
+    kind: isVirtual ? ('Reference' as const) : ('Normal' as const),
     marker_index: null,
     temperature: null,
   });
@@ -401,10 +401,10 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
  * fixture reproduces the production id scheme so the regression is pinned.
  */
 describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
-  const mkShot = (id: number, is_reference = false): Section['shots'][number] => ({
+  const mkShot = (id: number, isVirtual = false): Section['shots'][number] => ({
     id, azimuth_in: 0, azimuth_out: 0, length: 10, depth_in: 0, depth_out: 0,
     pitch_in: null, pitch_out: null, left: null, right: null, up: null, down: null,
-    comment: null, is_reference, marker_index: null, temperature: null,
+    comment: null, kind: isVirtual ? ('Reference' as const) : ('Normal' as const), marker_index: null, temperature: null,
   });
   // Section 0 shot ids are local-sized (< STRIDE); section 1 shot ids are the
   // production global form (100000, 100001), which is where the old decode broke.

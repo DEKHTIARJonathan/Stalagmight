@@ -18,7 +18,7 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
     up: shot.up,
     down: shot.down,
     comment: shot.comment,
-    is_reference: shot.is_reference ?? false,
+    kind: shot.kind ?? 'Normal',
     marker_index: null,
     temperature: null,
   };

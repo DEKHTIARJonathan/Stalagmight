@@ -429,9 +429,12 @@ export default function ImportDialog() {
                       <span className="px-2 py-1 flex items-center justify-center">
                         <input
                           type="checkbox"
-                          checked={shot.is_reference ?? false}
+                          // Still a virtual-vs-not checkbox. Which virtual kind
+                          // it becomes is the chain classifier's call at import
+                          // finalize (#27), or the per-file override above.
+                          checked={(shot.kind ?? 'Normal') !== 'Normal'}
                           onChange={(e) =>
-                            handleShotChange(rowIndex, 'is_reference', e.target.checked)
+                            handleShotChange(rowIndex, 'kind', e.target.checked ? 'Reference' : 'Normal')
                           }
                           onKeyDown={(e) => handleRowKeyDown(e, rowIndex)}
                         />
@@ -486,7 +489,7 @@ function createEmptyShot(): ShotData {
     up: null,
     down: null,
     comment: null,
-    is_reference: false,
+    kind: 'Normal' as const,
     marker_index: null,
     temperature: null,
   };

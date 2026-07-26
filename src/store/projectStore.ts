@@ -25,6 +25,7 @@ import type {
   SectionUpdates,
   ShotData,
   ShotUpdates,
+  ShotKind,
   SectionId,
   ShotId,
   StationRef,
@@ -321,7 +322,7 @@ interface ProjectStore {
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
-  setShotReference: (sectionId: SectionId, shotId: ShotId, isReference: boolean) => Promise<CommandResult>;
+  setShotKind: (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
@@ -1556,11 +1557,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  setShotReference: async (sectionId: SectionId, shotId: ShotId, isReference: boolean) => {
+  setShotKind: async (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => {
     return executeCommand(
-      'set_shot_reference',
-      { sectionId, shotId, isReference },
-      { purpose: 'toggle reference shot visibility', fields: { sectionId, shotId, isReference } }
+      'set_shot_kind',
+      { sectionId, shotId, kind },
+      { purpose: 'set shot kind (permanent/jump/reference)', fields: { sectionId, shotId, kind } }
     );
   },
 

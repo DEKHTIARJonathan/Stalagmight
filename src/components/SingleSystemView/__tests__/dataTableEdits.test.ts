@@ -16,7 +16,7 @@ const shot = (over: Partial<Shot> = {}): Shot => ({
   up: null,
   down: null,
   comment: null,
-  is_reference: false,
+  kind: 'Normal' as const,
   marker_index: null,
   temperature: null,
   ...over,

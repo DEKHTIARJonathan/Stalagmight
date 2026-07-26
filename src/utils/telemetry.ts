@@ -109,7 +109,8 @@ export type SelectionType =
 /** Canonical context-menu action names - parsed by registry exhaustiveness tests. */
 export type ContextMenuAction =
   | 'remove-closure'
-  | 'toggle-reference'
+  | 'set-shot-kind'
+  | 'cycle-shot-kind'
   | 'unmerge';
 
 /** Canonical source names - parsed by registry exhaustiveness tests. */

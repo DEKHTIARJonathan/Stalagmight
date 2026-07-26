@@ -50,8 +50,7 @@ use stalagmight_lib::models::{
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
     ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection,
-    TankMaterial, Team, ZeroDatumWire,
+    SurveyDirection, TankMaterial, Team, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};

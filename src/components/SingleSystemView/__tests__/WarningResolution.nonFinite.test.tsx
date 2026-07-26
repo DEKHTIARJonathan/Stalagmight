@@ -30,7 +30,7 @@ const nanLengthShot = {
   right: null,
   up: null,
   down: null,
-  is_reference: false,
+  kind: 'Normal' as const,
 } as unknown as Shot;
 
 const warning: ProjectWarning = {

@@ -26,7 +26,7 @@
  * simply pre-filters the descriptor list.
  */
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
-import { type SurveyData, SHOT_FLAG_IS_REFERENCE } from '../../../../types/survey-data';
+import { type SurveyData, isVirtualKind, shotKindFromFlags } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -209,7 +209,7 @@ export function buildLabelDescriptors(
       const fromG = inner.get(i);
       const toG = inner.get(i + 1);
       if (fromG === undefined || toG === undefined) continue;
-      const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+      const isRef = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
       const fx = data.stationCoords[fromG * 3]!;
       const fy = data.stationCoords[fromG * 3 + 1]!;
       const fz = data.stationCoords[fromG * 3 + 2]!;

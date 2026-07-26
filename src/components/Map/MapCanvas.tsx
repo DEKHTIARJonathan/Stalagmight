@@ -786,7 +786,7 @@ function MapCanvas() {
       !showReferenceShots &&
       (project?.sections
         .find((s) => s.id === snap.section_id)
-        ?.shots.find((sh) => sh.id === snap.shot_id)?.is_reference ?? false);
+        ?.shots.find((sh) => sh.id === snap.shot_id)?.kind !== 'Normal');
     if (!showShots || onHiddenReferenceLeg) setMeasureSnapShot(null);
   }, [showShots, showReferenceShots, project?.sections, setMeasureSnapShot]);
 
@@ -2671,7 +2671,7 @@ function MapCanvas() {
         if (s.type !== 'shot') return true;
         const section = project.sections.find((sec) => sec.id === s.sectionId);
         const shot = section?.shots.find((sh) => sh.id === s.shotId);
-        return !shot?.is_reference;
+        return shot?.kind === 'Normal';
       });
       surveyLayerRef.current?.clearShotHover();
       setHoveredShot(null);
@@ -3305,7 +3305,7 @@ function MapCanvas() {
         }
       };
       section?.shots.forEach((shot, i) => {
-        if (!refShotsVisible && shot.is_reference) return;
+        if (!refShotsVisible && shot.kind !== 'Normal') return;
         includeIdx(i);
         includeIdx(i + 1);
       });

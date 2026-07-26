@@ -37,7 +37,8 @@ import {
   type SectionMetadata,
   lazyStationArray,
   noteShotMaterialization,
-  SHOT_FLAG_IS_REFERENCE,
+  SHOT_FLAG_KIND_MASK,
+  shotKindFromFlags,
   SHOT_MARKER_NULL,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../types/survey-data';
@@ -251,7 +252,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
           down: nanToNull(shotsF32[fBase + 10]!),
           temperature: nanToNull(shotsF32[fBase + 11]!),
           comment: shotCommentByIdx.get(globalIdx) ?? null,
-          is_reference: (shotsFlags[globalIdx]! & 1) !== 0,
+          kind: shotKindFromFlags(shotsFlags[globalIdx]!),
           marker_index: markerRaw === 0xFFFFFFFF ? null : markerRaw,
         };
       }
@@ -463,8 +464,10 @@ function buildSurveyData(
     const markerRaw   = shotsU32[uBase + 2]!;
     shotMarkerIndex[i] = markerRaw === 0xFFFFFFFF ? SHOT_MARKER_NULL : (markerRaw | 0);
 
-    // Wire format used bit 0 for is_reference and we keep that mapping.
-    shotFlags[i] = (shotsFlags[i]! & 1) !== 0 ? SHOT_FLAG_IS_REFERENCE : 0;
+    // Wire format v3 packs the ShotKind discriminant into bits 0-1 (#27), and
+    // the SoA flags byte uses the same layout, so this is a straight copy of
+    // the low two bits.
+    shotFlags[i] = shotsFlags[i]! & SHOT_FLAG_KIND_MASK;
   }
 
   const sections: SectionMetadata[] = env.project_header.sections.map((sh) => ({

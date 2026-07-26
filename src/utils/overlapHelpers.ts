@@ -11,6 +11,7 @@
  * is inverted for Back compared to Front.
  */
 
+import type { ShotKind } from '../types/ipc/ShotKind';
 import { circularMeanDegrees } from './angles';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
@@ -34,7 +35,7 @@ export interface TargetShotLike {
 export interface EditableShotLike extends TargetShotLike {
   id: number;
   comment: string | null;
-  is_reference: boolean;
+  kind: ShotKind;
   isNew?: boolean;
   isDeleted?: boolean;
   tempId?: number;

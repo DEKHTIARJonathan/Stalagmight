@@ -4,7 +4,12 @@ import { useTranslation } from 'react-i18next';
 import { type Section, type SectionId } from '../../types/project';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { SHOT_FLAG_IS_REFERENCE, type SurveyData, type SectionMetadata } from '../../types/survey-data';
+import {
+  isVirtualKind,
+  shotKindFromFlags,
+  type SurveyData,
+  type SectionMetadata,
+} from '../../types/survey-data';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { useShallow } from 'zustand/react/shallow';
 import { formatFixed, formatNumber } from '../../i18n/format';
@@ -600,7 +605,9 @@ function calculateSectionStats(
     const end = meta.shotOffset + meta.shotCount;
     for (let g = meta.shotOffset; g < end; g++) {
       length += surveyData.shotLength[g]!;
-      if ((surveyData.shotFlags[g]! & SHOT_FLAG_IS_REFERENCE) !== 0) {
+      // Counts both virtual kinds: the panel shows a single "virtual shots"
+      // tally, and #27's Jump/Reference split is surfaced in the table, not here.
+      if (isVirtualKind(shotKindFromFlags(surveyData.shotFlags[g]!))) {
         referenceCount++;
       }
     }
@@ -613,7 +620,7 @@ function calculateSectionStats(
   let referenceCount = 0;
   for (const shot of section.shots) {
     length += shot.length;
-    if (shot.is_reference) referenceCount++;
+    if (isVirtualKind(shot.kind)) referenceCount++;
   }
   return {
     shotCount: section.shots.length,

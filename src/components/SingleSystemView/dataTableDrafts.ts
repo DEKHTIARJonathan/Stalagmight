@@ -152,7 +152,7 @@ export function materializeDraft(draft: ShotDraft): Shot {
     up: d.up ?? null,
     down: d.down ?? null,
     comment: d.comment ?? null,
-    is_reference: d.is_reference ?? false,
+    kind: d.kind ?? 'Normal',
     marker_index: null,
     temperature: null,
   };
@@ -213,7 +213,7 @@ export function completeDraftData(draft: ShotDraft): ShotData | null {
     up: d.up ?? null,
     down: d.down ?? null,
     comment: d.comment ?? null,
-    is_reference: d.is_reference ?? false,
+    kind: d.kind ?? 'Normal',
     marker_index: null,
     temperature: null,
   };

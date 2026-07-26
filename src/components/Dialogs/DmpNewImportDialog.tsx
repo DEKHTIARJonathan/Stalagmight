@@ -307,7 +307,7 @@ function applyAllOverlapTreatments(
   }
   // Track shots already treated by a previous suggestion to prevent double-treatment.
   // Key: "sectionIndex:shotId".  This replaced the old is_reference guard which was
-  // removed so that is_reference only has user-facing semantics (keep_both mode).
+  // removed so that the shot kind only has user-facing semantics (keep_both mode).
   const treatedShots = new Set<string>();
 
   for (const suggestion of fullPool) {
@@ -413,10 +413,10 @@ function applyAllOverlapTreatments(
             if (!actionableIds.has(shot.id)) return shot;
             if (treatedShots.has(`${importSectionIndex}:${shot.id}`)) return shot;
             treatedShots.add(`${importSectionIndex}:${shot.id}`);
-            return { ...shot, is_reference: true };
+            return { ...shot, kind: 'Reference' as const };
           });
           if (import.meta.env.DEV) {
-            const marked = newShots.filter(s => s.is_reference).length - importEdits.shots.filter(s => s.is_reference).length;
+            const marked = newShots.filter(s => s.kind !== 'Normal').length - importEdits.shots.filter(s => s.kind !== 'Normal').length;
             console.warn(`[applyAllOverlaps]   import ${importSectionIndex}: keep_both marked ${marked} shots as reference`);
           }
           sectionEdits.set(importSectionIndex, { ...importEdits, shots: newShots });
@@ -527,7 +527,7 @@ function applyAllOverlapTreatments(
           if (import.meta.env.DEV) {
             const alive = newShots.filter(s => !s.isDeleted).length;
             const deleted = newShots.filter(s => s.isDeleted).length;
-            const refs = newShots.filter(s => s.is_reference && !s.isDeleted).length;
+            const refs = newShots.filter(s => s.kind !== 'Normal' && !s.isDeleted).length;
             console.warn(
               `[applyAllOverlaps]   import ${importSectionIndex} AFTER: ${newShots.length} total, ${alive} alive, ${deleted} deleted, ${refs} reference`,
             );
@@ -567,7 +567,7 @@ function applyAllOverlapTreatments(
 
           let updates: Record<string, number | null> | null = null;
           if (overlapMode === 'interpolate') {
-            const interp = interpolateShots({ ...existingShot, id: existingShot.id, comment: existingShot.comment ?? null, is_reference: existingShot.is_reference, isNew: false, isDeleted: false }, importAsTarget);
+            const interp = interpolateShots({ ...existingShot, id: existingShot.id, comment: existingShot.comment ?? null, kind: existingShot.kind, isNew: false, isDeleted: false }, importAsTarget);
             updates = {
               azimuth_in: interp.azimuth_in, azimuth_out: interp.azimuth_out,
               length: interp.length, depth_in: interp.depth_in, depth_out: interp.depth_out,
@@ -712,7 +712,7 @@ function applyAllOverlapTreatments(
 
   // Post-pass: if a section would lose ALL shots to deletion (overlaps at both
   // ends where the section is the "import" side for both), convert the deletions
-  // to is_reference instead.  This prevents sections from disappearing while
+  // to a virtual kind instead.  This prevents sections from disappearing while
   // still avoiding un-marked duplication - adjacent target sections keep the
   // overlap shots with treated values, and this section keeps reference copies.
   for (const [sectionIdx, edits] of sectionEdits.entries()) {
@@ -720,7 +720,7 @@ function applyAllOverlapTreatments(
     const deletedCount = edits.shots.filter(s => s.isDeleted).length;
     if (aliveCount === 0 && deletedCount > 0) {
       const newShots = edits.shots.map(s =>
-        s.isDeleted ? { ...s, isDeleted: false, is_reference: true } : s,
+        s.isDeleted ? { ...s, isDeleted: false, kind: 'Reference' as const } : s,
       );
       sectionEdits.set(sectionIdx, { ...edits, shots: newShots });
       if (import.meta.env.DEV) {
@@ -911,7 +911,7 @@ function buildBatchImport(
                   `[buildBatchImport]   MODIFIED shot id=${edited.id}:`,
                   `az_in ${orig.azimuth_in.toFixed(1)}→${edited.azimuth_in.toFixed(1)}`,
                   `len ${orig.length.toFixed(3)}→${edited.length.toFixed(3)}`,
-                  `is_ref=${edited.is_reference}`,
+                  `kind=${edited.kind}`,
                 );
               }
             }
@@ -1877,7 +1877,7 @@ export default function DmpNewImportDialog({
 
       const isActionable = actionableIds.has(shot.id);
       if (overlapMode === 'keep_both') {
-        return { ...shot, is_reference: true };
+        return { ...shot, kind: 'Reference' as const };
       }
       if (!isActionable) {
         // Past merge station: leave unchanged to keep geometry continuous in preview.
@@ -1930,7 +1930,7 @@ export default function DmpNewImportDialog({
             up: null,
             down: null,
             comment: null,
-            is_reference: false,
+            kind: 'Normal' as const,
             isNew: true,
             tempId,
           },
@@ -1971,7 +1971,7 @@ export default function DmpNewImportDialog({
         up: null,
         down: null,
         comment: null,
-        is_reference: false,
+        kind: 'Normal' as const,
         isNew: true,
         tempId,
       });
@@ -1998,7 +1998,7 @@ export default function DmpNewImportDialog({
         up: null,
         down: null,
         comment: null,
-        is_reference: false,
+        kind: 'Normal' as const,
         isNew: true,
         tempId,
       });

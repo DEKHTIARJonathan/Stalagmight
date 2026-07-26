@@ -1333,6 +1333,7 @@
       "upShort": "U",
       "downShort": "D",
       "referenceShort": "J/R",
+      "kindCycleHint": "{{current}} - click for {{next}}",
       "comment": "Comment",
       "sectionIdShort": "Sec ID",
       "shotIdShort": "Shot ID"
@@ -1569,8 +1570,7 @@
       "startStation": "Start station",
       "endStation": "End station",
       "reference": "Jump/Reference shot",
-      "markReference": "Mark as Jump/Reference",
-      "markPermanent": "Mark as permanent"
+      "markAs": "Mark as {{kind}}"
     },
     "section": {
       "title": "Section",
@@ -2969,5 +2969,10 @@
       "deleted": "Project deleted from SpeleoDB. Your local copy is now a plain project.",
       "deleteFailed": "Could not delete the project"
     }
+  },
+  "shotKind": {
+    "normal": "Permanent",
+    "jump": "Jump",
+    "reference": "Reference"
   }
 }

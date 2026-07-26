@@ -27,7 +27,8 @@ import type { GpsOrigin } from '../../../../types/config';
 import {
   type SurveyData,
   type SectionMetadata,
-  SHOT_FLAG_IS_REFERENCE,
+  isVirtualKind,
+  shotKindFromFlags,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
@@ -222,7 +223,7 @@ export function computeStationAllReference(
       // build's `stationsWithNonReferenceShot` (features.ts) and the set of
       // shots the line buffers actually draw.
       if (fromGlobal === undefined || toGlobal === undefined) continue;
-      const isReference = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+      const isReference = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
       if (isReference) continue;
       allRef[fromGlobal] = 0;
       allRef[toGlobal] = 0;
@@ -349,7 +350,7 @@ function emitLineSection(
     const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
     const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
     const colB = ends ? ends[1] : colA;
-    const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0 ? 1 : 0;
+    const isRef = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!)) ? 1 : 0;
     const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHighlight = flagValue(highlightForShot?.(shotGlobalIdx, section.id));
@@ -754,7 +755,7 @@ export function recomputeSectionAllReference(
     const fromGlobal = inner.get(i);
     const toGlobal = inner.get(i + 1);
     if (fromGlobal === undefined || toGlobal === undefined) continue;
-    const isReference = (data.shotFlags[section.shotOffset + i]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+    const isReference = isVirtualKind(shotKindFromFlags(data.shotFlags[section.shotOffset + i]!));
     if (isReference) continue;
     allRef[fromGlobal] = 0;
     allRef[toGlobal] = 0;
