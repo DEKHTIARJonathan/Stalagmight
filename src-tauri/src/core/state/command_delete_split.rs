@@ -154,6 +154,15 @@ impl AppState {
                 shots: shots_after,
             };
 
+            // A split allocates a new section id. Refuse before mutating the
+            // original: past MAX_SECTION_ID the save would succeed and the
+            // reopen would not (persistence::sqlite::read rejects the id).
+            if !project.can_add_section() {
+                return CommandResult::failure(format!(
+                    "Cannot split: project is at the maximum number of sections (limit = {})",
+                    crate::models::MAX_SECTION_ID as u64 + 1
+                ));
+            }
             let section_b = project.add_section(section_b_data);
             let new_id = section_b.id;
 
@@ -420,6 +429,15 @@ impl AppState {
                 quality,
                 shots: shots_after,
             };
+            // A split allocates a new section id. Refuse before mutating the
+            // original: past MAX_SECTION_ID the save would succeed and the
+            // reopen would not (persistence::sqlite::read rejects the id).
+            if !project.can_add_section() {
+                return CommandResult::failure(format!(
+                    "Cannot split: project is at the maximum number of sections (limit = {})",
+                    crate::models::MAX_SECTION_ID as u64 + 1
+                ));
+            }
             let section_b = project.add_section(section_b_data);
             let new_id = section_b.id;
             project.set_section_offset(new_id, (section_ox + bx, section_oy + by));

@@ -587,10 +587,27 @@ impl Project {
 
     // === Section operations ===
 
+    /// True while another section id can be allocated without exceeding
+    /// [`MAX_SECTION_ID`]. Past that bound a section's shot-id band collides with
+    /// another's, and `persistence::sqlite::read` refuses to load such a file - so
+    /// any PRODUCTION path that allocates must check this first, or the app can
+    /// write a project it then declines to reopen.
+    pub fn can_add_section(&self) -> bool {
+        self.next_section_id <= crate::models::MAX_SECTION_ID
+    }
+
     /// Add a new section to the project
+    ///
+    /// Callers on a production path must gate this on [`Self::can_add_section`];
+    /// the id allocation below saturates rather than failing, so an unchecked
+    /// caller past the bound would mint a colliding shot-id band.
     pub fn add_section(&mut self, data: SectionData) -> &Section {
+        debug_assert!(
+            self.can_add_section(),
+            "add_section past MAX_SECTION_ID - gate on can_add_section()"
+        );
         let section = Section::new(self.next_section_id, data);
-        self.next_section_id += 1;
+        self.next_section_id = self.next_section_id.saturating_add(1);
         let new_idx = self.sections.len();
         self.section_index_cache.insert(section.id, new_idx);
         // Maintain the shot-UUID index incrementally so `resolve_key`'s AfterShot

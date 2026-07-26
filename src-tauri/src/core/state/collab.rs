@@ -566,6 +566,16 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     // without a returned UUID (Ariane ≤25 or shot lacked `<UUID>`)
     // keep the fresh UUID `Shot::new` minted.
     for s in &cs.sections_added {
+        // Reconciling a collaborator's file can add sections in bulk; stop at the
+        // bound rather than minting a colliding shot-id band that would not reload.
+        if !project.can_add_section() {
+            tracing::warn!(
+                limit = crate::models::MAX_SECTION_ID as u64 + 1,
+                purpose = "avoid allocating a section id that cannot be reloaded",
+                "Stopped applying collaborator sections at the maximum section count"
+            );
+            break;
+        }
         let new_sid = project
             .add_section(SectionData {
                 name: Some(s.name.clone()),

@@ -10461,6 +10461,47 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
+fn test_section_allocation_never_outruns_what_load_accepts() {
+    // The load path rejects section ids above MAX_SECTION_ID, so every PRODUCTION
+    // allocation path has to stop at the same bound - otherwise the app saves a
+    // project it then refuses to reopen. This pins the shared gate rather than any
+    // one caller: `can_add_section` is what create_section, the two split paths and
+    // the collab reconcile all consult, and it must agree with the loader.
+    let mut project = Project::new("Bound".to_string(), None);
+    project.next_section_id = crate::models::MAX_SECTION_ID;
+    assert!(
+        project.can_add_section(),
+        "the last representable id must still be allocatable"
+    );
+
+    // Take it, then the project is full.
+    project.add_section(SectionData::default());
+    assert!(
+        !project.can_add_section(),
+        "past the bound allocation must stop"
+    );
+
+    // And the bound is exactly the largest id whose whole shot-id band fits in a
+    // u32 - the property the loader's rejection is derived from.
+    let last_band_end = (crate::models::MAX_SECTION_ID as u64)
+        * crate::models::FEATURE_ID_STRIDE as u64
+        + crate::models::FEATURE_ID_STRIDE as u64
+        - 1;
+    assert!(
+        last_band_end <= u32::MAX as u64,
+        "MAX_SECTION_ID band must fit in u32, got {last_band_end}"
+    );
+    let next_band_end = (crate::models::MAX_SECTION_ID as u64 + 1)
+        * crate::models::FEATURE_ID_STRIDE as u64
+        + crate::models::FEATURE_ID_STRIDE as u64
+        - 1;
+    assert!(
+        next_band_end > u32::MAX as u64,
+        "MAX_SECTION_ID must be the LARGEST such id, not a conservative guess"
+    );
+}
+
+#[test]
 fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
     // SYNTHETIC STATE - read this before trusting the test. The closure-only link
     // built below cannot arise through the app: `convert_orphan_closures_to_merges`

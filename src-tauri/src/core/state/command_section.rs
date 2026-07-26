@@ -22,7 +22,7 @@ impl AppState {
         // The per-section shot cap above has a per-project twin: past
         // MAX_SECTION_ID the next section's shot-id band would wrap into an
         // existing one (see id_stride.rs).
-        if project.next_section_id > MAX_SECTION_ID {
+        if !project.can_add_section() {
             return CommandResult::failure(format!(
                 "Project exceeds maximum sections (limit = {})",
                 MAX_SECTION_ID as u64 + 1
