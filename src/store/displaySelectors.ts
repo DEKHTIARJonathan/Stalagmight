@@ -8,6 +8,8 @@
  * which depends on both the toggle's own state and its parent toggle's state.
  */
 
+import type { ShotKind } from '../types/ipc/ShotKind';
+
 /**
  * Display toggle defaults. This is the SINGLE SOURCE OF TRUTH for default values.
  * Used by uiStore for initial state and resetDisplaySettings.
@@ -44,6 +46,33 @@ export function getEffectiveShowReferenceShots(showShots: boolean, showReference
  */
 export function getEffectiveShowJumps(showShots: boolean, showJumps: boolean): boolean {
   return showShots && showJumps;
+}
+
+/**
+ * Is a shot of this kind currently drawn on the map? (#27)
+ *
+ * The one predicate every "the user hid this geometry, so drop the thing
+ * attached to it" effect should use. Jumps and References became independent
+ * toggles, so testing `kind !== 'Normal'` against the reference toggle alone -
+ * which is what the mechanical `is_reference` rewrite left behind - treats a
+ * still-visible jump as hidden, and silently discards its selection, its
+ * measure snap, or its contribution to a fit-bounds.
+ *
+ * An unresolvable shot (`undefined`, e.g. a lookup that raced a project
+ * refresh) reads as Normal. That matches the backend's `ShotKind::from_u8`
+ * fallback and is the conservative answer here too: "visible" means the caller
+ * leaves it alone rather than throwing away user state on a transient miss.
+ */
+export function isShotKindVisible(
+  kind: ShotKind | undefined,
+  showShots: boolean,
+  showJumps: boolean,
+  showReferenceShots: boolean
+): boolean {
+  if (!showShots) return false;
+  if (kind === 'Jump') return getEffectiveShowJumps(showShots, showJumps);
+  if (kind === 'Reference') return getEffectiveShowReferenceShots(showShots, showReferenceShots);
+  return true;
 }
 
 /**
