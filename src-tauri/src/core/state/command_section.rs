@@ -24,7 +24,8 @@ impl AppState {
         // existing one (see id_stride.rs).
         if !project.can_add_section() {
             return CommandResult::failure(format!(
-                "Project exceeds maximum sections (limit = {})",
+                "This project has used all {} available section ids. They are not reused when \
+                 sections are deleted, so this survey must continue in a new project.",
                 MAX_SECTION_ID as u64 + 1
             ));
         }

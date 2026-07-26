@@ -73,7 +73,9 @@ impl AppState {
             // while creating neither section B nor an undo entry.
             if !project.can_add_section() {
                 return CommandResult::failure(format!(
-                    "Cannot split: project is at the maximum number of sections (limit = {})",
+                    "Cannot split: this project has used all {} available section ids. They are \
+                     not reused when sections are deleted, so this survey must continue in a new \
+                     project.",
                     crate::models::MAX_SECTION_ID as u64 + 1
                 ));
             }
@@ -346,7 +348,9 @@ impl AppState {
             // creating neither section B nor an undo entry.
             if !project.can_add_section() {
                 return CommandResult::failure(format!(
-                    "Cannot split: project is at the maximum number of sections (limit = {})",
+                    "Cannot split: this project has used all {} available section ids. They are \
+                     not reused when sections are deleted, so this survey must continue in a new \
+                     project.",
                     crate::models::MAX_SECTION_ID as u64 + 1
                 ));
             }

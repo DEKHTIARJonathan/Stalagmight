@@ -601,6 +601,11 @@ impl Project {
     /// Bulk callers must preflight with this rather than allocating until
     /// [`Self::can_add_section`] flips: a half-applied bulk import is worse than
     /// a refused one when the caller marks its input consumed on success.
+    ///
+    /// This counts IDS, not live sections, and `next_section_id` only ever grows -
+    /// [`Self::remove_section`] does not reclaim an id, and undoing a create
+    /// delegates to it. So capacity NEVER goes back up within a project, and no
+    /// error message may tell a user to delete sections to free some.
     pub fn remaining_section_capacity(&self) -> u64 {
         (crate::models::MAX_SECTION_ID as u64 + 1).saturating_sub(u64::from(self.next_section_id))
     }

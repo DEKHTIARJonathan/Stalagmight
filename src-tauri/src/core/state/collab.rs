@@ -243,7 +243,9 @@ impl AppState {
                 return CommandResult::failure(format!(
                     "Cannot reconcile: the collaborator's file adds {needed} section(s) but only \
                      {remaining} can still be created (limit = {capacity}). No changes were made \
-                     and the file has not been marked as reconciled - free capacity and try again."
+                     and the file has not been marked as reconciled, so it can be applied later. \
+                     Section ids are never reused, so deleting sections will NOT free capacity - \
+                     reduce the additions in the collaborator's file, or continue in a new project."
                 ));
             }
         }
