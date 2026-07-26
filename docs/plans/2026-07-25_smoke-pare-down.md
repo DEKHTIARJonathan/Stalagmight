@@ -23,20 +23,31 @@ very different trees, and both a buggy and a fixed reporter: 64-67% locally,
 Every saved minute has to come out of test execution; there is nothing left in
 job setup.
 
-### ⚠ Effective parallelism is only ~1.9x - halve every estimate
+### ⚠ Effective parallelism is only ~1.9x - convert in seconds, not percentages
 
 On a real run: **753.6s of test time in 393.9s of wall clock.** CI sets
 `workers: '100%'` and the hosted runner is 2-core, so it is already saturated -
 there is no free win from raising the worker count. The consequence that matters:
 
-> **A second cut from test time buys only ~half a second of job time.**
-> A 25% test-time cut is a ~12% job cut.
+> **A second cut from aggregate test time removes only ~0.5s of job time.**
 
-Size any pare-down against **wall clock**, not test time. A dev machine with 4+
-workers will overstate the CI win by ~2x, so re-derive on CI before believing a
-local improvement.
+Every figure in the per-file table below is denominated in *test-time* seconds,
+so read each one through that divisor: `gas-planning`'s 150.3s of hook time is
+worth ~79s of job time, not 150s.
+
+⚠ **Do not apply the divisor twice.** A *percentage* cut is not halved - the
+test-time and wall-clock bases already differ by exactly this factor, so it
+cancels. A 25% cut in test time is a 25% cut in the Playwright step, which is a
+**~23%** cut in the job once the ~40s of fixed setup is added back. Halving that
+too gives ~12%, which understates the payoff by 2x. (An earlier revision of this
+doc did exactly that.)
+
+A dev machine with 4+ workers still overstates the CI win in absolute seconds, so
+re-derive on CI before believing a local improvement.
 
 ### Per file (hosted runner, 83 `@smoke` tests, 753.6s test time, 453.5s hook)
+
+Percentages are rounded per row, so the column sums to 101.
 
 | file | tests | % of test time | hook % |
 |---|---:|---:|---:|
@@ -144,8 +155,8 @@ whose output decides what gets deleted.
   (#277). `dive-plan` is the best-evidenced catch in the suite: **de-flake it, do
   not delete it.** Its `enterPlan` helper carries a sub-default 3000ms
   `dive-plan-bar` visibility timeout - the first thing to widen if it flakes.
-- Flake history tool: `python3 ~/tools/ci_flake_report.py --repo
-  Stalagmight/Stalagmight --days 30 --workflows "E2E Smoke"`.
+- To re-derive that: `gh run list --workflow "E2E Smoke" --limit 100 --json
+  conclusion,createdAt` and tally the conclusions.
 
 ---
 
@@ -155,7 +166,7 @@ whose output decides what gets deleted.
 
 - **A1. Done** - the instrumentation above. Keep it in CI until the pare-down
   lands; it is how Phase A gets measured. Remove it after.
-- **A2. Cut the per-test re-seed. The single biggest lever, and the next step.**
+- **A2. Cut the per-test re-seed - the single biggest lever.**
   Every smoke file re-seeds a full mocked project in `beforeEach` per test:
   `page.goto('/')` boots the whole SPA, a project is opened through the real
   New-Project UI flow, then MapLibre initializes - all before any assertion runs.
@@ -163,8 +174,9 @@ whose output decides what gets deleted.
   (`settings-dialog` and `display-toggles` have 9 `beforeEach` each,
   `undo-redo-dropdown` 7). Tracked as **#295**, which also records why the 30s
   global test timeout exists *because* setup is this heavy.
-  A 50% cut in hook time is ~30% of test time - on its own past the target,
-  before any test is dropped.
+  A 50% cut in hook time is ~30% of test time, so ~30% off the Playwright step:
+  a ~7:15 job becomes ~5:15. That clears the target on its own, before any test
+  is dropped.
   ⚠ **Two constraints on any shared-fixture refactor:**
   `pnpm lint:e2e-parallel` gates `fullyParallel` safety and runs in the smoke
   job, so a worker-scoped fixture must keep it green. And per-test isolation is
