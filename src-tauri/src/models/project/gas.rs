@@ -54,6 +54,7 @@ impl Project {
         self.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
+            &[],
             diver,
             cylinders,
             gas_config,
@@ -75,10 +76,18 @@ impl Project {
     /// back-gas turn pressure is independent of the stage drops and is unchanged. The reach math stays
     /// exact-litres (from the graph); only the moved drop's readout pressure is inverted from the Z
     /// curve. With an empty `stage_drop_overrides` this is byte-identical to the no-override field.
+    ///
+    /// `waypoints` (#298) are ordered intermediate route points the dive MUST visit, in order,
+    /// between the origin and the endpoint. They re-base the whole field: `gas_to_reach` becomes the
+    /// gas to reach a station AFTER flying the whole way-point chain, so the reachable overlay, the
+    /// turn frontier and the stage drops all cost the mandated detour instead of quietly planning
+    /// the shortest origin-to-endpoint line. With an empty `waypoints` this is byte-identical to the
+    /// single-Dijkstra field it replaces.
     pub(crate) fn compute_gas_reach_field_with_overrides(
         &self,
         origin: Option<&StationRef>,
         endpoint: Option<&StationRef>,
+        waypoints: &[StationRef],
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
@@ -126,30 +135,24 @@ impl Project {
         // Defensive: a non-positive / non-finite in-speed OR in-rmv (e.g. an un-normalized
         // 0 survey_rmv_multiplier) would zero every edge cost and make the whole cave falsely
         // reachable - the unsafe over-stating direction (§6) - so bail to all-unreachable.
-        // `pred` is the shortest-path predecessor tree (for the staged drop route below).
         //
-        // `adj` is kept alongside (gas_in, pred): its edge SET is identical to the plain
-        // topology graph `build_survey_graph` would return (same shots/merges/closures,
-        // just different edge weights), so it doubles as the turn-frontier's adjacency
-        // below - no second, purely-topological graph build. In the degenerate branch
-        // `gas_in` is all-INFINITY, so `reachable` is all-false and the turn-frontier's
-        // `reachable[u] && adj[u]...` filter short-circuits on `reachable[u]` without ever
-        // reading `adj` - an empty adjacency list is provably equivalent, so build one
-        // instead of paying for a real (unused) graph build.
-        let (gas_in, pred, adj) = if n == 0
+        // `adj` is kept alongside the walk: its edge SET is identical to the plain topology
+        // graph `build_survey_graph` would return (same shots/merges/closures, just different
+        // edge weights), so it doubles as the turn-frontier's adjacency below - no second,
+        // purely-topological graph build. In the degenerate branch `gas_in` is all-INFINITY, so
+        // `reachable` is all-false and the turn-frontier's `reachable[u] && adj[u]...` filter
+        // short-circuits on `reachable[u]` without ever reading `adj` - an empty adjacency list
+        // is provably equivalent, so build one instead of paying for a real (unused) graph build.
+        let degenerate = n == 0
             || roots.is_empty()
             || in_speed <= 0.0
             || !in_speed.is_finite()
             || in_rmv <= 0.0
-            || !in_rmv.is_finite()
-        {
-            (
-                vec![f64::INFINITY; n],
-                vec![usize::MAX; n],
-                vec![Vec::new(); n],
-            )
+            || !in_rmv.is_finite();
+        let adj = if degenerate {
+            vec![Vec::new(); n]
         } else {
-            let adj = self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
+            self.build_survey_graph_weighted(n, &station_index, |shot, fi, ti| {
                 // A reference tie is not swimmable (#27 q7), so it must not
                 // carry a dive route at all. Give it an INFINITE edge cost
                 // rather than skipping the edge: `along_line_between` keys a
@@ -185,10 +188,26 @@ impl Project {
                     coords_ref[fi].z,
                     coords_ref[ti].z,
                 )
-            });
-            let (gas_in, pred) = Self::dijkstra_with_preds(&adj, &roots);
-            (gas_in, pred, adj)
+            })
         };
+
+        // Ordered way points (#298), resolved to node indices. An entry that no longer resolves
+        // (its station was deleted under a plan that stayed loaded across a Survey edit) or that is
+        // graph-disconnected STALLS the walk: the mandated detour cannot be flown, so the field goes
+        // all-unreachable rather than quietly planning a route that skips it (the unsafe direction,
+        // §6). Unlike the origin and the endpoint - which are hints and degrade to the entrance /
+        // deepest point - a way point is a constraint, so dropping one silently would change the
+        // plan under the diver.
+        let resolved_waypoints: Vec<Option<usize>> = waypoints
+            .iter()
+            .map(|r| {
+                let key: StationKey = (*r).into();
+                self.resolve_key(&key)
+                    .and_then(|sr| station_index.get(&sr).copied())
+            })
+            .collect();
+        let walk = waypoint_walk(&adj, &roots, &resolved_waypoints, degenerate);
+        let gas_in = &walk.gas_in;
 
         // The strategy actually applied (a stage-short staged request falls back to All-thirds; Free
         // and All-thirds never fall back). Drives the drops AND the gauges so they agree.
@@ -230,8 +249,29 @@ impl Project {
             &gas_config.reserve_profile,
             conservative,
         );
+        // The route target is a plain input lookup, independent of the budget.
+        let endpoint_idx = endpoint.and_then(|r| {
+            let key: StationKey = (*r).into();
+            self.resolve_key(&key)
+                .and_then(|sr| station_index.get(&sr).copied())
+        });
+        // The un-overridden route: what the STRATEGY alone would fly, on the base budget. Its drop
+        // stations are the "defaults" a release-in-place must reproduce, so `apply` can recognise a
+        // pin to one and stay a true no-op (#246). Deriving them from a route rather than from the
+        // predecessor tree is what keeps that check exact once way points can make the route
+        // backtrack over a station it already visited (#298).
+        let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
+        let base_view = budget_view(&walk, endpoint_idx, base_budget);
+        let default_drop_nodes = drop_nodes(&base_view, &default_thresholds);
+
         let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
-            apply_stage_drop_overrides(&plans, &resolved_overrides, &gas_in, &pred, conservative);
+            apply_stage_drop_overrides(
+                &plans,
+                &resolved_overrides,
+                gas_in,
+                &default_drop_nodes,
+                conservative,
+            );
         // A pathological-but-valid cylinder (huge finite fill × volume) can overflow deliverable_gas
         // to a non-finite budget; treat that as all-unreachable (0.0) rather than leaking NaN/Inf to
         // the gauge readout. The staged paths already `.max(0.0)`-guard; this mirrors them. The
@@ -244,38 +284,20 @@ impl Project {
             0.0
         };
 
-        let reachable: Vec<bool> = gas_in
-            .iter()
-            .map(|&g| g.is_finite() && g <= budget_litres)
-            .collect();
-
-        // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
-        // `deepest` (the route fallback target) tracks the same arg-max but seeds at -∞ so a
-        // degenerate all-at-0 reachable set (only a root in budget) still yields a target.
-        let mut max_reachable_gas = 0.0_f64;
-        let mut deepest: Option<usize> = None;
-        let mut deepest_gas = f64::NEG_INFINITY;
-        let gas_to_reach: Vec<Option<f64>> = gas_in
-            .iter()
-            .zip(&reachable)
-            .enumerate()
-            .map(|(i, (&g, &ok))| {
-                if g.is_finite() {
-                    if ok {
-                        if g > max_reachable_gas {
-                            max_reachable_gas = g;
-                        }
-                        if g > deepest_gas {
-                            deepest_gas = g;
-                            deepest = Some(i);
-                        }
-                    }
-                    Some(g)
-                } else {
-                    None
-                }
-            })
-            .collect();
+        // Everything the final budget decides: the reachable mask, the reported gas-to-reach, and
+        // the planned route origin -> way points -> target (populated for ANY strategy when
+        // something is reachable). Per-stage drop points are placed on that route only where a
+        // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
+        // usable).
+        let view = budget_view(&walk, endpoint_idx, budget_litres);
+        let BudgetView {
+            reachable,
+            gas_to_reach,
+            max_reachable_gas,
+            target: route_target,
+            route: route_nodes,
+            route_gas,
+        } = view;
 
         // Turn frontier: reachable stations with at least one neighbour that is NOT reachable
         // (out of budget or in another component). Topology only - `adj`'s edge SET (built
@@ -285,23 +307,19 @@ impl Project {
             .map(|u| station_refs[u])
             .collect();
 
-        // Route target: the user-selected endpoint when it resolves to an in-budget station, else
-        // the deepest in-budget station. (An out-of-budget endpoint falls back to deepest - the
-        // chosen lead isn't reachable on this gas; the UI still marks the pick.)
-        let route_target = endpoint
-            .and_then(|r| {
-                let key: StationKey = (*r).into();
-                self.resolve_key(&key)
-                    .and_then(|sr| station_index.get(&sr).copied())
-            })
-            .filter(|&i| reachable[i])
-            .or(deepest);
-
-        // Planned route to the target (for the highlight + final turn) - populated for ANY strategy
-        // when something is reachable. Per-stage drop points are placed on it only where a threshold
-        // exists (empty for All-thirds / a fell-back staged rig / a Free rig with no stage usable).
-        let (route_refs, stage_drop_refs, final_turn_ref) =
-            staged_route(route_target, &pred, &gas_in, &station_refs, &thresholds);
+        let route_refs: Vec<StationRef> = route_nodes.iter().map(|&i| station_refs[i]).collect();
+        let final_turn_ref = route_target.map(|i| station_refs[i]);
+        // Drop indices along the route (not refs): a way-point route can revisit a station, so an
+        // index is the only unambiguous handle. No target means no plan, hence no drops.
+        let drop_indices: Vec<usize> = if route_target.is_some() {
+            place_stage_drops(&route_gas, &thresholds)
+        } else {
+            Vec::new()
+        };
+        let stage_drop_refs: Vec<StationRef> = drop_indices
+            .iter()
+            .filter_map(|&j| route_refs.get(j).copied())
+            .collect();
         let route = self.route_legs(&route_refs);
 
         // Physical route metrics from the route's measured coordinates: the one-way swum line length
@@ -331,9 +349,14 @@ impl Project {
         let (route_line_length_m, route_max_depth_m, route_avg_depth_m) =
             route_metrics(&route_pts, &route_swim);
         // Per-stage drop DISTANCE (metres, swum from origin), aligned with `stage_drop_refs`, for the
-        // Plan readout - same swum-distance basis as `route_line_length_m`.
-        let stage_drop_distances_m =
-            stage_drop_distances(&route_refs, &route_pts, &route_swim, &stage_drop_refs);
+        // Plan readout - same swum-distance basis as `route_line_length_m`. Read at the drop's route
+        // INDEX, so a route that doubles back over a station reports the distance of the pass the
+        // drop actually sits on.
+        let cum_route_distance = cumulative_distances(&route_pts, &route_swim);
+        let stage_drop_distances_m: Vec<f64> = drop_indices
+            .iter()
+            .map(|&j| cum_route_distance.get(j).copied().unwrap_or(0.0))
+            .collect();
 
         // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
@@ -372,6 +395,7 @@ impl Project {
             route_line_length_m,
             route_max_depth_m,
             route_avg_depth_m,
+            waypoint_gas_litres: walk.waypoint_gas,
         }
     }
 
@@ -399,65 +423,225 @@ impl Project {
     }
 }
 
-/// Reconstruct the route to `target` and place the per-stage drop points on it. Walks the
-/// predecessor tree from the route target (the user-selected endpoint, else the deepest in-budget
-/// station) back to its root, reverses to give the route origin→target, then for each cumulative
-/// stage threshold (litres) finds the first route station whose gas-to-reach reaches it (the
-/// diver's likely drop point). A threshold past the target - the cave is shorter than the staged
-/// gas, so the stage isn't fully breathed before turning - clamps its drop to the turnaround (you
-/// carry/drop it there), so EVERY threshold yields exactly one drop and `stage_drop_refs` stays
-/// aligned 1:1 with the per-stage gauges. Returns `(route_refs, stage_drop_refs, final_turn_ref)`;
-/// all empty/None when there is no reachable target.
-fn staged_route(
-    target: Option<usize>,
-    pred: &[usize],
-    gas_in: &[f64],
-    station_refs: &[StationRef],
-    thresholds: &[f64],
-) -> (Vec<StationRef>, Vec<StationRef>, Option<StationRef>) {
-    let Some(target) = target else {
-        return (Vec::new(), Vec::new(), None);
-    };
+/// Reconstruct the shortest path from a predecessor tree's root to `target`, root first. `pred` is
+/// acyclic by construction; the node-count cap is a defensive stop so a corrupt tree can never hang
+/// the compute.
+fn path_to(pred: &[usize], target: usize) -> Vec<usize> {
     let mut chain = vec![target];
     let mut cur = target;
-    while pred[cur] != usize::MAX {
+    while pred.get(cur).copied().unwrap_or(usize::MAX) != usize::MAX {
         cur = pred[cur];
         chain.push(cur);
-        // Defensive: pred is a tree (no cycles), but cap the walk at the node count so a corrupt
-        // map can never hang the compute.
         if chain.len() > pred.len() {
             break;
         }
     }
     chain.reverse();
-
-    let route_refs: Vec<StationRef> = chain.iter().map(|&i| station_refs[i]).collect();
-    // gas-to-reach increases monotonically root→target along the tree path, so the first station
-    // at/after a threshold is the drop point. A threshold beyond the target's reach clamps to the
-    // target (the turnaround), so every stage gets a drop and the gauges stay aligned.
-    let stage_drop_refs: Vec<StationRef> = thresholds
-        .iter()
-        .map(|&t| {
-            chain
-                .iter()
-                .find(|&&i| gas_in[i] >= t)
-                .map_or(station_refs[target], |&i| station_refs[i])
-        })
-        .collect();
-    (route_refs, stage_drop_refs, Some(station_refs[target]))
+    chain
 }
 
-/// Swum distance (metres) from the route origin to each stage-drop station, aligned with
-/// `stage_drop_refs`. Walks the ordered route accumulating 3-D segment lengths over swum legs only
-/// (ties excluded, exactly like `route_metrics`), then reads the cumulative distance at each drop
-/// station's position on the route. A drop not on the route (shouldn't happen - drops come from the
-/// route chain) reads 0. Backend-computed so the Plan readout never re-derives it.
-fn stage_drop_distances(
-    route_refs: &[StationRef],
-    pts: &[Coordinates],
-    swim: &[bool],
-    drops: &[StationRef],
-) -> Vec<f64> {
+/// Result of walking the ordered way points (#298) - the gas field the rest of the engine reads,
+/// plus the part of the route the way points have already fixed.
+struct WaypointWalk {
+    /// Gas-to-reach every station AFTER visiting every way point in order: the last leg's Dijkstra
+    /// distance offset by the gas already spent getting to the last way point. All-infinite when the
+    /// chain stalls, so nothing reads as reachable on a route that cannot be flown.
+    gas_in: Vec<f64>,
+    /// Predecessor tree of the LAST leg - rooted at the final way point, or at the origin roots when
+    /// there are none. Walk it back from the route target to finish the route.
+    pred: Vec<usize>,
+    /// Route stations the way-point chain has already committed (origin → … → last way point) with
+    /// their cumulative gas. Empty when there are no way points, so the route is then purely the
+    /// origin→target path and the field is byte-identical to the single-Dijkstra one.
+    chain: Vec<usize>,
+    chain_gas: Vec<f64>,
+    /// Cumulative gas at each way point, in order; `None` from the first one that stalls.
+    waypoint_gas: Vec<Option<f64>>,
+}
+
+/// Walk the ordered way points: one Dijkstra per leg, each seeded at the previous way point, with
+/// the legs' costs accumulated. `waypoints` carries `None` for an entry that no longer resolves to a
+/// station. A `None` entry, or one the graph cannot reach, **stalls** the walk - every later way
+/// point reports `None` and the whole field goes unreachable, because a plan that silently skipped a
+/// mandated point would over-state reach (the unsafe direction, §6).
+fn waypoint_walk(
+    adj: &[Vec<(usize, f64)>],
+    roots: &[usize],
+    waypoints: &[Option<usize>],
+    degenerate: bool,
+) -> WaypointWalk {
+    let n = adj.len();
+    if degenerate {
+        return WaypointWalk {
+            gas_in: vec![f64::INFINITY; n],
+            pred: vec![usize::MAX; n],
+            chain: Vec::new(),
+            chain_gas: Vec::new(),
+            waypoint_gas: vec![None; waypoints.len()],
+        };
+    }
+    let mut leg = Project::dijkstra_with_preds(adj, roots);
+    let mut cum = 0.0_f64;
+    let mut chain: Vec<usize> = Vec::new();
+    let mut chain_gas: Vec<f64> = Vec::new();
+    let mut waypoint_gas: Vec<Option<f64>> = Vec::with_capacity(waypoints.len());
+    let mut stalled = false;
+    for w in waypoints {
+        let reached = (!stalled)
+            .then_some(*w)
+            .flatten()
+            .filter(|&i| leg.0.get(i).is_some_and(|d| d.is_finite()));
+        let Some(w) = reached else {
+            stalled = true;
+            waypoint_gas.push(None);
+            continue;
+        };
+        // Commit this leg's path. Its first node is the previous leg's way point, which already
+        // closes the chain, so skip it rather than emitting a zero-length duplicate.
+        let skip = usize::from(!chain.is_empty());
+        for &node in path_to(&leg.1, w).iter().skip(skip) {
+            chain.push(node);
+            chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
+        }
+        cum += leg.0.get(w).copied().unwrap_or(0.0);
+        waypoint_gas.push(Some(cum));
+        leg = Project::dijkstra_with_preds(adj, &[w]);
+    }
+    let (dist, pred) = leg;
+    let gas_in = if stalled {
+        vec![f64::INFINITY; n]
+    } else {
+        dist.iter().map(|d| cum + *d).collect()
+    };
+    WaypointWalk {
+        gas_in,
+        pred,
+        chain,
+        chain_gas,
+        waypoint_gas,
+    }
+}
+
+/// Everything the penetration budget decides: which stations are in reach, the reported
+/// gas-to-reach, the largest in-budget value, and the planned route (with its cumulative gas)
+/// origin → way points → target.
+struct BudgetView {
+    reachable: Vec<bool>,
+    gas_to_reach: Vec<Option<f64>>,
+    max_reachable_gas: f64,
+    target: Option<usize>,
+    route: Vec<usize>,
+    route_gas: Vec<f64>,
+}
+
+/// Apply a budget to the walked field. The route target is the user-selected endpoint when it is in
+/// budget, else the deepest in-budget station (an out-of-budget endpoint isn't reachable on this
+/// gas; the UI still marks the pick). Computed twice per field - once on the base budget to locate
+/// the strategy's own drop stations, once on the final budget - which is two O(n) passes plus one
+/// path walk, negligible next to the Dijkstras.
+fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64) -> BudgetView {
+    let reachable: Vec<bool> = walk
+        .gas_in
+        .iter()
+        .map(|&g| g.is_finite() && g <= budget_litres)
+        .collect();
+
+    // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
+    // `deepest` (the route fallback target) tracks the same arg-max but seeds at -∞ so a
+    // degenerate all-at-0 reachable set (only a root in budget) still yields a target.
+    let mut max_reachable_gas = 0.0_f64;
+    let mut deepest: Option<usize> = None;
+    let mut deepest_gas = f64::NEG_INFINITY;
+    let gas_to_reach: Vec<Option<f64>> = walk
+        .gas_in
+        .iter()
+        .zip(&reachable)
+        .enumerate()
+        .map(|(i, (&g, &ok))| {
+            if g.is_finite() {
+                if ok {
+                    if g > max_reachable_gas {
+                        max_reachable_gas = g;
+                    }
+                    if g > deepest_gas {
+                        deepest_gas = g;
+                        deepest = Some(i);
+                    }
+                }
+                Some(g)
+            } else {
+                None
+            }
+        })
+        .collect();
+
+    let target = endpoint
+        .filter(|&i| reachable.get(i).copied().unwrap_or(false))
+        .or(deepest);
+    // The committed way-point chain, then the last leg's path to the target. That path starts at
+    // the final way point, which the chain already ends on, so it is skipped from the tail. With no
+    // way points the chain is empty and the route is exactly the origin→target path.
+    let mut route = walk.chain.clone();
+    let mut route_gas = walk.chain_gas.clone();
+    if let Some(t) = target {
+        let skip = usize::from(!route.is_empty());
+        for &node in path_to(&walk.pred, t).iter().skip(skip) {
+            route.push(node);
+            route_gas.push(walk.gas_in.get(node).copied().unwrap_or(0.0));
+        }
+    }
+    BudgetView {
+        reachable,
+        gas_to_reach,
+        max_reachable_gas,
+        target,
+        route,
+        route_gas,
+    }
+}
+
+/// Running sums of `values`, i.e. `[v0, v0+v1, …]`.
+fn cumulative(values: impl Iterator<Item = f64>) -> Vec<f64> {
+    let mut acc = 0.0_f64;
+    values
+        .map(|v| {
+            acc += v;
+            acc
+        })
+        .collect()
+}
+
+/// Place each stage's drop on the route: the first station whose cumulative route gas reaches the
+/// stage's threshold. Route gas increases monotonically along the route, so that station is the
+/// point where the stage runs out. A threshold past the turnaround - the cave is shorter than the
+/// staged gas, so the stage isn't fully breathed before turning - clamps to the last route station
+/// (you carry/drop it there), so EVERY threshold yields exactly one drop and the per-stage gauges
+/// stay aligned 1:1. Returns route INDICES, not refs: a way-point route can double back over a
+/// station, and only an index says which pass the drop is on.
+fn place_stage_drops(route_gas: &[f64], thresholds: &[f64]) -> Vec<usize> {
+    let Some(last) = route_gas.len().checked_sub(1) else {
+        return Vec::new();
+    };
+    thresholds
+        .iter()
+        .map(|&t| route_gas.iter().position(|&g| g >= t).unwrap_or(last))
+        .collect()
+}
+
+/// The station nodes a strategy's un-overridden drops land on, for the pin-to-default no-op check.
+fn drop_nodes(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
+    if view.target.is_none() {
+        return Vec::new();
+    }
+    place_stage_drops(&view.route_gas, thresholds)
+        .iter()
+        .filter_map(|&j| view.route.get(j).copied())
+        .collect()
+}
+
+/// Cumulative swum distance (metres) at each route station: 3-D segment lengths accumulated over
+/// swum legs only, with zero-distance merge/closure ties excluded exactly as [`route_metrics`] does.
+fn cumulative_distances(pts: &[Coordinates], swim: &[bool]) -> Vec<f64> {
     let mut cum = vec![0.0_f64; pts.len()];
     for i in 1..pts.len() {
         let seg = if swim.get(i - 1).copied().unwrap_or(true) {
@@ -468,16 +652,7 @@ fn stage_drop_distances(
         };
         cum[i] = cum[i - 1] + seg;
     }
-    drops
-        .iter()
-        .map(|d| {
-            route_refs
-                .iter()
-                .position(|r| r == d)
-                .and_then(|j| cum.get(j).copied())
-                .unwrap_or(0.0)
-        })
-        .collect()
+    cum
 }
 
 /// A route leg is a real **swum** leg - a shot (including a reference/jump shot the diver swims) -
@@ -588,46 +763,36 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// a drop shallower than the one before it contributes 0 (drops the stage full) rather than going
 /// negative. An unresolved / off-graph / non-finite override falls through to the strategy default.
 ///
-/// ⚠ Pin-to-the-default-station is a NO-OP. `staged_route` renders the default ▼ at the first route
-/// station whose `gas_in ≥ threshold`, so that station's `gas_in` usually OVERSHOOTS the sub-station
+/// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
+/// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
 /// threshold. Reading the override as `gas_in[station] - eff_cum` there would fabricate an
-/// over-reserve plan and extend the reach on a mere jiggle / release-in-place (the unsafe direction).
-/// `pred` (the shortest-path tree) lets us recognise that station - it's the first on its route whose
-/// gas clears the default threshold while its parent's doesn't - and reproduce the un-dragged default.
+/// over-reserve plan and extend the reach on a mere jiggle / release-in-place (the unsafe
+/// direction). `default_drop_nodes[k]` - stage `k`'s drop station on the UN-overridden route - lets
+/// us recognise that station exactly and reproduce the un-dragged default. (It replaces an earlier
+/// predecessor-tree heuristic, which could not stay exact once way points let a route double back
+/// over a station, #298.)
 fn apply_stage_drop_overrides(
     plans: &[StageDropPlan],
     overrides: &[Option<usize>],
     gas_in: &[f64],
-    pred: &[usize],
+    default_drop_nodes: &[usize],
     conservative: bool,
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
     let mut over = Vec::with_capacity(plans.len());
     let mut eff_cum = 0.0_f64;
-    // Cumulative UN-overridden threshold - the strategy's own drop point for each stage, used only to
-    // recognise a pin to that default station (the root's tree-parent reads gas 0).
-    let mut default_cum = 0.0_f64;
     let mut delta = 0.0_f64;
-    let pred_gas = |si: usize| -> f64 {
-        pred.get(si)
-            .copied()
-            .filter(|&p| p != usize::MAX)
-            .and_then(|p| gas_in.get(p).copied())
-            .unwrap_or(0.0)
-    };
     for (k, p) in plans.iter().enumerate() {
-        default_cum += p.safe_in_litres;
         let pinned = overrides
             .get(k)
             .copied()
             .flatten()
             .filter(|&si| gas_in.get(si).is_some_and(|g| g.is_finite()));
         let (contribution, bar, is_over) = match pinned {
-            // Pinned to the stage's OWN default drop station (first station past the default
-            // threshold - its tree-parent is still below it): reproduce the un-dragged default so a
+            // Pinned to the stage's OWN default drop station: reproduce the un-dragged default so a
             // jiggle / release-in-place can't fabricate over-reserve or extend the reach.
-            Some(si) if gas_in[si] >= default_cum && pred_gas(si) < default_cum => {
+            Some(si) if default_drop_nodes.get(k) == Some(&si) => {
                 (p.safe_in_litres, p.default_bar, false)
             }
             Some(si) => {

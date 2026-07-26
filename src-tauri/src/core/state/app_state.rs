@@ -517,6 +517,7 @@ impl AppState {
         &self,
         origin: Option<&StationRef>,
         endpoint: Option<&StationRef>,
+        waypoints: &[StationRef],
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
@@ -526,6 +527,7 @@ impl AppState {
         Some(project.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
+            waypoints,
             diver,
             cylinders,
             gas_config,

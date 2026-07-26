@@ -1064,6 +1064,7 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1090,6 +1091,7 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1136,6 +1138,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1165,6 +1168,7 @@ fn gas_reach_field_override_none_and_overlong_fall_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1199,6 +1203,7 @@ fn gas_reach_field_override_ignored_for_all_thirds_no_drops() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg],
         &GasConfig::default(),
@@ -1254,6 +1259,7 @@ fn gas_reach_field_override_recomputes_free_strategy_drop() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1311,6 +1317,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage0, stage1],
         &cfg,
@@ -1346,6 +1353,7 @@ fn gas_reach_field_override_to_default_station_is_a_no_op() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1373,6 +1381,7 @@ fn gas_reach_field_override_unresolvable_ref_falls_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1424,6 +1433,7 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &diver,
         &[bg, stage0, stage1],
         &cfg,
@@ -2398,4 +2408,346 @@ fn gas_reach_field_unresolvable_origin_falls_back_to_entrance() {
         project.compute_gas_reach_field(Some(&ghost), None, &diver, &[big], &GasConfig::default());
     assert!(field.reachable.iter().all(|&r| r)); // fell back to the entrance, not all-grey
     assert!(field_gas(&field, origin).abs() < EPS);
+}
+
+// ---- #298: ordered way points ---------------------------------------------------------
+
+/// A Y-shaped cave for the way-point tests: a trunk of 3 shots descending 0→30 m (100 m each)
+/// and a 1-shot side branch tied to the trunk's entrance by a station merge. Returns
+/// `(project, entrance, side_tip, trunk_tip)`.
+///
+/// Gas-to-reach from the entrance at 20 L/min and the default 10 m/min swim speed (Z ≈ 1 at
+/// these depths): trunk stations 0/1/2/3 = 0/300/800/1500 L; the side tip = 300 L.
+fn branching_project() -> (Project, StationRef, StationRef, StationRef) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let trunk = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(100.0, 0.0, 10.0),
+                make_shot(100.0, 10.0, 20.0),
+                make_shot(100.0, 20.0, 30.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let side = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(trunk, 0), StationRef::new(side, 0))
+        .unwrap();
+    (
+        project,
+        StationRef::new(trunk, 0),
+        StationRef::new(side, 1),
+        StationRef::new(trunk, 3),
+    )
+}
+
+/// A cylinder with effectively unlimited gas - for tests about ROUTE shape, not budget.
+fn unlimited_backgas() -> Cylinder {
+    Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap()
+}
+
+/// The ordered route stations of a field (its legs re-joined), for asserting the visit order.
+fn route_stations(field: &GasReachField) -> Vec<StationRef> {
+    match field.route.first() {
+        Some(first) => std::iter::once(first.from)
+            .chain(field.route.iter().map(|l| l.to))
+            .collect(),
+        None => Vec::new(),
+    }
+}
+
+#[test]
+fn gas_reach_field_no_waypoints_is_identical_to_the_plain_field() {
+    // THE guard for the #298 generalisation: an empty way-point list must leave the single-Dijkstra
+    // field exactly as it was. Compares every output of the way-point entry point against the
+    // no-way-point convenience entry on a branching cave with a staged rig (so route, drops, gauges
+    // and distances are all populated, not just the trivially-empty ones).
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let plain = project.compute_gas_reach_field(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &diver,
+        &[bg.clone(), stage.clone()],
+        &cfg,
+    );
+    let with_empty = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[],
+        &diver,
+        &[bg, stage],
+        &cfg,
+        &[],
+    );
+    assert_eq!(plain, with_empty);
+    assert!(plain.waypoint_gas_litres.is_empty());
+    // Sanity: the comparison is not vacuous - this rig really does produce a route and a drop.
+    assert!(!plain.route.is_empty());
+    assert_eq!(plain.stage_drop_refs.len(), 1);
+}
+
+#[test]
+fn gas_reach_field_waypoint_forces_the_detour_and_rebases_the_field() {
+    // A way point on the side branch must be VISITED: the route runs entrance → side tip → back →
+    // trunk tip, and every station's gas-to-reach is re-based to include the mandated detour.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig::default();
+
+    let plain = project.compute_gas_reach_field(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+    );
+    let via_side = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+
+    // The plain route never touches the side branch; the way-point route starts at the entrance,
+    // takes in the side tip, and only then descends the trunk. (The entrance is a merged pair, so
+    // the route legitimately lists both of its refs across the zero-distance tie.)
+    assert!(!route_stations(&plain).contains(&side_tip));
+    let route = route_stations(&via_side);
+    assert_eq!(route.first(), Some(&entrance));
+    assert_eq!(route.last(), Some(&trunk_tip));
+    let side_at = route.iter().position(|r| *r == side_tip).unwrap();
+    let tip_at = route.iter().position(|r| *r == trunk_tip).unwrap();
+    assert!(side_at < tip_at, "the way point must be visited first");
+    // The detour costs 300 L out + 300 L back, so every trunk station is 600 L dearer than before.
+    assert!((field_gas(&via_side, trunk_tip) - field_gas(&plain, trunk_tip) - 600.0).abs() < 1e-6);
+    // Even the entrance is no longer free: you must do the side branch first.
+    assert!((field_gas(&via_side, entrance) - 600.0).abs() < 1e-6);
+    // The cumulative gas AT the way point is reported for the readout.
+    assert_eq!(via_side.waypoint_gas_litres.len(), 1);
+    assert!((via_side.waypoint_gas_litres[0].unwrap() - 300.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_waypoints_are_visited_in_the_given_order() {
+    // Two way points are an ORDERED constraint, not a set: swapping them swaps the visit order (and
+    // here also the total cost, since the two detours are different depths).
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let trunk_mid = StationRef::new(entrance.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig::default();
+    let field_for = |waypoints: &[StationRef]| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            Some(&trunk_tip),
+            waypoints,
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+
+    let side_first = field_for(&[side_tip, trunk_mid]);
+    let mid_first = field_for(&[trunk_mid, side_tip]);
+
+    let side_pos = |f: &GasReachField| {
+        route_stations(f)
+            .iter()
+            .position(|r| *r == side_tip)
+            .unwrap()
+    };
+    let mid_pos = |f: &GasReachField| {
+        route_stations(f)
+            .iter()
+            .position(|r| *r == trunk_mid)
+            .unwrap()
+    };
+    assert!(side_pos(&side_first) < mid_pos(&side_first));
+    assert!(mid_pos(&mid_first) < side_pos(&mid_first));
+    // Visiting the deep trunk station first and then backtracking to the shallow side branch costs
+    // strictly more gas, so the order genuinely changes the plan rather than just the drawing.
+    assert!(field_gas(&mid_first, trunk_tip) > field_gas(&side_first, trunk_tip));
+}
+
+#[test]
+fn gas_reach_field_disconnected_waypoint_stalls_the_whole_plan() {
+    // A way point in another component cannot be flown. Silently skipping it would plan a route the
+    // diver never agreed to and OVER-state their reach, so the field goes all-unreachable and the
+    // readout says which way point broke.
+    let (mut project, entrance, side_tip, _trunk_tip) = branching_project();
+    let island = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 10.0)],
+            ..Default::default()
+        })
+        .id;
+    let marooned = StationRef::new(island, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[marooned, side_tip],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    assert!(!field.reachable.iter().any(|&r| r));
+    assert!(field.gas_to_reach.iter().all(Option::is_none));
+    assert!(field.turn_frontier.is_empty());
+    assert!(field.final_turn_ref.is_none());
+    assert!(field.stage_drop_refs.is_empty());
+    // Both entries report None: the first because it is unreachable, the second because the walk
+    // stalled before it.
+    assert_eq!(field.waypoint_gas_litres, vec![None, None]);
+}
+
+#[test]
+fn gas_reach_field_unresolvable_waypoint_stalls_rather_than_being_skipped() {
+    // A way point whose station was deleted under a loaded plan must NOT be dropped from the route:
+    // that would quietly relax a constraint the diver set. Contrast the origin, which deliberately
+    // degrades to the entrance.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let ghost = StationRef::new(entrance.section_id + 999, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[ghost],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    assert_eq!(field.waypoint_gas_litres, vec![None]);
+    assert!(!field.reachable.iter().any(|&r| r));
+}
+
+#[test]
+fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
+    // When the mandated detour alone exceeds the budget nothing is reachable, but the route drawn so
+    // far is kept so the diver can SEE which way point blew the gas (the panel compares
+    // waypoint_gas_litres against budget_litres).
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // 20 bar x 10 L water, all-thirds ⇒ budget ≈ 66 L, far under the 300 L to the side tip.
+    let tiny = Cylinder::new(
+        10.0,
+        207.0,
+        20.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[tiny],
+        &GasConfig::default(),
+        &[],
+    );
+    assert!(field.waypoint_gas_litres[0].unwrap() > field.budget_litres);
+    assert!(!field.reachable.iter().any(|&r| r));
+    assert!(field.final_turn_ref.is_none());
+    // The chain the way point committed is still drawn - entrance → … → side tip - even though
+    // nothing on it is in budget.
+    let route = route_stations(&field);
+    assert_eq!(route.first(), Some(&entrance));
+    assert_eq!(route.last(), Some(&side_tip));
+}
+
+#[test]
+fn gas_reach_field_stage_drop_override_on_a_revisited_station_picks_the_later_pass() {
+    // A way-point route doubles back over the entrance, so that station appears TWICE on the route.
+    // Its drop distance must come from the pass the drop actually sits on (the return leg), not
+    // from the first occurrence - the exact ambiguity a ref-based lookup could not resolve.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[bg, stage],
+        &cfg,
+        &[Some(entrance)],
+    );
+    let route = route_stations(&field);
+    assert_eq!(
+        route.iter().filter(|r| **r == entrance).count(),
+        2,
+        "the detour must revisit the entrance for this test to mean anything"
+    );
+    // The drop lands back at the entrance point on the RETURN pass. (The entrance is a merged pair,
+    // so the engine may name it by either section's ref - what matters is the distance.)
+    assert_eq!(field.stage_drop_refs.len(), 1);
+    // 100 m out to the side tip + 100 m back = 200 m swum when the drop is made on the return pass.
+    // The first occurrence of that station on the route would have reported 0 m.
+    assert!((field.stage_drop_distances_m[0] - 200.0).abs() < 1e-6);
 }

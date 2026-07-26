@@ -254,4 +254,11 @@ pub struct GasReachField {
     /// Distance-weighted average depth along the route (metres, positive = below surface); `None`
     /// when no route.
     pub route_avg_depth_m: Option<f64>,
+    /// Cumulative gas-to-reach (litres) at each ordered way point (#298), aligned 1:1 with the
+    /// `waypoints` input. `None` from the first way point that no longer resolves to a station or
+    /// that the graph cannot reach: the mandated route can't be flown, so every station also reads
+    /// unreachable and the UI shows the route only as far as the chain got. Compare an entry against
+    /// `budget_litres` to tell the diver the detour alone exceeds their gas. Empty when the plan has
+    /// no way points.
+    pub waypoint_gas_litres: Vec<Option<f64>>,
 }

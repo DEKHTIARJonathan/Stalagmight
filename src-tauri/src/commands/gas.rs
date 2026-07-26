@@ -16,6 +16,10 @@ pub async fn compute_gas_reach_field(
     app_handle: tauri::AppHandle,
     origin: Option<StationRef>,
     endpoint: Option<StationRef>,
+    // Ordered way points (#298) the dive must visit, in order, between the origin and the endpoint.
+    // The frontend always sends it (empty when the plan has none). Each is re-resolved by the
+    // engine; an entry that no longer resolves stalls the plan rather than being skipped.
+    waypoints: Vec<StationRef>,
     diver: Diver,
     cylinders: Vec<Cylinder>,
     gas_config: GasConfig,
@@ -60,6 +64,7 @@ pub async fn compute_gas_reach_field(
         state.inner().gas_reach_field(
             origin.as_ref(),
             endpoint.as_ref(),
+            &waypoints,
             &diver,
             &cylinders,
             &gas_config,
