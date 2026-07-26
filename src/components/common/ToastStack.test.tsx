@@ -451,10 +451,11 @@ describe('ToastStack - pausing', () => {
     expect(toastFor('read me')?.style.opacity).toBe('1');
   });
 
-  it('resumes from where it stopped on mouse-out', () => {
+  it('gives the FULL dwell back on mouse-out rather than resuming mid-fade', () => {
     render(<ToastStack />);
     push('read me', 'k');
 
+    // Deep into the fade before the pointer arrives.
     advance(5500);
     const stack = screen.getByTestId('toast-stack');
     act(() => {
@@ -465,11 +466,58 @@ describe('ToastStack - pausing', () => {
       stack.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
     });
 
-    // Only ~1s of the 1.5s fade remained, so it is still here but fading again.
-    advance(500);
-    expect(Number(toastFor('read me')?.style.opacity)).toBeLessThan(1);
-    advance(1200);
+    // Resuming where it stopped would have left ~1s of fade and killed it almost
+    // at once. Having read it, the user has spent exactly the time the dwell
+    // exists to give, so the clock starts over: still fully opaque a full dwell
+    // later, gone once that dwell plus the fade has run.
+    advance(4500);
+    expect(toastFor('read me')?.style.opacity).toBe('1');
+    advance(2500);
     expect(toastFor('read me')).toBeUndefined();
+  });
+
+  it('un-pauses itself when the pointer is gone but no mouse-out ever arrived', () => {
+    // mouseleave is not guaranteed: the node under the pointer can be REMOVED
+    // (a toast finishing its exit, the stack reflowing) and a node that no longer
+    // exists fires no leave event. Without a self-heal `paused` sticks true and
+    // nothing dismisses again - the reported "once I hover them they never go
+    // away". jsdom reports no :hover, so the tick's DOM re-check should recover.
+    render(<ToastStack />);
+    push('stuck?', 'k');
+    // Let the entrance settle - a toast's first frame is deliberately at
+    // opacity 0, below its slot.
+    advance(200);
+
+    act(() => {
+      screen.getByTestId('toast-stack').dispatchEvent(
+        new MouseEvent('mouseover', { bubbles: true }),
+      );
+    });
+    expect(toastFor('stuck?')?.style.opacity).toBe('1');
+
+    // No mouseout is ever dispatched. Instead the pointer simply turns up
+    // somewhere else, which is positive evidence it has left the stack.
+    act(() => {
+      document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    });
+    advance(8000);
+    expect(toastFor('stuck?')).toBeUndefined();
+  });
+
+  it('does NOT un-pause on a pointer move that is still inside the stack', () => {
+    render(<ToastStack />);
+    push('read me', 'k');
+
+    const stack = screen.getByTestId('toast-stack');
+    act(() => {
+      stack.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    });
+    act(() => {
+      stack.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
+    });
+
+    advance(20000);
+    expect(toastFor('read me')).toBeDefined();
   });
 
   it('keyboard focus pauses the stack too', () => {

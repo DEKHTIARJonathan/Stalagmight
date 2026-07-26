@@ -234,6 +234,22 @@ export function ToastStack() {
   reducedMotionRef.current = reducedMotion;
 
   const clocks = useRef(new Map<number, Clock>());
+  /** The stack container, so the tick can re-check whether it is really hovered. */
+  const stackRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * Leave the paused state and give every surviving toast its FULL dwell back.
+   *
+   * A reset rather than a resume: having read the stack, the user has spent the
+   * time the dwell exists to provide, and dropping them back into the last
+   * fraction of a fade means a toast they just looked at vanishes almost
+   * immediately.
+   */
+  const resume = useCallback(() => {
+    for (const clock of clocks.current.values()) clock.elapsed = 0;
+    setPaused(false);
+  }, []);
+
   /** Live DOM node per toast id, so heights can be re-measured on demand. */
   const nodes = useRef(new Map<number, HTMLElement>());
   /** Last measured box per toast id. */
@@ -330,6 +346,7 @@ export function ToastStack() {
       const live = store.toasts;
       const map = clocks.current;
 
+
       for (const id of [...map.keys()]) {
         if (!live.some((item) => item.id === id)) map.delete(id);
       }
@@ -362,6 +379,37 @@ export function ToastStack() {
     }, TICK_MS);
     return () => window.clearInterval(handle);
   }, [hasToasts]);
+
+  /**
+   * Self-heal a stranded pause.
+   *
+   * `mouseleave` is not guaranteed to arrive. The node under the pointer can be
+   * REMOVED - a toast finishing its exit, the stack reflowing, the container
+   * unmounting - and a node that no longer exists fires no leave event, so
+   * `paused` would stay true and nothing would ever dismiss again. That is the
+   * "once I have hovered them they never go away" case.
+   *
+   * So do not rely solely on the enter/leave pair: while paused, any pointer
+   * movement over something OUTSIDE the stack is positive evidence the pointer
+   * has gone, and resumes. A keyboard pause is exempt, since focus is still held
+   * regardless of where the mouse happens to be.
+   */
+  useEffect(() => {
+    if (!paused) return undefined;
+    const onMove = (e: Event) => {
+      const el = stackRef.current;
+      if (el && el.contains(document.activeElement)) return;
+      const target = e.target;
+      if (el && target instanceof Node && el.contains(target)) return;
+      resume();
+    };
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('mousemove', onMove, true);
+    return () => {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('mousemove', onMove, true);
+    };
+  }, [paused, resume]);
 
   // The entrance. A toast renders its first frame below its slot at opacity 0,
   // then flips to its real offset on the next frame, and the CSS transition does
@@ -444,10 +492,11 @@ export function ToastStack() {
           // the hit area would un-pause every time the pointer crossed one.
           className="absolute bottom-6 left-6 pointer-events-auto"
           style={{ height: stackHeight || undefined, width: stackWidth || undefined }}
+          ref={stackRef}
           onMouseEnter={() => setPaused(true)}
-          onMouseLeave={() => setPaused(false)}
+          onMouseLeave={resume}
           onFocusCapture={() => setPaused(true)}
-          onBlurCapture={() => setPaused(false)}
+          onBlurCapture={resume}
         >
           {toasts.map((item) => (
             <Toast
