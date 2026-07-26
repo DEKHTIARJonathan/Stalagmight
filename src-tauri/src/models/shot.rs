@@ -33,6 +33,23 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
     }
 }
 
+/// Circular mean of a shot's two **forward** azimuth readings, normalised to
+/// `[0, 360)`.
+///
+/// `azimuth_in`/`azimuth_out` are not a foresight/backsight pair - they are two
+/// readings of the same forward line - so geometry uses their mean, not either
+/// one alone.
+///
+/// The mean of two readings exactly 180 degrees apart is undefined (both
+/// perpendiculars are equidistant); the `+540 % 360 - 180` normalisation
+/// resolves that tie to `azimuth_in - 90`. Reversing a section has to cope with
+/// that arbitrary choice - see [`crate::models::reverse_shots`].
+pub(crate) fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
+    // Handle wraparound at 360 degrees
+    let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
+    (azimuth_in + diff / 2.0 + 360.0) % 360.0
+}
+
 /// Convert horizontal + vertical components into slope length.
 #[cfg_attr(not(test), expect(dead_code))] // used only by tests; dead in the lib build
 pub(crate) fn slope_length_from_components(horizontal: f64, dz: f64) -> f64 {
@@ -595,9 +612,7 @@ impl Shot {
 
     /// Calculate the average azimuth from in and out readings
     pub fn average_azimuth(&self) -> f64 {
-        // Handle wraparound at 360 degrees
-        let diff = (self.azimuth_out - self.azimuth_in + 540.0) % 360.0 - 180.0;
-        (self.azimuth_in + diff / 2.0 + 360.0) % 360.0
+        average_azimuth_of(self.azimuth_in, self.azimuth_out)
     }
 
     /// Horizontal projection of the shot length (meters).
@@ -664,6 +679,13 @@ impl ShotData {
     /// ShotData.length is slope distance, so horizontal is derived from depth change.
     pub fn horizontal_length(&self) -> f64 {
         horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
+    }
+
+    /// Circular mean of the two forward azimuth readings - the bearing geometry
+    /// actually walks. Mirrors [`Shot::average_azimuth`] for the pre-creation
+    /// form used by the importers.
+    pub fn average_azimuth(&self) -> f64 {
+        average_azimuth_of(self.azimuth_in, self.azimuth_out)
     }
 }
 

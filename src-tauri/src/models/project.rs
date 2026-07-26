@@ -48,7 +48,7 @@ pub use gas::{
     Team,
 };
 pub use integrity::{IntegrityViolation, ViolationSeverity};
-pub use reverse::reverse_shots;
+pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).

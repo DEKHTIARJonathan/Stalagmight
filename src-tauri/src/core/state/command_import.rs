@@ -591,9 +591,20 @@ impl AppState {
             // final order - the contract every importer wizard builds against.
             // Left/right is never swapped on this path (no dialog to ask).
             let mut shots = config.shots.clone();
-            if config.reverse {
+            // A reverse makes station 0 the far end, so the section's anchor has
+            // to gain the span it used to cover or the passage lands a full
+            // end-to-end displacement away from where the wizard put it.  The
+            // in-app reverse does this via `adjust_section_offset`; do the same
+            // here, measured on the pre-reverse order, and apply it once the
+            // section exists.  Merge- and datum-based placements below re-anchor
+            // the section outright, so for those it is inert - it is `Origin` and
+            // `Manual` (which position station 0 directly) that would otherwise
+            // silently move.
+            let reverse_offset = config.reverse.then(|| {
+                let displacement = crate::models::shot_run_displacement(&shots);
                 crate::models::reverse_shots(&mut shots, false);
-            }
+                displacement
+            });
             let section_data = SectionData {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
@@ -626,6 +637,22 @@ impl AppState {
             created_ids.insert(config.section_index, section_id);
             all_section_ids.push(section_id);
             all_warnings.extend(create_result.warnings);
+
+            // Keep a reversed section where the un-reversed import would have put
+            // it (see `reverse_offset` above).  Undo/redo for the whole import is
+            // the before/after snapshot pair pushed at the end, so this needs no
+            // command of its own.
+            if let Some((dx, dy)) = reverse_offset {
+                if dx != 0.0 || dy != 0.0 {
+                    let mut proj_guard = match self.project.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    if let Some(project) = proj_guard.as_mut() {
+                        project.adjust_section_offset(section_id, dx, dy);
+                    }
+                }
+            }
 
             // Apply station comments (promoted from shot comments during TML import)
             if !config.station_comments.is_empty() {

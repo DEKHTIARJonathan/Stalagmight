@@ -335,6 +335,80 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     );
 }
 
+/// Ticking the import toggle changes the numbering, never where the passage
+/// lands.  `Origin` and `Manual` position station 0 directly, so without the
+/// offset compensation a reversed section - whose station 0 is now the far end -
+/// would sit a full end-to-end displacement away from the un-reversed import.
+#[test]
+fn import_reverse_lands_the_section_in_the_same_place() {
+    let shots = vec![
+        shot(0.0, 10.0, 0.0, 2.0),
+        shot(90.0, 5.0, 2.0, 2.0),
+        shot(210.0, 7.5, 2.0, 1.0),
+    ];
+
+    let import = |reverse: bool, placement: ImportPlacement| {
+        let state = AppState::new().unwrap();
+        state.execute(Command::CreateProject {
+            name: "Import".to_string(),
+            location: None,
+        });
+        let result = state.execute_import_sections(
+            vec![ImportSectionConfig {
+                section_index: 0,
+                name: Some("Imported".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#4ecdc4".to_string(),
+                direction: None,
+                quality: 1.0,
+                shots: shots.clone(),
+                placement,
+                station_comments: Vec::new(),
+                reverse,
+            }],
+            Vec::new(),
+            None,
+            Vec::new(),
+            Vec::new(),
+        );
+        assert!(result.success, "import failed: {:?}", result.error);
+        let project = state.get_project_state().unwrap();
+        let mut coords: Vec<Coordinates> = project
+            .compute_station_coordinates()
+            .into_iter()
+            .map(|s| s.coordinates)
+            .collect();
+        // Reversed numbering walks the same stations from the other end.
+        if reverse {
+            coords.reverse();
+        }
+        coords
+    };
+
+    for placement in [
+        ImportPlacement::Origin,
+        ImportPlacement::Manual {
+            align_station_index: 0,
+            offset: Some(Coordinates {
+                x: 40.0,
+                y: -15.0,
+                z: 0.0,
+            }),
+        },
+    ] {
+        let plain = import(false, placement.clone());
+        let reversed = import(true, placement.clone());
+        assert_eq!(plain.len(), reversed.len(), "station count changed");
+        for (i, (a, b)) in plain.iter().zip(&reversed).enumerate() {
+            assert!(
+                (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6,
+                "station {i} moved under {placement:?}: {a:?} vs {b:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn reverse_of_a_missing_section_fails() {
     let (state, _) = state_with_section();
