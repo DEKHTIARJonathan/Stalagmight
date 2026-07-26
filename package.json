@@ -32,6 +32,7 @@
     "lint:readonly-gates:test": "node scripts/check-readonly-gates.test.mjs",
     "lint:no-em-dash": "node scripts/check-no-em-dash.mjs",
     "lint:no-em-dash:test": "node scripts/check-no-em-dash.test.mjs",
+    "lint:pw-timing:test": "node scripts/pw-timing-reporter.test.mjs && node scripts/pw-timing-summary.test.mjs",
     "coverage:ui": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:ui",
     "coverage:e2e": "E2E_COVERAGE=1 VITE_COVERAGE=1 pnpm test:e2e",
     "coverage:merge": "node scripts/merge-coverage.mjs",
