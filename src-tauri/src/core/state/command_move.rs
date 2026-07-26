@@ -39,11 +39,37 @@ impl AppState {
                 .filter(|id| existing.contains(id))
                 .collect();
 
-            if project.rigid_group_has_datum(section_id)
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            // Guard the set actually being offset, not just this section's merge
+            // group. `connected` follows merges AND aligned closures, while
+            // `rigid_group_has_datum` walks merges only, so in principle a datum
+            // reachable over a closure-only edge could slip through.
+            //
+            // HARDENING, not a live bug fix: that state is currently unreachable.
+            // `convert_orphan_closures_to_merges` runs after every command and
+            // promotes any sole-bridge closure to a merge, skipping only the case
+            // where both endpoint groups are already zero-datum-anchored - and in
+            // THAT case the dragged section's own merge group holds a datum, so the
+            // narrow check catches it too. The point of widening it is to stop this
+            // guard depending on an invariant maintained in another module.
+            //
+            // Resolved once against `connected` rather than per section: calling
+            // rigid_group_has_datum for each member rebuilds a whole merge component
+            // and rescans the datum list every time, which is quadratic on a large
+            // merge-connected survey. Equivalent, because a merge edge is also a
+            // rigid edge, so every member's merge component is a subset of
+            // `connected`.
+            let connected_set: std::collections::HashSet<SectionId> =
+                connected.iter().copied().collect();
+            let group_has_datum = project
+                .zero_datums
+                .iter()
+                .filter_map(|zd| project.resolve_key(&zd.station_ref))
+                .any(|sr| connected_set.contains(&sr.section_id));
+            if (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+                && group_has_datum
             {
                 return CommandResult::failure(
-                    "Cannot move a segment whose merge group holds a zero datum".to_string(),
+                    "Cannot move a segment whose rigid group holds a zero datum".to_string(),
                 );
             }
 
