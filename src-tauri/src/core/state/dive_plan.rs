@@ -15,14 +15,19 @@ use std::path::PathBuf;
 use super::AppState;
 use crate::config::GasConfig;
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, Project, StationKey, StationRef,
-    DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, Project, StationKey,
+    StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
 /// Upper bound on a dive-plan name, enforced on the trusted write path independent of
 /// the UI input widget (guards an unbounded untrusted string from a hand-edited `.plnx`; #244).
 const MAX_PLAN_NAME_CHARS: usize = 200;
+
+/// Upper bound on a marked point's optional label (#298), enforced on the same trusted
+/// write path and for the same reason as [`MAX_PLAN_NAME_CHARS`]: the UI caps its input,
+/// but a hand-edited `.plnx` must not be able to smuggle an unbounded string back in.
+const MAX_MARKED_LABEL_CHARS: usize = 120;
 
 /// The open project's `.plnx` sibling path plus the identity we stamp/verify it
 /// with (`created_at` is immutable, so it survives a file rename).
@@ -97,6 +102,8 @@ struct PersistedDivePlanSnapshot {
     origin: Option<StationKey>,
     #[serde(default)]
     endpoint: Option<StationKey>,
+    #[serde(default)]
+    waypoints: Vec<StationKey>,
     #[serde(default = "default_persisted_diver")]
     diver: Diver,
     #[serde(default)]
@@ -105,6 +112,16 @@ struct PersistedDivePlanSnapshot {
     gas_config: GasConfig,
     #[serde(default)]
     stage_drop_overrides: Vec<Option<StationKey>>,
+    #[serde(default)]
+    marked_points: Vec<PersistedMarkedPoint>,
+}
+
+/// On-disk form of a [`MarkedPoint`] (#298): the annotated station as a stable anchor.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct PersistedMarkedPoint {
+    station: StationKey,
+    #[serde(default)]
+    label: Option<String>,
 }
 
 /// Canonicalize a positional ref to a stable key against `project`. A ref that does not
@@ -123,6 +140,18 @@ fn from_key(project: &Project, k: Option<StationKey>, stale: &mut u32) -> Option
         *stale += 1;
     }
     resolved
+}
+
+/// Resolve a stored LIST of keys, DROPPING any that no longer anchor (each counted into
+/// `stale`). Used for the way points and marked points (#298), where - unlike the single
+/// optional origin/endpoint - there is no "null it out" slot: a dangling entry simply
+/// leaves the list, and the UI warns off `stale_ref_count`. Dropping is also what keeps a
+/// loaded plan safe to compute: the engine treats an unresolvable way point as a hard stall,
+/// so carrying a dead one through would blank the whole field on load.
+fn from_keys(project: &Project, keys: Vec<StationKey>, stale: &mut u32) -> Vec<StationRef> {
+    keys.into_iter()
+        .filter_map(|k| from_key(project, Some(k), stale))
+        .collect()
 }
 
 impl AppState {
@@ -225,6 +254,14 @@ impl AppState {
         if name.chars().count() > MAX_PLAN_NAME_CHARS {
             return Err("That dive-plan name is too long.".to_string());
         }
+        if snapshot
+            .marked_points
+            .iter()
+            .filter_map(|m| m.label.as_ref())
+            .any(|l| l.chars().count() > MAX_MARKED_LABEL_CHARS)
+        {
+            return Err("A marked-point label is too long.".to_string());
+        }
         // Resolve ownership BEFORE opening the store: opening unconditionally initializes
         // schema/user_version, which must never happen to a Foreign file (#244 Copilot
         // finding). Fresh vs Owned is stable across the subsequent open() (identity is only
@@ -296,6 +333,11 @@ impl AppState {
         Ok(PersistedDivePlanSnapshot {
             origin: to_key(project, snap.origin),
             endpoint: to_key(project, snap.endpoint),
+            waypoints: snap
+                .waypoints
+                .iter()
+                .filter_map(|w| to_key(project, Some(*w)))
+                .collect(),
             diver: snap.diver.clone(),
             cylinders: snap.cylinders.clone(),
             gas_config: snap.gas_config.clone(),
@@ -303,6 +345,16 @@ impl AppState {
                 .stage_drop_overrides
                 .iter()
                 .map(|o| to_key(project, *o))
+                .collect(),
+            marked_points: snap
+                .marked_points
+                .iter()
+                .filter_map(|m| {
+                    to_key(project, Some(m.station)).map(|station| PersistedMarkedPoint {
+                        station,
+                        label: m.label.clone(),
+                    })
+                })
                 .collect(),
         })
     }
@@ -323,18 +375,31 @@ impl AppState {
         let mut stale = 0u32;
         let origin = from_key(project, p.origin, &mut stale);
         let endpoint = from_key(project, p.endpoint, &mut stale);
+        let waypoints = from_keys(project, p.waypoints, &mut stale);
         let stage_drop_overrides = p
             .stage_drop_overrides
             .into_iter()
             .map(|k| from_key(project, k, &mut stale))
             .collect();
+        let marked_points = p
+            .marked_points
+            .into_iter()
+            .filter_map(|m| {
+                from_key(project, Some(m.station), &mut stale).map(|station| MarkedPoint {
+                    station,
+                    label: m.label,
+                })
+            })
+            .collect();
         let snapshot = DivePlanSnapshot {
             origin,
             endpoint,
+            waypoints,
             diver: p.diver,
             cylinders: p.cylinders,
             gas_config: p.gas_config,
             stage_drop_overrides,
+            marked_points,
         };
         Ok((snapshot, stale))
     }
@@ -598,5 +663,96 @@ mod tests {
         let mut stale = 0;
         assert_eq!(from_key(&project, None, &mut stale), None);
         assert_eq!(stale, 0);
+    }
+
+    /// A snapshot carrying way points and marked points, for the #298 persistence tests.
+    fn snapshot_with_route_points(sec: u32) -> DivePlanSnapshot {
+        DivePlanSnapshot {
+            origin: Some(StationRef::new(sec, 0)),
+            endpoint: Some(StationRef::new(sec, 3)),
+            waypoints: vec![StationRef::new(sec, 2)],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: vec![MarkedPoint {
+                station: StationRef::new(sec, 2),
+                label: Some("photo".to_string()),
+            }],
+        }
+    }
+
+    #[test]
+    fn waypoints_and_marked_points_track_their_station_across_a_shot_deletion() {
+        // Same headline guarantee the origin/endpoint already had (#244 §2): a saved route point is
+        // an anchor, not an index, so a survey edit must move it WITH its physical station rather
+        // than silently rebinding it to whatever now sits at the old index. A way point that
+        // rebinds is worse than a stale origin - it re-routes the dive.
+        let (mut project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        let persisted = {
+            *state.project.lock().unwrap() = Some(project.clone());
+            state
+                .to_persisted(&snapshot_with_route_points(sec))
+                .unwrap()
+        };
+
+        // Delete shot 0: the physical station that was at index 2 is now at index 1.
+        project.sections[0].shots.remove(0);
+        *state.project.lock().unwrap() = Some(project);
+        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(stale, 0);
+        assert_eq!(snapshot.waypoints, vec![StationRef::new(sec, 1)]);
+        assert_eq!(snapshot.marked_points.len(), 1);
+        assert_eq!(snapshot.marked_points[0].station, StationRef::new(sec, 1));
+        assert_eq!(snapshot.marked_points[0].label.as_deref(), Some("photo"));
+    }
+
+    #[test]
+    fn dangling_waypoints_and_marked_points_are_dropped_and_counted() {
+        // Unlike the single origin/endpoint slots there is nothing to null out, so a dangling entry
+        // leaves the list entirely - and MUST, because the engine treats an unresolvable way point
+        // as a hard stall that would blank the whole field on load. It still counts as stale so the
+        // UI can warn that the loaded plan is not what was saved.
+        let (mut project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project.clone());
+        let persisted = state
+            .to_persisted(&snapshot_with_route_points(sec))
+            .unwrap();
+
+        project.sections.clear(); // every anchoring shot is gone
+        *state.project.lock().unwrap() = Some(project);
+        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert!(snapshot.waypoints.is_empty());
+        assert!(snapshot.marked_points.is_empty());
+        // origin + endpoint + way point + marked point all dangled.
+        assert_eq!(stale, 4);
+    }
+
+    #[test]
+    fn over_long_marked_point_label_is_rejected() {
+        // The UI caps its input; this is the trusted-write-path guard against a hand-edited .plnx
+        // (mirrors the plan-name cap).
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_3_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.marked_points[0].label = Some("x".repeat(MAX_MARKED_LABEL_CHARS + 1));
+        let err = state
+            .save_dive_plan(None, "Plan".to_string(), snapshot.clone())
+            .unwrap_err();
+        assert!(err.contains("label is too long"), "got: {err}");
+
+        // Exactly at the cap is fine - the boundary is inclusive.
+        snapshot.marked_points[0].label = Some("x".repeat(MAX_MARKED_LABEL_CHARS));
+        assert!(state
+            .save_dive_plan(None, "Plan".to_string(), snapshot)
+            .is_ok());
     }
 }

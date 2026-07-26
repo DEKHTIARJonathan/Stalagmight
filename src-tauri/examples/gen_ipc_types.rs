@@ -47,11 +47,12 @@ use stalagmight_lib::models::{
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, PathShot, PlanMode, Project, ProjectMetadata,
-    ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
-    SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
-    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
+    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, Project,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint,
+    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire,
+    StationPair, StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
+    ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -128,6 +129,7 @@ fn main() {
     export::<Team>(&out_dir);
     export::<GasReachField>(&out_dir);
     // Dive-plan persistence (#244)
+    export::<MarkedPoint>(&out_dir);
     export::<DivePlanSnapshot>(&out_dir);
     export::<DivePlanMeta>(&out_dir);
     export::<DivePlan>(&out_dir);
@@ -369,6 +371,7 @@ fn main() {
         "Cylinder",
         "Team",
         "GasReachField",
+        "MarkedPoint",
         "DivePlanSnapshot",
         "DivePlanMeta",
         "DivePlan",

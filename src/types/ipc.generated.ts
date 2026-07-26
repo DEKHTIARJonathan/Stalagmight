@@ -32,6 +32,7 @@ export * from './ipc/Diver';
 export * from './ipc/Cylinder';
 export * from './ipc/Team';
 export * from './ipc/GasReachField';
+export * from './ipc/MarkedPoint';
 export * from './ipc/DivePlanSnapshot';
 export * from './ipc/DivePlanMeta';
 export * from './ipc/DivePlan';
