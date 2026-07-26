@@ -54,6 +54,7 @@ impl AppState {
             CreateSection { .. }
             | DeleteSection { .. }
             | UpdateSectionMetadata { .. }
+            | ReverseSection { .. }
             | CreateShot { .. }
             | UpdateShot { .. }
             | DeleteShot { .. }
@@ -167,7 +168,13 @@ impl AppState {
             // table) is metadata, and the rationale below does not apply to it.
             UpdateShot { updates, .. } if !updates.touches_geometry() => INERT,
 
-            CreateSection { .. }
+            // Reverse renumbers every station in a section but rewrites its own
+            // external refs to the mirrored stations as part of the operation, so
+            // nothing is left dangling and no closure is stranded. World coords are
+            // invariant by construction; the reconcile epilogue is a no-op that
+            // keeps it uniform with the other station-moving commands.
+            ReverseSection { .. }
+            | CreateSection { .. }
             | UpdateShot { .. }
             | MergeStations { .. }
             | CreateLoopClosure { .. }
@@ -534,6 +541,10 @@ impl AppState {
                 section_id,
                 updates,
             } => self.update_section(*section_id, updates.clone()),
+            Command::ReverseSection {
+                section_id,
+                swap_left_right,
+            } => self.reverse_section(*section_id, *swap_left_right),
             Command::CreateShot {
                 section_id,
                 shot,

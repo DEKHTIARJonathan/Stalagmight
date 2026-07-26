@@ -39,6 +39,7 @@ mod shots;
 mod integrity;
 mod offsets;
 mod relationships;
+mod reverse;
 mod stats;
 
 pub use classify::ClassifyScope;

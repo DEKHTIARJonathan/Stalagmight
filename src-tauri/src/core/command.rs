@@ -80,6 +80,16 @@ pub enum Command {
         section_id: SectionId,
         updates: SectionUpdates,
     },
+    /// Reverse a section end-to-end so the far end becomes station 0, keeping
+    /// every station's world coordinate (see [`crate::models::Project::reverse_section`]).
+    /// `swap_left_right` also mirrors the `left`/`right` passage dimensions; it
+    /// is opt-in because whether LRUD was recorded facing along travel is a
+    /// survey convention we cannot infer.
+    ReverseSection {
+        section_id: SectionId,
+        #[serde(default)]
+        swap_left_right: bool,
+    },
 
     // Shot commands
     CreateShot {
@@ -383,6 +393,9 @@ impl Command {
             }
             Command::UpdateSectionMetadata { section_id, .. } => {
                 format!("Update section {section_id} metadata")
+            }
+            Command::ReverseSection { section_id, .. } => {
+                format!("Reverse section {section_id}")
             }
             Command::CreateShot { section_id, .. } => {
                 format!("Create shot in section {section_id}")

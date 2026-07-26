@@ -90,6 +90,59 @@ impl AppState {
         })
     }
 
+    /// Reverse a section end-to-end (issue #24).  The far end becomes station 0
+    /// and every station keeps its world coordinate; see
+    /// [`crate::models::Project::reverse_section`] for the transform.
+    ///
+    /// Frozen shots are deliberately NOT consulted here.  `update_shot` rejects
+    /// azimuth/depth/pitch edits on a frozen shot because those move the station
+    /// it is pinned to, but reverse re-associates each reading with the other end
+    /// of the same physical line and leaves the line itself untouched, so the
+    /// frozen invariant still holds.  Applying the frozen check would block
+    /// reverse on any datum-anchored section for no benefit.
+    pub(super) fn reverse_section(&self, section_id: SectionId, swap_lr: bool) -> CommandResult {
+        self.with_project_mut(|project| {
+            if !project.reverse_section(section_id, swap_lr) {
+                return CommandResult::failure(format!("Section {section_id} not found"));
+            }
+            tracing::debug!(
+                section_id,
+                swap_left_right = swap_lr,
+                purpose = "reverse section end-to-end",
+                "Section reversed"
+            );
+
+            // Swapping depths and reciprocating azimuths can newly satisfy or trip
+            // the per-project discrepancy checks, so re-emit shot warnings the way
+            // create_section/update_shot do rather than leaving the panel stale.
+            let warnings: Vec<_> = project
+                .get_section(section_id)
+                .map(|section| {
+                    section
+                        .shots
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(i, shot)| {
+                            Validator::validate_shot(
+                                &shot.to_shot_data(),
+                                &project.validation,
+                                section_id,
+                                i,
+                            )
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+
+            let result = CommandResult::success().with_section_id(section_id);
+            if warnings.is_empty() {
+                result
+            } else {
+                result.with_warnings(warnings)
+            }
+        })
+    }
+
     pub(super) fn update_section(
         &self,
         section_id: SectionId,

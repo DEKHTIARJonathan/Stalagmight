@@ -37,6 +37,25 @@ impl AppState {
                 }
             }
 
+            // For ReverseSection, capture full project snapshot (before/after pair).
+            // Re-running the reverse would be a valid inverse in exact arithmetic,
+            // but the snapshot keeps undo bit-exact (the f64 `(az + 180) % 360`
+            // round trip is not guaranteed to be) and spares redo from having to
+            // reproduce the anchor mirroring and section-offset compensation.
+            Command::ReverseSection { section_id, .. } => {
+                if project.get_section(*section_id).is_some() {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
+
             // For DeleteShot, capture full project snapshot (before/after pair)
             // because remove_shot shifts station refs - a ShotSnapshot alone cannot
             // restore the original station references.
