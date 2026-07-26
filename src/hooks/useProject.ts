@@ -13,6 +13,7 @@ import {
 import { openOrImport, pickAndRoute } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
+import { hasUnpushedSpeleoWork } from '../utils/quit';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore();
@@ -89,7 +90,19 @@ export function useProject() {
     // prompt, so no in-app close affordance - hamburger Close, Save-and-Close, the
     // overwrite-confirm close - can leave the server mutex stranded (fix 1). The
     // dialog owns the actual close and handles both dirty states itself.
-    if (useSpeleoStore.getState().link?.editState === 'editing') {
+    //
+    // #270: the lock is not the only thing worth guarding, and gating on it ALONE
+    // was the same defect `guardQuit` was fixed for - the states that strand the
+    // work hardest (`notifyReverifyDivergence`, a `ReLogin` that runs
+    // `clearSession()`) are exactly the ones that drop to read-only while KEEPING
+    // the unpushed edits. Closing there returned straight to the home screen with
+    // no notice at all. Both terms are needed and neither subsumes the other: the
+    // held lock must be resolved because the app keeps running (quit does not need
+    // that - the backend releases on exit), and unpushed work must be surfaced
+    // because nothing else will surface it. `hasUnpushedSpeleoWork` is the term
+    // literally shared with `guardQuit`, so the two cannot silently diverge again.
+    const speleoLink = useSpeleoStore.getState().link;
+    if (hasUnpushedSpeleoWork(speleoLink) || speleoLink?.editState === 'editing') {
       openDialog('speleodb-close');
       return { success: false, error: 'Showing dialog' };
     }

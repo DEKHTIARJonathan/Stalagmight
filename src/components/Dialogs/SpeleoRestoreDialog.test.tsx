@@ -109,7 +109,7 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
     },
   };
 
-  it('arms an explicit discard step instead of dead-ending on the refusal', async () => {
+  it('offers an explicit discard step instead of dead-ending on the refusal', async () => {
     invokeIpcMock.mockRejectedValue(REFUSAL);
     render(<SpeleoRestoreDialog />);
 
@@ -120,16 +120,26 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
     );
     // The refusal is NOT shown as a plain error - it is an actionable choice.
     expect(screen.queryByTestId('speleodb-restore-error')).not.toBeInTheDocument();
-    expect(screen.getByTestId('speleodb-restore-discard-confirm-btn')).toBeInTheDocument();
+    // OFFERED, not armed: a distinct control that still needs its own press. The
+    // plain retry is gone (it would only be refused again).
+    expect(screen.getByTestId('speleodb-restore-discard-offer-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-restore-discard-confirm-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-restore-confirm-btn')).not.toBeInTheDocument();
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 
-  it('the armed second press waives the guard and completes the restore', async () => {
+  it('takes two further presses - the refusal alone can never discard', async () => {
     invokeIpcMock.mockRejectedValueOnce(REFUSAL);
     invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
     render(<SpeleoRestoreDialog />);
 
     await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+    // Press 1 on the new control only arms it.
+    await userEvent.click(await screen.findByTestId('speleodb-restore-discard-offer-btn'));
+    expect(
+      invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_restore_revision'),
+    ).toHaveLength(1);
+    // Press 2 performs it.
     await userEvent.click(await screen.findByTestId('speleodb-restore-discard-confirm-btn'));
 
     await waitFor(() => expect(refreshProjectStateMock).toHaveBeenCalled());
@@ -138,5 +148,32 @@ describe('SpeleoRestoreDialog - a second restore (#270)', () => {
     expect(calls[0]?.[1]).toMatchObject({ discardLocal: false });
     expect(calls[1]?.[1]).toMatchObject({ restore: true, discardLocal: true });
     expect(closeDialogMock).toHaveBeenCalled();
+  });
+
+  // The regression: the refusal is a purely LOCAL read, so the failed first attempt
+  // can resolve inside a double-click interval. It used to re-label the SAME
+  // auto-focused primary button into "Replace my changes & restore" wired straight to
+  // the discard - so the tail of a double click, or a second Enter on a still-focused
+  // button, permanently destroyed un-pushed survey work the user never chose to lose.
+  it('a second Enter on the focused control after the refusal does NOT discard', async () => {
+    invokeIpcMock.mockRejectedValueOnce(REFUSAL);
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    render(<SpeleoRestoreDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-restore-discard-warning')).toBeInTheDocument(),
+    );
+
+    // Whatever the focus heuristic landed on, hitting Enter again must not discard.
+    await userEvent.keyboard('{Enter}');
+    // ...and neither must a second click at the primary button's old position, which
+    // is now Cancel / the un-armed offer, never the discard itself.
+    await userEvent.keyboard('{Enter}');
+
+    const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_restore_revision');
+    expect(calls.some((c) => (c[1] as { discardLocal?: boolean }).discardLocal === true)).toBe(
+      false,
+    );
   });
 });

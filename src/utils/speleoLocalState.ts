@@ -51,3 +51,24 @@ export function hasUnpushedEdits(
   if (!projectId) return false;
   return states[projectId]?.has_unpushed_edits === true;
 }
+
+/**
+ * Whether the backend found a local copy for `projectId` but could NOT read its
+ * state - `SpeleoLocalProjectState.state_unknown` (#270).
+ *
+ * The listing fails OPEN per row so one bad file costs only its own row, which
+ * means an unreadable copy arrives with `has_unpushed_edits: false` - byte-identical
+ * to a genuinely clean one. `state_unknown` is the discriminant, and callers that
+ * gate an IRREVERSIBLE action on "clean" must treat it as unknown, not as clean:
+ * the likely cause is a hot journal left by a kill/power-loss (a read-only
+ * connection cannot roll one back), i.e. exactly the abandoned session whose work
+ * is most at risk. The guard on the Rust side already fails CLOSED on the same
+ * input; this keeps the UI from disagreeing with it.
+ */
+export function localStateUnknown(
+  states: SpeleoLocalStateMap,
+  projectId: string | null | undefined,
+): boolean {
+  if (!projectId) return false;
+  return states[projectId]?.state_unknown === true;
+}

@@ -269,9 +269,6 @@ interface SpeleoStore {
       prompt-worthy via `heldLockPromptPending`. Best-effort; a logged-out / offline
       scan clears the badges. */
   scanLocksOnOpen: (opts?: { prompt?: boolean }) => Promise<void>;
-  /** Release EVERY lock this user holds (the prompt's "Release all"); on success
-      clears `heldLocks`, re-scans, and refreshes the open project's link status. */
-  releaseAllLocks: () => Promise<void>;
   /** Release ONE held lock by project id (the prompt's per-project "Release"); on
       success drops it from `heldLocks`, marks it free in `remoteLocks`, and refreshes
       the open project's link status. Throws on failure so the prompt can surface it. */
@@ -292,8 +289,6 @@ interface SpeleoStore {
   setAuthError: (msg: string | null) => void;
   /** Apply the staged login/logout (A2). ok=false carries the raw error. */
   applyPendingAuth: (endpoint: string | null) => Promise<{ ok: boolean; error?: unknown }>;
-  /** Immediate logout (A3 server-address change / dead token). */
-  logout: () => Promise<void>;
 
   // --- link/edit (action shell #204) ---
   /**
@@ -330,10 +325,26 @@ interface SpeleoStore {
   refreshLinkStatus: () => Promise<void>;
   /** Seed the link from the backend status command (authoritative; runs post-load). */
   seedFromStatus: (s: SpeleoLinkStatus) => void;
-  /** Optimistic seed from the browser's summary before `loadProject` settles.
-      `forPath` is the local `.stalx` about to be loaded, so `syncProjectLink` can
-      tell this fresh seed from a previous project's leftover link. */
-  setLinkOnOpen: (a: { permission: Permission | null; forPath?: string | null }) => void;
+  /**
+   * Optimistic seed from the browser's summary before `loadProject` settles.
+   * `forPath` is the local `.stalx` about to be loaded, so `syncProjectLink` can
+   * tell this fresh seed from a previous project's leftover link.
+   *
+   * `hasUnpushedEdits` defaults to false because the seed's original caller is a
+   * fresh PULL, which by construction has nothing local the server has not seen.
+   * It is an explicit parameter (#270) because that is no longer the only caller:
+   * "Keep the local copy" reuses this same tail while downloading NOTHING, and is
+   * reachable only because the backend refused the open over un-pushed local
+   * edits - so for it the dirty bit is KNOWN true. Hardcoding false there seeded
+   * "nothing outstanding" for the one project we have proof is dirty, which
+   * disarmed the quit guard (`guardQuit` reads exactly this flag) and dropped the
+   * status button's unpushed warning until some later poll happened to correct it.
+   */
+  setLinkOnOpen: (a: {
+    permission: Permission | null;
+    forPath?: string | null;
+    hasUnpushedEdits?: boolean;
+  }) => void;
   clearLink: () => void;
   applyStartEditing: (r: StartEditingResult) => void;
   applyUpdate: (r: UpdateResult) => void;
@@ -370,6 +381,50 @@ interface SpeleoStore {
       banner can surface it. */
   enableRendering: () => Promise<void>;
   dismissBanner: () => void;
+}
+
+/**
+ * [#260/#270] The push/release outcome kinds, widened by `not_editing`.
+ *
+ * `speleodb_push_only` / `speleodb_done` answer `NotEditing` when the backend's
+ * edit gate was already closed: no lock was held, so NOTHING was uploaded and
+ * nothing was released. They used to fold that case into `Pushed` / `Released`,
+ * which told the frontend the work had landed - clearing `hasUnpushedEdits`,
+ * disarming `guardQuit` and toasting success - over edits that never left this
+ * machine. It is reachable in normal use: a 401 auto-drop closes the gate while
+ * deliberately KEEPING the dirty bit, and the push-failure banner's Retry then
+ * re-issues the verb from that state.
+ *
+ * The alias exists because the generated `PushResult` / `DoneResult` unions are
+ * regenerated from Rust in a separate step, so this file must be able to name the
+ * arm before (and after) that lands. Once the arm is in the generated union the
+ * alias is a no-op, and any FUTURE variant flows into it and trips the
+ * {@link unhandledHandoffKind} `never` check instead of silently taking a
+ * success path.
+ */
+export type PushKind = PushResult['kind'] | 'not_editing';
+export type DoneKind = DoneResult['kind'] | 'not_editing';
+
+/**
+ * Widen a result kind to {@link PushKind} / {@link DoneKind} for a switch.
+ *
+ * Functions rather than an annotated `const`: TS narrows an annotated binding
+ * back to its initializer's type, which would drop `not_editing` off the union
+ * again and make the arm unreachable. A call expression's type is its declared
+ * return type, so the widening survives - and so does the `never` check.
+ */
+export const asPushKind = (kind: PushResult['kind']): PushKind => kind;
+export const asDoneKind = (kind: DoneResult['kind']): DoneKind => kind;
+
+/**
+ * Exhaustiveness guard for the hand-off switches. Reached only if the backend
+ * grows a variant the frontend has not been taught, so it is a COMPILE error at
+ * the call site and, at runtime, changes no state at all - the conservative
+ * answer, since every unknown outcome could be one that did not upload anything.
+ */
+export function unhandledHandoffKind(kind: never): Record<string, never> {
+  console.warn('[speleoStore] unhandled SpeleoDB hand-off result kind:', kind);
+  return {};
 }
 
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
@@ -434,17 +489,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     } catch (error) {
       return { ok: false, error };
     }
-  },
-
-  logout: async () => {
-    // Best-effort: the token is forgotten locally regardless of the server call.
-    try {
-      await invokeIpc<null>('speleodb_logout');
-    } catch {
-      /* ignore - clearSession still drops the local session */
-    }
-    set({ pendingAuth: null, authError: null });
-    get().clearSession();
   },
 
   syncProjectLink: (isRemote, forPath = null) =>
@@ -601,15 +645,6 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
-  releaseAllLocks: async () => {
-    // Throws on failure so the dialog can keep itself open and surface the error;
-    // heldLocks is cleared only on a confirmed release.
-    await invokeIpc<null>('speleodb_release_all_locks');
-    set({ heldLocks: null });
-    await get().scanLocksOnOpen();
-    await get().refreshLinkStatus();
-  },
-
   releaseLock: async (projectId) => {
     // Throws on failure so the dialog keeps itself open and surfaces the error.
     await invokeIpc<null>('speleodb_release_lock', { projectId });
@@ -749,7 +784,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false }) =>
     set({
       // We just pulled it from SpeleoDB, so it is remote by construction - and
       // saying so keeps the gate closed even if the load never completes.
@@ -757,19 +792,26 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // Whose link this is, so the `syncProjectLink` that runs inside the load
       // that follows recognises it as THIS project's seed and keeps it.
       linkPath: forPath,
-      // A freshly pulled project always opens read-only + up-to-date;
-      // `seedFromStatus` refines lock holder / dirty bit / remote state on load.
+      // Opens read-only until the status confirms a lock. `remoteState` is the
+      // pull's truth (we just took the server tip) and stays optimistic; the dirty
+      // bit is NOT assumed - see the interface note - because "keep the local copy"
+      // reaches this seed with edits the server has never seen. `seedFromStatus`
+      // refines lock holder / remote state on the first poll.
       link: {
         permission,
         editState: 'read-only',
         lockHolder: null,
         lockedByOther: false,
-        hasUnpushedEdits: false,
+        hasUnpushedEdits,
         // A fresh pull always opens without the lock and not force-editing;
         // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
         forceEditing: false,
         forceEditAllowed: false,
-        remoteState: 'up_to_date',
+        // A pull just took the server tip, so up-to-date is true by construction -
+        // but only for a pull. A seed that already knows the copy holds un-pushed
+        // edits is by definition NOT in sync, so claim nothing until the first poll
+        // resolves it rather than render a self-contradictory "up to date + dirty".
+        remoteState: hasUnpushedEdits ? 'unknown' : 'up_to_date',
         noAccess: false,
         serverError: null,
       },
@@ -861,7 +903,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   applyDone: (r) =>
     set((state) => {
       if (!state.link) return {};
-      switch (r.kind) {
+      // Widened so the not-editing arm is nameable and the `never` check below
+      // stays honest across the type regeneration - see {@link DoneKind}.
+      const kind = asDoneKind(r.kind);
+      switch (kind) {
         case 'released':
           // Lock released and edits are on the server - clear the holder (or we'd
           // read as still holding it), drop the dirty bit + any push-unconfirmed
@@ -883,15 +928,24 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           return { divergence: 'done' };
         case 'push_unconfirmed':
           return { banner: { kind: 'push_unconfirmed' } };
-        default:
+        case 'not_editing':
+          // Nothing was uploaded and nothing was released: the backend's edit gate
+          // was already closed (typically a 401 auto-drop, which runs
+          // `speleodb_forget` and deliberately LEAVES the dirty bit alone). Change
+          // no link state - above all not `hasUnpushedEdits`, which is the flag
+          // `guardQuit` and the status button's warning both read. The caller
+          // surfaces the honest "reconnect and start editing again" line.
           return {};
+        default:
+          return unhandledHandoffKind(kind);
       }
     }),
 
   applyPush: (r) =>
     set((state) => {
       if (!state.link) return {};
-      switch (r.kind) {
+      const kind = asPushKind(r.kind);
+      switch (kind) {
         case 'pushed':
           // Lock retained (still editing); edits are now on the server. Clear a
           // prior push-unconfirmed banner since this push landed.
@@ -908,8 +962,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           return { divergence: 'push' };
         case 'push_unconfirmed':
           return { banner: { kind: 'push_unconfirmed' } };
-        default:
+        case 'not_editing':
+          // See applyDone: nothing left this machine, so nothing about the local
+          // copy's relationship to the server may be marked resolved.
           return {};
+        default:
+          return unhandledHandoffKind(kind);
       }
     }),
 

@@ -353,3 +353,81 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
 });
+
+// #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
+// gate was already closed - nothing was uploaded and nothing was released. Reported
+// as Pushed/Released, that produced a green "Changes pushed to SpeleoDB." toast, a
+// disk flush and a cleared dirty bit for work that never left this computer. It is
+// reachable in normal use: a 401 auto-drop closes the gate but keeps the dirty bit,
+// and the push-failure banner's Retry re-issues the verb from exactly that state.
+describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', () => {
+  it('push (→ not_editing) warns instead of claiming success, and does not flush', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('m');
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-not-editing', 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-pushed', 'success');
+    // The flush exists to clear `isDirty` after a CONFIRMED upload; nothing was
+    // uploaded, so a false-clean local state must not be manufactured.
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('done (→ not_editing) warns, and the caller sees a kind that is not "released"', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let resolved: { kind: string } | null = null;
+    await act(async () => {
+      resolved = (await result.current.done()) as { kind: string } | null;
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-not-editing', 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
+    // The close/quit dialogs only leave on `released`, so they correctly stay open.
+    expect(resolved).toEqual({ kind: 'not_editing' });
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+});
+
+// #270: `startEditing(): Promise<boolean>` had all four known variants handled but no
+// exhaustiveness guard, so a fifth backend variant fell through to `return true` -
+// "we hold the lock". `HeldLockResumeDialog` acts on that by calling
+// `clearHeldLocks()`, discarding every remaining lock with no way to re-raise the
+// prompt until the next login scan.
+describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', () => {
+  it('answers false for a variant it does not recognise', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'something_new' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('still answers true when we really do hold the lock', async () => {
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(true);
+  });
+});

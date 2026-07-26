@@ -17,7 +17,7 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 
-import { humanizeSpeleoError } from './speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits } from './speleoError';
 import { useSpeleoStore } from '../store/speleoStore';
 import type { SpeleoErrorDto } from '../types/ipc.generated';
 
@@ -99,5 +99,67 @@ describe('humanizeSpeleoError - transport failures (#270)', () => {
       'Could not push changes',
     );
     expect(line).toBe('Could not push changes: Server error');
+  });
+});
+
+/**
+ * [#270] `unpushedLocalEdits` gates the refused-open prompt. That prompt names the
+ * project and when the local copy was last edited, and offers an IRREVERSIBLE
+ * "discard my changes" button - so a payload it cannot describe must fall back to the
+ * generic error path rather than raise a prompt with blanks in it. These pin the
+ * malformed-payload guards, which the reader would otherwise be free to "simplify".
+ */
+describe('unpushedLocalEdits payload guards (#270)', () => {
+  const refusal = (unpushed_local: unknown) =>
+    ({
+      message: 'local edits never pushed',
+      action: 'UnpushedLocalEdits',
+      status: null,
+      transport: null,
+      unpushed_local,
+    }) as unknown;
+
+  it('accepts a well-formed refusal', () => {
+    const payload = {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: '2026-07-26T09:00:00Z',
+    };
+    expect(unpushedLocalEdits(refusal(payload))).toEqual(payload);
+  });
+
+  it('rejects a null payload', () => {
+    expect(unpushedLocalEdits(refusal(null))).toBeNull();
+  });
+
+  it('rejects a non-object payload', () => {
+    expect(unpushedLocalEdits(refusal('p1'))).toBeNull();
+  });
+
+  it('rejects a non-string project_id', () => {
+    expect(
+      unpushedLocalEdits(refusal({ project_id: 42, local_path: '/cache/p1.stalx' })),
+    ).toBeNull();
+  });
+
+  it('rejects an EMPTY local_path - the prompt cannot open a file it cannot name', () => {
+    expect(unpushedLocalEdits(refusal({ project_id: 'p1', local_path: '' }))).toBeNull();
+  });
+
+  it('rejects a missing local_path', () => {
+    expect(unpushedLocalEdits(refusal({ project_id: 'p1' }))).toBeNull();
+  });
+
+  it('rejects an error that is not this refusal at all', () => {
+    expect(
+      unpushedLocalEdits({ message: 'boom', action: 'Fatal', status: 500 }),
+    ).toBeNull();
+    expect(unpushedLocalEdits(new Error('plain'))).toBeNull();
+    expect(unpushedLocalEdits('a string rejection')).toBeNull();
+  });
+
+  it('tolerates a missing last_edit_at (the prompt has its own unknown wording)', () => {
+    const payload = { project_id: 'p1', local_path: '/cache/p1.stalx', last_edit_at: null };
+    expect(unpushedLocalEdits(refusal(payload))).toEqual(payload);
   });
 });

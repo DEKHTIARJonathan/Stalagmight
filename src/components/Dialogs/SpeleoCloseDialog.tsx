@@ -31,6 +31,13 @@ export default function SpeleoCloseDialog() {
   const { busy, done } = useSpeleoActions();
 
   const sdbDirty = link?.hasUnpushedEdits ?? false;
+  // #270: the close guard now also fires on un-pushed edits ALONE, matching
+  // `guardQuit` - so this dialog is reachable with no lock (a re-verify divergence,
+  // or a token loss that ran `clearSession()`). Every verb below needs one, so it
+  // adapts exactly the way SpeleoQuitDialog does rather than offering two buttons
+  // that can only fail. `forceEditing` is the #213 state of editing WITHOUT a lock,
+  // which is equally nothing to push or release.
+  const holdsLock = link?.editState === 'editing' && !link.forceEditing;
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
   const busyAny = busy || saving;
@@ -58,8 +65,8 @@ export default function SpeleoCloseDialog() {
       // A thrown save (rare - real failures resolve as {success:false}) must not be
       // treated as success; surface it and keep the project open over unsaved work.
       openDialog('error', {
-        title: 'Save Failed',
-        message: getErrorMessage(e, 'Failed to save project'),
+        title: t('speleodb.errors.saveFailedTitle'),
+        message: getErrorMessage(e, t('speleodb.errors.saveFailedMessage')),
       });
       return false;
     } finally {
@@ -84,6 +91,8 @@ export default function SpeleoCloseDialog() {
     closeDialog();
     // Explicitly retain the server lock: this is the one close path that opts out of
     // the default lock-release (fix 1), so the user keeps their editing claim.
+    // Also the lock-less exit: there is no lock to release, and asking the backend
+    // to release one it does not hold is the only other option.
     await closeProject({ releaseLock: false });
   };
 
@@ -99,7 +108,11 @@ export default function SpeleoCloseDialog() {
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          {sdbDirty ? t('speleodb.close.dirtyMessage') : t('speleodb.close.message')}
+          {!holdsLock
+            ? t('speleodb.close.messageNoLock')
+            : sdbDirty
+              ? t('speleodb.close.dirtyMessage')
+              : t('speleodb.close.message')}
         </p>
 
         {isDirtyLocal ? (
@@ -127,22 +140,39 @@ export default function SpeleoCloseDialog() {
           <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-close-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void closeKeepingLock()}
-            disabled={busyAny}
-            data-testid="speleodb-close-keep-lock"
-          >
-            {t('speleodb.close.keepLock')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => void pushReleaseThenClose()}
-            disabled={busyAny}
-            data-testid="speleodb-close-push-release"
-          >
-            {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
-          </Button>
+          {holdsLock ? (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => void closeKeepingLock()}
+                disabled={busyAny}
+                data-testid="speleodb-close-keep-lock"
+              >
+                {t('speleodb.close.keepLock')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void pushReleaseThenClose()}
+                disabled={busyAny}
+                data-testid="speleodb-close-push-release"
+              >
+                {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
+              </Button>
+            </>
+          ) : (
+            // No lock: nothing to push and nothing to release. The one honest action
+            // is to flush the .stalx (the checkbox above) and hand the project back,
+            // with the work still only on this computer. Same shape as
+            // SpeleoQuitDialog's "Quit anyway", and not `danger` - nothing is lost.
+            <Button
+              variant="primary"
+              onClick={() => void closeKeepingLock()}
+              disabled={busyAny}
+              data-testid="speleodb-close-anyway"
+            >
+              {t('speleodb.close.closeAnyway')}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>

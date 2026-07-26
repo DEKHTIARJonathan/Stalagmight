@@ -907,6 +907,23 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           useUIStore.getState().setView('single');
           get().resetLoading();
           await get().refreshUndoState();
+          // #270: this branch RENDERS a project, so it owes the same duty every
+          // other rendered-project path pays - resolve the SpeleoDB edit gate. The
+          // success path does it synchronously via `syncProjectLink(result.isRemote)`;
+          // here there is no result to read it off, because the backend short-
+          // circuited before re-reading anything. Left unresolved, whatever link the
+          // caller seeded on the way in survives verbatim: the refused-open prompt's
+          // "Keep the local copy" used to seed a pessimistic read-only link over a
+          // project we hold the lock on, and this branch then reported success with
+          // it intact - a read-only survey UI and a disarmed quit guard that healed
+          // only on the next status poll (Survey mode only, 30 s to 24 h).
+          //
+          // Unawaited and best-effort on purpose: `speleodb_link_status` does
+          // blocking HTTP for a remote project, and no caller of `loadProject` may
+          // be stalled behind the network. It is a REFINEMENT, not the fix - the
+          // seeding side (`keepLocalCopy`) is now correct on its own, offline
+          // included; this re-resolves any other state the short circuit left behind.
+          void useSpeleoStore.getState().refreshLinkStatus();
           return { success: true };
         }
 

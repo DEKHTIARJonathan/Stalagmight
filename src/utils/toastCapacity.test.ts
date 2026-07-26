@@ -157,6 +157,19 @@ describe('toastStackOffsets', () => {
     expect(toastStackOffsets([])).toEqual([]);
     expect(toastStackOffsets([40])).toEqual([0]);
   });
+
+  it('costs an UNMEASURED height at the estimate, exactly as capacity does', () => {
+    // The component measures `rect.height || offsetHeight || 0`, so a zero-layout
+    // environment stores a real 0 - and this used to read it as a zero-tall toast,
+    // stacking the whole column at one 8px gap per slot, i.e. every toast painted
+    // on top of the previous one. `fitToastCapacity` already substituted the
+    // estimate for the same reading; the two have to agree or the geometry tears.
+    const slot = ESTIMATED_TOAST_HEIGHT_PX + TOAST_GAP_PX;
+    expect(toastStackOffsets([0, 0, 0])).toEqual([slot * 2, slot, 0]);
+    expect(toastStackOffsets([Number.NaN, -10, 0])).toEqual([slot * 2, slot, 0]);
+    // A measured toast still pushes by its own height.
+    expect(toastStackOffsets([0, 80, 40])).toEqual([80 + 40 + TOAST_GAP_PX * 2, 48, 0]);
+  });
 });
 
 describe('toastStackHeight', () => {
@@ -164,5 +177,13 @@ describe('toastStackHeight', () => {
     expect(toastStackHeight([40, 40, 40])).toBe(136);
     expect(toastStackHeight([40])).toBe(40);
     expect(toastStackHeight([])).toBe(0);
+  });
+
+  it('costs unmeasured heights the same way the offsets do', () => {
+    // Otherwise the hover/hit box is shorter than the boxes those offsets place,
+    // and the pointer crossing the uncovered part un-pauses the stack. `|| 0` here
+    // vs `?? 0` in the offsets was the inconsistency: NaN-safe on one side only.
+    expect(toastStackHeight([0, 0])).toBe(ESTIMATED_TOAST_HEIGHT_PX * 2 + TOAST_GAP_PX);
+    expect(toastStackHeight([Number.NaN])).toBe(ESTIMATED_TOAST_HEIGHT_PX);
   });
 });

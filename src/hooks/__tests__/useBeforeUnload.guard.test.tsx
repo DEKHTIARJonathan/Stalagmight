@@ -34,8 +34,16 @@ vi.mock('@tauri-apps/plugin-dialog', () => ({ confirm: confirmMock }));
 import { useBeforeUnload } from '../useBeforeUnload';
 import { performQuit, resetQuitConfirmationForTests } from '../../utils/quit';
 
-function Harness({ shouldBlock, guard }: { shouldBlock: boolean; guard: () => boolean }) {
-  useBeforeUnload(shouldBlock, 'discard?', undefined, guard);
+function Harness({
+  shouldBlock,
+  guard,
+  onConfirm,
+}: {
+  shouldBlock: boolean;
+  guard: () => boolean;
+  onConfirm?: () => Promise<void>;
+}) {
+  useBeforeUnload(shouldBlock, 'discard?', onConfirm, guard);
   return null;
 }
 
@@ -144,5 +152,66 @@ describe('useBeforeUnload - the in-app exit guard', () => {
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
     expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * [#270] The tier-1 cleanup is destructive by contract ("e.g. delete placed
+ * sections"), so it may only run once the close is actually going ahead. It used to
+ * run inside the tier-1 confirmation, ABOVE the tier-2 guard - so a close the guard
+ * then aborted had already performed the deletions: the user gets their prompt,
+ * cancels, keeps working, and the sections are gone anyway.
+ */
+describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () => {
+  it('does NOT run the cleanup when the guard aborts the close', async () => {
+    const onConfirm = vi.fn(async () => {});
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
+    await flush();
+
+    await pressWindowX();
+
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('runs the cleanup once the close survives every guard', async () => {
+    const onConfirm = vi.fn(async () => {});
+    const guard = vi.fn(() => false);
+    render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
+    await flush();
+
+    await pressWindowX();
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not run the cleanup when the tier-1 confirm itself is declined', async () => {
+    confirmMock.mockResolvedValue(false);
+    const onConfirm = vi.fn(async () => {});
+    render(<Harness shouldBlock guard={() => false} onConfirm={onConfirm} />);
+    await flush();
+
+    await pressWindowX();
+
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('a throwing cleanup still lets the window close', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const onConfirm = vi.fn(async () => {
+      throw new Error('cleanup boom');
+    });
+    render(<Harness shouldBlock guard={() => false} onConfirm={onConfirm} />);
+    await flush();
+
+    await pressWindowX();
+
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+    err.mockRestore();
   });
 });

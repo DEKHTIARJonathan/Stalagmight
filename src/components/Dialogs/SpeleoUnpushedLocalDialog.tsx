@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -29,7 +30,13 @@ import type { SpeleoProjectSummary, UnpushedLocalEdits } from '../../types/ipc.g
 export default function SpeleoUnpushedLocalDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const openDialog = useUIStore((s) => s.openDialog);
   const dialogData = useUIStore((s) => s.dialogData);
+  // A dead token here must drop the session, exactly as every other consumer of
+  // `takeRemoteDiscardingLocal`'s outcome does (`OpenFromSpeleoDbDialog` routes it
+  // through `surfaceOpenError`). Reading only `outcome.message` left the shell
+  // claiming a session the backend no longer has.
+  const clearSession = useSpeleoStore((s) => s.clearSession);
   // Close the prompt right before loadProject so its progress is visible (the same
   // hand-off the browser dialog makes).
   const { keepLocalCopy, takeRemoteDiscardingLocal } = useOpenRemoteProject({
@@ -42,7 +49,22 @@ export default function SpeleoUnpushedLocalDialog() {
 
   const summary = dialogData.summary as SpeleoProjectSummary | undefined;
   const unpushedLocal = dialogData.unpushedLocal as UnpushedLocalEdits | undefined;
+  // Which dialog displaced us in the single `activeDialog` slot, if any (#270).
+  const cancelReturnsTo =
+    typeof dialogData.cancelReturnsTo === 'string' ? dialogData.cancelReturnsTo : null;
   if (!summary || !unpushedLocal) return null;
+
+  /**
+   * Cancel / X / backdrop. Hands the user back to the dialog this prompt replaced
+   * (the SpeleoDB browser), because cancelling here opened nothing: dropping to
+   * `activeDialog: null` left the browser gone, no project opened, and no way back
+   * except re-opening the menu. Hosts that are not dialogs pass nothing and get the
+   * plain close, which correctly reveals the view underneath.
+   */
+  const dismiss = () => {
+    if (cancelReturnsTo) openDialog(cancelReturnsTo);
+    else closeDialog();
+  };
 
   const lastEditAt = unpushedLocal.last_edit_at;
   const parsed = lastEditAt ? new Date(lastEditAt) : null;
@@ -72,6 +94,9 @@ export default function SpeleoUnpushedLocalDialog() {
     const outcome = await takeRemoteDiscardingLocal(summary);
     if (outcome.status === 'error') {
       setError(outcome.message);
+      // A `ReLogin` outcome means the token is gone; keeping the session would have
+      // the shell offering lock verbs against an identity the backend has dropped.
+      if (outcome.reLogin) clearSession();
       setBusy(false);
     }
   };
@@ -79,7 +104,13 @@ export default function SpeleoUnpushedLocalDialog() {
   return (
     <DialogWrapper
       title={t('speleodb.unpushedLocal.title')}
-      onClose={closeDialog}
+      // Not dismissable while a branch is in flight - the same hardening
+      // SpeleoQuitDialog / SpeleoCloseDialog carry. DialogWrapper routes BOTH
+      // Escape and a backdrop click here, so an Escape while
+      // `speleodb_open_project_discarding_local` was awaiting unmounted the only
+      // surface its error had: `setError` landed on an unmounted component and a
+      // failed discard-my-edits open produced no message anywhere.
+      onClose={busy ? () => {} : dismiss}
       size="md"
       data-testid="speleodb-unpushed-local-dialog"
     >
@@ -113,7 +144,7 @@ export default function SpeleoUnpushedLocalDialog() {
         )}
 
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
+          <Button onClick={dismiss} disabled={busy} data-testid="speleodb-unpushed-local-cancel">
             {t('common.actions.cancel')}
           </Button>
           <Button

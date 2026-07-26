@@ -2767,7 +2767,9 @@
       "release": "Release & close",
       "pushRelease": "Push, release & close",
       "saveLocally": "Save changes locally before closing",
-      "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet."
+      "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
+      "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
+      "closeAnyway": "Close anyway"
     },
     "quit": {
       "title": "Quit with changes not on SpeleoDB",
@@ -2812,7 +2814,9 @@
       "loginFailed": "Login to SpeleoDB failed",
       "openFailed": "Unable to open the project",
       "listFailed": "Could not load projects",
-      "adoptFailed": "Could not adopt the Ariane project"
+      "adoptFailed": "Could not adopt the Ariane project",
+      "saveFailedTitle": "Save Failed",
+      "saveFailedMessage": "Failed to save project"
     },
     "adopt": {
       "confirmTitle": "Adopt this Ariane project?",
@@ -2863,7 +2867,8 @@
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
       "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
-      "discardConfirm": "Replace my changes & restore",
+      "discardOffer": "Replace my changes & restore",
+      "discardConfirm": "Yes, replace my changes & restore",
       "restoring": "Restoring…",
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
@@ -2883,7 +2888,8 @@
         "doneFailed": "Could not finish editing",
         "pushFailed": "Could not push changes",
         "tookRemote": "Reset to the SpeleoDB version.",
-        "takeRemoteFailed": "Could not take the SpeleoDB version"
+        "takeRemoteFailed": "Could not take the SpeleoDB version",
+        "notEditing": "Nothing was uploaded - you are not editing this project right now. Start editing again (signing in first if needed) to upload your changes."
       }
     },
     "done": {
@@ -2935,6 +2941,7 @@
       "enableRenderingFailed": "Could not enable rendering",
       "pushFailed": "Your changes were NOT uploaded and are still only on this computer. {{message}}",
       "retryPush": "Retry upload",
+      "startEditingToRetry": "Start editing to upload",
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {
@@ -2956,7 +2963,9 @@
         "opening": "Opening…",
         "checking": "Checking…",
         "openFailed": "Could not find the local copy of {{name}} to open. Its lock is left alone so nothing is lost.",
-        "unknown": "Could not check which projects have changes only on this computer. Release with care."
+        "unknown": "Could not check which projects have changes only on this computer. Release with care.",
+        "localStateUnknown": "Its local copy could not be read, so it may hold unsent changes",
+        "unsavedChanges": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them."
       }
     },
     "recentBadge": {

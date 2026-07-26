@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
@@ -37,7 +37,28 @@ export default function SpeleoRestoreDialog() {
   // A restore STAMPS the copy un-pushed itself, so this is the ordinary state of
   // "restore a second revision" or "revert a restore I did not like" - without a
   // way through it, Restore was single-use.
+  //
+  // It only OFFERS the discard route; it never arms it. The refusal is a purely
+  // local read, so the failed first attempt can resolve inside a double-click
+  // interval - and this dialog's primary button is the one DialogWrapper/AlertDialog
+  // focuses. Letting the refusal re-label that same focused control into "replace my
+  // changes" made a second Enter (or the tail of a double click) permanently destroy
+  // un-pushed survey work that the user never chose to destroy.
   const [needsDiscard, setNeedsDiscard] = useState(false);
+  // The separate arming step for that route, on its own control - the same
+  // arm-then-confirm shape SpeleoUnpushedLocalDialog and SpeleoQuitDialog use for
+  // their destructive verbs.
+  const [discardArmed, setDiscardArmed] = useState(false);
+
+  // React reconciles the swapped-in discard control into the same slot as the
+  // primary Restore button, so it inherits that button's FOCUS - which would let two
+  // more Enters (arm, then confirm) run the discard without the user ever looking at
+  // it. Park focus on Cancel the moment the destructive route appears, so keyboard
+  // repetition is inert and reaching the discard needs a deliberate move.
+  const cancelRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (needsDiscard) cancelRef.current?.focus();
+  }, [needsDiscard]);
 
   const run = async (discardLocal: boolean) => {
     if (!projectId || !hexsha) return;
@@ -80,24 +101,54 @@ export default function SpeleoRestoreDialog() {
       data-testid="speleodb-restore-dialog"
       actions={
         <>
-          <Button onClick={closeDialog} disabled={busy} data-testid="speleodb-restore-cancel">
+          {/* Once the destructive route is on offer, Cancel is the safe landing spot
+              for the focus heuristic and for a stray Enter. */}
+          <Button
+            ref={cancelRef}
+            onClick={closeDialog}
+            disabled={busy}
+            {...(needsDiscard ? { 'data-primary-action': '' } : {})}
+            data-testid="speleodb-restore-cancel"
+          >
             {t('common.actions.cancel')}
           </Button>
-          <Button
-            variant="danger"
-            onClick={() => void run(needsDiscard)}
-            disabled={busy}
-            data-primary-action=""
-            data-testid={
-              needsDiscard ? 'speleodb-restore-discard-confirm-btn' : 'speleodb-restore-confirm-btn'
-            }
-          >
-            {busy
-              ? t('speleodb.restore.restoring')
-              : needsDiscard
-                ? t('speleodb.restore.discardConfirm')
-                : t('speleodb.restore.confirmButton')}
-          </Button>
+          {needsDiscard ? (
+            // A DISTINCT control, rendered only after the refusal, that still needs
+            // its own arming press before it can discard anything. The plain retry
+            // is deliberately gone: `run(false)` would just be refused again.
+            <Button
+              variant="danger"
+              onClick={() => {
+                if (!discardArmed) {
+                  setDiscardArmed(true);
+                  return;
+                }
+                void run(true);
+              }}
+              disabled={busy}
+              data-testid={
+                discardArmed
+                  ? 'speleodb-restore-discard-confirm-btn'
+                  : 'speleodb-restore-discard-offer-btn'
+              }
+            >
+              {busy
+                ? t('speleodb.restore.restoring')
+                : discardArmed
+                  ? t('speleodb.restore.discardConfirm')
+                  : t('speleodb.restore.discardOffer')}
+            </Button>
+          ) : (
+            <Button
+              variant="danger"
+              onClick={() => void run(false)}
+              disabled={busy}
+              data-primary-action=""
+              data-testid="speleodb-restore-confirm-btn"
+            >
+              {busy ? t('speleodb.restore.restoring') : t('speleodb.restore.confirmButton')}
+            </Button>
+          )}
         </>
       }
     >

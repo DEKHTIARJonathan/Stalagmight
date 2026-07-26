@@ -616,5 +616,110 @@ describe('speleoStore', () => {
       expect(s.heldLocks).toBeNull(); // empty → the dialog's effect auto-closes it
       expect(s.remoteLocks.p2).toBeNull();
     });
+
+    // #270: the "Release all locks" button was deleted (the server verb is
+    // all-or-nothing and this prompt is exactly where locks over un-pushed work
+    // surface), and the store action it drove went with it - dead code that still
+    // offered a one-call way to strand every project's work.
+    it('exposes no bulk release action at all', () => {
+      expect('releaseAllLocks' in useSpeleoStore.getState()).toBe(false);
+    });
+
+    // #270: `applyPendingAuth`'s logout branch is the only logout path. Its dead twin
+    // swallowed a keychain-delete failure, so the user was never warned a credential
+    // might still be stored on the machine.
+    it('exposes no second logout path that could swallow a keychain failure', () => {
+      expect('logout' in useSpeleoStore.getState()).toBe(false);
+    });
+  });
+
+  // #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
+  // gate was already closed - nothing uploaded, nothing released. Folded into
+  // Pushed/Released, that cleared `hasUnpushedEdits`, which is exactly the flag
+  // `guardQuit` and the status button's warning read: the app claimed the work had
+  // landed and stopped protecting it, over edits still only on this computer.
+  describe('a no-op push/release must not clear the dirty bit (#270)', () => {
+    const dirtyReadOnly = () =>
+      useSpeleoStore.setState({
+        link: {
+          permission: 'READ_AND_WRITE',
+          // How this state is reached: a 401 runs `clearSession()`, which drops to
+          // read-only while deliberately CARRYING the dirty bit through.
+          editState: 'read-only',
+          lockHolder: null,
+          lockedByOther: false,
+          hasUnpushedEdits: true,
+          forceEditing: false,
+          forceEditAllowed: false,
+          remoteState: 'unknown',
+          noAccess: false,
+          serverError: null,
+        },
+      });
+
+    it('applyPush leaves the dirty bit set on not_editing', () => {
+      dirtyReadOnly();
+      useSpeleoStore.getState().applyPush({ kind: 'not_editing' } as never);
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(true);
+      // And it must not claim the copy is in sync either.
+      expect(link?.remoteState).toBe('unknown');
+    });
+
+    it('applyDone leaves the dirty bit AND the read-only state alone on not_editing', () => {
+      dirtyReadOnly();
+      useSpeleoStore.getState().applyDone({ kind: 'not_editing' } as never);
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(true);
+      expect(link?.remoteState).toBe('unknown');
+    });
+
+    it('an unrecognised kind is treated conservatively rather than as success', () => {
+      dirtyReadOnly();
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      useSpeleoStore.getState().applyPush({ kind: 'something_new' } as never);
+      useSpeleoStore.getState().applyDone({ kind: 'something_new' } as never);
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+      warn.mockRestore();
+    });
+
+    it('still clears the dirty bit when the work genuinely landed', () => {
+      dirtyReadOnly();
+      useSpeleoStore.getState().applyPush({ kind: 'pushed' });
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+      dirtyReadOnly();
+      useSpeleoStore.getState().applyDone({ kind: 'released' });
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+    });
+  });
+
+  // #270: the optimistic open seed hardcoded `hasUnpushedEdits: false` under the
+  // comment "a freshly pulled project always opens read-only + up-to-date". True for
+  // a pull; false for "Keep the local copy", which reuses the same tail and pulls
+  // nothing.
+  describe('setLinkOnOpen carries the dirty bit explicitly (#270)', () => {
+    it('defaults to clean, preserving the fresh-pull case', () => {
+      useSpeleoStore.getState().setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/a.stalx' });
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(false);
+      expect(link?.remoteState).toBe('up_to_date');
+    });
+
+    it('seeds a dirty copy as dirty, and stops claiming it is up to date', () => {
+      useSpeleoStore
+        .getState()
+        .setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/a.stalx', hasUnpushedEdits: true });
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(true);
+      expect(link?.remoteState).toBe('unknown');
+    });
+
+    it('syncProjectLink keeps that seed for the path being loaded', () => {
+      useSpeleoStore
+        .getState()
+        .setLinkOnOpen({ permission: 'READ_AND_WRITE', forPath: '/a.stalx', hasUnpushedEdits: true });
+      useSpeleoStore.getState().syncProjectLink(true, '/a.stalx');
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    });
   });
 });

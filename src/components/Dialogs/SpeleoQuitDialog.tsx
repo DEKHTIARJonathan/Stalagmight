@@ -75,8 +75,8 @@ export default function SpeleoQuitDialog() {
       return true;
     } catch (e) {
       openDialog('error', {
-        title: 'Save Failed',
-        message: getErrorMessage(e, 'Failed to save project'),
+        title: t('speleodb.errors.saveFailedTitle'),
+        message: getErrorMessage(e, t('speleodb.errors.saveFailedMessage')),
       });
       return false;
     } finally {

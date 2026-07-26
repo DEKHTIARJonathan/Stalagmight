@@ -245,7 +245,7 @@ describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)',
     },
   };
 
-  it('raises the prompt instead of a generic error, and releases the busy flag', async () => {
+  it('raises the prompt instead of a generic error, and tells it the way back here', async () => {
     const openDialogMock = vi.fn();
     useUIStore.setState({ openDialog: openDialogMock });
     mockRoutes({ speleodb_open_project: () => Promise.reject(REFUSAL) });
@@ -257,13 +257,14 @@ describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)',
       expect(openDialogMock).toHaveBeenCalledWith('speleodb-unpushed-local', {
         summary: expect.objectContaining({ id: 'p1' }),
         unpushedLocal: REFUSAL.unpushed_local,
+        // #270: the prompt replaces this browser in the single dialog slot, so it
+        // carries the route back. Without it, cancelling the prompt left nothing
+        // open and nothing opened - a dead end.
+        cancelReturnsTo: 'open-from-speleodb',
       }),
     );
     expect(screen.queryByTestId('open-from-speleodb-error')).not.toBeInTheDocument();
-    // Nothing was downloaded or opened, and the row is clickable again.
+    // Nothing was downloaded or opened.
     expect(loadProjectMock).not.toHaveBeenCalled();
-    await waitFor(() =>
-      expect(screen.getByTestId('open-from-speleodb-open-p1')).not.toBeDisabled(),
-    );
   });
 });

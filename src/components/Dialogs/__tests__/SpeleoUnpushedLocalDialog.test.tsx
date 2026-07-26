@@ -46,8 +46,9 @@ beforeEach(() => {
   invokeIpcMock.mockResolvedValue(undefined);
   loadProjectMock = vi.fn(async () => ({ success: true }));
   closeDialogMock = vi.fn();
-  useProjectStore.setState({ loadProject: loadProjectMock });
-  useSpeleoStore.setState({ setLinkOnOpen: vi.fn(), clearLink: vi.fn() });
+  // `keepLocalCopy` compares the refused path against the LIVE open project.
+  useProjectStore.setState({ loadProject: loadProjectMock, project: null });
+  useSpeleoStore.setState({ setLinkOnOpen: vi.fn(), clearLink: vi.fn(), clearSession: vi.fn() });
   useUIStore.setState({
     closeDialog: closeDialogMock,
     openDialog: vi.fn(),
@@ -139,5 +140,82 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     expect(closeDialogMock).not.toHaveBeenCalled();
     // The button stays armed, so it is a retry rather than a fresh arm.
     expect(screen.getByTestId('speleodb-unpushed-local-take-remote')).not.toBeDisabled();
+  });
+
+  // #270: DialogWrapper routes BOTH Escape and a backdrop click into `onClose`, and
+  // this dialog handed it `closeDialog` bare. Escaping while
+  // `speleodb_open_project_discarding_local` was in flight unmounted the only surface
+  // its error had - `setError` landed on an unmounted component, so a failed
+  // discard-my-edits open produced no message anywhere at all.
+  it('cannot be dismissed while the destructive branch is in flight', async () => {
+    let rejectOpen: (e: unknown) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_open_project_discarding_local'
+        ? new Promise((_resolve, reject) => {
+            rejectOpen = reject;
+          })
+        : Promise.resolve(undefined),
+    );
+    const openDialogMock = vi.fn();
+    useUIStore.setState({ openDialog: openDialogMock });
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+
+    // Escape mid-flight is inert.
+    await userEvent.keyboard('{Escape}');
+    expect(closeDialogMock).not.toHaveBeenCalled();
+    expect(openDialogMock).not.toHaveBeenCalled();
+    expect(screen.getByTestId('speleodb-unpushed-local-dialog')).toBeInTheDocument();
+
+    // ...so the failure still has somewhere to land.
+    rejectOpen({ message: 'server exploded', action: 'None', status: 500 });
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-unpushed-local-error')).toBeInTheDocument(),
+    );
+  });
+
+  it('drops the session when the discarding open reports a dead token', async () => {
+    // Every other consumer of this outcome handles `reLogin`; reading only
+    // `outcome.message` left the shell claiming a session the backend had dropped.
+    const clearSession = vi.fn();
+    useSpeleoStore.setState({ clearSession });
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_open_project_discarding_local'
+        ? Promise.reject({ message: 'unauthorized', action: 'ReLogin', status: 401 })
+        : Promise.resolve(undefined),
+    );
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+
+    await waitFor(() => expect(clearSession).toHaveBeenCalled());
+    expect(screen.getByTestId('speleodb-unpushed-local-error')).toBeInTheDocument();
+  });
+
+  // #270: this prompt REPLACES the browser in the single `activeDialog` slot, so a
+  // bare `closeDialog` on Cancel left nothing open and nothing opened - a dead end.
+  it('Cancel returns to the dialog it displaced when told how', async () => {
+    const openDialogMock = vi.fn();
+    useUIStore.setState({
+      openDialog: openDialogMock,
+      dialogData: {
+        summary: SUMMARY,
+        unpushedLocal: UNPUSHED,
+        cancelReturnsTo: 'open-from-speleodb',
+      },
+    });
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-cancel'));
+
+    expect(openDialogMock).toHaveBeenCalledWith('open-from-speleodb');
+    expect(closeDialogMock).not.toHaveBeenCalled();
+    expect(speleoCalls()).toEqual([]);
+  });
+
+  it('Cancel just closes for a host that is not a dialog (GlobalView rows)', async () => {
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-cancel'));
+    expect(closeDialogMock).toHaveBeenCalled();
   });
 });

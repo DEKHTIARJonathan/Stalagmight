@@ -35,6 +35,15 @@ export type OpenRemoteOutcome =
 interface UseOpenRemoteProjectOpts {
   /** Run right before loadProject (e.g. closeDialog so the load progress shows). */
   onBeforeLoad?: () => void;
+  /**
+   * [#270] The dialog to hand the user back to if they cancel the refused-open
+   * prompt this hook raises. The prompt replaces the host in the single
+   * `activeDialog` slot, so without this a Cancel left `activeDialog: null` - the
+   * browser gone, nothing opened, and no way back except re-opening the menu.
+   * Omitted by hosts that are not dialogs (GlobalView's remote rows), where
+   * cancelling correctly just returns to the view underneath.
+   */
+  cancelReturnsTo?: string;
 }
 
 /**
@@ -47,7 +56,7 @@ interface UseOpenRemoteProjectOpts {
  */
 export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const { t } = useTranslation();
-  const { onBeforeLoad } = opts;
+  const { onBeforeLoad, cancelReturnsTo } = opts;
   const showToast = useUIStore((s) => s.showToast);
   const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
@@ -62,8 +71,27 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     async (
       result: { local_path: string; concurrent_session: boolean },
       permission: SpeleoProjectSummary['permission'],
-      successToast?: { message: string; key: string },
+      opts: {
+        successToast?: { message: string; key: string };
+        /**
+         * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
+         * pull (nothing local the server has not seen); "keep the local copy" is
+         * the opposite by construction, and seeding it clean disarmed the quit
+         * guard for the one project we have proof is dirty.
+         */
+        hasUnpushedEdits?: boolean;
+        /**
+         * [#270] Do not touch the link AT ALL - the file being "opened" is the one
+         * already on screen, whose live link is the authoritative state (lock held,
+         * permission, dirty bit, all resolved). The optimistic seed is for a project
+         * arriving from the server; applied to the open one it OVERWRITES resolved
+         * truth with a pessimistic guess, and `loadProject` then short-circuits on
+         * ALREADY_OPEN so nothing re-resolves it synchronously.
+         */
+        skipSeed?: boolean;
+      } = {},
     ): Promise<OpenRemoteOutcome> => {
+      const { successToast, hasUnpushedEdits, skipSeed } = opts;
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
       if (result.concurrent_session) {
@@ -72,10 +100,20 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // `forPath` is the exact string handed to `loadProject` below, so the
       // `syncProjectLink` inside that load recognises this seed as belonging to
       // the project being opened rather than to whatever was open before.
-      setLinkOnOpen({ permission, forPath: result.local_path });
+      if (!skipSeed) {
+        setLinkOnOpen({
+          permission,
+          forPath: result.local_path,
+          hasUnpushedEdits: hasUnpushedEdits === true,
+        });
+      }
       onBeforeLoad?.();
       const loaded = await loadProject(result.local_path);
       if (!loaded.success) {
+        // Nothing to roll back when we never seeded: the link on screen is still
+        // the open project's own, resolved state, and clearing it would be the very
+        // downgrade this branch exists to undo.
+        if (skipSeed) return { status: 'load_failed' };
         clearLink();
         // #270: the failed load left the PREVIOUS project on screen, and
         // `clearLink` just dropped the gate back to "unresolved" (= read-only).
@@ -114,7 +152,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // choice instead of a dead-end error. Every other failure falls through.
         const unpushed = unpushedLocalEdits(e);
         if (unpushed) {
-          openDialog('speleodb-unpushed-local', { summary, unpushedLocal: unpushed });
+          openDialog('speleodb-unpushed-local', {
+            summary,
+            unpushedLocal: unpushed,
+            // Where Cancel goes, so the prompt is not a dead end for a host it
+            // displaced in the single dialog slot (#270).
+            ...(cancelReturnsTo ? { cancelReturnsTo } : {}),
+          });
           return { status: 'unpushed_local' };
         }
         return {
@@ -125,7 +169,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       }
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, openDialog, t],
+    [finishOpen, openDialog, cancelReturnsTo, t],
   );
 
   /**
@@ -135,10 +179,33 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * overwritten. The local `.stalx` named by the refusal is opened through the
    * SAME tail every successful pull uses (`finishOpen` -> loadProject, with the
    * link seed + rollback), so the two branches can never drift apart.
+   *
+   * Two things the shared tail must be told, because this branch is NOT a pull:
+   *
+   * 1. The copy is DIRTY, and we know it: this branch is reachable only because
+   *    the backend refused the open over edits the server has never seen. The
+   *    tail's default seed says `hasUnpushedEdits: false`, and that value is
+   *    exactly what `guardQuit` and the status button's warning read - so seeding
+   *    it clean disarmed the quit guard for the one project proven to have work
+   *    at risk, until some later status poll (30 s to a user-configurable 24 h)
+   *    happened to correct it.
+   * 2. If the refusal names the project ALREADY OPEN, seed nothing. "Open from
+   *    SpeleoDB" sits in the in-project menu, so re-opening the current project is
+   *    an ordinary mis-step; the refusal fires, the user keeps local, and the seed
+   *    would replace a fully-resolved link (lock held, permission, remote state)
+   *    with a pessimistic guess. `loadProject` then short-circuits on ALREADY_OPEN,
+   *    so nothing re-resolves it synchronously and the survey UI drops to read-only
+   *    for a project we hold the lock on. Skipping the seed is correct even when
+   *    the network is down, which a status-refresh repair would not be.
    */
   const keepLocalCopy = useCallback(
-    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> =>
-      finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission),
+    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> => {
+      const alreadyOpen = useProjectStore.getState().project?.file_path === localPath;
+      return finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
+        hasUnpushedEdits: true,
+        skipSeed: alreadyOpen,
+      });
+    },
     [finishOpen],
   );
 
@@ -187,10 +254,12 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // Post-adoption notice: Stalagmight now owns edits. When the server type could
       // not be flipped (no write access), say so - the user can still edit locally.
       return finishOpen(result, summary.permission, {
-        message: result.type_flipped
-          ? t('speleodb.adopt.doneToast')
-          : t('speleodb.adopt.doneToastNoWrite'),
-        key: 'speleodb-adopted',
+        successToast: {
+          message: result.type_flipped
+            ? t('speleodb.adopt.doneToast')
+            : t('speleodb.adopt.doneToastNoWrite'),
+          key: 'speleodb-adopted',
+        },
       });
     },
     [finishOpen, t],

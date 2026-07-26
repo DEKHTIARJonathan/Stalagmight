@@ -101,6 +101,13 @@ export function useBeforeUnload(
           // import wizard mid-flight, a dirty dive plan). Deliberately NOT
           // skipped by `preConfirmed`: a menu Quit confirms the PROJECT, which
           // says nothing about the dive plan the same close would drop.
+          // Tier-1 cleanup, DEFERRED. It is destructive by contract ("e.g. delete
+          // placed sections"), so it may only run once the close is actually going
+          // ahead. Running it inside the tier-1 confirmation performed the deletions
+          // for a close that tier 2 below then aborted - the user gets their dialog,
+          // cancels, keeps the app open, and the sections are gone anyway.
+          let deferredCleanup: (() => Promise<void>) | undefined;
+
           if (shouldBlockRef.current) {
             // Prevent multiple dialogs
             if (isShowingDialog.current || !isMounted) return;
@@ -113,15 +120,6 @@ export function useBeforeUnload(
                 okLabel: 'Discard and Close',
                 cancelLabel: 'Cancel',
               });
-
-              if (proceed && onConfirm) {
-                // Run cleanup callback if provided
-                try {
-                  await onConfirm();
-                } catch (e) {
-                  console.error('Cleanup callback failed:', e);
-                }
-              }
             } catch (e) {
               console.error('Close confirmation error:', e);
               proceed = false;
@@ -129,6 +127,7 @@ export function useBeforeUnload(
               isShowingDialog.current = false;
             }
             if (!proceed) return;
+            deferredCleanup = onConfirm;
           }
 
           // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
@@ -138,6 +137,16 @@ export function useBeforeUnload(
           if (!preConfirmed && guardRef.current?.()) {
             debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
             return;
+          }
+
+          // Past every guard: the window IS going away, so the tier-1 cleanup is
+          // finally safe to perform.
+          if (deferredCleanup) {
+            try {
+              await deferredCleanup();
+            } catch (e) {
+              console.error('Cleanup callback failed:', e);
+            }
           }
 
           // Mark that we're closing to prevent re-triggering

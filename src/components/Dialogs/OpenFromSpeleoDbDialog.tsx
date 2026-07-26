@@ -29,7 +29,13 @@ export default function OpenFromSpeleoDbDialog() {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   // Shared pull+open flow (#218): closeDialog runs right before loadProject so its
   // LoadingState progress is visible. The Ariane-adopt route surfaces as an outcome.
-  const { openRemote, adoptRemote } = useOpenRemoteProject({ onBeforeLoad: closeDialog });
+  // `cancelReturnsTo`: the refused-open prompt the hook may raise REPLACES this
+  // browser in the single `activeDialog` slot, so its Cancel must hand the user back
+  // here - otherwise cancelling leaves nothing open and nothing opened (#270).
+  const { openRemote, adoptRemote } = useOpenRemoteProject({
+    onBeforeLoad: closeDialog,
+    cancelReturnsTo: 'open-from-speleodb',
+  });
 
   // Start in 'checking' so the session probe settles before the first paint
   // (avoids a logged-out flash for an already-authenticated session).
@@ -144,10 +150,10 @@ export default function OpenFromSpeleoDbDialog() {
       setPendingAdopt(project);
       setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
-      // #270: the hook raised the keep-local / take-remote prompt, which replaces
-      // this browser as the active dialog. Not an error - just release the busy
-      // flag so this list is usable again if the user backs out of the prompt.
-      setBusy(false);
+      // #270: the hook raised the keep-local / take-remote prompt, which has already
+      // replaced this browser as the active dialog - so this component is unmounting
+      // and there is deliberately nothing to do. (Backing out of that prompt re-opens
+      // this dialog fresh via `cancelReturnsTo`, with its own state.)
     } else if (outcome.status === 'error') {
       surfaceOpenError(outcome.message, outcome.reLogin);
     }

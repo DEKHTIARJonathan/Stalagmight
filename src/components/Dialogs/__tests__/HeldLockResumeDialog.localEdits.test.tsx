@@ -32,6 +32,20 @@ const local = (opts: { unpushed: boolean; open?: boolean }) => ({
   has_unpushed_edits: opts.unpushed,
   last_edit_at: opts.unpushed ? '2026-07-26T00:00:00Z' : null,
   is_open: opts.open ?? false,
+  state_unknown: false,
+});
+
+/**
+ * A row the backend found but could NOT read. The listing fails open per row, so it
+ * reports `has_unpushed_edits: false` - byte-identical to a clean row - and only
+ * `state_unknown` tells them apart.
+ */
+const unreadable = () => ({
+  has_local_copy: false,
+  has_unpushed_edits: false,
+  last_edit_at: null,
+  is_open: false,
+  state_unknown: true,
 });
 
 /** Route the mock by command; `localStates` is the reply (or a thrown failure). */
@@ -65,6 +79,11 @@ beforeEach(() => {
   });
   useProjectStore.setState({
     loadProject: loadProjectMock,
+    // No project open and nothing unsaved unless a case says so - `continueEditing`
+    // now reads BOTH live (the open path decides whether a load is even needed; the
+    // dirty flag decides whether a load is allowed to close what is open).
+    project: null,
+    isDirty: false,
     recentProjects: [
       {
         name: 'Dirty Cave',
@@ -124,6 +143,9 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
   });
 
   it('skips the reload when that project is already the open one', async () => {
+    // Decided from the LIVE open path, not from the `is_open` field of a snapshot
+    // taken when this prompt mounted and never revalidated since.
+    useProjectStore.setState({ project: { file_path: '/cache/dirty.stalx' } as never });
     wireIpc({
       [DIRTY]: local({ unpushed: true, open: true }),
       [CLEAN]: local({ unpushed: false }),
@@ -136,6 +158,32 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
     );
     expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('refuses to open over a dirty project instead of dropping its in-memory edits', async () => {
+    // This prompt is raised on LOGIN as well as app-open, and login is reachable from
+    // Settings with a dirty project open. `loadProject` for a DIFFERENT project closes
+    // the current one backend-side, dropping unsaved edits - which is why
+    // `useProject.handleOpenProject` routes through the unsaved-changes prompt. Here
+    // there is no such route (the prompt is an app-wide overlay), so it must refuse.
+    useProjectStore.setState({
+      project: { file_path: '/other/open.stalx' } as never,
+      isDirty: true,
+    });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    // Nothing was acquired and nothing was discarded: the prompt stays up with every
+    // lock still listed, so the user can save first and come back to it.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
   it('offers no bulk release at all', async () => {
@@ -194,6 +242,35 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     // Continue editing keeps the lock held, so nothing can be stranded behind it.
     expect(screen.getByTestId(`speleodb-held-lock-continue-${DIRTY}`)).toBeInTheDocument();
     expect(screen.getByTestId(`speleodb-held-lock-continue-${CLEAN}`)).toBeInTheDocument();
+  });
+
+  it('withholds Release for a copy it could not read, and says why', async () => {
+    // The per-row twin of the whole-call failure above. An unreadable copy comes back
+    // `has_unpushed_edits: false` because the listing fails open, so before
+    // `state_unknown` existed this row was indistinguishable from clean and offered
+    // the one irreversible button - over a file whose likely problem is a hot journal
+    // left by the same crash that stranded the lock. The Rust guard fails CLOSED on
+    // this input, so offering Release here also meant offering what the backend
+    // would refuse.
+    wireIpc({ [DIRTY]: unreadable(), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    // The clean row still resolves to Release: this must not become a blanket veto.
+    await screen.findByTestId(`speleodb-held-lock-release-${CLEAN}`);
+    expect(screen.queryByTestId(`speleodb-held-lock-release-${DIRTY}`)).not.toBeInTheDocument();
+    expect(screen.getByTestId(`speleodb-held-lock-continue-${DIRTY}`)).toBeInTheDocument();
+    // A withheld button with no explanation reads as a bug, so the row says why.
+    expect(
+      screen.getByTestId(`speleodb-held-lock-state-unknown-${DIRTY}`),
+    ).toBeInTheDocument();
+    expect(screen.getByTestId(`speleodb-held-lock-${DIRTY}`)).toHaveAttribute(
+      'data-local-state-unknown',
+      'true',
+    );
+    expect(screen.getByTestId(`speleodb-held-lock-${CLEAN}`)).toHaveAttribute(
+      'data-local-state-unknown',
+      'false',
+    );
   });
 
   it('keeps the prompt (and the other locks) when the re-acquire is refused', async () => {

@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import { useSpeleoStore, asPushKind, asDoneKind } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import type {
@@ -151,6 +151,18 @@ export function useSpeleoActions(): SpeleoActions {
           // #198 seam: applyStartEditing recorded the divergence origin. The
           // divergence dialog decides what happens next; nothing is held yet.
           return false;
+        default: {
+          // A variant this frontend has not been taught must NOT fall through to
+          // the permissive `return true` below. That answer means "we hold the
+          // lock", and callers act on it destructively: the held-lock prompt
+          // dismisses itself AND discards every remaining lock, with no way to
+          // re-raise it until the next login scan. The `never` binding makes a new
+          // backend variant a COMPILE error here; at runtime it answers "no".
+          const _exhaustive: never = result;
+          void _exhaustive;
+          console.warn('[speleodb] unhandled start-editing result:', result);
+          return false;
+        }
       }
       return true;
     } catch (e) {
@@ -228,10 +240,18 @@ export function useSpeleoActions(): SpeleoActions {
       try {
         const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
         applyPush(result);
-        if (result.kind === 'pushed') {
+        const kind = asPushKind(result.kind);
+        if (kind === 'pushed') {
           showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed', 'success');
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
+        } else if (kind === 'not_editing') {
+          // Nothing was uploaded: the edit gate was already closed (a 401 auto-drop
+          // is the common way in, and the push-failure banner's Retry is the common
+          // way to re-issue from there). A green "Changes pushed to SpeleoDB." here
+          // was a lie that also cost the flush + no-anchor check their meaning, so
+          // say what actually happened and name the way out.
+          showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
         }
         // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
         // the returned kind lets the dialog stay open to resolve them.
@@ -278,7 +298,7 @@ export function useSpeleoActions(): SpeleoActions {
       try {
         const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
         applyDone(result);
-        switch (result.kind) {
+        switch (asDoneKind(result.kind)) {
           case 'released':
             showToast(
               hadUnpushedEdits
@@ -295,6 +315,12 @@ export function useSpeleoActions(): SpeleoActions {
             break;
           case 'divergence_needed':
             // #198 seam: applyDone recorded the divergence origin.
+            break;
+          case 'not_editing':
+            // No lock was held, so nothing was uploaded AND nothing was released.
+            // `applyDone` deliberately left the dirty bit alone; callers key off
+            // `kind === 'released'`, so the close/quit dialogs correctly stay open.
+            showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
             break;
         }
         return result;

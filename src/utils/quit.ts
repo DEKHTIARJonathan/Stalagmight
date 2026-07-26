@@ -5,7 +5,7 @@
  */
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 
 /**
@@ -58,12 +58,31 @@ export function performQuit(): void {
 }
 
 /**
+ * Work that exists ONLY on this computer: edits SpeleoDB has never seen.
+ *
+ * Shared by both exits ({@link guardQuit} and `useProject.handleCloseProject`) so
+ * they cannot drift again. The predicate keys on the WORK AT RISK, not on the
+ * lock, because the states where the work is most stranded are precisely the ones
+ * that drop the lock while keeping the edits: `notifyReverifyDivergence()` sets
+ * read-only, and any `ReLogin` error runs `clearSession()`, which does too.
+ *
+ * The two exits are not identical, and deliberately so - see each call site. Quit
+ * needs only this: holding the lock with nothing unpushed is safe to walk away
+ * from, because the backend's exit-time release vetoes itself when there ARE
+ * unpushed edits (aab5121d). Close additionally has to resolve a held lock, since
+ * it hands the project back while the app keeps running.
+ */
+export function hasUnpushedSpeleoWork(link: SpeleoLinkState | null): boolean {
+  return link?.hasUnpushedEdits === true;
+}
+
+/**
  * The exit guards, in the order the close flow uses them (see
  * `useProject.handleCloseProject`). Returns `true` when a dialog was opened and
  * the caller must NOT quit; `false` when there is nothing to protect.
  *
- * Ordering - SpeleoDB first, unsaved-to-disk second - deliberately mirrors the
- * close-project flow, and matters because the two conditions overlap: a project
+ * Ordering - SpeleoDB first, unsaved-to-disk second - is the same as the
+ * close-project flow's, and matters because the two conditions overlap: a project
  * can be both unsaved to disk AND unpushed to the server. The SpeleoDB prompt is
  * the one that subsumes the other (it carries its own "Save changes locally"
  * checkbox, defaulted to on, exactly like `SpeleoCloseDialog`), so running it
@@ -80,18 +99,13 @@ export function guardQuit(): boolean {
   if (!project) return false;
 
   const link = useSpeleoStore.getState().link;
-  // Keyed on the WORK AT RISK, not on the lock. Edits the server has not seen are
-  // what quitting can strand; whether we still hold the write lock only changes
-  // which choices the dialog can offer (it adapts), not whether the user should
-  // be told.
-  //
-  // Requiring `editState === 'editing'` silently disarmed this guard in exactly
-  // the states where the work is MOST stranded: `notifyReverifyDivergence()` sets
-  // read-only while keeping the unpushed edits, and any `ReLogin` error runs
-  // `clearSession()`, which also drops to read-only. Holding the lock with
-  // nothing unpushed still needs no prompt - the backend's exit-time release is
-  // safe then, and vetoes itself otherwise (aab5121d).
-  if (link?.hasUnpushedEdits) {
+  // Keyed on the WORK AT RISK only - see {@link hasUnpushedSpeleoWork}. Whether we
+  // still hold the write lock changes which choices the dialog can offer (it
+  // adapts), not whether the user should be told. Holding the lock with nothing
+  // unpushed needs no prompt at QUIT time specifically: the backend's exit-time
+  // release is safe then, and vetoes itself otherwise (aab5121d). The close flow
+  // does not get that for free, so it guards on the lock as well.
+  if (hasUnpushedSpeleoWork(link)) {
     useUIStore.getState().openDialog('speleodb-quit');
     return true;
   }

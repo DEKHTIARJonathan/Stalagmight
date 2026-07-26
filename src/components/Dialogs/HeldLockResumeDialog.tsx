@@ -5,7 +5,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore, type HeldLock } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
-import { hasUnpushedEdits, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
+import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -26,6 +26,13 @@ import { DialogWrapper } from './DialogWrapper';
  *   the lock (`speleodb_start_editing`, the app's open-and-hold verb). Release is not
  *   offered at all for such a row - it is the one action that would strand the work
  *   behind a lock the user no longer holds.
+ * - **local copy present but UNREADABLE** (`state_unknown`) -> **Continue editing**
+ *   too. The listing fails open per row, so such a row arrives with
+ *   `has_unpushed_edits: false` - identical to clean. The likely cause is a hot
+ *   journal from the kill/power-loss that stranded this very lock, which a read-only
+ *   connection cannot roll back, so "unknown" is the only honest read and Release is
+ *   withheld. The Rust guard fails closed on the same input; this keeps the two in
+ *   agreement rather than having the UI offer what the backend would refuse.
  *
  * Dialog-wide:
  * - **Keep working** - dismiss and leave the locks held.
@@ -49,7 +56,8 @@ export default function HeldLockResumeDialog() {
   const recentProjects = useProjectStore((s) => s.recentProjects);
   const loadProject = useProjectStore((s) => s.loadProject);
   const { startEditing } = useSpeleoActions();
-  // Which project id is being acted on, or 'all' for the Release-all path.
+  // Which project id is being acted on, or null when idle. (There is no bulk path -
+  // see the note above on why "Release all" does not exist.)
   const [busyId, setBusyId] = useState<string | null>(null);
 
   const locks = useMemo(() => heldLocks ?? [], [heldLocks]);
@@ -62,6 +70,10 @@ export default function HeldLockResumeDialog() {
   // The accent + "has changes" line are a POSITIVE report only: an empty `states`
   // means we have not been told, not that the project is clean.
   const dirty = (projectId: string) => hasUnpushedEdits(states, projectId);
+  // A local copy the backend could not READ. It arrives with `has_unpushed_edits:
+  // false` (the listing fails open per row), so without this it is indistinguishable
+  // from clean and would offer Release. See `localStateUnknown`.
+  const unknownState = (projectId: string) => localStateUnknown(states, projectId);
 
   /**
    * Which action a row offers. Release is the one irreversible button here - the
@@ -83,6 +95,11 @@ export default function HeldLockResumeDialog() {
   const actionFor = (projectId: string): 'release' | 'continue' | 'checking' => {
     if (!loaded) return 'checking';
     if (failed) return 'continue';
+    // An UNREADABLE copy is "unknown", not "clean": the whole-call `failed` branch
+    // above and this per-row one are the same rule at two scopes, so they get the
+    // same safe answer. Checked before `dirty` because an unreadable row cannot
+    // report a dirty bit at all.
+    if (unknownState(projectId)) return 'continue';
     return dirty(projectId) ? 'continue' : 'release';
   };
 
@@ -97,8 +114,6 @@ export default function HeldLockResumeDialog() {
     clearHeldLocks();
     closeHeldLockPrompt();
   };
-
-
 
   const releaseOne = async (projectId: string) => {
     setBusyId(projectId);
@@ -128,17 +143,36 @@ export default function HeldLockResumeDialog() {
   const continueEditing = async (lock: HeldLock) => {
     setBusyId(lock.projectId);
     try {
-      if (states[lock.projectId]?.is_open !== true) {
-        const path = recentProjects.find(
-          (p) => p.speleodb_project_id === lock.projectId,
-        )?.file_path;
-        if (path === undefined) {
-          // A local copy exists (that is why this row offers Continue editing) but we
-          // cannot name its file. Say so and change nothing - releasing the lock here
-          // is exactly the outcome this row exists to prevent.
+      const path = recentProjects.find((p) => p.speleodb_project_id === lock.projectId)?.file_path;
+      if (path === undefined) {
+        // We cannot name a local file for this project. Say so and change nothing -
+        // releasing the lock here is exactly the outcome this row exists to prevent.
+        // (Reachable from the `failed` branch too, where `actionFor` returns
+        // 'continue' precisely because NOTHING is known about the local copy.)
+        showToast(
+          t('speleodb.localEdits.heldLocks.openFailed', { name: lock.projectName }),
+          'speleodb-continue-editing-error',
+          'warning',
+        );
+        return;
+      }
+      // Compare against the LIVE open path rather than `states[...].is_open`: that
+      // map is a snapshot taken when the prompt mounted and is never revalidated, and
+      // `loadProject` short-circuits on ALREADY_OPEN anyway. The path is also the only
+      // thing that decides whether the load below would close another project.
+      const openPath = useProjectStore.getState().project?.file_path ?? null;
+      if (openPath !== path) {
+        // This prompt is app-wide and is raised on LOGIN as well as app-open, and
+        // login is reachable from Settings with a dirty project open. `loadProject`
+        // for a DIFFERENT project closes the current one backend-side, dropping its
+        // in-memory edits - which is exactly why `useProject.handleOpenProject`
+        // routes through the unsaved-changes prompt. Refuse rather than open a
+        // second modal over this overlay: the lock stays held and resolvable, and
+        // nothing is lost.
+        if (useProjectStore.getState().isDirty) {
           showToast(
-            t('speleodb.localEdits.heldLocks.openFailed', { name: lock.projectName }),
-            'speleodb-continue-editing-error',
+            t('speleodb.localEdits.heldLocks.unsavedChanges', { name: lock.projectName }),
+            'speleodb-continue-editing-dirty',
             'warning',
           );
           return;
@@ -179,6 +213,7 @@ export default function HeldLockResumeDialog() {
         <ul className="max-h-40 overflow-y-auto rounded border border-border divide-y divide-border">
           {locks.map((lock) => {
             const hasEdits = dirty(lock.projectId);
+            const stateUnknown = unknownState(lock.projectId);
             const action = actionFor(lock.projectId);
             return (
               <li
@@ -186,6 +221,7 @@ export default function HeldLockResumeDialog() {
                 className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-text-primary"
                 data-testid={`speleodb-held-lock-${lock.projectId}`}
                 data-local-edits={hasEdits ? 'true' : 'false'}
+                data-local-state-unknown={stateUnknown ? 'true' : 'false'}
                 data-row-action={action}
               >
                 <span className="min-w-0 truncate">
@@ -197,6 +233,18 @@ export default function HeldLockResumeDialog() {
                       data-testid={`speleodb-held-lock-local-edits-${lock.projectId}`}
                     >
                       {t('speleodb.localEdits.heldLocks.hasLocalChanges')}
+                    </span>
+                  )}
+                  {/* Say WHY Release is missing on this row, so a withheld button does
+                      not read as a bug. Mutually exclusive with the line above: an
+                      unreadable copy cannot report a dirty bit. */}
+                  {stateUnknown && !hasEdits && (
+                    <span
+                      className="block text-xs"
+                      style={{ color: UNPUSHED_ACCENT }}
+                      data-testid={`speleodb-held-lock-state-unknown-${lock.projectId}`}
+                    >
+                      {t('speleodb.localEdits.heldLocks.localStateUnknown')}
                     </span>
                   )}
                 </span>

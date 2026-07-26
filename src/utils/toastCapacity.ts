@@ -40,6 +40,26 @@ export const TOAST_GAP_PX = 8;
  */
 export const ESTIMATED_TOAST_HEIGHT_PX = 40;
 
+/**
+ * One toast's usable height: the measurement when there is one, the estimate
+ * otherwise.
+ *
+ * "Otherwise" is any NON-POSITIVE or non-finite number, not just a missing entry.
+ * ToastStack measures with `rect.height || el.offsetHeight || 0`, so an
+ * environment that does not lay out (a webview before its first paint, jsdom)
+ * stores a real `0` - and `?? fallback` does not catch a stored zero. The three
+ * consumers below have to agree on that or the geometry tears: `fitToastCapacity`
+ * already substituted the estimate while `toastStackOffsets` used the raw value,
+ * so a stack of measured zeroes was costed as five full toasts for capacity and
+ * then stacked at an 8px pitch - every toast painted on top of the previous one.
+ */
+export function usableToastHeight(
+  height: number | undefined,
+  fallback: number = ESTIMATED_TOAST_HEIGHT_PX,
+): number {
+  return typeof height === 'number' && Number.isFinite(height) && height > 0 ? height : fallback;
+}
+
 /** Clamp any candidate capacity into the allowed band. */
 export function clampToastCapacity(capacity: number): number {
   if (!Number.isFinite(capacity)) return MAX_VISIBLE_TOASTS;
@@ -76,11 +96,7 @@ export function fitToastCapacity(
   let used = 0;
   let fitted = 0;
   while (fitted < MAX_VISIBLE_TOASTS) {
-    const measured = heights[fitted];
-    const height =
-      typeof measured === 'number' && Number.isFinite(measured) && measured > 0
-        ? measured
-        : fallbackHeight;
+    const height = usableToastHeight(heights[fitted], fallbackHeight);
     const next = used + height + (fitted > 0 ? gap : 0);
     if (next > budget) break;
     used = next;
@@ -98,20 +114,37 @@ export function fitToastCapacity(
  * older one is pushed up by the full height of everything newer than it, gaps
  * included. Rendering is `translateY(-offset)`, so a changed offset is animated
  * by the CSS transition rather than jumping the way a flex reflow would.
+ *
+ * An unmeasured entry costs the estimate, exactly as it does for capacity (see
+ * {@link usableToastHeight}) - the alternative is a pitch of one gap, i.e. a pile
+ * of toasts painted on top of each other.
  */
-export function toastStackOffsets(heights: readonly number[], gap: number = TOAST_GAP_PX): number[] {
+export function toastStackOffsets(
+  heights: readonly number[],
+  gap: number = TOAST_GAP_PX,
+  fallbackHeight: number = ESTIMATED_TOAST_HEIGHT_PX,
+): number[] {
   const offsets = new Array<number>(heights.length).fill(0);
   let stacked = 0;
   for (let i = heights.length - 1; i >= 0; i -= 1) {
     offsets[i] = stacked;
-    stacked += (heights[i] ?? 0) + gap;
+    stacked += usableToastHeight(heights[i], fallbackHeight) + gap;
   }
   return offsets;
 }
 
-/** Total height of the stack, gaps included - the hover/hit area of the column. */
-export function toastStackHeight(heights: readonly number[], gap: number = TOAST_GAP_PX): number {
+/**
+ * Total height of the stack, gaps included - the hover/hit area of the column.
+ * Same unmeasured rule as the offsets above, so the hit area always covers the
+ * boxes those offsets place. (`|| 0` here vs `?? 0` there was the inconsistency:
+ * one silently swallowed a NaN, the other propagated it into every offset.)
+ */
+export function toastStackHeight(
+  heights: readonly number[],
+  gap: number = TOAST_GAP_PX,
+  fallbackHeight: number = ESTIMATED_TOAST_HEIGHT_PX,
+): number {
   if (heights.length === 0) return 0;
-  const total = heights.reduce((sum, h) => sum + (h || 0), 0);
+  const total = heights.reduce((sum, h) => sum + usableToastHeight(h, fallbackHeight), 0);
   return total + gap * (heights.length - 1);
 }
