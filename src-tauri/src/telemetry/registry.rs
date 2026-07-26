@@ -251,6 +251,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
+    "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
     "action.dialog.unmerge-stations",
     "action.dialog.unsaved-changes",
@@ -314,6 +315,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
+    "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
     "dialog-cancel.unmerge-stations",
     "dialog-cancel.unsaved-changes",
@@ -403,6 +405,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
+    "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
     "dwell.dialog.unmerge-stations",
     "dwell.dialog.unsaved-changes",
@@ -542,6 +545,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
+    "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
     "active-dwell.dialog.unmerge-stations",
     "active-dwell.dialog.unsaved-changes",
@@ -879,7 +883,10 @@ mod tests {
         //   + 1 split display toggle (#27): action.toggle.showJumps = 656.
         //   + 1 unreadable-kind prompt (#27):
         //       command.take_unrecognised_shot_kinds = 657.
-        assert_eq!(EVENT_NAMES.len(), 657);
+        //   + 4 unrecognised-shot-kind dialog events (#27):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .unrecognised-shot-kind = 661.
+        assert_eq!(EVENT_NAMES.len(), 661);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

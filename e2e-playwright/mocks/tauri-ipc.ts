@@ -3928,6 +3928,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           case 'get_collab_state':
             return null;
+          case 'take_unrecognised_shot_kinds':
+            // #27: no unreadable kinds in the mocked fixtures. Present so the
+            // post-load call resolves instead of throwing into the catch, which
+            // would mask a real regression in that path.
+            return [];
           case 'detect_collab_changes':
             return null;
           case 'collab_sibling_when_disabled':

@@ -38,6 +38,7 @@ import type {
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
+import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
@@ -806,6 +807,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             state.loading.clientOpId === detectOpId
           );
         };
+        // #27: shots whose stored `kind` this build could not read. The backend
+        // already failed them closed to Reference (so nothing routes through a
+        // leg it could not parse) and hands them over exactly once, but that is
+        // a substitution the user never agreed to - ask what they should be.
+        // Guarded by the same staleness check as the collab prompt: a user who
+        // switched projects before this resolved must not get a dialog about a
+        // file that is no longer open.
+        void invokeIpc<UnrecognisedShotKind[]>('take_unrecognised_shot_kinds', undefined, {
+          purpose: 'resolve unreadable shot kinds',
+        })
+          .then((found) => {
+            if (!isStillCurrentLoad()) return;
+            if (found.length > 0) {
+              useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
+            }
+          })
+          .catch(() => {
+            /* best-effort: the shots are already safely Reference either way */
+          });
+
         if (result.project.collab?.enabled) {
           void get()
             .detectCollabChanges()

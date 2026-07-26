@@ -51,7 +51,7 @@ use stalagmight_lib::models::{
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
     ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
-    SurveyDirection, TankMaterial, Team, ZeroDatumWire,
+    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -146,6 +146,7 @@ fn main() {
     export::<Shot>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
+    export::<UnrecognisedShotKind>(&out_dir);
     export::<VirtualShotMode>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
@@ -385,6 +386,7 @@ fn main() {
         "Shot",
         "ShotData",
         "ShotKind",
+        "UnrecognisedShotKind",
         "VirtualShotMode",
         "ShotUpdates",
         "Station",

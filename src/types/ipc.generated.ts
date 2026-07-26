@@ -49,6 +49,7 @@ export * from './ipc/ImportPlacement';
 export * from './ipc/Shot';
 export * from './ipc/ShotData';
 export * from './ipc/ShotKind';
+export * from './ipc/UnrecognisedShotKind';
 export * from './ipc/VirtualShotMode';
 export * from './ipc/ShotUpdates';
 export * from './ipc/Station';

@@ -1135,6 +1135,18 @@
     }
   },
   "dialogs": {
+    "unrecognisedShotKind": {
+      "title": "Unreadable shot types",
+      "body": "{{count}} shot(s) in this project store a type this version does not recognise - from a file written by a newer build, a hand-edit, or corruption. They have been treated as reference ties for now, which keeps them OUT of gas, penetration and the ruler, so nothing can route through a leg we could not read. Tell us what they really are, or leave them as they stand.",
+      "shot": "Shot",
+      "found": "Stored value",
+      "treatAs": "Treat as",
+      "treatAsAria": "Type for shot {{number}}",
+      "unnamedSection": "Unnamed section",
+      "note": "Whatever you pick is an ordinary edit - undoable, and saved with the project.",
+      "keepAsReference": "Leave as references",
+      "apply": "Apply"
+    },
     "settings": {
       "title": "Settings"
     },
