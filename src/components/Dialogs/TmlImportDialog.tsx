@@ -8,6 +8,7 @@ import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { TmlFile, OrphanPlacementSuggestion } from '../../types/commands';
 import { setSource } from '../../utils/telemetry';
+import type { VirtualShotMode } from '../../types/project';
 
 interface TmlImportDialogProps {
   tmlFile: TmlFile;
@@ -24,6 +25,9 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
   const [hashChecked, setHashChecked] = useState(false);
   const [includeExcluded, setIncludeExcluded] = useState(false);
   const [commentsOnStations, setCommentsOnStations] = useState(true);
+  // #27: Ariane has one VIRTUAL category, so the chain rule decides Jump vs
+  // Reference by default. A user who knows the file can override it here.
+  const [virtualShotMode, setVirtualShotMode] = useState<VirtualShotMode>('Auto');
 
   // Check for duplicate import on mount
   useEffect(() => {
@@ -52,6 +56,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     let maxDepth = -Infinity;
     let excludedCount = 0;
     let commentCount = 0;
+    let virtualCount = 0;
 
     for (const section of tmlFile.sections) {
       totalShots += section.shots.length;
@@ -61,11 +66,13 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         if (shot.depth > maxDepth) maxDepth = shot.depth;
         if (shot.excluded) excludedCount++;
         if (shot.comment) commentCount++;
+        if (shot.shot_type === 'Virtual') virtualCount++;
       }
     }
 
     return {
       totalShots,
+      virtualCount,
       totalLength: Math.round(totalLength * 10) / 10,
       depthRange:
         minDepth === Infinity
@@ -84,7 +91,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
     setLoadingProgress({ phase: 'import_parsing' });
     const importUi = { closeDialog, setView, triggerFitToBounds, openDialog };
     try {
-      const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations);
+      const result = await executeTmlImport(filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode);
       resetLoading();
 
       if (!result.success) {
@@ -133,7 +140,7 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
         message: getErrorMessage(e, 'Failed to import TML file'),
       });
     }
-  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
+  }, [executeTmlImport, filePath, fileHash, includeExcluded, commentsOnStations, virtualShotMode, tmlFile.cave_name, fileName, closeDialog, openDialog, setView, triggerFitToBounds, startLoading, setLoadingProgress, resetLoading]);
 
   return (
     <DialogWrapper title="Import Ariane Survey" onClose={closeDialog} size="lg" data-testid="tml-import-dialog">
@@ -247,6 +254,28 @@ export default function TmlImportDialog({ tmlFile, filePath }: TmlImportDialogPr
               data-testid="tml-comments-on-shots"
             />
             Keep comments on shots
+          </label>
+        )}
+
+        {/* Virtual-shot classification (#27). One control for the whole file,
+            rather than the per-shot picker the issue first proposed: the chain
+            rule gets it right in the common case, and the data table's J/R cell
+            handles the exceptions with the map visible alongside. */}
+        {stats.virtualCount > 0 && (
+          <label className="flex items-center gap-2 text-sm text-text-secondary">
+            <span>
+              {stats.virtualCount} virtual shot{stats.virtualCount !== 1 ? 's' : ''}:
+            </span>
+            <select
+              className="bg-surface border border-border rounded px-2 py-1"
+              value={virtualShotMode}
+              onChange={(e) => setVirtualShotMode(e.target.value as VirtualShotMode)}
+              data-testid="tml-virtual-shot-mode"
+            >
+              <option value="Auto">Auto (bounded runs are jumps)</option>
+              <option value="AllJumps">All jumps</option>
+              <option value="AllReferences">All references</option>
+            </select>
           </label>
         )}
 

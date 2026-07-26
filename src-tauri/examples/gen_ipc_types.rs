@@ -35,6 +35,7 @@ use stalagmight_lib::core::reconcile::{
     AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
     MatchQuality, RemovedShot, SectionMetaChange,
 };
+use stalagmight_lib::core::state::VirtualShotMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -145,6 +146,7 @@ fn main() {
     export::<Shot>(&out_dir);
     export::<ShotData>(&out_dir);
     export::<ShotKind>(&out_dir);
+    export::<VirtualShotMode>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
     export::<StationRef>(&out_dir);
@@ -383,6 +385,7 @@ fn main() {
         "Shot",
         "ShotData",
         "ShotKind",
+        "VirtualShotMode",
         "ShotUpdates",
         "Station",
         "StationRef",

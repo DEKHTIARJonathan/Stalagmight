@@ -1,8 +1,29 @@
 use super::AppState;
 use crate::core::{Command, CommandResult};
 use crate::models::{
-    ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData, StationRef,
+    ClosureStrategy, Coordinates, Project, SectionData, SectionId, ShotData, ShotKind, StationRef,
 };
+use serde::{Deserialize, Serialize};
+use ts_rs::TS;
+
+/// How a freshly-imported file's virtual shots should be classified (#27 q3).
+///
+/// A parser can only tell that a shot is virtual; which of the two virtual kinds
+/// it is needs the project graph, which only exists once the import is placed
+/// and merged. [`Auto`](VirtualShotMode::Auto) runs the chain rule at that
+/// point. The two explicit modes let a user who knows the file override it in
+/// one control, instead of the per-shot picker the issue originally proposed.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub enum VirtualShotMode {
+    /// Chain rule: a virtual run bounded by real survey on both ends is a Jump,
+    /// anything else a Reference.
+    #[default]
+    Auto,
+    /// Every virtual shot in this file is a swum shortcut.
+    AllJumps,
+    /// Every virtual shot in this file is a non-swimmable survey tie.
+    AllReferences,
+}
 use std::sync::Mutex;
 
 /// RAII guard for [`Project::cascade_deferred`].
@@ -186,6 +207,32 @@ impl AppState {
     /// Creates all sections with their placements (merges, zero datums, moves)
     /// and optionally tracks the file hash. Uses `ProjectSnapshotPair` so a
     /// single undo reverts everything including the hash.
+    /// Classify the virtual shots of a just-finished import (#27).
+    ///
+    /// Runs here rather than in the parsers because the chain rule needs the
+    /// project graph: sections placed, merges and closures created. Every import
+    /// command funnels through this one call.
+    pub fn classify_imported_virtual_shots(&self, mode: VirtualShotMode) -> CommandResult {
+        self.with_project_mut(|project| {
+            let changed = match mode {
+                VirtualShotMode::Auto => project.classify_virtual_shots(),
+                VirtualShotMode::AllJumps => project.set_all_virtual_shots(ShotKind::Jump),
+                VirtualShotMode::AllReferences => {
+                    project.set_all_virtual_shots(ShotKind::Reference)
+                }
+            };
+            if changed > 0 {
+                tracing::info!(
+                    changed,
+                    ?mode,
+                    purpose = "assign Jump/Reference kinds at import finalize (#27)",
+                    "Classified imported virtual shots"
+                );
+            }
+            CommandResult::success()
+        })
+    }
+
     pub fn execute_import_sections(
         &self,
         sections: Vec<crate::models::ImportSectionConfig>,

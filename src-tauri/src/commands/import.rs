@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
-use crate::core::state::AppState;
+use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
@@ -133,6 +133,19 @@ pub fn check_section_hashes(
 /// the in-memory import under the close-guard) but carries a warning about the
 /// failed save. Returning a hard failure here would make the UI treat the import as
 /// failed, never mark dirty, and silently lose the imported data on exit.
+/// Classify the just-imported virtual shots, then let the deferred first save
+/// run. Every import command funnels through here.
+fn finalize_import(
+    state: &AppState,
+    import_result: CommandResult,
+    mode: VirtualShotMode,
+) -> CommandResult {
+    if import_result.success {
+        state.classify_imported_virtual_shots(mode);
+    }
+    finalize_deferred_import(state, import_result)
+}
+
 fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> CommandResult {
     if !import_result.success || !state.initial_save_deferred() {
         return import_result;
@@ -168,6 +181,7 @@ pub fn import_sections(
     file_hash: Option<String>,
     section_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
@@ -183,7 +197,7 @@ pub fn import_sections(
         section_hashes.unwrap_or_default(),
         updates,
     );
-    finalize_deferred_import(state.inner(), result)
+    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -215,6 +229,7 @@ pub fn execute_tml_import(
     file_hash: Option<String>,
     include_excluded: bool,
     comments_on_stations: bool,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -274,7 +289,7 @@ pub fn execute_tml_import(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_deferred_import(state.inner(), result)
+    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
 }
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
@@ -307,6 +322,7 @@ pub fn execute_compass_import(
     include_excluded: bool,
     apply_corrections: bool,
     comments_on_stations: bool,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -373,7 +389,7 @@ pub fn execute_compass_import(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_deferred_import(state.inner(), result)
+    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -568,6 +584,7 @@ pub fn execute_walls_import(
     comments_on_stations: bool,
     include_splays: bool,
     selected_surveys: Option<Vec<u32>>,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -637,5 +654,5 @@ pub fn execute_walls_import(
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_deferred_import(state.inner(), result)
+    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
 }

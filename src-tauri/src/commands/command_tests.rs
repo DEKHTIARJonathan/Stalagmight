@@ -1096,7 +1096,7 @@ fn test_import_sections_persists_deferred_new_project() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
         assert_success(&result);
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
@@ -1164,7 +1164,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
@@ -1254,7 +1254,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
 
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);

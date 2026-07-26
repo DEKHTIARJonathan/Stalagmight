@@ -196,6 +196,28 @@ impl Project {
     }
 }
 
+impl Project {
+    /// Force every virtual shot to one kind, bypassing the chain rule (#27 q3's
+    /// per-file import override). Non-virtual shots are untouched. Returns the
+    /// number of shots whose kind actually changed.
+    pub fn set_all_virtual_shots(&mut self, kind: ShotKind) -> usize {
+        debug_assert!(kind.is_virtual(), "only the virtual kinds make sense here");
+        let mut changed = 0;
+        for section in &mut self.sections {
+            for shot in &mut section.shots {
+                if shot.kind.is_virtual() && shot.kind != kind {
+                    shot.kind = kind;
+                    changed += 1;
+                }
+            }
+        }
+        if changed > 0 {
+            self.touch();
+        }
+        changed
+    }
+}
+
 #[cfg(test)]
 #[expect(clippy::unwrap_used)]
 mod tests {
@@ -446,6 +468,24 @@ mod tests {
         // Second run changes nothing, so a caller can use the count to skip a save.
         assert_eq!(project.classify_virtual_shots(), 0);
         assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
+    }
+
+    #[test]
+    fn set_all_virtual_shots_overrides_the_chain_rule_without_touching_real_shots() {
+        let mut project = project_with(vec![
+            shot(ShotKind::Normal),
+            shot(ShotKind::Reference),
+            shot(ShotKind::Normal),
+        ]);
+
+        // The chain rule would call this bounded run a Jump; the override wins.
+        assert_eq!(project.set_all_virtual_shots(ShotKind::Reference), 0);
+        assert_eq!(project.set_all_virtual_shots(ShotKind::Jump), 1);
+        assert_eq!(
+            kinds(&project),
+            vec![ShotKind::Normal, ShotKind::Jump, ShotKind::Normal],
+            "permanent shots must never be virtualised by the override"
+        );
     }
 
     #[test]

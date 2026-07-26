@@ -8,6 +8,7 @@ export type {
   Shot,
   ShotData,
   ShotKind,
+  VirtualShotMode,
   ShotUpdates,
   Section,
   SectionData,

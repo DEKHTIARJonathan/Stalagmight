@@ -26,6 +26,7 @@ import type {
   ShotData,
   ShotUpdates,
   ShotKind,
+  VirtualShotMode,
   SectionId,
   ShotId,
   StationRef,
@@ -353,7 +354,7 @@ interface ProjectStore {
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
@@ -375,7 +376,7 @@ interface ProjectStore {
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
-  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => Promise<CommandResult>;
+  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
@@ -1797,7 +1798,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => {
+  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -1808,6 +1809,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           fileHash: fileHash ?? null,
           includeExcluded: includeExcluded ?? false,
           commentsOnStations: commentsOnStations ?? true,
+          // #27: null lets the backend default to Auto (the chain rule).
+          virtualShotMode: virtualShotMode ?? null,
         },
         { purpose: 'import Ariane TML/TMLU', fields: { path } }
       );
@@ -1999,7 +2002,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => {
+  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2009,6 +2012,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sections,
           fileHash: fileHash ?? null,
           sectionHashes: sectionHashes ?? null,
+          virtualShotMode: virtualShotMode ?? null,
         },
         { purpose: 'apply imported sections', fields: { section_count: sections.length } }
       );
