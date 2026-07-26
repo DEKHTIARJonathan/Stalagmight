@@ -1337,6 +1337,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               calls.push({
                 stageDropOverrides: args?.stageDropOverrides ?? [],
                 endpoint: args?.endpoint ?? null,
+                origin: args?.origin ?? null,
+                // #298: the ordered way points, so an e2e can assert the pick reached the engine
+                // and in what order.
+                waypoints: args?.waypoints ?? [],
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
@@ -1575,6 +1579,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
               return 0;
             });
+            // Cumulative gas at each way point (#298). Like the drop math above this is a
+            // shape-correct stand-in, not the engine's multi-leg walk: it reports each way point's
+            // own gas-to-reach (null when the station is not in the field at all, which is what
+            // the panel's "unreachable" warning keys off) rather than accumulating the legs. The
+            // real accumulation is unit-tested in Rust; the e2e asserts UI wiring only.
+            const waypointArgs = (args?.waypoints ?? []) as Array<{
+              section_id: number;
+              station_index: number;
+            }>;
+            const waypoint_gas_litres = waypointArgs.map((w) => {
+              const idx = stations.findIndex(
+                (s) =>
+                  s.station_ref.section_id === w.section_id &&
+                  s.station_ref.station_index === w.station_index,
+              );
+              return idx >= 0 ? gas_to_reach[idx] : null;
+            });
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1593,6 +1614,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route_line_length_m,
               route_max_depth_m,
               route_avg_depth_m,
+              waypoint_gas_litres,
             };
           }
 

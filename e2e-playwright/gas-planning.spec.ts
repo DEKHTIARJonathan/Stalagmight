@@ -97,12 +97,31 @@ type E2EWindow = {
     };
     gasPlanStore: {
       getState: () => {
+        origin: StationRefLite | null;
         endpoint: StationRefLite | null;
+        waypoints: StationRefLite[];
+        markedPoints: { station: StationRefLite; label: string | null }[];
         reachField: { turn_frontier: StationRefLite[] } | null;
       };
     };
   };
 };
+
+/**
+ * A Plan context-menu entry, addressed by ROLE. The menu rows are buttons, and matching them by
+ * text alone collides with prose that quotes the same label (the Origin hint names "Set as start
+ * point" so the user can find it).
+ */
+function planMenuItem(page: Page, label: string) {
+  return page.getByRole('button', { name: label, exact: true });
+}
+
+/** The gas plan's ordered way points (#298). */
+async function gasWaypoints(page: Page): Promise<StationRefLite[]> {
+  return page.evaluate(
+    () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().waypoints ?? [],
+  );
+}
 
 async function appMode(page: Page): Promise<string> {
   return page.evaluate(() => (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().appMode ?? '');
@@ -660,17 +679,192 @@ test.describe('Gas planning', () => {
       });
     });
 
-    await expect(page.getByText('Set as endpoint')).toBeVisible();
-    // "Set as origin" was removed from the right-click menu - origin is set by single-click / the
-    // datum star, and the menu is reserved for the endpoint pick + future recalc affordances.
-    await expect(page.getByText('Set as origin')).toHaveCount(0);
+    // The Plan menu is the route-picking menu (#298).
+    await expect(planMenuItem(page, 'Set as endpoint')).toBeVisible();
+    await expect(planMenuItem(page, 'Set as start point')).toBeVisible();
+    await expect(planMenuItem(page, 'Set as way point')).toBeVisible();
+    await expect(planMenuItem(page, 'Set marked point')).toBeVisible();
+    // No stage drop entry on the default all-thirds rig: the backend returns no drops for it, so
+    // offering a slot the engine would ignore would be a lie.
+    await expect(page.getByRole('button', { name: /Set as stage/ })).toHaveCount(0);
     // The survey mutation menu must NOT appear (the read-only bug): no "Edit Station".
     await expect(page.getByText('Edit Station')).toHaveCount(0);
 
     // Picking the endpoint stores it in the gas plan store and closes the menu.
-    await page.getByText('Set as endpoint').click();
-    await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+    await planMenuItem(page, 'Set as endpoint').click();
+    await expect(planMenuItem(page, 'Set as endpoint')).toHaveCount(0);
     expect(await gasEndpoint(page)).not.toBeNull();
+  });
+
+  /** Open the Plan right-click menu for `stationIndex` of the first section. */
+  async function openPlanMenu(page: Page, stationIndex: number): Promise<void> {
+    await page.evaluate((idx) => {
+      const e2e = (
+        window as unknown as {
+          __E2E_TEST__: {
+            projectStore: { getState: () => { project: { sections: Array<{ id: number }> } } };
+            uiStore: { getState: () => { openDialog: (d: string, data: unknown) => void } };
+          };
+        }
+      ).__E2E_TEST__;
+      const sec = e2e.projectStore.getState().project.sections[0];
+      e2e.uiStore.getState().openDialog('context-menu', {
+        target: { type: 'station', ref: { section_id: sec.id, station_index: idx } },
+        position: { x: 220, y: 220 },
+      });
+    }, stationIndex);
+  }
+
+  test('a plain left-click on a station sets the ENDPOINT, not the origin @smoke', async ({
+    page,
+  }) => {
+    // #298 flipped this: a map click used to re-root the origin. Picking a destination is the
+    // frequent action, and the origin is nearly always the entrance.
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await waitForDrawnStations(page);
+    // Zoom in the same way the pixel probes do: at the fit-to-bounds zoom the 11 stations are only
+    // a few px apart and a click lands ambiguously between discs.
+    await setMapZoom(page, (await mapZoom(page)) + PROBE_ZOOM_DELTA);
+    await waitForDrawnStations(page);
+    // `stationAt` is CANVAS-relative (it feeds the pixel probes); the mouse works in viewport
+    // coordinates, so the canvas origin has to be added or the click lands above the map.
+    const pt = await stationAt(page, 3);
+    const canvasBox = await page.locator('canvas').first().boundingBox();
+    expect(canvasBox).not.toBeNull();
+    await page.mouse.click(canvasBox!.x + pt.x, canvasBox!.y + pt.y);
+
+    await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).not.toBeNull();
+    // The origin must be untouched (still the entrance default) - the whole point of the change.
+    expect(
+      await page.evaluate(
+        () => (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+      ),
+    ).toBeNull();
+  });
+
+  test('Set as start point sets the ORIGIN, not the endpoint (#298)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await openPlanMenu(page, 2);
+    await planMenuItem(page, 'Set as start point').click();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState().origin ?? null,
+          ),
+        { timeout: 2000 },
+      )
+      .toEqual({ section_id: 1, station_index: 2 });
+    // The origin pick must NOT double as an endpoint pick - they are separate route roles.
+    expect(await gasEndpoint(page)).toBeNull();
+  });
+
+  test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    // Empty state first, so the list rows below are proof of the add and not pre-existing.
+    await expect(page.locator('[data-testid="gas-waypoints-empty"]')).toBeVisible();
+
+    await openPlanMenu(page, 2);
+    await planMenuItem(page, 'Set as way point').click();
+    await openPlanMenu(page, 4);
+    await planMenuItem(page, 'Set as way point').click();
+
+    // Click order IS visit order.
+    await expect.poll(() => gasWaypoints(page), { timeout: 2000 }).toEqual([
+      { section_id: 1, station_index: 2 },
+      { section_id: 1, station_index: 4 },
+    ]);
+    await expect(page.locator('[data-testid="gas-waypoint-row"]')).toHaveCount(2);
+    // One numbered pin per way point on the map.
+    await expect(page.locator('[data-testid="gas-waypoint-marker"]')).toHaveCount(2);
+
+    // The engine receives them, in order - this is a gas input, not a drawing hint.
+    const sent = await page.evaluate(
+      () =>
+        (
+          (window as unknown as Record<string, unknown>).__MOCK_GAS_REACH_CALLS__ as Array<{
+            waypoints: StationRefLite[];
+          }>
+        ).at(-1)?.waypoints ?? [],
+    );
+    expect(sent).toEqual([
+      { section_id: 1, station_index: 2 },
+      { section_id: 1, station_index: 4 },
+    ]);
+
+    // Reordering is a real change of plan, so it must actually swap the list.
+    await page.locator('[data-testid="gas-waypoint-down"]').first().click();
+    await expect.poll(() => gasWaypoints(page), { timeout: 2000 }).toEqual([
+      { section_id: 1, station_index: 4 },
+      { section_id: 1, station_index: 2 },
+    ]);
+
+    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await expect
+      .poll(() => gasWaypoints(page), { timeout: 2000 })
+      .toEqual([{ section_id: 1, station_index: 2 }]);
+    await expect(page.locator('[data-testid="gas-waypoint-marker"]')).toHaveCount(1);
+  });
+
+  test('marked points: pin, label, remove - and no gas recompute (#298)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-marked-empty"]')).toBeVisible();
+    // Let the initial field settle so the call count below reflects only what marking does.
+    await expect(page.locator('[data-testid="gas-legend"]')).toBeVisible({ timeout: 3000 });
+    const callsBefore = await page.evaluate(
+      () =>
+        ((window as unknown as Record<string, unknown>).__MOCK_GAS_REACH_CALLS__ as unknown[])
+          ?.length ?? 0,
+    );
+
+    await openPlanMenu(page, 3);
+    await planMenuItem(page, 'Set marked point').click();
+    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(1);
+
+    await page.locator('[data-testid="gas-marked-label-input"]').fill('photo here');
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore.getState()
+                .markedPoints[0]?.label ?? null,
+          ),
+        { timeout: 2000 },
+      )
+      .toBe('photo here');
+
+    // A marked point is an annotation: it must never re-run the gas solve. If this ever fires, the
+    // store setter has started nulling reachField and the overlay will flicker on every keystroke.
+    const callsAfter = await page.evaluate(
+      () =>
+        ((window as unknown as Record<string, unknown>).__MOCK_GAS_REACH_CALLS__ as unknown[])
+          ?.length ?? 0,
+    );
+    expect(callsAfter).toBe(callsBefore);
+
+    await page.locator('[data-testid="gas-marked-remove"]').click();
+    await expect(page.locator('[data-testid="gas-marked-row"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="gas-marked-point-marker"]')).toHaveCount(0);
+  });
+
+  test('the legend keys the route line and the new route symbols (#298)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    const key = page.locator('[data-testid="gas-legend-key"]');
+    await expect(key).toBeVisible({ timeout: 3000 });
+    // The route line is drawn by default (origin -> deepest reachable), so its key is always there.
+    await expect(key.getByText('Planned route')).toBeVisible();
+    // Way point / marked point rows appear only once those exist, so the key stays short.
+    await expect(key.getByText('Way point')).toHaveCount(0);
+    await openPlanMenu(page, 2);
+    await planMenuItem(page, 'Set as way point').click();
+    await expect(key.getByText('Way point')).toBeVisible();
   });
 
   test('right-clicking a turn-frontier dot opens the Plan menu and sets the endpoint @smoke', async ({
@@ -683,8 +877,8 @@ test.describe('Gas planning', () => {
       .poll(() => page.locator('[data-testid="gas-turn-marker"]').count(), { timeout: 3000 })
       .toBeGreaterThan(0);
     await page.locator('[data-testid="gas-turn-marker"]').first().click({ button: 'right' });
-    await expect(page.getByText('Set as endpoint')).toBeVisible();
-    await page.getByText('Set as endpoint').click();
+    await expect(planMenuItem(page, 'Set as endpoint')).toBeVisible();
+    await planMenuItem(page, 'Set as endpoint').click();
     expect(await gasEndpoint(page)).not.toBeNull();
   });
 
@@ -705,7 +899,7 @@ test.describe('Gas planning', () => {
     await page.locator('[data-testid="gas-turn-marker"]').first().click();
     await expect.poll(() => gasEndpoint(page), { timeout: 2000 }).toEqual(expected);
     // And it must not have opened the context menu.
-    await expect(page.getByText('Set as endpoint')).toHaveCount(0);
+    await expect(planMenuItem(page, 'Set as endpoint')).toHaveCount(0);
   });
 
   test('keyboard-activating a turn-frontier dot (Enter) selects it and preserves focus (#243 a11y)', async ({

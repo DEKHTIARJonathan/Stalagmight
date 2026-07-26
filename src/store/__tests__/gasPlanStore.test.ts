@@ -124,6 +124,118 @@ describe('gasPlanStore', () => {
   });
 });
 
+describe('gasPlanStore way points (#298)', () => {
+  const a = { section_id: 1, station_index: 1 };
+  const b = { section_id: 1, station_index: 5 };
+
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('adds in click order and removes by index', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    expect(useGasPlanStore.getState().waypoints).toEqual([a, b]);
+    useGasPlanStore.getState().removeWaypoint(0);
+    expect(useGasPlanStore.getState().waypoints).toEqual([b]);
+  });
+
+  it('moveWaypoint swaps with the neighbour and clamps at both ends', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().moveWaypoint(1, -1);
+    expect(useGasPlanStore.getState().waypoints).toEqual([b, a]);
+    // Off either end is a no-op, so the panel's arrows need no bounds logic of their own.
+    useGasPlanStore.getState().moveWaypoint(0, -1);
+    useGasPlanStore.getState().moveWaypoint(1, 1);
+    useGasPlanStore.getState().moveWaypoint(99, -1);
+    expect(useGasPlanStore.getState().waypoints).toEqual([b, a]);
+  });
+
+  it('a stray remove index is a no-op (never truncates the list)', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().removeWaypoint(-1);
+    useGasPlanStore.getState().removeWaypoint(7);
+    expect(useGasPlanStore.getState().waypoints).toEqual([a]);
+  });
+
+  it.each([
+    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint(b)],
+    ['removeWaypoint', () => useGasPlanStore.getState().removeWaypoint(0)],
+    ['moveWaypoint', () => useGasPlanStore.getState().moveWaypoint(0, 1)],
+  ])(
+    '%s nulls reachField and clears stageDropOverrides (the route is re-based, so the old overlay and pinned drops are both wrong)',
+    (_name, mutate) => {
+      // Two way points so `moveWaypoint(0, 1)` is a real move rather than an out-of-range no-op.
+      useGasPlanStore.getState().addWaypoint(a);
+      useGasPlanStore.getState().addWaypoint(b);
+      useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+      useGasPlanStore.setState({ reachField: fakeField() });
+      mutate();
+      expect(useGasPlanStore.getState().reachField).toBeNull();
+      expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
+    }
+  );
+
+  it('reset clears way points (no leak across plan sessions)', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().waypoints).toEqual([]);
+  });
+});
+
+describe('gasPlanStore marked points (#298)', () => {
+  const at = { section_id: 2, station_index: 3 };
+
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('adds unlabelled, relabels, and removes by index', () => {
+    useGasPlanStore.getState().addMarkedPoint(at);
+    expect(useGasPlanStore.getState().markedPoints).toEqual([{ station: at, label: null }]);
+    useGasPlanStore.getState().setMarkedPointLabel(0, 'photo');
+    expect(useGasPlanStore.getState().markedPoints[0]?.label).toBe('photo');
+    useGasPlanStore.getState().removeMarkedPoint(0);
+    expect(useGasPlanStore.getState().markedPoints).toEqual([]);
+  });
+
+  it('an all-whitespace label stores as null (a cleared input is "no label", not a blank one)', () => {
+    useGasPlanStore.getState().addMarkedPoint(at);
+    useGasPlanStore.getState().setMarkedPointLabel(0, 'photo');
+    useGasPlanStore.getState().setMarkedPointLabel(0, '   ');
+    expect(useGasPlanStore.getState().markedPoints[0]?.label).toBeNull();
+  });
+
+  it.each([
+    ['addMarkedPoint', () => useGasPlanStore.getState().addMarkedPoint(at)],
+    ['setMarkedPointLabel', () => useGasPlanStore.getState().setMarkedPointLabel(0, 'x')],
+    ['removeMarkedPoint', () => useGasPlanStore.getState().removeMarkedPoint(0)],
+  ])(
+    '%s does NOT null reachField (an annotation cannot change the plan, so flashing the overlay off would be a lie)',
+    (_name, mutate) => {
+      useGasPlanStore.getState().addMarkedPoint(at);
+      useGasPlanStore.setState({ reachField: fakeField() });
+      mutate();
+      expect(useGasPlanStore.getState().reachField).not.toBeNull();
+    }
+  );
+
+  it('but marking IS dirty-tracked, so an unsaved mark still hits the close guard', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(3, snapshot);
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+    useGasPlanStore.getState().addMarkedPoint(at);
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
+  });
+
+  it('reset clears marked points (no leak across plan sessions)', () => {
+    useGasPlanStore.getState().addMarkedPoint(at);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().markedPoints).toEqual([]);
+  });
+});
+
 describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
   beforeEach(() => {
     useGasPlanStore.getState().reset();
