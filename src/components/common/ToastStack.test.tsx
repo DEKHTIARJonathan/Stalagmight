@@ -388,6 +388,33 @@ describe('ToastStack - lifecycle', () => {
     expect(toastFor('went badly')).toBeUndefined();
   });
 
+  it('rises as it fades, not after it (the fade-in-place regression)', () => {
+    render(<ToastStack />);
+    push('drifts away', 'k');
+
+    // Sitting on its slot at full opacity: no travel yet. (Read the number
+    // rather than the string - the sole toast sits at -0, which serialises to
+    // "0px".)
+    advance(4000);
+    const settled = Number(
+      /translateY\((-?[\d.]+)px\)/.exec(toastFor('drifts away')?.style.transform ?? '')?.[1],
+    );
+    expect(settled).toBe(0);
+
+    // Mid-fade the toast must ALREADY have travelled upward. The bug was that
+    // the 12px exit drift was only applied once the toast was marked `leaving`,
+    // which happens after the tick has taken it to opacity 0 - so the travel was
+    // applied to an invisible box and it simply faded in place.
+    advance(1500);
+    const el = toastFor('drifts away');
+    const opacity = Number(el?.style.opacity);
+    expect(opacity).toBeGreaterThan(0);
+    expect(opacity).toBeLessThan(1);
+
+    const y = Number(/translateY\((-?[\d.]+)px\)/.exec(el?.style.transform ?? '')?.[1]);
+    expect(y).toBeLessThan(0);
+  });
+
   it('restarts the clock when the same key refreshes the toast', () => {
     render(<ToastStack />);
     push('attempt one', 'dup');

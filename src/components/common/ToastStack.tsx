@@ -146,7 +146,10 @@ export function usePrefersReducedMotion(): boolean {
 
 function readViewportHeight(): number {
   if (typeof window === 'undefined') return 0;
-  return window.innerHeight || 0;
+  // innerHeight can read 0 in a webview that has not sized itself yet; fall back
+  // to the layout viewport before giving up, so a transient 0 does not become the
+  // number the capacity is computed from.
+  return window.innerHeight || document.documentElement?.clientHeight || 0;
 }
 
 /**
@@ -499,11 +502,21 @@ function Toast({
   // can freeze it and un-pausing can resume from where it stopped. Hover/focus
   // snaps straight back to full - "it lit back up" is the intended read.
   let opacity = 1;
+  // How far through the fade-out this toast is, 0 (untouched) to 1 (gone). Also
+  // drives the exit RISE below, so the drift happens WHILE it fades rather than
+  // after: expiring naturally used to reach opacity 0 on the tick and only then
+  // be marked `leaving`, so the upward travel was applied to an already-invisible
+  // box and the toast simply faded in place.
+  let fade = 0;
   if (item.leaving || entering) {
     opacity = 0;
+    fade = item.leaving ? 1 : 0;
   } else if (!paused && !reducedMotion) {
     const overdue = elapsed - dwellOf(item.kind);
-    if (overdue > 0) opacity = Math.max(0, 1 - overdue / FADE_MS);
+    if (overdue > 0) {
+      fade = Math.min(1, overdue / FADE_MS);
+      opacity = 1 - fade;
+    }
   }
 
   // Up is negative. A toast enters from below its slot, sits ON it, and leaves
@@ -511,8 +524,8 @@ function Toast({
   // slot and taken away from it, with the same lifetime either way.
   let translate = -offset;
   if (!reducedMotion) {
-    if (item.leaving) translate = -(offset + EXIT_RISE_PX);
-    else if (entering) translate = -(offset - ENTER_RISE_PX);
+    if (entering) translate = -(offset - ENTER_RISE_PX);
+    else if (fade > 0) translate = -(offset + EXIT_RISE_PX * fade);
   }
 
   return (

@@ -86,10 +86,16 @@ describe('fitToastCapacity - the floor of two', () => {
     expect(fitToastCapacity(100, rows(6, 200))).toBe(2);
   });
 
-  it('allows two in a degenerate viewport', () => {
-    expect(fitToastCapacity(0, rows(6, 40))).toBe(2);
-    expect(fitToastCapacity(Number.NaN, rows(6, 40))).toBe(2);
-    expect(fitToastCapacity(-500, rows(6, 40))).toBe(2);
+  it('treats an unmeasured viewport as NO constraint, not as no room', () => {
+    // A non-positive height means the window has not reported a size yet, which
+    // is not the same as a window with no room in it. Flooring here was a real
+    // bug: a webview whose innerHeight reads 0 on first paint stranded the stack
+    // at two forever, because nothing re-triggers the measurement on a window
+    // that is never resized. A genuinely SMALL viewport still floors at two -
+    // that is the two cases above.
+    expect(fitToastCapacity(0, rows(6, 40))).toBe(MAX_VISIBLE_TOASTS);
+    expect(fitToastCapacity(Number.NaN, rows(6, 40))).toBe(MAX_VISIBLE_TOASTS);
+    expect(fitToastCapacity(-500, rows(6, 40))).toBe(MAX_VISIBLE_TOASTS);
   });
 
   it('ignores unmeasured or nonsense heights and falls back to the estimate', () => {

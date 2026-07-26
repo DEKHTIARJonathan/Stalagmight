@@ -64,8 +64,14 @@ export function fitToastCapacity(
   gap: number = TOAST_GAP_PX,
   fallbackHeight: number = ESTIMATED_TOAST_HEIGHT_PX,
 ): number {
-  const usable = Number.isFinite(viewportHeight) ? Math.max(0, viewportHeight) : 0;
-  const budget = usable * TOAST_HEIGHT_BUDGET;
+  // A non-positive height means NOT MEASURED YET (first paint, a webview that
+  // has not reported a size, a zero-layout test env) - not "a window with no
+  // room". Collapsing to the floor on a degenerate reading would strand the
+  // stack at 2 forever, because nothing re-triggers the measurement on a window
+  // that never resizes. Unmeasured therefore means no constraint.
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return MAX_VISIBLE_TOASTS;
+
+  const budget = viewportHeight * TOAST_HEIGHT_BUDGET;
 
   let used = 0;
   let fitted = 0;
