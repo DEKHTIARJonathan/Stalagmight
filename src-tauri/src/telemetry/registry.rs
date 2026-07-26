@@ -194,6 +194,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.toggle.showDevStats",
     "action.toggle.showGrid",
     "action.toggle.showReferenceShots",
+    "action.toggle.showJumps",
     "action.toggle.showSatellite",
     "action.toggle.showSectionNames",
     "action.toggle.showShotComments",
@@ -874,7 +875,8 @@ mod tests {
         //       .insert-station = 654.
         //   + 1 net for the Jump/Reference split (#27): action.toggle-reference
         //       retired, action.{set-shot-kind,cycle-shot-kind} added = 655.
-        assert_eq!(EVENT_NAMES.len(), 655);
+        //   + 1 split display toggle (#27): action.toggle.showJumps = 656.
+        assert_eq!(EVENT_NAMES.len(), 656);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

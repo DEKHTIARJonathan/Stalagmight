@@ -447,15 +447,31 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
     return d;
   }
 
-  it('buildLineBuffers marks all 4 verts of a reference segment, 0 otherwise', () => {
+  it('buildLineBuffers writes the ShotKind discriminant on all 4 verts', () => {
     const d = refFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
-    // Segment 0 = shot global 0 (reference) -> all 4 verts flagged 1.
-    expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
-    // Segment 1 = shot global 1 (not reference) -> 0.
+    // #27: the attribute carries the kind (0/1/2), not a bool, so the shader
+    // can fade and hide jumps and references separately. Segment 0 is a
+    // Reference -> 2 on all 4 verts.
+    expect(Array.from(b.reference.slice(0, 4))).toEqual([2, 2, 2, 2]);
+    // Segment 1 is permanent -> 0.
     expect(Array.from(b.reference.slice(4, 8))).toEqual([0, 0, 0, 0]);
+    // Every "is virtual" test still reads as > 0.5, which is what the hide
+    // path and computeStationAllReference rely on.
+    expect(b.reference[0]!).toBeGreaterThan(0.5);
+  });
+
+  it('buildLineBuffers writes 1 for a jump, distinct from a reference', () => {
+    const d = refFixture();
+    // Flip the virtual shot from Reference (2) to Jump (1).
+    d.shotFlags = Uint8Array.from(d.shotFlags);
+    d.shotFlags[0] = shotKindToFlags('Jump');
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
   });
 
   it('computeStationAllReference flags stations touched only by reference/invalid shots', () => {
@@ -633,12 +649,14 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
     expect(Array.from(computeCircleDim(d, dimForStation, exclude))).toEqual(Array.from(circleEx.dim));
   });
 
-  it('the shaders dim by 0.25 and let dim WIN over the reference 0.5 case', () => {
-    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the reference
-    // 0.5 case in the ternary so a shot that is both dimmed and reference resolves
-    // to 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
+  it('the shaders dim by 0.25 and let dim WIN over the virtual cases', () => {
+    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the virtual
+    // cases in the ternary so a shot that is both dimmed and virtual resolves to
+    // 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
+    // #27 splits the single 0.5 virtual case: a jump keeps 0.5 so existing
+    // surveys look unchanged, a reference is fainter because it is not swum.
     expect(LINE_VERTEX_SRC).toContain(
-      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : ((a_reference > 0.5) ? 0.5 : 1.0);',
+      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0));',
     );
     expect(LINE_FRAGMENT_SRC).toContain('col.a * v_alpha_mul * alpha');
     // Circle fragment folds the dim factor into the final alpha.

@@ -298,6 +298,7 @@ const h = vi.hoisted(() => {
     setShotsVisible(): void {}
     setStationsVisible(): void {}
     setReferenceShotsVisible(): void {}
+    setJumpShotsVisible(): void {}
     updateDim(): void {}
     updateHide(): void {}
     updateHighlight(): void {}

@@ -305,6 +305,11 @@ export class SurveyLabelController {
   private kindVisible: boolean[] = [false, false, true, false, false];
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
+  /** #27: jumps toggle separately. Label flags carry a single "virtual" bit, so
+   *  a virtual shot's label hides only when BOTH kinds are hidden - the same
+   *  conservative rule the circle shader uses for all-virtual stations. A label
+   *  therefore never disappears while its own shot is still drawn. */
+  private jumpShotsVisible = true;
   /** Adaptive-emit candidate threshold (see the option). */
   private readonly adaptiveEmitMax: number;
 
@@ -407,6 +412,21 @@ export class SurveyLabelController {
     }
   }
 
+  /** True only when every virtual kind is hidden, so no virtual shot is drawn
+   *  and its label is safe to drop. */
+  private hideVirtualLabels(): boolean {
+    return !this.referenceShotsVisible && !this.jumpShotsVisible;
+  }
+
+  /** Mirror setShowJumps (label half), #27. */
+  setJumpShotsVisible(visible: boolean): void {
+    this.jumpShotsVisible = visible;
+    if (this.active) {
+      this.pushStyle();
+      this.rerunReveal();
+    }
+  }
+
   /** Mirror setShowReferenceShots (label half): flip the shader uniform, then
    *  re-declutter (reference-hide changes the collision candidate set). */
   setReferenceShotsVisible(visible: boolean): void {
@@ -422,7 +442,12 @@ export class SurveyLabelController {
   private computeStyle(): LabelStyleInputs {
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const haloColors = this.lastThemeColors ? resolveHaloColors(this.lastThemeColors) : [];
-    return { dpr, kindEnabled: this.kindVisible.slice(), haloColors, hideReference: !this.referenceShotsVisible };
+    return {
+      dpr,
+      kindEnabled: this.kindVisible.slice(),
+      haloColors,
+      hideReference: this.hideVirtualLabels(),
+    };
   }
 
   private pushStyle(): void {
@@ -488,7 +513,7 @@ export class SurveyLabelController {
         buildZoom: zoom,
         worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
-        hideReference: !this.referenceShotsVisible,
+        hideReference: this.hideVirtualLabels(),
         commentOverlapExempt: this.commentOverlapExempt,
         slack: emitSlack,
       });
@@ -698,7 +723,7 @@ export class SurveyLabelController {
       buildZoom: this.lastBuildZoom,
       worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
-      hideReference: !this.referenceShotsVisible,
+      hideReference: this.hideVirtualLabels(),
       commentOverlapExempt: this.commentOverlapExempt,
       slack: this.lastEmitSlack,
     });

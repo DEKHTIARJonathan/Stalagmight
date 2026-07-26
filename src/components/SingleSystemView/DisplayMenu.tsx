@@ -42,6 +42,7 @@ interface ToggleItem {
     | 'showStations'
     | 'showShots'
     | 'showReferenceShots'
+    | 'showJumps'
     | 'showZeroDatum'
     | 'showSectionNames'
     | 'showStationLabels'
@@ -64,6 +65,7 @@ interface ToggleItem {
 const MAP_ELEMENTS: ToggleItem[] = [
   { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations', entity: 'station' },
   { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots', entity: 'shot' },
+  { key: 'showJumps', labelKey: 'displayMenu.items.jumps', descriptionKey: 'displayMenu.descriptions.jumps', disabledWhen: 'showShots', entity: 'shot', symbol: 'reference' },
   { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots', entity: 'shot', symbol: 'reference' },
   { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum', entity: 'station', symbol: 'datum' },
 ];
@@ -207,6 +209,7 @@ export default function DisplayMenu({
         showStations: s.showStations,
         showShots: s.showShots,
         showReferenceShots: s.showReferenceShots,
+        showJumps: s.showJumps,
         showZeroDatum: s.showZeroDatum,
         showSectionNames: s.showSectionNames,
         showStationLabels: s.showStationLabels,

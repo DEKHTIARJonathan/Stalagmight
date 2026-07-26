@@ -60,11 +60,37 @@ export interface NearestShotHit {
   to: [lng: number, lat: number];
 }
 
+/**
+ * Which virtual shot kinds are currently drawn (#27). Hit-testing must agree
+ * with what is on screen, so a hidden kind is also non-interactive.
+ */
+export interface VisibleKinds {
+  jump: boolean;
+  reference: boolean;
+}
+
+/** True when a shot of this kind is currently drawn. */
+export function isKindVisible(flags: number, visible: VisibleKinds): boolean {
+  const kind = shotKindFromFlags(flags);
+  if (kind === 'Jump') return visible.jump;
+  if (kind === 'Reference') return visible.reference;
+  return true;
+}
+
+/**
+ * A station touched only by virtual shots stays visible while EITHER kind is
+ * drawn, matching the circle shader's `u_hide_reference && u_hide_jump` test.
+ * Conservative on purpose: a station never vanishes while one of its legs shows.
+ */
+export function anyVirtualVisible(visible: VisibleKinds): boolean {
+  return visible.jump || visible.reference;
+}
+
 export interface ResolveOptions {
-  /** Mirror of the reference-shots visibility toggle: when false, reference
-   *  shots and all-reference stations are skipped (they are filtered out of
-   *  the hitbox layers and must stay non-interactive). */
-  includeReference: boolean;
+  /** Mirror of the per-kind visibility toggles: a hidden kind's shots (and
+   *  stations touched only by hidden kinds) are skipped, since they are
+   *  filtered out of the hitbox layers and must stay non-interactive. */
+  visibleKinds: VisibleKinds;
 }
 
 /**
@@ -275,7 +301,7 @@ export class SurveyGeometryIndex {
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
-      const visibleIdxs = opts.includeReference ? null : this.nonRefStations(sid);
+      const visibleIdxs = anyVirtualVisible(opts.visibleKinds) ? null : this.nonRefStations(sid);
       for (const g of idxs) {
         if (visibleIdxs && !visibleIdxs.has(this.data.stationIndices[g]!)) continue;
         const lngLat = this.stationLngLat(g);
@@ -313,9 +339,7 @@ export class SurveyGeometryIndex {
       if (!section || !lookup) continue;
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
-        const isReference =
-          isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!));
-        if (isReference && !opts.includeReference) continue;
+        if (!isKindVisible(this.data.shotFlags[shotGlobalIdx]!, opts.visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -360,7 +384,7 @@ export class SurveyGeometryIndex {
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
-      const visibleIdxs = opts.includeReference ? null : this.nonRefStations(sid);
+      const visibleIdxs = anyVirtualVisible(opts.visibleKinds) ? null : this.nonRefStations(sid);
       for (const g of idxs) {
         if (visibleIdxs && !visibleIdxs.has(this.data.stationIndices[g]!)) continue;
         const p = project(this.stationLngLat(g));
@@ -446,7 +470,14 @@ export class SurveyGeometryIndex {
   shotGeometry(
     sectionId: number,
     shotId: number,
-  ): { from: [number, number]; to: [number, number]; globalIdx: number; isReference: boolean } | null {
+  ): {
+    from: [number, number];
+    to: [number, number];
+    globalIdx: number;
+    isReference: boolean;
+    /** Raw flags byte, so callers can resolve the exact kind (#27). */
+    kindFlags: number;
+  } | null {
     this.ensureBuilt();
     const section = this.sectionById.get(sectionId);
     const lookup = this.stationLookup.get(sectionId);
@@ -462,6 +493,7 @@ export class SurveyGeometryIndex {
         to: this.stationLngLat(toGlobal),
         globalIdx: shotGlobalIdx,
         isReference: isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!)),
+        kindFlags: this.data.shotFlags[shotGlobalIdx]!,
       };
     }
     return null;
@@ -480,12 +512,12 @@ export class SurveyGeometryIndex {
    * mis-attributes every shot in section >= 1 to the wrong section and shot id,
    * dropping its tint. Re-deriving is exact regardless of the shot-id range.
    *
-   * `includeReference` mirrors the reference-shots toggle: hidden reference legs
-   * are skipped, matching the interact overlay / stock measure-path filter.
+   * `visibleKinds` mirrors the per-kind toggles: legs of a hidden kind are
+   * skipped, matching the interact overlay / measure-path filter.
    */
   measuredShotSegments(
     fids: ReadonlySet<number>,
-    includeReference: boolean,
+    visibleKinds: VisibleKinds,
   ): Array<{ from: [number, number]; to: [number, number] }> {
     this.ensureBuilt();
     const out: Array<{ from: [number, number]; to: [number, number] }> = [];
@@ -496,7 +528,7 @@ export class SurveyGeometryIndex {
       for (let i = 0; i < section.shotCount; i++) {
         const gi = section.shotOffset + i;
         if (!fids.has(encodeFeatureId(section.id, this.data.shotIds[gi]!))) continue;
-        if (!includeReference && isVirtualKind(shotKindFromFlags(this.data.shotFlags[gi]!))) continue;
+        if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;
@@ -516,11 +548,11 @@ export class SurveyGeometryIndex {
    * hook). Same source of truth the renderer and hit-testing use, so positions
    * agree with what is actually drawn.
    *
-   * `includeReference: false` mirrors the reference-shots toggle - reference
-   * shots and all-reference stations are omitted, exactly as the layers filter
-   * them.
+   * `visibleKinds` mirrors the per-kind toggles - shots of a hidden kind, and
+   * stations touched only by hidden kinds, are omitted exactly as the layers
+   * filter them.
    */
-  enumerateGeometry(includeReference: boolean): {
+  enumerateGeometry(visibleKinds: VisibleKinds): {
     stations: Array<{ sectionId: number; stationIndex: number; lngLat: [number, number] }>;
     shots: Array<{
       sectionId: number;
@@ -534,7 +566,7 @@ export class SurveyGeometryIndex {
     for (let g = 0; g < this.data.stationCount; g++) {
       const sectionId = this.data.stationSectionIds[g]!;
       const stationIndex = this.data.stationIndices[g]!;
-      if (!includeReference && !this.nonRefStations(sectionId).has(stationIndex)) continue;
+      if (!anyVirtualVisible(visibleKinds) && !this.nonRefStations(sectionId).has(stationIndex)) continue;
       stations.push({ sectionId, stationIndex, lngLat: this.stationLngLat(g) });
     }
     const shots: Array<{
@@ -548,7 +580,7 @@ export class SurveyGeometryIndex {
       if (!lookup) continue;
       for (let i = 0; i < section.shotCount; i++) {
         const gi = section.shotOffset + i;
-        if (!includeReference && isVirtualKind(shotKindFromFlags(this.data.shotFlags[gi]!))) continue;
+        if (!isKindVisible(this.data.shotFlags[gi]!, visibleKinds)) continue;
         const fromGlobal = lookup.get(i);
         const toGlobal = lookup.get(i + 1);
         if (fromGlobal === undefined || toGlobal === undefined) continue;

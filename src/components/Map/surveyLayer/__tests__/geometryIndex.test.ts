@@ -19,6 +19,10 @@ import { encodeFeatureId } from '../../../../utils/ids';
 import type { Section } from '../../../../types/ipc/Section';
 import type { Station } from '../../../../types/ipc/Station';
 
+/** #27: both virtual kinds drawn (the default) / neither drawn. */
+const ALL_KINDS = { jump: true, reference: true } as const;
+const NO_VIRTUAL = { jump: false, reference: false } as const;
+
 /** Deterministic screen projection for tests: 1 degree = 100000 px, y down. */
 const SCALE = 100000;
 const project = (lngLat: [number, number]) => ({
@@ -192,7 +196,7 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
       });
       const oldPick = resolveNearestStation(fakeMap, eventAt(p.x, p.y), oldCandidates, stationHitArea);
       const newPick = index.nearestStation(
-        (c) => project(c), p.x, p.y, allSectionIds, stationHitArea, { includeReference: true },
+        (c) => project(c), p.x, p.y, allSectionIds, stationHitArea, { visibleKinds: { jump: true, reference: true } },
       );
       if (oldPick) {
         hits++;
@@ -224,7 +228,7 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
       });
       const oldPick = resolveNearestShot(fakeMap, eventAt(p.x, p.y), oldCandidates, shotHitArea);
       const newPick = index.nearestShot(
-        (c) => project(c), p.x, p.y, allSectionIds, shotHitArea, { includeReference: true },
+        (c) => project(c), p.x, p.y, allSectionIds, shotHitArea, { visibleKinds: { jump: true, reference: true } },
       );
       if (oldPick) {
         hits++;
@@ -245,16 +249,16 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     // Probe directly on the reference shot (section 1, shot 103: (30,25)-(60,25)).
     const px = (45 / 111320) * SCALE;
     const py = -(25 / 111320) * SCALE;
-    const withRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { includeReference: true });
+    const withRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { visibleKinds: { jump: true, reference: true } });
     expect(withRef?.shotId).toBe(103);
-    const withoutRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { includeReference: false });
+    const withoutRef = index.nearestShot((c) => project(c), px, py, allSectionIds, 8, { visibleKinds: { jump: false, reference: false } });
     expect(withoutRef?.shotId).not.toBe(103);
     // Station (1,3) only touches the reference shot -> hidden when refs are.
     const stPx = (60 / 111320) * SCALE;
     const stPy = -(25 / 111320) * SCALE;
-    const stWith = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { includeReference: true });
+    const stWith = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds: { jump: true, reference: true } });
     expect(stWith?.ref).toEqual({ section_id: 1, station_index: 3 });
-    const stWithout = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { includeReference: false });
+    const stWithout = index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds: { jump: false, reference: false } });
     expect(stWithout?.ref).not.toEqual({ section_id: 1, station_index: 3 });
   });
 
@@ -262,7 +266,7 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     // Probe near the midpoint of shot 101 ((0,0)-(30,0)).
     const px = (12 / 111320) * SCALE;
     const py = -(1 / 111320) * SCALE;
-    const hit = index.nearestShot((c) => project(c), px, py, [1], 8, { includeReference: true })!;
+    const hit = index.nearestShot((c) => project(c), px, py, [1], 8, { visibleKinds: { jump: true, reference: true } })!;
     expect(hit.shotId).toBe(101);
     expect(hit.t).toBeCloseTo(12 / 30, 3);
     expect(hit.from[0]).toBeCloseTo(0, 9);
@@ -276,7 +280,7 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     const minY = -(21 / 111320) * SCALE;
     const maxY = (2 / 111320) * SCALE;
     const refs = index.stationsInBox(
-      (c) => project(c), minX, minY, maxX, maxY, allSectionIds, 10, { includeReference: true },
+      (c) => project(c), minX, minY, maxX, maxY, allSectionIds, 10, { visibleKinds: { jump: true, reference: true } },
     );
     const keys = refs.map((r) => `${r.section_id}:${r.station_index}`).sort();
     expect(keys).toContain('1:0');
@@ -360,7 +364,7 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
   const index = new SurveyGeometryIndex(data, null);
 
   it('enumerates every station and shot with identities matching the per-item accessors', () => {
-    const { stations, shots } = index.enumerateGeometry(true);
+    const { stations, shots } = index.enumerateGeometry(ALL_KINDS);
     // Fixture: section 1 has 3 shots (4 stations), section 2 has 2 shots (3 stations).
     expect(stations).toHaveLength(7);
     expect(shots).toHaveLength(5);
@@ -379,8 +383,8 @@ describe('SurveyGeometryIndex.enumerateGeometry', () => {
   });
 
   it('omits reference shots and all-reference stations when reference is hidden', () => {
-    const all = index.enumerateGeometry(true);
-    const visible = index.enumerateGeometry(false);
+    const all = index.enumerateGeometry(ALL_KINDS);
+    const visible = index.enumerateGeometry(NO_VIRTUAL);
     // Fixture shot 103 is a reference shot; it drops out, as does the station
     // that only that shot touches.
     expect(visible.shots.length).toBeLessThan(all.shots.length);
@@ -434,7 +438,7 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
   it('resolves a section >= 1 shot by its globally-encoded feature id', () => {
     // encodeFeatureId(1, 100000) = 200000; the old floor(200000/STRIDE)=2 split
     // looked up a nonexistent section 2 and returned nothing.
-    const segs = index.measuredShotSegments(new Set([encodeFeatureId(1, 100000)]), true);
+    const segs = index.measuredShotSegments(new Set([encodeFeatureId(1, 100000)]), ALL_KINDS);
     expect(segs).toHaveLength(1);
     expect(segs[0]!.from[0]).toBeCloseTo(mc(100), 9);
     expect(segs[0]!.to[0]).toBeCloseTo(mc(110), 9);
@@ -443,19 +447,19 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
   it('resolves shots across sections in one pass', () => {
     const segs = index.measuredShotSegments(
       new Set([encodeFeatureId(0, 0), encodeFeatureId(1, 100000)]),
-      true,
+      ALL_KINDS,
     );
     expect(segs).toHaveLength(2);
   });
 
   it('drops a hidden reference leg unless reference shots are shown', () => {
     const fid = new Set([encodeFeatureId(1, 100001)]);
-    expect(index.measuredShotSegments(fid, false)).toHaveLength(0);
-    expect(index.measuredShotSegments(fid, true)).toHaveLength(1);
+    expect(index.measuredShotSegments(fid, NO_VIRTUAL)).toHaveLength(0);
+    expect(index.measuredShotSegments(fid, ALL_KINDS)).toHaveLength(1);
   });
 
   it('returns nothing for an empty id set', () => {
-    expect(index.measuredShotSegments(new Set(), true)).toHaveLength(0);
+    expect(index.measuredShotSegments(new Set(), ALL_KINDS)).toHaveLength(0);
   });
 });
 
@@ -494,12 +498,12 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
   it('is a SUPERSET of the sections the SoA resolver picks (station + shot)', () => {
     for (const p of probeGrid()) {
       const st = index.nearestStation(proj, p.x, p.y, [1, 2], stationReach, {
-        includeReference: true,
+        visibleKinds: { jump: true, reference: true },
       });
       if (st) {
         expect(sectionsAt(padProbeBox([p.x, p.y], stationReach)).has(st.ref.section_id)).toBe(true);
       }
-      const sh = index.nearestShot(proj, p.x, p.y, [1, 2], shotReach, { includeReference: true });
+      const sh = index.nearestShot(proj, p.x, p.y, [1, 2], shotReach, { visibleKinds: { jump: true, reference: true } });
       if (sh) {
         expect(sectionsAt(padProbeBox([p.x, p.y], shotReach)).has(sh.sectionId)).toBe(true);
       }
@@ -516,7 +520,7 @@ describe('SurveyGeometryIndex.sectionsIntersectingBox candidate gate', () => {
     const cand = sectionsAt(padProbeBox([p.x, p.y], stationReach));
     expect(cand.has(1)).toBe(true);
     // The resolver, fed that candidate set, confirms the real in-reach hit.
-    const hit = index.nearestStation(proj, p.x, p.y, cand, stationReach, { includeReference: true });
+    const hit = index.nearestStation(proj, p.x, p.y, cand, stationReach, { visibleKinds: { jump: true, reference: true } });
     expect(hit?.ref).toEqual({ section_id: 1, station_index: 3 });
   });
 });

@@ -384,6 +384,8 @@ interface UIStore {
   showStationLabels: boolean;
   showShotData: boolean;
   showReferenceShots: boolean;
+  /** #27: jumps hide independently of references. */
+  showJumps: boolean;
   showZeroDatum: boolean;
   showGrid: boolean;
   showSatellite: boolean;
@@ -553,6 +555,7 @@ export type DisplayToggleKey =
   | 'showStationLabels'
   | 'showShotData'
   | 'showReferenceShots'
+  | 'showJumps'
   | 'showZeroDatum'
   | 'showGrid'
   | 'showSatellite'
@@ -600,6 +603,7 @@ const PREPLAN_DISPLAY_KEYS = [
   'showStations',
   'showShots',
   'showReferenceShots',
+  'showJumps',
   'showZeroDatum',
   'showSectionNames',
   'showStationLabels',
@@ -1222,6 +1226,7 @@ export const useUIStore = create<UIStore>((set) => ({
   showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
   showShotData: DISPLAY_DEFAULTS.showShotData,
   showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
+  showJumps: DISPLAY_DEFAULTS.showJumps,
   showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
   showGrid: DISPLAY_DEFAULTS.showGrid,
   showSatellite: DISPLAY_DEFAULTS.showSatellite,
@@ -1522,6 +1527,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationLabels: DISPLAY_DEFAULTS.showStationLabels,
       showShotData: DISPLAY_DEFAULTS.showShotData,
       showReferenceShots: DISPLAY_DEFAULTS.showReferenceShots,
+      showJumps: DISPLAY_DEFAULTS.showJumps,
       showZeroDatum: DISPLAY_DEFAULTS.showZeroDatum,
       showGrid: DISPLAY_DEFAULTS.showGrid,
       showSatellite: DISPLAY_DEFAULTS.showSatellite,
@@ -1572,6 +1578,7 @@ export const useUIStore = create<UIStore>((set) => ({
       showStationLabels: settings.showStationLabels ?? state.showStationLabels,
       showShotData: settings.showShotData ?? state.showShotData,
       showReferenceShots: settings.showReferenceShots ?? state.showReferenceShots,
+      showJumps: settings.showJumps ?? state.showJumps,
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
       showGrid: settings.showGrid ?? state.showGrid,
       showSatellite: settings.showSatellite ?? state.showSatellite,

@@ -69,6 +69,7 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
         showStationLabels: false,
         showShotData: false,
         showReferenceShots: true,
+        showJumps: true,
         showZeroDatum: true,
         showGrid: false,
         showSatellite: false,

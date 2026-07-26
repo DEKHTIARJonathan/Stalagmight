@@ -12,6 +12,7 @@ import { isMutatingTool } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
+  getEffectiveShowJumps,
   getEffectiveShowReferenceShots,
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
@@ -397,6 +398,7 @@ function MapCanvas() {
     showStations,
     showShots,
     showReferenceShots,
+    showJumps,
     showDepthGradient,
     showDistanceGradient,
     appMode,
@@ -2610,6 +2612,12 @@ function MapCanvas() {
     if (!surveyLayerRef.current) return;
     surveyLayerRef.current.setShowReferenceShots(getEffectiveShowReferenceShots(showShots, showReferenceShots));
   }, [showReferenceShots, showShots, mapLoaded]);
+
+  // Sync jump shots visibility (#27): jumps hide independently of references.
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowJumps(getEffectiveShowJumps(showShots, showJumps));
+  }, [showJumps, showShots, mapLoaded]);
 
   // Sync anchored section IDs with SurveyLayer for fading.
   // useLayoutEffect (not useEffect) for the same reason as the selection sync

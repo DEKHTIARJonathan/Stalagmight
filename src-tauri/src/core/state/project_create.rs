@@ -384,6 +384,7 @@ impl AppState {
                 "showReferenceShots",
                 display_settings.show_reference_shots.to_string(),
             ),
+            ("showJumps", display_settings.show_jumps.to_string()),
             (
                 "showZeroDatum",
                 display_settings.show_zero_datum.to_string(),

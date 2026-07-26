@@ -19,6 +19,7 @@ export const DISPLAY_DEFAULTS = {
   showStationLabels: false,
   showShotData: false,
   showReferenceShots: true,
+  showJumps: true,
   showZeroDatum: true,
   showGrid: false,
   showSatellite: false,
@@ -35,6 +36,14 @@ export const DISPLAY_DEFAULTS = {
  */
 export function getEffectiveShowReferenceShots(showShots: boolean, showReferenceShots: boolean): boolean {
   return showShots && showReferenceShots;
+}
+
+/**
+ * Compute effective visibility of jump shots (#27).
+ * Same shape as the reference selector: jumps need the master shots toggle too.
+ */
+export function getEffectiveShowJumps(showShots: boolean, showJumps: boolean): boolean {
+  return showShots && showJumps;
 }
 
 /**

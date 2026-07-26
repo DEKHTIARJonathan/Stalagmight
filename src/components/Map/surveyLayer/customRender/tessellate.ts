@@ -29,6 +29,7 @@ import {
   type SectionMetadata,
   isVirtualKind,
   shotKindFromFlags,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
@@ -73,7 +74,7 @@ export interface LineBuffers {
    *  {@link colorFrom}. */
   colorTo: Uint8Array;
   /** Per-vertex reference flag (1 = reference shot, else 0). Mirrors the stock
-   *  shots layer's `isReference` property: the shader dims reference shots to
+   *  shots layer's kind property: the shader fades virtual shots to
    *  0.5 opacity and collapses them when reference shots are hidden. */
   reference: Float32Array;
   /** Per-vertex dim flag (1 = dimmed to 0.25, else 0). Mirrors the stock shots
@@ -350,7 +351,10 @@ function emitLineSection(
     const ends = colorForShotEndpoints?.(shotGlobalIdx, section.id);
     const colA = ends ? ends[0] : colorForShot(shotGlobalIdx, section.id);
     const colB = ends ? ends[1] : colA;
-    const isRef = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!)) ? 1 : 0;
+    // #27: the attribute carries the ShotKind discriminant (0/1/2), not a
+    // bool, so the shader can fade and hide jumps and references separately.
+    // Every "is virtual" test still reads as > 0.5.
+    const isRef = shotKindToFlags(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
     const isDim = dimForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHide = hideForShot?.(shotGlobalIdx, section.id) === true ? 1 : 0;
     const isHighlight = flagValue(highlightForShot?.(shotGlobalIdx, section.id));
