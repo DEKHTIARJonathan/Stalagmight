@@ -146,11 +146,14 @@ const SHOT_KINDS: readonly ShotKind[] = ['Normal', 'Jump', 'Reference'];
 
 /**
  * Decode the 2-bit discriminant in a `shotFlags` byte. An unrecognised value
- * degrades to `'Normal'` rather than throwing, mirroring Rust's
- * `ShotKind::from_u8`: a corrupt byte should not break a whole project load.
+ * (only `3` is reachable through the 2-bit mask) degrades to `'Reference'`
+ * rather than throwing, mirroring Rust's `ShotKind::from_u8`: a corrupt byte
+ * should not break a whole project load, but it must not produce a SWIMMABLE
+ * leg either. `Normal` would be the unsafe reading - it enters gas, penetration
+ * and the ruler at normal cost; `Reference` can only ever shrink a route (#27).
  */
 export function shotKindFromFlags(flags: number): ShotKind {
-  return SHOT_KINDS[flags & SHOT_FLAG_KIND_MASK] ?? 'Normal';
+  return SHOT_KINDS[flags & SHOT_FLAG_KIND_MASK] ?? 'Reference';
 }
 
 /** Encode a `ShotKind` into the low 2 bits of a `shotFlags` byte. */

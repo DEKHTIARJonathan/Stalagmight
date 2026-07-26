@@ -68,8 +68,11 @@ describe('shot kind binary flag encoding (#27)', () => {
     expect(shotKindFromFlags(0b1010_1010)).toBe('Reference');
   });
 
-  it('degrades an unknown discriminant to Normal instead of throwing', () => {
-    // Mirrors Rust's ShotKind::from_u8: a corrupt byte must not break a load.
-    expect(shotKindFromFlags(0b11)).toBe('Normal');
+  it('degrades an unknown discriminant to Reference, not Normal', () => {
+    // Mirrors Rust's ShotKind::from_u8 on BOTH counts: a corrupt byte must not
+    // break a load, and it must not produce a swimmable leg either. `Normal`
+    // would enter gas, penetration and the ruler at normal cost; `Reference`
+    // can only shrink a route, which is the safe direction (#27).
+    expect(shotKindFromFlags(0b11)).toBe('Reference');
   });
 });

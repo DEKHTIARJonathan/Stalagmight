@@ -18,8 +18,8 @@ describe('LABEL_FLAG bit contract', () => {
       acc |= v;
     }
     // FIRST_IN_SECTION / REFERENCE / ALL_REFERENCE / DIM / DRAG_HIDE /
-    // COMMENT_HIDE / JUMP (no COLLIDE_HIDE).
-    expect(Object.keys(LABEL_FLAG)).toHaveLength(7);
+    // COMMENT_HIDE / JUMP / ALL_JUMP (no COLLIDE_HIDE).
+    expect(Object.keys(LABEL_FLAG)).toHaveLength(8);
   });
 
   it('no longer defines a COLLIDE_HIDE bit (declutter moved to a_reveal_zoom)', () => {

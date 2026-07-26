@@ -814,20 +814,34 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // Guarded by the same staleness check as the collab prompt: a user who
         // switched projects before this resolved must not get a dialog about a
         // file that is no longer open.
-        void invokeIpc<UnrecognisedShotKind[]>('take_unrecognised_shot_kinds', undefined, {
-          purpose: 'resolve unreadable shot kinds',
-        })
-          .then((found) => {
-            if (!isStillCurrentLoad()) return;
-            if (found.length > 0) {
-              useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
-            }
-          })
-          .catch(() => {
-            /* best-effort: the shots are already safely Reference either way */
-          });
+        //
+        // AWAITED, and it gates the collab prompt below. `openDialog` REPLACES
+        // whatever is showing rather than queueing, so two fire-and-forget
+        // prompts racing means whichever resolves second silently dismisses the
+        // other. That is not symmetric: the collaboration changeset is
+        // re-detected on the next open and costs nothing to defer, while this
+        // list has already been consumed from the backend - losing this dialog
+        // loses the prompt for the session, leaving substitutions unreviewed.
+        let promptedForUnknownKinds = false;
+        try {
+          const found = await invokeIpc<UnrecognisedShotKind[]>(
+            'take_unrecognised_shot_kinds',
+            undefined,
+            { purpose: 'resolve unreadable shot kinds' }
+          );
+          if (isStillCurrentLoad() && found.length > 0) {
+            useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
+            promptedForUnknownKinds = true;
+          }
+        } catch {
+          /* best-effort: the shots are already safely Reference either way */
+        }
 
-        if (result.project.collab?.enabled) {
+        if (promptedForUnknownKinds) {
+          // Skip the collaboration prompt for this load rather than letting it
+          // stomp the dialog above. Nothing is lost: detect_collab_changes does
+          // not consume, so the next open re-offers it.
+        } else if (result.project.collab?.enabled) {
           void get()
             .detectCollabChanges()
             .then((cs) => {

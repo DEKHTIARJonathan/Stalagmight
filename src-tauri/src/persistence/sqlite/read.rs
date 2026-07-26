@@ -370,8 +370,16 @@ impl Database {
                             up: row.get(11)?,
                             down: row.get(12)?,
                             comment: row.get(13)?,
+                            // Out-of-u8 values (a corrupt or newer file can hold
+                            // -1 or 256) must fail closed too. `unwrap_or(0)`
+                            // sent them to `Normal` - swimmable - which routed
+                            // straight past `from_u8`'s fail-closed rule, and
+                            // the dialog would then send no edit because it
+                            // assumes the in-memory value is already the safe
+                            // one. Map every failed conversion to a discriminant
+                            // `from_u8` rejects, so it lands on `Reference`.
                             kind: ShotKind::from_u8(
-                                u8::try_from(row.get::<_, i32>(14)?).unwrap_or(0),
+                                u8::try_from(row.get::<_, i32>(14)?).unwrap_or(u8::MAX),
                             ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,

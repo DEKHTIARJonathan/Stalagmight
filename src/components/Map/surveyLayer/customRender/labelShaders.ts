@@ -97,6 +97,12 @@ export const LABEL_FLAG = {
    *  specifically - the two split when the display toggles did, so a label can
    *  be culled with the exact kind whose geometry the line shader collapsed. */
   JUMP: 1 << 6,
+  /** Station/section counterpart of ALL_REFERENCE: the station is touched by
+   *  Jumps (#27). A station can be touched by BOTH virtual kinds, so unlike a
+   *  shot it needs a pair of bits rather than one - it stays drawn while ANY
+   *  kind touching it is drawn, which is not the same as "hide if my bit is
+   *  hidden". Mirrors the circle shader's mask exactly. */
+  ALL_JUMP: 1 << 7,
 } as const;
 
 /** Normalized SDF value at the glyph edge (= `1 - cutoff`, cutoff 0.25). See the
@@ -141,6 +147,7 @@ const FLAG_DEFINES = `
 #define FLAG_REFERENCE ${LABEL_FLAG.REFERENCE}u
 #define FLAG_JUMP ${LABEL_FLAG.JUMP}u
 #define FLAG_ALL_REFERENCE ${LABEL_FLAG.ALL_REFERENCE}u
+#define FLAG_ALL_JUMP ${LABEL_FLAG.ALL_JUMP}u
 #define FLAG_DIM ${LABEL_FLAG.DIM}u
 #define FLAG_DRAG_HIDE ${LABEL_FLAG.DRAG_HIDE}u
 #define FLAG_COMMENT_HIDE ${LABEL_FLAG.COMMENT_HIDE}u
@@ -205,10 +212,15 @@ void main() {
   // hiding one kind cannot orphan the other's text over an empty line (#27).
   if (u_hide_reference > 0.5 && (a_flags & FLAG_REFERENCE) != 0u) { collapse(); return; }
   if (u_hide_jump > 0.5 && (a_flags & FLAG_JUMP) != 0u) { collapse(); return; }
-  // ALL_REFERENCE (a station touched only by virtual shots, or a section whose
-  // stations all are) keeps the both-off rule: the station circle itself only
-  // disappears once no virtual kind is drawn.
-  if (u_hide_reference > 0.5 && u_hide_jump > 0.5 && (a_flags & FLAG_ALL_REFERENCE) != 0u) {
+  // A station (or section name) whose every leg is virtual disappears when every
+  // kind that touches IT is hidden - the same per-kind rule the circle shader
+  // applies, so a label can never outlive its own station marker. The two bits
+  // are independent: a station touched by both kinds carries both.
+  bool allJump = (a_flags & FLAG_ALL_JUMP) != 0u;
+  bool allRef = (a_flags & FLAG_ALL_REFERENCE) != 0u;
+  bool keptByJump = allJump && u_hide_jump < 0.5;
+  bool keptByRef = allRef && u_hide_reference < 0.5;
+  if ((allJump || allRef) && !keptByJump && !keptByRef) {
     collapse();
     return;
   }

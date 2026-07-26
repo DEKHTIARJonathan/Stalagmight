@@ -471,6 +471,28 @@ impl Database {
                 VALUES ('pending_kind_classification', '1');
             ",
         )?;
+
+        // Materialise `showJumps` now, from whatever single toggle this file
+        // used, so the two split toggles are independent from the first open.
+        //
+        // The load-time fallback (`showJumps` -> `showReferenceShots` ->
+        // `showVirtualShots`) gets the FIRST open right, but it is a read-time
+        // default, not a stored value: `save_display_setting` writes only the key
+        // it was given, so a user who then changes References alone still has no
+        // `showJumps` row, and the next open reads their NEW reference value as
+        // the jump default - silently moving a toggle they never touched.
+        // Writing the row here closes that window. `INSERT ... WHERE NOT EXISTS`
+        // keeps it idempotent and never overwrites a real choice.
+        conn.execute_batch(
+            r"
+            INSERT INTO display_settings (key, value)
+            SELECT 'showJumps', COALESCE(
+                (SELECT value FROM display_settings WHERE key = 'showReferenceShots'),
+                (SELECT value FROM display_settings WHERE key = 'showVirtualShots'),
+                'true')
+            WHERE NOT EXISTS (SELECT 1 FROM display_settings WHERE key = 'showJumps');
+            ",
+        )?;
         Ok(())
     }
 

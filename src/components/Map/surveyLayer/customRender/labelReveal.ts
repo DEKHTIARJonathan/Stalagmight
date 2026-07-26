@@ -225,10 +225,15 @@ function isCandidate(desc: LabelDescriptor, input: RevealInput): boolean {
   // hidden before its geometry is actually gone.
   if (input.hideReference && (desc.flags & LABEL_FLAG.REFERENCE) !== 0) return false;
   if (input.hideJump && (desc.flags & LABEL_FLAG.JUMP) !== 0) return false;
+  // A station/section label whose every leg is virtual stops being a candidate
+  // when every kind touching it is hidden - per-kind, mirroring the shader and
+  // the circle. A station can be touched by BOTH kinds, hence a bit pair.
+  const allJump = (desc.flags & LABEL_FLAG.ALL_JUMP) !== 0;
+  const allRef = (desc.flags & LABEL_FLAG.ALL_REFERENCE) !== 0;
   if (
-    input.hideReference &&
-    input.hideJump &&
-    (desc.flags & LABEL_FLAG.ALL_REFERENCE) !== 0
+    (allJump || allRef) &&
+    !(allJump && !input.hideJump) &&
+    !(allRef && !input.hideReference)
   ) {
     return false;
   }

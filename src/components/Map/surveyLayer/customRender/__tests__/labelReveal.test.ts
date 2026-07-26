@@ -192,16 +192,30 @@ describe('computeRevealZooms candidate filter (matches the shader gates)', () =>
     expect(refsHidden[1]).toBe(nothingHidden[1]);
   });
 
-  it('an all-reference label stays contested while either virtual kind is drawn', () => {
-    const allRef = desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.ALL_REFERENCE, ordinal: 1 });
+  it('a station label follows the kinds that touch ITS station (#27)', () => {
+    // Station labels carry a bit PAIR, not one flag: a station can be touched by
+    // both virtual kinds, so it stays a candidate while either of its own kinds
+    // is drawn - and stops being one as soon as all of them are hidden. A single
+    // both-off rule left a reference-only station's label drawn over a marker
+    // the circle shader had already collapsed.
     const winner = desc(LABEL_KIND.SHOT_LABEL, { ordinal: 0 });
-    const reveal = computeRevealZooms(
-      [winner, allRef],
-      [UNIT_EXT, UNIT_EXT],
-      input({ hideReference: true })
-    );
-    const nothingHidden = computeRevealZooms([winner, allRef], [UNIT_EXT, UNIT_EXT], input());
-    expect(reveal[1]).toBe(nothingHidden[1]);
+    const refOnly = desc(LABEL_KIND.SHOT_LABEL, { flags: LABEL_FLAG.ALL_REFERENCE, ordinal: 1 });
+    const both = desc(LABEL_KIND.SHOT_LABEL, {
+      flags: LABEL_FLAG.ALL_REFERENCE | LABEL_FLAG.ALL_JUMP,
+      ordinal: 1,
+    });
+    const at = (d: typeof refOnly, over: Parameters<typeof input>[0]) =>
+      computeRevealZooms([winner, d], [UNIT_EXT, UNIT_EXT], input(over))[1];
+
+    const contested = at(refOnly, {});
+    // References hidden -> a reference-ONLY station's label drops out.
+    expect(at(refOnly, { hideReference: true })).toBeLessThan(contested!);
+    // Jumps hidden is irrelevant to it - no jump touches that station.
+    expect(at(refOnly, { hideJump: true })).toBe(contested);
+    // A station touched by BOTH needs both hidden before its label goes.
+    expect(at(both, { hideReference: true })).toBe(contested);
+    expect(at(both, { hideJump: true })).toBe(contested);
+    expect(at(both, { hideReference: true, hideJump: true })).toBeLessThan(contested!);
   });
 
   it('an empty (whitespace) label never reveals - no ink, never emitted', () => {

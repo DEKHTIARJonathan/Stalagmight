@@ -4568,6 +4568,74 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
         ShotKind::Reference,
         "an unreadable kind must not load as a swimmable leg"
     );
+
+    // Values OUTSIDE the u8 range have to fail closed too. The column is a
+    // plain INTEGER, so -1 and 256 are both storable, and the u8 conversion on
+    // the way to `from_u8` is a second place the fail-closed rule can be lost.
+    for bad in [-1_i64, 256, i64::from(i32::MAX)] {
+        db.conn
+            .execute("UPDATE shots SET kind = ?1 WHERE sequence_order = 1", [bad])
+            .unwrap();
+        assert_eq!(
+            db.unrecognised_shot_kinds().unwrap().len(),
+            1,
+            "kind {bad} must still be reported"
+        );
+        assert_eq!(
+            db.load_project().unwrap().sections[0].shots[1].kind,
+            ShotKind::Reference,
+            "kind {bad} must load as Reference, not Normal"
+        );
+    }
+}
+
+/// #27: the split toggles have to stay independent ACROSS RESTARTS, not just on
+/// the first open.
+///
+/// The load-time fallback (`showJumps` -> `showReferenceShots`) gets the first
+/// open right, but it is a read-time default. `save_display_setting` writes only
+/// the key it is handed, so without a materialised row a user who then changes
+/// References alone would find Jumps following that new value on the next open -
+/// a toggle moving on its own.
+#[test]
+fn migrate_v13_materialises_show_jumps_from_the_old_single_toggle() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_toggle.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![legacy_shot(ShotKind::Reference)],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // A pre-#27 file: one combined toggle, turned OFF, and no showJumps row.
+        db.conn
+            .execute_batch(
+                "DELETE FROM display_settings WHERE key IN ('showJumps', 'showReferenceShots');
+                 INSERT INTO display_settings (key, value) VALUES ('showReferenceShots', 'false');",
+            )
+            .unwrap();
+        db.set_user_version(12).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        db.get_display_setting("showJumps").unwrap().as_deref(),
+        Some("false"),
+        "showJumps must be materialised from the old combined toggle, not left absent"
+    );
+
+    // Now the user changes ONLY references. Jumps must not follow.
+    db.save_display_setting("showReferenceShots", "true")
+        .unwrap();
+    assert_eq!(
+        db.get_display_setting("showJumps").unwrap().as_deref(),
+        Some("false"),
+        "a stored showJumps must not be moved by a change to showReferenceShots"
+    );
 }
 
 /// #27: a v12 file keeps its persisted undo history (`UNDO_FORMAT_SAFE_VERSION`
