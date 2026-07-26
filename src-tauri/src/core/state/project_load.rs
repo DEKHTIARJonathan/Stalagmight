@@ -414,6 +414,30 @@ impl AppState {
         // have now and the bare migration connection did not. Runs once, then
         // clears its own flag: classification is import-time only (q14), so a
         // later merge must never silently re-flip a kind.
+        // Record any shot whose stored `kind` this build cannot read (#27). The
+        // loader already substituted `Reference` for them via `from_u8` - the
+        // fail-closed choice, so a corrupt or future byte cannot invent a
+        // swimmable leg - but that substitution is a guess, not a verdict. Stash
+        // them so the frontend can ask the user what each one really is.
+        match db.unrecognised_shot_kinds() {
+            Ok(found) => {
+                if !found.is_empty() {
+                    tracing::warn!(
+                        count = found.len(),
+                        purpose = "surface unreadable shot kinds for user resolution (#27)",
+                        "Found shots with an unrecognised kind; defaulted them to Reference"
+                    );
+                }
+                self.set_unrecognised_shot_kinds(found);
+            }
+            Err(e) => {
+                // Non-fatal: the shots are already safely Reference in memory.
+                // Losing the prompt is better than failing the load.
+                tracing::warn!(error = %e, "Failed to scan for unrecognised shot kinds");
+                self.set_unrecognised_shot_kinds(Vec::new());
+            }
+        }
+
         if db.is_kind_classification_pending() {
             let reclassified =
                 project.classify_virtual_shots(&crate::models::ClassifyScope::WholeProject);

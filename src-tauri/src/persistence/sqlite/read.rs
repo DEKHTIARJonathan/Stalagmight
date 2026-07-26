@@ -5,7 +5,8 @@ use std::collections::HashMap;
 
 use crate::models::{
     ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, SectionId, Shot,
-    ShotKind, StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum,
+    FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -976,6 +977,52 @@ impl Database {
             [],
         )?;
         Ok(())
+    }
+
+    /// Shots whose stored `kind` this build does not recognise (#27).
+    ///
+    /// There is no `CHECK` constraint on the column, so a corrupt byte, a manual
+    /// edit, or a file written by a newer build can hold anything. `from_u8`
+    /// fails those closed to `Reference` so they cannot invent a swimmable leg,
+    /// but silently substituting a kind would leave the user with a leg missing
+    /// from gas and penetration and no idea why - so the load path collects them
+    /// here and asks.
+    ///
+    /// Detected with a standalone query rather than during row decode: the loader
+    /// builds `Shot`s through `from_u8`, which has already discarded the raw
+    /// value by then, and threading a diagnostic out of `load_project` would
+    /// change a signature every caller shares.
+    ///
+    /// `shot_id` is the in-memory id the frontend addresses shots by
+    /// (`section_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
+        // `kind` was added in v13; an older file legitimately has no such column.
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(Vec::new());
+        }
+        let mut stmt = self.conn.prepare(
+            "SELECT s.section_id, s.sequence_order, s.kind, sec.name
+             FROM shots s
+             LEFT JOIN sections sec ON sec.id = s.section_id
+             WHERE s.kind NOT IN (0, 1, 2)
+             ORDER BY s.section_id, s.sequence_order",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let section_id: SectionId = row.get(0)?;
+            let sequence_order: u32 = row.get(1)?;
+            Ok(UnrecognisedShotKind {
+                section_id,
+                shot_id: section_id * FEATURE_ID_STRIDE + sequence_order,
+                shot_number: sequence_order + 1,
+                section_name: row.get(3)?,
+                raw_value: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
     }
 
     /// Write the one-shot #27 backfill's verdicts straight to disk and clear the

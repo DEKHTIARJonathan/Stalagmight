@@ -4511,6 +4511,127 @@ fn migrate_v13_converts_is_reference_to_kind_and_flags_backfill() {
     );
 }
 
+/// #27: a `kind` byte this build cannot read must be REPORTED, not just quietly
+/// substituted. `from_u8` fails it closed to `Reference` so it cannot invent a
+/// swimmable leg, but the user is then owed an explanation and a choice.
+#[test]
+fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("bad_kind.stalx");
+
+    let mut project = Project::new("Corrupt".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Main".to_string()),
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Jump),
+            legacy_shot(ShotKind::Reference),
+        ],
+        ..Default::default()
+    });
+
+    let db = {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db
+    };
+    // Nothing wrong yet.
+    assert!(db.unrecognised_shot_kinds().unwrap().is_empty());
+
+    // Corrupt the middle shot's discriminant. There is no CHECK constraint, so
+    // this is exactly what a bad write or a newer writer would leave behind.
+    db.conn
+        .execute_batch("UPDATE shots SET kind = 7 WHERE sequence_order = 1;")
+        .unwrap();
+
+    let found = db.unrecognised_shot_kinds().unwrap();
+    assert_eq!(found.len(), 1, "exactly the corrupt row is reported");
+    let hit = &found[0];
+    assert_eq!(
+        hit.raw_value, 7,
+        "the raw value must survive for the dialog"
+    );
+    assert_eq!(hit.shot_number, 2, "1-based position for display");
+    assert_eq!(hit.section_name.as_deref(), Some("Main"));
+    let section_id = project.sections[0].id;
+    assert_eq!(hit.section_id, section_id);
+    assert_eq!(
+        hit.shot_id,
+        section_id * crate::models::FEATURE_ID_STRIDE + 1,
+        "shot_id must be the in-memory id set_shot_kind expects, not the rowid"
+    );
+
+    // And the loader itself fails the shot closed rather than making it swimmable.
+    let loaded = db.load_project().unwrap();
+    assert_eq!(
+        loaded.sections[0].shots[1].kind,
+        ShotKind::Reference,
+        "an unreadable kind must not load as a swimmable leg"
+    );
+}
+
+/// #27: a v12 file keeps its persisted undo history (`UNDO_FORMAT_SAFE_VERSION`
+/// is 7), and those payloads carry the legacy `is_reference` boolean. A bare
+/// `true` cannot say which virtual kind it meant, so `de_shot_kind` maps it to
+/// `Jump` - replaying one after the backfill settled a tie on `Reference` would
+/// make it swimmable again, with no classifier pass on the undo path to correct
+/// it. The v13 migration drops both stacks, exactly as v11->v12 does after a
+/// pitch flip.
+#[test]
+fn migrate_v13_drops_persisted_undo_history() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v12_undo.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Reference),
+        ],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // A persisted entry whose payload still speaks the pre-#27 boolean.
+        db.conn
+            .execute_batch(
+                r#"INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at)
+                   VALUES (0,
+                           '{"type":"set_shot_reference","section_id":0,"shot_id":1,"is_reference":true}',
+                           '{}', '2026-01-01T00:00:00Z');"#,
+            )
+            .unwrap();
+        // Back to the v12 shape so ensure_schema_version runs the v13 arm.
+        db.conn
+            .execute_batch(
+                "ALTER TABLE shots ADD COLUMN is_reference INTEGER NOT NULL DEFAULT 0;
+                 UPDATE shots SET is_reference = CASE WHEN kind != 0 THEN 1 ELSE 0 END;
+                 ALTER TABLE shots DROP COLUMN kind;",
+            )
+            .unwrap();
+        db.set_user_version(12).unwrap();
+        let staged: i64 = db
+            .conn
+            .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(staged, 1, "the fixture must actually stage an undo entry");
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    for table in ["undo_stack", "redo_stack"] {
+        let remaining: i64 = db
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "{table} must be empty: a legacy is_reference payload cannot be replayed safely"
+        );
+    }
+}
+
 /// The verdicts the one-shot backfill computes have to land on the RIGHT rows
 /// and survive a reopen.
 ///
@@ -5304,7 +5425,7 @@ fn migrate_v12_only_clears_dismissals_whose_meaning_changed() {
 /// keeps its undo history. Dropping it unconditionally would cost every user
 /// their undo stack on upgrade for no reason.
 #[test]
-fn migrate_v12_keeps_undo_history_when_no_section_was_flipped() {
+fn migrate_v12_does_not_flip_an_untouched_project_but_v13_still_drops_its_undo() {
     let temp = TempDir::new().unwrap();
     let path = temp.path().join("untouched.stalx");
 
@@ -5328,9 +5449,18 @@ fn migrate_v12_keeps_undo_history_when_no_section_was_flipped() {
         vec![Some(30.0); 4],
         "precondition: nothing was flipped"
     );
+    // The v11->v12 pitch migration itself still leaves history alone when it
+    // flips nothing - `invalidate_pre_pitch_flip_state` is only called for a
+    // non-empty flip set. But this file also crosses v12->v13, which drops the
+    // stacks unconditionally: any pre-#27 payload can carry an `is_reference`
+    // boolean, and a bare `true` cannot say which virtual kind it meant, so
+    // replaying one could turn a Reference tie back into a swimmable Jump. That
+    // supersedes the narrower v12 guarantee this test used to assert
+    // end-to-end; there is no version between 12 and SCHEMA_VERSION to observe
+    // it at any more.
     assert_eq!(
         db.load_undo_stack_with_timestamps().unwrap().len(),
-        1,
-        "an untouched project must keep its undo history"
+        0,
+        "crossing v13 drops persisted undo: legacy is_reference payloads are unsafe to replay"
     );
 }

@@ -373,6 +373,31 @@ pub fn cancel_loading(state: State<AppState>) {
 /// Uses AppHandle instead of State<'_, AppState> because Tauri's State<'_, T>
 /// wraps a reference (&'r Arc<T>) that cannot outlive the function body. For spawn_blocking,
 /// we need 'static ownership, which AppHandle provides via app_handle.state::<T>().
+/// Shots the last load could not read a `kind` for (#27), taken once.
+///
+/// The loader already substituted [`ShotKind::Reference`] for each - fail-closed,
+/// so an unreadable byte cannot put a swimmable leg into gas, penetration or the
+/// ruler - but that is a guess. The frontend calls this after a load and, when
+/// the list is non-empty, asks the user what each shot actually is; their answer
+/// lands as an ordinary `SetShotKind`, undoable like any other edit.
+///
+/// Taking rather than peeking makes it one-shot: a project refresh cannot
+/// resurrect a prompt the user already dismissed.
+#[tauri::command]
+pub fn take_unrecognised_shot_kinds(
+    state: State<'_, AppState>,
+) -> Vec<crate::models::UnrecognisedShotKind> {
+    let found = state.take_unrecognised_shot_kinds();
+    if !found.is_empty() {
+        tracing::info!(
+            count = found.len(),
+            purpose = "prompt the user to resolve unreadable shot kinds (#27)",
+            "Handing unrecognised shot kinds to the frontend"
+        );
+    }
+    found
+}
+
 #[tauri::command]
 pub async fn create_project_full(
     app_handle: tauri::AppHandle,

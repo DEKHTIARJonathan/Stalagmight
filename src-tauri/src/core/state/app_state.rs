@@ -126,6 +126,12 @@ pub struct AppState {
     pub(super) app_handle: Mutex<Option<AppHandle>>,
     /// Active loading cancellation token (if any load operation is in progress)
     pub(super) active_loading: Mutex<Option<Arc<AtomicBool>>>,
+    /// Shots the last load found carrying a `kind` byte this build does not
+    /// recognise (#27). Transient and per-project: recorded during load, read
+    /// once by the frontend so it can ask the user what each one should be, and
+    /// cleared when it does (or when another project opens). Never persisted -
+    /// the fix is the user's answer, applied as an ordinary `SetShotKind`.
+    pub(super) unrecognised_shot_kinds: Mutex<Vec<crate::models::UnrecognisedShotKind>>,
     /// Memoized closure-adjusted station coordinates for the display-mode toggle.
     /// See [`AdjustedStationsCache`]. Transient; never persisted.
     pub(super) adjusted_cache: Mutex<Option<AdjustedStationsCache>>,
@@ -185,6 +191,7 @@ impl AppState {
             tile_fetch_stats: Arc::new(TileFetchStats::new()),
             app_handle: Mutex::new(None),
             active_loading: Mutex::new(None),
+            unrecognised_shot_kinds: Mutex::new(Vec::new()),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
         })
@@ -725,5 +732,31 @@ impl AppState {
                 crate::core::UndoData::ProjectSnapshotPair { before, after },
             );
         }
+    }
+}
+
+impl AppState {
+    /// Replace the recorded set of shots with an unreadable `kind` byte (#27).
+    /// Called once per load; an empty vec clears a previous project's set.
+    pub(crate) fn set_unrecognised_shot_kinds(
+        &self,
+        found: Vec<crate::models::UnrecognisedShotKind>,
+    ) {
+        let mut guard = match self.unrecognised_shot_kinds.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        *guard = found;
+    }
+
+    /// Take the recorded set, leaving it empty. Taking rather than cloning makes
+    /// the prompt one-shot: the frontend asks the user once per load, and a
+    /// refresh cannot resurrect a dialog they already answered.
+    pub(crate) fn take_unrecognised_shot_kinds(&self) -> Vec<crate::models::UnrecognisedShotKind> {
+        let mut guard = match self.unrecognised_shot_kinds.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        std::mem::take(&mut *guard)
     }
 }

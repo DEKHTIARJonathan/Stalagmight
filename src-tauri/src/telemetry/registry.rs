@@ -47,6 +47,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.check_section_hashes",
     "command.clear_tile_cache",
     "command.close_project",
+    "command.take_unrecognised_shot_kinds",
     "command.compute_gas_reach_field",
     "command.create_loop_closure",
     "command.create_project_full",
@@ -876,7 +877,9 @@ mod tests {
         //   + 1 net for the Jump/Reference split (#27): action.toggle-reference
         //       retired, action.{set-shot-kind,cycle-shot-kind} added = 655.
         //   + 1 split display toggle (#27): action.toggle.showJumps = 656.
-        assert_eq!(EVENT_NAMES.len(), 656);
+        //   + 1 unreadable-kind prompt (#27):
+        //       command.take_unrecognised_shot_kinds = 657.
+        assert_eq!(EVENT_NAMES.len(), 657);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

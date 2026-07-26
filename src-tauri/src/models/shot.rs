@@ -75,6 +75,23 @@ pub enum ShotKind {
     Reference,
 }
 
+/// A shot whose stored `kind` discriminant this build does not recognise (#27).
+///
+/// Surfaced from the load so the user can decide what each one should be, rather
+/// than living with the fail-closed `Reference` substitution silently. Carries
+/// the raw value so a genuinely newer file is distinguishable from corruption.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct UnrecognisedShotKind {
+    pub section_id: SectionId,
+    /// In-memory shot id, i.e. what `set_shot_kind` expects.
+    pub shot_id: ShotId,
+    /// 1-based position in the section, for display.
+    pub shot_number: u32,
+    pub section_name: Option<String>,
+    /// The value actually stored, so the dialog can show what was found.
+    pub raw_value: i64,
+}
+
 impl ShotKind {
     /// Compact discriminant for SQLite storage and the binary IPC flags byte.
     /// Stable on the wire: do not renumber.
@@ -86,15 +103,32 @@ impl ShotKind {
         }
     }
 
-    /// Inverse of [`as_u8`](Self::as_u8). Unknown discriminants fall back to
-    /// `Normal` rather than failing the load: a corrupt byte should not make a
-    /// project unopenable, and `Normal` is the conservative reading (it keeps
-    /// the shot visible and surveyed rather than silently hiding it).
+    /// Inverse of [`as_u8`](Self::as_u8), for a value already known to be valid.
+    /// Unknown discriminants fall back to [`ShotKind::Reference`] - a corrupt or
+    /// future byte should not make a project unopenable, but it must not invent a
+    /// swimmable leg either.
+    ///
+    /// `Reference` is the fail-closed choice, and the direction matters: `Normal`
+    /// is swimmable, so an unrecognised byte would silently enter gas,
+    /// penetration and the ruler at normal cost - the false shortcut #27 exists
+    /// to remove, and the overstating-reach direction §6 forbids. A `Reference`
+    /// can only ever shrink the route. It is a fallback, not a verdict: the load
+    /// path uses [`try_from_u8`](Self::try_from_u8) to collect the affected shots
+    /// and asks the user which kind each should be.
     pub fn from_u8(value: u8) -> Self {
+        Self::try_from_u8(value).unwrap_or(ShotKind::Reference)
+    }
+
+    /// Strict inverse of [`as_u8`](Self::as_u8): `None` for a discriminant this
+    /// build does not know. Callers that can report a problem should use this and
+    /// surface the raw value rather than letting [`from_u8`](Self::from_u8)
+    /// quietly substitute a kind.
+    pub fn try_from_u8(value: u8) -> Option<Self> {
         match value {
-            1 => ShotKind::Jump,
-            2 => ShotKind::Reference,
-            _ => ShotKind::Normal,
+            0 => Some(ShotKind::Normal),
+            1 => Some(ShotKind::Jump),
+            2 => Some(ShotKind::Reference),
+            _ => None,
         }
     }
 
@@ -721,8 +755,14 @@ mod tests {
         assert_eq!(ShotKind::Normal.as_u8(), 0);
         assert_eq!(ShotKind::Jump.as_u8(), 1);
         assert_eq!(ShotKind::Reference.as_u8(), 2);
-        // An unrecognised discriminant degrades to Normal, never panics.
-        assert_eq!(ShotKind::from_u8(9), ShotKind::Normal);
+        // An unrecognised discriminant degrades safely, never panics.
+        // An unrecognised discriminant fails CLOSED, to Reference: Normal would
+        // be swimmable and would silently enter the route graph.
+        assert_eq!(ShotKind::from_u8(9), ShotKind::Reference);
+        assert_eq!(ShotKind::try_from_u8(9), None);
+        assert_eq!(ShotKind::try_from_u8(0), Some(ShotKind::Normal));
+        assert_eq!(ShotKind::try_from_u8(1), Some(ShotKind::Jump));
+        assert_eq!(ShotKind::try_from_u8(2), Some(ShotKind::Reference));
     }
 
     #[test]

@@ -702,7 +702,20 @@ impl Database {
         Ok(())
     }
 
-    /// Drop persisted undo/redo stacks written by pre-v7 builds (schema v6→v7).
+    /// Drop the persisted undo/redo stacks. Called by every migration whose
+    /// change makes older payloads unsafe to replay.
+    ///
+    /// Callers, and what each is protecting against:
+    ///
+    /// - **v6→v7** (the original): explicit-null `ShotUpdates` fields, detailed
+    ///   below. Also runs for any file below `UNDO_FORMAT_SAFE_VERSION`.
+    /// - **v11→v12**: entries holding a pre-#296 pitch, via
+    ///   [`invalidate_pre_pitch_flip_state`](Self::invalidate_pre_pitch_flip_state).
+    /// - **v12→v13**: entries holding a legacy `is_reference` boolean. A bare
+    ///   `true` cannot say which virtual kind it meant, so `de_shot_kind` maps it
+    ///   to `Jump`; replaying one after the #27 backfill settled that shot on
+    ///   `Reference` would make a non-swimmable tie swimmable again, and no
+    ///   classifier pass runs on an undo to correct it.
     ///
     /// Pre-v7 builds serialized every untouched nullable `ShotUpdates` field as
     /// an explicit `"left": null, "pitch_in": null, ...` inside the persisted
@@ -724,8 +737,8 @@ impl Database {
                 tracing::info!(
                     table,
                     removed,
-                    purpose = "prevent legacy undo entries from clearing shot fields",
-                    "Dropped pre-v7 persisted undo history (explicit-null payloads are unsafe to replay)"
+                    purpose = "prevent legacy payloads from being replayed unsafely",
+                    "Dropped persisted undo history (legacy payloads are unsafe to replay)"
                 );
             }
         }
@@ -934,6 +947,16 @@ impl Database {
         }
         if current < 13 {
             Self::migrate_is_reference_to_kind(&self.conn)?;
+            // Drop persisted undo/redo, for the same reason v11->v12 does after a
+            // pitch flip. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v12 file keeps
+            // its history, and those payloads still carry the legacy
+            // `is_reference` boolean - which `de_shot_kind` maps to `Jump`
+            // unconditionally, since a bare `true` cannot say which virtual kind
+            // it meant. Replaying one after the backfill has settled a tie on
+            // `Reference` would restore it as a Jump: swimmable again, and back
+            // in gas, penetration and the ruler, with no classifier pass to
+            // correct it. The history is not worth an unsafe shortcut.
+            self.drop_legacy_undo_history()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
