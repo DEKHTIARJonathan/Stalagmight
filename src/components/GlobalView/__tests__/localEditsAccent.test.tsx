@@ -94,9 +94,17 @@ describe('recents local-edit accent (#270)', () => {
     const dirtyRow = screen.getByTestId(`system-row-${DIRTY_PROJECT.file_path}`);
     const cleanRow = screen.getByTestId(`system-row-${CLEAN_PROJECT.file_path}`);
     expect(dirtyRow).toHaveAttribute('data-local-edits', 'true');
-    expect(dirtyRow.getAttribute('style')).toContain('var(--sh-comment)');
     expect(cleanRow).toHaveAttribute('data-local-edits', 'false');
-    expect(cleanRow.getAttribute('style') ?? '').not.toContain('var(--sh-comment)');
+
+    // The accent must sit on the row's first CELL, not the row. The table is
+    // border-collapse, under which a <tr> generates no box, so a border or a
+    // box-shadow set on it never paints - the accent was invisible in the table
+    // view while passing a test that only checked the <tr>'s style attribute.
+    const accentOf = (row: HTMLElement) =>
+      row.querySelector('td')?.getAttribute('style') ?? '';
+    expect(accentOf(dirtyRow)).toContain('var(--sh-comment)');
+    expect(accentOf(cleanRow)).not.toContain('var(--sh-comment)');
+    expect(dirtyRow.getAttribute('style') ?? '').not.toContain('var(--sh-comment)');
   });
 
   it('leaves every row unaccented when the local state is unavailable', () => {

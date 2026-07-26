@@ -203,10 +203,6 @@ export function SystemTable({
                 className={`border-b border-border transition-colors ${
                   busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:bg-panel'
                 }`}
-                // #270: same yellow leading-edge accent as the card grid. An inset
-                // shadow rather than a border - a <tr> border does not paint reliably
-                // under border-collapse, and this leaves the row's own borders alone.
-                style={unpushedAccentStyle(remoteLock.hasLocalEdits)}
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
                 data-local-edits={remoteLock.hasLocalEdits ? 'true' : 'false'}
@@ -223,7 +219,15 @@ export function SystemTable({
                   }
                 }}
               >
-                <td className={`${cellClass} font-medium`}>{item.summary.name}</td>
+                {/* #270: the yellow leading-edge accent from the card grid. It sits on
+                    the first CELL, not the row: under border-collapse a <tr> generates no
+                    box, so neither its border nor its box-shadow paints. */}
+                <td
+                  className={`${cellClass} font-medium`}
+                  style={unpushedAccentStyle(remoteLock.hasLocalEdits)}
+                >
+                  {item.summary.name}
+                </td>
                 <td className={cellClass}>
                   <SpeleoRecentInfo info={remoteLock} name={item.summary.name} />
                 </td>
@@ -261,7 +265,6 @@ export function SystemTable({
               className={`border-b border-border cursor-pointer transition-colors ${
                 isSelected ? 'bg-accent-10' : 'hover:bg-panel'
               }`}
-              style={unpushedAccentStyle(lock.hasLocalEdits)}
               data-testid={`system-row-${item.filePath}`}
               data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
               role="button"
@@ -277,7 +280,10 @@ export function SystemTable({
                 }
               }}
             >
-              <td className={`${cellClass} font-medium`}>
+              <td
+                className={`${cellClass} font-medium`}
+                style={unpushedAccentStyle(lock.hasLocalEdits)}
+              >
                 <span>{project.name}</span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>
