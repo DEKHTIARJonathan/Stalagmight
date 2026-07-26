@@ -11,14 +11,17 @@ export function SpeleoBadgedIcon({
   badge,
   badgeColor,
   size = 20,
+  tint,
 }: {
   badge: ReactNode;
   badgeColor: string;
   size?: number;
+  /** Recolour the MARK itself (#270: yellow while there are un-pushed local edits). */
+  tint?: string | undefined;
 }) {
   return (
     <span className="relative inline-flex">
-      <SpeleoDbLogo size={size} />
+      <SpeleoDbLogo size={size} tint={tint} />
       {/* The disc is the panel BACKGROUND colour (like the DisplayMenu badge-bg,
           fill: var(--cc-panel)) so it knocks the icon out around the badge - a
           cutout, not a coloured circle. */}

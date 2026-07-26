@@ -1,7 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, type HeldLock } from '../../store/speleoStore';
+import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
+import { hasUnpushedEdits, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -10,12 +14,26 @@ import { DialogWrapper } from './DialogWrapper';
  * Held-lock resume/release prompt (#201, B1). SpeleoDB has no server-side lock
  * TTL, so a crashed/abandoned session leaves its write locks held. On login /
  * app-open a single `list_projects` scan finds the locks THIS user holds; if any,
- * this prompt offers to resolve them:
- * - **Release** (per project) - `POST /projects/{id}/release/`, freeing that one
- *   lock; releasing the last one auto-closes the prompt.
- * - **Release all locks** - `DELETE /user/release_all_locks/`, freeing them all.
- * - **Keep working** - dismiss and leave the locks held (the user is still using
- *   them; the open project, if held, is already resumed into its editing state).
+ * this prompt offers to resolve them.
+ *
+ * That scan is server-only, so on its own it cannot tell a lock over an abandoned
+ * empty session from a lock over hours of work that never reached the server.
+ * #270 joins in the LOCAL half (`speleodb_local_project_states`, one call for every
+ * listed id) and lets it pick the row's action:
+ * - **no un-pushed edits** -> **Release** (`POST /projects/{id}/release/`), as before;
+ *   releasing the last one auto-closes the prompt.
+ * - **un-pushed edits** -> **Continue editing** INSTEAD: open that project and keep
+ *   the lock (`speleodb_start_editing`, the app's open-and-hold verb). Release is not
+ *   offered at all for such a row - it is the one action that would strand the work
+ *   behind a lock the user no longer holds.
+ *
+ * Dialog-wide:
+ * - **Release all locks** is only the blunt server-side `DELETE
+ *   /user/release_all_locks/` when nothing is at risk. When some rows have local
+ *   edits it becomes "release the rest", releasing only the clean ones one by one and
+ *   leaving the rest listed; when the local check FAILED (we do not know), it asks
+ *   for a second, explicit confirmation instead of guessing.
+ * - **Keep working** - dismiss and leave the locks held.
  * - Closing the dialog (X) is the "do nothing" exit - same as Keep working.
  */
 export default function HeldLockResumeDialog() {
@@ -28,11 +46,30 @@ export default function HeldLockResumeDialog() {
   // Close this OVERLAY only (not the shared `closeDialog`, which would close the
   // dialog this prompt is layered over - e.g. Settings during an inline login).
   const closeHeldLockPrompt = useSpeleoStore((s) => s.closeHeldLockPrompt);
-  // Which project id is being released one-off, or 'all' for the Release-all path.
-  const [releasing, setReleasing] = useState<string | null>(null);
+  const recentProjects = useProjectStore((s) => s.recentProjects);
+  const loadProject = useProjectStore((s) => s.loadProject);
+  const { startEditing } = useSpeleoActions();
+  // Which project id is being acted on, or 'all' for the Release-all path.
+  const [busyId, setBusyId] = useState<string | null>(null);
+  // Release-all is armed for a second click (only when local state is unknown).
+  const [confirmReleaseAll, setConfirmReleaseAll] = useState(false);
 
-  const locks = heldLocks ?? [];
-  const busy = releasing !== null;
+  const locks = useMemo(() => heldLocks ?? [], [heldLocks]);
+  const busy = busyId !== null;
+
+  // The local half of the join, fetched once for every listed lock (#270).
+  const lockIds = useMemo(() => locks.map((l) => l.projectId), [locks]);
+  const { states, loaded, failed } = useSpeleoLocalStates(lockIds);
+
+  // A row's action is "Continue editing" only on a POSITIVE local-edit report. While
+  // the call is in flight or after it failed nothing is claimed either way - which is
+  // why an unknown result also disarms the bulk release below.
+  const dirty = (projectId: string) => hasUnpushedEdits(states, projectId);
+  const someDirty = locks.some((l) => dirty(l.projectId));
+  // Nothing left for the bulk action to free (every remaining row has local edits).
+  const noneReleasable = someDirty && locks.every((l) => dirty(l.projectId));
+  // We do not KNOW these projects are clean: the call failed, or has not landed yet.
+  const unknown = failed || !loaded;
 
   // Auto-close once the last lock is gone - releasing them one by one shrinks
   // `heldLocks` in the store, and when it empties there is nothing left to resolve.
@@ -46,11 +83,30 @@ export default function HeldLockResumeDialog() {
     closeHeldLockPrompt();
   };
 
+  /** Release exactly `targets`, one request each, stopping at the first failure. */
+  const releaseEach = async (targets: HeldLock[]) => {
+    for (const lock of targets) {
+      await releaseLock(lock.projectId);
+    }
+  };
+
   const releaseAll = async () => {
-    setReleasing('all');
+    // Unknown local state: make the user say it twice rather than release locks that
+    // may sit over un-pushed work (the bulk verb is server-wide and irreversible).
+    if (unknown && !confirmReleaseAll) {
+      setConfirmReleaseAll(true);
+      return;
+    }
+    setBusyId('all');
     try {
-      await releaseAllLocks();
-      closeHeldLockPrompt();
+      if (someDirty) {
+        // The server's release-all is all-or-nothing, so "release the rest" is done
+        // per project - the rows with local edits keep their locks and stay listed.
+        await releaseEach(locks.filter((l) => !dirty(l.projectId)));
+      } else {
+        await releaseAllLocks();
+        closeHeldLockPrompt();
+      }
     } catch (e) {
       // Release failed: keep the prompt open so the user can retry.
       showToast(
@@ -59,12 +115,13 @@ export default function HeldLockResumeDialog() {
         'error',
       );
     } finally {
-      setReleasing(null);
+      setConfirmReleaseAll(false);
+      setBusyId(null);
     }
   };
 
   const releaseOne = async (projectId: string) => {
-    setReleasing(projectId);
+    setBusyId(projectId);
     try {
       // On success the store drops this lock from `heldLocks`; the effect above
       // closes the dialog when the last one goes.
@@ -76,7 +133,48 @@ export default function HeldLockResumeDialog() {
         'error',
       );
     } finally {
-      setReleasing(null);
+      setBusyId(null);
+    }
+  };
+
+  /**
+   * Resume the session this lock belongs to: open the project (unless it already is
+   * the open one) and re-acquire, keeping the lock. `speleodb_start_editing` is the
+   * app's open-and-hold verb and acts on the OPEN project, so the load comes first.
+   * Re-acquiring a lock we already hold is a no-op server-side - the acquire simply
+   * succeeds (only ANOTHER holder produces the 400 that reports contention) - and the
+   * reconcile that follows is exactly what a resumed session needs.
+   */
+  const continueEditing = async (lock: HeldLock) => {
+    setBusyId(lock.projectId);
+    try {
+      if (states[lock.projectId]?.is_open !== true) {
+        const path = recentProjects.find(
+          (p) => p.speleodb_project_id === lock.projectId,
+        )?.file_path;
+        if (path === undefined) {
+          // A local copy exists (that is why this row offers Continue editing) but we
+          // cannot name its file. Say so and change nothing - releasing the lock here
+          // is exactly the outcome this row exists to prevent.
+          showToast(
+            t('speleodb.localEdits.heldLocks.openFailed', { name: lock.projectName }),
+            'speleodb-continue-editing-error',
+            'warning',
+          );
+          return;
+        }
+        const result = await loadProject(path);
+        // loadProject surfaces its own failure; leave the prompt up so the lock is
+        // still resolvable.
+        if (!result.success) return;
+      }
+      // Acquire + reconcile, with its own toasts / divergence routing.
+      await startEditing();
+      // The lock stays held on purpose: hand the shell over to the project.
+      clearHeldLocks();
+      closeHeldLockPrompt();
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -93,28 +191,78 @@ export default function HeldLockResumeDialog() {
         </p>
 
         <ul className="max-h-40 overflow-y-auto rounded border border-border divide-y divide-border">
-          {locks.map((lock) => (
-            <li
-              key={lock.projectId}
-              className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-text-primary"
-              data-testid={`speleodb-held-lock-${lock.projectId}`}
-            >
-              <span className="min-w-0 truncate">{lock.projectName}</span>
-              <button
-                type="button"
-                onClick={() => void releaseOne(lock.projectId)}
-                disabled={busy}
-                className="shrink-0 text-xs text-danger hover:underline disabled:opacity-50 disabled:no-underline"
-                aria-label={t('speleodb.heldLocks.releaseOneAria', { name: lock.projectName })}
-                data-testid={`speleodb-held-lock-release-${lock.projectId}`}
+          {locks.map((lock) => {
+            const hasEdits = dirty(lock.projectId);
+            return (
+              <li
+                key={lock.projectId}
+                className="flex items-center justify-between gap-3 px-3 py-2 text-sm text-text-primary"
+                data-testid={`speleodb-held-lock-${lock.projectId}`}
+                data-local-edits={hasEdits ? 'true' : 'false'}
               >
-                {releasing === lock.projectId
-                  ? t('speleodb.heldLocks.releasing')
-                  : t('speleodb.heldLocks.release')}
-              </button>
-            </li>
-          ))}
+                <span className="min-w-0 truncate">
+                  {lock.projectName}
+                  {hasEdits && (
+                    <span
+                      className="block text-xs"
+                      style={{ color: UNPUSHED_ACCENT }}
+                      data-testid={`speleodb-held-lock-local-edits-${lock.projectId}`}
+                    >
+                      {t('speleodb.localEdits.heldLocks.hasLocalChanges')}
+                    </span>
+                  )}
+                </span>
+                {hasEdits ? (
+                  <button
+                    type="button"
+                    onClick={() => void continueEditing(lock)}
+                    disabled={busy}
+                    className="shrink-0 text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+                    aria-label={t('speleodb.localEdits.heldLocks.continueEditingAria', {
+                      name: lock.projectName,
+                    })}
+                    data-testid={`speleodb-held-lock-continue-${lock.projectId}`}
+                  >
+                    {busyId === lock.projectId
+                      ? t('speleodb.localEdits.heldLocks.opening')
+                      : t('speleodb.localEdits.heldLocks.continueEditing')}
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => void releaseOne(lock.projectId)}
+                    disabled={busy}
+                    className="shrink-0 text-xs text-danger hover:underline disabled:opacity-50 disabled:no-underline"
+                    aria-label={t('speleodb.heldLocks.releaseOneAria', { name: lock.projectName })}
+                    data-testid={`speleodb-held-lock-release-${lock.projectId}`}
+                  >
+                    {busyId === lock.projectId
+                      ? t('speleodb.heldLocks.releasing')
+                      : t('speleodb.heldLocks.release')}
+                  </button>
+                )}
+              </li>
+            );
+          })}
         </ul>
+
+        {failed && (
+          <p
+            className="text-xs"
+            style={{ color: UNPUSHED_ACCENT }}
+            data-testid="speleodb-held-lock-local-unknown"
+          >
+            {t('speleodb.localEdits.heldLocks.unknown')}
+          </p>
+        )}
+        {confirmReleaseAll && (
+          <p
+            className="text-xs text-danger"
+            data-testid="speleodb-held-lock-release-all-confirm-note"
+          >
+            {t('speleodb.localEdits.heldLocks.releaseAllConfirmNote')}
+          </p>
+        )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={keep} disabled={busy} data-testid="speleodb-held-lock-keep">
@@ -123,12 +271,16 @@ export default function HeldLockResumeDialog() {
           <Button
             variant="danger"
             onClick={() => void releaseAll()}
-            disabled={busy}
+            disabled={busy || noneReleasable}
             data-testid="speleodb-held-lock-release-all"
           >
-            {releasing === 'all'
+            {busyId === 'all'
               ? t('speleodb.heldLocks.releasing')
-              : t('speleodb.heldLocks.releaseAll')}
+              : confirmReleaseAll
+                ? t('speleodb.localEdits.heldLocks.releaseAllConfirm')
+                : someDirty
+                  ? t('speleodb.localEdits.heldLocks.releaseRest')
+                  : t('speleodb.heldLocks.releaseAll')}
           </Button>
         </div>
       </div>

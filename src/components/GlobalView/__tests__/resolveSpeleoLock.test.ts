@@ -11,6 +11,8 @@ describe('resolveSpeleoLock (#201)', () => {
       lockHolder: undefined,
       lockedByMe: false,
       speleoName: undefined,
+      // #270: no local-state map was passed, so nothing is claimed either way.
+      hasLocalEdits: false,
     });
   });
 
@@ -26,6 +28,7 @@ describe('resolveSpeleoLock (#201)', () => {
       lockHolder: undefined,
       lockedByMe: false,
       speleoName: undefined,
+      hasLocalEdits: false,
     });
   });
 

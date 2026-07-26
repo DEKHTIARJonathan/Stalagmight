@@ -199,6 +199,13 @@ export default function Toolbar({
   // The SpeleoStatusButton's presence widens the left cluster, so its visibility
   // gates re-measurement too.
   const speleoLinkPresent = useSpeleoStore((s) => s.link != null);
+  // #270: the status button grows by a "!" badge when the project has changes only
+  // on this computer and no lock protecting them, so that flip changes the left
+  // cluster's width and must re-run the fit below, exactly like the button
+  // appearing at all.
+  const speleoUnpushedBadge = useSpeleoStore(
+    (s) => s.link?.hasUnpushedEdits === true && !(s.link.editState === 'editing' && !s.link.forceEditing),
+  );
   const CONDENSE_MAX = 5;
   const [condense, setCondense] = useState(0);
   const condenseRef = useRef(0);
@@ -244,6 +251,7 @@ export default function Toolbar({
     // left cluster width and must not kick off a reset -> re-fit on every edit.
     editingBlocked,
     speleoLinkPresent,
+    speleoUnpushedBadge,
     t,
   ]);
 

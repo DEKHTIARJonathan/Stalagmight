@@ -6,6 +6,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
+import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { LockIcon, PencilIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
@@ -41,6 +42,11 @@ type ButtonKind =
  * - 🟥 crimson (conflict) → the resolution dialog (#198)
  * - ❗ red exclamation (no permission - shared as a file) → offer converting to a
  *   plain unmanaged .stalx (fix 10)
+ *
+ * Across ALL of those states (#270) the mark itself turns from white to yellow
+ * whenever the project has edits that are not on SpeleoDB, and gains a standalone
+ * yellow "!" when those edits are not even protected by a held lock - which is what
+ * makes the "unlocked" state stop being dirty-blind.
  *
  * It also owns the remote-state poll (configurable interval, clamped 30s..24h)
  * while a remote project is open.
@@ -91,6 +97,38 @@ export function SpeleoStatusButton() {
   // a status change that landed while away surfaces on the next tick.
   if (!link || appMode !== 'survey') return null;
 
+  // #270: work that exists ONLY on this computer. This is NOT projectStore.isDirty
+  // (unsaved to disk) - it survives a save and a restart, and it is what a lock
+  // release or a pull would put at risk. It colours the mark in EVERY state, so the
+  // "unlocked" state stops being dirty-blind.
+  const unpushed = link.hasUnpushedEdits;
+  // We hold the server write lock. `editState === 'editing'` is the app's
+  // hold-lock signal, EXCEPT while force-editing (#213), which is editing with no
+  // lock at all - so a force-editor counts as not holding it.
+  const lockHeld = link.editState === 'editing' && !link.forceEditing;
+  // Local-only changes with no lock to protect them: the state that most needs
+  // calling out, so it gets a second, standalone "!" beside the mark.
+  const unpushedUnlocked = unpushed && !lockHeld;
+  const tint = unpushed ? UNPUSHED_ACCENT : undefined;
+  // Appended to whichever state title applies, so the new dirty variants of the
+  // existing states all say the one thing the user needs to know. Left off when we
+  // hold the lock: those titles already talk about pushing.
+  const unpushedSuffix = unpushedUnlocked ? ` ${t('speleodb.localEdits.titleSuffix')}` : '';
+
+  // The standalone "!", rendered beside the mark (not on it - the corner badge is
+  // the state glyph). Kept out of the accessible name: the title/aria-label below
+  // already carries the wording.
+  const unpushedBadge = unpushedUnlocked ? (
+    <span
+      className="ml-0.5 inline-flex items-center"
+      style={{ color: UNPUSHED_ACCENT }}
+      data-testid="speleodb-status-unpushed-badge"
+      aria-hidden="true"
+    >
+      <ExclamationGlyph size={11} />
+    </span>
+  ) : null;
+
   // Logged out: every lock action needs a token (the backend gate would reject the
   // acquire anyway), so present the mark grayed + inert and point the user at login
   // via the tooltip, rather than a live "Start editing" that can only fail (#201).
@@ -101,17 +139,27 @@ export function SpeleoStatusButton() {
   // Showing the inert logged-out mark then would wrongly hide Done/push for a
   // project we actually hold the lock on, so fall through to the normal rendering.
   if (!loggedIn && link.editState !== 'editing') {
+    const loggedOutTitle = `${t('speleodb.button.loggedOut')}${unpushedSuffix}`;
     return (
       <button
         type="button"
         disabled
-        title={t('speleodb.button.loggedOut')}
-        aria-label={t('speleodb.button.loggedOut')}
+        title={loggedOutTitle}
+        aria-label={loggedOutTitle}
         data-testid="speleodb-status-button"
         data-kind="logged_out"
-        className="flex items-center justify-center w-8 h-8 rounded ml-1 opacity-40 cursor-not-allowed"
+        data-unpushed={unpushed ? 'true' : 'false'}
+        className={`flex items-center justify-center h-8 rounded ml-1 opacity-40 cursor-not-allowed ${
+          unpushedUnlocked ? 'px-1' : 'w-8'
+        }`}
       >
-        <SpeleoBadgedIcon badge={<LockIcon size={10} />} badgeColor="text-text-secondary" size={20} />
+        <SpeleoBadgedIcon
+          badge={<LockIcon size={10} />}
+          badgeColor="text-text-secondary"
+          size={20}
+          tint={tint}
+        />
+        {unpushedBadge}
       </button>
     );
   }
@@ -293,16 +341,21 @@ export function SpeleoStatusButton() {
       type="button"
       onClick={handleClick}
       disabled={busy}
-      title={title}
-      aria-label={title}
+      title={`${title}${unpushedSuffix}`}
+      aria-label={`${title}${unpushedSuffix}`}
       data-testid="speleodb-status-button"
       data-kind={kind}
-      className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-colors disabled:opacity-50 ${bgClass}`}
+      data-unpushed={unpushed ? 'true' : 'false'}
+      className={`flex items-center justify-center h-8 rounded ml-1 transition-colors disabled:opacity-50 ${
+        unpushedUnlocked ? 'px-1' : 'w-8'
+      } ${bgClass}`}
     >
       {/* The state badge sits on the ICON - a small disc + glyph anchored to the
           logo's corner (like the DisplayMenu shot/station symbols), not floating
-          on the button. */}
-      <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} />
+          on the button. The MARK itself turns yellow while there are un-pushed
+          local edits (#270). */}
+      <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} tint={tint} />
+      {unpushedBadge}
     </button>
   );
 }

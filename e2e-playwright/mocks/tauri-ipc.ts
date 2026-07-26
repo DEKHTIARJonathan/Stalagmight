@@ -3994,6 +3994,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           case 'speleodb_list_projects':
             return [];
+          // #270: local (un-pushed) state per project id, keyed by id. Nothing is
+          // cached in a mocked run, so every list renders without a local-edit
+          // accent; specs that need one override this per spec.
+          case 'speleodb_local_project_states':
+            return {};
           case 'speleodb_take_remote':
             // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
             return '/mock/project.stalx';

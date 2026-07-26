@@ -9,8 +9,9 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
-import { SpeleoRecentInfo, resolveSpeleoLock } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, resolveSpeleoLock, unpushedAccentStyle } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -24,6 +25,9 @@ interface SystemTableProps {
   remoteProjects: Record<string, string>;
   /** Current user's email, to tell our own held lock from another's (#201). */
   myEmail: string | null;
+  /** #270: per-project LOCAL state (un-pushed edits), fetched once for the whole
+      list. Empty when the fetch failed - which simply means no row is accented. */
+  localStates?: SpeleoLocalStateMap;
   /** Toggle/apply sorting when a sortable column header is clicked. */
   onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
@@ -93,6 +97,7 @@ export function SystemTable({
   remoteLocks,
   remoteProjects,
   myEmail,
+  localStates = {},
   onSort,
   onSelect,
   onOpen,
@@ -190,6 +195,7 @@ export function SystemTable({
               remoteLocks,
               myEmail,
               remoteProjects,
+              localStates,
             );
             return (
               <tr
@@ -197,8 +203,13 @@ export function SystemTable({
                 className={`border-b border-border transition-colors ${
                   busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:bg-panel'
                 }`}
+                // #270: same yellow leading-edge accent as the card grid. An inset
+                // shadow rather than a border - a <tr> border does not paint reliably
+                // under border-collapse, and this leaves the row's own borders alone.
+                style={unpushedAccentStyle(remoteLock.hasLocalEdits)}
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
+                data-local-edits={remoteLock.hasLocalEdits ? 'true' : 'false'}
                 role="button"
                 aria-disabled={busy || undefined}
                 tabIndex={0}
@@ -240,7 +251,7 @@ export function SystemTable({
           }
 
           const { project } = item;
-          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects);
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects, localStates);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 
@@ -250,7 +261,9 @@ export function SystemTable({
               className={`border-b border-border cursor-pointer transition-colors ${
                 isSelected ? 'bg-accent-10' : 'hover:bg-panel'
               }`}
+              style={unpushedAccentStyle(lock.hasLocalEdits)}
               data-testid={`system-row-${item.filePath}`}
+              data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
               role="button"
               tabIndex={0}
               aria-pressed={isSelected}

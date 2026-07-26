@@ -37,6 +37,7 @@ import {
   filterRecentListItems,
 } from './recentListItems';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
+import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { SpeleoAdoptConfirm } from '../Dialogs/SpeleoAdoptConfirm';
 import type { ProjectMetadata } from '../../types/project';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
@@ -595,6 +596,20 @@ export default function GlobalView() {
     () => filterRecentListItems(listItems, searchTerm),
     [listItems, searchTerm]
   );
+  // #270: which of these projects hold work that never reached SpeleoDB. ONE local
+  // IPC call for the whole list (never per row), keyed on the id SET of everything
+  // this screen can list - deliberately NOT the search-filtered subset, so typing in
+  // the box does not re-issue it. A failure yields no accents (see the hook).
+  const localStateIds = useMemo(
+    () => [
+      ...recentProjects
+        .map((p) => p.speleodb_project_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ...Object.keys(remoteSummaries),
+    ],
+    [recentProjects, remoteSummaries]
+  );
+  const { states: localStates } = useSpeleoLocalStates(localStateIds);
   const isSearching = searchTerm.trim().length > 0;
   // Gate the tabs and content area on the combined count (loaded + missing) so
   // an all-missing recent list still renders its removable rows instead of the
@@ -964,6 +979,7 @@ export default function GlobalView() {
                   remoteLocks={remoteLocks}
                   remoteProjects={remoteProjects}
                   myEmail={speleoEmail}
+                  localStates={localStates}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleOpenFromList}
@@ -985,7 +1001,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
-                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                       />
@@ -998,6 +1014,7 @@ export default function GlobalView() {
                           remoteLocks,
                           speleoEmail,
                           remoteProjects,
+                          localStates,
                         )}
                         busy={remoteBusy}
                         onOpen={(summary) => void handleOpenRemote(summary)}
