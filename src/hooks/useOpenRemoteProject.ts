@@ -68,6 +68,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const loaded = await loadProject(result.local_path);
       if (!loaded.success) {
         clearLink();
+        // #270: the failed load left the PREVIOUS project on screen, and
+        // `clearLink` just dropped the gate back to "unresolved" (= read-only).
+        // Re-resolve it from the backend, which still has that project open, so
+        // a local project the user was editing does not stay read-only because an
+        // unrelated remote open failed. Unawaited: the caller's error path must
+        // not wait on it, and read-only is the safe state until it lands.
+        void useSpeleoStore.getState().refreshLinkStatus();
         return { status: 'load_failed' };
       }
       if (successToast) showToast(successToast.message, successToast.key);

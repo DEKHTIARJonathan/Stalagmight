@@ -99,6 +99,7 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
     // stale value here rots silently rather than failing.
     version: 3,
     loading_id: 1,
+    is_remote: false,
     project_header: {
       name: 'fixture',
       location: null,

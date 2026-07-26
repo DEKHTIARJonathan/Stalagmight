@@ -69,15 +69,24 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// Bumped from 1 → 2 to include `ProjectHeaderBinary.collab` so the
 /// frontend's load-time collaboration detection has the project's
 /// CollabState available without a separate round-trip.
-/// Bumped from 2 → 3 for #27: the per-shot flags byte now carries a 2-bit
-/// `ShotKind` in bits 0-1 instead of a single `is_reference` bit, so a
-/// stale frontend would read a Reference (discriminant 2) as "not virtual".
+/// Bumped from 2 → 3 for two independent layout changes that landed in the
+/// same unreleased version, so one bump covers both:
+/// - #27: the per-shot flags byte now carries a 2-bit `ShotKind` in bits 0-1
+///   instead of a single `is_reference` bit, so a stale frontend would read a
+///   Reference (discriminant 2) as "not virtual".
+/// - #270: the envelope includes `is_remote`, so the frontend's SpeleoDB
+///   read-only gate resolves synchronously with the load instead of defaulting
+///   open until `speleodb_link_status` answers.
 pub const BINARY_FORMAT_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
     pub version: u32,
     pub loading_id: u64,
+    /// Is this a SpeleoDB project? Mirrors `LoadProjectFullResult::is_remote`
+    /// (the same value the backend edit gate was set from), so the frontend can
+    /// settle its read-only gate before the project renders (#270).
+    pub is_remote: bool,
     pub project_header: ProjectHeaderBinary,
 
     pub shot_count: u32,
@@ -177,6 +186,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         stats,
         warnings,
         display_settings,
+        is_remote,
     } = result;
 
     // Compute the frozen shots while the whole project is still in scope (its
@@ -368,6 +378,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
     let result = LoadProjectFullBinaryResult {
         version: BINARY_FORMAT_VERSION,
         loading_id,
+        is_remote,
         project_header,
         shot_count: shot_count as u32,
         shots_floats: ByteBuf::from(shots_floats),
@@ -534,6 +545,7 @@ mod tests {
             stats: empty_stats(),
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
+            is_remote: false,
         };
 
         let bytes = encode(result).unwrap();
@@ -605,6 +617,7 @@ mod tests {
             stats: empty_stats(),
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
+            is_remote: false,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();
@@ -646,6 +659,7 @@ mod tests {
             stats: empty_stats(),
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
+            is_remote: false,
         };
         let bytes = encode(result).unwrap();
         let decoded: DecodedResult = rmp_serde::from_slice(&bytes).unwrap();

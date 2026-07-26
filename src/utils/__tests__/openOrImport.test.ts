@@ -51,6 +51,10 @@ beforeEach(() => {
     importDmp,
     parseGpx,
   } as never);
+  // The open project (where a test opens one) is a CONFIRMED-local project: the
+  // SpeleoDB read-only gate fails closed since #270, so the editable baseline has
+  // to say so rather than leave the gate unresolved.
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   // Each test starts with an armed entry-point source so we can assert clearing.
   setProjectActionSource('keyboard');
 });
@@ -107,7 +111,7 @@ describe('routeOpenedFile - read-only-map import guard (#243)', () => {
   // Reset the mode so a case that sets Plan/adjusted can't leak into later tests.
   afterEach(() => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
-    useSpeleoStore.setState({ link: null });
+    useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   });
 
   it('allows a DMP import in Survey + measured (the editable baseline)', async () => {

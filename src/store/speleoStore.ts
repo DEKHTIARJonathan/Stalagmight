@@ -25,12 +25,37 @@ import { useProjectStore } from './projectStore';
  * This store is UI-truth seeded from backend results (`speleodb_link_status`,
  * the hand-off verb results); it never contradicts the backend edit gate - the
  * `EDIT_DISABLED` mutation rejection (see `utils/editErrors.ts`) remains the hard
- * backstop. `link === null` means the open project is local (or none is open), so
- * the shell renders nothing.
+ * backstop. `link === null` means the shell renders nothing; whether that is
+ * because the project is local or because nothing is established yet is carried
+ * by `projectLinkKind`, and only the former is editable (#270).
  */
 
 /** A remote project is either opened read-only or actively edited (lock held). */
 export type SpeleoEditState = 'read-only' | 'editing';
+
+/**
+ * Whether the OPEN project is a SpeleoDB project, as a tri-state (#270).
+ *
+ * `link === null` used to carry two very different meanings - "confirmed local
+ * project" and "we have not established what this project is yet" - and the
+ * read-only selector read both as editable. That is a permission gate defaulting
+ * OPEN: between `setView('single')` and the first `speleodb_link_status` reply,
+ * a locked remote project rendered every edit affordance enabled, and the user
+ * could start an action the backend then silently refused.
+ *
+ * So the unresolved case gets its own value and is treated as read-only:
+ * - `unknown` - no project open, or one is open whose remoteness has not been
+ *   established. Pessimistic: read-only.
+ * - `local` - confirmed not a SpeleoDB project. Fully editable via this path.
+ * - `remote` - a SpeleoDB project; `link` carries the lock/edit state.
+ *
+ * It is resolved SYNCHRONOUSLY at project-open time (`syncProjectLink`, fed by
+ * the load result's `isRemote` - the very verdict that load set the BACKEND edit
+ * gate from, read off the same `EXISTS(speleo_link)` row `speleodb_link_status`
+ * reads), so a local project is never briefly read-only, a remote one is never
+ * briefly editable, and the two gates cannot disagree.
+ */
+export type ProjectLinkKind = 'unknown' | 'local' | 'remote';
 
 /** Which hand-off verb hit a divergence that needs the reconcile prompt (#198).
     `reverify` is the lazy 20-min lock re-verify (#202) catching a lost lock /
@@ -149,6 +174,12 @@ interface SpeleoStore {
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
+   * Is the open project a SpeleoDB project? Tri-state, so "not established yet"
+   * is distinguishable from "confirmed local" - see `ProjectLinkKind`. Read by
+   * `selectSpeleoReadOnly`, which treats `unknown` as read-only.
+   */
+  projectLinkKind: ProjectLinkKind;
+  /**
    * [#218] The open remote project's SpeleoDB project id (from the poll'd status),
    * so the in-project menu can open its revision history. `null` for a local project
    * / none open / before the first status seed.
@@ -259,6 +290,26 @@ interface SpeleoStore {
   logout: () => Promise<void>;
 
   // --- link/edit (action shell #204) ---
+  /**
+   * Resolve the open project's remoteness SYNCHRONOUSLY from the load result's
+   * `isRemote`, BEFORE the project view renders (#270).
+   *
+   * This is the render-order half of the fix: `refreshLinkStatus` is fired
+   * unawaited after `setView('single')`, so the view used to paint with
+   * `link === null` for a beat. Awaiting it instead is not an option -
+   * `speleodb_link_status` is only PART local: for a remote project it also does
+   * best-effort `get_project` + `get_revisions` HTTP round trips, so awaiting it
+   * would stall every remote open behind the network.
+   *
+   * - remote: seeds a pessimistic read-only link if none is seeded yet, so the
+   *   project is read-only from the first frame AND the status button still
+   *   renders its way out ("Start editing"), even if the status call never
+   *   answers. `refreshLinkStatus` refines it.
+   * - local: drops any link left over from a previously-open remote project
+   *   (same shape as `seedFromStatus` on a non-remote status), so a local
+   *   project is fully editable from the first frame with no read-only flash.
+   */
+  syncProjectLink: (isRemote: boolean) => void;
   /** Query `speleodb_link_status` and seed the link (best-effort; runs post-load). */
   refreshLinkStatus: () => Promise<void>;
   /** Seed the link from the backend status command (authoritative; runs post-load). */
@@ -306,6 +357,8 @@ interface SpeleoStore {
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
+  // Pessimistic until a project open resolves it: an unresolved gate is closed.
+  projectLinkKind: 'unknown',
   remoteProjectId: null,
   divergence: null,
   banner: null,
@@ -374,6 +427,48 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set({ pendingAuth: null, authError: null });
     get().clearSession();
   },
+
+  syncProjectLink: (isRemote) =>
+    set((state) => {
+      if (!isRemote) {
+        // Confirmed local: no link, and none of a previous remote project's
+        // shell state may survive into it.
+        return state.link === null && state.projectLinkKind === 'local'
+          ? { projectLinkKind: 'local' }
+          : {
+              projectLinkKind: 'local',
+              link: null,
+              remoteProjectId: null,
+              divergence: null,
+              banner: null,
+            };
+      }
+      // Remote. Keep an already-seeded link (the browser's `setLinkOnOpen`, or a
+      // reload that kept the previous status) - only fill the gap left by the
+      // paths that never seeded one (reopen-from-recents, fast-forward reload).
+      if (state.link) return { projectLinkKind: 'remote' };
+      return {
+        projectLinkKind: 'remote',
+        link: {
+          // Read-only until the status confirms we hold the write lock. The
+          // backend agrees: `project_load` re-derives its edit gate as
+          // `!is_remote`, so a remote project loads with mutations rejected.
+          editState: 'read-only',
+          // Unknown rather than assumed: nothing has been asked of the server
+          // yet. `null` permission reads as "unknown (offline)" in the status
+          // button, which is exactly the truth here.
+          permission: null,
+          lockHolder: null,
+          lockedByOther: false,
+          hasUnpushedEdits: false,
+          forceEditing: false,
+          forceEditAllowed: false,
+          remoteState: 'unknown',
+          noAccess: false,
+          serverError: null,
+        },
+      };
+    }),
 
   refreshLinkStatus: async () => {
     // Capture which project this poll/refresh is for BEFORE the await, and drop the
@@ -559,7 +654,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   seedFromStatus: (s) =>
     set((state) => {
-      if (!s.is_remote) return { link: null, remoteProjectId: null, divergence: null, banner: null };
+      // The status is authoritative on remoteness, so it also RESOLVES the
+      // tri-state (both ways) - a status reply is never "unknown".
+      if (!s.is_remote) {
+        return {
+          projectLinkKind: 'local' as const,
+          link: null,
+          remoteProjectId: null,
+          divergence: null,
+          banner: null,
+        };
+      }
       const editState = s.edit_enabled ? 'editing' : 'read-only';
       // #200: reflect the server's exclude_geojson as a persistent
       // rendering-disabled banner. It outranks the informational `no_anchor` notice
@@ -577,6 +682,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       }
       return {
         banner,
+        projectLinkKind: 'remote' as const,
         link: {
           editState,
           // The network fields degrade to null/unknown offline - keep the
@@ -608,6 +714,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   setLinkOnOpen: ({ permission }) =>
     set({
+      // We just pulled it from SpeleoDB, so it is remote by construction - and
+      // saying so keeps the gate closed even if the load never completes.
+      projectLinkKind: 'remote',
       // A freshly pulled project always opens read-only + up-to-date;
       // `seedFromStatus` refines lock holder / dirty bit / remote state on load.
       link: {
@@ -631,7 +740,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
   // would otherwise leave a freshly-opened project's status button disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
-  clearLink: () => set({ link: null, remoteProjectId: null, divergence: null, banner: null, busy: false }),
+  // Back to `unknown`, not `local`: this runs on close (nothing open) and to roll
+  // back a remote open whose `loadProject` failed - and neither outcome
+  // establishes that a local project is open, so neither may re-open the gate.
+  // The rollback caller re-resolves it (see `useOpenRemoteProject`), since there
+  // the PREVIOUS project is still displayed and must not stay read-only.
+  clearLink: () =>
+    set({
+      link: null,
+      projectLinkKind: 'unknown',
+      remoteProjectId: null,
+      divergence: null,
+      banner: null,
+      busy: false,
+    }),
 
   applyStartEditing: (r) =>
     set((state) => {
@@ -820,7 +942,21 @@ export const selectPushFailure = (s: SpeleoStore): PushFailedBanner | null =>
  * A remote SpeleoDB project opened without the write lock is read-only. Shared so
  * the toolbar, map read-only badge, and context menu all derive "read-only"
  * identically (the backend edit gate is the real enforcement; this is the visual
- * parity). Local projects (`link === null`) are never read-only via this path.
+ * parity).
+ *
+ * Fails CLOSED (#270). Only two things open this gate: a `local` project, or a
+ * link that says we hold the write lock. Everything else - including the
+ * `unknown` window before a project's remoteness is established - reads as
+ * read-only, because a permission gate must not default open. The old form was
+ * `s.link ? s.link.editState !== 'editing' : false`, which handed the editable
+ * answer to every state where `link` had simply not been seeded yet, and a
+ * reopen-from-recents of a locked remote project spent the whole
+ * `speleodb_link_status` round trip in exactly that state.
+ *
+ * This is strictly MORE read-only than the old form, never less: whenever `link`
+ * is set the verdict is unchanged, so no existing read-only path is weakened.
  */
-export const selectSpeleoReadOnly = (s: SpeleoStore): boolean =>
-  s.link ? s.link.editState !== 'editing' : false;
+export const selectSpeleoReadOnly = (s: SpeleoStore): boolean => {
+  if (s.link) return s.link.editState !== 'editing';
+  return s.projectLinkKind !== 'local';
+};

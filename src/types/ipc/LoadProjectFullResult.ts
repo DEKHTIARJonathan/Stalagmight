@@ -5,4 +5,4 @@ import type { ProjectStats } from "./ProjectStats";
 import type { ProjectWarning } from "./ProjectWarning";
 import type { Station } from "./Station";
 
-export interface LoadProjectFullResult { loadingId: bigint, project: Project, stations: Array<Station>, stats: ProjectStats, warnings: Array<ProjectWarning>, displaySettings: DisplaySettings, }
+export interface LoadProjectFullResult { loadingId: bigint, project: Project, stations: Array<Station>, stats: ProjectStats, warnings: Array<ProjectWarning>, displaySettings: DisplaySettings, isRemote: boolean, }

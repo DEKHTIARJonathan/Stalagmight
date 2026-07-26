@@ -49,7 +49,8 @@ beforeEach(() => {
     appMode: 'survey',
     geometryMode: 'measured',
   });
-  useSpeleoStore.setState({ link: null });
+  // Confirmed-local project - the editable baseline (#270 fail-closed gate).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
 });
 
 describe('useKeyboardShortcuts Delete guard (#275)', () => {

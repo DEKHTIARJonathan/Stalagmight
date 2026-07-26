@@ -20139,6 +20139,7 @@ fn profile_stalx_load() {
         warnings,
         display_settings,
         loading_id: 0,
+        is_remote: false,
     };
     let bin = crate::core::load_binary::encode(result).expect("encode");
     let t8 = Instant::now();

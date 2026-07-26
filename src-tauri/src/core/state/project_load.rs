@@ -752,6 +752,9 @@ impl AppState {
             stats,
             warnings,
             display_settings,
+            // Same verdict the edit gate above was derived from, so the frontend
+            // gate and the backend gate can never disagree about this load (#270).
+            is_remote,
         })
     }
 }

@@ -750,6 +750,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
 
+        // #270: resolve the SpeleoDB edit gate BEFORE `setView('single')` paints
+        // the project. `refreshLinkStatus` below is fired unawaited, so until it
+        // answers the shell used to have no idea what this project was - and the
+        // read-only selector read "no idea" as editable, showing a locked remote
+        // project with every edit affordance on. `result.isRemote` is the backend's
+        // own `EXISTS(speleo_link)` verdict for THIS load - the very value it set
+        // its own edit gate from - so the two gates cannot disagree, and it costs
+        // no round trip: a remote project is read-only from the first frame and a
+        // local one is editable from the first frame (no read-only flash).
+        useSpeleoStore.getState().syncProjectLink(result.isRemote);
+
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
         useUIStore.getState().triggerFitToBounds();
@@ -777,12 +788,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         await get().refreshUndoState();
         recordPerfTiming('loadProject total', performance.now() - tStart);
 
-        // #204: seed the SpeleoDB action-shell edit-state from the freshly-loaded
-        // project (is_remote / edit gate / permission / lock holder). Best-effort
-        // and non-blocking - a local project resolves to `link = null` (shell
-        // hidden); a remote one seeds read-only/editing. Covers reopen-from-recents
-        // (where the browser's optimistic setLinkOnOpen never ran) and the
-        // fast-forward reload path (which routes back through loadProject).
+        // #204: refine the SpeleoDB action-shell edit-state (permission / lock
+        // holder / remote state) from the backend. Best-effort and non-blocking -
+        // it is only a REFINEMENT now: `syncProjectLink` above already settled the
+        // gate itself, so a slow or failing status call can no longer leave a
+        // remote project looking editable. Deliberately not awaited: for a remote
+        // project this command also makes best-effort `get_project` /
+        // `get_revisions` HTTP calls, and no open should wait on the network.
         void useSpeleoStore.getState().refreshLinkStatus();
         // Also refresh who we are, so the action button can tell our own held lock
         // from someone else's (otherwise a reopen-from-recents has no session and
@@ -995,6 +1007,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integritySaveBlocked: false,
         integrityDialogOpen: false,
       });
+
+      // #270: a freshly created project is local by construction - it has no
+      // `speleo_link` row until a later Publish - and saying so before the view
+      // renders is what keeps the pessimistic default from leaving it read-only:
+      // nothing on this path ever calls `refreshLinkStatus`.
+      useSpeleoStore.getState().syncProjectLink(false);
 
       // Apply display settings from backend (defaults for new project)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);
