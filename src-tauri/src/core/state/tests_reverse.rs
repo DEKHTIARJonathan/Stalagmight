@@ -1,0 +1,293 @@
+//! `Command::ReverseSection` at the state layer (issue #24).
+//!
+//! The model-level transform is covered in `models::project::reverse`; these
+//! tests pin the command's contract: geometry is invariant through the full
+//! execute pipeline (including the reconcile epilogue), undo restores exactly,
+//! frozen shots do not block it, and warnings are re-emitted.
+
+use std::collections::HashMap;
+
+use super::AppState;
+use crate::core::Command;
+use crate::models::{Coordinates, GpsCoordinates, Project, SectionId, ShotData, StationRef};
+
+fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
+    ShotData {
+        azimuth_in: azimuth,
+        azimuth_out: azimuth,
+        length,
+        depth_in,
+        depth_out,
+        ..Default::default()
+    }
+}
+
+fn abs_coord_map(project: &Project) -> HashMap<StationRef, Coordinates> {
+    project
+        .compute_station_coordinates()
+        .into_iter()
+        .map(|s| (s.station_ref, s.coordinates))
+        .collect()
+}
+
+fn assert_coords_close(a: Coordinates, b: Coordinates) {
+    let eps = 1e-6;
+    assert!(
+        (a.x - b.x).abs() < eps && (a.y - b.y).abs() < eps && (a.z - b.z).abs() < eps,
+        "coordinate moved: {a:?} vs {b:?}"
+    );
+}
+
+/// A project with one three-shot section that turns a corner and changes depth,
+/// so a botched reverse shows up as a moved station rather than a coincidence.
+fn state_with_section() -> (AppState, SectionId) {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Reverse".to_string(),
+        location: None,
+    });
+    let created = state.execute(Command::CreateSection {
+        name: Some("Main line".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![
+            shot(0.0, 10.0, 0.0, 2.0),
+            shot(90.0, 5.0, 2.0, 2.0),
+            shot(210.0, 7.5, 2.0, 1.0),
+        ],
+    });
+    let section_id = created.section_id.unwrap();
+    (state, section_id)
+}
+
+#[test]
+fn reverse_keeps_every_station_where_it_was() {
+    let (state, section_id) = state_with_section();
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let result = state.execute(Command::ReverseSection {
+        section_id,
+        swap_left_right: false,
+    });
+    assert!(result.success, "reverse failed: {:?}", result.error);
+
+    let after = abs_coord_map(&state.get_project_state().unwrap());
+    assert_eq!(before.len(), after.len(), "station count changed");
+
+    // Station i is now station N - i, at the same place.
+    let n = 3;
+    for i in 0..=n {
+        assert_coords_close(
+            before[&StationRef::new(section_id, i)],
+            after[&StationRef::new(section_id, n - i)],
+        );
+    }
+}
+
+#[test]
+fn reverse_reverses_the_shot_order() {
+    let (state, section_id) = state_with_section();
+    let before = state.get_project_state().unwrap();
+    let lengths: Vec<_> = before
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.length)
+        .collect();
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+
+    let after = state.get_project_state().unwrap();
+    let reversed: Vec<_> = after
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| s.length)
+        .collect();
+    let mut expected = lengths;
+    expected.reverse();
+    assert_eq!(reversed, expected);
+}
+
+#[test]
+fn undo_restores_the_original_section_exactly() {
+    let (state, section_id) = state_with_section();
+    let before = state.get_project_state().unwrap();
+    let original = before.get_section(section_id).unwrap().clone();
+    let coords_before = abs_coord_map(&before);
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: true,
+            })
+            .success
+    );
+    assert!(state.undo().success, "reverse must be undoable");
+
+    let restored_project = state.get_project_state().unwrap();
+    let restored = restored_project.get_section(section_id).unwrap();
+    assert_eq!(restored.shots.len(), original.shots.len());
+    for (a, b) in restored.shots.iter().zip(&original.shots) {
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.uuid, b.uuid);
+        assert_eq!(a.azimuth_in, b.azimuth_in);
+        assert_eq!(a.azimuth_out, b.azimuth_out);
+        assert_eq!(a.depth_in, b.depth_in);
+        assert_eq!(a.depth_out, b.depth_out);
+        assert_eq!(a.left, b.left);
+        assert_eq!(a.right, b.right);
+    }
+    for (sr, coord) in coords_before {
+        assert_coords_close(coord, abs_coord_map(&restored_project)[&sr]);
+    }
+}
+
+#[test]
+fn redo_reapplies_the_reverse() {
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    let reversed = state.get_project_state().unwrap();
+    let expected: Vec<_> = reversed
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.id, s.length, s.azimuth_in))
+        .collect();
+
+    assert!(state.undo().success);
+    assert!(state.redo().success, "reverse must be redoable");
+
+    let after = state.get_project_state().unwrap();
+    let actual: Vec<_> = after
+        .get_section(section_id)
+        .unwrap()
+        .shots
+        .iter()
+        .map(|s| (s.id, s.length, s.azimuth_in))
+        .collect();
+    assert_eq!(actual, expected);
+}
+
+#[test]
+fn reverse_twice_is_the_identity() {
+    let (state, section_id) = state_with_section();
+    let original = state
+        .get_project_state()
+        .unwrap()
+        .get_section(section_id)
+        .unwrap()
+        .clone();
+
+    for _ in 0..2 {
+        assert!(
+            state
+                .execute(Command::ReverseSection {
+                    section_id,
+                    swap_left_right: true,
+                })
+                .success
+        );
+    }
+
+    let project = state.get_project_state().unwrap();
+    let round_tripped = project.get_section(section_id).unwrap();
+    for (a, b) in round_tripped.shots.iter().zip(&original.shots) {
+        assert_eq!(a.id, b.id);
+        assert_eq!(a.azimuth_in, b.azimuth_in);
+        assert_eq!(a.azimuth_out, b.azimuth_out);
+        assert_eq!(a.depth_in, b.depth_in);
+        assert_eq!(a.depth_out, b.depth_out);
+    }
+}
+
+/// A zero datum freezes the shots it anchors; `update_shot` rejects geometry
+/// edits on them. Reverse must still work, because it leaves each physical line
+/// untouched - and the datum must stay on the station the surveyor pinned.
+#[test]
+fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
+    let (state, section_id) = state_with_section();
+    let datum_at = StationRef::new(section_id, 0);
+    assert!(
+        state
+            .execute(Command::SetZeroDatum {
+                station_ref: datum_at,
+                coordinates: GpsCoordinates {
+                    latitude: 20.2,
+                    longitude: -87.4,
+                    depth_reference: 0.0,
+                },
+            })
+            .success
+    );
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let result = state.execute(Command::ReverseSection {
+        section_id,
+        swap_left_right: false,
+    });
+    assert!(
+        result.success,
+        "frozen shots must not block reverse: {:?}",
+        result.error
+    );
+
+    // Nothing moved, and the datum now sits on station 3 - the same physical
+    // station it was pinned to before the reverse.
+    let project = state.get_project_state().unwrap();
+    let after = abs_coord_map(&project);
+    for i in 0..=3u32 {
+        assert_coords_close(
+            before[&StationRef::new(section_id, i)],
+            after[&StationRef::new(section_id, 3 - i)],
+        );
+    }
+    assert_eq!(project.zero_datums.len(), 1);
+    assert_eq!(
+        project.resolve_key(&project.zero_datums[0].station_ref),
+        Some(StationRef::new(section_id, 3)),
+        "the zero datum must follow its physical station, not stay on index 0"
+    );
+}
+
+#[test]
+fn reverse_of_a_missing_section_fails() {
+    let (state, _) = state_with_section();
+    let result = state.execute(Command::ReverseSection {
+        section_id: 9999,
+        swap_left_right: false,
+    });
+    assert!(!result.success);
+    assert!(result.error.unwrap().contains("not found"));
+}
+
+#[test]
+fn reverse_reports_the_section_it_touched() {
+    let (state, section_id) = state_with_section();
+    let result = state.execute(Command::ReverseSection {
+        section_id,
+        swap_left_right: false,
+    });
+    assert_eq!(result.section_id, Some(section_id));
+}

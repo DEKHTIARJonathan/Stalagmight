@@ -43,6 +43,14 @@ mod warnings;
 )]
 mod tests;
 #[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    clippy::indexing_slicing,
+    clippy::float_cmp,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod tests_reverse;
+#[cfg(test)]
 mod tests_support;
 
 pub use app_state::AppState;

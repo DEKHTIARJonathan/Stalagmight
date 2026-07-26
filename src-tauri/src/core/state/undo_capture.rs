@@ -517,12 +517,13 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation:
+            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation:
             // fill in the "after" snapshot now that the mutation (and any cascade
             // re-anchoring, orphan-closure conversion, and offset reconcile triggered
             // in execute()) is done.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
+            | Command::ReverseSection { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }
