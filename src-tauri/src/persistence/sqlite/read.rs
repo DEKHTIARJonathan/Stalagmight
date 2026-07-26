@@ -309,6 +309,15 @@ impl Database {
             let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
             for section_row in section_rows {
                 let (id, name, surveyor, date_str, color, direction_str, quality_raw) = section_row;
+                // Section ids come straight off disk. Past MAX_SECTION_ID the
+                // shot-id band `id * FEATURE_ID_STRIDE` wraps and two sections
+                // collide, so refuse the file instead of loading corrupt ids.
+                if id > crate::models::MAX_SECTION_ID {
+                    return Err(anyhow::anyhow!(
+                        "Section id {id} exceeds the maximum supported id ({})",
+                        crate::models::MAX_SECTION_ID
+                    ));
+                }
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
                     .and_then(|s| s.parse::<SurveyDirection>().ok())
@@ -331,7 +340,7 @@ impl Database {
 
                 let section = Section::new(id, section_data);
                 section_by_id.insert(id, sections.len());
-                next_section_id = next_section_id.max(id + 1);
+                next_section_id = next_section_id.max(id.saturating_add(1));
                 sections.push(section);
             }
 

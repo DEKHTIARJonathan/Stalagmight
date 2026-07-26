@@ -10461,6 +10461,98 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
+fn test_move_segment_blocked_by_datum_reachable_only_over_a_closure() {
+    // The datum guard must cover the set move_segment actually offsets. That set
+    // follows merges AND aligned closures, but `rigid_group_has_datum` only walks
+    // merges, so a datum reachable over a closure-only edge used to pass the guard
+    // and then get moved by the offset loop - silently relocating a GPS anchor.
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "ClosureDatum".to_string(),
+        location: None,
+    });
+
+    let sid_a = state
+        .execute(Command::CreateSection {
+            name: Some("A".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        })
+        .section_id
+        .unwrap();
+    let sid_b = state
+        .execute(Command::CreateSection {
+            name: Some("B".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#00ff00".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(3.0)],
+        })
+        .section_id
+        .unwrap();
+
+    // A <-> B joined ONLY by an aligned closure: no merge edge, so
+    // get_merged_section_ids(B) is {B} while get_rigid_connected_section_ids(B)
+    // is {A, B}. That divergence is the hole.
+    {
+        let mut proj_guard = state.project.lock().unwrap();
+        let project = proj_guard.as_mut().unwrap();
+        let closure_id = project.next_closure_id;
+        project.loop_closures.push(LoopClosure {
+            id: closure_id,
+            station_a: StationRef::new(sid_a, 1).into(),
+            station_b: StationRef::new(sid_b, 0).into(),
+            path_length: 10.0,
+            misclosure_distance: 0.1,
+            error_percentage: 1.0,
+            horizontal_misclosure: 0.08,
+            vertical_misclosure: 0.06,
+            strategy: ClosureStrategy::default(),
+            is_aligned: true,
+        });
+        project.next_closure_id += 1;
+    }
+
+    let datum = state.execute(Command::SetZeroDatum {
+        station_ref: StationRef::new(sid_a, 0),
+        coordinates: GpsCoordinates::new(24.55, -81.78, 0.0).unwrap(),
+    });
+    assert!(datum.success, "datum setup must succeed");
+
+    let before = state.get_project_state().unwrap();
+    let a_before = before
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+
+    // Dragging B would drag A - the datum holder - along with it.
+    let result = state.execute(Command::MoveSegment {
+        section_id: sid_b,
+        offset: Coordinates::new(5.0, 15.0, 0.0),
+    });
+    assert!(
+        !result.success,
+        "moving a segment whose closure-connected group holds a datum must be refused"
+    );
+
+    let after = state.get_project_state().unwrap();
+    let a_after = after
+        .section_offsets
+        .get(&sid_a)
+        .copied()
+        .unwrap_or((0.0, 0.0));
+    assert!(
+        (a_after.0 - a_before.0).abs() < 1e-9 && (a_after.1 - a_before.1).abs() < 1e-9,
+        "the datum-bearing section must not have moved"
+    );
+}
+
+#[test]
 fn test_move_segment_isolated() {
     // An unconnected section should NOT be moved when moving a segment
     let state = AppState::new().unwrap();

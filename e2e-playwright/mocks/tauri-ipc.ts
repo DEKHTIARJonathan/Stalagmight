@@ -155,6 +155,14 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       } | null = null;
       let projectPath: string | null = null;
       let sectionCounter = 0;
+      // Shot ids are section-encoded, exactly as the backend allocates them:
+      // `Section::new` seeds `next_shot_id = section.id * FEATURE_ID_STRIDE` and
+      // increments from there (src-tauri/src/models/section.rs). Keeping the mock
+      // on flat 1,2,3 ids made `Math.floor(fid / STRIDE)` accidentally correct and
+      // hid a whole class of id-decoding bugs from Playwright (#301).
+      const MOCK_FEATURE_ID_STRIDE = 100000;
+      const mockShotId = (sectionId: number, seq: number): number =>
+        sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
       // Cache mock state - tracks cache operations for verification
       // Use explicit types so providers can be empty and keys can be deleted
@@ -610,8 +618,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: now.split('T')[0],
                 color: '#4ECDC4',
                 shots: [
-                  { id: 1, azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_reference: false },
-                  { id: 2, azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_reference: false },
+                  { id: mockShotId(sectionCounter, 0), azimuth_in: 45, azimuth_out: 50, length: 10, depth_in: 0, depth_out: -2, is_reference: false },
+                  { id: mockShotId(sectionCounter, 1), azimuth_in: 90, azimuth_out: 95, length: 15, depth_in: -2, depth_out: -5, is_reference: false },
                 ],
               },
             ];
@@ -1605,7 +1613,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             sectionCounter++;
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
-              id: index + 1,
+              id: mockShotId(sectionCounter, index),
               azimuth_in: (shot.azimuth_in as number) ?? 0,
               azimuth_out: (shot.azimuth_out as number) ?? 0,
               length: (shot.length as number) ?? 0,
@@ -1658,7 +1666,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               sectionCounter++;
               const rawShots = Array.isArray(sectionData.shots) ? (sectionData.shots as Array<Record<string, unknown>>) : [];
               const shots = rawShots.map((shot, index) => ({
-                id: index + 1,
+                id: mockShotId(sectionCounter, index),
                 azimuth_in: (shot.azimuth_in as number) ?? 0,
                 azimuth_out: (shot.azimuth_out as number) ?? 0,
                 length: (shot.length as number) ?? 0,
@@ -3565,7 +3573,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const shotData = (args?.shot ?? {}) as Record<string, unknown>;
             const afterShotId = (args?.afterShotId ?? args?.after_shot_id ?? null) as number | null;
             const beforeShotId = (args?.beforeShotId ?? args?.before_shot_id ?? null) as number | null;
-            const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+            const nextId =
+              section.shots.reduce(
+                (max, s) => Math.max(max, s.id),
+                mockShotId(section.id as number, 0) - 1,
+              ) + 1;
             const newShot = {
               id: nextId,
               azimuth_in: (shotData.azimuth_in as number) ?? 0,
@@ -3645,7 +3657,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const depthIn = (target.depth_in as number) ?? 0;
             const depthOut = (target.depth_out as number) ?? 0;
             const midDepth = depthIn + (distance / length) * (depthOut - depthIn);
-            const nextId = section.shots.reduce((max, s) => Math.max(max, s.id), 0) + 1;
+            const nextId =
+              section.shots.reduce(
+                (max, s) => Math.max(max, s.id),
+                mockShotId(section.id as number, 0) - 1,
+              ) + 1;
             const headShot = {
               ...target,
               id: nextId,

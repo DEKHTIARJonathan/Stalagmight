@@ -231,7 +231,10 @@ impl Section {
                 default_section_quality()
             },
             shots: Vec::new(),
-            next_shot_id: id * FEATURE_ID_STRIDE,
+            // Saturating so an out-of-range id cannot panic here (debug) or wrap
+            // into another section's shot-id band (release). Callers are expected
+            // to reject `id > MAX_SECTION_ID` first; this is the backstop.
+            next_shot_id: id.saturating_mul(FEATURE_ID_STRIDE),
         };
 
         for shot_data in data.shots {

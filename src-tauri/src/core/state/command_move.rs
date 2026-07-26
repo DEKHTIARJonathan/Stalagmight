@@ -39,11 +39,19 @@ impl AppState {
                 .filter(|id| existing.contains(id))
                 .collect();
 
-            if project.rigid_group_has_datum(section_id)
-                && (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+            // Guard the set actually being offset, not just this section's merge
+            // group. `connected` follows merges AND aligned closures, but
+            // `rigid_group_has_datum` only walks merges (via `get_merged_section_ids`),
+            // so a datum reachable over a closure-only edge - e.g. after the merge
+            // path is severed by an unmerge or a section delete - passed the old
+            // check and the loop below then moved the datum-bearing section.
+            if (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
+                && connected
+                    .iter()
+                    .any(|sid| project.rigid_group_has_datum(*sid))
             {
                 return CommandResult::failure(
-                    "Cannot move a segment whose merge group holds a zero datum".to_string(),
+                    "Cannot move a segment whose rigid group holds a zero datum".to_string(),
                 );
             }
 

@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
-use crate::models::{SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE};
+use crate::models::{SectionData, SectionId, SectionUpdates, FEATURE_ID_STRIDE, MAX_SECTION_ID};
 
 impl AppState {
     pub(super) fn create_section(&self, data: SectionData) -> CommandResult {
@@ -16,6 +16,16 @@ impl AppState {
         if data.shots.len() > max_shots {
             return CommandResult::failure(format!(
                 "Section exceeds maximum shots per section (limit = {max_shots})"
+            ));
+        }
+
+        // The per-section shot cap above has a per-project twin: past
+        // MAX_SECTION_ID the next section's shot-id band would wrap into an
+        // existing one (see id_stride.rs).
+        if project.next_section_id > MAX_SECTION_ID {
+            return CommandResult::failure(format!(
+                "Project exceeds maximum sections (limit = {})",
+                MAX_SECTION_ID as u64 + 1
             ));
         }
 
