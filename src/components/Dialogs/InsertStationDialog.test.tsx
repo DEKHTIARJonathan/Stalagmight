@@ -73,6 +73,94 @@ describe('InsertStationDialog (#59)', () => {
     expect(splitShotAtDistance).not.toHaveBeenCalled();
   });
 
+  describe('paired metres / percent inputs', () => {
+    it('typing metres updates the percent field', () => {
+      render(<InsertStationDialog />);
+      fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
+      // 4 m of a 10 m shot.
+      expect(screen.getByTestId('insert-station-percent')).toHaveValue(40);
+    });
+
+    it('typing percent updates the metres field', () => {
+      render(<InsertStationDialog />);
+      fireEvent.change(screen.getByTestId('insert-station-percent'), { target: { value: '25' } });
+      expect(screen.getByTestId('insert-station-distance')).toHaveValue(2.5);
+    });
+
+    it('splits at the metres the percent resolved to', async () => {
+      splitShotAtDistance.mockResolvedValue({ success: true } as CommandResult);
+      render(<InsertStationDialog />);
+      fireEvent.change(screen.getByTestId('insert-station-percent'), { target: { value: '30' } });
+      fireEvent.click(screen.getByTestId('insert-station-confirm'));
+      await waitFor(() => {
+        // What the metres field shows is exactly what gets split - no hidden
+        // extra precision from the percentage.
+        expect(splitShotAtDistance).toHaveBeenCalledWith(SECTION_ID, SHOT_ID, 3);
+      });
+    });
+
+    it('clearing one field clears the other', () => {
+      render(<InsertStationDialog />);
+      fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '4' } });
+      fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '' } });
+      expect(screen.getByTestId('insert-station-percent')).toHaveValue(null);
+      expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();
+    });
+
+    it('does not fight the user by rewriting the field they are typing in', () => {
+      render(<InsertStationDialog />);
+      // 1/3 of 10 m is 3.3333...; the metres field must show the user's own
+      // input untouched, with only the partner field rounded.
+      fireEvent.change(screen.getByTestId('insert-station-distance'), { target: { value: '3.333' } });
+      expect(screen.getByTestId('insert-station-distance')).toHaveValue(3.333);
+      expect(screen.getByTestId('insert-station-percent')).toHaveValue(33.33);
+    });
+  });
+
+  describe('prefill from a map right-click', () => {
+    it('prefills both fields at the clicked spot', () => {
+      // alongT is the fraction along the shot the pointer landed on.
+      useUIStore.setState({
+        dialogData: {
+          sectionId: SECTION_ID,
+          shotId: SHOT_ID,
+          shotLength: SHOT_LENGTH,
+          sectionName: 'Main Passage',
+          alongT: 0.35,
+        },
+      });
+      render(<InsertStationDialog />);
+      expect(screen.getByTestId('insert-station-distance')).toHaveValue(3.5);
+      expect(screen.getByTestId('insert-station-percent')).toHaveValue(35);
+      // Prefilled and immediately usable.
+      expect(screen.getByTestId('insert-station-confirm')).toBeEnabled();
+    });
+
+    it('splits exactly at the clicked spot without further input', async () => {
+      splitShotAtDistance.mockResolvedValue({ success: true } as CommandResult);
+      useUIStore.setState({
+        dialogData: {
+          sectionId: SECTION_ID,
+          shotId: SHOT_ID,
+          shotLength: SHOT_LENGTH,
+          sectionName: 'Main Passage',
+          alongT: 0.6,
+        },
+      });
+      render(<InsertStationDialog />);
+      fireEvent.click(screen.getByTestId('insert-station-confirm'));
+      await waitFor(() => {
+        expect(splitShotAtDistance).toHaveBeenCalledWith(SECTION_ID, SHOT_ID, 6);
+      });
+    });
+
+    it('opens blank when there is no click position (data-table menu)', () => {
+      render(<InsertStationDialog />);
+      expect((screen.getByTestId('insert-station-distance') as HTMLInputElement).value).toBe('');
+      expect((screen.getByTestId('insert-station-percent') as HTMLInputElement).value).toBe('');
+    });
+  });
+
   it('disables confirm when the distance field is empty', () => {
     render(<InsertStationDialog />);
     expect(screen.getByTestId('insert-station-confirm')).toBeDisabled();

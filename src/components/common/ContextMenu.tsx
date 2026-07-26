@@ -57,7 +57,11 @@ export default function ContextMenu() {
 
   const target = dialogData.target as
     | { type: 'station'; ref: StationRef }
-    | { type: 'shot'; sectionId: SectionId; shotId: ShotId }
+    // `alongT` (0..1 from the from-station) is present only for a map
+    // right-click: it records where on the shot the pointer actually landed so
+    // Insert Station can pre-place the station there. Absent for the data-table
+    // menu, which has no click position on the line.
+    | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT?: number }
     | { type: 'section'; sectionId: SectionId }
     | { type: 'datatable-shot'; sectionId: SectionId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; sectionName: string }
     | null;
@@ -306,6 +310,9 @@ export default function ContextMenu() {
               shotId: target.shotId,
               shotLength: sourceShot?.length ?? 0,
               sectionName: section?.name ?? `Section ${target.sectionId}`,
+              // Only set from a map right-click; the dialog prefills the exact
+              // clicked spot when present and starts blank otherwise.
+              alongT: target.type === 'shot' ? target.alongT : undefined,
             });
           },
           disabled: !sourceShot || !canSplitShot(sourceShot.length),

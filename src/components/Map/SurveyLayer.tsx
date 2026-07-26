@@ -94,8 +94,13 @@ export interface SurveyLayerCallbacks {
   onStationHover?: (ref: StationRef | null) => void;
   onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
   onFeatureHover?: ((isHovering: boolean) => void) | undefined;
+  /** `alongT` is where on the shot the click landed, 0..1 from the from-station.
+   *  A shot is a straight 3D segment, so the fraction along its planimetric
+   *  projection equals the fraction along its slope length: callers multiply
+   *  straight through by `shot.length`. */
   onContextMenu?: (
-    target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
+    target: { type: 'station'; ref: StationRef }
+      | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT: number } | null,
     event: MapMouseEvent
   ) => void;
   /** Called when user clicks near a hidden station (for toast feedback) */
@@ -1184,10 +1189,8 @@ export default class SurveyLayer {
           candidateSections: shotSections.size,
         });
       }
-      this.callbacks.onContextMenu?.(
-        { type: 'shot', sectionId: nearestShot.sectionId, shotId: nearestShot.shotId },
-        e
-      );
+      const { sectionId, shotId, t: alongT } = nearestShot;
+      this.callbacks.onContextMenu?.({ type: 'shot', sectionId, shotId, alongT }, e);
       return;
     }
 
