@@ -6,9 +6,9 @@
  * ToastStack, which is where hover/focus pausing is observable - so everything
  * here is synchronous and time-independent.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 
-import { useUIStore, MAX_VISIBLE_TOASTS } from '../uiStore';
+import { useUIStore, MAX_VISIBLE_TOASTS, TOAST_DEDUP_WINDOW_MS } from '../uiStore';
 import { MIN_VISIBLE_TOASTS } from '../../utils/toastCapacity';
 
 const messages = () => useUIStore.getState().toasts.map((t) => t.message);
@@ -190,6 +190,77 @@ describe('toast stack - same-key de-duplication', () => {
     showToast('same words', 'b');
 
     expect(useUIStore.getState().toasts).toHaveLength(2);
+  });
+});
+
+describe('toast stack - the de-duplication WINDOW', () => {
+  /**
+   * Found by using the app: the user toggled the edit lock repeatedly and only
+   * ever saw two toasts. Matching a key for the toast's whole visible life made
+   * each key a single slot, so lock/unlock/lock/unlock had every new toast steal
+   * the previous one of its kind. Those are four distinct things the user did.
+   */
+  it('stacks a repeat that arrives after the window instead of stealing the old one', () => {
+    vi.useFakeTimers();
+    try {
+      const { showToast } = useUIStore.getState();
+      showToast('Editing', 'speleodb-editing', 'success');
+      vi.advanceTimersByTime(TOAST_DEDUP_WINDOW_MS + 1);
+      showToast('Editing', 'speleodb-editing', 'success');
+
+      expect(live()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('reproduces the lock/unlock/lock/unlock sequence as four toasts', () => {
+    vi.useFakeTimers();
+    try {
+      const { showToast } = useUIStore.getState();
+      for (let i = 0; i < 2; i += 1) {
+        showToast('Editing', 'speleodb-editing', 'success');
+        vi.advanceTimersByTime(TOAST_DEDUP_WINDOW_MS + 1);
+        showToast('Lock released', 'speleodb-released', 'success');
+        vi.advanceTimersByTime(TOAST_DEDUP_WINDOW_MS + 1);
+      }
+
+      expect(live()).toHaveLength(4);
+      expect(messages()).toEqual(['Editing', 'Lock released', 'Editing', 'Lock released']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still collapses a genuine burst inside the window', () => {
+    vi.useFakeTimers();
+    try {
+      const { showToast } = useUIStore.getState();
+      showToast('Stations are hidden', 'stations-hidden', 'warning');
+      vi.advanceTimersByTime(50);
+      showToast('Stations are hidden', 'stations-hidden', 'warning');
+      vi.advanceTimersByTime(50);
+      showToast('Stations are hidden', 'stations-hidden', 'warning');
+
+      expect(live()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('keeps a sustained burst collapsed, because each refresh restarts the window', () => {
+    vi.useFakeTimers();
+    try {
+      const { showToast } = useUIStore.getState();
+      for (let i = 0; i < 20; i += 1) {
+        showToast('spam', 'flood', 'warning');
+        vi.advanceTimersByTime(TOAST_DEDUP_WINDOW_MS - 100);
+      }
+
+      expect(live()).toHaveLength(1);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

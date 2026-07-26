@@ -300,6 +300,20 @@ function capToasts(next: ToastItem[], capacity: number): ToastItem[] {
   return marked.slice(-MAX_TOTAL_TOASTS);
 }
 
+/**
+ * How long after a toast appears a repeat of its key still counts as the SAME
+ * event rather than a new one.
+ *
+ * Deliberately far shorter than a toast's visible life. Matching for the whole
+ * lifetime turned each key into a single slot, so repeating an action - lock,
+ * unlock, lock, unlock - had every new toast steal the previous one of its kind
+ * and the stack could never grow past one per key. Inside a second a repeat is a
+ * burst (a double-click, a loop firing the same warning) where collapsing is
+ * both wanted and imperceptible; past that it is something the user did again
+ * and it earns its own line.
+ */
+export const TOAST_DEDUP_WINDOW_MS = 1000;
+
 /** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
 let nextToastId = 1;
 
@@ -1732,11 +1746,21 @@ export const useUIStore = create<UIStore>((set) => ({
   showToast: (message, key, kind = 'info') => {
     const prev = useUIStore.getState().toasts;
 
-    // Same key, still on screen: refresh in place. This replaces the old 5s
-    // per-key throttle - which swallowed the repeat outright, so a *changed*
-    // message under a reused key was lost - with the stacked-world equivalent:
-    // one toast per key, showing the latest wording, with a fresh timer.
-    const existing = prev.find((t) => t.key === key && !t.leaving);
+    // Same key fired again WITHIN THE BURST WINDOW: refresh in place rather than
+    // stacking a duplicate. This replaces the old 5s per-key throttle - which
+    // swallowed the repeat outright, so a *changed* message under a reused key
+    // was lost.
+    //
+    // The window matters. Matching for the toast's whole visible life made a key
+    // a single slot, so a user repeating an action (lock, unlock, lock, unlock)
+    // saw each new toast STEAL the earlier one of its kind and the stack could
+    // never grow past one per key. Those are distinct things the user did and
+    // each deserves its own line. A repeat inside a second is a burst - a
+    // double-click, or a loop firing the same warning - where collapsing is both
+    // wanted and imperceptible, since the two would overlap anyway.
+    const existing = prev.find(
+      (t) => t.key === key && !t.leaving && Date.now() - t.timestamp < TOAST_DEDUP_WINDOW_MS,
+    );
     if (existing) {
       const refreshed: ToastItem = {
         ...existing,
