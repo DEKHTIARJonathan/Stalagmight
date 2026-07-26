@@ -1438,17 +1438,12 @@ tr[data-selected="true"]:hover {
   fill: #38bdf8;
   stroke: none;
 }
-/* "Unmark" strike: same hue as its letter so the two read as one mark. */
-.duotone .kind-jump-strike {
+/* "Unmark" strike through the J/R letter: the shared action red, matching the
+   delete X, so removing a mark reads as removal. */
+.duotone .kind-strike {
   fill: none;
-  stroke: #fbbf24;
-  stroke-width: 1.8;
-  stroke-linecap: round;
-}
-.duotone .kind-reference-strike {
-  fill: none;
-  stroke: #38bdf8;
-  stroke-width: 1.8;
+  stroke: var(--sh-delete);
+  stroke-width: 2;
   stroke-linecap: round;
 }
 .duotone .x {

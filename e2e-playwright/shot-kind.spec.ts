@@ -151,7 +151,7 @@ test.describe('shot kind context menu (#27)', () => {
     await openMenu();
     await expect(page.getByRole('button', { name: 'Unmark Jump' })).toBeVisible();
     await expect(page.getByRole('button', { name: 'Mark as Reference' })).toBeVisible();
-    await expect(page.locator('svg .kind-jump-strike')).toHaveCount(1);
+    await expect(page.locator('svg .kind-strike')).toHaveCount(1);
 
     // Unmark returns it to permanent.
     await page.getByRole('button', { name: 'Unmark Jump' }).click();

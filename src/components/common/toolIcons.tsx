@@ -296,13 +296,13 @@ function kindLetter(letter: 'J' | 'R', cssClass: string, struck = false): BadgeC
       >
         {letter}
       </text>
-      {/* "Unmark" variant: a horizontal rule straight through the letter, the
-          same read as a struck-out word. Drawn slightly wider than the glyph so
-          it reads as a strike rather than a hyphen. */}
+      {/* "Unmark" variant: a short horizontal rule through the letter, in the
+          shared action red (--sh-delete, same as the delete X) so removing a
+          mark reads as removal rather than as more of the same kind. */}
       {struck && (
         <path
-          className={`${cssClass}-strike`}
-          d={`M${(cx - r * 0.85).toFixed(2)} ${cy} L${(cx + r * 0.85).toFixed(2)} ${cy}`}
+          className="kind-strike"
+          d={`M${(cx - r * 0.55).toFixed(2)} ${cy} L${(cx + r * 0.55).toFixed(2)} ${cy}`}
         />
       )}
     </g>
