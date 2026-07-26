@@ -1,5 +1,6 @@
 #![expect(
     clippy::unwrap_used,
+    clippy::expect_used,
     reason = "tests construct from known-valid literals; a failed unwrap should fail the test"
 )]
 
@@ -2830,4 +2831,173 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
     );
     // And it is not a reserve breach - the diver breathed nothing off that stage.
     assert_eq!(pinned.stage_drop_over_reserve, vec![false]);
+}
+
+/// Two branches off one entrance, for the endpoint-fallback tests. `north` is the branch the diver
+/// picks an endpoint on; `east` is a competing branch whose stations sit at different gas costs, so
+/// "the deepest reachable station anywhere" can legitimately land on it. All shots are at the
+/// surface, so gas is proportional to distance: a 100 m shot costs 200 L at the default 20 L/min and
+/// 10 m/min.
+///
+/// Returns `(project, entrance, north_section, east_section, north_tip, east_mid)`.
+fn two_branch_project() -> (Project, StationRef, u32, u32, StationRef, StationRef) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let north = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(100.0, 0.0, 0.0),
+                make_shot(100.0, 0.0, 0.0),
+                make_shot(100.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let east = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(130.0, 0.0, 0.0),
+                make_shot(130.0, 0.0, 0.0),
+                make_shot(130.0, 0.0, 0.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(north, 0), StationRef::new(east, 0))
+        .unwrap();
+    (
+        project,
+        StationRef::new(north, 0),
+        north,
+        east,
+        StationRef::new(north, 3),
+        StationRef::new(east, 1),
+    )
+}
+
+/// The reachable station with the largest gas-to-reach - i.e. what "deepest in budget ANYWHERE"
+/// would have picked. Used to prove the endpoint-fallback test is not vacuous.
+fn deepest_reachable(field: &GasReachField) -> StationRef {
+    let mut best = field.station_refs[0];
+    let mut best_gas = f64::NEG_INFINITY;
+    for (i, r) in field.station_refs.iter().enumerate() {
+        if field.reachable[i] {
+            if let Some(g) = field.gas_to_reach[i] {
+                if g > best_gas {
+                    best_gas = g;
+                    best = *r;
+                }
+            }
+        }
+    }
+    best
+}
+
+#[test]
+fn gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch() {
+    // Reported from manual inspection: with an endpoint set on one branch, adding a way point that
+    // costs a little extra gas moved the turnaround to a DIFFERENT branch, which reads as the plan
+    // picking a destination at random. The turnaround should stay on the passage the diver chose and
+    // simply turn earlier.
+    let (project, entrance, north, east, north_tip, east_mid) = two_branch_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // ~800 L of All-thirds budget: enough to reach the north tip (600 L) directly, not enough once
+    // the way-point detour is priced in.
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig::default();
+
+    // Baseline: no way point, the endpoint is in budget and is the turnaround.
+    let direct = project.compute_gas_reach_field(
+        Some(&entrance),
+        Some(&north_tip),
+        &diver,
+        std::slice::from_ref(&bg),
+        &cfg,
+    );
+    assert_eq!(
+        direct.final_turn_ref,
+        Some(north_tip),
+        "setup: the endpoint must be reachable without the detour (budget {})",
+        direct.budget_litres
+    );
+
+    // Add a way point on the east branch. The detour now puts the north tip out of budget.
+    let detoured = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&north_tip),
+        &[east_mid],
+        &diver,
+        std::slice::from_ref(&bg),
+        &cfg,
+        &[],
+    );
+    let turn = detoured
+        .final_turn_ref
+        .expect("something is still reachable");
+    assert_ne!(
+        turn, north_tip,
+        "setup: the detour must push the endpoint out of budget for this test to mean anything"
+    );
+
+    // NON-VACUITY: the old rule (deepest in budget anywhere) really would have jumped branches here.
+    assert_eq!(
+        deepest_reachable(&detoured).section_id,
+        east,
+        "setup: the deepest reachable station must be on the OTHER branch, else this test would \
+         pass under the old rule too"
+    );
+
+    // THE PROPERTY: the turnaround stays on the endpoint's own branch, just closer in.
+    assert_eq!(
+        turn.section_id, north,
+        "the turnaround jumped to another passage instead of turning early on the chosen one"
+    );
+    assert!(
+        turn.station_index < north_tip.station_index,
+        "the turnaround must be closer in than the endpoint, got {turn:?}"
+    );
+    // And it is the FARTHEST such station - turning earlier than necessary would waste the dive.
+    let turn_gas = field_gas(&detoured, turn);
+    let next = StationRef::new(north, turn.station_index + 1);
+    assert!(
+        field_gas(&detoured, next) > detoured.budget_litres,
+        "the next station out ({next:?}) was still in budget, so the turn was too early: {} vs \
+         budget {}",
+        field_gas(&detoured, next),
+        detoured.budget_litres
+    );
+    assert!(turn_gas <= detoured.budget_litres);
+}
+
+#[test]
+fn gas_reach_field_disconnected_endpoint_still_falls_back_to_deepest() {
+    // The early-turn walk only applies when there IS a path toward the endpoint. An endpoint in
+    // another component has none, so the plan must still fall back to the deepest reachable point
+    // rather than returning no route at all.
+    let (mut project, entrance, _north, _east, _north_tip, _east_mid) = two_branch_project();
+    let island = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 0.0, 0.0)],
+            ..Default::default()
+        })
+        .id;
+    let marooned = StationRef::new(island, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let field = project.compute_gas_reach_field(
+        Some(&entrance),
+        Some(&marooned),
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+    );
+    assert!(field.final_turn_ref.is_some());
+    assert_eq!(field.final_turn_ref, Some(deepest_reachable(&field)));
 }

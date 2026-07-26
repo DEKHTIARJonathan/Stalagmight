@@ -30,7 +30,7 @@ impl Project {
     /// one-way gas-to-reach is within the **turn budget** ([`penetration_budget`] for the active
     /// strategy; the diver holds the rest for the exit). The turn frontier is the reachable
     /// stations bordering an unreachable one. Under a staged (Half-Minus) strategy it also walks
-    /// the route to `endpoint` (else the deepest in-budget station) to place per-stage drop points,
+    /// the route to `endpoint` (see [`route_target`] for the out-of-budget rule) to place drops,
     /// and computes the readout gauges; All-thirds leaves those empty.
     ///
     /// Contract: `gas_config` is assumed normalized (`GasConfig::normalize` - finite/positive
@@ -550,11 +550,42 @@ struct BudgetView {
     route_gas: Vec<f64>,
 }
 
-/// Apply a budget to the walked field. The route target is the user-selected endpoint when it is in
-/// budget, else the deepest in-budget station (an out-of-budget endpoint isn't reachable on this
-/// gas; the UI still marks the pick). Computed twice per field - once on the base budget to locate
+/// Apply a budget to the walked field. Computed twice per field - once on the base budget to locate
 /// the strategy's own drop stations, once on the final budget - which is two O(n) passes plus one
 /// path walk, negligible next to the Dijkstras.
+///
+/// The route target is the user-selected endpoint when it is in budget. When it is NOT, the plan
+/// stays on the passage the diver chose and simply turns earlier: the target becomes the farthest
+/// in-budget station ON THE WAY to that endpoint. Only with no endpoint set at all (or when nothing
+/// on that path is in budget) does it fall back to the deepest in-budget station anywhere.
+///
+/// That matters because "deepest anywhere" is an arg-max over the whole cave, so it can sit in a
+/// completely different passage: adding a way point that costs a little extra gas would move the
+/// turnaround from the northern lead the diver picked to some unrelated eastern one, which reads as
+/// the plan choosing a destination at random. Walking toward the pick instead keeps the answer to
+/// the question actually being asked - "how far toward X can I get on this gas?"
+fn route_target(
+    endpoint: Option<usize>,
+    walk: &WaypointWalk,
+    reachable: &[bool],
+    deepest: Option<usize>,
+) -> Option<usize> {
+    let Some(endpoint) = endpoint else {
+        return deepest;
+    };
+    if reachable.get(endpoint).copied().unwrap_or(false) {
+        return Some(endpoint);
+    }
+    // Walk the path toward the endpoint and keep the last station still in budget. Gas along a
+    // shortest path is monotone non-decreasing, so that is exactly where the gas runs out. An
+    // endpoint in another component has no path (its `pred` is unset), leaving just itself - which
+    // is unreachable - so this yields nothing and we fall through.
+    path_to(&walk.pred, endpoint)
+        .into_iter()
+        .take_while(|&n| reachable.get(n).copied().unwrap_or(false))
+        .last()
+        .or(deepest)
+}
 fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64) -> BudgetView {
     let reachable: Vec<bool> = walk
         .gas_in
@@ -591,9 +622,7 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
         })
         .collect();
 
-    let target = endpoint
-        .filter(|&i| reachable.get(i).copied().unwrap_or(false))
-        .or(deepest);
+    let target = route_target(endpoint, walk, &reachable, deepest);
     // The committed way-point chain, then the last leg's path to the target. That path starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
     // way points the chain is empty and the route is exactly the origin→target path.

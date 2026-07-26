@@ -192,6 +192,17 @@ export function GasPlanPanel() {
   const waypointsOverBudget =
     reachField != null && waypointGas.some((g) => g != null && g > reachField.budget_litres);
 
+  // The engine turned short of the chosen endpoint (it is out of budget, so the plan runs as far
+  // toward it as the gas allows). The station it actually turns at, or null when the endpoint IS
+  // the turnaround. `final_turn_ref` is the engine's own answer - never re-derived here.
+  const turn = reachField?.final_turn_ref ?? null;
+  const endpointOutOfReach =
+    endpoint != null &&
+    turn != null &&
+    (turn.section_id !== endpoint.section_id || turn.station_index !== endpoint.station_index)
+      ? turn
+      : null;
+
   // Count only ENABLED stages: the engine filters disabled tanks before counting stages
   // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
   // panel would show a staged plan + its reserve control while the engine has fallen back to
@@ -333,6 +344,19 @@ export function GasPlanPanel() {
               </button>
             </div>
           </div>
+          {/* The pick is never silently rewritten - it stays yours, and clearing whatever put it out
+              of budget restores the full reach. But the turnaround marker has moved, so say why
+              rather than leaving the diver to wonder where their endpoint went. */}
+          {endpointOutOfReach && (
+            <p className="text-xs opacity-70" data-testid="gas-endpoint-out-of-reach">
+              {t('gasPanel.route.endpointOutOfReach', {
+                id: formatStationId(
+                  endpointOutOfReach.section_id,
+                  endpointOutOfReach.station_index
+                ),
+              })}
+            </p>
+          )}
 
           <div className="pt-1">
             <span className="text-xs opacity-70">{t('gasPanel.route.waypointsLabel')}</span>
