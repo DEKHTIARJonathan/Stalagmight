@@ -78,7 +78,7 @@ import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/ma
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import {
   InteractOverlayHideController,
-  overlayDimSignature,
+  overlayPaintDigest,
   overlayTouchesRemovedSections,
 } from './surveyLayer/interactOverlayHide';
 
@@ -340,6 +340,8 @@ export default class SurveyLayer {
   // overlay source when its content actually changes. Reset to '' whenever
   // styling inputs change (rebuild, config, theme, overlay modes).
   private lastInteractKey: string | null = null;
+  /** {@link overlayPaintDigest} of the features the last overlay build emitted. */
+  private lastOverlayDigest = '';
 
   // SoA survey data + geometry resolver for the last applied build (#mem).
   // The resolver serves per-item hit-testing over merged features and the
@@ -802,7 +804,7 @@ export default class SurveyLayer {
       paint: {
         'line-color': ['get', 'color'],
         'line-width': ['get', 'width'],
-        'line-opacity': 1,
+        'line-opacity': ['get', 'opacity'],
       },
     }, this.interactStationsLayerId);
 
@@ -1395,24 +1397,6 @@ export default class SurveyLayer {
     }
   }
 
-  /** {@link overlayDimSignature} over the ids the interact overlay paints, used to
-   *  decide whether a dim-set change actually alters what is on screen. */
-  private dimSignature(): string {
-    return overlayDimSignature(
-      {
-        hoveredShotId: this.hoveredShotId,
-        selectedShotId: this.selectedShotId,
-        hoveredStationId: this.hoveredStationId,
-        selectedStationId: this.selectedStationId,
-      },
-      (id) => this.isSectionAnchored(sectionIdFromKey(id)),
-      (id) => {
-        const fid = this.parseFeatureId(id);
-        return fid !== null && (this.isShotImmovable(fid) || this.isStationImmovable(fid));
-      },
-    );
-  }
-
   // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
   // Takes the SECTION id, never a featureId: a shot's featureId is not decodable back
   // to one (shot.id is itself section-encoded, so floor(fid / STRIDE) yields 2*sectionId
@@ -1531,6 +1515,7 @@ export default class SurveyLayer {
       }
     }
 
+    this.lastOverlayDigest = overlayPaintDigest(features);
     (source as maplibregl.GeoJSONSource).setData({ type: 'FeatureCollection', features });
   }
 
@@ -2376,7 +2361,7 @@ export default class SurveyLayer {
    * Sections in this set get reduced opacity via feature-state.
    */
   setAnchoredSections(sectionIds: Set<number>): void {
-    const before = this.dimSignature();
+    const before = this.lastOverlayDigest;
     this.anchoredSectionIds = sectionIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
     this.updateClosureAnchoredOpacity(sectionIds);
@@ -2432,7 +2417,7 @@ export default class SurveyLayer {
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
-    const before = this.dimSignature();
+    const before = this.lastOverlayDigest;
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
     // Loop closures dim if either endpoint is immovable (kept GeoJSON overlay).
@@ -2444,17 +2429,19 @@ export default class SurveyLayer {
     this.applyDimChangeToOverlay(before);
   }
 
-  /** Re-derive everything a dim-set change feeds, given the {@link dimSignature}
+  /** Re-derive everything a dim-set change feeds, given the {@link overlayPaintDigest}
    *  captured before the change: the interact overlay (not in its own cache key),
    *  the hover cursor (otherwise only recomputed when the hovered id changes), and
-   *  - only when the on-screen overlay actually changed - a hide across the
-   *  GeoJSON re-tile, which lags the synchronous custom-geometry dim by ~250ms and
-   *  would otherwise flash the old highlight over newly dimmed geometry. */
+   *  - only when the emitted overlay actually changed - a hide across the GeoJSON
+   *  re-tile, which lags the synchronous custom-geometry dim by ~250ms and would
+   *  otherwise flash the old highlight over newly dimmed geometry. Comparing the
+   *  BUILT features, rather than re-deriving which dim rule applies to which id,
+   *  keeps this in lockstep with what is actually painted. */
   private applyDimChangeToOverlay(before: string): void {
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
     this.refreshHoverCursor();
-    if (this.dimSignature() !== before) this.interactHide.hideUntilRetile();
+    if (this.lastOverlayDigest !== before) this.interactHide.hideUntilRetile();
   }
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {

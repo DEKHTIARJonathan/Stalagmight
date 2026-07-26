@@ -54,46 +54,25 @@ export function overlayTouchesRemovedSections(
   return false;
 }
 
-/** The four ids `refreshInteractOverlay` can paint. */
-export interface OverlayHighlightIds {
-  hoveredShotId: string | null;
-  selectedShotId: string | null;
-  hoveredStationId: string | null;
-  selectedStationId: string | null;
-}
-
 /**
- * Compact signature of how the currently-painted overlay ids are dimmed /
- * suppressed. Compare one taken BEFORE a dim-set change with one taken AFTER: an
- * unequal pair means the overlay the user is looking at right now really does
- * change, so its stale tile must be hidden across the re-tile. An equal pair -
- * the common case, e.g. a tool switch that sets empty dim sets while nothing is
- * hovered - means hiding would only introduce flicker. Pure.
+ * Digest of what an interact-overlay build will actually paint: every emitted
+ * feature's visual properties, in emission order.
  *
- * The two dim inputs are NOT symmetric, because the overlay does not treat them
- * symmetrically:
- * - anchored changes what every id paints (the HOVER branches gate on it, and
- *   both overlay-feature builders key their 0.25 opacity off it), so it counts
- *   for all four ids;
- * - immovable only gates the HOVER branches. The selected branches are emitted
- *   unconditionally and no builder applies an immovable opacity, so an immovable
- *   flip on a SELECTED id changes nothing on screen and must not trigger a hide -
- *   otherwise entering Move Station / Move Shot with an immovable feature already
- *   selected blanks an unchanged selection highlight for the re-tile interval.
+ * Compare one taken BEFORE a dim-set change with one taken AFTER the rebuild. An
+ * unequal pair means the overlay the user is looking at really does change, so its
+ * stale tile must be hidden across the re-tile. An equal pair - the common case,
+ * e.g. a tool switch that sets empty dim sets - means hiding would only introduce
+ * flicker.
+ *
+ * Deliberately derived from the BUILT features rather than from the dim sets plus
+ * a copy of the emission rules. The rules are asymmetric in ways that are easy to
+ * get wrong (hover branches gate on anchored AND immovable, selected branches on
+ * neither; shot and station feature ids share a numeric space, so `1:100000` and
+ * `2:0` both encode to 200000), and a re-derived rule table silently drifts from
+ * the builder. Reading the output cannot drift. Pure.
  */
-export function overlayDimSignature(
-  ids: OverlayHighlightIds,
-  isAnchored: (id: string) => boolean,
-  isImmovable: (id: string) => boolean,
-): string {
-  const mark = (id: string | null, immovableMatters: boolean): string =>
-    id ? `${isAnchored(id) ? 'a' : ''}${immovableMatters && isImmovable(id) ? 'i' : ''}` : '-';
-  return [
-    mark(ids.hoveredShotId, true),
-    mark(ids.hoveredStationId, true),
-    mark(ids.selectedShotId, false),
-    mark(ids.selectedStationId, false),
-  ].join(',');
+export function overlayPaintDigest(features: readonly GeoJSON.Feature[]): string {
+  return features.map((f) => JSON.stringify(f.properties ?? null)).join('|');
 }
 
 /** Narrow map surface the controller needs (visibility get/set + source-load
