@@ -9,12 +9,13 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 
 import { useUIStore, MAX_VISIBLE_TOASTS } from '../uiStore';
+import { MIN_VISIBLE_TOASTS } from '../../utils/toastCapacity';
 
 const messages = () => useUIStore.getState().toasts.map((t) => t.message);
 const live = () => useUIStore.getState().toasts.filter((t) => !t.leaving);
 
 beforeEach(() => {
-  useUIStore.setState({ toasts: [] });
+  useUIStore.setState({ toasts: [], toastCapacity: MAX_VISIBLE_TOASTS });
 });
 
 describe('toast stack - ordering', () => {
@@ -72,6 +73,65 @@ describe('toast stack - the visible cap', () => {
 
     expect(useUIStore.getState().toasts.length).toBeLessThanOrEqual(MAX_VISIBLE_TOASTS + 4);
     expect(live()).toHaveLength(MAX_VISIBLE_TOASTS);
+  });
+});
+
+describe('toast stack - the fitted capacity', () => {
+  it('starts at the ceiling, so the store is sane with no stack mounted to measure', () => {
+    expect(useUIStore.getState().toastCapacity).toBe(MAX_VISIBLE_TOASTS);
+  });
+
+  it.each([
+    [-1, MIN_VISIBLE_TOASTS],
+    [0, MIN_VISIBLE_TOASTS],
+    [1, MIN_VISIBLE_TOASTS],
+    [3, 3],
+    [MAX_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS],
+    [99, MAX_VISIBLE_TOASTS],
+  ])('clamps a reported capacity of %s to %s', (reported, expected) => {
+    useUIStore.getState().setToastCapacity(reported);
+    expect(useUIStore.getState().toastCapacity).toBe(expected);
+  });
+
+  it('honours the reported capacity on push', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    setToastCapacity(2);
+    for (let i = 0; i < 4; i += 1) showToast(`m${i}`, `k${i}`);
+
+    expect(live().map((t) => t.message)).toEqual(['m2', 'm3']);
+  });
+
+  it('evicts immediately when the window shrinks, rather than hiding a live toast', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    for (let i = 0; i < 5; i += 1) showToast(`m${i}`, `k${i}`);
+    expect(live()).toHaveLength(5);
+
+    setToastCapacity(2);
+
+    expect(live().map((t) => t.message)).toEqual(['m3', 'm4']);
+    // The evicted ones animate out rather than blinking away.
+    expect(useUIStore.getState().toasts.filter((t) => t.leaving)).toHaveLength(3);
+  });
+
+  it('does not evict when the window grows', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    setToastCapacity(2);
+    showToast('a', 'a');
+    showToast('b', 'b');
+
+    setToastCapacity(5);
+
+    expect(live().map((t) => t.message)).toEqual(['a', 'b']);
+  });
+
+  it('is a no-op when the number has not moved, so reporting it every frame is free', () => {
+    const { showToast, setToastCapacity } = useUIStore.getState();
+    showToast('a', 'a');
+    const before = useUIStore.getState().toasts;
+
+    setToastCapacity(MAX_VISIBLE_TOASTS);
+
+    expect(useUIStore.getState().toasts).toBe(before);
   });
 });
 

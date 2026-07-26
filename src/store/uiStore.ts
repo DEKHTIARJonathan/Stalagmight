@@ -20,6 +20,7 @@ import { useGasPlanStore } from './gasPlanStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+import { MAX_VISIBLE_TOASTS, clampToastCapacity } from '../utils/toastCapacity';
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
@@ -266,10 +267,18 @@ export interface ToastItem {
 }
 
 /**
- * How many toasts stay fully live at once. A push past this evicts the OLDEST
- * (marks it leaving, so it animates out instead of blinking away).
+ * Hard ceiling on how many toasts stay fully live at once. A push past the
+ * effective cap evicts the OLDEST (marks it leaving, so it animates out instead
+ * of blinking away).
+ *
+ * The EFFECTIVE cap is usually smaller: it is "whatever fits in 20% of the
+ * window height", which only the DOM can answer, so ToastStack measures it and
+ * feeds it back through `setToastCapacity`. Until something reports a real
+ * measurement the store uses this maximum, which keeps it deterministic on its
+ * own (and correct in unit tests of unrelated components, where no stack is
+ * mounted to measure anything).
  */
-export const MAX_VISIBLE_TOASTS = 4;
+export { MAX_VISIBLE_TOASTS };
 
 /**
  * Hard ceiling on the array, live + leaving. Exit animations are driven by
@@ -278,6 +287,18 @@ export const MAX_VISIBLE_TOASTS = 4;
  * outright rather than allowed to grow without bound.
  */
 const MAX_TOTAL_TOASTS = MAX_VISIBLE_TOASTS + 4;
+
+/**
+ * Apply the live-toast cap: mark the oldest overflow `leaving` (so it animates
+ * away rather than blinking out), then trim the array to its hard ceiling.
+ */
+function capToasts(next: ToastItem[], capacity: number): ToastItem[] {
+  const live = next.filter((t) => !t.leaving);
+  const overflow = live.length - capacity;
+  const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
+  const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
+  return marked.slice(-MAX_TOTAL_TOASTS);
+}
 
 /** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
 let nextToastId = 1;
@@ -510,6 +531,12 @@ interface UIStore {
   // Toast stack (oldest first, newest last - see src/components/common/ToastStack.tsx)
   toasts: ToastItem[];
   /**
+   * How many toasts may be live at once. Reported by ToastStack from measured
+   * geometry (see `fitToastCapacity`); defaults to `MAX_VISIBLE_TOASTS` so the
+   * store behaves sanely with no stack mounted.
+   */
+  toastCapacity: number;
+  /**
    * Push a toast onto the stack. `kind` is optional and defaults to `'info'`, so
    * every pre-existing two-argument call site keeps the neutral look it had.
    *
@@ -519,6 +546,12 @@ interface UIStore {
    * of stacking a duplicate.
    */
   showToast: (message: string, key: string, kind?: ToastKind) => void;
+  /**
+   * Set the live-toast cap from measured geometry. Clamped into
+   * [MIN_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS]; shrinking it evicts the oldest
+   * toasts immediately, so nothing can sit off-screen with a running timer.
+   */
+  setToastCapacity: (capacity: number) => void;
   /** Begin one toast's exit animation (the per-toast dismiss button). */
   dismissToast: (id: number) => void;
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
@@ -1695,6 +1728,7 @@ export const useUIStore = create<UIStore>((set) => ({
   // it hover/focus pausing, which only the DOM knows about) belongs to
   // ToastStack, which calls removeToast when a toast's life ends.
   toasts: [],
+  toastCapacity: MAX_VISIBLE_TOASTS,
   showToast: (message, key, kind = 'info') => {
     const prev = useUIStore.getState().toasts;
 
@@ -1725,17 +1759,15 @@ export const useUIStore = create<UIStore>((set) => ({
       revision: 0,
       leaving: false,
     };
-    const next = [...prev, pushed];
-
-    // Cap the LIVE stack. The overflow is the oldest live toasts; mark them
-    // leaving rather than splicing them out so they animate away.
-    const live = next.filter((t) => !t.leaving);
-    const overflow = live.length - MAX_VISIBLE_TOASTS;
-    const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
-    const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
-
-    // Safety valve: without a mounted ToastStack nothing reaps `leaving` entries.
-    set({ toasts: marked.slice(-MAX_TOTAL_TOASTS) });
+    set({ toasts: capToasts([...prev, pushed], useUIStore.getState().toastCapacity) });
+  },
+  setToastCapacity: (capacity) => {
+    const clamped = clampToastCapacity(capacity);
+    const state = useUIStore.getState();
+    if (state.toastCapacity === clamped) return;
+    // Evict on the way down as well as on push: a toast the window no longer has
+    // room for must not linger invisibly with its timer still running.
+    set({ toastCapacity: clamped, toasts: capToasts(state.toasts, clamped) });
   },
   dismissToast: (id) =>
     set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),

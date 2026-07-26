@@ -502,13 +502,58 @@ test.describe('Toast Notifications', () => {
     await expect(page.getByTestId('toast').nth(1)).toContainText('Different key toast');
   });
 
-  test('the stack is capped at four live toasts', async ({ page }) => {
-    for (let i = 0; i < 6; i += 1) await showToast(page, `Toast ${i}`, `key-${i}`);
+  test('the stack is capped at five live toasts in a tall window', async ({ page }) => {
+    // A one-line toast is ~36px, so 20% of 1400 (280px) has room for the ceiling
+    // of five; the cap that bites here is the ceiling, not the budget.
+    await page.setViewportSize({ width: 1280, height: 1400 });
+    for (let i = 0; i < 8; i += 1) await showToast(page, `Toast ${i}`, `key-${i}`);
 
-    // The two oldest are evicted (they animate out, then go).
-    await expect(page.locator('[data-testid="toast"]:not([data-toast-leaving])')).toHaveCount(4);
-    await expect(page.getByTestId('toast')).toHaveCount(4);
-    await expect(page.getByTestId('toast').nth(0)).toContainText('Toast 2');
+    // The three oldest are evicted (they animate out, then go).
+    await expect(page.locator('[data-testid="toast"]:not([data-toast-leaving])')).toHaveCount(5);
+    await expect(page.getByTestId('toast')).toHaveCount(5);
+    await expect(page.getByTestId('toast').nth(0)).toContainText('Toast 3');
+  });
+
+  test('a short window fits fewer toasts, but never fewer than two', async ({ page }) => {
+    // 20% of 300px is 60px - not even room for two toasts. The floor still wins,
+    // so a follow-up message is never invisible.
+    await page.setViewportSize({ width: 1280, height: 300 });
+    for (let i = 0; i < 5; i += 1) await showToast(page, `Toast ${i}`, `key-${i}`);
+
+    await expect(page.getByTestId('toast')).toHaveCount(2);
+    await expect(page.getByTestId('toast').nth(1)).toContainText('Toast 4');
+  });
+
+  test('shrinking the window evicts the toasts that no longer fit', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1400 });
+    for (let i = 0; i < 5; i += 1) await showToast(page, `Toast ${i}`, `key-${i}`);
+    await expect(page.getByTestId('toast')).toHaveCount(5);
+
+    await page.setViewportSize({ width: 1280, height: 300 });
+
+    // Evicted, not merely hidden - nothing lingers off-screen with a live timer.
+    await expect(page.getByTestId('toast')).toHaveCount(2);
+    await expect(page.getByTestId('toast').nth(1)).toContainText('Toast 4');
+  });
+
+  test('a new toast enters from below and pushes the stack up', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 1400 });
+    await showToast(page, 'First toast', 'key-1');
+
+    const first = page.locator('[data-toast-key="key-1"]');
+    // Settled on the anchor: the newest toast sits at offset zero.
+    await expect(first).toHaveAttribute('style', /translateY\(0px\)/);
+
+    await showToast(page, 'Second toast', 'key-2');
+
+    // Pushed up by the height of the newcomer plus the gap, and the newcomer
+    // takes the anchor. The exact px depends on the rendered height, so assert
+    // the sign and the ordering rather than a magic number.
+    await expect(first).toHaveAttribute('style', /translateY\(-\d+px\)/);
+    await expect(page.locator('[data-toast-key="key-2"]')).toHaveAttribute(
+      'style',
+      /translateY\(0px\)/,
+    );
   });
 
   test('each kind renders with its own accent', async ({ page }) => {
