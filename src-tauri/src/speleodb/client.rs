@@ -59,10 +59,30 @@ const DUMP_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 ///
 /// The dump is the whole working tree as a ZIP - the same payload the (uncapped)
 /// upload sends back - so the ceiling exists only as a sanity bound against a
-/// runaway response, not as a project-size policy. It is deliberately far above
-/// any plausible survey: the whole body is read into memory either way, and a
-/// real project must never be the thing that trips it.
-const DUMP_MAX_BYTES: u64 = 2 * 1024 * 1024 * 1024;
+/// runaway response, not as a project-size policy. It must stay far above any
+/// plausible survey (the "a dump over 10 MiB must still be openable" property is
+/// the whole point), but NOT arbitrarily far: the whole body is read into memory
+/// (`read_to_vec` is `read_to_end` into a `Vec`), and `Dump::extract_entry_capped`
+/// then builds a SECOND buffer of up to `dump::MAX_ENTRY_BYTES` + 1 on top of it,
+/// so the ceiling is a peak-RSS budget as much as a sanity bound - and this app
+/// already has documented WebKitGTK memory-ceiling trouble.
+///
+/// 640 MiB, chosen to be COHERENT with `MAX_ENTRY_BYTES` (512 MiB): the extractable
+/// `.stalx` is what a dump is downloaded for, so a body whose every entry is over
+/// that per-entry cap can never yield one. The earlier 2 GiB left 1.5 GiB of
+/// allowed body that could only ever be downloaded, held, and then rejected - a
+/// guaranteed-futile multi-gigabyte allocation. The remaining 128 MiB is headroom
+/// for ZIP overhead plus the dump's other entries (`ariane.tml`, `misc/`).
+///
+/// Streaming the body to the staging temp file instead of buffering would retire
+/// the budget question entirely, but `Dump` parses an in-memory `&[u8]` and all
+/// four pull flows are built on that, so it is its own change.
+const DUMP_MAX_BYTES: u64 = 640 * 1024 * 1024;
+/// ureq's own default body ceiling, applied by a bare `Body::read_to_vec()` - i.e.
+/// the limit that actually bites on every endpoint except the two dump downloads.
+/// Mirrored here (ureq does not export it) so [`with_retry`] can name the limit
+/// that was really exceeded instead of quoting the dump one at a JSON endpoint.
+const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 /// Transient-transport retries (total attempts = 1 + MAX_RETRIES).
 const MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries (mirrors the tile-fetch idiom).
@@ -85,10 +105,26 @@ fn dump_agent() -> ureq::Agent {
 /// [`UPLOAD_TIMEOUT`], the dump download [`DUMP_DOWNLOAD_TIMEOUT`]).
 /// `http_status_as_error(false)` is kept so the status branching shape #186 keys
 /// off is preserved.
+///
+/// `max_redirects(0)` is a SECURITY setting, not a tidiness one. The http /
+/// private-network policy ([`super::tls::enforce`]) runs once per request against
+/// the CONFIGURED base URL, so it says nothing about where a redirect goes. With
+/// ureq's default of 10 redirects, a `302` to `http://<anything>/` was followed in
+/// plaintext straight past the policy that exists to forbid exactly that - the
+/// endpoint the policy vetted is not the endpoint the credentials-bearing request
+/// ends up at. Zero redirects means the 3xx comes back as an ordinary status and
+/// is reported by [`status_error`] like any other unexpected response.
+///
+/// (Redirected credentials were never the exposure here: ureq defaults to
+/// `RedirectAuthHeaders::Never`, so the `Authorization` header is dropped on a
+/// cross-host hop. Verified against the pinned ureq; the plaintext-to-anywhere hole
+/// is what this closes. The v2 API is not expected to redirect at all, so nothing
+/// legitimate is lost.)
 fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
+        .max_redirects(0)
         .build()
         .new_agent()
 }
@@ -176,13 +212,17 @@ fn with_retry(
                 // Retrying re-downloads the whole oversized body to fail again,
                 // and reporting it as "cannot reach the endpoint" sends the user
                 // looking at their network for a payload-size refusal.
+                let limit = body_limit_for(endpoint);
                 tracing::error!(
                     ?endpoint,
-                    limit = DUMP_MAX_BYTES,
+                    limit,
                     "SpeleoDB response body exceeded the download ceiling"
                 );
                 return Err(SpeleoDbError::Parse(format!(
-                    "the response was larger than the {DUMP_MAX_BYTES}-byte download limit"
+                    "SpeleoDB's reply was larger than the {} this app will hold in memory. \
+                     If this was a project download, the project is too large for this \
+                     version to open - report it so the limit can be raised.",
+                    human_bytes(limit)
                 )));
             }
             Err(e) => {
@@ -276,6 +316,34 @@ fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ur
 fn is_body_limit(err: &ureq::Error) -> bool {
     matches!(err, ureq::Error::Io(e)
         if e.to_string().contains("larger than request limit"))
+}
+
+/// Which body ceiling actually applied to `endpoint`.
+///
+/// [`with_retry`] is shared by all thirteen endpoints, but only the two dump
+/// downloads read through [`read_dump_body`]; the rest use [`read_status_body`],
+/// which takes ureq's own [`DEFAULT_MAX_BYTES`]. Quoting the dump ceiling at a JSON
+/// endpoint told the user their reply had exceeded a limit six-and-a-half times the
+/// one it actually hit.
+fn body_limit_for(endpoint: Endpoint) -> u64 {
+    match endpoint {
+        Endpoint::DownloadDump => DUMP_MAX_BYTES,
+        _ => DEFAULT_MAX_BYTES,
+    }
+}
+
+/// A byte count as GiB / MiB / KiB for a user-facing message. Whole units only
+/// (the ceilings are all round powers of two), falling back to bytes below 1 KiB.
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    match bytes {
+        b if b >= GIB => format!("{} GiB", b / GIB),
+        b if b >= MIB => format!("{} MiB", b / MIB),
+        b if b >= KIB => format!("{} KiB", b / KIB),
+        b => format!("{b} bytes"),
+    }
 }
 
 /// Map a non-2xx response into a [`SpeleoDbError::Status`], extracting a
@@ -1270,12 +1338,13 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        classify_transport, clean_transport, delete_project, download_dump, download_dump_at_hash,
-        list_teams, list_user_autocomplete, list_user_permissions, mime_for, parse_error_message,
-        parse_upload_auto_response, remove_team_permission, remove_user_permission,
-        set_user_permission, with_retry, Endpoint, RevisionHistory, UserInfo,
-        DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES, REQUEST_TIMEOUT,
+        add_team_permission, add_user_permission, api_url, bearer, body_limit_for,
+        build_upload_parts, classify_transport, clean_transport, delete_project, download_dump,
+        download_dump_at_hash, human_bytes, list_teams, list_user_autocomplete,
+        list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
+        remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
+        RevisionHistory, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES,
+        REQUEST_TIMEOUT,
     };
     use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
@@ -2258,6 +2327,124 @@ mod tests {
         assert!(
             DUMP_MAX_BYTES > 10 * 1024 * 1024,
             "the dump ceiling must be above the default it exists to replace"
+        );
+    }
+
+    #[test]
+    fn the_dump_ceiling_is_coherent_with_the_per_entry_ceiling() {
+        // Both directions are load-bearing.
+        //
+        // ABOVE the per-entry cap: the extractable `.stalx` is the whole reason a dump
+        // is downloaded, so the body must be able to carry one at its full allowed size
+        // plus the rest of the archive.
+        //
+        // But NOT far above it: the earlier 2 GiB left ~1.5 GiB of allowed body that
+        // could only ever be downloaded, held in memory and then rejected by the
+        // per-entry cap - a guaranteed-futile multi-gigabyte allocation in an app with
+        // documented WebKitGTK memory-ceiling trouble. The whole body is buffered
+        // (`read_to_vec` is `read_to_end`) and the extract then builds a SECOND buffer
+        // on top of it, so this constant is a peak-RSS budget.
+        const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+        assert!(
+            DUMP_MAX_BYTES > MAX_ENTRY_BYTES,
+            "the body ceiling must admit a full-size extractable entry"
+        );
+        assert!(
+            DUMP_MAX_BYTES <= 2 * MAX_ENTRY_BYTES,
+            "and must not admit a body the per-entry cap can never yield anything from"
+        );
+    }
+
+    #[test]
+    fn the_body_limit_message_names_the_limit_that_actually_applied() {
+        // `with_retry` is shared by all thirteen endpoints, but only the two dump
+        // downloads read on the dump ceiling; the other eleven use `read_status_body`,
+        // i.e. ureq's own 10 MiB default. Quoting the dump ceiling at a JSON endpoint
+        // told the user their reply had exceeded a limit many times the one it hit.
+        assert_eq!(body_limit_for(Endpoint::DownloadDump), DUMP_MAX_BYTES);
+        assert_eq!(body_limit_for(Endpoint::ListProjects), DEFAULT_MAX_BYTES);
+        assert_eq!(body_limit_for(Endpoint::Upload), DEFAULT_MAX_BYTES);
+
+        // And it is rendered in units a human reads, not as a raw byte count
+        // ("2147483648-byte" was the old message).
+        assert_eq!(human_bytes(DEFAULT_MAX_BYTES), "10 MiB");
+        assert_eq!(human_bytes(DUMP_MAX_BYTES), "640 MiB");
+        assert_eq!(human_bytes(3 * 1024 * 1024 * 1024), "3 GiB");
+        assert_eq!(human_bytes(2048), "2 KiB");
+        assert_eq!(human_bytes(17), "17 bytes");
+    }
+
+    #[test]
+    fn agents_never_follow_a_redirect() {
+        // SECURITY. `tls::enforce` vets the CONFIGURED base URL once per request and
+        // says nothing about where a redirect leads, so with ureq's default of 10
+        // redirects a `302` to `http://<anything>/` was followed in plaintext straight
+        // past the private-network policy that exists to forbid exactly that. Zero
+        // redirects means the 3xx returns as an ordinary status and `status_error` maps
+        // it like any other unexpected response.
+        assert_eq!(
+            super::agent().config().max_redirects(),
+            0,
+            "the shared agent must not follow redirects"
+        );
+        assert_eq!(
+            super::dump_agent().config().max_redirects(),
+            0,
+            "nor the dump agent"
+        );
+        // Credentials were never the exposure here - ureq drops `Authorization` on a
+        // cross-host hop - but pin that too so a config change cannot quietly turn a
+        // redirect into a token leak on top.
+        assert!(
+            matches!(
+                super::agent().config().redirect_auth_headers(),
+                ureq::config::RedirectAuthHeaders::Never
+            ),
+            "auth headers must never ride a redirect"
+        );
+    }
+
+    #[test]
+    fn a_redirect_is_reported_as_a_status_not_followed() {
+        // End-to-end over loopback: the server answers `302` pointing somewhere else.
+        // With redirects disabled the caller sees the 302 itself (a `Status` error),
+        // never a second request to the redirect target.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = Arc::clone(&hits);
+        let handle = std::thread::spawn(move || {
+            use std::io::Read as _;
+            // Two accepts on purpose: if the agent followed the redirect there would be
+            // a SECOND connection, and the count would show it.
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+                let mut chunk = vec![0u8; 8 * 1024];
+                let _ = stream.read(&mut chunk);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/evil\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.flush();
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let err = download_dump(&base, "tok", false, WIRE_PID)
+            .expect_err("a 302 must not be followed, and is not a success");
+        assert!(
+            matches!(err, SpeleoDbError::Status { status: 302, .. }),
+            "the redirect must surface as its own status, got {err:?}"
+        );
+        drop(handle);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "exactly one request - the redirect target was never dialed"
         );
     }
 }

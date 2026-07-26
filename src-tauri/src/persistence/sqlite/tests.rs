@@ -3658,6 +3658,75 @@ fn is_remote_false_on_metadata_open_of_pre_v9_file() {
 }
 
 #[test]
+fn metadata_open_reads_a_pre_v10_speleo_link_without_last_edit_or_verify_columns() {
+    // The missing-TABLE case has coverage (`is_remote_false_on_metadata_open_of_pre_v9_file`);
+    // this is the missing-COLUMN one, which wedged projects rather than merely
+    // reporting them local.
+    //
+    // `open_for_metadata` runs NO migration, so a `.stalx` last written by a v9/v10
+    // build still has the v9/v10 `speleo_link` shape while the crate is at
+    // SCHEMA_VERSION 13. Selecting `last_edit_at` (v10) / `last_verify_at` (v11)
+    // unconditionally failed with `no such column`, and that error PROPAGATES - so a
+    // perfectly readable legacy cache copy read as an unreadable FILE. Downstream that
+    // was permanent: `guard_local_edits` refused every pull / adopt / revision-restore
+    // for the project with a factually wrong "has local edits that were never pushed",
+    // and the cache scan reported "no local copy" for a project that has one.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("pre_v10.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("PreV10".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc123"), false)))
+            .unwrap();
+        // Rebuild the table in its narrow, pre-v10 shape (SQLite cannot DROP COLUMN
+        // before 3.35, and this is closer to what the old build actually wrote).
+        db.conn.execute_batch(
+            "DROP TABLE speleo_link;
+             CREATE TABLE speleo_link (
+                 id INTEGER PRIMARY KEY CHECK (id = 1),
+                 endpoint TEXT NOT NULL,
+                 project_id TEXT NOT NULL,
+                 project_name TEXT NOT NULL,
+                 base_commit_sha TEXT,
+                 has_unpushed_edits INTEGER NOT NULL DEFAULT 0
+             );
+             INSERT INTO speleo_link (id, endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits)
+             VALUES (1, 'http://10.10.0.220:8000/', '11111111-1111-1111-1111-111111111111', 'Test Cave', 'abc123', 0);",
+        ).unwrap();
+    }
+
+    let db = Database::open_for_metadata(&path).unwrap();
+    let link = db
+        .load_speleo_link()
+        .expect("a narrow speleo_link is READ, not reported as an unreadable file")
+        .expect("the row is there");
+    assert_eq!(link.project_id, "11111111-1111-1111-1111-111111111111");
+    assert_eq!(link.base_commit_sha.as_deref(), Some("abc123"));
+    assert!(!link.has_unpushed_edits, "and known-clean, not unknown");
+    // The columns this file predates read as NULL - the same value a migrated row
+    // that was never stamped carries.
+    assert_eq!(link.last_edit_at, None);
+    assert_eq!(link.last_verify_at, None);
+}
+
+#[test]
+fn metadata_open_still_propagates_a_genuinely_unreadable_file() {
+    // The tolerance above must NOT become "swallow every read error". A file that is
+    // not a database at all has to keep failing, because `guard_local_edits` fails
+    // CLOSED on that error - it is what stops a re-pull overwriting a copy whose
+    // un-pushed work could not be read.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("junk.stalx");
+    std::fs::write(&path, b"not a sqlite database at all").unwrap();
+    let read = Database::open_for_metadata(&path).and_then(|db| db.load_speleo_link());
+    assert!(
+        read.is_err(),
+        "an unreadable FILE must still propagate as an error"
+    );
+}
+
+#[test]
 fn save_project_does_not_clear_speleo_link() {
     // D-B13c: save_project wipes/rewrites its owned tables, but speleo_link is
     // intentionally excluded so a local autosave never clears the dirty bit.

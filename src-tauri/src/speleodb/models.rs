@@ -127,18 +127,21 @@ impl From<RevisionCommit> for SpeleoRevision {
 /// about the local cache. Purely local: no token, no network, no server fields.
 ///
 /// Reported per project id by `speleodb_local_project_states`. Every field is a
-/// statement about the local copy only, so an absent / unreadable file degrades to
-/// "nothing here" (`has_local_copy: false`) rather than failing the whole listing.
+/// statement about the local copy only, so one unreadable file costs its own row
+/// rather than failing the whole listing - but it says so via [`Self::state_unknown`]
+/// instead of impersonating a clean row.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
 #[ts(export)]
 pub struct SpeleoLocalProjectState {
     /// A local `.stalx` for this project exists AND its SpeleoDB link row could be
-    /// read. False when the file is missing, unreadable, corrupt, or carries no
-    /// link row - in every one of those cases there is no usable local state to
-    /// act on, so the UI treats them identically.
+    /// read. False when the file is missing, corrupt, or carries no link row. Also
+    /// false when the file is present but unreadable - that row is distinguished by
+    /// [`Self::state_unknown`], which the UI MUST check before treating the row as
+    /// "nothing here".
     pub has_local_copy: bool,
     /// The local copy has edits that are not on the server yet
-    /// (`speleo_link.has_unpushed_edits`). Always false without a local copy.
+    /// (`speleo_link.has_unpushed_edits`). Always false without a local copy, and
+    /// meaningless (not "clean") when [`Self::state_unknown`] is set.
     pub has_unpushed_edits: bool,
     /// When the local copy was last edited (RFC-3339), when known. `None` for a
     /// clean copy, an older file that never recorded one, or no local copy.
@@ -146,6 +149,22 @@ pub struct SpeleoLocalProjectState {
     /// This is the project currently open in the app, so the reported state came
     /// from the live open database rather than a file on disk.
     pub is_open: bool,
+    /// A local `.stalx` for this project IS present but could not be read, so
+    /// `has_local_copy` / `has_unpushed_edits` state nothing about it - in
+    /// particular NOT that it is free of un-pushed work.
+    ///
+    /// This exists because the listing fails OPEN (one bad file may cost only its
+    /// own row) while the replace guard fails CLOSED on the very same input, and
+    /// without this flag the two disagreed silently. The realistic cause is a hot
+    /// journal left by a kill or power loss - which a read-only connection cannot
+    /// roll back (`SQLITE_READONLY_ROLLBACK`) though a read-write open would - i.e.
+    /// precisely the abandoned session the held-lock prompt is raised over. Offering
+    /// that row the irreversible "Release lock" because it "looks clean" frees the
+    /// project for someone else to push over recoverable work.
+    ///
+    /// The UI must render this as UNKNOWN (and withhold the destructive choices),
+    /// never as clean.
+    pub state_unknown: bool,
 }
 
 /// The active lock ("mutex") on a project, when one is held.
@@ -467,7 +486,24 @@ pub enum StartEditingResult {
 pub enum DoneResult {
     /// Edits pushed (or there was nothing to push); the lock was released and the
     /// project is read-only again.
+    ///
+    /// This is the ONLY arm that means "the local work is on the server", so it is
+    /// the only one the frontend may clear its `hasUnpushedEdits` on. See
+    /// [`Self::NotEditing`] for the case that used to be folded in here.
     Released,
+    /// There was no edit session to finish: the backend's edit gate was already
+    /// closed, so no lock was held, nothing was pushed and nothing was released.
+    ///
+    /// Distinct from [`Self::Released`] because the two are NOT interchangeable
+    /// when the project is dirty. The gate can be closed while
+    /// `has_unpushed_edits` is still set - a 401 auto-drop runs `speleodb_forget`,
+    /// which closes the gate but deliberately leaves the dirty bit alone - and
+    /// reporting that as `Released` told the frontend the work had landed, which
+    /// cleared its `hasUnpushedEdits` and disarmed the quit guard over edits that
+    /// were never uploaded. The frontend must leave its dirty state untouched on
+    /// this arm and route the user back through Start editing (re-login first if
+    /// the token is gone).
+    NotEditing,
     /// The server diverged (a stranger commit between our base and the tip):
     /// nothing was pushed, the lock + dirty bit are retained for the user to
     /// reconcile (#198).
@@ -606,7 +642,15 @@ pub enum RemoteState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PushResult {
     /// Edits pushed (or nothing to push); the lock is retained.
+    ///
+    /// The ONLY arm that means "the local work is on the server" - see
+    /// [`DoneResult::Released`] for the same distinction on the release verb.
     Pushed,
+    /// There was no edit session to push from: the backend's edit gate was already
+    /// closed, so no lock was held and nothing was uploaded. See
+    /// [`DoneResult::NotEditing`] - same hazard, same frontend obligation (leave
+    /// the dirty state alone; do NOT treat this as a successful push).
+    NotEditing,
     /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
     DivergenceNeeded,
     /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a

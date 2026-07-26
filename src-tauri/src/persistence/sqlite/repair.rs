@@ -75,6 +75,12 @@ impl Database {
     /// The others (`display_settings`, `collab_state`) are privacy-neutral local
     /// prefs / wiring: aborting a push over them would be a worse outcome for the
     /// user than the (harmless) leak, so a failure there stays a warning.
+    ///
+    /// "Subset" is LOAD-BEARING, not descriptive: the strip loop iterates
+    /// `PUSH_SNAPSHOT_LOCAL_TABLES` and only consults this list to decide how loudly
+    /// to fail, so a name that appears HERE but not THERE is never visited and its
+    /// fatality never fires - it would read as guarded while being entirely inert.
+    /// `fatal_tables_are_a_subset_of_local_tables` pins the relationship.
     const PUSH_SNAPSHOT_FATAL_TABLES: &[&str] = &["undo_stack", "redo_stack"];
 
     /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
@@ -149,12 +155,56 @@ impl Database {
         // Reclaim the freed pages: the rows deleted above are still byte-for-byte
         // present in the file until the database is rewritten, and this file is
         // about to be uploaded to collaborators.
-        conn.execute_batch("VACUUM;")
-            .context("could not VACUUM the push snapshot; refusing to upload it")?;
-        // Close the connection explicitly so the rewritten file (and its rollback
-        // journal) is fully flushed before the caller reads it for the upload.
+        //
+        // `VACUUM INTO` a sibling + rename, NOT a plain `VACUUM`. A plain VACUUM
+        // rewrites through SQLite's TEMP directory (`SQLITE_TMPDIR` / `TMPDIR` /
+        // `/tmp`), which is nowhere near the snapshot: on a box with a small tmpfs
+        // `/tmp` - the common Linux default - a large project ran out of space there
+        // and, now that the failure is fatal, that turned into a push the user can
+        // never complete. `VACUUM INTO` writes the compacted copy straight into the
+        // snapshot's own directory, which is the staging area the caller already
+        // chose and sized for a full copy of the project. Same reasoning as
+        // [`Self::vacuum_snapshot`], which has always done it this way.
+        let compacted = Self::vacuum_temp_path(snapshot);
+        // VACUUM INTO refuses to overwrite an existing target; a leftover from a
+        // killed run must not wedge every later push.
+        let _ = std::fs::remove_file(&compacted);
+        if let Err(e) = conn.execute("VACUUM INTO ?1", params![compacted.to_string_lossy()]) {
+            let _ = std::fs::remove_file(&compacted);
+            return Err(anyhow::Error::from(e).context(format!(
+                "could not compact the push snapshot into {} (most likely not enough \
+                 free disk space there for a second copy of the project); refusing to \
+                 upload it",
+                compacted.display()
+            )));
+        }
+        // Close the connection explicitly BEFORE the rename: on Windows the source
+        // file cannot be replaced while SQLite holds it open, and the rewritten copy
+        // (and its rollback journal) must be fully flushed before the caller reads it
+        // for the upload.
         drop(conn);
+        if let Err(e) = std::fs::rename(&compacted, snapshot) {
+            let _ = std::fs::remove_file(&compacted);
+            return Err(anyhow::Error::from(e).context(format!(
+                "could not replace the push snapshot at {} with its compacted copy; \
+                 refusing to upload it",
+                snapshot.display()
+            )));
+        }
         Ok(())
+    }
+
+    /// Where [`Self::sanitize_push_snapshot`] stages its compacted copy: a SIBLING
+    /// of the snapshot, so the follow-up rename stays on one filesystem (a
+    /// cross-device rename fails with `EXDEV`) and so the space it needs is the same
+    /// space the snapshot itself already occupies - never a small `/tmp`.
+    fn vacuum_temp_path(snapshot: &Path) -> std::path::PathBuf {
+        let mut name = snapshot
+            .file_name()
+            .unwrap_or_else(|| std::ffi::OsStr::new("snapshot"))
+            .to_os_string();
+        name.push(".vacuum.tmp");
+        snapshot.with_file_name(name)
     }
 
     /// `table_exists` against a bare [`Connection`] - the sanitize path holds one
@@ -397,5 +447,104 @@ impl Database {
             .conn
             .query_row("SELECT COUNT(*) FROM station_merges", [], |row| row.get(0))?;
         Ok(count as usize)
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
+mod tests {
+    use super::{Database, Path};
+
+    #[test]
+    fn fatal_tables_are_a_subset_of_local_tables() {
+        // The doc calls PUSH_SNAPSHOT_FATAL_TABLES "the subset of
+        // PUSH_SNAPSHOT_LOCAL_TABLES whose strip is FATAL", and nothing enforced it.
+        // The relationship is load-bearing, not descriptive: `sanitize_push_snapshot`
+        // ITERATES the local list and only consults the fatal one to decide how loudly
+        // to fail, so a table named fatal-but-not-local is never visited at all - it
+        // reads as guarded while being completely inert, which is the worst state for a
+        // data-corruption guard to be in.
+        for table in Database::PUSH_SNAPSHOT_FATAL_TABLES {
+            assert!(
+                Database::PUSH_SNAPSHOT_LOCAL_TABLES.contains(table),
+                "`{table}` is marked FATAL but is not in PUSH_SNAPSHOT_LOCAL_TABLES, so \
+                 the strip loop never visits it and its fatality can never fire"
+            );
+        }
+    }
+
+    #[test]
+    fn sanitize_compacts_beside_the_snapshot_and_leaves_no_staging_file() {
+        // The compaction is a `VACUUM INTO` a sibling + rename, not a plain `VACUUM`.
+        // A plain VACUUM rewrites the whole database through SQLite's temp directory
+        // (`SQLITE_TMPDIR` / `TMPDIR` / `/tmp`), which is nowhere near the snapshot, so
+        // on a box with a small tmpfs `/tmp` a large project ran out of space there -
+        // and, now that this failure is fatal to the push, that became a push the user
+        // could never complete. `VACUUM INTO` writes into the snapshot's own directory,
+        // which the caller already sized for a full copy of the project.
+        //
+        // Behaviourally: the sanitize succeeds, the staging file is consumed by the
+        // rename rather than littering the staging dir, and the result is still a
+        // readable database with the local tables emptied.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let snapshot = dir.path().join("snap.stalx");
+        let mut db = Database::open(&snapshot).expect("open snapshot");
+        db.save_project(&crate::models::Project::new("Snap".to_owned(), None))
+            .expect("save project");
+        db.save_display_setting("grid", "on").expect("seed a local");
+        drop(db);
+
+        Database::sanitize_push_snapshot(&snapshot).expect("sanitize");
+
+        assert!(
+            !Database::vacuum_temp_path(&snapshot).exists(),
+            "the staging copy must be renamed away, not left beside the snapshot"
+        );
+        let db = Database::open_for_metadata(&snapshot).expect("compacted snapshot reopens");
+        assert!(
+            db.load_display_settings()
+                .expect("read display settings")
+                .is_empty(),
+            "the local-only tables are still stripped after the compaction"
+        );
+    }
+
+    #[test]
+    fn sanitize_never_falls_back_to_a_plain_vacuum() {
+        // Which SQL a function issues is not observable from its result, so the
+        // tmp-directory hazard is guarded at the source: a future edit that reaches
+        // back for `VACUUM;` silently reinstates "a small /tmp blocks every push on a
+        // large project".
+        let src = include_str!("repair.rs");
+        let start = src
+            .find("pub fn sanitize_push_snapshot")
+            .expect("sanitize fn present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        assert!(
+            body.contains("VACUUM INTO ?1"),
+            "sanitize must compact via VACUUM INTO a sibling"
+        );
+        assert!(
+            !body.contains("\"VACUUM;\"") && !body.contains("execute_batch(\"VACUUM"),
+            "sanitize must NOT run a plain VACUUM (it rewrites through SQLITE_TMPDIR)"
+        );
+    }
+
+    #[test]
+    fn vacuum_temp_path_is_a_sibling_of_the_snapshot() {
+        // The rename that follows the VACUUM INTO must stay on one filesystem (a
+        // cross-device rename fails with EXDEV), which only holds while the staging
+        // file is a sibling.
+        let path = Path::new("/some/dir/snap.stalx");
+        let temp = Database::vacuum_temp_path(path);
+        assert_eq!(temp.parent(), path.parent());
+        assert_eq!(
+            temp.file_name().and_then(|n| n.to_str()),
+            Some("snap.stalx.vacuum.tmp")
+        );
     }
 }

@@ -21,6 +21,23 @@ use super::SpeleoDbError;
 /// lying ZIP header (a zip bomb) can't exhaust memory before we reject it.
 const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 
+/// Hard ceiling on how many entries a dump may declare.
+///
+/// [`MAX_ENTRY_BYTES`] bounds one entry's CONTENT and says nothing about how many
+/// there are, so it does not cover this at all. A central-directory record is only
+/// ~46 bytes plus its name, so even the (reduced) body ceiling admits millions of
+/// them - and every one costs a `String` in [`Dump::entry_paths`], on top of the
+/// `Vec::with_capacity(archive.len())` it sizes from the archive's own claim. That
+/// is gigabytes of allocation from a body that is merely large, reached before any
+/// per-entry cap can apply.
+///
+/// A real dump is a `.stalx`, an `ariane.tml` and a handful of `misc/` files, so
+/// 10 000 is several orders of magnitude of headroom over anything legitimate while
+/// still bounding the walk. (The check necessarily lands AFTER `ZipArchive::new`,
+/// which parses the whole central directory eagerly - the `zip` crate exposes no
+/// hook to bound that - so it caps the amplification, not the parse itself.)
+const MAX_ENTRIES: usize = 10_000;
+
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpClassification {
@@ -106,9 +123,26 @@ pub(crate) struct Dump<'a> {
 
 impl<'a> Dump<'a> {
     /// Parse an in-memory dump ZIP.
+    ///
+    /// Rejects an absurd entry count up front (see [`MAX_ENTRIES`]) so the
+    /// per-entry work in [`Self::entry_paths`] can never be driven to exhaustion by
+    /// a server that claims millions of files.
     pub(crate) fn open(zip_bytes: &'a [u8]) -> Result<Self, SpeleoDbError> {
+        Self::open_capped(zip_bytes, MAX_ENTRIES)
+    }
+
+    /// [`Self::open`] with an explicit entry ceiling (parameterized for testing, the
+    /// same way [`Self::extract_entry_capped`] is - building ten thousand real ZIP
+    /// entries to exercise one comparison buys nothing).
+    fn open_capped(zip_bytes: &'a [u8], max_entries: usize) -> Result<Self, SpeleoDbError> {
         let archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
             .map_err(|e| SpeleoDbError::Parse(format!("dump is not a valid ZIP: {e}")))?;
+        let entries = archive.len();
+        if entries > max_entries {
+            return Err(SpeleoDbError::Parse(format!(
+                "dump declares {entries} entries, over the {max_entries}-entry limit"
+            )));
+        }
         Ok(Self { archive })
     }
 
@@ -391,6 +425,40 @@ mod tests {
         assert!(
             !dest.exists(),
             "nothing should be written when over the cap"
+        );
+    }
+
+    #[test]
+    fn open_rejects_an_archive_with_too_many_entries() {
+        // A central-directory record is ~46 bytes plus its name, so a body that is
+        // merely large can declare millions of entries - and `entry_paths` sizes a
+        // `Vec` from the archive's own claim and then allocates a `String` per entry.
+        // `MAX_ENTRY_BYTES` bounds one entry's CONTENT and does nothing about the
+        // count, so this is its own ceiling.
+        //
+        // Driven at a small explicit cap: building 10 001 real entries just to prove
+        // the comparison would make this test slow for no extra coverage.
+        let entries: Vec<(String, &[u8])> =
+            (0..6).map(|i| (format!("f{i}.txt"), &b""[..])).collect();
+        let borrowed: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+        let zip = make_zip(&borrowed);
+
+        let err = Dump::open_capped(&zip, 5)
+            .err()
+            .expect("an over-count archive must be rejected");
+        assert!(
+            matches!(err, SpeleoDbError::Parse(_)),
+            "an over-count archive should map to Parse, got {err:?}"
+        );
+        // At the cap it is accepted, and a real dump (a handful of files) is nowhere
+        // near the production ceiling.
+        assert!(
+            Dump::open_capped(&zip, 6).is_ok(),
+            "exactly at the cap is allowed"
+        );
+        assert!(
+            Dump::open(&zip).is_ok(),
+            "a normal dump is far below the production ceiling"
         );
     }
 

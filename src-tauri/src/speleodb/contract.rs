@@ -240,10 +240,25 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         SpeleoDbError::WouldDiscardLocalEdits { .. } => {
             (SpeleoDbAction::UnpushedLocalEdits, None, err.to_string())
         }
-        // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
-        // AmbiguousDump / Io / InvalidProjectId - all fail closed; their Display is
-        // already user-facing.
-        _ => (SpeleoDbAction::Fatal, None, err.to_string()),
+        // Everything below fails closed; each Display is already user-facing.
+        //
+        // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,
+        // `WouldDiscardLocalEdits`) exist precisely because a ROUTING signal must
+        // not reach the user as `Fatal` - and a wildcard here is what silently
+        // routes the next one wrongly: a new variant compiles clean and lands in
+        // `Fatal`, so the frontend toasts a dead end instead of offering the choice
+        // the variant was added to offer. Listing them makes adding a variant fail
+        // the build until someone decides which side of that line it is on.
+        SpeleoDbError::NoEndpoint
+        | SpeleoDbError::MissingCredentials
+        | SpeleoDbError::Parse(_)
+        | SpeleoDbError::EmptyDump
+        | SpeleoDbError::AmbiguousDump(_)
+        | SpeleoDbError::Io(_)
+        | SpeleoDbError::InvalidProjectId
+        | SpeleoDbError::InvalidRevision
+        | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
         message,
@@ -255,6 +270,10 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
 mod tests {
     use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
     use crate::speleodb::SpeleoDbError;
@@ -502,6 +521,31 @@ mod tests {
         let adopt = dto_for_error(Endpoint::DownloadDump, &SpeleoDbError::AdoptAriane);
         assert_eq!(adopt.action, SpeleoDbAction::Adopt);
         assert_eq!(adopt.status, None);
+    }
+
+    #[test]
+    fn the_action_match_is_exhaustive_so_a_new_variant_cannot_default_to_fatal() {
+        // The fail-closed arm used to be `_ =>`, sitting directly under two arms that
+        // exist precisely because a ROUTING signal must not reach the user as `Fatal`
+        // (`AdoptAriane` → Adopt, `WouldDiscardLocalEdits` → UnpushedLocalEdits). A
+        // wildcard is what silently routes the NEXT such variant wrongly: it compiles
+        // clean, lands in Fatal, and the frontend toasts a dead end instead of offering
+        // the choice the variant was added to offer.
+        //
+        // Guarded at the source, because "this match has no wildcard" is not observable
+        // from its results - and rustc's own exhaustiveness check is the real enforcement
+        // the moment the wildcard is gone.
+        let src = include_str!("contract.rs");
+        let start = src
+            .find("let (action, status, message) = match err {")
+            .expect("the action match is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    };\n").expect("the match terminates")];
+        assert!(
+            !body.contains("_ =>"),
+            "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
+             variant default to Fatal without anyone deciding that it should"
+        );
     }
 
     #[test]

@@ -752,6 +752,18 @@ impl AppState {
         CommandResult::success()
     }
 
+    /// The path of the `.stalx` currently open, when one is open and it has been
+    /// saved somewhere (a never-saved project has no `file_path`).
+    ///
+    /// Recovers a poisoned lock rather than reporting "nothing open": every caller
+    /// uses this to decide whether the live handle / live link belongs to a file it
+    /// is about to touch, and answering "no" on a poisoned mutex is the unsafe
+    /// direction in both.
+    pub(super) fn open_project_path(&self) -> Option<PathBuf> {
+        let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().and_then(|p| p.file_path.clone())
+    }
+
     /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
     /// whether it was closed.
     ///
@@ -771,13 +783,7 @@ impl AppState {
     /// project the user does not currently have open), and dropping an unrelated
     /// open project would throw away its undo/redo history for nothing.
     pub(super) fn close_project_if_open_at(&self, dest: &std::path::Path) -> bool {
-        let open_path = {
-            // Recover a poisoned lock rather than skip the close - silently leaving
-            // the handle open is the unsafe outcome here.
-            let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
-            guard.as_ref().and_then(|p| p.file_path.clone())
-        };
-        let Some(open_path) = open_path else {
+        let Some(open_path) = self.open_project_path() else {
             return false;
         };
         if !same_file(&open_path, dest) {
@@ -801,7 +807,11 @@ impl AppState {
 /// not exist yet (a first pull into an empty cache) - it cannot be the file a live
 /// connection is holding unless it is LITERALLY the same path, so fall back to a
 /// plain comparison instead of guessing.
-fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+///
+/// Shared with `speleodb_local_state`, where the same question ("is the open
+/// project THIS file?") decides whether the live in-memory link may vouch for a
+/// copy that could not be read.
+pub(super) fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,

@@ -894,9 +894,47 @@ impl Database {
             return Ok(None);
         }
 
+        // The table can be NARROWER than today's schema, and this reader has to
+        // cope: `open_for_metadata` runs NO migration (it is a read-only connection
+        // opened for a handful of SELECTs), so a `.stalx` last written by a build at
+        // schema v9/v10 still has the v9/v10 `speleo_link` shape while the crate is
+        // at v13. Selecting `last_edit_at` (v10) / `last_verify_at` (v11)
+        // unconditionally failed those files with `no such column`, and that error is
+        // PROPAGATED (see above) - so a perfectly readable legacy cache copy was
+        // reported as an unreadable FILE. That wedged it permanently: the guard
+        // refused every pull / adopt / revision-restore for the project with a
+        // factually wrong "has local edits that were never pushed", and the cache
+        // scan reported "no local copy" for a project that has one.
+        //
+        // Probe the actual columns and substitute a literal NULL for the ones this
+        // file predates - the same value a migrated-but-never-stamped row carries, so
+        // the `Option<String>` reads below are unchanged. A genuinely unreadable FILE
+        // still fails here (the pragma cannot be run either) and still propagates,
+        // which is the fail-closed behaviour the guard depends on.
+        let mut columns = self
+            .conn
+            .prepare("SELECT name FROM pragma_table_info('speleo_link')")?;
+        let columns: std::collections::HashSet<String> = columns
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        // Named as expressions rather than as a dynamic column list so the SELECT
+        // keeps a fixed arity and the indices below stay literal.
+        let last_edit_at = if columns.contains("last_edit_at") {
+            "last_edit_at"
+        } else {
+            "NULL"
+        };
+        let last_verify_at = if columns.contains("last_verify_at") {
+            "last_verify_at"
+        } else {
+            "NULL"
+        };
+
         let row = self.conn.query_row(
-            "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, last_edit_at, last_verify_at
-             FROM speleo_link WHERE id = 1",
+            &format!(
+                "SELECT endpoint, project_id, project_name, base_commit_sha, has_unpushed_edits, {last_edit_at}, {last_verify_at}
+                 FROM speleo_link WHERE id = 1"
+            ),
             [],
             |row| {
                 Ok(crate::models::SpeleoLink {
