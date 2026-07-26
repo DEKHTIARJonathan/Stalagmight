@@ -21,7 +21,7 @@ import {
  * Calls are recorded in __MOCK_DATA_TABLE_VIEW_CALLS__ (camelCase payloads).
  * Default panels config hides section_id + shot_id and shows azimuth as avg /
  * inclination off, so the visible shot columns start as: _warnings, length,
- * _azimuth_avg, depth_in, depth_out, left, right, up, down, is_reference,
+ * _azimuth_avg, depth_in, depth_out, left, right, up, down, kind,
  * comment.
  */
 

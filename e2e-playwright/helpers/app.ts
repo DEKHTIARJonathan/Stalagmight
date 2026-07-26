@@ -20,7 +20,7 @@ export interface SectionSeed {
     up?: number | null;
     down?: number | null;
     comment?: string | null;
-    is_reference?: boolean;
+    kind?: string;
   }>;
 }
 

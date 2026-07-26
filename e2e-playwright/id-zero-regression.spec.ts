@@ -56,7 +56,7 @@ async function injectId0Fixture(page: Page) {
         up: 2,
         down: 0.5,
         comment: null,
-        is_reference: false,
+        kind: 'Normal',
         marker_index: 0,
         temperature: null,
       }]

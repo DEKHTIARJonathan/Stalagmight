@@ -377,14 +377,26 @@ describe('SurveyLabelController style wiring', () => {
     expect(layer.lastStyle?.haloColors.length).toBeGreaterThan(0);
   });
 
-  it('flips the reference-hide input when reference shots are hidden', () => {
+  it('hides virtual labels only when BOTH kinds are hidden (#27)', () => {
     const { map } = makeFakeMap();
     const c = makeController(map);
     c.sync(makeParams());
     const layer = h.layerState.last!;
     expect(layer.lastStyle?.hideReference).toBe(false);
+
+    // Label flags carry a single "virtual" bit, not the kind, so hiding one
+    // kind alone must NOT drop the labels - that would hide the label of a
+    // jump that is still drawn. Deliberately conservative: the rule can only
+    // ever keep a label visible.
     c.setReferenceShotsVisible(false);
+    expect(layer.lastStyle?.hideReference).toBe(false);
+
+    c.setJumpShotsVisible(false);
     expect(layer.lastStyle?.hideReference).toBe(true);
+
+    // Bringing either kind back makes the labels eligible again.
+    c.setReferenceShotsVisible(true);
+    expect(layer.lastStyle?.hideReference).toBe(false);
   });
 });
 

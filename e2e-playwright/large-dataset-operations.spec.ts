@@ -61,7 +61,7 @@ test.describe('Large Dataset Operations', () => {
             up: null,
             down: null,
             comment: null,
-            is_reference: false,
+            kind: 'Normal',
             marker_index: null,
             temperature: null,
           });

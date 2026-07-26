@@ -63,7 +63,7 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
   right: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
   up: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
   down: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  is_reference: { nameKey: 'reference', keys: ['is_reference'] },
+  kind: { nameKey: 'reference', keys: ['kind'] },
   comment: { nameKey: 'comment', keys: ['comment'] },
   section_id: { nameKey: 'sectionId', keys: ['section_id'] },
   shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
@@ -1778,7 +1778,7 @@ export default function DataTable({ sections }: DataTableProps) {
                     {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftHiddenProblems.has('depthOut'))}
                   </div>
                   {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-                  {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
+                  {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
                   {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
                 </>
               ) : (
