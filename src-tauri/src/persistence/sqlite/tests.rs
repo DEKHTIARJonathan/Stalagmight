@@ -4548,7 +4548,7 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
     assert_eq!(found.len(), 1, "exactly the corrupt row is reported");
     let hit = &found[0];
     assert_eq!(
-        hit.raw_value, 7,
+        hit.raw_value, "7",
         "the raw value must survive for the dialog"
     );
     assert_eq!(hit.shot_number, 2, "1-based position for display");
@@ -4585,17 +4585,137 @@ fn unrecognised_shot_kinds_are_reported_with_their_raw_value() {
         db.conn
             .execute("UPDATE shots SET kind = ?1 WHERE sequence_order = 1", [bad])
             .unwrap();
-        assert_eq!(
-            db.unrecognised_shot_kinds().unwrap().len(),
-            1,
-            "kind {bad} must still be reported"
-        );
+        let reported = db.unrecognised_shot_kinds().unwrap();
+        assert_eq!(reported.len(), 1, "kind {bad} must still be reported");
+        assert_eq!(reported[0].raw_value, bad.to_string());
         assert_eq!(
             db.load_project().unwrap().sections[0].shots[1].kind,
             ShotKind::Reference,
             "kind {bad} must load as Reference, not Normal"
         );
     }
+
+    // The column has INTEGER *affinity*, not an INTEGER constraint - the table
+    // is not STRICT - so a corrupt or hand-edited row can hold any storage
+    // class. These must load, not error out the whole project.
+    for bad in ["'not-a-number'", "x'DEADBEEF'", "3.5"] {
+        db.conn
+            .execute_batch(&format!(
+                "UPDATE shots SET kind = {bad} WHERE sequence_order = 1;"
+            ))
+            .unwrap();
+        assert_eq!(
+            db.load_project().unwrap().sections[0].shots[1].kind,
+            ShotKind::Reference,
+            "kind {bad} must load as Reference rather than failing the load"
+        );
+        assert_eq!(
+            db.unrecognised_shot_kinds().unwrap().len(),
+            1,
+            "kind {bad} must still reach the resolution prompt"
+        );
+    }
+}
+
+/// #27: the fail-closed substitution has to reach DISK, or it is session-only.
+///
+/// Nothing marks the project dirty (the user edited nothing), so without an
+/// explicit repair the invalid discriminant survives every open and the prompt
+/// reappears forever - while the dialog claims the choice is saved with the
+/// project.
+#[test]
+fn unrecognised_shot_kinds_are_repaired_on_disk() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("repair.stalx");
+
+    let mut project = Project::new("Corrupt".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![legacy_shot(ShotKind::Normal), legacy_shot(ShotKind::Jump)],
+        ..Default::default()
+    });
+
+    let db = {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db
+    };
+    db.conn
+        .execute_batch("UPDATE shots SET kind = 9 WHERE sequence_order = 1;")
+        .unwrap();
+
+    assert_eq!(db.repair_unrecognised_shot_kinds().unwrap(), 1);
+    assert!(
+        db.unrecognised_shot_kinds().unwrap().is_empty(),
+        "nothing is left to prompt about once the row is repaired"
+    );
+    let kinds: Vec<i64> = db
+        .conn
+        .prepare("SELECT kind FROM shots ORDER BY sequence_order")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        vec![0, 2],
+        "the unreadable row is now Reference on disk"
+    );
+
+    // Idempotent, and it never touches a row it can read.
+    assert_eq!(db.repair_unrecognised_shot_kinds().unwrap(), 0);
+}
+
+/// #27: the pre-#27 loader read `is_reference` as `!= 0`, so ANY truthy value
+/// meant virtual. A migration that only copied `= 1` would leave a noncanonical
+/// `-1` or `2` on the new column's `Normal` default and then drop the evidence -
+/// permanently converting a reference tie into a swimmable leg, with the
+/// backfill unable to help because the shot no longer looks virtual.
+#[test]
+fn migrate_v13_carries_every_truthy_legacy_reference_value() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("noncanonical.stalx");
+
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        shots: vec![
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Normal),
+            legacy_shot(ShotKind::Normal),
+        ],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        // Rebuild the v12 shape by hand with a spread of truthy values.
+        db.conn
+            .execute_batch(
+                "ALTER TABLE shots ADD COLUMN is_reference INTEGER NOT NULL DEFAULT 0;
+                 UPDATE shots SET is_reference = 0  WHERE sequence_order = 0;
+                 UPDATE shots SET is_reference = 1  WHERE sequence_order = 1;
+                 UPDATE shots SET is_reference = -1 WHERE sequence_order = 2;
+                 UPDATE shots SET is_reference = 2  WHERE sequence_order = 3;
+                 ALTER TABLE shots DROP COLUMN kind;",
+            )
+            .unwrap();
+        db.set_user_version(12).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let kinds: Vec<i64> = db
+        .conn
+        .prepare("SELECT kind FROM shots ORDER BY sequence_order")
+        .unwrap()
+        .query_map([], |r| r.get::<_, i64>(0))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    // 0 stays Normal; every truthy value becomes the Jump seed (1) the backfill
+    // then judges - none is silently left Normal.
+    assert_eq!(kinds, vec![0, 1, 1, 1]);
 }
 
 /// #27: the split toggles have to stay independent ACROSS RESTARTS, not just on

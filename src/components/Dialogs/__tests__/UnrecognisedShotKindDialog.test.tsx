@@ -10,7 +10,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 
-const setShotKind = vi.fn().mockResolvedValue({ success: true });
+const executeBatch = vi.fn().mockResolvedValue({ success: true });
 const closeDialog = vi.fn();
 
 vi.mock('react-i18next', () => ({
@@ -25,7 +25,7 @@ vi.mock('../../../store/uiStore', () => ({
 }));
 
 vi.mock('../../../store/projectStore', () => ({
-  useProjectStore: (sel: (s: unknown) => unknown) => sel({ setShotKind }),
+  useProjectStore: (sel: (s: unknown) => unknown) => sel({ executeBatch }),
 }));
 
 vi.mock('../../../utils/telemetry', () => ({ trackDialogComplete: vi.fn() }));
@@ -42,7 +42,7 @@ vi.mock('../../common/Button', () => ({
 
 import UnrecognisedShotKindDialog from '../UnrecognisedShotKindDialog';
 
-const shot = (shotId: number, raw: number) => ({
+const shot = (shotId: number, raw: string) => ({
   section_id: 0,
   shot_id: shotId,
   shot_number: shotId + 1,
@@ -53,7 +53,7 @@ const shot = (shotId: number, raw: number) => ({
 describe('UnrecognisedShotKindDialog', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    dialogData.shots = [shot(1, 7), shot(2, 42)];
+    dialogData.shots = [shot(1, '7'), shot(2, "'not-a-number'")];
   });
 
   it('renders nothing when there is nothing to resolve', () => {
@@ -65,7 +65,9 @@ describe('UnrecognisedShotKindDialog', () => {
   it('shows the raw stored value so corruption is distinguishable from a newer file', () => {
     render(<UnrecognisedShotKindDialog />);
     expect(screen.getByText('7')).toBeInTheDocument();
-    expect(screen.getByText('42')).toBeInTheDocument();
+    // Rendered via SQLite's quote(), so a non-integer storage class - the case
+    // an integer read would have failed on entirely - shows up legibly.
+    expect(screen.getByText("'not-a-number'")).toBeInTheDocument();
   });
 
   it('preselects Reference - the fail-closed answer the backend already applied', () => {
@@ -78,7 +80,7 @@ describe('UnrecognisedShotKindDialog', () => {
     render(<UnrecognisedShotKindDialog />);
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(setShotKind).not.toHaveBeenCalled();
+    expect(executeBatch).not.toHaveBeenCalled();
   });
 
   it('issues an edit only for the shots the user actually changed', async () => {
@@ -88,8 +90,10 @@ describe('UnrecognisedShotKindDialog', () => {
     });
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
     await waitFor(() => expect(closeDialog).toHaveBeenCalled());
-    expect(setShotKind).toHaveBeenCalledTimes(1);
-    expect(setShotKind).toHaveBeenCalledWith(0, 1, 'Jump');
+    expect(executeBatch).toHaveBeenCalledTimes(1);
+    expect(executeBatch).toHaveBeenCalledWith([
+      { type: 'update_shot', section_id: 0, shot_id: 1, updates: { kind: 'Jump' } },
+    ]);
   });
 
   it('stays open and explains when an edit is rejected', async () => {
@@ -97,7 +101,7 @@ describe('UnrecognisedShotKindDialog', () => {
     // project, or a lock re-verify that rejects). Closing anyway would lose the
     // user's choices for good: the backend list is already consumed and cannot
     // be re-offered.
-    setShotKind.mockResolvedValueOnce({ success: false, error: 'Project is read-only' });
+    executeBatch.mockResolvedValueOnce({ success: false, error: 'Project is read-only' });
     render(<UnrecognisedShotKindDialog />);
     fireEvent.change(screen.getByTestId('unrecognised-kind-select-1'), {
       target: { value: 'Jump' },
@@ -114,8 +118,10 @@ describe('UnrecognisedShotKindDialog', () => {
     expect(screen.getByTestId('unrecognised-kind-select-1')).toHaveValue('Jump');
   });
 
-  it('stops at the first rejection rather than firing the rest', async () => {
-    setShotKind.mockResolvedValueOnce({ success: false, error: 'nope' });
+  it('sends every change as ONE batch, not a call per shot', async () => {
+    // A newer file can use an unknown discriminant on every shot in the survey.
+    // Per-shot commands would each refetch the whole project state, undo state,
+    // warnings and the integrity check.
     render(<UnrecognisedShotKindDialog />);
     for (const id of [1, 2]) {
       fireEvent.change(screen.getByTestId(`unrecognised-kind-select-${id}`), {
@@ -123,14 +129,15 @@ describe('UnrecognisedShotKindDialog', () => {
       });
     }
     fireEvent.click(screen.getByTestId('unrecognised-kind-apply'));
-    await waitFor(() => expect(screen.getByTestId('unrecognised-kind-error')).toBeInTheDocument());
-    expect(setShotKind).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(executeBatch).toHaveBeenCalledTimes(1);
+    expect(executeBatch.mock.calls[0]![0]).toHaveLength(2);
   });
 
   it('dismissing leaves everything as Reference', () => {
     render(<UnrecognisedShotKindDialog />);
     fireEvent.click(screen.getByText('dialogs.unrecognisedShotKind.keepAsReference'));
-    expect(setShotKind).not.toHaveBeenCalled();
+    expect(executeBatch).not.toHaveBeenCalled();
     expect(closeDialog).toHaveBeenCalled();
   });
 });

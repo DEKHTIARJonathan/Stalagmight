@@ -88,8 +88,11 @@ pub struct UnrecognisedShotKind {
     /// 1-based position in the section, for display.
     pub shot_number: u32,
     pub section_name: Option<String>,
-    /// The value actually stored, so the dialog can show what was found.
-    pub raw_value: i64,
+    /// The value actually stored, rendered as text. A string rather than an
+    /// integer because the column is not STRICT: a corrupt or hand-edited row
+    /// can hold TEXT, REAL or a BLOB, and the case most worth showing the user
+    /// is exactly the one an integer read would fail on.
+    pub raw_value: String,
 }
 
 impl ShotKind {

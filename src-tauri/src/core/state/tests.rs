@@ -4463,7 +4463,7 @@ fn unrecognised_shot_kinds_are_scoped_to_their_load() {
         shot_id: section_id * crate::models::FEATURE_ID_STRIDE,
         shot_number: 1,
         section_name: Some(format!("s{section_id}")),
-        raw_value: 7,
+        raw_value: "7".to_string(),
     };
 
     // Load A (id 1), then load B (id 2) - the project the user actually opened.

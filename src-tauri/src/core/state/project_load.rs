@@ -427,6 +427,25 @@ impl AppState {
                         purpose = "surface unreadable shot kinds for user resolution (#27)",
                         "Found shots with an unrecognised kind; defaulted them to Reference"
                     );
+                    // Make the disk agree with the value already in force in
+                    // memory. Otherwise the substitution is session-only: the
+                    // project is never dirty (nothing was edited), so nothing
+                    // saves it, and the prompt returns on every open. This
+                    // writes the fail-closed value, not a choice taken from the
+                    // user - picking anything else stays an ordinary undoable
+                    // SetShotKind on top.
+                    match db.repair_unrecognised_shot_kinds() {
+                        Ok(n) if n > 0 => tracing::info!(
+                            repaired = n,
+                            purpose = "persist the fail-closed substitution (#27)",
+                            "Rewrote unreadable shot kinds to Reference on disk"
+                        ),
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "Failed to persist the Reference substitution; it stays session-only"
+                        ),
+                    }
                 }
                 self.set_unrecognised_shot_kinds(progress.loading_id(), found);
             }

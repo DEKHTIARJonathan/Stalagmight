@@ -26,7 +26,7 @@ export default function UnrecognisedShotKindDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const dialogData = useUIStore((s) => s.dialogData);
-  const setShotKind = useProjectStore((s) => s.setShotKind);
+  const executeBatch = useProjectStore((s) => s.executeBatch);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -43,19 +43,31 @@ export default function UnrecognisedShotKindDialog() {
     setBusy(true);
     setError(null);
     try {
-      // Only send the ones the user actually changed: the rest are already
-      // Reference in memory, so re-setting them would add pointless undo noise.
-      //
-      // `setShotKind` REPORTS failure rather than throwing - a read-only
-      // SpeleoDB project, or a lock re-verification that rejects the edit, comes
-      // back as `success: false`. Closing anyway would lose the user's choices
-      // for good, because the backend list has already been consumed and cannot
-      // be re-offered. So a rejection keeps the dialog open with its state
-      // intact, and says why.
-      for (const shot of shots) {
-        const chosen = choiceFor(shot);
-        if (chosen === 'Reference') continue;
-        const res = await setShotKind(shot.section_id, shot.shot_id, chosen);
+      // Only the ones the user actually changed: the rest are already Reference
+      // both in memory AND on disk (the loader repairs the row), so re-sending
+      // them would be undo noise for no effect.
+      const changed = shots
+        .filter((shot) => choiceFor(shot) !== 'Reference')
+        .map((shot) => ({
+          type: 'update_shot' as const,
+          section_id: shot.section_id,
+          shot_id: shot.shot_id,
+          updates: { kind: choiceFor(shot) },
+        }));
+
+      if (changed.length > 0) {
+        // ONE batch, not a call per shot. A newer file can use an unknown
+        // discriminant on every shot in the survey, and each executeCommand
+        // refetches the whole project state, undo state, warnings and the
+        // integrity check - so a per-shot loop turns a compatibility prompt into
+        // N full refresh cycles. `update_shot` is batch-allowed, and a kind-only
+        // update is classified INERT, so the batch skips the geometry reconcile.
+        //
+        // The result REPORTS failure rather than throwing - a read-only SpeleoDB
+        // project, or a lock re-verification that rejects. Closing anyway would
+        // lose the user's choices for good, since the backend list has already
+        // been consumed. A rejection keeps the dialog open, state intact.
+        const res = await executeBatch(changed);
         if (!res.success) {
           setError(res.error ?? t('dialogs.unrecognisedShotKind.applyFailed'));
           return;
@@ -101,7 +113,7 @@ export default function UnrecognisedShotKindDialog() {
                     {shot.section_name ?? t('dialogs.unrecognisedShotKind.unnamedSection')}
                     {` · #${shot.shot_number}`}
                   </td>
-                  <td className="p-2 font-mono text-text-secondary">{String(shot.raw_value)}</td>
+                  <td className="p-2 font-mono text-text-secondary">{shot.raw_value}</td>
                   <td className="p-2">
                     <select
                       value={choiceFor(shot)}

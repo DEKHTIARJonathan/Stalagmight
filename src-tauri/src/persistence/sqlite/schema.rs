@@ -456,9 +456,18 @@ impl Database {
             }
             // 1 == ShotKind::Jump. Kept as a literal because this migration must
             // stay pinned to the v13 encoding even if the enum grows later.
+            //
+            // `!= 0`, not `= 1`: the pre-#27 loader read this column as
+            // `row.get::<_, i32>()? != 0`, so ANY truthy value meant virtual. A
+            // hand-edited or otherwise noncanonical `-1` / `2` would keep the
+            // new column's `Normal` default and then be dropped along with
+            // `is_reference` - permanently turning a reference tie into a
+            // swimmable leg, with the backfill unable to help because the shot
+            // no longer looks virtual to it. The pre-v2 rebuild path in
+            // integrity.rs already widens with `!= 0`; this matches it.
             conn.execute_batch(
                 r"
-                UPDATE shots SET kind = 1 WHERE is_reference = 1;
+                UPDATE shots SET kind = 1 WHERE is_reference != 0;
                 ALTER TABLE shots DROP COLUMN is_reference;
                 ",
             )?;

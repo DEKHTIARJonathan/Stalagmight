@@ -378,14 +378,22 @@ impl Database {
                             // assumes the in-memory value is already the safe
                             // one. Map every failed conversion to a discriminant
                             // `from_u8` rejects, so it lands on `Reference`.
-                            // Read as i64, the width SQLite actually stores (and
-                            // the width `UnrecognisedShotKind::raw_value` reports
-                            // in). An i32 read ERRORS on e.g. 2147483648, which
-                            // would abort the whole load instead of opening the
-                            // project with the shot safely on Reference and
-                            // offering the resolution prompt.
+                            // Deliberately total: ANY value this build cannot
+                            // read becomes `Reference` rather than an error.
+                            // `INTEGER` here is a type AFFINITY, not a
+                            // constraint - the table is not STRICT, so a
+                            // hand-edited or corrupt row can hold TEXT, REAL or
+                            // a BLOB, and `row.get::<_, i64>` returns
+                            // InvalidColumnType for those. Propagating that
+                            // would make the whole project unopenable over one
+                            // bad cell; out-of-i64 and wrong-type alike now land
+                            // on a discriminant `from_u8` rejects, so the shot
+                            // loads safely and reaches the resolution prompt.
                             kind: ShotKind::from_u8(
-                                u8::try_from(row.get::<_, i64>(14)?).unwrap_or(u8::MAX),
+                                row.get::<_, i64>(14)
+                                    .ok()
+                                    .and_then(|v| u8::try_from(v).ok())
+                                    .unwrap_or(u8::MAX),
                             ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,
@@ -1014,8 +1022,15 @@ impl Database {
         if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
             return Ok(Vec::new());
         }
+        // `quote(...)`, not a raw read or a CAST: the column can legally hold any
+        // storage class (see the loader's note), and reading a TEXT/BLOB cell as
+        // i64 would error out the whole diagnostic - so the case most in need of
+        // the prompt would be the one that never reached it. `CAST(blob AS
+        // TEXT)` is no good either: it can yield invalid UTF-8. `quote` is total
+        // and renders every class legibly (7, 'abc', X'DEADBEEF'), which is
+        // exactly what the dialog wants to show.
         let mut stmt = self.conn.prepare(
-            "SELECT s.section_id, s.sequence_order, s.kind, sec.name
+            "SELECT s.section_id, s.sequence_order, quote(s.kind), sec.name
              FROM shots s
              LEFT JOIN sections sec ON sec.id = s.section_id
              WHERE s.kind NOT IN (0, 1, 2)
@@ -1037,6 +1052,28 @@ impl Database {
             out.push(row?);
         }
         Ok(out)
+    }
+
+    /// Rewrite every unreadable `kind` to `Reference` on disk (#27).
+    ///
+    /// The loader already substitutes `Reference` in memory, so without this the
+    /// two disagree: the app behaves correctly for the session, but the invalid
+    /// discriminant survives, the project is never dirty (nothing was edited),
+    /// and the same prompt reappears on every single open - while the dialog
+    /// tells the user their choice is saved with the project.
+    ///
+    /// Writing the fail-closed value is not a decision taken from the user: it
+    /// is the value already in force. Choosing anything else is still an
+    /// ordinary undoable `SetShotKind` on top.
+    pub fn repair_unrecognised_shot_kinds(&self) -> Result<usize> {
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(0);
+        }
+        // 2 == ShotKind::Reference, pinned like the migration's literals.
+        let repaired = self
+            .conn
+            .execute("UPDATE shots SET kind = 2 WHERE kind NOT IN (0, 1, 2)", [])?;
+        Ok(repaired)
     }
 
     /// Write the one-shot #27 backfill's verdicts straight to disk and clear the
