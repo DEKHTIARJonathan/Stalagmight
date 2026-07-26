@@ -43,3 +43,4 @@ mod tests_support;
 pub use app_state::AppState;
 #[cfg(test)]
 pub(crate) use collab::apply_changeset;
+pub use command_import::VirtualShotMode;

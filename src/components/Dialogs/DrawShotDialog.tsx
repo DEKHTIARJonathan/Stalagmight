@@ -7,7 +7,8 @@ import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
 import { formatStationId } from '../../utils/formatters';
 import { DialogWrapper } from './DialogWrapper';
-import type { StationRef, ShotData } from '../../types/project';
+import type { StationRef, ShotData, ShotKind } from '../../types/project';
+import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
 
 export default function DrawShotDialog() {
   const { closeDialog, dialogData, setSelection } = useUIStore();
@@ -56,7 +57,7 @@ export default function DrawShotDialog() {
   const [length, setLength] = useState((prependMode || appendMode) ? '0' : '');
   const [depthIn, setDepthIn] = useState(sourceGeometry ? String(sourceGeometry.depth_in) : '');
   const [depthOut, setDepthOut] = useState(sourceGeometry ? String(sourceGeometry.depth_out) : '');
-  const [isReference, setIsReference] = useState(false);
+  const [shotKind, setShotKind] = useState<ShotKind>('Normal');
   const [left, setLeft] = useState('');
   const [right, setRight] = useState('');
   const [up, setUp] = useState('');
@@ -143,7 +144,7 @@ export default function DrawShotDialog() {
         up: up ? parseFloat(up) : null,
         down: down ? parseFloat(down) : null,
         comment: null,
-        is_reference: isReference,
+        kind: shotKind,
         marker_index: null,
         temperature: null,
       };
@@ -201,7 +202,7 @@ export default function DrawShotDialog() {
   // Track if form has been modified (exclude auto-initialized depth/length from making dirty)
   const userModifiedDepth = depthIn !== '' && !depthAutoInitialized.current;
   const userModifiedLength = length !== '' && !lengthAutoInitialized.current;
-  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || isReference || left !== '' || right !== '' || up !== '' || down !== '';
+  const isDirty = azimuthIn !== '' || userModifiedLength || userModifiedDepth || shotKind !== 'Normal' || left !== '' || right !== '' || up !== '' || down !== '';
 
   if (!fromStation) {
     return null;
@@ -348,11 +349,26 @@ export default function DrawShotDialog() {
           </div>
         </details>
 
-        {/* Reference checkbox */}
-        <label className="flex items-center gap-2 cursor-pointer">
-          <input type="checkbox" checked={isReference} onChange={(e) => setIsReference(e.target.checked)} />
-          <span>Mark as Jump/Reference shot</span>
-          <span className="text-text-secondary text-sm">(temporary connection)</span>
+        {/* Shot kind (#27): drawing one shot by hand is exactly the case where
+            the user knows whether they swam it, so offer the choice outright
+            rather than leaving it to the classifier. */}
+        <label className="flex items-center gap-2">
+          <span>Shot kind</span>
+          <select
+            data-testid="draw-shot-kind"
+            className="bg-surface border border-border rounded px-2 py-1"
+            value={shotKind}
+            onChange={(e) => setShotKind(e.target.value as ShotKind)}
+          >
+            {SHOT_KIND_CYCLE.map((kind) => (
+              <option key={kind} value={kind}>
+                {SHOT_KIND_MENU_LABEL[kind]}
+              </option>
+            ))}
+          </select>
+          <span className="text-text-secondary text-sm">
+            (a jump is swum; a reference is a survey tie)
+          </span>
         </label>
 
         {/* Actions */}

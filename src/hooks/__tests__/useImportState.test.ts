@@ -18,7 +18,7 @@ const baseShot: EditableShot = {
   up: null,
   down: null,
   comment: null,
-  is_reference: false,
+  kind: 'Normal' as const,
 };
 
 const baseConfig: SectionConfig = {

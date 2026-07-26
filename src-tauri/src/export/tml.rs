@@ -615,7 +615,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                 root_shots.push(ExportShot {
                     id: shot_ariane_id,
                     from_id: prev_id,
-                    shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                    shot_type: if shot.kind.is_virtual() {
+                        "VIRTUAL"
+                    } else {
+                        "REAL"
+                    },
                     section: section_name.clone(),
                     azimuth: shot.azimuth_in,
                     length: shot.length,
@@ -686,7 +690,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                     reverse_shots.push(ExportShot {
                         id: shot_ariane_id,
                         from_id: prev_id,
-                        shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                        shot_type: if shot.kind.is_virtual() {
+                            "VIRTUAL"
+                        } else {
+                            "REAL"
+                        },
                         section: split_name.clone(),
                         // Ariane carries a single forward azimuth per shot. The reverse
                         // pre-zero leg must therefore be synthesized as reciprocal heading.
@@ -759,7 +767,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         fwd_shots.push(ExportShot {
                             id: shot_ariane_id,
                             from_id: prev_id,
-                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            shot_type: if shot.kind.is_virtual() {
+                                "VIRTUAL"
+                            } else {
+                                "REAL"
+                            },
                             section: section_name.clone(),
                             azimuth: shot.azimuth_in,
                             length: shot.length,
@@ -835,7 +847,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
                             from_id: prev_id,
-                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            shot_type: if shot.kind.is_virtual() {
+                                "VIRTUAL"
+                            } else {
+                                "REAL"
+                            },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
                             length: shot.length,
@@ -898,7 +914,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
                             from_id: prev_id,
-                            shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                            shot_type: if shot.kind.is_virtual() {
+                                "VIRTUAL"
+                            } else {
+                                "REAL"
+                            },
                             section: rev_name.clone(),
                             azimuth: reverse_pre_zero_azimuth(shot.azimuth_in),
                             length: shot.length,
@@ -1009,7 +1029,11 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
             shots.push(ExportShot {
                 id: shot_ariane_id,
                 from_id: prev_id,
-                shot_type: if shot.is_reference { "VIRTUAL" } else { "REAL" },
+                shot_type: if shot.kind.is_virtual() {
+                    "VIRTUAL"
+                } else {
+                    "REAL"
+                },
                 section: section_name.clone(),
                 azimuth: shot.azimuth_in,
                 length: shot.length,
@@ -1440,8 +1464,8 @@ fn color_to_ariane(hex: &str) -> String {
 mod tests {
     use super::*;
     use crate::models::{
-        ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, StationMerge,
-        ZeroDatum,
+        ClosureStrategy, GpsCoordinates, LoopClosure, SectionData, ShotData, ShotKind,
+        StationMerge, ZeroDatum,
     };
     use tempfile::NamedTempFile;
 
@@ -1932,12 +1956,12 @@ mod tests {
             color: "#000000".to_string(),
             shots: vec![
                 ShotData {
-                    is_reference: true,
+                    kind: ShotKind::Jump,
                     length: 5.0,
                     ..Default::default()
                 },
                 ShotData {
-                    is_reference: false,
+                    kind: ShotKind::Normal,
                     length: 3.0,
                     ..Default::default()
                 },

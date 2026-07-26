@@ -46,7 +46,7 @@ use std::path::Path;
 /// records which importer produced a section. `migrate_pitch_to_down_convention`
 /// infers it from the geometry and negates only the sections that need it. No
 /// column changes, so the carry-forward fence is unaffected.
-const SCHEMA_VERSION: i32 = 12;
+const SCHEMA_VERSION: i32 = 13;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

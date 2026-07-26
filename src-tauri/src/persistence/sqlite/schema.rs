@@ -418,6 +418,93 @@ impl Database {
         Ok(())
     }
 
+    /// Replace the boolean `is_reference` column with a 3-way `kind`
+    /// (schema v12→v13, #27).
+    ///
+    /// Every legacy `is_reference = 1` row becomes [`ShotKind::Jump`] (issue #27
+    /// q2: most user-toggled reference shots are swum shortcuts in practice).
+    /// That is only a seed: `pending_kind_classification` is set so the next
+    /// project load runs the chain classifier once and demotes the runs that are
+    /// not actually bounded, landing existing files where a fresh import would.
+    /// The classifier needs sections, merges and closures assembled into a
+    /// `Project`, which is not available on this bare connection, hence the flag
+    /// rather than doing it inline.
+    ///
+    /// Idempotent: the column rewrite is guarded on the old column still
+    /// existing, but the pending flag is set unconditionally.
+    ///
+    /// The two halves are guarded separately on purpose. A pre-v2 file is run
+    /// through [`Self::rebuild_tables_with_foreign_keys`] first, and that rebuild
+    /// already creates `shots` with `kind` and maps the legacy `is_reference`
+    /// rows onto it - so by the time this runs there is no `is_reference` column
+    /// left to convert, yet the rows still hold nothing but q2's Jump seed and
+    /// still need the chain classifier. Guarding the flag on the column too
+    /// (which is what the first cut did) silently skipped the backfill for every
+    /// pre-v2 project, leaving its reference ties counted as swum jumps forever.
+    fn migrate_is_reference_to_kind(conn: &Connection) -> Result<()> {
+        let needs_column_rewrite = conn
+            .prepare("SELECT is_reference FROM shots LIMIT 0")
+            .is_ok();
+        if needs_column_rewrite {
+            tracing::info!("Converting shots.is_reference → shots.kind (v12→v13, #27)");
+
+            let has_kind = conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
+            if !has_kind {
+                conn.execute_batch(
+                    "ALTER TABLE shots ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+            // 1 == ShotKind::Jump. Kept as a literal because this migration must
+            // stay pinned to the v13 encoding even if the enum grows later.
+            //
+            // `!= 0`, not `= 1`: the pre-#27 loader read this column as
+            // `row.get::<_, i32>()? != 0`, so ANY truthy value meant virtual. A
+            // hand-edited or otherwise noncanonical `-1` / `2` would keep the
+            // new column's `Normal` default and then be dropped along with
+            // `is_reference` - permanently turning a reference tie into a
+            // swimmable leg, with the backfill unable to help because the shot
+            // no longer looks virtual to it. The pre-v2 rebuild path in
+            // integrity.rs already widens with `!= 0`; this matches it.
+            conn.execute_batch(
+                r"
+                UPDATE shots SET kind = 1 WHERE is_reference != 0;
+                ALTER TABLE shots DROP COLUMN is_reference;
+                ",
+            )?;
+        }
+        // Unconditional: reaching this function at all means the file predates
+        // v13, so its kinds are a seed and the next load owes it one chain pass.
+        conn.execute_batch(
+            r"
+            INSERT OR REPLACE INTO project_settings (key, value)
+                VALUES ('pending_kind_classification', '1');
+            ",
+        )?;
+
+        // Materialise `showJumps` now, from whatever single toggle this file
+        // used, so the two split toggles are independent from the first open.
+        //
+        // The load-time fallback (`showJumps` -> `showReferenceShots` ->
+        // `showVirtualShots`) gets the FIRST open right, but it is a read-time
+        // default, not a stored value: `save_display_setting` writes only the key
+        // it was given, so a user who then changes References alone still has no
+        // `showJumps` row, and the next open reads their NEW reference value as
+        // the jump default - silently moving a toggle they never touched.
+        // Writing the row here closes that window. `INSERT ... WHERE NOT EXISTS`
+        // keeps it idempotent and never overwrites a real choice.
+        conn.execute_batch(
+            r"
+            INSERT INTO display_settings (key, value)
+            SELECT 'showJumps', COALESCE(
+                (SELECT value FROM display_settings WHERE key = 'showReferenceShots'),
+                (SELECT value FROM display_settings WHERE key = 'showVirtualShots'),
+                'true')
+            WHERE NOT EXISTS (SELECT 1 FROM display_settings WHERE key = 'showJumps');
+            ",
+        )?;
+        Ok(())
+    }
+
     /// Normalise stored pitch to the +down convention (schema v11→v12, #296).
     ///
     /// DMP import used to keep the mNemo's +up reading, so shots from a DMP
@@ -646,7 +733,20 @@ impl Database {
         Ok(())
     }
 
-    /// Drop persisted undo/redo stacks written by pre-v7 builds (schema v6→v7).
+    /// Drop the persisted undo/redo stacks. Called by every migration whose
+    /// change makes older payloads unsafe to replay.
+    ///
+    /// Callers, and what each is protecting against:
+    ///
+    /// - **v6→v7** (the original): explicit-null `ShotUpdates` fields, detailed
+    ///   below. Also runs for any file below `UNDO_FORMAT_SAFE_VERSION`.
+    /// - **v11→v12**: entries holding a pre-#296 pitch, via
+    ///   [`invalidate_pre_pitch_flip_state`](Self::invalidate_pre_pitch_flip_state).
+    /// - **v12→v13**: entries holding a legacy `is_reference` boolean. A bare
+    ///   `true` cannot say which virtual kind it meant, so `de_shot_kind` maps it
+    ///   to `Jump`; replaying one after the #27 backfill settled that shot on
+    ///   `Reference` would make a non-swimmable tie swimmable again, and no
+    ///   classifier pass runs on an undo to correct it.
     ///
     /// Pre-v7 builds serialized every untouched nullable `ShotUpdates` field as
     /// an explicit `"left": null, "pitch_in": null, ...` inside the persisted
@@ -668,8 +768,8 @@ impl Database {
                 tracing::info!(
                     table,
                     removed,
-                    purpose = "prevent legacy undo entries from clearing shot fields",
-                    "Dropped pre-v7 persisted undo history (explicit-null payloads are unsafe to replay)"
+                    purpose = "prevent legacy payloads from being replayed unsafely",
+                    "Dropped persisted undo history (legacy payloads are unsafe to replay)"
                 );
             }
         }
@@ -876,6 +976,19 @@ impl Database {
             self.invalidate_collab_tml_baseline()?;
             tx.commit()?;
         }
+        if current < 13 {
+            Self::migrate_is_reference_to_kind(&self.conn)?;
+            // Drop persisted undo/redo, for the same reason v11->v12 does after a
+            // pitch flip. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v12 file keeps
+            // its history, and those payloads still carry the legacy
+            // `is_reference` boolean - which `de_shot_kind` maps to `Jump`
+            // unconditionally, since a bare `true` cannot say which virtual kind
+            // it meant. Replaying one after the backfill has settled a tie on
+            // `Reference` would restore it as a Jump: swimmable again, and back
+            // in gas, penetration and the ruler, with no classifier pass to
+            // correct it. The history is not worth an unsafe shortcut.
+            self.drop_legacy_undo_history()?;
+        }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
         let _ = self.conn.execute(
@@ -930,7 +1043,7 @@ impl Database {
                 up_distance REAL,
                 down_distance REAL,
                 comment TEXT,
-                is_reference INTEGER NOT NULL DEFAULT 0,
+                kind INTEGER NOT NULL DEFAULT 0,
                 marker_index INTEGER,
                 temperature REAL,
                 uuid TEXT,

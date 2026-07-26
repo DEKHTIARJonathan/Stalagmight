@@ -199,6 +199,8 @@ export class SurveyCustomController {
   private shotsVisible = true;
   private stationsVisible = true;
   private referenceShotsVisible = true;
+  /** #27: jumps hide independently of references. */
+  private jumpShotsVisible = true;
   /** Anchored / immovable dim set applied to every build; survives re-enable. */
   private dimState: CustomDimState = EMPTY_DIM;
   /** Features hidden for the active move drag (drag begin/end). Applied as the
@@ -290,6 +292,14 @@ export class SurveyCustomController {
     if (this.active) this.map.triggerRepaint();
   }
 
+  /** Mirror setShowJumps: hide/show jump shots independently of references
+   *  (#27), same instant shader-uniform path. */
+  setJumpShotsVisible(visible: boolean): void {
+    this.jumpShotsVisible = visible;
+    this.layer?.setJumpShotsVisible(visible);
+    if (this.active) this.map.triggerRepaint();
+  }
+
   /** Set the active flag, firing {@link onActiveChange} only on a real change so
    *  SurveyLayer can drop / re-publish the stock bulk sources in lockstep. */
   private setActive(v: boolean): void {
@@ -310,6 +320,7 @@ export class SurveyCustomController {
     layer.setShotsVisible(this.shotsVisible);
     layer.setStationsVisible(this.stationsVisible);
     layer.setReferenceShotsVisible(this.referenceShotsVisible);
+    layer.setJumpShotsVisible(this.jumpShotsVisible);
     // Insert below the interact overlay (the lowest kept layer above the survey
     // geometry) so the custom geometry sits above loop closures / ghosts and
     // beneath every hover/selection overlay + labels. Falls back to the top if

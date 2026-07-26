@@ -3,7 +3,7 @@ use chrono::Utc;
 use serde::Serialize;
 use std::path::Path;
 
-use crate::models::Project;
+use crate::models::{Project, ShotKind};
 
 /// Export project data to JSON format
 pub fn export_json(project: &Project, path: &Path) -> Result<()> {
@@ -51,7 +51,7 @@ pub struct JsonShot {
     pub depth_out: f64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub lrud: Option<[f64; 4]>,
-    pub is_reference: bool,
+    pub kind: ShotKind,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
 }
@@ -97,7 +97,7 @@ impl JsonExport {
                             } else {
                                 None
                             },
-                            is_reference: shot.is_reference,
+                            kind: shot.kind,
                             comment: shot.comment.clone(),
                         })
                         .collect(),
@@ -208,7 +208,7 @@ mod tests {
                 length: 1.0,
                 depth_in: 0.0,
                 depth_out: 0.0,
-                is_reference: true,
+                kind: ShotKind::Reference,
                 ..Default::default()
             }],
         });
@@ -220,6 +220,6 @@ mod tests {
         let contents = std::fs::read_to_string(file.path()).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&contents).unwrap();
         let shot = &parsed["sections"][0]["shots"][0];
-        assert_eq!(shot["is_reference"], true);
+        assert_eq!(shot["kind"], "Reference");
     }
 }

@@ -8,7 +8,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use super::AppState;
+use super::{AppState, VirtualShotMode};
 use crate::speleodb::auth::TokenStore;
 use crate::speleodb::client;
 // [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
@@ -1301,8 +1301,12 @@ impl AppState {
         let (sections, closures) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
                 .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
+        // Auto: adoption is an ordinary Ariane import with no dialog to carry a
+        // per-file override, so its virtual shots get the chain rule (#27).
+        let auto = VirtualShotMode::Auto;
         let imported =
-            self.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+            self.execute_import_sections(sections, closures, None, Vec::new(), Vec::new(), auto);
+
         if !imported.success {
             return Err(local_dto(SpeleoDbError::Parse(format!(
                 "could not import the Ariane .tml: {}",

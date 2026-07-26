@@ -513,7 +513,7 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
         case 'update_section':
         case 'delete_section':
         case 'create_shot':
-        case 'set_shot_reference':
+        case 'set_shot_kind':
           return { success: true };
 
         default:

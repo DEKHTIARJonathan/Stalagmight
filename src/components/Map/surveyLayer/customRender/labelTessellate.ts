@@ -26,7 +26,7 @@
  * simply pre-filters the descriptor list.
  */
 import type { GpsOrigin, DecimalPrecision } from '../../../../types/config';
-import { type SurveyData, SHOT_FLAG_IS_REFERENCE } from '../../../../types/survey-data';
+import { type SurveyData, shotKindFromFlags } from '../../../../types/survey-data';
 import { metersToMapCoords } from '../../../../utils/coordinates';
 import { lngLatToMercator } from '../mercatorCoords';
 import { packCssColor, type Rgba8 } from './colorPack';
@@ -190,10 +190,19 @@ export function buildLabelDescriptors(
     viewport === undefined ||
     (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
   const lookup = buildStationLookup(data);
-  // allRef[g] === 1 <=> every shot touching station g is a reference shot (or it
-  // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot - the
-  // `stationsWithNonReferenceShot` predicate features.ts uses.
+  // allRef[g] is the per-station kind mask (#27): 0 = a Normal shot touches it,
+  // 1 = only Jumps, 2 = only References, 3 = both / no legs. Carried into the
+  // label flags per-kind rather than collapsed, so a station label cannot
+  // outlive the station marker it sits on.
   const allRef = computeStationAllReference(data, lookup);
+  const stationKindFlags = (g: number): number => {
+    const mask = allRef[g]!;
+    if (mask === 0) return 0;
+    return (
+      ((mask & 1) !== 0 ? LABEL_FLAG.ALL_JUMP : 0) |
+      ((mask & 2) !== 0 ? LABEL_FLAG.ALL_REFERENCE : 0)
+    );
+  };
   const stationRel = projectStationsRel(data, gpsOrigin, anchorX, anchorY);
   const { colorCtx } = ctx;
 
@@ -209,7 +218,12 @@ export function buildLabelDescriptors(
       const fromG = inner.get(i);
       const toG = inner.get(i + 1);
       if (fromG === undefined || toG === undefined) continue;
-      const isRef = (data.shotFlags[shotGlobalIdx]! & SHOT_FLAG_IS_REFERENCE) !== 0;
+      const shotKind = shotKindFromFlags(data.shotFlags[shotGlobalIdx]!);
+      // Carry WHICH virtual kind, not just "virtual": the two hide independently
+      // (#27), so a single shared bit orphans one kind's labels over collapsed
+      // geometry whenever only the other kind is hidden.
+      const virtualFlag =
+        shotKind === 'Jump' ? LABEL_FLAG.JUMP : shotKind === 'Reference' ? LABEL_FLAG.REFERENCE : 0;
       const fx = data.stationCoords[fromG * 3]!;
       const fy = data.stationCoords[fromG * 3 + 1]!;
       const fz = data.stationCoords[fromG * 3 + 2]!;
@@ -232,7 +246,7 @@ export function buildLabelDescriptors(
         anchorY: ay,
         color: packCssColor(resolveShotLabelColor(avgDepth, colorCtx)),
         ordinal: globalShotOrdinal,
-        flags: isRef ? LABEL_FLAG.REFERENCE : 0,
+        flags: virtualFlag,
         sectionId: section.id,
         shotGlobal: shotGlobalIdx,
         shotId,
@@ -248,11 +262,11 @@ export function buildLabelDescriptors(
             ? ctx.commentColor(`${section.id}:s${shotId}`)
             : packCssColor(colorCtx.labelColor),
           ordinal: 0,
-          // Mirror the shot label: a reference-shot comment carries REFERENCE so
-          // the shader's hide-reference uniform collapses it with its geometry.
-          // Without it the comment orphans (stays visible) when reference shots
-          // are hidden, since flags:0 never matches the hide mask.
-          flags: isRef ? LABEL_FLAG.REFERENCE : 0,
+          // Mirror the shot label: a virtual shot's comment carries its own
+          // kind bit so the matching hide uniform collapses it with its
+          // geometry. Without it the comment orphans (stays visible) when that
+          // kind is hidden, since flags:0 never matches the hide mask.
+          flags: virtualFlag,
           sectionId: section.id,
           shotGlobal: shotGlobalIdx,
           shotId,
@@ -280,7 +294,7 @@ export function buildLabelDescriptors(
       const z = data.stationCoords[g * 3 + 2]!;
       let flags = 0;
       if (stationIndex === sectionMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_SECTION;
-      if (allRef[g] === 1) flags |= LABEL_FLAG.ALL_REFERENCE;
+      flags |= stationKindFlags(g);
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
@@ -311,7 +325,7 @@ export function buildLabelDescriptors(
           // ALL_REFERENCE so the hide-reference uniform collapses it with its
           // geometry (the station comment shows below the station label). Without
           // it the comment orphans when reference shots are hidden.
-          flags: allRef[g] === 1 ? LABEL_FLAG.ALL_REFERENCE : 0,
+          flags: stationKindFlags(g),
           sectionId: sid,
           stationGlobal: g,
           stationIndex,
@@ -329,7 +343,12 @@ export function buildLabelDescriptors(
     let anchorGlobal: number | undefined;
     let anchorStationIdx = Infinity;
     let foundNonRef = false;
+    // Union of the kinds touching this section's stations, for the case where
+    // NONE of them has a Normal shot: the section name then hides on the same
+    // per-kind rule its stations do, not on a both-off rule (#27).
+    let sectionKindFlags = 0;
     for (const [stIdx, gIdx] of inner.entries()) {
+      sectionKindFlags |= stationKindFlags(gIdx);
       const hasNonRef = allRef[gIdx] === 0;
       if (foundNonRef && !hasNonRef) continue;
       if (hasNonRef && !foundNonRef) {
@@ -345,7 +364,6 @@ export function buildLabelDescriptors(
     const secX = stationRel[anchorGlobal * 2]!;
     const secY = stationRel[anchorGlobal * 2 + 1]!;
     if (!inView(secX, secY)) continue;
-    const allStationsReference = !foundNonRef;
     descriptors.push({
       kind: LABEL_KIND.SECTION_NAME,
       text: formatSectionLabel(section.name),
@@ -353,7 +371,7 @@ export function buildLabelDescriptors(
       anchorY: secY,
       color: packCssColor(resolveSectionLabelColor(section.color)),
       ordinal: 0,
-      flags: allStationsReference ? LABEL_FLAG.ALL_REFERENCE : 0,
+      flags: foundNonRef ? 0 : sectionKindFlags,
       sectionId: section.id,
     });
   }

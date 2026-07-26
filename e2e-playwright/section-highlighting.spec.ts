@@ -60,7 +60,7 @@ const sectionSeeds: SectionSeed[] = [
     shots: [
       { azimuth_in: 45, azimuth_out: 225, length: 10, depth_in: -1, depth_out: -3 },
       { azimuth_in: 90, azimuth_out: 270, length: 12, depth_in: -3, depth_out: -6 },
-      { azimuth_in: 120, azimuth_out: 300, length: 6, depth_in: -6, depth_out: -4, is_reference: true },
+      { azimuth_in: 120, azimuth_out: 300, length: 6, depth_in: -6, depth_out: -4, kind: 'Reference' },
     ],
   },
   {
@@ -774,14 +774,14 @@ test.describe('Section Highlighting', () => {
         const stores = (window as unknown as {
           __E2E_TEST__?: {
             projectStore: { getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ id: number; is_reference?: boolean }> }> } | null
+              project: { sections: Array<{ id: number; shots: Array<{ id: number; kind?: string }> }> } | null
             } };
           };
         }).__E2E_TEST__;
 
         const sections = stores?.projectStore.getState().project?.sections ?? [];
         for (const section of sections) {
-          const shot = section.shots?.find((s) => s.is_reference);
+          const shot = section.shots?.find((s) => s.kind && s.kind !== 'Normal');
           if (shot) return { sectionId: section.id, shotId: shot.id };
         }
         return null;

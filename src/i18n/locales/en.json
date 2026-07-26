@@ -312,8 +312,13 @@
       },
       "jumpMultiplier": {
         "label": "Jump RMV multiplier",
-        "help": "Extra breathing-rate factor on jump/reference legs (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
+        "help": "Extra breathing-rate factor on virtual legs - jumps always, and reference ties when \"Route through reference ties\" is on (tying in a jump is more work). 1.0 = no bump; 1.5 is a useful value. Never below 1.0.",
         "aria": "Jump RMV multiplier"
+      },
+      "includeReferenceLegs": {
+        "label": "Route through reference ties",
+        "help": "Off (default): reference ties are survey connections nobody swims, so gas, penetration distance and the ruler route around them. On: restores the pre-split behaviour where every marked shot counts as swimmable - useful if a tie in your data really is divable and you would rather not reclassify it.",
+        "aria": "Route through reference ties"
       }
     },
     "units": {
@@ -1130,6 +1135,19 @@
     }
   },
   "dialogs": {
+    "unrecognisedShotKind": {
+      "title": "Unreadable shot types",
+      "body": "{{count}} shot(s) in this project store a type this version does not recognise - from a file written by a newer build, a hand-edit, or corruption. They have been treated as reference ties for now, which keeps them OUT of gas, penetration and the ruler, so nothing can route through a leg we could not read. Tell us what they really are, or leave them as they stand.",
+      "shot": "Shot",
+      "found": "Stored value",
+      "treatAs": "Treat as",
+      "treatAsAria": "Type for shot {{number}}",
+      "unnamedSection": "Unnamed section",
+      "note": "Whatever you pick is an ordinary edit - undoable, and saved with the project.",
+      "applyFailed": "Could not apply the changes - the project may be read-only. Your selections are still here; close only if you want to leave everything as reference ties.",
+      "keepAsReference": "Leave as references",
+      "apply": "Apply"
+    },
     "settings": {
       "title": "Settings"
     },
@@ -1333,6 +1351,7 @@
       "upShort": "U",
       "downShort": "D",
       "referenceShort": "J/R",
+      "kindCycleHint": "{{current}} - click for {{next}}",
       "comment": "Comment",
       "sectionIdShort": "Sec ID",
       "shotIdShort": "Shot ID"
@@ -1568,9 +1587,8 @@
       "connected": "Connected",
       "startStation": "Start station",
       "endStation": "End station",
-      "reference": "Jump/Reference shot",
-      "markReference": "Mark as Jump/Reference",
-      "markPermanent": "Mark as permanent"
+      "kindBadge": "{{kind}} shot",
+      "markAs": "Mark as {{kind}}"
     },
     "section": {
       "title": "Section",
@@ -1662,7 +1680,8 @@
       "sectionNames": "Section names",
       "stationLabels": "Station labels",
       "shots": "Shots",
-      "referenceShots": "Jump/Reference",
+      "jumps": "Jumps",
+      "referenceShots": "References",
       "stationComments": "Station comments",
       "shotData": "Shot data",
       "shotComments": "Shot comments",
@@ -1679,7 +1698,8 @@
       "sectionNames": "Show section labels",
       "stationLabels": "Show station IDs",
       "shots": "Show shot lines",
-      "referenceShots": "Show Jump/Reference shots",
+      "jumps": "Show jump shots (swum shortcuts)",
+      "referenceShots": "Show reference shots (survey ties)",
       "stationComments": "Show station comments on map",
       "shotData": "Show shot data labels",
       "shotComments": "Show shot comments on map",
@@ -2969,5 +2989,10 @@
       "deleted": "Project deleted from SpeleoDB. Your local copy is now a plain project.",
       "deleteFailed": "Could not delete the project"
     }
+  },
+  "shotKind": {
+    "normal": "Permanent",
+    "jump": "Jump",
+    "reference": "Reference"
   }
 }

@@ -35,6 +35,7 @@ use stalagmight_lib::core::reconcile::{
     AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
     MatchQuality, RemovedShot, SectionMetaChange,
 };
+use stalagmight_lib::core::state::VirtualShotMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
 use stalagmight_lib::models::placement_suggest::{
@@ -49,8 +50,8 @@ use stalagmight_lib::models::{
     ImportSectionConfig, LoopClosureWire, PathShot, PlanMode, Project, ProjectMetadata,
     ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint, Section, SectionData,
     SectionRelationships, SectionStats, SectionUpdates, Shot, ShotBaselineEntry, ShotData,
-    ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef, SurveyDirection,
-    TankMaterial, Team, ZeroDatumWire,
+    ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair, StationRef,
+    SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -144,6 +145,9 @@ fn main() {
     export::<ExistingShotUpdate>(&out_dir);
     export::<Shot>(&out_dir);
     export::<ShotData>(&out_dir);
+    export::<ShotKind>(&out_dir);
+    export::<UnrecognisedShotKind>(&out_dir);
+    export::<VirtualShotMode>(&out_dir);
     export::<ShotUpdates>(&out_dir);
     export::<Station>(&out_dir);
     export::<StationRef>(&out_dir);
@@ -381,6 +385,9 @@ fn main() {
         "ImportPlacement",
         "Shot",
         "ShotData",
+        "ShotKind",
+        "UnrecognisedShotKind",
+        "VirtualShotMode",
         "ShotUpdates",
         "Station",
         "StationRef",

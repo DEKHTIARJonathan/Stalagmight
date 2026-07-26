@@ -83,7 +83,7 @@ impl AppState {
                             up: updates.up.as_ref().map(|_| shot.up),
                             down: updates.down.as_ref().map(|_| shot.down),
                             comment: updates.comment.as_ref().map(|_| shot.comment.clone()),
-                            is_reference: updates.is_reference.map(|_| shot.is_reference),
+                            kind: updates.kind.map(|_| shot.kind),
                             marker_index: updates.marker_index.as_ref().map(|_| shot.marker_index),
                             temperature: updates.temperature.as_ref().map(|_| shot.temperature),
                         };
@@ -134,16 +134,26 @@ impl AppState {
                 }
             }
 
-            // For reference status toggle, inverse is toggling back
-            Command::SetShotReference {
+            // The old boolean toggle inverted from the command alone (`!flag`).
+            // A 3-way kind cannot (#27 q12): "undo setting this to Reference"
+            // has to know whether it was Normal or Jump before. So read the
+            // current kind out of the project and carry it in the inverse.
+            // Falls back to UndoData::None if the shot is gone, matching how
+            // the other shot commands degrade rather than inventing a value.
+            Command::SetShotKind {
                 section_id,
                 shot_id,
-                is_reference,
-            } => UndoData::InverseCommand(Command::SetShotReference {
-                section_id: *section_id,
-                shot_id: *shot_id,
-                is_reference: !*is_reference,
-            }),
+                ..
+            } => project
+                .get_section(*section_id)
+                .and_then(|section| section.get_shot(*shot_id))
+                .map_or(UndoData::None, |shot| {
+                    UndoData::InverseCommand(Command::SetShotKind {
+                        section_id: *section_id,
+                        shot_id: *shot_id,
+                        kind: shot.kind,
+                    })
+                }),
 
             // Merge can shift sections BEYOND the two merge groups: after aligning
             // the groups, cascade_connection_offsets re-anchors any section reachable

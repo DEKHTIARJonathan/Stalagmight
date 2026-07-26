@@ -21,7 +21,7 @@ function makeShot(id: number, overrides: Partial<{
     azimuth_in: 90, azimuth_out: 91, length: 4.0,
     depth_in: 8, depth_out: 10, pitch_in: -3, pitch_out: -4,
     left: 1.5, right: 2.5, up: 1.0, down: 0.8,
-    comment: null, is_reference: false,
+    comment: null, kind: 'Normal' as const,
     isNew: false, isDeleted: false,
     ...overrides,
   };

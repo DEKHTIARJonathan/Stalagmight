@@ -2,7 +2,7 @@ use tauri::State;
 
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
-    DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotUpdates,
+    DeleteShotImpact, DeleteShotRangeImpact, SectionId, ShotData, ShotId, ShotKind, ShotUpdates,
 };
 
 /// Create a new shot
@@ -238,26 +238,26 @@ pub(crate) fn delete_shot_range_shift_impl(
     state.execute_delete_shot_range_shift(section_id, start_shot_id, end_shot_id)
 }
 
-/// Set shot reference status
+/// Set a shot's kind: permanent, jump, or reference (#27).
 #[tauri::command]
-pub fn set_shot_reference(
+pub fn set_shot_kind(
     state: State<AppState>,
     section_id: SectionId,
     shot_id: ShotId,
-    is_reference: bool,
+    kind: ShotKind,
 ) -> CommandResult {
-    set_shot_reference_impl(state.inner(), section_id, shot_id, is_reference)
+    set_shot_kind_impl(state.inner(), section_id, shot_id, kind)
 }
 
-pub(crate) fn set_shot_reference_impl(
+pub(crate) fn set_shot_kind_impl(
     state: &AppState,
     section_id: SectionId,
     shot_id: ShotId,
-    is_reference: bool,
+    kind: ShotKind,
 ) -> CommandResult {
-    state.execute(Command::SetShotReference {
+    state.execute(Command::SetShotKind {
         section_id,
         shot_id,
-        is_reference,
+        kind,
     })
 }

@@ -8,8 +8,9 @@ use crate::core::undo::{UndoData, UndoEntry};
 use crate::core::{Command, CommandResult, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
-    LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotUpdates,
-    StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection, MIN_SPLIT_CHILD_LENGTH_M,
+    LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
+    ShotUpdates, StationAnchor, StationKey, StationMerge, StationRef, SurveyDirection,
+    MIN_SPLIT_CHILD_LENGTH_M,
 };
 use crate::persistence::Database;
 use tempfile::TempDir;
@@ -3456,7 +3457,7 @@ fn test_split_shot_at_distance_happy_path() {
                     up: Some(0.5),
                     down: Some(0.25),
                     comment: Some("mid comment".to_string()),
-                    is_reference: false,
+                    kind: ShotKind::Normal,
                     marker_index: Some(3),
                     temperature: Some(15.0),
                 },
@@ -3506,7 +3507,7 @@ fn test_split_shot_at_distance_happy_path() {
     assert_eq!(head.comment, None);
     assert_eq!(head.marker_index, None);
     assert_eq!(head.temperature, Some(15.0));
-    assert!(!head.is_reference);
+    assert!(!head.kind.is_virtual());
 
     assert_eq!(
         tail.id, target_shot_id,
@@ -4040,7 +4041,7 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
     project.add_section(SectionData {
         color: "#ff0000".to_string(),
         shots: vec![ShotData {
-            is_reference: true,
+            kind: ShotKind::Jump,
             ..test_shot_data(10.0)
         }],
         ..Default::default()
@@ -4057,12 +4058,12 @@ fn test_split_shot_at_distance_reference_shot_both_children_reference() {
     let after = state.get_project_state().unwrap();
     let section = after.get_section(sec).unwrap();
     assert!(
-        section.shots[0].is_reference,
-        "head must inherit is_reference"
+        section.shots[0].kind.is_virtual(),
+        "head must inherit the shot kind"
     );
     assert!(
-        section.shots[1].is_reference,
-        "tail keeps its own is_reference"
+        section.shots[1].kind.is_virtual(),
+        "tail keeps its own kind"
     );
 }
 
@@ -4445,8 +4446,52 @@ fn delete_first_shot_keeps_downstream_merged_neighbor_put() {
     }
 }
 
+/// #27: unreadable-kind diagnostics belong to the load that found them.
+///
+/// Two loads can overlap - opening B cancels A, but a cancelled load keeps
+/// running to its next checkpoint - so a slower A can reach the setter AFTER B
+/// stored its own. An unversioned slot would then hand B the section and shot
+/// ids of a project the user navigated away from, and applying that resolution
+/// would write kinds onto whatever shots in B happen to share those ids.
 #[test]
-fn test_set_shot_reference() {
+fn unrecognised_shot_kinds_are_scoped_to_their_load() {
+    use crate::models::UnrecognisedShotKind;
+
+    let state = AppState::new().unwrap();
+    let entry = |section_id: u32| UnrecognisedShotKind {
+        section_id,
+        shot_id: section_id * crate::models::FEATURE_ID_STRIDE,
+        shot_number: 1,
+        section_name: Some(format!("s{section_id}")),
+        raw_value: "7".to_string(),
+    };
+
+    // Load A (id 1), then load B (id 2) - the project the user actually opened.
+    state.set_unrecognised_shot_kinds(1, vec![entry(11)]);
+    state.set_unrecognised_shot_kinds(2, vec![entry(22)]);
+
+    // The cancelled A finally reaches the setter. It must NOT clobber B.
+    state.set_unrecognised_shot_kinds(1, vec![entry(11)]);
+
+    // A asking gets nothing rather than B's list.
+    assert!(
+        state.take_unrecognised_shot_kinds(1).is_empty(),
+        "a stale load must not receive the current load's diagnostics"
+    );
+
+    let for_b = state.take_unrecognised_shot_kinds(2);
+    assert_eq!(for_b.len(), 1);
+    assert_eq!(
+        for_b[0].section_id, 22,
+        "B must get its OWN diagnostics, not the cancelled load's"
+    );
+
+    // One-shot: a second ask returns nothing.
+    assert!(state.take_unrecognised_shot_kinds(2).is_empty());
+}
+
+#[test]
+fn test_set_shot_kind() {
     let state = AppState::new().unwrap();
 
     state.execute(Command::CreateProject {
@@ -4468,18 +4513,18 @@ fn test_set_shot_reference() {
     let shot_id = project.sections[0].shots[0].id;
 
     // Initially not reference
-    assert!(!project.sections[0].shots[0].is_reference);
+    assert!(!project.sections[0].shots[0].kind.is_virtual());
 
-    let result = state.execute(Command::SetShotReference {
+    let result = state.execute(Command::SetShotKind {
         section_id,
         shot_id,
-        is_reference: true,
+        kind: ShotKind::Jump,
     });
 
     assert!(result.success);
 
     let project = state.get_project_state().unwrap();
-    assert!(project.sections[0].shots[0].is_reference);
+    assert!(project.sections[0].shots[0].kind.is_virtual());
 }
 
 // === Undo/Redo Tests ===
@@ -6427,7 +6472,14 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
     };
-    let r = state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
+    let r = state.execute_import_sections(
+        vec![seed],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(r.success, "seed import failed: {:?}", r.error);
     let project = state.get_project_state().unwrap();
     let section_id = project.sections[0].id;
@@ -6471,6 +6523,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
                 },
             },
         ],
+        VirtualShotMode::Auto,
     );
     assert!(
         !r.success,
@@ -15492,7 +15545,14 @@ fn test_execute_import_sections_origin_placement() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -15506,6 +15566,153 @@ fn test_execute_import_sections_origin_placement() {
         project.sections.len(),
         0,
         "undo should remove all imported sections"
+    );
+}
+
+/// #27: the Jump/Reference pass has to run INSIDE the import command, before
+/// the `after` snapshot. When it ran afterwards, redo restored a snapshot that
+/// predated it and every virtual shot silently reverted to the parser's
+/// conservative `Reference` seed - dropping the far side of each jump out of
+/// gas, penetration and the ruler with no user edit.
+#[test]
+fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
+    use crate::models::{ImportPlacement, ImportSectionConfig, ShotKind};
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    // Real - virtual - real: the chain rule calls the middle shot a Jump.
+    let virtual_shot = ShotData {
+        kind: ShotKind::Reference,
+        ..test_shot_data(4.0)
+    };
+    let sections = vec![ImportSectionConfig {
+        section_index: 0,
+        name: Some("Imported".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    }];
+
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let kind_of_middle =
+        |state: &AppState| state.get_project_state().unwrap().sections[0].shots[1].kind;
+    assert_eq!(
+        kind_of_middle(&state),
+        ShotKind::Jump,
+        "a virtual run bounded by real survey classifies as Jump at import"
+    );
+
+    assert!(state.undo().success);
+    assert!(state.redo().success);
+    assert_eq!(
+        kind_of_middle(&state),
+        ShotKind::Jump,
+        "redo must restore the CLASSIFIED kind, not the parser's Reference seed"
+    );
+}
+
+/// #27: the per-file override is per *file*. It used to walk the whole project,
+/// so a second import silently re-kinded shots the user had hand-set in an
+/// earlier session - with no undo entry and nothing in the UI to say so.
+#[test]
+fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
+    use crate::models::{ImportPlacement, ImportSectionConfig, ShotKind};
+
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Test".to_string(),
+        location: None,
+    });
+
+    let config = |name: &str, shots: Vec<ShotData>| ImportSectionConfig {
+        section_index: 0,
+        name: Some(name.to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        quality: 1.0,
+        shots,
+        station_comments: Vec::new(),
+        placement: ImportPlacement::Origin,
+    };
+    let reference_shot = ShotData {
+        kind: ShotKind::Reference,
+        ..test_shot_data(4.0)
+    };
+
+    // First file: a bounded virtual run, which the user then demotes by hand to
+    // Reference (the non-swimmable tape tie the chain rule cannot detect).
+    let first = state.execute_import_sections(
+        vec![config(
+            "First",
+            vec![
+                test_shot_data(5.0),
+                reference_shot.clone(),
+                test_shot_data(6.0),
+            ],
+        )],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(first.success, "first import failed: {:?}", first.error);
+
+    let (section_id, shot_id) = {
+        let project = state.get_project_state().unwrap();
+        (project.sections[0].id, project.sections[0].shots[1].id)
+    };
+    state.execute(Command::SetShotKind {
+        section_id,
+        shot_id,
+        kind: ShotKind::Reference,
+    });
+    assert_eq!(
+        state.get_project_state().unwrap().sections[0].shots[1].kind,
+        ShotKind::Reference,
+    );
+
+    // Second file, imported with the "everything here is a jump" override.
+    let second = state.execute_import_sections(
+        vec![config("Second", vec![reference_shot])],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::AllJumps,
+    );
+    assert!(second.success, "second import failed: {:?}", second.error);
+
+    let project = state.get_project_state().unwrap();
+    assert_eq!(
+        project.sections[0].shots[1].kind,
+        ShotKind::Reference,
+        "the hand-set kind in the FIRST file must survive a later import"
+    );
+    assert_eq!(
+        project.sections[1].shots[0].kind,
+        ShotKind::Jump,
+        "the override still applies to the file being imported"
     );
 }
 
@@ -15538,8 +15745,14 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
     };
-    let result =
-        state.execute_import_sections(vec![seed], Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        vec![seed],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success, "seed import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     let section_id = project.sections[0].id;
@@ -15571,6 +15784,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
                 ..Default::default()
             },
         }],
+        VirtualShotMode::Auto,
     );
     assert!(
         !result.success,
@@ -15641,6 +15855,7 @@ fn test_execute_import_sections_from_importing_placement() {
         Some("abc123".to_string()),
         Vec::new(),
         Vec::new(),
+        VirtualShotMode::Auto,
     );
     assert!(result.success, "import failed: {:?}", result.error);
 
@@ -15686,7 +15901,14 @@ fn test_execute_import_sections_from_existing_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success, "import failed: {:?}", result.error);
     let project = state.get_project_state().unwrap();
     assert_eq!(project.sections.len(), 2);
@@ -15724,7 +15946,14 @@ fn test_execute_import_sections_manual_with_offset() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -15767,7 +15996,14 @@ fn test_execute_import_sections_zero_datum_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success, "import failed: {:?}", result.error);
 
     let project = state.get_project_state().unwrap();
@@ -15817,7 +16053,14 @@ fn test_execute_import_sections_rollback_on_failure() {
         },
     ];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(
         !result.success,
         "should fail when merge target doesn't exist"
@@ -15840,7 +16083,14 @@ fn test_execute_import_sections_empty_is_noop() {
         location: None,
     });
 
-    let result = state.execute_import_sections(vec![], Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        vec![],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(result.success);
 }
 
@@ -15863,7 +16113,14 @@ fn test_execute_import_sections_no_project() {
         placement: ImportPlacement::Origin,
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(!result.success);
     assert!(result.error.unwrap_or_default().contains("No project open"));
 }
@@ -15904,7 +16161,14 @@ fn test_execute_import_sections_manual_snap_placement() {
         },
     }];
 
-    let result = state.execute_import_sections(sections, Vec::new(), None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     assert!(
         result.success,
         "import with ManualSnap failed: {:?}",
@@ -16588,6 +16852,7 @@ fn kb5_import_overlap_interpolation_integration() {
         None,
         Vec::new(),
         Vec::new(),
+        VirtualShotMode::Auto,
     );
     assert!(
         result_002.success,
@@ -16702,6 +16967,7 @@ fn kb5_import_overlap_interpolation_integration() {
         None,
         Vec::new(),
         existing_updates,
+        VirtualShotMode::Auto,
     );
     assert!(
         result_001.success,
@@ -17443,7 +17709,7 @@ fn test_merge_datum_section_does_not_move() {
 }
 
 /// Test 2f: A shot marked as reference (frozen) survives a merge followed by
-/// an undo. After undo the shot must still be marked is_reference=true.
+/// an undo. After undo the shot must still be virtual.
 #[test]
 fn test_reference_shot_survives_merge_then_undo() {
     let state = AppState::new().unwrap();
@@ -17481,12 +17747,12 @@ fn test_reference_shot_survives_merge_then_undo() {
         let proj = state.get_project_state().unwrap();
         proj.sections.iter().find(|s| s.id == a).unwrap().shots[0].id
     };
-    let ref_result = state.execute(Command::SetShotReference {
+    let ref_result = state.execute(Command::SetShotKind {
         section_id: a,
         shot_id: first_shot_id,
-        is_reference: true,
+        kind: ShotKind::Jump,
     });
-    assert!(ref_result.success, "SetShotReference should succeed");
+    assert!(ref_result.success, "SetShotKind should succeed");
 
     // Confirm it's marked before merge
     {
@@ -17500,7 +17766,10 @@ fn test_reference_shot_survives_merge_then_undo() {
             .iter()
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
-        assert!(shot.is_reference, "Shot should be reference before merge");
+        assert!(
+            shot.kind.is_virtual(),
+            "Shot should be virtual before merge"
+        );
     }
 
     // Merge A.2 ↔ B.0
@@ -17523,7 +17792,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
         assert!(
-            shot.is_reference,
+            shot.kind.is_virtual(),
             "Shot must still be reference after merge"
         );
     }
@@ -17542,7 +17811,7 @@ fn test_reference_shot_survives_merge_then_undo() {
             .find(|sh| sh.id == first_shot_id)
             .unwrap();
         assert!(
-            shot.is_reference,
+            shot.kind.is_virtual(),
             "Shot must still be reference after undo of merge"
         );
         // Merge should be gone
@@ -19767,7 +20036,14 @@ fn profile_tml_import_full() {
     );
 
     let t_exec_start = Instant::now();
-    let result = state.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
     let exec_elapsed = t_exec_start.elapsed();
     eprintln!(
         "│ execute_import_sections:     {:>9.2} ms",
@@ -20442,6 +20718,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
                 None,
                 Vec::new(),
                 Vec::new(),
+                VirtualShotMode::Auto,
             ),
         );
     }

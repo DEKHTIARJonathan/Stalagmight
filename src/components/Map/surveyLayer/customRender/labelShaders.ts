@@ -93,6 +93,16 @@ export const LABEL_FLAG = {
   DIM: 1 << 3,
   DRAG_HIDE: 1 << 4,
   COMMENT_HIDE: 1 << 5,
+  /** Set on a Jump shot's own labels (#27). REFERENCE means the Reference kind
+   *  specifically - the two split when the display toggles did, so a label can
+   *  be culled with the exact kind whose geometry the line shader collapsed. */
+  JUMP: 1 << 6,
+  /** Station/section counterpart of ALL_REFERENCE: the station is touched by
+   *  Jumps (#27). A station can be touched by BOTH virtual kinds, so unlike a
+   *  shot it needs a pair of bits rather than one - it stays drawn while ANY
+   *  kind touching it is drawn, which is not the same as "hide if my bit is
+   *  hidden". Mirrors the circle shader's mask exactly. */
+  ALL_JUMP: 1 << 7,
 } as const;
 
 /** Normalized SDF value at the glyph edge (= `1 - cutoff`, cutoff 0.25). See the
@@ -128,13 +138,16 @@ export const LABEL_UNIFORMS = {
   haloColor: 'u_halo_color', // vec4[5]
   haloWidthPx: 'u_halo_width_px', // float[5]
   hideReference: 'u_hide_reference',
+  hideJump: 'u_hide_jump',
 } as const;
 
 // The flag-bit literals are inlined into the GLSL (a `#define` block) so the
 // shader and the TS `LABEL_FLAG` table share one set of numbers by construction.
 const FLAG_DEFINES = `
 #define FLAG_REFERENCE ${LABEL_FLAG.REFERENCE}u
+#define FLAG_JUMP ${LABEL_FLAG.JUMP}u
 #define FLAG_ALL_REFERENCE ${LABEL_FLAG.ALL_REFERENCE}u
+#define FLAG_ALL_JUMP ${LABEL_FLAG.ALL_JUMP}u
 #define FLAG_DIM ${LABEL_FLAG.DIM}u
 #define FLAG_DRAG_HIDE ${LABEL_FLAG.DRAG_HIDE}u
 #define FLAG_COMMENT_HIDE ${LABEL_FLAG.COMMENT_HIDE}u
@@ -165,6 +178,7 @@ uniform float u_text_size_px[KIND_COUNT];
 uniform float u_opacity[KIND_COUNT];
 uniform float u_kind_visible[KIND_COUNT];
 uniform float u_hide_reference;
+uniform float u_hide_jump;
 in vec2 a_anchor;
 in vec2 a_offset_em;
 in vec2 a_uv;
@@ -194,9 +208,19 @@ void main() {
   // The one comment picked up during move_comment: hidden so only the
   // cursor-following tag shows (C3).
   if ((a_flags & FLAG_COMMENT_HIDE) != 0u) { collapse(); return; }
-  // Reference-shots hidden: collapse reference shot labels and all-reference
-  // station labels / section names (mirrors the stock setFilter parity).
-  if (u_hide_reference > 0.5 && (a_flags & (FLAG_REFERENCE | FLAG_ALL_REFERENCE)) != 0u) {
+  // A virtual shot's labels collapse with the geometry of THEIR OWN kind, so
+  // hiding one kind cannot orphan the other's text over an empty line (#27).
+  if (u_hide_reference > 0.5 && (a_flags & FLAG_REFERENCE) != 0u) { collapse(); return; }
+  if (u_hide_jump > 0.5 && (a_flags & FLAG_JUMP) != 0u) { collapse(); return; }
+  // A station (or section name) whose every leg is virtual disappears when every
+  // kind that touches IT is hidden - the same per-kind rule the circle shader
+  // applies, so a label can never outlive its own station marker. The two bits
+  // are independent: a station touched by both kinds carries both.
+  bool allJump = (a_flags & FLAG_ALL_JUMP) != 0u;
+  bool allRef = (a_flags & FLAG_ALL_REFERENCE) != 0u;
+  bool keptByJump = allJump && u_hide_jump < 0.5;
+  bool keptByRef = allRef && u_hide_reference < 0.5;
+  if ((allJump || allRef) && !keptByJump && !keptByRef) {
     collapse();
     return;
   }

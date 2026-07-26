@@ -13,7 +13,7 @@ import { GlyphAtlas, SDF_BUFFER, type GlyphRasterizer, type RasterizedGlyph } fr
 import { packCssColor } from '../colorPack';
 import {
   emptySurveyData,
-  SHOT_FLAG_IS_REFERENCE,
+  shotKindToFlags,
   type SurveyData,
 } from '../../../../../types/survey-data';
 import { commentColorForKey } from '../../displayColor';
@@ -57,7 +57,7 @@ function fixture(): SurveyData {
   d.shotCount = 2;
   d.shotIds = new Int32Array([0, 1]);
   d.shotSectionIds = new Int32Array([1, 1]);
-  d.shotFlags = new Uint8Array([0, SHOT_FLAG_IS_REFERENCE]);
+  d.shotFlags = new Uint8Array([0, shotKindToFlags('Reference')]);
   d.shotAzimuthIn = new Float32Array([312, 45]);
   d.shotLength = new Float32Array([4, 3]);
   d.shotDepthIn = new Float32Array([1, 2]);

@@ -46,6 +46,7 @@ describe('projectStore.createProject', () => {
             showStationLabels: false,
             showShotData: false,
             showReferenceShots: true,
+        showJumps: true,
             showZeroDatum: true,
             showGrid: false,
             showSatellite: false,

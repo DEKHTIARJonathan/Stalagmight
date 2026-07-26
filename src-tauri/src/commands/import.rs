@@ -5,7 +5,7 @@ use sha2::{Digest, Sha256};
 use tauri::{AppHandle, State};
 
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
-use crate::core::state::AppState;
+use crate::core::state::{AppState, VirtualShotMode};
 use crate::core::CommandResult;
 use crate::models::placement_suggest::{
     suggest_all_placements, suggest_placements, CrossSectionSuggestion, ExistingSection,
@@ -168,6 +168,7 @@ pub fn import_sections(
     file_hash: Option<String>,
     section_hashes: Option<Vec<String>>,
     existing_shot_updates: Option<Vec<crate::models::ExistingShotUpdate>>,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     let updates = existing_shot_updates.unwrap_or_default();
     tracing::info!(
@@ -182,6 +183,7 @@ pub fn import_sections(
         file_hash,
         section_hashes.unwrap_or_default(),
         updates,
+        virtual_shot_mode.unwrap_or_default(),
     );
     finalize_deferred_import(state.inner(), result)
 }
@@ -215,6 +217,7 @@ pub fn execute_tml_import(
     file_hash: Option<String>,
     include_excluded: bool,
     comments_on_stations: bool,
+    virtual_shot_mode: Option<VirtualShotMode>,
 ) -> CommandResult {
     tracing::info!(
         path = ?path,
@@ -267,8 +270,14 @@ pub fn execute_tml_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        virtual_shot_mode.unwrap_or_default(),
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
@@ -366,8 +375,18 @@ pub fn execute_compass_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        // Auto: no dialog on this path carries a per-file override, so the chain
+        // rule decides. An Option parameter here was unreachable - no frontend
+        // caller ever populated it - which read as "the override works" while
+        // silently always meaning Auto.
+        VirtualShotMode::Auto,
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
@@ -459,7 +478,20 @@ pub fn execute_gpx_import(
 
     finalize_deferred_import(
         state.inner(),
-        state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new(), Vec::new()),
+        // Auto, not a per-file override: the GPX dialog has no mode control, so
+        // there is nothing to pass through - but the chain rule still has to run.
+        // `parsers::gpx` seeds every leg as Reference on the promise that the
+        // classifier can promote it, and skipping the pass here (this path used
+        // to call `finalize_deferred_import` directly) left a GPS surface track
+        // tying two sumps together permanently excluded from the survey graph.
+        state.execute_import_sections(
+            sections,
+            Vec::new(),
+            file_hash,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        ),
     )
 }
 
@@ -630,8 +662,18 @@ pub fn execute_walls_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        // Auto: no dialog on this path carries a per-file override, so the chain
+        // rule decides. An Option parameter here was unreachable - no frontend
+        // caller ever populated it - which read as "the override works" while
+        // silently always meaning Auto.
+        VirtualShotMode::Auto,
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);

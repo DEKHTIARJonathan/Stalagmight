@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::models::geo::{haversine_distance, initial_bearing};
-use crate::models::{GpsCoordinates, ImportPlacement, ImportSectionConfig, ShotData};
+use crate::models::{GpsCoordinates, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 // ============================================================================
 // IPC-visible types
@@ -769,7 +769,11 @@ fn shots_from_points(points: &[(f64, f64, Option<f64>)], depth_inverted: bool) -
                 length,
                 depth_in: depths[i],
                 depth_out: depths[i + 1],
-                is_reference: true,
+                // A GPS track is a surface trace, never a swum cave leg, so it
+                // seeds as Reference. The chain classifier can still promote it
+                // to a Jump if it turns out to bridge real survey on both ends
+                // (#27 q10).
+                kind: ShotKind::Reference,
                 ..Default::default()
             }
         })
@@ -1182,7 +1186,7 @@ mod tests {
         let c = &configs[0];
         assert_eq!(c.name.as_deref(), Some("Surface Path"));
         assert_eq!(c.shots.len(), 2);
-        assert!(c.shots[0].is_reference);
+        assert_eq!(c.shots[0].kind, ShotKind::Reference);
         assert!(c.shots[0].length > 0.0);
         assert!(c.shots[0].azimuth_in >= 0.0 && c.shots[0].azimuth_in < 360.0);
     }
@@ -1240,7 +1244,7 @@ mod tests {
         );
         assert!((shot.depth_in).abs() < 1e-9);
         assert!((shot.depth_out).abs() < 1e-9);
-        assert!(shot.is_reference);
+        assert_eq!(shot.kind, ShotKind::Reference);
     }
 
     #[test]

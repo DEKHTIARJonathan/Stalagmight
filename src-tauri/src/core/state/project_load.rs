@@ -142,6 +142,13 @@ impl AppState {
                 "open_project: corrected drifted section offsets on load"
             );
         }
+        // The #27 one-shot backfill (see `do_load_project_full`) is deliberately
+        // NOT replicated here. It is the one load-time step that WRITES, and
+        // this path has no remote/read-only context to gate that on. Leaving the
+        // flag set costs nothing: the kinds a migrated file opens with are the
+        // migration's Jump seed either way, and the next open through the real
+        // load path classifies and persists them. Classifying in memory here
+        // without persisting would only make the two paths disagree.
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
@@ -401,6 +408,125 @@ impl AppState {
                 "Re-derived drifted section offsets while opening project"
             );
         }
+        // One-shot #27 backfill. The v12->v13 migration seeded every legacy
+        // `is_reference` row as Jump, which is only q2's guess; the real verdict
+        // needs sections + merges + closures assembled, which is exactly what we
+        // have now and the bare migration connection did not. Runs once, then
+        // clears its own flag: classification is import-time only (q14), so a
+        // later merge must never silently re-flip a kind.
+        // Record any shot whose stored `kind` this build cannot read (#27). The
+        // loader already substituted `Reference` for them via `from_u8` - the
+        // fail-closed choice, so a corrupt or future byte cannot invent a
+        // swimmable leg - but that substitution is a guess, not a verdict. Stash
+        // them so the frontend can ask the user what each one really is.
+        match db.unrecognised_shot_kinds() {
+            Ok(found) => {
+                if !found.is_empty() {
+                    tracing::warn!(
+                        count = found.len(),
+                        purpose = "surface unreadable shot kinds for user resolution (#27)",
+                        "Found shots with an unrecognised kind; defaulted them to Reference"
+                    );
+                    // Make the disk agree with the value already in force in
+                    // memory. Otherwise the substitution is session-only: the
+                    // project is never dirty (nothing was edited), so nothing
+                    // saves it, and the prompt returns on every open. This
+                    // writes the fail-closed value, not a choice taken from the
+                    // user - picking anything else stays an ordinary undoable
+                    // SetShotKind on top.
+                    match db.repair_unrecognised_shot_kinds() {
+                        Ok(n) if n > 0 => tracing::info!(
+                            repaired = n,
+                            purpose = "persist the fail-closed substitution (#27)",
+                            "Rewrote unreadable shot kinds to Reference on disk"
+                        ),
+                        Ok(_) => {}
+                        Err(e) => tracing::warn!(
+                            error = %e,
+                            "Failed to persist the Reference substitution; it stays session-only"
+                        ),
+                    }
+                }
+                self.set_unrecognised_shot_kinds(progress.loading_id(), found);
+            }
+            Err(e) => {
+                // Non-fatal: the shots are already safely Reference in memory.
+                // Losing the prompt is better than failing the load.
+                tracing::warn!(error = %e, "Failed to scan for unrecognised shot kinds");
+                self.set_unrecognised_shot_kinds(progress.loading_id(), Vec::new());
+            }
+        }
+
+        if db.is_kind_classification_pending() {
+            let reclassified =
+                project.classify_virtual_shots(&crate::models::ClassifyScope::WholeProject);
+            tracing::info!(
+                reclassified,
+                purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
+                "Classified virtual shots on first open after migration"
+            );
+            // Write the verdicts through and clear the flag together. The pass
+            // only touched the in-memory project, so clearing the flag on its
+            // own would burn the one retry on a result that dies with the
+            // process if the user closes without saving - and the next open
+            // would then keep the migration's Jump seed for good.
+            //
+            // Addressed by (section_id, sequence_order), which is what the rows
+            // are keyed by on disk - `Shot::id` is a synthesised in-memory value
+            // and would hit the wrong rows. Virtual shots only: `Normal` is what
+            // the migration already wrote for every non-legacy-reference row, so
+            // re-stamping them would be one UPDATE per shot in the project on a
+            // load that is already paying for the schema migration.
+            //
+            // Runs for a remote project too, deliberately. Gating it on
+            // `load_speleo_link()` looks safer - `shots.kind` rides in the push
+            // snapshot, so writing on a lock-free open diverges the local .stalx
+            // from BASE - but that predicate is true whether or not the user
+            // holds the lock, so the flag would never clear and this pass would
+            // re-run on EVERY open. Being project-wide, it cannot tell the
+            // migration's Jump seed from a kind the user set by hand, so each
+            // reopen would silently revert their choice and restore exactly the
+            // unsafe shortcut #27 exists to remove. A one-time local write whose
+            // values are what the classifier is meant to land - and which the
+            // v12->v13 migration has already rewritten this file's schema
+            // without a lock to produce - is the smaller hazard by a wide margin.
+            //
+            // `shot.id % FEATURE_ID_STRIDE`, not the enumerate() index: the
+            // loader reads `ORDER BY section_id, sequence_order` and pushes
+            // sequentially, so the index is the shot's RANK, while the id
+            // carries the raw stored `sequence_order` (read.rs synthesises
+            // `section_id * FEATURE_ID_STRIDE + seq` from the column). They
+            // differ the moment a legacy file has a gap in the sequence, and
+            // a miss here is permanent because the flag is cleared with it.
+            let verdicts: Vec<_> = project
+                .sections
+                .iter()
+                .flat_map(|section| {
+                    section
+                        .shots
+                        .iter()
+                        .filter(|shot| shot.kind.is_virtual())
+                        .map(|shot| {
+                            (
+                                section.id,
+                                shot.id % crate::models::FEATURE_ID_STRIDE,
+                                shot.kind,
+                            )
+                        })
+                })
+                .collect();
+            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+                // Non-fatal: the flag is cleared in the same transaction as
+                // the writes, so a failure here leaves both undone and the
+                // (idempotent) backfill simply runs again on the next open.
+                tracing::warn!(
+                    error = %e,
+                    purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
+                    "Failed to persist backfilled shot kinds; will retry on next open"
+                );
+            }
+        }
+
         progress.update_phase(LoadingPhase::LoadingProjectData, 1, 1);
         check_cancelled!();
         progress.complete_phase(LoadingPhase::LoadingProjectData);
@@ -438,11 +564,15 @@ impl AppState {
 
         // === PHASE 4: Computing statistics (15%) - INDETERMINATE ===
         progress.start_phase(LoadingPhase::ComputingStatistics);
+        // Reference ties are not swimmable, so penetration excludes them unless
+        // the user opts them back in (#27 q13).
+        let include_reference_legs = self.get_config().gas.include_reference_legs;
         // Heartbeat at start to indicate phase is active
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         let mut stats = project.stats();
         // Calculate penetration distance with computed stations
-        stats.penetration_distance = project.calculate_penetration(&stations);
+        stats.penetration_distance =
+            project.calculate_penetration_with(&stations, include_reference_legs);
         // Heartbeat after computation to indicate work completed
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         check_cancelled!();

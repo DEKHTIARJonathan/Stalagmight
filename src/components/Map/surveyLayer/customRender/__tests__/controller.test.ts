@@ -75,6 +75,10 @@ const h = vi.hoisted(() => {
     setReferenceShotsVisible(v: boolean): void {
       this.referenceShotsVisible = v;
     }
+    jumpShotsVisible = true;
+    setJumpShotsVisible(v: boolean): void {
+      this.jumpShotsVisible = v;
+    }
 
     // Buffer sub-uploads the controller's incremental / color-only fast paths
     // call; the fake just records that they ran (no GL).

@@ -37,7 +37,8 @@ import {
   type SectionMetadata,
   lazyStationArray,
   noteShotMaterialization,
-  SHOT_FLAG_IS_REFERENCE,
+  SHOT_FLAG_KIND_MASK,
+  shotKindFromFlags,
   SHOT_MARKER_NULL,
   STATION_FLAG_IS_ZERO_DATUM,
 } from '../types/survey-data';
@@ -59,8 +60,17 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
   frozen_shots: FrozenShotRef[];
 }
 
-/** Wire format version expected from the Rust encoder. */
-const EXPECTED_VERSION = 2;
+/**
+ * Wire format version expected from the Rust encoder. Must track
+ * `BINARY_FORMAT_VERSION` in `src-tauri/src/core/load_binary.rs` exactly - the
+ * version check below is the only thing standing between a format change and a
+ * silently misdecoded project.
+ *
+ * 3 (#27): the per-shot flags byte carries a 2-bit `ShotKind` discriminant in
+ * bits 0-1 instead of a single `is_reference` bit, so a v2 reader would decode
+ * a Reference (2) as "not virtual".
+ */
+const EXPECTED_VERSION = 3;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
@@ -251,7 +261,7 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
           down: nanToNull(shotsF32[fBase + 10]!),
           temperature: nanToNull(shotsF32[fBase + 11]!),
           comment: shotCommentByIdx.get(globalIdx) ?? null,
-          is_reference: (shotsFlags[globalIdx]! & 1) !== 0,
+          kind: shotKindFromFlags(shotsFlags[globalIdx]!),
           marker_index: markerRaw === 0xFFFFFFFF ? null : markerRaw,
         };
       }
@@ -463,8 +473,10 @@ function buildSurveyData(
     const markerRaw   = shotsU32[uBase + 2]!;
     shotMarkerIndex[i] = markerRaw === 0xFFFFFFFF ? SHOT_MARKER_NULL : (markerRaw | 0);
 
-    // Wire format used bit 0 for is_reference and we keep that mapping.
-    shotFlags[i] = (shotsFlags[i]! & 1) !== 0 ? SHOT_FLAG_IS_REFERENCE : 0;
+    // Wire format v3 packs the ShotKind discriminant into bits 0-1 (#27), and
+    // the SoA flags byte uses the same layout, so this is a straight copy of
+    // the low two bits.
+    shotFlags[i] = shotsFlags[i]! & SHOT_FLAG_KIND_MASK;
   }
 
   const sections: SectionMetadata[] = env.project_header.sections.map((sh) => ({

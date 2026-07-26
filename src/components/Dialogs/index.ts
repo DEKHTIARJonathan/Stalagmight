@@ -32,6 +32,7 @@ export { default as CompassImportDialog } from './CompassImportDialog';
 export { default as WallsImportDialog } from './WallsImportDialog';
 export { default as DebugDialog } from './DebugDialog';
 export { default as SwapCommentsDialog } from './SwapCommentsDialog';
+export { default as UnrecognisedShotKindDialog } from './UnrecognisedShotKindDialog';
 export { default as GpxSelectionDialog } from './GpxSelectionDialog';
 export { default as GpxPlacementDialog } from './GpxPlacementDialog';
 export { default as ZeroDatumSelectionDialog } from './ZeroDatumSelectionDialog';

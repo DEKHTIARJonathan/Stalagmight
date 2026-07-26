@@ -7,6 +7,7 @@ import type { SettingsCategoryProps } from './types';
 import { isFieldChanged } from './types';
 import { defaultConfig } from '../../../types/config';
 import { PositiveNumberField } from '../../common/PositiveNumberField';
+import { Toggle } from '../../common/Toggle';
 
 /**
  * Gas & route-planning settings category (#38). Persisted personal defaults a plan is
@@ -86,6 +87,22 @@ export function GasSettings({
             className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
             ariaLabel={t('settings.gas.jumpMultiplier.aria')}
             testId="input-gas-jump-multiplier"
+          />
+        </SettingRow>
+
+        <SettingRow
+          label={t('settings.gas.includeReferenceLegs.label')}
+          helpText={t('settings.gas.includeReferenceLegs.help')}
+          isChanged={isFieldChanged(changedFields, 'gas.include_reference_legs')}
+          onReset={() => setGas({ include_reference_legs: defaultConfig.gas.include_reference_legs })}
+          isDefault={config.gas.include_reference_legs === defaultConfig.gas.include_reference_legs}
+          data-testid="setting-gas-include-reference-legs"
+        >
+          <Toggle
+            checked={config.gas.include_reference_legs}
+            onChange={(v) => setGas({ include_reference_legs: v })}
+            aria-label={t('settings.gas.includeReferenceLegs.aria')}
+            data-testid="toggle-gas-include-reference-legs"
           />
         </SettingRow>
       </SettingsSection>

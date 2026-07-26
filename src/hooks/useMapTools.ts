@@ -861,7 +861,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
   // Handle context menu
   const handleContextMenu = useCallback(
     (
-      target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
+      target:
+        | { type: 'station'; ref: StationRef }
+        | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT: number }
+        | null,
       event: MapMouseEvent
     ) => {
       // ALWAYS prevent native context menu

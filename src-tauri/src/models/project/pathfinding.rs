@@ -579,28 +579,41 @@ impl Project {
     /// shorter, more correct route - never inflate one. Excluding real
     /// connections is what hides reachable areas or routes "the long way".
     ///
-    /// NOTE (#77): the one residual risk is a *non-physical* reference tie (a pure
-    /// survey backsight, not swimmable) creating a false shortcut that understates
-    /// distance. Telling those apart from real jumps needs a first-class model;
-    /// until then we favor completeness - real data showed over-exclusion (a
-    /// dropped jump shortcut, excluded non-aligned closures) was the actual bug.
+    /// #77 is now CLOSED by #27: a [`ShotKind::Reference`] is a non-swimmable
+    /// survey tie, so `include_reference = false` (the default everywhere but the
+    /// `gas.include_reference_legs` opt-in) drops it from the route. That removes
+    /// the false-shortcut risk this doc used to carry. Jumps stay in: they are
+    /// swum. Excluding an edge can only lengthen a route or shrink reach, which
+    /// is the safe direction; the 88ccbaff lesson was about excluding *real* legs,
+    /// and a reference tie is precisely the leg that is not real to swim.
     pub(super) fn build_survey_graph(
         &self,
         n: usize,
         station_index: &HashMap<StationRef, usize>,
         coords: Option<&[Coordinates]>,
+        include_reference: bool,
     ) -> Vec<Vec<(usize, f64)>> {
         // Thin wrapper over `build_survey_graph_weighted` preserving the original two
         // weightings: straight-line between `coords` (closure-adjusted geometry, for the
         // distance gradient) when supplied, else the measured `shot.length`. The gas engine
         // (`models/project/gas`) calls the weighted form directly with a gas-cost closure.
+        // An unusable leg gets an INFINITE weight rather than being skipped:
+        // `along_line_between` keys a parallel shot-edge map on this function's
+        // edge-emission order, so the edge SET must not change. Dijkstra never
+        // relaxes across an infinite edge, so the leg is unreachable either way.
         match coords {
-            Some(c) => self.build_survey_graph_weighted(n, station_index, |_shot, fi, ti| {
+            Some(c) => self.build_survey_graph_weighted(n, station_index, |shot, fi, ti| {
+                if !shot.kind.is_swum() && !include_reference {
+                    return f64::INFINITY;
+                }
                 let (a, b) = (&c[fi], &c[ti]);
                 let (dx, dy, dz) = (b.x - a.x, b.y - a.y, b.z - a.z);
                 (dx * dx + dy * dy + dz * dz).sqrt()
             }),
             None => self.build_survey_graph_weighted(n, station_index, |shot, _fi, _ti| {
+                if !shot.kind.is_swum() && !include_reference {
+                    return f64::INFINITY;
+                }
                 shot.length.max(0.0)
             }),
         }

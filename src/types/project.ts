@@ -7,6 +7,8 @@ export type {
   SurveyDirection,
   Shot,
   ShotData,
+  ShotKind,
+  VirtualShotMode,
   ShotUpdates,
   Section,
   SectionData,

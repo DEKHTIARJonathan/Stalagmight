@@ -259,6 +259,18 @@ pub struct ExportImageOptions {
     /// `false`); black text + white halo.
     #[serde(default)]
     pub show_shot_data: bool,
+    /// Mirror of `gas.include_reference_legs` (#27), so the exported distance
+    /// ramp and penetration labels use the same graph the app is showing.
+    ///
+    /// **Server-populated, not a user-facing export option.** The commands
+    /// overwrite it with the live config value, so it is `ts(skip)`-ed out of
+    /// the generated TS: the frontend has no business setting it, and
+    /// `serde(default)` means it need not send the field at all. It lives here
+    /// rather than as a fourth parameter because it is one more thing the
+    /// renderer needs to know, exactly like the other flags.
+    #[serde(default)]
+    #[ts(skip)]
+    pub include_reference_legs: bool,
 }
 
 impl Default for ExportImageOptions {
@@ -274,6 +286,7 @@ impl Default for ExportImageOptions {
             show_station_comments: false,
             show_shot_comments: false,
             show_shot_data: false,
+            include_reference_legs: false,
         }
     }
 }
@@ -479,7 +492,7 @@ pub fn generate_svg_string_with_stations(
     };
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if shot.is_reference {
+            if shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -611,7 +624,7 @@ pub fn generate_svg_string_with_stations(
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 uf.union(fi, ti);
                 // Mark both roots as "has at least one real shot" after we
                 // settle roots below. For now, store the indices.
@@ -672,7 +685,7 @@ pub fn generate_svg_string_with_stations(
     }
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -692,7 +705,7 @@ pub fn generate_svg_string_with_stations(
     let mut cluster_segments: HashMap<usize, HashSet<usize>> = HashMap::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -808,7 +821,7 @@ pub fn generate_svg_string_with_stations(
     let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -892,7 +905,11 @@ pub fn generate_svg_string_with_stations(
         // measured coords - see `AppState::distance_field`). Match that: distances
         // key by station_ref, so this stays consistent with the adjusted geometry
         // we draw. (It also skips the adjusted solve the map was designed to avoid.)
-        let field = project.distance_field_from(&project.compute_station_coordinates(), None);
+        let field = project.distance_field_from_with(
+            &project.compute_station_coordinates(),
+            None,
+            options.include_reference_legs,
+        );
         let by_ref: HashMap<StationRef, Option<f64>> = field
             .station_refs
             .iter()
@@ -910,7 +927,7 @@ pub fn generate_svg_string_with_stations(
         // trimming here - the color variation carries the visual, not line breaks.
         for section in &project.sections {
             for j in 0..section.shots.len() {
-                if section.shots[j].is_reference {
+                if section.shots[j].kind.is_virtual() {
                     continue;
                 }
                 let from_ref = StationRef::new(section.id, j as u32);
@@ -975,7 +992,7 @@ pub fn generate_svg_string_with_stations(
                 (mode == ColorMode::Section).then(|| sanitize_hex_color(&section.color));
             let mut i = 0;
             while i < section.shots.len() {
-                if section.shots[i].is_reference {
+                if section.shots[i].kind.is_virtual() {
                     i += 1;
                     continue;
                 }
@@ -986,7 +1003,7 @@ pub fn generate_svg_string_with_stations(
                 let mut first_si: Option<usize> = None;
                 let mut last_si: Option<usize> = None;
                 let mut j = i;
-                while j < section.shots.len() && !section.shots[j].is_reference {
+                while j < section.shots.len() && !section.shots[j].kind.is_virtual() {
                     let from_ref = StationRef::new(section.id, j as u32);
                     let to_ref = StationRef::new(section.id, (j + 1) as u32);
                     let (Some(from), Some(to)) =
@@ -1138,7 +1155,8 @@ pub fn generate_svg_string_with_stations(
         // same metric as `Project::calculate_penetration` (and therefore
         // the Survey overview panel), so the map labels and the panel
         // value agree.
-        let pen_dist = project.compute_penetration_distances(&stations);
+        let pen_dist =
+            project.compute_penetration_distances_with(&stations, options.include_reference_legs);
 
         // Group stations by their segment root so we can find each
         // segment's deepest member in one pass.
@@ -1278,7 +1296,7 @@ pub fn generate_svg_string_with_stations(
         let mut degree: HashMap<usize, u32> = HashMap::new();
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let from = StationRef::new(section.id, i as u32);
@@ -1406,7 +1424,7 @@ pub fn generate_svg_string_with_stations(
             let mut sum_y = 0.0;
             let mut summed = 0u32;
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 for sr in [
@@ -1507,7 +1525,7 @@ pub fn generate_svg_string_with_stations(
         let mut opened = false;
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let from_ref = StationRef::new(section.id, i as u32);
@@ -1559,7 +1577,7 @@ pub fn generate_svg_string_with_stations(
         let mut opened = false;
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let Some(text) = shot.comment.clone() else {
@@ -1700,7 +1718,7 @@ fn label_open_space_angle(
     };
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if shot.is_reference {
+            if shot.kind.is_virtual() {
                 continue;
             }
             let from_ref = StationRef::new(section.id, i as u32);
@@ -1887,17 +1905,23 @@ impl UnionFind {
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::models::{GpsCoordinates, SectionData, ShotData, StationMerge};
+    use crate::models::{GpsCoordinates, SectionData, ShotData, ShotKind, StationMerge};
     use tempfile::NamedTempFile;
 
-    fn make_shot(length: f64, azimuth: f64, is_reference: bool) -> ShotData {
+    fn make_shot(length: f64, azimuth: f64, is_virtual: bool) -> ShotData {
         ShotData {
             azimuth_in: azimuth,
             azimuth_out: azimuth,
             length,
             depth_in: 0.0,
             depth_out: 0.0,
-            is_reference,
+            // Image export only cares about virtual-vs-not, so either virtual
+            // kind exercises the same paths; Jump is the migration default.
+            kind: if is_virtual {
+                ShotKind::Jump
+            } else {
+                ShotKind::Normal
+            },
             ..Default::default()
         }
     }
@@ -3409,6 +3433,58 @@ mod tests {
         );
     }
 
+    /// #27: the export has to route on the same graph the app does. Both
+    /// distance call sites used the non-configurable wrappers, which hardcode
+    /// reference exclusion, so with `gas.include_reference_legs` on the exported
+    /// PNG/SVG showed a different penetration than the Survey panel - breaking
+    /// the promise in this file's own header that the two agree.
+    #[test]
+    fn penetration_labels_follow_include_reference_legs() {
+        // Normal - Reference - Normal, datum at station 0. Excluding the
+        // reference tie strands everything past it; including it does not.
+        let mut project = Project::new("RefRoute".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("S".to_string()),
+            color: "#000000".to_string(),
+            shots: vec![
+                make_shot(10.0, 90.0, false),
+                ShotData {
+                    kind: ShotKind::Reference,
+                    ..make_shot(10.0, 90.0, true)
+                },
+                make_shot(10.0, 90.0, false),
+            ],
+            ..Default::default()
+        });
+        let section_id = project.sections[0].id;
+        let gps = GpsCoordinates::new(45.0, -122.0, 0.0).unwrap();
+        project
+            .set_zero_datum(StationRef::new(section_id, 0), gps)
+            .unwrap();
+
+        let labels = |include: bool| {
+            generate_svg_string(
+                &project,
+                &ExportImageOptions {
+                    branching_threshold: 1,
+                    show_penetration_labels: true,
+                    include_reference_legs: include,
+                    ..Default::default()
+                },
+            )
+            .unwrap()
+        };
+
+        assert!(
+            labels(false).contains("p. 10"),
+            "excluded: the far side is unreachable, so penetration stops at the tie"
+        );
+        assert!(
+            labels(true).contains("p. 30"),
+            "included: the opt-in must restore the pre-#27 route through the tie"
+        );
+    }
+
     #[test]
     fn sanitize_hex_color_rejects_non_hex() {
         assert_eq!(sanitize_hex_color("#ff0000"), "#ff0000");
@@ -3587,7 +3663,7 @@ mod tests {
                 length: 120.0, // >= the 100 m depth change so the geometry is valid
                 depth_in: 0.0,
                 depth_out: 100.0,
-                is_reference: false,
+                kind: ShotKind::Normal,
                 ..Default::default()
             }],
             ..Default::default()
@@ -4307,7 +4383,7 @@ mod tests {
                 length: 12.3,
                 depth_in: 3.0,
                 depth_out: 5.0,
-                is_reference: false,
+                kind: ShotKind::Normal,
                 ..Default::default()
             }],
             ..Default::default()

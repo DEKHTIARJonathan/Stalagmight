@@ -69,7 +69,10 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// Bumped from 1 → 2 to include `ProjectHeaderBinary.collab` so the
 /// frontend's load-time collaboration detection has the project's
 /// CollabState available without a separate round-trip.
-pub const BINARY_FORMAT_VERSION: u32 = 2;
+/// Bumped from 2 → 3 for #27: the per-shot flags byte now carries a 2-bit
+/// `ShotKind` in bits 0-1 instead of a single `is_reference` bit, so a
+/// stale frontend would read a Reference (discriminant 2) as "not virtual".
+pub const BINARY_FORMAT_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -86,7 +89,8 @@ pub struct LoadProjectFullBinaryResult {
     /// Per-shot u32 fields. Order: section_id, shot_id, marker_or_max
     /// where marker_or_max = u32::MAX when `marker_index` is None.
     pub shots_uints: ByteBuf,
-    /// Per-shot flags: bit 0 = is_reference. One byte per shot.
+    /// Per-shot flags: bits 0-1 = `ShotKind` discriminant (0 Normal, 1 Jump,
+    /// 2 Reference). One byte per shot. Bits 2-7 are reserved.
     pub shots_flags: ByteBuf,
     /// Sparse map of (global_shot_index, comment). global_shot_index is the
     /// row index into the per-shot arrays above (NOT a Shot.id).
@@ -244,7 +248,7 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
             uint_bytes[8..12].copy_from_slice(&marker.to_le_bytes());
             shots_uints.extend_from_slice(&uint_bytes);
             // Flags.
-            shots_flags.push(u8::from(shot.is_reference));
+            shots_flags.push(shot.kind.as_u8());
             // Sparse comment.
             if let Some(comment) = &shot.comment {
                 if !comment.is_empty() {
@@ -409,6 +413,7 @@ fn hashmap_to_pairs<K: Eq + std::hash::Hash, V>(map: HashMap<K, V>) -> Vec<(K, V
 mod tests {
     use super::*;
     use crate::core::loading::DisplaySettings;
+    use crate::models::ShotKind;
     use crate::models::{Coordinates, Project, ProjectStats, Section, Shot, Station, StationRef};
     use chrono::Utc;
     use serde::Deserialize;
@@ -494,7 +499,7 @@ mod tests {
             up: None,
             down: None,
             comment: None,
-            is_reference: false,
+            kind: ShotKind::Normal,
             marker_index: None,
             temperature: None,
         }
@@ -586,7 +591,7 @@ mod tests {
             up: None,
             down: None,
             comment: Some("hello".to_string()),
-            is_reference: true,
+            kind: ShotKind::Reference,
             marker_index: Some(7),
             temperature: None,
         });
@@ -613,8 +618,11 @@ mod tests {
         assert!((pitch_in - 10.0).abs() < 1e-3);
         assert!(pitch_out.is_nan(), "pitch_out should be NaN for None");
 
-        // is_reference flag
-        assert_eq!(decoded.shots_flags[0] & 1, 1);
+        // Shot kind occupies bits 0-1 of the flags byte (#27).
+        assert_eq!(
+            ShotKind::from_u8(decoded.shots_flags[0] & 0b11),
+            ShotKind::Reference
+        );
 
         // Comment carried over
         assert_eq!(decoded.shot_comments.len(), 1);

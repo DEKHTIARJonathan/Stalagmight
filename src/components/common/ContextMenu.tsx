@@ -5,19 +5,22 @@ import { useShallow } from 'zustand/react/shallow';
 import { useProjectStore } from '../../store/projectStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
-import type { StationRef, SectionId, ShotId } from '../../types/project';
+import type { StationRef, SectionId, ShotId, ShotKind } from '../../types/project';
 import { getDeleteShotDialog } from '../../utils/contextMenuHelpers';
 import { canSplitShot } from '../../utils/shotSplit';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
 import { ArrowUpRightIcon } from './icons';
+import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
 import {
   EntityDeleteSymbol,
   EntityEditSymbol,
   EntityDatumSymbol,
-  EntityReferenceSymbol,
-  EntityPermanentSymbol,
+  EntityJumpSymbol,
+  EntityJumpUnmarkSymbol,
+  EntityReferenceKindSymbol,
+  EntityReferenceUnmarkSymbol,
   EntityAddSymbol,
   EntityUnlinkSymbol,
   ToolGlyph,
@@ -48,13 +51,17 @@ export default function ContextMenu() {
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
-  const { project, stations, setShotReference, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
+  const { project, stations, setShotKind, unmergeStations, unmergeStationPair, removeLoopClosure } = useProjectStore();
 
   const menuRef = useRef<HTMLDivElement>(null);
 
   const target = dialogData.target as
     | { type: 'station'; ref: StationRef }
-    | { type: 'shot'; sectionId: SectionId; shotId: ShotId }
+    // `alongT` (0..1 from the from-station) is present only for a map
+    // right-click: it records where on the shot the pointer actually landed so
+    // Insert Station can pre-place the station there. Absent for the data-table
+    // menu, which has no click position on the line.
+    | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT?: number }
     | { type: 'section'; sectionId: SectionId }
     | { type: 'datatable-shot'; sectionId: SectionId; shotId: ShotId; isFirst: boolean; isLast: boolean; totalShots: number; sectionName: string }
     | null;
@@ -82,6 +89,8 @@ export default function ContextMenu() {
         .find((s) => s.id === target.sectionId)
         ?.shots.find((sh) => sh.id === target.shotId)
     : null;
+  /** The shot's current kind, defaulting to permanent when no shot resolves. */
+  const shotKind: ShotKind = shot?.kind ?? 'Normal';
 
   const sameStationRef = (a: StationRef, b: StationRef): boolean => (
     a.section_id === b.section_id && a.station_index === b.station_index
@@ -301,19 +310,32 @@ export default function ContextMenu() {
               shotId: target.shotId,
               shotLength: sourceShot?.length ?? 0,
               sectionName: section?.name ?? `Section ${target.sectionId}`,
+              // Only set from a map right-click; the dialog prefills the exact
+              // clicked spot when present and starts blank otherwise.
+              alongT: target.type === 'shot' ? target.alongT : undefined,
             });
           },
           disabled: !sourceShot || !canSplitShot(sourceShot.length),
         },
-        {
-          label: shot?.is_reference ? 'Mark as Permanent' : 'Mark as Jump/Reference',
+        // A context menu has room to offer both other kinds outright, which is
+        // clearer than the table cell's cycle (#27). Only the kinds the shot is
+        // not already are listed. Going back to permanent reads as "Unmark
+        // <what it currently is>" rather than a generic "Mark as Permanent",
+        // since that is how the user thinks of undoing the mark.
+        ...SHOT_KIND_CYCLE.filter((kind) => kind !== shotKind).map((kind) => ({
+          // Hardcoded English to match every other label in this file; the
+          // menu has no i18n wiring (tracked separately).
+          label:
+            kind === 'Normal'
+              ? `Unmark ${SHOT_KIND_MENU_LABEL[shotKind]}`
+              : `Mark as ${SHOT_KIND_MENU_LABEL[kind]}`,
           action: async () => {
-            trackContextMenuAction('toggle-reference', 'context-menu');
-            await setShotReference(target.sectionId, target.shotId, !shot?.is_reference);
+            trackContextMenuAction('set-shot-kind', 'context-menu');
+            await setShotKind(target.sectionId, target.shotId, kind);
             trackDialogComplete('context-menu');
             closeDialog();
           },
-        },
+        })),
       ];
 
       // "Add Shot Before" - only for first shot (prepend mode)
@@ -524,10 +546,17 @@ export default function ContextMenu() {
       case 'Add Shot Before':
       case 'Add Shot After':
         return <EntityAddSymbol entity="shot" size={18} />;
-      case 'Mark as Jump/Reference':
-        return <EntityReferenceSymbol entity="shot" size={18} />;
-      case 'Mark as Permanent':
-        return <EntityPermanentSymbol entity="shot" size={18} />;
+      // #27: the shot glyph with the same letter badge the data table shows,
+      // so "R" here and "R" in the J/R cell are visibly the same thing. The
+      // Unmark variants strike the letter through.
+      case `Mark as ${SHOT_KIND_MENU_LABEL.Jump}`:
+        return <EntityJumpSymbol entity="shot" size={18} />;
+      case `Mark as ${SHOT_KIND_MENU_LABEL.Reference}`:
+        return <EntityReferenceKindSymbol entity="shot" size={18} />;
+      case `Unmark ${SHOT_KIND_MENU_LABEL.Jump}`:
+        return <EntityJumpUnmarkSymbol entity="shot" size={18} />;
+      case `Unmark ${SHOT_KIND_MENU_LABEL.Reference}`:
+        return <EntityReferenceUnmarkSymbol entity="shot" size={18} />;
       case 'Set Zero Datum':
         return <EntityDatumSymbol entity="station" size={18} />;
       case 'Delete Section':

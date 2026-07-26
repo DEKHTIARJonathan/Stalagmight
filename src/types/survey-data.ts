@@ -27,6 +27,7 @@
  */
 
 import type { Shot } from './ipc/Shot';
+import type { ShotKind } from './ipc/ShotKind';
 import type { Station } from './ipc/Station';
 import type { StationRef } from './ipc/StationRef';
 import type { ClosureRef } from './ipc/ClosureRef';
@@ -86,7 +87,7 @@ export interface SurveyData {
   shotUp: Float32Array;
   shotDown: Float32Array;
   shotTemperature: Float32Array;
-  /** Bit 0: is_reference. Room to grow (e.g. has_comment cache bit). */
+  /** Bits 0-1: `ShotKind` discriminant. Room to grow (e.g. has_comment cache bit). */
   shotFlags: Uint8Array;
   /** `-1` represents `null` for the IPC's optional marker_index. */
   shotMarkerIndex: Int32Array;
@@ -133,8 +134,38 @@ export function noteShotMaterialization(): void {
 
 /** Sentinel: `Int32Array`'s representation of "the marker_index is null". */
 export const SHOT_MARKER_NULL = -1;
-/** Bit position of the `is_reference` flag in `shotFlags`. */
-export const SHOT_FLAG_IS_REFERENCE = 0b01;
+/**
+ * Mask for the `ShotKind` discriminant packed into bits 0-1 of `shotFlags`
+ * (#27). Values match Rust's `ShotKind::as_u8`: 0 Normal, 1 Jump, 2 Reference.
+ * Before #27 bit 0 alone meant `is_reference`.
+ */
+export const SHOT_FLAG_KIND_MASK = 0b11;
+
+/** Ordered so the index equals the wire discriminant. */
+const SHOT_KINDS: readonly ShotKind[] = ['Normal', 'Jump', 'Reference'];
+
+/**
+ * Decode the 2-bit discriminant in a `shotFlags` byte. An unrecognised value
+ * (only `3` is reachable through the 2-bit mask) degrades to `'Reference'`
+ * rather than throwing, mirroring Rust's `ShotKind::from_u8`: a corrupt byte
+ * should not break a whole project load, but it must not produce a SWIMMABLE
+ * leg either. `Normal` would be the unsafe reading - it enters gas, penetration
+ * and the ruler at normal cost; `Reference` can only ever shrink a route (#27).
+ */
+export function shotKindFromFlags(flags: number): ShotKind {
+  return SHOT_KINDS[flags & SHOT_FLAG_KIND_MASK] ?? 'Reference';
+}
+
+/** Encode a `ShotKind` into the low 2 bits of a `shotFlags` byte. */
+export function shotKindToFlags(kind: ShotKind): number {
+  const index = SHOT_KINDS.indexOf(kind);
+  return index < 0 ? 0 : index;
+}
+
+/** True for the two virtual kinds. Mirrors Rust's `ShotKind::is_virtual`. */
+export function isVirtualKind(kind: ShotKind): boolean {
+  return kind !== 'Normal';
+}
 /** Bit position of the `is_zero_datum` flag in `stationFlags`. */
 export const STATION_FLAG_IS_ZERO_DATUM = 0b01;
 
@@ -172,7 +203,7 @@ export function getShot(data: SurveyData, globalIndex: number): Shot {
     up: nanToNull(data.shotUp[globalIndex]!),
     down: nanToNull(data.shotDown[globalIndex]!),
     comment: data.shotComments.get(globalIndex) ?? null,
-    is_reference: (data.shotFlags[globalIndex]! & SHOT_FLAG_IS_REFERENCE) !== 0,
+    kind: shotKindFromFlags(data.shotFlags[globalIndex]!),
     marker_index: data.shotMarkerIndex[globalIndex] === SHOT_MARKER_NULL
       ? null
       : data.shotMarkerIndex[globalIndex]!,
@@ -414,7 +445,7 @@ export function surveyDataFromLegacy(
       data.shotUp[cursor] = nullToNaN(shot.up);
       data.shotDown[cursor] = nullToNaN(shot.down);
       data.shotTemperature[cursor] = nullToNaN(shot.temperature);
-      data.shotFlags[cursor] = shot.is_reference ? SHOT_FLAG_IS_REFERENCE : 0;
+      data.shotFlags[cursor] = shotKindToFlags(shot.kind);
       data.shotMarkerIndex[cursor] = shot.marker_index ?? SHOT_MARKER_NULL;
       if (shot.comment) data.shotComments.set(cursor, shot.comment);
       cursor++;

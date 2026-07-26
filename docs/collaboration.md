@@ -113,7 +113,8 @@ back to name-based matching (today's behavior).
 ## What is and isn't reconciled
 
 **Overwritten from the `.tml`** on edited shots: azimuth (→ azimuth_in), length,
-depth_in/out, inclination (→ pitch_in), L/R/U/D, comment, is_reference; and section
+depth_in/out, inclination (→ pitch_in), L/R/U/D, comment, virtual-vs-not (the
+Jump/Reference axis is local-only, #27 q11); and section
 name/color/surveyor/date. **Station comments** round-trip too - see
 [Station comments via the ZWSP marker](#station-comments-via-the-zwsp-marker).
 

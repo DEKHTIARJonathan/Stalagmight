@@ -98,7 +98,7 @@ impl Database {
                         section_id, sequence_order,
                         azimuth_in, azimuth_out, length, depth_in, depth_out,
                         pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                        comment, is_reference, marker_index, temperature, uuid
+                        comment, kind, marker_index, temperature, uuid
                     ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18)",
                     params![
                         section.id,
@@ -115,7 +115,7 @@ impl Database {
                         shot.up,
                         shot.down,
                         shot.comment,
-                        i32::from(shot.is_reference),
+                        i32::from(shot.kind.as_u8()),
                         shot.marker_index,
                         shot.temperature,
                         uuid,

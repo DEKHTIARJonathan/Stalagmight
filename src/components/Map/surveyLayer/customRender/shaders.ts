@@ -49,6 +49,28 @@
  * etc.) let independent `map.shot.hover_width` / `selection_width` +
  * `map.station.hover_radius` / `selection_radius` config drive the widths (C2).
  */
+/** Per-kind line alpha (#27). Exported because the interact/hover overlay draws
+ *  the SAME leg through MapLibre rather than this shader, and a divergence there
+ *  makes a hovered reference tie pop brighter than its own base rendering. */
+export const SHOT_ALPHA_DIMMED = 0.25;
+export const SHOT_ALPHA_REFERENCE = 0.28;
+export const SHOT_ALPHA_JUMP = 0.5;
+export const SHOT_ALPHA_NORMAL = 1;
+
+/** Base line alpha for a shot of each kind, so the interact/hover overlay and
+ *  the shader cannot drift apart. Does not include the dimmed case, which wins
+ *  over the kind. */
+export const SHOT_ALPHA_BY_KIND: Record<'Normal' | 'Jump' | 'Reference', number> = {
+  Normal: SHOT_ALPHA_NORMAL,
+  Jump: SHOT_ALPHA_JUMP,
+  Reference: SHOT_ALPHA_REFERENCE,
+};
+
+/** Render a number as a GLSL float literal: always a decimal point, no trailing
+ *  zero padding, so the generated source stays byte-identical to the constants
+ *  it was hand-written with. */
+export const glslFloat = (n: number): string => (Number.isInteger(n) ? `${n}.0` : String(n));
+
 export const DEFAULT_SHOT_HOVER_WIDTH_MUL = 2;
 export const DEFAULT_SHOT_SELECT_WIDTH_MUL = 1.5;
 export const DEFAULT_STATION_HOVER_SIZE_MUL = 1.5;
@@ -80,6 +102,7 @@ uniform mat4 u_matrix;
 uniform vec2 u_viewport;
 uniform float u_half_width;
 uniform float u_aa;
+uniform float u_hide_jump;
 uniform float u_hide_reference;
 uniform float u_hover_width_mul;
 uniform float u_select_width_mul;
@@ -89,6 +112,8 @@ in float a_endpoint;
 in float a_side;
 in vec4 a_color_from;
 in vec4 a_color_to;
+// #27: 0 = permanent, 1 = jump, 2 = reference (the ShotKind discriminant, not
+// a bool). Both virtual kinds test as > 0.5, so "is virtual" reads the same.
 in float a_reference;
 in float a_dim;
 in float a_hide;
@@ -116,10 +141,12 @@ void main() {
     v_width_mul = 1.0;
     return;
   }
-  // Reference shots hidden (setShowReferenceShots(false)): collapse the whole
-  // quad to a single clipped point so it produces no fragments. All 4 vertices
-  // of a segment share a_reference, so both triangles degenerate together.
-  if (a_reference > 0.5 && u_hide_reference > 0.5) {
+  // Jumps and references hide independently (#27). Collapse the whole quad to a
+  // single clipped point so it produces no fragments. All 4 vertices of a
+  // segment share a_reference, so both triangles degenerate together.
+  bool isJump = a_reference > 0.5 && a_reference < 1.5;
+  bool isRef = a_reference > 1.5;
+  if ((isJump && u_hide_jump > 0.5) || (isRef && u_hide_reference > 0.5)) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_color_from = vec4(0.0);
     v_color_to = vec4(0.0);
@@ -164,9 +191,11 @@ void main() {
   v_color_from = a_color_from;
   v_color_to = a_color_to;
   // Dimmed shots (anchored / immovable during move tools) draw at 0.25 and this
-  // WINS over the reference 0.5 case, matching the stock line-opacity case order
-  // (immovable 0.25, anchored 0.25, isReference 0.5, else 1).
-  v_alpha_mul = (a_dim > 0.5) ? 0.25 : ((a_reference > 0.5) ? 0.5 : 1.0);
+  // WINS over the virtual cases, matching the stock line-opacity case order
+  // (immovable 0.25, anchored 0.25, virtual, else 1). A jump keeps the 0.5 it
+  // has always had so existing surveys look unchanged; a reference is fainter
+  // still, because it is not a leg anyone swims (#27).
+  v_alpha_mul = (a_dim > 0.5) ? ${glslFloat(SHOT_ALPHA_DIMMED)} : (isRef ? ${glslFloat(SHOT_ALPHA_REFERENCE)} : (isJump ? ${glslFloat(SHOT_ALPHA_JUMP)} : ${glslFloat(SHOT_ALPHA_NORMAL)}));
   // Signed perpendicular px, along-axis px (from endpoint A; the cap extension
   // shifts each base vert by capSign*outset), and segment length px. The fragment
   // rebuilds the capsule distance and the clamped color fraction from these.
@@ -214,6 +243,7 @@ uniform vec2 u_viewport;
 uniform float u_radius;
 uniform float u_stroke_width;
 uniform float u_aa;
+uniform float u_hide_jump;
 uniform float u_hide_reference;
 uniform float u_hover_size_mul;
 uniform float u_select_size_mul;
@@ -243,10 +273,19 @@ void main() {
     v_dim = 0.0;
     return;
   }
-  // All-reference stations hidden with reference shots (matches the stock
-  // stations layer's not-allShotsReference filter): collapse the quad to a
-  // single clipped point.
-  if (a_all_reference > 0.5 && u_hide_reference > 0.5) {
+  // A station touched only by virtual shots disappears when every kind that
+  // touches it is hidden (#27). a_all_reference is a mask, not a bool:
+  // 0 = a Normal shot touches it, 1 = only Jumps, 2 = only References,
+  // 3 = both. Testing "any virtual kind is visible" instead left an orphan
+  // marker on, say, a reference-only station while References were hidden and
+  // Jumps were not - its own legs were all gone.
+  bool onlyVirtual = a_all_reference > 0.5;
+  bool touchedByJump = a_all_reference > 0.5 && a_all_reference < 1.5
+                    || a_all_reference > 2.5;
+  bool touchedByRef = a_all_reference > 1.5;
+  bool keptByJump = touchedByJump && u_hide_jump < 0.5;
+  bool keptByRef = touchedByRef && u_hide_reference < 0.5;
+  if (onlyVirtual && !keptByJump && !keptByRef) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_fill = vec4(0.0);
     v_stroke = vec4(0.0);

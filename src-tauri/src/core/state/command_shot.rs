@@ -1,7 +1,7 @@
 use super::AppState;
 use crate::core::{CommandResult, Validator};
 use crate::models::{
-    shot_display_position, SectionId, ShotData, ShotId, ShotUpdates, FEATURE_ID_STRIDE,
+    shot_display_position, SectionId, ShotData, ShotId, ShotKind, ShotUpdates, FEATURE_ID_STRIDE,
 };
 
 impl AppState {
@@ -230,23 +230,20 @@ impl AppState {
         }
     }
 
-    pub(super) fn set_shot_reference(
+    pub(super) fn set_shot_kind(
         &self,
         section_id: SectionId,
         shot_id: ShotId,
-        is_reference: bool,
+        kind: ShotKind,
     ) -> CommandResult {
         self.with_project_mut(|project| {
-            if project
-                .set_shot_reference(section_id, shot_id, is_reference)
-                .is_some()
-            {
+            if project.set_shot_kind(section_id, shot_id, kind).is_some() {
                 tracing::info!(
                     section_id,
                     shot_id,
-                    is_reference,
-                    purpose = "toggle reference shot visibility",
-                    "Shot reference status updated"
+                    kind = kind.label(),
+                    purpose = "set shot kind (permanent/jump/reference)",
+                    "Shot kind updated"
                 );
                 CommandResult::success()
             } else {

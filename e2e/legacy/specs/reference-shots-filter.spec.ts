@@ -59,7 +59,7 @@ async function toggleReferenceShots(): Promise<void> {
 }
 
 /**
- * Count shots in the project, split by is_reference.
+ * Count shots in the project, split by virtual-vs-not.
  */
 async function countShotsByType(): Promise<{ real: number; reference: number }> {
   return await browser.executeAsync(
@@ -70,7 +70,7 @@ async function countShotsByType(): Promise<{ real: number; reference: number }> 
             getState: () => {
               project: {
                 sections: Array<{
-                  shots: Array<{ is_reference: boolean }>;
+                  shots: Array<{ kind: string }>;
                 }>;
               } | null;
             };
@@ -87,7 +87,7 @@ async function countShotsByType(): Promise<{ real: number; reference: number }> 
       let reference = 0;
       for (const section of e2e.projectStore.getState().project!.sections) {
         for (const shot of section.shots) {
-          if (shot.is_reference) reference++;
+          if (shot.kind !== 'Normal') reference++;
           else real++;
         }
       }

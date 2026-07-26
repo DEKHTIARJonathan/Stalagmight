@@ -25,6 +25,8 @@ import type {
   SectionUpdates,
   ShotData,
   ShotUpdates,
+  ShotKind,
+  VirtualShotMode,
   SectionId,
   ShotId,
   StationRef,
@@ -36,6 +38,7 @@ import type {
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
+import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
@@ -321,7 +324,7 @@ interface ProjectStore {
   deleteLastShotAndSection: (sectionId: SectionId, shotId: ShotId) => Promise<CommandResult>;
   deleteShotRangeSplit: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId, nameA: string, nameB: string) => Promise<CommandResult>;
   deleteShotRangeShift: (sectionId: SectionId, startShotId: ShotId, endShotId: ShotId) => Promise<CommandResult>;
-  setShotReference: (sectionId: SectionId, shotId: ShotId, isReference: boolean) => Promise<CommandResult>;
+  setShotKind: (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => Promise<CommandResult>;
 
   mergeStations: (stationA: StationRef, stationB: StationRef) => Promise<CommandResult>;
   unmergeStations: (stationRef: StationRef) => Promise<CommandResult>;
@@ -352,7 +355,7 @@ interface ProjectStore {
 
   importDmp: (path: string) => Promise<DmpFile>;
   parseTml: (path: string) => Promise<TmlFile>;
-  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
+  executeTmlImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
   parseCompass: (path: string) => Promise<CompassFile>;
   executeCompassImport: (path: string, fileHash?: string | null, includeExcluded?: boolean, applyCorrections?: boolean, commentsOnStations?: boolean) => Promise<CommandResult>;
   parseWalls: (path: string) => Promise<WallsFile>;
@@ -374,7 +377,7 @@ interface ProjectStore {
   checkDuplicateImport: (hash: string) => Promise<boolean>;
   trackImportedFile: (hash: string) => Promise<void>;
   checkSectionHashes: (hashes: string[]) => Promise<boolean[]>;
-  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => Promise<CommandResult>;
+  importSections: (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => Promise<CommandResult>;
   suggestImportPlacement: (shots: ShotData[]) => Promise<PlacementSuggestion[]>;
   exportCsv: (path: string) => Promise<void>;
   exportJson: (path: string) => Promise<void>;
@@ -544,6 +547,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   updateConfig: async (config: Config) => {
     try {
+      const routingBefore = get().config?.gas.include_reference_legs;
       // Rust command returns Result<(), String> - success returns nothing, error throws
       await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
@@ -553,6 +557,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // lazily (the backend memo is keyed on the config, so a stale config would
       // otherwise keep rendering the old weighted solve until an unrelated edit).
       set({ stationsAdjusted: null, surveyDataAdjusted: null });
+      // `gas.include_reference_legs` decides whether penetration routes through
+      // reference ties, and `stats.penetration_distance` is computed inside
+      // `get_project_state` - not lazily like the geometry above. Nothing else
+      // here re-runs it, so without this the Detail panel keeps showing the old
+      // figure while the distance overlay and ruler (both keyed on the setting)
+      // have already switched, until some unrelated command refreshes state.
+      // Gated on an actual change: this is a full project refetch, too heavy to
+      // fire on every unrelated settings tweak.
+      if (get().config?.gas.include_reference_legs !== routingBefore) {
+        await get().refreshProjectState();
+      }
       return emptyCommandResult(true, null);
     } catch (e) {
       return emptyCommandResult(false, String(e));
@@ -792,7 +807,44 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             state.loading.clientOpId === detectOpId
           );
         };
-        if (result.project.collab?.enabled) {
+        // #27: shots whose stored `kind` this build could not read. The backend
+        // already failed them closed to Reference (so nothing routes through a
+        // leg it could not parse) and hands them over exactly once, but that is
+        // a substitution the user never agreed to - ask what they should be.
+        // Guarded by the same staleness check as the collab prompt: a user who
+        // switched projects before this resolved must not get a dialog about a
+        // file that is no longer open.
+        //
+        // AWAITED, and it gates the collab prompt below. `openDialog` REPLACES
+        // whatever is showing rather than queueing, so two fire-and-forget
+        // prompts racing means whichever resolves second silently dismisses the
+        // other. That is not symmetric: the collaboration changeset is
+        // re-detected on the next open and costs nothing to defer, while this
+        // list has already been consumed from the backend - losing this dialog
+        // loses the prompt for the session, leaving substitutions unreviewed.
+        let promptedForUnknownKinds = false;
+        try {
+          const found = await invokeIpc<UnrecognisedShotKind[]>(
+            'take_unrecognised_shot_kinds',
+            // Scoped to THIS load: a cancelled load runs on to its next
+            // checkpoint, so without the id an abandoned project's shot ids
+            // could be handed to the one actually open.
+            { loadingId: result.loadingId },
+            { purpose: 'resolve unreadable shot kinds' }
+          );
+          if (isStillCurrentLoad() && found.length > 0) {
+            useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
+            promptedForUnknownKinds = true;
+          }
+        } catch {
+          /* best-effort: the shots are already safely Reference either way */
+        }
+
+        if (promptedForUnknownKinds) {
+          // Skip the collaboration prompt for this load rather than letting it
+          // stomp the dialog above. Nothing is lost: detect_collab_changes does
+          // not consume, so the next open re-offers it.
+        } else if (result.project.collab?.enabled) {
           void get()
             .detectCollabChanges()
             .then((cs) => {
@@ -1556,11 +1608,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     );
   },
 
-  setShotReference: async (sectionId: SectionId, shotId: ShotId, isReference: boolean) => {
+  setShotKind: async (sectionId: SectionId, shotId: ShotId, kind: ShotKind) => {
     return executeCommand(
-      'set_shot_reference',
-      { sectionId, shotId, isReference },
-      { purpose: 'toggle reference shot visibility', fields: { sectionId, shotId, isReference } }
+      'set_shot_kind',
+      { sectionId, shotId, kind },
+      { purpose: 'set shot kind (permanent/jump/reference)', fields: { sectionId, shotId, kind } }
     );
   },
 
@@ -1796,7 +1848,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean) => {
+  executeTmlImport: async (path: string, fileHash?: string | null, includeExcluded?: boolean, commentsOnStations?: boolean, virtualShotMode?: VirtualShotMode) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -1807,6 +1859,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           fileHash: fileHash ?? null,
           includeExcluded: includeExcluded ?? false,
           commentsOnStations: commentsOnStations ?? true,
+          // #27: null lets the backend default to Auto (the chain rule).
+          virtualShotMode: virtualShotMode ?? null,
         },
         { purpose: 'import Ariane TML/TMLU', fields: { path } }
       );
@@ -1998,7 +2052,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     });
   },
 
-  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null) => {
+  importSections: async (sections: ImportSectionConfig[], fileHash?: string | null, sectionHashes?: string[] | null, virtualShotMode?: VirtualShotMode) => {
     const s = peekProjectActionSource();
     if (s) setSource(s);
     try {
@@ -2008,6 +2062,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           sections,
           fileHash: fileHash ?? null,
           sectionHashes: sectionHashes ?? null,
+          virtualShotMode: virtualShotMode ?? null,
         },
         { purpose: 'apply imported sections', fields: { section_count: sections.length } }
       );

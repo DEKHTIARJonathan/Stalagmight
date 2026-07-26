@@ -38,7 +38,7 @@ pub struct UndoEntry {
 /// Data needed to undo a command
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UndoData {
-    /// Simple inverse command (e.g., SetShotReference -> SetShotReference(!), MergeStations -> UnmergeStations)
+    /// Simple inverse command (e.g., SetShotKind -> SetShotKind(prev kind), MergeStations -> UnmergeStations)
     InverseCommand(Command),
 
     /// Previous values for an update operation (JSON serialized)

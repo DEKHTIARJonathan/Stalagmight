@@ -136,8 +136,12 @@ pub async fn export_image(
     state: State<'_, AppState>,
     app_handle: AppHandle,
     path: PathBuf,
-    options: ExportImageOptions,
+    mut options: ExportImageOptions,
 ) -> Result<(), String> {
+    // Server-populated (#27): the export must colour its distance ramp and
+    // label its penetration with the same graph the app is showing, so this
+    // comes from the live config, never from whatever the frontend sent.
+    options.include_reference_legs = state.get_config().gas.include_reference_legs;
     let project = state.get_project_state().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
@@ -243,8 +247,10 @@ pub async fn export_image(
 pub(crate) fn export_image_impl(
     state: &AppState,
     path: PathBuf,
-    options: ExportImageOptions,
+    mut options: ExportImageOptions,
 ) -> Result<(), String> {
+    // See the `export_image` command: config wins over the wire (#27).
+    options.include_reference_legs = state.get_config().gas.include_reference_legs;
     let project = state.get_project_state().ok_or_else(|| {
         tracing::warn!(
             path = ?path,
@@ -301,10 +307,13 @@ pub(crate) fn export_image_impl(
 #[tauri::command]
 pub async fn preview_svg_export(
     app_handle: AppHandle,
-    options: ExportImageOptions,
+    mut options: ExportImageOptions,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
+        // Same config-wins rule as the export itself, so the preview cannot
+        // disagree with the file it is previewing (#27).
+        options.include_reference_legs = state.get_config().gas.include_reference_legs;
         let project = state
             .get_project_state()
             .ok_or_else(|| "No project open".to_string())?;

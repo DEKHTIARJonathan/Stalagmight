@@ -275,6 +275,45 @@ const deleteX: BadgeContent = (cx, cy, r) => {
   );
 };
 
+/**
+ * Letter badge for the two virtual shot kinds (#27): a yellow "J" or a blue
+ * "R", matching the glyphs and colours the data table's J/R cell uses so the
+ * context menu and the table read as the same vocabulary.
+ */
+function kindLetter(letter: 'J' | 'R', cssClass: string, struck = false): BadgeContent {
+  return (cx, cy, r) => (
+    <g>
+      <text
+        className={cssClass}
+        x={cx}
+        y={cy}
+        // `central` centres the cap on the badge; a capital's baseline would
+        // otherwise sit the glyph low.
+        dominantBaseline="central"
+        textAnchor="middle"
+        fontSize={r * 1.7}
+        fontWeight="700"
+      >
+        {letter}
+      </text>
+      {/* "Unmark" variant: a short horizontal rule through the letter, in the
+          shared action red (--sh-delete, same as the delete X) so removing a
+          mark reads as removal rather than as more of the same kind. */}
+      {struck && (
+        <path
+          className="kind-strike"
+          d={`M${(cx - r * 0.55).toFixed(2)} ${cy} L${(cx + r * 0.55).toFixed(2)} ${cy}`}
+        />
+      )}
+    </g>
+  );
+}
+
+const jumpLetter = kindLetter('J', 'kind-jump');
+const referenceLetter = kindLetter('R', 'kind-reference');
+const jumpLetterStruck = kindLetter('J', 'kind-jump', true);
+const referenceLetterStruck = kindLetter('R', 'kind-reference', true);
+
 /** Orange pencil (edit) - a filled pencil, rotated diagonally. */
 const editPencil: BadgeContent = (cx, cy, r) => {
   const k = r * 0.92;
@@ -302,23 +341,18 @@ const datumStar: BadgeContent = (cx, cy, r) => (
   <path className="datum-star" d={starD(cx, cy, r * 1.02, r * 0.42)} />
 );
 
-/** Eye (open, or crossed with a slash) - visibility / reference state. */
-function eyeShape(cx: number, cy: number, r: number, crossed: boolean): ReactNode {
-  const rx = r * 0.98, ry = r * 0.62, pr = r * 0.32, a = r * 0.8;
+/** Open eye (mark as permanent) - the "this shot is a real surveyed leg" badge.
+ *  The crossed variant is gone: #27 replaced the single reference symbol with
+ *  the J/R letter badges, so nothing needed the slash any more. */
+const openEye: BadgeContent = (cx, cy, r) => {
+  const rx = r * 0.98, ry = r * 0.62, pr = r * 0.32;
   return (
     <g>
       <ellipse className="eye" cx={cx} cy={cy} rx={rx} ry={ry} />
       <circle className="eye-pupil" cx={cx} cy={cy} r={pr} />
-      {crossed && (
-        <path className="eye" d={`M${(cx - a).toFixed(2)} ${(cy - a).toFixed(2)} L${(cx + a).toFixed(2)} ${(cy + a).toFixed(2)}`} />
-      )}
     </g>
   );
-}
-/** Crossed eye (mark as jump/reference). */
-const crossedEye: BadgeContent = (cx, cy, r) => eyeShape(cx, cy, r, true);
-/** Open eye (mark as permanent). */
-const openEye: BadgeContent = (cx, cy, r) => eyeShape(cx, cy, r, false);
+};
 
 /** Green plus (add). */
 const greenPlus: BadgeContent = (cx, cy, r) => {
@@ -459,9 +493,21 @@ export function EntityEditSymbol(props: EntitySymbolProps) {
 export function EntityDatumSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={datumStar} />;
 }
-/** Duotone "mark <entity> as jump/reference" (entity color + crossed-eye badge). */
-export function EntityReferenceSymbol(props: EntitySymbolProps) {
-  return <EntityBadgedSymbol {...props} content={crossedEye} />;
+/** Duotone "mark <entity> as jump" (entity color + yellow J badge, #27). */
+export function EntityJumpSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={jumpLetter} />;
+}
+/** Duotone "mark <entity> as reference" (entity color + blue R badge, #27). */
+export function EntityReferenceKindSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={referenceLetter} />;
+}
+/** Duotone "unmark jump" (entity color + struck-through J badge, #27). */
+export function EntityJumpUnmarkSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={jumpLetterStruck} />;
+}
+/** Duotone "unmark reference" (entity color + struck-through R badge, #27). */
+export function EntityReferenceUnmarkSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={referenceLetterStruck} />;
 }
 /** Duotone "mark <entity> as permanent" (entity color + open-eye badge). */
 export function EntityPermanentSymbol(props: EntitySymbolProps) {

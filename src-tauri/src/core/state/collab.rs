@@ -1,6 +1,7 @@
 //! AppState methods for collaboration mode: enabling, change detection, and
 //! applying a collaborator's reconciled `.tml` edits as one undoable operation.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 
 use chrono::Utc;
@@ -385,6 +386,10 @@ fn default_sibling_name(project: &Project) -> String {
 /// sections → section metadata. Stalagmight-only shot fields are preserved.
 pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Vec<String> {
     let mut skipped: Vec<String> = Vec::new();
+    // Shots this changeset flipped from real to virtual. Their kind cannot be
+    // settled inline - the chain rule needs the graph the whole changeset
+    // produces - so they are collected here and classified at the end.
+    let mut newly_virtual: HashSet<(SectionId, ShotId)> = HashSet::new();
     // Edits in place, preserving Stalagmight-only fields.
     for e in &cs.shots_edited {
         let Some(section) = project.get_section_mut(e.section_id) else {
@@ -424,9 +429,26 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         shot.up = d.up;
         shot.down = d.down;
         shot.comment = d.comment.clone();
-        shot.is_reference = d.is_reference;
+        // Only virtualness round-trips through Ariane; the Jump/Reference axis
+        // is local-only (#27 q11). If the shot was already virtual and comes
+        // back virtual, keep whichever kind the user chose here rather than
+        // letting Ariane's single VIRTUAL category flatten it.
+        if shot.kind.is_virtual() != d.kind.is_virtual() {
+            shot.kind = d.kind;
+            if d.kind.is_virtual() {
+                // Ariane only says VIRTUAL, so `d.kind` is the parser's
+                // conservative Reference seed, not a verdict - exactly the state
+                // an import leaves behind before the chain rule runs. Taking it
+                // literally gave a newly-virtualised shot an infinite edge
+                // weight, so a partner marking one real jump line VIRTUAL
+                // dropped everything beyond it out of penetration, the distance
+                // gradient and gas reach. Defer to the classifier below, once
+                // the whole changeset has been applied and the graph is final.
+                newly_virtual.insert((e.section_id, shot.id));
+            }
+        }
         // Preserved (no TML equivalent): azimuth_out, pitch_out,
-        // marker_index, temperature.
+        // marker_index, temperature, and the Jump/Reference distinction.
 
         // The shot's `to` station picks up the station-portion of the
         // returned Comment. `None` clears any prior entry so a round-trip
@@ -556,6 +578,16 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                     }
                 }
             }
+            // An ADDED virtual shot needs the chain rule for exactly the reason
+            // an edited one does: `a.data.kind` is `normalize_tml_shot`'s
+            // provisional Reference seed, not a verdict, because Ariane only
+            // says VIRTUAL. A partner who draws a NEW jump line (rather than
+            // flipping an existing shot) would otherwise land a permanent
+            // Reference - infinite edge weight, far side gone from penetration,
+            // the distance gradient and gas reach.
+            if a.data.kind.is_virtual() {
+                newly_virtual.insert((sid, nid));
+            }
             last_add = Some((sid, a.after_shot_id, nid));
         }
     }
@@ -577,6 +609,20 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 shots: s.shots.clone(),
             })
             .id;
+        // A wholly new section's virtual shots need the chain rule for the same
+        // reason an added or newly-virtualised one does: `s.shots` came from
+        // `normalize_tml_shot`, which seeds every Ariane VIRTUAL shot as the
+        // provisional Reference. Without this a bounded Normal-Reference-Normal
+        // run inside the new section keeps that seed, so its middle leg gets an
+        // infinite edge weight and the far side drops out of penetration, the
+        // distance gradient and gas reach.
+        if let Some(section) = project.get_section(new_sid) {
+            for shot in &section.shots {
+                if shot.kind.is_virtual() {
+                    newly_virtual.insert((new_sid, shot.id));
+                }
+            }
+        }
         if !s.shot_uuids.is_empty() {
             if let Some(section) = project.get_section_mut(new_sid) {
                 // Adopt each collaborator UUID only if it has not already been
@@ -586,8 +632,7 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
                 // to the wrong station; keep the unique fresh mint add_section gave
                 // the shot in that case. (Mirrors the per-stamp guard the
                 // `shots_added` path already applies above.)
-                let mut adopted: std::collections::HashSet<String> =
-                    std::collections::HashSet::new();
+                let mut adopted: HashSet<String> = HashSet::new();
                 for (shot, uuid_opt) in section.shots.iter_mut().zip(s.shot_uuids.iter()) {
                     if let Some(u) = uuid_opt.as_ref() {
                         if adopted.insert(u.clone()) {
@@ -651,6 +696,21 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
     // does not apply). Re-mint any in-section duplicate so resolve_key's
     // first-match cannot silently mis-anchor a cross-reference.
     project.ensure_unique_shot_uuids();
+
+    // Settle the kind of anything the collaborator newly virtualised, now that
+    // the graph is final. Scoped to those shots alone: every other virtual shot
+    // in the project keeps the kind it already had, so this cannot re-flip a
+    // choice the user made locally (#27 q14).
+    if !newly_virtual.is_empty() {
+        let classified =
+            project.classify_virtual_shots(&crate::models::ClassifyScope::Shots(&newly_virtual));
+        tracing::info!(
+            newly_virtual = newly_virtual.len(),
+            classified,
+            purpose = "assign Jump/Reference to shots a collaborator turned VIRTUAL (#27)",
+            "Classified newly-virtual shots after collab apply"
+        );
+    }
 
     skipped
 }
@@ -976,6 +1036,79 @@ mod tests {
         assert_eq!(
             p.station_comment_for_ref(crate::models::StationRef::new(sid, 1)),
             None
+        );
+    }
+
+    /// #27: every path that can introduce a virtual shot has to hand it to the
+    /// chain rule, including a whole new section. `normalize_tml_shot` seeds
+    /// each Ariane VIRTUAL shot as the provisional `Reference`, so a bounded run
+    /// inside a collaborator's new section would otherwise keep that seed - and
+    /// a Reference gets an infinite edge weight, dropping the far side out of
+    /// penetration, the distance gradient and gas reach.
+    ///
+    /// Regression: `newly_virtual` was populated for edited and individually
+    /// added shots but not for `sections_added`.
+    #[test]
+    fn apply_sections_added_classifies_its_virtual_shots() {
+        use crate::models::ShotKind;
+
+        let mut p = Project::new("Cave".into(), None);
+
+        // Normal - Reference - Normal: bounded by real survey at both ends, so
+        // the chain rule must promote the middle leg to Jump.
+        let virtual_shot = ShotData {
+            kind: ShotKind::Reference,
+            ..shot(20.0, 6.0)
+        };
+        let mut cs = CollabChangeSet::empty();
+        cs.sections_added
+            .push(crate::core::reconcile::AddedSection {
+                name: "New".into(),
+                color: "#000000".into(),
+                surveyor: None,
+                date: None,
+                shots: vec![shot(10.0, 5.0), virtual_shot, shot(30.0, 7.0)],
+                shot_uuids: vec![None, None, None],
+                shot_station_comments: vec![None, None, None],
+            });
+        apply_changeset(&mut p, &cs);
+
+        let kinds: Vec<ShotKind> = p.sections[0].shots.iter().map(|s| s.kind).collect();
+        assert_eq!(
+            kinds,
+            vec![ShotKind::Normal, ShotKind::Jump, ShotKind::Normal],
+            "a bounded virtual run in a newly-added section must classify as Jump"
+        );
+    }
+
+    /// The scoped pass must not reach outside the shots the changeset touched:
+    /// a kind the local user set by hand stays put (#27 q14).
+    #[test]
+    fn apply_sections_added_leaves_existing_kinds_alone() {
+        use crate::models::ShotKind;
+
+        let mut p = proj_abcd();
+        let sid = p.sections[0].id;
+        let shot_id = p.sections[0].shots[1].id;
+        p.set_shot_kind(sid, shot_id, ShotKind::Reference);
+
+        let mut cs = CollabChangeSet::empty();
+        cs.sections_added
+            .push(crate::core::reconcile::AddedSection {
+                name: "New".into(),
+                color: "#000000".into(),
+                surveyor: None,
+                date: None,
+                shots: vec![shot(10.0, 5.0)],
+                shot_uuids: vec![None],
+                shot_station_comments: vec![None],
+            });
+        apply_changeset(&mut p, &cs);
+
+        assert_eq!(
+            p.sections[0].shots[1].kind,
+            ShotKind::Reference,
+            "the pre-existing hand-set kind must survive a collaborator's new section"
         );
     }
 

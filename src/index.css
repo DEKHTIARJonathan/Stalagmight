@@ -1426,6 +1426,26 @@ tr[data-selected="true"]:hover {
   fill: var(--cc-panel);
   stroke: none;
 }
+/* Shot-kind letter badges (#27). The hexes match the Tailwind classes the data
+   table's J/R cell uses (amber-400 / sky-400) so the context menu and the table
+   read as one vocabulary. Filled text, no stroke: a stroked capital at this
+   size turns into a blob. */
+.duotone .kind-jump {
+  fill: #fbbf24;
+  stroke: none;
+}
+.duotone .kind-reference {
+  fill: #38bdf8;
+  stroke: none;
+}
+/* "Unmark" strike through the J/R letter: the shared action red, matching the
+   delete X, so removing a mark reads as removal. */
+.duotone .kind-strike {
+  fill: none;
+  stroke: var(--sh-delete);
+  stroke-width: 2;
+  stroke-linecap: round;
+}
 .duotone .x {
   fill: none;
   stroke: var(--sh-delete);

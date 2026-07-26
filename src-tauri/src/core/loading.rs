@@ -198,6 +198,10 @@ pub struct DisplaySettings {
     pub show_station_labels: bool,
     pub show_shot_data: bool,
     pub show_reference_shots: bool,
+    /// #27: jump shots hide independently of reference shots. Defaults to the
+    /// stored `showReferenceShots` value so an existing project keeps showing
+    /// exactly what it showed before the split.
+    pub show_jumps: bool,
     pub show_zero_datum: bool,
     pub show_grid: bool,
     pub show_satellite: bool,
@@ -221,6 +225,7 @@ impl Default for DisplaySettings {
             show_station_labels: false,
             show_shot_data: false,
             show_reference_shots: true,
+            show_jumps: true,
             show_zero_datum: true,
             show_grid: false,
             show_satellite: false,
@@ -246,6 +251,14 @@ impl DisplaySettings {
             show_shot_data: map.get("showShotData").is_some_and(|s| s == "true"),
             show_reference_shots: map
                 .get("showReferenceShots")
+                .or_else(|| map.get("showVirtualShots"))
+                .is_none_or(|s| s == "true"),
+            // Falls back through the pre-#27 keys so a project saved before the
+            // split reopens with jumps in the same state its single toggle left
+            // them, rather than silently flipping them on.
+            show_jumps: map
+                .get("showJumps")
+                .or_else(|| map.get("showReferenceShots"))
                 .or_else(|| map.get("showVirtualShots"))
                 .is_none_or(|s| s == "true"),
             show_zero_datum: map.get("showZeroDatum").is_none_or(|s| s == "true"),

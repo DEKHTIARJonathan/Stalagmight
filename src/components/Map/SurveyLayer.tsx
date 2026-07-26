@@ -15,7 +15,8 @@ import type { ToolType } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
 import { selectActiveSurveyData } from '../../store/geometrySelectors';
-import { surveyDataFromLegacy } from '../../types/survey-data';
+import { surveyDataFromLegacy, shotKindFromFlags } from '../../types/survey-data';
+import { SHOT_ALPHA_BY_KIND, SHOT_ALPHA_DIMMED } from './surveyLayer/customRender/shaders';
 import { hasLiveStyle } from './mapUtils';
 import { buildGhostFeatures } from './surveyLayer/ghostFeatures';
 import {
@@ -26,7 +27,11 @@ import {
   type DisplayColorContext,
   type GhostSectionData,
 } from './surveyLayer/displayColor';
-import { SurveyGeometryIndex } from './surveyLayer/geometryIndex';
+import {
+  SurveyGeometryIndex,
+  isKindVisible,
+  type VisibleKinds,
+} from './surveyLayer/geometryIndex';
 import {
   offsetOverlayPoint,
   offsetOverlayShot,
@@ -89,8 +94,13 @@ export interface SurveyLayerCallbacks {
   onStationHover?: (ref: StationRef | null) => void;
   onShotHover?: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
   onFeatureHover?: ((isHovering: boolean) => void) | undefined;
+  /** `alongT` is where on the shot the click landed, 0..1 from the from-station.
+   *  A shot is a straight 3D segment, so the fraction along its planimetric
+   *  projection equals the fraction along its slope length: callers multiply
+   *  straight through by `shot.length`. */
   onContextMenu?: (
-    target: { type: 'station'; ref: StationRef } | { type: 'shot'; sectionId: SectionId; shotId: ShotId } | null,
+    target: { type: 'station'; ref: StationRef }
+      | { type: 'shot'; sectionId: SectionId; shotId: ShotId; alongT: number } | null,
     event: MapMouseEvent
   ) => void;
   /** Called when user clicks near a hidden station (for toast feedback) */
@@ -168,6 +178,8 @@ export default class SurveyLayer {
   // Cached reference-shots visibility (custom renderer + labels + measure path
   // read it to hide/show reference legs).
   private showReferenceShotsCached = true;
+  /** #27: jumps hide independently of references. */
+  private showJumpsCached = true;
 
   // Comment tool override: when comment/move_comment tool is active, force both
   // comment layers visible with text-allow-overlap so comments win over other labels.
@@ -1177,10 +1189,8 @@ export default class SurveyLayer {
           candidateSections: shotSections.size,
         });
       }
-      this.callbacks.onContextMenu?.(
-        { type: 'shot', sectionId: nearestShot.sectionId, shotId: nearestShot.shotId },
-        e
-      );
+      const { sectionId, shotId, t: alongT } = nearestShot;
+      this.callbacks.onContextMenu?.({ type: 'shot', sectionId, shotId, alongT }, e);
       return;
     }
 
@@ -1272,7 +1282,7 @@ export default class SurveyLayer {
   ): ReturnType<SurveyGeometryIndex['nearestStation']> {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestStation(this.projector(), x, y, sections, maxDistance, {
-      includeReference: this.showReferenceShotsCached,
+      visibleKinds: this.visibleKinds(),
     });
   }
 
@@ -1285,7 +1295,7 @@ export default class SurveyLayer {
   ): ReturnType<SurveyGeometryIndex['nearestShot']> {
     if (sections.size === 0 || !this.geoIndex) return null;
     return this.geoIndex.nearestShot(this.projector(), x, y, sections, maxDistance, {
-      includeReference: this.showReferenceShotsCached,
+      visibleKinds: this.visibleKinds(),
     });
   }
 
@@ -1310,7 +1320,7 @@ export default class SurveyLayer {
       maxY,
       stationSections,
       this.getStationHitArea(),
-      { includeReference: this.showReferenceShotsCached },
+      { visibleKinds: this.visibleKinds() },
     );
   }
 
@@ -1545,8 +1555,8 @@ export default class SurveyLayer {
     if (Number.isNaN(sectionId) || Number.isNaN(shotId)) return null;
     const geo = this.geoIndex.shotGeometry(sectionId, shotId);
     if (!geo) return null;
-    // Hidden reference shots must not surface via the overlay either.
-    if (geo.isReference && !this.showReferenceShotsCached) return null;
+    // A shot of a hidden kind must not surface via the overlay either (#27).
+    if (geo.isReference && !isKindVisible(geo.kindFlags, this.visibleKinds())) return null;
 
     const fid = this.parseFeatureId(idStr);
     const measured = fid !== null && this.measuredPathIds?.has(fid);
@@ -1559,7 +1569,15 @@ export default class SurveyLayer {
           geo.globalIdx,
           this.displayColorContext(),
         );
-    const opacity = this.isSectionAnchored(sectionId) ? 0.25 : geo.isReference ? 0.5 : 1;
+    // Per-kind, from the same table the shader is generated from (#27):
+    // `geo.isReference` is "any virtual kind", so a flat 0.5 here drew a
+    // hovered/selected reference tie brighter than its own base geometry.
+    const overlayKind = shotKindFromFlags(
+      this.cachedSurveyData?.shotFlags[geo.globalIdx] ?? 0,
+    );
+    const opacity = this.isSectionAnchored(sectionId)
+      ? SHOT_ALPHA_DIMMED
+      : SHOT_ALPHA_BY_KIND[overlayKind];
     const properties: Record<string, unknown> = {
       kind: measured ? 'shotMeasured' : 'shot',
       color,
@@ -1600,9 +1618,10 @@ export default class SurveyLayer {
     const coords = this.geoIndex.stationCoords(ref);
     const g = this.geoIndex.stationGlobalIndex(ref);
     if (!coords || g === null) return null;
-    // A station hidden by the reference-shots toggle must not surface via a
-    // highlight (matches the old stations-layer filter swallowing the ring).
-    if (!this.showReferenceShotsCached && this.geoIndex.isAllReferenceStation(ref)) return null;
+    // A station hidden because every kind touching it is hidden must not
+    // surface via a highlight (matches the circle shader's both-off test).
+    if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
+      return null;
 
     const fid = this.parseFeatureId(idStr);
     const section = this.geoIndex.section(ref.section_id);
@@ -1825,7 +1844,7 @@ export default class SurveyLayer {
       // legs are excluded to match the interact overlay / stock filter.
       for (const { from, to } of this.geoIndex.measuredShotSegments(
         this.measuredPathIds,
-        this.showReferenceShotsCached,
+        this.visibleKinds(),
       )) {
         segments.push({ a: from, b: to });
       }
@@ -1836,9 +1855,10 @@ export default class SurveyLayer {
         const sectionId = Math.floor(fid / FEATURE_ID_STRIDE);
         const stationIndex = fid - sectionId * FEATURE_ID_STRIDE;
         const ref = { section_id: sectionId, station_index: stationIndex };
-        // Match the interact-overlay guard: a station hidden by the reference
-        // toggle must not surface.
-        if (!this.showReferenceShotsCached && this.geoIndex.isAllReferenceStation(ref)) continue;
+        // Match the interact-overlay guard: a station hidden because every
+        // kind touching it is hidden must not surface.
+        if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
+          continue;
         const coords = this.geoIndex.stationCoords(ref);
         if (coords) points.push({ center: coords });
       }
@@ -2250,6 +2270,24 @@ export default class SurveyLayer {
   // Control reference shots visibility. The custom renderer + custom label layer
   // hide/show reference legs via a shader uniform; the interact overlay + custom
   // measure-path honor the same flag when resolving features.
+  /** Which virtual kinds are currently drawn (#27). Hit-testing, the measure
+   *  path and the overlay all resolve against this so they agree with the
+   *  shader. */
+  private visibleKinds(): VisibleKinds {
+    return { jump: this.showJumpsCached, reference: this.showReferenceShotsCached };
+  }
+
+  /** Show/hide jump shots, independently of references (#27). */
+  setShowJumps(visible: boolean): void {
+    if (!this.map) return;
+    this.showJumpsCached = visible;
+    this.customRender?.setJumpShotsVisible(visible);
+    this.customLabels?.setJumpShotsVisible(visible);
+    this.syncCustomMeasurePath();
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
+  }
+
   setShowReferenceShots(visible: boolean): void {
     if (!this.map) return;
     this.showReferenceShotsCached = visible;
@@ -3512,7 +3550,7 @@ export default class SurveyLayer {
    */
   enumerateGeometry(): ReturnType<SurveyGeometryIndex['enumerateGeometry']> | null {
     if (!this.geoIndex) return null;
-    return this.geoIndex.enumerateGeometry(this.showReferenceShotsCached);
+    return this.geoIndex.enumerateGeometry(this.visibleKinds());
   }
 
   /**

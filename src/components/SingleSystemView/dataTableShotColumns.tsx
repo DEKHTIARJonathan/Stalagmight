@@ -12,11 +12,18 @@ import type { ReactNode } from 'react';
 import type { TFunction } from 'i18next';
 import type { Shot } from '../../types/project';
 import type { GridColumn } from '../common/SpreadsheetGrid/types';
-import { AlertCircleIcon, AlertTriangleIcon, DotIcon, LockIcon } from '../common/icons';
+import { AlertCircleIcon, AlertTriangleIcon, LockIcon } from '../common/icons';
 import { circularMeanDegrees } from '../../utils/angles';
 import { formatFixed } from '../../i18n/format';
 import type { ProjectWarning } from '../../types/commands';
 import { AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import type { ShotKind } from '../../types/ipc/ShotKind';
+import {
+  SHOT_KIND_CLASS,
+  SHOT_KIND_LABEL_KEY,
+  nextShotKind,
+  shotKindGlyph,
+} from '../../utils/shotKind';
 
 /** Columns whose edits touch the adjusted centerline geometry → locked on a frozen
  *  shot (matches the Rust `ShotUpdates::touches_geometry` set, minus LRUD). */
@@ -42,8 +49,9 @@ export interface ShotColumnContext {
   /** Map a grid row index to its index in the section's shots array - `null`
    *  for draft rows (grid rows interleave drafts with the real shots). */
   shotIndexAt: (gridRowIndex: number) => number | null;
-  /** Toggle a shot's reference flag (the inline dot control). */
-  onToggleReference: (shot: Shot) => void;
+  /** Advance a shot's kind around the Normal -> Jump -> Reference ring (the
+   *  inline J/R cell). `direction` of -1 walks it backwards (shift-click). */
+  onCycleShotKind: (shot: Shot, direction: 1 | -1) => void;
   /** Open the Warnings tab and start resolving the given shot's issue (the
    *  warning indicator becomes a button when the shot has unresolved warnings). */
   onResolveWarning?: (shotId: number) => void;
@@ -266,42 +274,64 @@ export function buildShotColumns(ctx: ShotColumnContext): GridColumn<Shot>[] {
     lrudCol('up', t('dataTable.columns.upShort')),
     lrudCol('down', t('dataTable.columns.downShort')),
     {
-      key: 'is_reference',
+      key: 'kind',
       header: t('dataTable.columns.referenceShort'),
       width: 40,
       align: 'center',
       kind: 'text',
-      getValue: (r) => r.is_reference,
-      format: (v) => (v ? 'true' : 'false'),
-      // Editable as a boolean so fill/paste/clear work like any other column
-      // (drag a J/R cell's fill handle to stamp the flag down a range); the
-      // rendered dot stays the pointer affordance for single toggles.
+      getValue: (r) => r.kind,
+      // Blank for a permanent shot so the column stays visually quiet on a
+      // normal survey and the virtual shots stand out (#27).
+      format: (v) => shotKindGlyph(v as ShotKind),
+      // Editable as text so fill/paste/clear work like any other column: drag a
+      // cell's fill handle to stamp one kind down a whole run, which is the
+      // bulk-reclassify path now that classification never re-runs.
       editable: true,
-      isEditable: editableUnlessFrozenGeometry('is_reference'), // not locked on frozen
+      isEditable: editableUnlessFrozenGeometry('kind'), // not locked on frozen
       parse: (raw) => {
         const v = raw.trim().toLowerCase();
-        if (v === '' || v === 'false' || v === '0' || v === 'no') return false;
-        if (v === 'true' || v === '1' || v === 'yes') return true;
+        // Accept the rendered glyphs, the full words, and the legacy booleans
+        // so a sheet copied out of an older build still pastes back in.
+        if (v === '' || v === 'n' || v === 'normal' || v === 'permanent') return 'Normal';
+        if (v === 'j' || v === 'jump') return 'Jump';
+        if (v === 'r' || v === 'ref' || v === 'reference') return 'Reference';
+        if (v === 'false' || v === '0' || v === 'no') return 'Normal';
+        if (v === 'true' || v === '1' || v === 'yes') return 'Jump';
         return undefined; // anything else is rejected
       },
-      render: (shot): ReactNode => (
-        <span
-          className={`flex items-center justify-center ${geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'}`}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (!geometryReadOnly) ctx.onToggleReference(shot);
-          }}
-          title={shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
-        >
-          {shot.is_reference ? (
-            <DotIcon size={20} />
-          ) : (
-            <span className="opacity-0 hover:opacity-30">
-              <DotIcon size={20} />
-            </span>
-          )}
-        </span>
-      ),
+      render: (shot): ReactNode => {
+        const glyph = shotKindGlyph(shot.kind);
+        return (
+          <span
+            data-testid="shot-kind-cell"
+            data-kind={shot.kind}
+            role={geometryReadOnly ? undefined : 'button'}
+            tabIndex={geometryReadOnly ? undefined : -1}
+            aria-label={t(SHOT_KIND_LABEL_KEY[shot.kind])}
+            className={`flex items-center justify-center font-semibold ${SHOT_KIND_CLASS[shot.kind]} ${
+              geometryReadOnly ? 'cursor-default opacity-60' : 'cursor-pointer'
+            }`}
+            onClick={(e) => {
+              e.stopPropagation();
+              // Shift-click walks the ring backwards, so overshooting a
+              // three-state cycle costs one click instead of two.
+              if (!geometryReadOnly) ctx.onCycleShotKind(shot, e.shiftKey ? -1 : 1);
+            }}
+            title={t('dataTable.columns.kindCycleHint', {
+              current: t(SHOT_KIND_LABEL_KEY[shot.kind]),
+              next: t(SHOT_KIND_LABEL_KEY[nextShotKind(shot.kind, 1)]),
+            })}
+          >
+            {glyph === '' ? (
+              // Keep the hover affordance the old dot had: an empty cell still
+              // has to advertise that it is clickable.
+              <span className="opacity-0 hover:opacity-40">J</span>
+            ) : (
+              glyph
+            )}
+          </span>
+        );
+      },
     },
     {
       key: 'comment',

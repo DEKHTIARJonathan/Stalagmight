@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates,
-    ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
+    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -98,11 +98,27 @@ pub enum Command {
         section_id: SectionId,
         shot_id: ShotId,
     },
-    #[serde(alias = "set_shot_virtual")]
-    SetShotReference {
+    /// Set a shot's [`ShotKind`] (#27). Replaces the old boolean
+    /// `SetShotReference`.
+    ///
+    /// Reads pre-#27 persisted undo history **losslessly** rather than forcing
+    /// it to be discarded: the variant aliases the old `set_shot_reference` /
+    /// `set_shot_virtual` tags, and the `kind` field aliases the old
+    /// `is_reference` bool through `models::shot::de_shot_kind`, which
+    /// maps `true` to [`ShotKind::Jump`] per q2. An old entry's inverse
+    /// (`SetShotReference { is_reference: !x }`) therefore still round-trips, so
+    /// upgrading does not cost the user their undo stack.
+    #[serde(alias = "set_shot_virtual", alias = "set_shot_reference")]
+    SetShotKind {
         section_id: SectionId,
         shot_id: ShotId,
-        is_reference: bool,
+        #[serde(
+            default,
+            alias = "is_reference",
+            alias = "is_virtual",
+            deserialize_with = "crate::models::shot::de_shot_kind"
+        )]
+        kind: ShotKind,
     },
 
     // Station commands
@@ -388,16 +404,16 @@ impl Command {
                 section_id,
                 shot_display_position(*shot_id, *section_id)
             ),
-            Command::SetShotReference {
+            Command::SetShotKind {
                 section_id,
                 shot_id,
-                is_reference,
+                kind,
             } => {
                 let pos = shot_display_position(*shot_id, *section_id);
-                if *is_reference {
-                    format!("Mark shot {section_id}:{pos} as reference")
-                } else {
-                    format!("Mark shot {section_id}:{pos} as permanent")
+                match kind {
+                    ShotKind::Normal => format!("Mark shot {section_id}:{pos} as permanent"),
+                    ShotKind::Jump => format!("Mark shot {section_id}:{pos} as jump"),
+                    ShotKind::Reference => format!("Mark shot {section_id}:{pos} as reference"),
                 }
             }
             Command::MergeStations {
@@ -488,6 +504,51 @@ mod tests {
         StationRef,
     };
     use chrono::NaiveDate;
+
+    #[test]
+    fn legacy_set_shot_reference_undo_entries_still_deserialize() {
+        // Pre-#27 persisted undo history is JSON-tagged `set_shot_reference`
+        // with an `is_reference` bool. It must still load, otherwise upgrading
+        // would silently throw away the user's undo stack.
+        let legacy =
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":true}"#;
+        let parsed: Command = serde_json::from_str(legacy).unwrap();
+        // q2: a legacy virtual shot reads as a Jump, and the ids survive.
+        assert!(
+            matches!(
+                parsed,
+                Command::SetShotKind {
+                    section_id: 1,
+                    shot_id: 2,
+                    kind: ShotKind::Jump,
+                }
+            ),
+            "legacy set_shot_reference must map onto SetShotKind: {parsed:?}"
+        );
+
+        // The false case, which is what an old inverse command carried.
+        let legacy_false =
+            r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":false}"#;
+        let parsed: Command = serde_json::from_str(legacy_false).unwrap();
+        assert!(matches!(
+            parsed,
+            Command::SetShotKind {
+                kind: ShotKind::Normal,
+                ..
+            }
+        ));
+
+        // And the even older `set_shot_virtual` tag.
+        let ancient = r#"{"type":"set_shot_virtual","section_id":1,"shot_id":2,"is_virtual":true}"#;
+        let parsed: Command = serde_json::from_str(ancient).unwrap();
+        assert!(matches!(
+            parsed,
+            Command::SetShotKind {
+                kind: ShotKind::Jump,
+                ..
+            }
+        ));
+    }
     use std::path::PathBuf;
 
     // Re-import CommentHolder so tests can use it without qualification
@@ -667,18 +728,26 @@ mod tests {
                 "Delete shot 4:3",
             ),
             (
-                Command::SetShotReference {
+                Command::SetShotKind {
                     section_id: 4,
                     shot_id: 2,
-                    is_reference: true,
+                    kind: ShotKind::Reference,
                 },
                 "Mark shot 4:3 as reference",
             ),
             (
-                Command::SetShotReference {
+                Command::SetShotKind {
                     section_id: 4,
                     shot_id: 2,
-                    is_reference: false,
+                    kind: ShotKind::Jump,
+                },
+                "Mark shot 4:3 as jump",
+            ),
+            (
+                Command::SetShotKind {
+                    section_id: 4,
+                    shot_id: 2,
+                    kind: ShotKind::Normal,
                 },
                 "Mark shot 4:3 as permanent",
             ),

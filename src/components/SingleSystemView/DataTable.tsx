@@ -25,6 +25,7 @@ import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
 import { canSplitShot } from '../../utils/shotSplit';
+import { nextShotKind } from '../../utils/shotKind';
 import {
   type RowEntry,
   type ShotDraft,
@@ -62,7 +63,7 @@ const HEADER_HIDE_GROUPS: Record<string, { nameKey: string; keys: string[] }> = 
   right: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
   up: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
   down: { nameKey: 'lrud', keys: ['left', 'right', 'up', 'down'] },
-  is_reference: { nameKey: 'reference', keys: ['is_reference'] },
+  kind: { nameKey: 'reference', keys: ['kind'] },
   comment: { nameKey: 'comment', keys: ['comment'] },
   section_id: { nameKey: 'sectionId', keys: ['section_id'] },
   shot_id: { nameKey: 'shotId', keys: ['shot_id'] },
@@ -268,7 +269,7 @@ export default function DataTable({ sections }: DataTableProps) {
   // Flag to skip scroll when selection originated from within the table
   const internalSelectionRef = useRef(false);
 
-  const { updateShot, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
+  const { updateShot, setShotKind, warnings, isShotFrozen, updateStationComment, executeBatch, createShot, isDirty } = useProjectStore();
   // Coordinate columns follow the active geometry (adjusted in the read-only
   // closure-adjusted view); row refs/comments stay measured for editing.
   const activeStations = useActiveStations();
@@ -1118,17 +1119,18 @@ export default function DataTable({ sections }: DataTableProps) {
     [selectedSection, editingBlocked, rowEntries, discardDraftRows, showToast, t, openDialog]
   );
 
-  const handleToggleReference = useCallback(
-    (shot: Shot) => {
+  const handleCycleShotKind = useCallback(
+    (shot: Shot, direction: 1 | -1) => {
       if (!selectedSection || editingBlocked) return;
-      if (shot.id < 0) {
-        // A draft row - its id is the draft key.
-        applyDraftEdit(shot.id, 'is_reference', !shot.is_reference);
-        return;
-      }
-      void updateShot(selectedSection.id, shot.id, { is_reference: !shot.is_reference });
+      const next = nextShotKind(shot.kind, direction);
+      // A draft row's id is the draft key: no backend identity yet, so the
+      // cycle only touches local state. Otherwise use the same command the
+      // context menu and detail panel use - before #27 this path went through
+      // the generic `update_shot` while those two used `set_shot_reference`.
+      if (shot.id < 0) applyDraftEdit(shot.id, 'kind', next);
+      else void setShotKind(selectedSection.id, shot.id, next);
     },
-    [selectedSection, editingBlocked, updateShot, applyDraftEdit]
+    [selectedSection, editingBlocked, setShotKind, applyDraftEdit]
   );
 
   const handlePanToShot = useCallback(
@@ -1151,7 +1153,7 @@ export default function DataTable({ sections }: DataTableProps) {
         isShotFrozen,
         getShotWarnings,
         shotIndexAt,
-        onToggleReference: handleToggleReference,
+        onCycleShotKind: handleCycleShotKind,
         onResolveWarning: (shotId: number) => {
           if (selectedSectionId === null) return;
           // triggerResolveWarning opens the Warnings panel (and exits
@@ -1162,7 +1164,7 @@ export default function DataTable({ sections }: DataTableProps) {
     // getShotWarnings reads shotWarningsMap (derived from `warnings`); rebuild when
     // warnings change so frozen/warning icons stay current.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleToggleReference, triggerResolveWarning]
+    [t, precision, selectedSectionId, editingBlocked, isShotFrozen, warnings, shotIndexAt, handleCycleShotKind, triggerResolveWarning]
   );
 
   // Localized grid chrome; rowNoun makes the context menus speak in shots
@@ -1776,7 +1778,7 @@ export default function DataTable({ sections }: DataTableProps) {
                     {colCheckRow(['depth_out'], t('dataTable.columnsMenu.depthOut'), 'flex-1', draftHiddenProblems.has('depthOut'))}
                   </div>
                   {colCheckRow(['left', 'right', 'up', 'down'], t('dataTable.columnsMenu.lrud'))}
-                  {colCheckRow(['is_reference'], t('dataTable.columnsMenu.reference'))}
+                  {colCheckRow(['kind'], t('dataTable.columnsMenu.reference'))}
                   {colCheckRow(['comment'], t('dataTable.columnsMenu.comment'))}
                 </>
               ) : (

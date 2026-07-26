@@ -18,7 +18,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -710,6 +710,7 @@ function App() {
       {activeDialog === 'corruption-recovery' && <CorruptionRecoveryDialog />}
       {activeDialog === 'debug' && <DebugDialog />}
       {activeDialog === 'swap-comments' && <SwapCommentsDialog />}
+      {activeDialog === 'unrecognised-shot-kind' && <UnrecognisedShotKindDialog />}
       {activeDialog === 'orphan-placement' && (
         <OrphanPlacementDialog
           suggestions={(dialogData.suggestions ?? []) as OrphanPlacementSuggestion[]}

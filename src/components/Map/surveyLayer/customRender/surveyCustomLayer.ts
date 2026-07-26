@@ -158,9 +158,11 @@ export class SurveyCustomLayer implements CustomLayerInterface {
    *  equivalent of hiding the stock layer. */
   private drawShots = true;
   private drawStations = true;
-  /** Hide reference shots + all-reference stations (setShowReferenceShots
-   *  false). Fed to the shaders' `u_hide_reference` uniform. */
+  /** Hide reference shots (setShowReferences false). Fed to the shaders'
+   *  `u_hide_reference` uniform. Separate from jumps since #27. */
   private hideReference = false;
+  /** Hide jump shots (setShowJumps false). Fed to `u_hide_jump`. */
+  private hideJump = false;
 
   /** Show/hide custom-rendered shots (mirrors setShowShots). */
   setShotsVisible(visible: boolean): void {
@@ -172,10 +174,15 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     this.drawStations = visible;
   }
 
-  /** Hide/show reference shots + all-reference stations (mirrors
-   *  setShowReferenceShots). */
+  /** Hide/show reference shots (mirrors setShowReferences). A station touched
+   *  only by virtual shots hides only when BOTH kinds are hidden. */
   setReferenceShotsVisible(visible: boolean): void {
     this.hideReference = !visible;
+  }
+
+  /** Hide/show jump shots (mirrors setShowJumps, #27). */
+  setJumpShotsVisible(visible: boolean): void {
+    this.hideJump = !visible;
   }
 
   /** Set before addLayer so onAdd uploads immediately. `onSelfDisable` lets the
@@ -481,6 +488,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform1f(gl.getUniformLocation(prog, 'u_half_width'), data.lineHalfWidthPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), this.hideJump ? 1 : 0);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_width_mul'), data.lineHoverWidthMul);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_select_width_mul'), data.lineSelectWidthMul);
     this.bindVec2(gl, prog, 'a_pos_a', g.posA);
@@ -512,6 +520,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
     gl.uniform1f(gl.getUniformLocation(prog, 'u_stroke_width'), data.circleStrokePx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_aa'), data.aaPx);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_reference'), this.hideReference ? 1 : 0);
+    gl.uniform1f(gl.getUniformLocation(prog, 'u_hide_jump'), this.hideJump ? 1 : 0);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_hover_size_mul'), data.circleHoverSizeMul);
     gl.uniform1f(gl.getUniformLocation(prog, 'u_select_size_mul'), data.circleSelectSizeMul);
     this.bindVec2(gl, prog, 'a_center', g.center);

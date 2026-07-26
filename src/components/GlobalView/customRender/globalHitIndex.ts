@@ -85,7 +85,7 @@ function buildEntry(system: SystemGeometry): SystemEntry {
     const t0 = shot.to[0]!;
     const t1 = shot.to[1]!;
     shotList.push(f0, f1, t0, t1);
-    refList.push(shot.is_reference ? 1 : 0);
+    refList.push(shot.kind !== 'Normal' ? 1 : 0);
     bump(f0, f1);
     bump(t0, t1);
   }

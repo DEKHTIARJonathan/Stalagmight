@@ -2,8 +2,8 @@ use chrono::Utc;
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use crate::models::{
-    SectionId, Shot, ShotData, ShotId, ShotUpdates, StationAnchor, StationKey, StationMerge,
-    StationRef, FEATURE_ID_STRIDE,
+    SectionId, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationAnchor, StationKey,
+    StationMerge, StationRef, FEATURE_ID_STRIDE,
 };
 
 use super::{
@@ -405,7 +405,7 @@ impl Project {
             up: shot.up,
             down: shot.down,
             comment: None,
-            is_reference: shot.is_reference,
+            kind: shot.kind,
             marker_index: None,
             temperature: shot.temperature,
         };
@@ -1294,16 +1294,16 @@ impl Project {
             .map(|(shot, _)| shot)
     }
 
-    /// Set a shot as reference or not
-    pub fn set_shot_reference(
+    /// Set a shot's kind (permanent / jump / reference, #27)
+    pub fn set_shot_kind(
         &mut self,
         section_id: SectionId,
         shot_id: ShotId,
-        is_reference: bool,
+        kind: ShotKind,
     ) -> Option<&Shot> {
         let section = self.get_section_mut(section_id)?;
         let shot = section.get_shot_mut(shot_id)?;
-        shot.is_reference = is_reference;
+        shot.kind = kind;
         self.touch();
         self.get_section(section_id)?.get_shot(shot_id)
     }

@@ -53,7 +53,7 @@ export function makeSection(i: number): Record<string, unknown> {
     up: 1,
     down: 1,
     comment: null,
-    is_reference: false,
+    kind: 'Normal',
     marker_index: null,
     temperature: null,
   });

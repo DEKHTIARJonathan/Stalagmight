@@ -305,6 +305,11 @@ export class SurveyLabelController {
   private kindVisible: boolean[] = [false, false, true, false, false];
   /** setShowReferenceShots state (false → collapse reference / all-reference). */
   private referenceShotsVisible = true;
+  /** #27: jumps toggle separately. Label flags carry a single "virtual" bit, so
+   *  a virtual shot's label hides only when BOTH kinds are hidden - the same
+   *  conservative rule the circle shader uses for all-virtual stations. A label
+   *  therefore never disappears while its own shot is still drawn. */
+  private jumpShotsVisible = true;
   /** Adaptive-emit candidate threshold (see the option). */
   private readonly adaptiveEmitMax: number;
 
@@ -407,6 +412,28 @@ export class SurveyLabelController {
     }
   }
 
+  /** Per-kind label hiding (#27). A label is dropped with the geometry of ITS
+   *  OWN kind - a single both-off rule left one kind's shot-data and comment
+   *  labels floating over the other kind's collapsed lines. The both-off case
+   *  still applies to ALL_REFERENCE station/section labels, and that rule lives
+   *  in the reveal pass + shader where the flag is read. */
+  private hideReferenceLabels(): boolean {
+    return !this.referenceShotsVisible;
+  }
+
+  private hideJumpLabels(): boolean {
+    return !this.jumpShotsVisible;
+  }
+
+  /** Mirror setShowJumps (label half), #27. */
+  setJumpShotsVisible(visible: boolean): void {
+    this.jumpShotsVisible = visible;
+    if (this.active) {
+      this.pushStyle();
+      this.rerunReveal();
+    }
+  }
+
   /** Mirror setShowReferenceShots (label half): flip the shader uniform, then
    *  re-declutter (reference-hide changes the collision candidate set). */
   setReferenceShotsVisible(visible: boolean): void {
@@ -422,7 +449,13 @@ export class SurveyLabelController {
   private computeStyle(): LabelStyleInputs {
     const dpr = (typeof window !== 'undefined' && window.devicePixelRatio) || 1;
     const haloColors = this.lastThemeColors ? resolveHaloColors(this.lastThemeColors) : [];
-    return { dpr, kindEnabled: this.kindVisible.slice(), haloColors, hideReference: !this.referenceShotsVisible };
+    return {
+      dpr,
+      kindEnabled: this.kindVisible.slice(),
+      haloColors,
+      hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
+    };
   }
 
   private pushStyle(): void {
@@ -488,7 +521,8 @@ export class SurveyLabelController {
         buildZoom: zoom,
         worldPixelScale: vpCtx.worldPixelScale,
         kindVisible: this.kindVisible,
-        hideReference: !this.referenceShotsVisible,
+        hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
         commentOverlapExempt: this.commentOverlapExempt,
         slack: emitSlack,
       });
@@ -698,7 +732,8 @@ export class SurveyLabelController {
       buildZoom: this.lastBuildZoom,
       worldPixelScale: this.lastWorldPixelScale,
       kindVisible: this.kindVisible,
-      hideReference: !this.referenceShotsVisible,
+      hideReference: this.hideReferenceLabels(),
+      hideJump: this.hideJumpLabels(),
       commentOverlapExempt: this.commentOverlapExempt,
       slack: this.lastEmitSlack,
     });

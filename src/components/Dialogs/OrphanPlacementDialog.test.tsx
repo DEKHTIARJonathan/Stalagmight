@@ -69,7 +69,7 @@ beforeEach(() => {
     project: null,
     mergeStations: vi.fn(ok),
     updateShot: vi.fn(ok),
-    setShotReference: vi.fn(ok),
+    setShotKind: vi.fn(ok),
     refreshProjectState,
     saveAfterImport,
   });

@@ -885,11 +885,16 @@ fn field_changes(
             new: returned_station.to_string(),
         });
     }
-    if old.is_reference != new.is_reference {
+    // Compare virtual-vs-not only, never the Jump/Reference axis (#27 q11).
+    // Ariane has a single VIRTUAL category, so a locally-Reference shot comes
+    // back from a round-trip looking like any other virtual shot. Diffing the
+    // kind here would raise a spurious "jump_line changed" conflict on every
+    // sync; diffing virtualness keeps the local Jump/Reference choice intact.
+    if old.kind.is_virtual() != new.kind.is_virtual() {
         c.push(CollabFieldChange {
             field: "jump_line".into(),
-            old: old.is_reference.to_string(),
-            new: new.is_reference.to_string(),
+            old: old.kind.is_virtual().to_string(),
+            new: new.kind.is_virtual().to_string(),
         });
     }
     c

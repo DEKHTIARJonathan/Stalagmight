@@ -6,7 +6,7 @@ use super::{
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
-    ShotUpdates, StationRef, SurveyDirection,
+    ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use crate::test_helpers::TestDb;
@@ -1096,7 +1096,7 @@ fn test_import_sections_persists_deferred_new_project() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
         assert_success(&result);
 
         // The command resolved the deferred save: file on disk + in Recent Projects.
@@ -1164,7 +1164,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
 
         // Partial success: the import itself still succeeds, but a warning flags the
         // failed save instead of reporting a phantom "saved".
@@ -1254,7 +1254,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
             station_comments: Vec::new(),
             placement: crate::models::ImportPlacement::Origin,
         }];
-        let result = import::import_sections(state(&app), sections, None, None, None);
+        let result = import::import_sections(state(&app), sections, None, None, None, None);
 
         // Partial success carrying a HUMANIZED permission warning...
         assert_success(&result);
@@ -1900,34 +1900,71 @@ fn test_delete_last_shot_and_section_removes_section() {
 }
 
 #[test]
-fn test_set_shot_reference_fails_missing() {
+fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::set_shot_reference(state(&app), 0, 999, true);
+    let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
     assert_failure_contains(&result, "not found");
 }
 
 #[test]
-fn test_set_shot_reference_sets_true() {
+fn test_set_shot_kind_sets_jump() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::set_shot_reference(state(&app), id, 0, true);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
-    assert!(section.shots[0].is_reference);
+    assert_eq!(section.shots[0].kind, ShotKind::Jump);
 }
 
 #[test]
-fn test_set_shot_reference_sets_false() {
+fn test_set_shot_kind_sets_reference() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = shot::set_shot_reference(state(&app), id, 0, true);
-    let result = shot::set_shot_reference(state(&app), id, 0, false);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Reference);
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
-    assert!(!section.shots[0].is_reference);
+    assert_eq!(section.shots[0].kind, ShotKind::Reference);
+}
+
+#[test]
+fn test_set_shot_kind_back_to_normal() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _ = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Normal);
+    assert_success(&result);
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(section.shots[0].kind, ShotKind::Normal);
+}
+
+#[test]
+fn test_set_shot_kind_undo_restores_previous_kind() {
+    // The old boolean toggle inverted itself; a 3-way kind must carry the
+    // captured previous value (#27 q12). Jump -> Reference must undo to Jump,
+    // NOT to Normal.
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    assert_success(&shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump));
+    assert_success(&shot::set_shot_kind(
+        state(&app),
+        id,
+        0,
+        ShotKind::Reference,
+    ));
+
+    assert_success(&history::undo_impl(state(&app).inner()));
+
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(
+        section.shots[0].kind,
+        ShotKind::Jump,
+        "undo must restore the captured previous kind, not toggle to Normal"
+    );
 }
 
 // === Station commands ===
@@ -2364,7 +2401,12 @@ fn test_export_roundtrip_includes_reference_and_comment() {
         ..Default::default()
     };
     let section_id = create_section_with_shots(&app, vec![shot]);
-    assert_success(&shot::set_shot_reference(state(&app), section_id, 0, true));
+    assert_success(&shot::set_shot_kind(
+        state(&app),
+        section_id,
+        0,
+        ShotKind::Jump,
+    ));
 
     let dir = TempDir::new().unwrap();
     let csv_path = dir.path().join("export.csv");
@@ -2376,12 +2418,15 @@ fn test_export_roundtrip_includes_reference_and_comment() {
     let csv_contents = fs::read_to_string(&csv_path).unwrap();
     assert!(csv_contents.contains("section_id,section_name"));
     assert!(csv_contents.contains("\"note,with comma\""));
-    assert!(csv_contents.contains("true"));
+    // #27 replaced the boolean `is_reference` column with the 3-way `kind`,
+    // so the export now names the kind instead of emitting "true".
+    assert!(csv_contents.contains(",kind,comment"));
+    assert!(csv_contents.contains("Jump"));
 
     let json_contents = fs::read_to_string(&json_path).unwrap();
     let parsed: serde_json::Value = serde_json::from_str(&json_contents).unwrap();
     let shot_json = &parsed["sections"][0]["shots"][0];
-    assert_eq!(shot_json["is_reference"], true);
+    assert_eq!(shot_json["kind"], "Jump");
     assert_eq!(shot_json["comment"], "note,with comma");
     assert!(shot_json["lrud"].is_array());
 }

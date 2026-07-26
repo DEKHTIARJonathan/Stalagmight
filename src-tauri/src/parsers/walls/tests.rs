@@ -1399,7 +1399,7 @@ fn end_to_end_import_respects_datum_invariants() {
     // Runs the REAL import (execute_import_sections enforces
     // `multiple_datums_per_merge_component`), so a successful result proves
     // the placement respects the model's one-datum-per-component invariant.
-    use crate::core::state::AppState;
+    use crate::core::state::{AppState, VirtualShotMode};
     use crate::core::Command;
 
     let run = |srv: &str| -> (bool, Option<String>, usize) {
@@ -1409,8 +1409,14 @@ fn end_to_end_import_respects_datum_invariants() {
             name: "T".to_string(),
             location: None,
         });
-        let result =
-            state.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+        let result = state.execute_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        );
         let datums = state
             .get_project_state()
             .map(|p| p.zero_datums.len())
@@ -1705,7 +1711,7 @@ fn floated_variance_leg_is_kept() {
         1,
         "floated-variance leg must not be dropped as a splay"
     );
-    assert!(!configs[0].shots[0].is_reference);
+    assert!(!configs[0].shots[0].kind.is_virtual());
 }
 
 #[test]

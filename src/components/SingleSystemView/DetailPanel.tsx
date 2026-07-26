@@ -21,6 +21,7 @@ import { formatFixed, formatPercent, formatNumber, formatDate } from '../../i18n
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { useActiveStations } from '../../hooks/useActiveStations';
 import { setSource, trackContextMenuAction } from '../../utils/telemetry';
+import { SHOT_KIND_LABEL_KEY, nextShotKind } from '../../utils/shotKind';
 
 /** Center/locate glyph (small ring + edge spokes), filled so it stays crisp
  *  under the page-zoom UI scale. Shared by the per-entity "center on map"
@@ -945,7 +946,7 @@ function computeInclination(depthIn: number, depthOut: number, length: number): 
 
 function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot; stations: Station[] }) {
   const { t } = useTranslation();
-  const { setShotReference } = useProjectStore();
+  const { setShotKind } = useProjectStore();
   const editingBlocked = useEditingBlocked();
   const { openDialog, setSelection, triggerCenterOnShot, announceSelection, setHoveredStation, setHoveredSectionId } = useUIStore(
     useShallow((s) => ({ openDialog: s.openDialog, setSelection: s.setSelection, triggerCenterOnShot: s.triggerCenterOnShot, announceSelection: s.announceSelection, setHoveredStation: s.setHoveredStation, setHoveredSectionId: s.setHoveredSectionId }))
@@ -973,9 +974,11 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === endStationIndex
   );
 
-  const handleToggleReference = async () => {
-    trackContextMenuAction('toggle-reference', 'detail-panel');
-    await setShotReference(section.id, shot.id, !shot.is_reference);
+  const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
+
+  const handleCycleShotKind = async () => {
+    trackContextMenuAction('cycle-shot-kind', 'detail-panel');
+    await setShotKind(section.id, shot.id, nextShotKind(shot.kind));
   };
 
   const handleDelete = () => {
@@ -1130,9 +1133,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
             </div>
           </div>
 
-          {shot.is_reference && (
-            <div className="text-warning text-sm">{t('detailPanel.shot.reference')}</div>
-          )}
+          {shot.kind !== 'Normal' && <div className="text-warning text-sm">{kindBadge}</div>}
 
           {shot.comment && (
             <div className="pt-2 border-t border-border">
@@ -1144,8 +1145,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleToggleReference} disabled={editingBlocked}>
-          {shot.is_reference ? t('detailPanel.shot.markPermanent') : t('detailPanel.shot.markReference')}
+        <Button size="sm" className="w-full" onClick={handleCycleShotKind} disabled={editingBlocked}>
+          {t('detailPanel.shot.markAs', { kind: t(SHOT_KIND_LABEL_KEY[nextShotKind(shot.kind)]) })}
         </Button>
         <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked}>
           {t('common.actions.delete')}
@@ -1172,7 +1173,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
   // Calculate section statistics
   const sectionLength = section.shots.reduce((sum, s) => sum + s.length, 0);
   const shotCount = section.shots.length;
-  const referenceCount = section.shots.filter((s) => s.is_reference).length;
+  const referenceCount = section.shots.filter((s) => s.kind !== 'Normal').length;
   const avgShotLength = shotCount > 0 ? sectionLength / shotCount : 0;
   const contributionPercent = totalProjectLength > 0
     ? (sectionLength / totalProjectLength) * 100

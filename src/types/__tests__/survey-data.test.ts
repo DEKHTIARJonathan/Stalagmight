@@ -54,7 +54,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
           up: 2.0,
           down: 0.5,
           comment: 'start of survey',
-          is_reference: false,
+          kind: 'Normal' as const,
           marker_index: 1,
           temperature: 12.0,
         },
@@ -72,7 +72,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
           up: null,
           down: null,
           comment: null,
-          is_reference: true,
+          kind: 'Reference' as const,
           marker_index: null,
           temperature: null,
         },
@@ -102,7 +102,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
           up: null,
           down: null,
           comment: '',  // empty string → should NOT round-trip as a comment
-          is_reference: false,
+          kind: 'Normal' as const,
           marker_index: null,
           temperature: null,
         },
@@ -186,7 +186,7 @@ describe('SurveyData', () => {
       const expectShotsEqual = (actual: Shot, expected: Shot) => {
         // Integer / categorical fields - exact equality.
         expect(actual.id).toBe(expected.id);
-        expect(actual.is_reference).toBe(expected.is_reference);
+        expect(actual.kind).toBe(expected.kind);
         expect(actual.marker_index).toBe(expected.marker_index);
         expect(actual.comment).toBe(expected.comment);
         // f32-stored doubles: ~7 decimal digits of precision; relative

@@ -132,6 +132,8 @@ export interface RevealInput {
   /** setShowReferenceShots(false) → reference / all-reference labels are not
    *  collision candidates. */
   hideReference: boolean;
+  /** #27: independent of hideReference, mirroring the split display toggles. */
+  hideJump: boolean;
   /** A comment tool (comment / move_comment) is active → the two comment kinds
    *  are OVERLAP-EXEMPT: they skip the collision contest and are revealed
    *  uncontested at their decimation floor (their `minzoom`), so ALL comments
@@ -218,7 +220,21 @@ function overlaps(a: ScreenBox, b: ScreenBox): boolean {
  *  block others), but is still emitted at its decimation floor (below). */
 function isCandidate(desc: LabelDescriptor, input: RevealInput): boolean {
   if (!input.kindVisible[desc.kind]) return false;
-  if (input.hideReference && (desc.flags & (LABEL_FLAG.REFERENCE | LABEL_FLAG.ALL_REFERENCE)) !== 0) {
+  // Per-kind, mirroring the shader: a hidden kind's own labels stop being
+  // candidates, while an ALL_REFERENCE station/section label needs both kinds
+  // hidden before its geometry is actually gone.
+  if (input.hideReference && (desc.flags & LABEL_FLAG.REFERENCE) !== 0) return false;
+  if (input.hideJump && (desc.flags & LABEL_FLAG.JUMP) !== 0) return false;
+  // A station/section label whose every leg is virtual stops being a candidate
+  // when every kind touching it is hidden - per-kind, mirroring the shader and
+  // the circle. A station can be touched by BOTH kinds, hence a bit pair.
+  const allJump = (desc.flags & LABEL_FLAG.ALL_JUMP) !== 0;
+  const allRef = (desc.flags & LABEL_FLAG.ALL_REFERENCE) !== 0;
+  if (
+    (allJump || allRef) &&
+    !(allJump && !input.hideJump) &&
+    !(allRef && !input.hideReference)
+  ) {
     return false;
   }
   // Comment tool active (C1): comment kinds are overlap-exempt. Treated as

@@ -11,7 +11,7 @@ use super::physics::{
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{
-    Coordinates, GpsCoordinates, Project, SectionData, ShotData, StationRef, ZeroDatum,
+    Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };
 
 const EPS: f64 = 1e-9;
@@ -2073,7 +2073,7 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
                     length: 100.0,
                     depth_in: 10.0,
                     depth_out: 20.0,
-                    is_reference: true,
+                    kind: ShotKind::Jump,
                     ..Default::default()
                 },
             ],
@@ -2081,6 +2081,113 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
         })
         .id;
     (project, StationRef::new(sec, 0))
+}
+
+#[test]
+fn gas_reach_field_excludes_reference_legs() {
+    // A Reference tie is not swimmable, so it must not carry a dive route at
+    // all (#27 q7). Station 2 sits beyond the tie and becomes unreachable, while
+    // station 1 (reached over a permanent shot) is untouched. This is the safe
+    // direction: excluding an edge can only shrink reach, never overstate it.
+    let (mut project, origin) = project_with_jump_second_leg();
+    let sec = origin.section_id;
+    project.sections[0].shots[1].kind = ShotKind::Reference;
+
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        std::slice::from_ref(&big),
+        &GasConfig::default(),
+    );
+    let reachable_at = |field: &GasReachField, i: u32| {
+        let target = StationRef::new(sec, i);
+        field
+            .station_refs
+            .iter()
+            .position(|r| *r == target)
+            .map(|idx| field.reachable[idx])
+    };
+    assert_eq!(
+        reachable_at(&field, 1),
+        Some(true),
+        "a permanent leg is unaffected by the reference exclusion"
+    );
+    assert_eq!(
+        reachable_at(&field, 2),
+        Some(false),
+        "a station reachable only across a reference tie must be unreachable"
+    );
+
+    // The opt-in restores the pre-#27 behaviour exactly (#27 q13).
+    let opted_in = GasConfig {
+        include_reference_legs: true,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &opted_in);
+    assert_eq!(
+        reachable_at(&field, 2),
+        Some(true),
+        "include_reference_legs must make the leg divable again"
+    );
+}
+
+/// #27: `include_reference_legs` is documented as restoring the pre-#27
+/// inclusive behaviour, and before the split EVERY virtual leg carried
+/// `jump_rmv_multiplier`. Charging an opted-in Reference at base RMV made a
+/// route cost LESS gas than it did before the migration, which overstates the
+/// reachable frontier - the unsafe direction the module's §6 rule forbids.
+#[test]
+fn opted_in_reference_legs_carry_the_jump_rmv_multiplier() {
+    let (mut project, origin) = project_with_jump_second_leg();
+    let sec = origin.section_id;
+    // Leg 1 (station 1 -> 2) becomes a non-swimmable tie, opted back in below.
+    project.sections[0].shots[1].kind = ShotKind::Reference;
+
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    let gas_to_reach_station_2 = |multiplier: f64| -> f64 {
+        let cfg = GasConfig {
+            include_reference_legs: true,
+            jump_rmv_multiplier: multiplier,
+            ..GasConfig::default()
+        };
+        let field = project.compute_gas_reach_field(
+            Some(&origin),
+            None,
+            &diver,
+            std::slice::from_ref(&big),
+            &cfg,
+        );
+        field_gas(&field, StationRef::new(sec, 2))
+    };
+
+    let plain = gas_to_reach_station_2(1.0);
+    let bumped = gas_to_reach_station_2(2.0);
+    assert!(
+        bumped > plain,
+        "the multiplier must raise an opted-in reference leg's gas: {bumped} vs {plain}"
+    );
 }
 
 #[test]
@@ -2113,7 +2220,7 @@ fn gas_reach_field_jump_multiplier_raises_only_jump_legs() {
     // Leg 0 is a permanent shot (avg 5 m → 1.5 ATA → 20·1.5·10 = 300 L); leg 1 is a
     // reference/jump (avg 15 m → 2.5 ATA → base 20·2.5·10 = 500 L). A 1.5× jump multiplier
     // scales ONLY the jump leg's RMV (20 → 30 → 750 L): station 1 is untouched at 300, while
-    // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets is_reference
+    // station 2 rises from 300+500=800 to 300+750=1050. Pins that the bump targets jump
     // legs and nothing else (a misapplied multiplier would also move station 1).
     let (project, origin) = project_with_jump_second_leg();
     let sec = origin.section_id;

@@ -5,7 +5,7 @@ use tauri::State;
 use ts_rs::TS;
 
 use crate::core::{AppState, Command, CommandResult, UndoData, UndoEntry};
-use crate::models::SectionId;
+use crate::models::{SectionId, ShotKind};
 
 /// DTO for undo history item sent to frontend
 #[derive(Debug, Clone, Serialize, TS)]
@@ -145,7 +145,7 @@ fn get_command_type(command: &Command) -> String {
         Command::CreateShot { .. } => "create_shot".to_string(),
         Command::UpdateShot { .. } => "update_shot".to_string(),
         Command::DeleteShot { .. } => "delete_shot".to_string(),
-        Command::SetShotReference { .. } => "set_shot_reference".to_string(),
+        Command::SetShotKind { .. } => "set_shot_kind".to_string(),
         Command::MergeStations { .. } => "merge_stations".to_string(),
         Command::UnmergeStations { .. } => "unmerge_stations".to_string(),
         Command::UnmergeStationPair { .. } => "unmerge_station_pair".to_string(),
@@ -247,9 +247,7 @@ fn derive_command_details(
             closure_strategy.as_str()
         )),
         Command::RemoveLoopClosure { closure_id } => Some(format!("Closure #{closure_id}")),
-        Command::SetShotReference { is_reference, .. } => {
-            Some(format!("Reference: {is_reference}"))
-        }
+        Command::SetShotKind { kind, .. } => Some(format!("Kind: {}", kind.label())),
         Command::CreateShot { shot, .. } => Some(format!(
             "Length: {:.2}, Azimuth: {:.1}",
             shot.length, shot.azimuth_in
@@ -353,16 +351,28 @@ fn derive_preview_data(
                     });
                 }
 
-                // is_reference
-                if let Some(new_reference) = updates.is_reference {
-                    let old_reference = prev
-                        .get("is_reference")
-                        .and_then(serde_json::Value::as_bool)
-                        .unwrap_or(false);
+                // kind (#27). Older history rows stored a `is_reference` bool;
+                // read either spelling so past entries still render a label.
+                if let Some(new_kind) = updates.kind {
+                    let old_kind = prev
+                        .get("kind")
+                        .and_then(|v| serde_json::from_value::<ShotKind>(v.clone()).ok())
+                        .or_else(|| {
+                            prev.get("is_reference")
+                                .and_then(serde_json::Value::as_bool)
+                                .map(|was_reference| {
+                                    if was_reference {
+                                        ShotKind::Jump
+                                    } else {
+                                        ShotKind::Normal
+                                    }
+                                })
+                        })
+                        .unwrap_or_default();
                     changes.push(FieldChange {
-                        field: "Reference".to_string(),
-                        old_value: old_reference.to_string(),
-                        new_value: new_reference.to_string(),
+                        field: "Kind".to_string(),
+                        old_value: old_kind.label().to_string(),
+                        new_value: new_kind.label().to_string(),
                     });
                 }
 
@@ -587,15 +597,24 @@ fn derive_preview_data(
             additional_changes: 0,
         }),
 
-        // SetShotReference - show the toggle
-        (Command::SetShotReference { is_reference, .. }, _) => Some(PreviewData {
-            changes: vec![FieldChange {
-                field: "Reference".to_string(),
-                old_value: (!is_reference).to_string(),
-                new_value: is_reference.to_string(),
-            }],
-            additional_changes: 0,
-        }),
+        // SetShotKind - the inverse command carries the real previous kind
+        // (#27 q12), so show it rather than guessing as the old boolean did.
+        (Command::SetShotKind { kind, .. }, undo_data) => {
+            let old_value = match undo_data {
+                UndoData::InverseCommand(Command::SetShotKind { kind: prev, .. }) => {
+                    prev.label().to_string()
+                }
+                _ => String::new(),
+            };
+            Some(PreviewData {
+                changes: vec![FieldChange {
+                    field: "Kind".to_string(),
+                    old_value,
+                    new_value: kind.label().to_string(),
+                }],
+                additional_changes: 0,
+            })
+        }
 
         // MoveSection - show offset and section name
         (Command::MoveSection { section_id, offset }, _) => {
@@ -1155,21 +1174,47 @@ mod tests {
     }
 
     #[test]
-    fn test_derive_preview_data_set_shot_reference() {
+    fn test_derive_preview_data_set_shot_kind() {
+        // The inverse command supplies the previous kind, so the preview can
+        // show a real Jump -> Reference transition rather than a guessed one.
         let entry = UndoEntry {
-            command: Command::SetShotReference {
+            command: Command::SetShotKind {
                 section_id: 1,
                 shot_id: 2,
-                is_reference: true,
+                kind: ShotKind::Reference,
+            },
+            undo_data: UndoData::InverseCommand(Command::SetShotKind {
+                section_id: 1,
+                shot_id: 2,
+                kind: ShotKind::Jump,
+            }),
+            timestamp: None,
+        };
+
+        let preview = derive_preview_data(&entry, &empty_names()).unwrap();
+        assert_eq!(preview.changes[0].field, "Kind");
+        assert_eq!(preview.changes[0].old_value, "Jump");
+        assert_eq!(preview.changes[0].new_value, "Reference");
+    }
+
+    #[test]
+    fn test_derive_preview_data_set_shot_kind_without_undo_data() {
+        // No captured inverse (e.g. the shot vanished): the new kind still
+        // renders, the old side is simply blank rather than wrong.
+        let entry = UndoEntry {
+            command: Command::SetShotKind {
+                section_id: 1,
+                shot_id: 2,
+                kind: ShotKind::Jump,
             },
             undo_data: UndoData::None,
             timestamp: None,
         };
 
         let preview = derive_preview_data(&entry, &empty_names()).unwrap();
-        assert_eq!(preview.changes[0].field, "Reference");
-        assert_eq!(preview.changes[0].old_value, "false");
-        assert_eq!(preview.changes[0].new_value, "true");
+        assert_eq!(preview.changes[0].field, "Kind");
+        assert_eq!(preview.changes[0].old_value, "");
+        assert_eq!(preview.changes[0].new_value, "Jump");
     }
 
     #[test]

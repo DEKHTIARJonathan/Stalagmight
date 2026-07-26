@@ -316,6 +316,7 @@ export const defaultConfig: Config = {
     "survey_rmv_multiplier": 1.0,
     "stressed_rmv_multiplier": 1.5,
     "jump_rmv_multiplier": 1.5,
+    "include_reference_legs": false,
     "conservative_tank_gas": true,
     "dpv": null
   },

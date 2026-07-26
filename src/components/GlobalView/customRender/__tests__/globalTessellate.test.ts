@@ -17,8 +17,12 @@ import {
   recomputeSelectedFlags,
 } from '../globalTessellate';
 
-function shot(from: [number, number], to: [number, number], isReference = false): GeometryShot {
-  return { from, to, is_reference: isReference, section_id: 0 };
+function shot(
+  from: [number, number],
+  to: [number, number],
+  kind: GeometryShot['kind'] = 'Normal',
+): GeometryShot {
+  return { from, to, kind, section_id: 0 };
 }
 
 function makeSystem(filePath: string, name: string, shots: GeometryShot[]): SystemGeometry {
@@ -48,7 +52,7 @@ const systemA = makeSystem('a.tml', 'Alpha', [
 // far station only touches the reference shot (allShotsReference).
 const systemB = makeSystem('b.tml', 'Bravo', [
   shot([10, 10], [11, 10]),
-  shot([11, 10], [12, 10], true),
+  shot([11, 10], [12, 10], 'Reference'),
 ]);
 
 const NO_OPTS = { searchTerm: null, selectedIds: new Set<string>() };
@@ -92,13 +96,29 @@ describe('buildGlobalBuffers', () => {
 
   it('flags reference shots and all-reference stations', () => {
     const { line, circle } = buildGlobalBuffers([systemB], NO_OPTS);
-    // Segment 0 (non-reference) has reference 0; segment 1 (reference) has 1.
+    // `reference` carries the ShotKind discriminant, not a bool (#27):
+    // 0 Normal / 1 Jump / 2 Reference. Segment 0 is Normal, segment 1 Reference.
     expect(line.reference[0]).toBe(0);
-    expect(line.reference[4]).toBe(1);
+    expect(line.reference[4]).toBe(2);
     // Exactly one station is all-reference (4 verts).
     let allRefVerts = 0;
     for (let v = 0; v < circle.vertexCount; v++) if (circle.allReference[v] === 1) allRefVerts++;
     expect(allRefVerts).toBe(4);
+  });
+
+  it('keeps Jump and Reference distinct in the line buffer (#27)', () => {
+    // Regression: this collapsed to a single `kind !== 'Normal' ? 1 : 0` bit, so
+    // the global shader could not dim a Reference further than a Jump - the
+    // distinction was gone before it ever reached the GPU.
+    const mixed = makeSystem('c.tml', 'Charlie', [
+      shot([10, 10], [11, 10], 'Jump'),
+      shot([11, 10], [12, 10], 'Reference'),
+      shot([12, 10], [13, 10], 'Normal'),
+    ]);
+    const { line } = buildGlobalBuffers([mixed], NO_OPTS);
+    expect(line.reference[0]).toBe(1); // segment 0 = Jump
+    expect(line.reference[4]).toBe(2); // segment 1 = Reference
+    expect(line.reference[8]).toBe(0); // segment 2 = Normal
   });
 
   it('bakes search-dim from the name and selection from the id set', () => {

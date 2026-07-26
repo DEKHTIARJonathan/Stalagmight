@@ -49,7 +49,7 @@ function makeEditableShot(id: number, overrides: Partial<EditableShotLike> = {})
     up: 1.0,
     down: 0.8,
     comment: null,
-    is_reference: false,
+    kind: 'Normal' as const,
     ...overrides,
   };
 }
@@ -597,7 +597,7 @@ describe('applyTargetData', () => {
     // Preserved from shot
     expect(result.id).toBe(0);
     expect(result.comment).toBeNull();
-    expect(result.is_reference).toBe(false);
+    expect(result.kind).toBe('Normal');
   });
 });
 
@@ -624,13 +624,13 @@ describe('interpolateShots', () => {
   });
 
   it('preserves non-measurement fields', () => {
-    const shot = makeEditableShot(42, { comment: 'test', is_reference: true });
+    const shot = makeEditableShot(42, { comment: 'test', kind: 'Reference' as const });
     const target = makeTargetShot();
     const result = interpolateShots(shot, target);
 
     expect(result.id).toBe(42);
     expect(result.comment).toBe('test');
-    expect(result.is_reference).toBe(true);
+    expect(result.kind).toBe('Reference');
   });
 });
 
@@ -1360,7 +1360,7 @@ describe('geometric invariant: station coordinates stay close across overlap mod
     depth_out: (i + 1) * 1.0 + (i % 2) * 0.2,
     pitch_in: -3, pitch_out: -3,
     left: 2.0, right: 2.0, up: 1.5, down: 0.5,
-    comment: null, is_reference: false,
+    comment: null, kind: 'Normal' as const,
   }));
 
   // Tolerance: generous enough for survey error, but catches any 180° flip.

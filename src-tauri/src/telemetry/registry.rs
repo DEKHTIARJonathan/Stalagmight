@@ -47,6 +47,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.check_section_hashes",
     "command.clear_tile_cache",
     "command.close_project",
+    "command.take_unrecognised_shot_kinds",
     "command.compute_gas_reach_field",
     "command.create_loop_closure",
     "command.create_project_full",
@@ -115,7 +116,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.save_display_setting",
     "command.save_dive_plan",
     "command.save_project",
-    "command.set_shot_reference",
+    "command.set_shot_kind",
     "command.set_station_comment",
     "command.set_zero_datum",
     "command.speleodb_add_collaborator",
@@ -194,6 +195,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.toggle.showDevStats",
     "action.toggle.showGrid",
     "action.toggle.showReferenceShots",
+    "action.toggle.showJumps",
     "action.toggle.showSatellite",
     "action.toggle.showSectionNames",
     "action.toggle.showShotComments",
@@ -249,6 +251,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
+    "action.dialog.unrecognised-shot-kind",
     "action.dialog.tml-import",
     "action.dialog.unmerge-stations",
     "action.dialog.unsaved-changes",
@@ -269,7 +272,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.panel-unpin.sections",
     // ── Action: context menu (174-176) ──
     "action.remove-closure",
-    "action.toggle-reference",
+    "action.set-shot-kind",
+    "action.cycle-shot-kind",
     "action.unmerge",
     // ── Dialog cancellations (177-210) ──
     "dialog-cancel.adjust-closures",
@@ -311,6 +315,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
+    "dialog-cancel.unrecognised-shot-kind",
     "dialog-cancel.tml-import",
     "dialog-cancel.unmerge-stations",
     "dialog-cancel.unsaved-changes",
@@ -339,7 +344,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.move_station",
     "undo-after.remove_loop_closure",
     "undo-after.remove_zero_datum",
-    "undo-after.set_shot_reference",
+    "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
     "undo-after.set_zero_datum",
     "undo-after.split_shot_at_distance",
@@ -400,6 +405,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
+    "dwell.dialog.unrecognised-shot-kind",
     "dwell.dialog.tml-import",
     "dwell.dialog.unmerge-stations",
     "dwell.dialog.unsaved-changes",
@@ -539,6 +545,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
+    "active-dwell.dialog.unrecognised-shot-kind",
     "active-dwell.dialog.tml-import",
     "active-dwell.dialog.unmerge-stations",
     "active-dwell.dialog.unsaved-changes",
@@ -871,7 +878,15 @@ mod tests {
         //       command.split_shot_at_distance, undo-after.split_shot_at_distance,
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .insert-station = 654.
-        assert_eq!(EVENT_NAMES.len(), 654);
+        //   + 1 net for the Jump/Reference split (#27): action.toggle-reference
+        //       retired, action.{set-shot-kind,cycle-shot-kind} added = 655.
+        //   + 1 split display toggle (#27): action.toggle.showJumps = 656.
+        //   + 1 unreadable-kind prompt (#27):
+        //       command.take_unrecognised_shot_kinds = 657.
+        //   + 4 unrecognised-shot-kind dialog events (#27):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .unrecognised-shot-kind = 661.
+        assert_eq!(EVENT_NAMES.len(), 661);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

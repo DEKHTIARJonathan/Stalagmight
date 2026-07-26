@@ -12,10 +12,12 @@ import { isMutatingTool } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
+  getEffectiveShowJumps,
   getEffectiveShowReferenceShots,
   getEffectiveShowShotData,
   getEffectiveShowStationComments,
   getEffectiveShowShotComments,
+  isShotKindVisible,
 } from '../../store/displaySelectors';
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
@@ -397,6 +399,7 @@ function MapCanvas() {
     showStations,
     showShots,
     showReferenceShots,
+    showJumps,
     showDepthGradient,
     showDistanceGradient,
     appMode,
@@ -775,20 +778,25 @@ function MapCanvas() {
     }
   }, [hasMeasureSnap]);
 
-  // Hiding Shots disables shot interaction; hiding only Reference Shots disables it
-  // for reference legs. Drop a live measure shot-snap in either case (when the snap
-  // is on a now-hidden reference leg), so the cyan marker doesn't linger on hidden
-  // geometry - the null-ness effect above then removes the marker + ref (#26, Codex).
+  // Hiding Shots disables shot interaction; hiding Jumps or Reference Shots
+  // disables it for those legs. Drop a live measure shot-snap when its leg is no
+  // longer drawn, so the cyan marker doesn't linger on hidden geometry - the
+  // null-ness effect above then removes the marker + ref (#26, Codex).
   useEffect(() => {
+    // Nothing is hidden -> nothing to drop. Bail before the lookup: reading
+    // `section.shots` force-materializes the lazy per-section shot array
+    // (`noteShotMaterialization` in loadProjectBinary.ts), and the default
+    // all-visible state must not pay that on every project refresh.
+    if (showShots && showJumps && showReferenceShots) return;
     const snap = useUIStore.getState().measureSnapShot;
     if (!snap) return;
-    const onHiddenReferenceLeg =
-      !showReferenceShots &&
-      (project?.sections
-        .find((s) => s.id === snap.section_id)
-        ?.shots.find((sh) => sh.id === snap.shot_id)?.is_reference ?? false);
-    if (!showShots || onHiddenReferenceLeg) setMeasureSnapShot(null);
-  }, [showShots, showReferenceShots, project?.sections, setMeasureSnapShot]);
+    const kind = project?.sections
+      .find((s) => s.id === snap.section_id)
+      ?.shots.find((sh) => sh.id === snap.shot_id)?.kind;
+    if (!isShotKindVisible(kind, showShots, showJumps, showReferenceShots)) {
+      setMeasureSnapShot(null);
+    }
+  }, [showShots, showJumps, showReferenceShots, project?.sections, setMeasureSnapShot]);
 
   // Handle move drag start from SurveyLayer
   const handleMoveDragStart = useCallback(
@@ -1884,9 +1892,14 @@ function MapCanvas() {
   // the old geometry would otherwise survive a setData() rebuild and silently lie.
   // Kept separate from the switch reset above so an edit doesn't also move the
   // distance-gradient origin (intentionally stable across edits) (#26, Codex).
+  //
+  // `gas.include_reference_legs` counts as such a change (#27): the along-line
+  // distance is computed with reference ties either traversable or not, so
+  // flipping the setting invalidates a live readout exactly the way an edit does
+  // - and it does NOT bump modified_at, so it needs its own dep.
   useEffect(() => {
     clearMeasure();
-  }, [project?.modified_at, clearMeasure]);
+  }, [project?.modified_at, config?.gas.include_reference_legs, clearMeasure]);
 
   // In closureAdjusted mode the map first renders the measured fallback, then swaps
   // in the adjusted geometry when it finishes loading (async, with no modified_at
@@ -1903,6 +1916,11 @@ function MapCanvas() {
   // geometry (surveyed lengths), so neither closure-adjustment config nor the
   // display geometryMode affects them - no need to refetch on either. `from` null
   // = the entrance (zero-datum) default.
+  //
+  // `gas.include_reference_legs` IS an input, though (#27): the backend reads it
+  // per call to decide whether a reference tie is traversable, so flipping it in
+  // Settings changes the whole field. It has to be in the deps or the ramp keeps
+  // showing the pre-toggle routing until some unrelated edit bumps modified_at.
   useEffect(() => {
     if (!showDistanceGradient) return undefined;
     let cancelled = false;
@@ -1921,7 +1939,13 @@ function MapCanvas() {
         if (!cancelled) { setDistanceField(null); setDistanceFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showDistanceGradient, distanceGradientOrigin, project?.modified_at, setDistanceField]);
+  }, [
+    showDistanceGradient,
+    distanceGradientOrigin,
+    project?.modified_at,
+    config?.gas.include_reference_legs,
+    setDistanceField,
+  ]);
 
   // Gas reachable-frontier overlay (#38): fetch the reachability field when the
   // sub-mode is on and any input (origin / diver / cylinders / config) or the
@@ -2611,6 +2635,12 @@ function MapCanvas() {
     surveyLayerRef.current.setShowReferenceShots(getEffectiveShowReferenceShots(showShots, showReferenceShots));
   }, [showReferenceShots, showShots, mapLoaded]);
 
+  // Sync jump shots visibility (#27): jumps hide independently of references.
+  useEffect(() => {
+    if (!surveyLayerRef.current) return;
+    surveyLayerRef.current.setShowJumps(getEffectiveShowJumps(showShots, showJumps));
+  }, [showJumps, showShots, mapLoaded]);
+
   // Sync anchored section IDs with SurveyLayer for fading.
   // useLayoutEffect (not useEffect) for the same reason as the selection sync
   // above: the controller retains its dim state across a project switch, and
@@ -2662,21 +2692,27 @@ function MapCanvas() {
     }
   }, [showShots, clearSelectionByType, setHoveredShot]);
 
-  // Clear reference shot selection when reference shots visibility changes to OFF
-  // Uses composite identity (file_path or created_at) since Project type has no id field
-  const projectIdentity = project?.file_path ?? project?.created_at;
+  // Drop the selection of any shot a kind toggle just hid. Jumps and References
+  // are independent (#27), so this has to run for either going OFF and has to
+  // judge each selected shot by its own kind - keying the whole effect off the
+  // reference toggle deselected still-visible jumps.
+  // Keyed on `project?.sections`, not a project-identity string: a shot's kind
+  // is editable (context menu, the J/R table cell, a fill-drag), and those go
+  // through executeCommand, which bumps `modified_at` but never `file_path` /
+  // `created_at`. Keying on identity meant marking the SELECTED shot as a Jump
+  // while Jumps were hidden left it selected and in the Detail panel after it
+  // vanished from the map. The measure-snap effect above already keys this way.
   useEffect(() => {
-    if (!showReferenceShots && project?.sections) {
-      filterSelection((s) => {
-        if (s.type !== 'shot') return true;
-        const section = project.sections.find((sec) => sec.id === s.sectionId);
-        const shot = section?.shots.find((sh) => sh.id === s.shotId);
-        return !shot?.is_reference;
-      });
-      surveyLayerRef.current?.clearShotHover();
-      setHoveredShot(null);
-    }
-  }, [showReferenceShots, projectIdentity, filterSelection, setHoveredShot]);
+    if ((showReferenceShots && showJumps) || !project?.sections) return;
+    filterSelection((s) => {
+      if (s.type !== 'shot') return true;
+      const section = project.sections.find((sec) => sec.id === s.sectionId);
+      const shot = section?.shots.find((sh) => sh.id === s.shotId);
+      return isShotKindVisible(shot?.kind, showShots, showJumps, showReferenceShots);
+    });
+    surveyLayerRef.current?.clearShotHover();
+    setHoveredShot(null);
+  }, [showShots, showJumps, showReferenceShots, project?.sections, filterSelection, setHoveredShot]);
 
   // The scale bar is always shown. Add the control once the map is loaded.
   useEffect(() => {
@@ -3284,13 +3320,12 @@ function MapCanvas() {
       }
 
       // Fit to *rendered* geometry: endpoints of drawn shots plus zero-datum
-      // stations, falling back to all stations when nothing matches. When
-      // reference shots are hidden, a long ref/jump connector or a ref-only
-      // station shouldn't inflate the bounds and shrink the section (mirrors
-      // the export, which never draws reference shots). But when reference
-      // shots are *visible* (the default), they're drawn - so include them, or
-      // a visible connector could be left off-screen.
-      const refShotsVisible = getEffectiveShowReferenceShots(showShots, showReferenceShots);
+      // stations, falling back to all stations when nothing matches. A hidden
+      // connector or a station only a hidden shot touches shouldn't inflate the
+      // bounds and shrink the section; a *visible* one must be included, or it
+      // could be left off-screen. Jumps and References are independent toggles
+      // (#27), so this is per-kind - judging both by the reference toggle alone
+      // got it backwards in each direction.
       const byIndex = new Map<number, (typeof sectionStations)[number]>();
       for (const s of sectionStations) byIndex.set(s.station_ref.station_index, s);
       const section = project?.sections.find((s) => s.id === sectionId);
@@ -3305,7 +3340,7 @@ function MapCanvas() {
         }
       };
       section?.shots.forEach((shot, i) => {
-        if (!refShotsVisible && shot.is_reference) return;
+        if (!isShotKindVisible(shot.kind, showShots, showJumps, showReferenceShots)) return;
         includeIdx(i);
         includeIdx(i + 1);
       });
@@ -3379,7 +3414,7 @@ function MapCanvas() {
         maxZoom: config.map.zoom_max ?? 22,
       });
     },
-    [activeStations, project?.sections, config, gpsOrigin, showShots, showReferenceShots, calcPadding]
+    [activeStations, project?.sections, config, gpsOrigin, showShots, showJumps, showReferenceShots, calcPadding]
   );
 
   // Pan to a shot's midpoint (used when double-clicking a row in DataTable)

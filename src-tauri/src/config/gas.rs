@@ -156,14 +156,29 @@ pub struct GasConfig {
     /// Tying in a jump is extra task-loading that raises the breathing rate, so its gas burns
     /// at a higher RMV. **Default 1.5** ("putting in a jump is work"). Always ≥1.0 after
     /// `normalize`, so it can only ever *raise* gas (the conservative direction, §6).
-    /// ⚠ **Stacks MULTIPLICATIVELY** with `survey_rmv_multiplier` on `is_reference` legs:
+    /// ⚠ **Stacks MULTIPLICATIVELY** with `survey_rmv_multiplier` on jump legs:
     /// the engine uses `edge_rmv = rmv · survey_rmv_multiplier · jump_rmv_multiplier`. With the
     /// default `survey_rmv_multiplier = 1.0` there is no stacking (jumps burn `rmv · 1.5`);
     /// raising both compounds (e.g. 1.5 × 1.5 = 2.25×).
-    /// Today this covers all `is_reference` shots - a non-swimmable backsight is also a reference
-    /// (the #77 jump-vs-reference distinction is still future work), and bumping its RMV is safe.
+    /// Since #27 this applies to [`ShotKind::Jump`] only. A
+    /// [`ShotKind::Reference`] is not swimmable at all, so it leaves the gas
+    /// graph entirely rather than burning gas at a higher rate.
     #[serde(default = "default_jump_rmv_multiplier")]
     pub jump_rmv_multiplier: f64,
+    /// Opt-in escape hatch (#27 q13): when `true`, reference legs are treated as
+    /// divable again and rejoin the gas / penetration / distance graphs exactly
+    /// as they did before #27.
+    ///
+    /// Default `false`, which is the **safe** direction: a reference tie is a
+    /// tape measurement or backsight, not a swimmable passage, and routing a
+    /// dive through one invents a shortcut that does not exist. That is the
+    /// precise failure #77 left open. Excluding an edge can only ever shrink
+    /// reachability or lengthen a route, never overstate either (§6).
+    ///
+    /// Turn it on if your survey uses reference shots to record legs you really
+    /// do swim and you would rather have the old, inclusive numbers.
+    #[serde(default)]
+    pub include_reference_legs: bool,
     /// `true` (default) = the conservative "call-it-an-80" derate covers real-gas Z; `false`
     /// = precise `fill × volume × Z` for the few who want it (PRD §5.3).
     #[serde(default = "default_true")]
@@ -184,6 +199,7 @@ impl Default for GasConfig {
             survey_rmv_multiplier: default_survey_rmv_multiplier(),
             stressed_rmv_multiplier: default_stressed_rmv_multiplier(),
             jump_rmv_multiplier: default_jump_rmv_multiplier(),
+            include_reference_legs: false,
             conservative_tank_gas: true,
             dpv: None,
         }

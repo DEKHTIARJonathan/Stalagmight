@@ -25,7 +25,7 @@ import {
 import type { Rgba8 } from '../colorPack';
 import {
   emptySurveyData,
-  SHOT_FLAG_IS_REFERENCE,
+  shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
   type SurveyData,
 } from '../../../../../types/survey-data';
@@ -443,37 +443,58 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
   /** makeFixture with shot global 0 (section 1, shot idx0) flagged reference. */
   function refFixture(): SurveyData {
     const d = makeFixture();
-    d.shotFlags = new Uint8Array([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    d.shotFlags = new Uint8Array([shotKindToFlags('Reference'), 0, 0]);
     return d;
   }
 
-  it('buildLineBuffers marks all 4 verts of a reference segment, 0 otherwise', () => {
+  it('buildLineBuffers writes the ShotKind discriminant on all 4 verts', () => {
     const d = refFixture();
     const lookup = buildStationLookup(d);
     const rel = projectStationsRel(d, null, 0, 0);
     const b = buildLineBuffers(d, rel, lookup, stubColor);
-    // Segment 0 = shot global 0 (reference) -> all 4 verts flagged 1.
-    expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
-    // Segment 1 = shot global 1 (not reference) -> 0.
+    // #27: the attribute carries the kind (0/1/2), not a bool, so the shader
+    // can fade and hide jumps and references separately. Segment 0 is a
+    // Reference -> 2 on all 4 verts.
+    expect(Array.from(b.reference.slice(0, 4))).toEqual([2, 2, 2, 2]);
+    // Segment 1 is permanent -> 0.
     expect(Array.from(b.reference.slice(4, 8))).toEqual([0, 0, 0, 0]);
+    // Every "is virtual" test still reads as > 0.5, which is what the hide
+    // path and computeStationAllReference rely on.
+    expect(b.reference[0]!).toBeGreaterThan(0.5);
   });
 
-  it('computeStationAllReference flags stations touched only by reference/invalid shots', () => {
+  it('buildLineBuffers writes 1 for a jump, distinct from a reference', () => {
+    const d = refFixture();
+    // Flip the virtual shot from Reference (2) to Jump (1).
+    d.shotFlags = Uint8Array.from(d.shotFlags);
+    d.shotFlags[0] = shotKindToFlags('Jump');
+    const lookup = buildStationLookup(d);
+    const rel = projectStationsRel(d, null, 0, 0);
+    const b = buildLineBuffers(d, rel, lookup, stubColor);
+    expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
+  });
+
+  it('computeStationAllReference records WHICH kinds touch each station', () => {
     const d = refFixture();
     const lookup = buildStationLookup(d);
     const allRef = computeStationAllReference(d, lookup);
-    // Station 0: only endpoint of the reference shot -> all-reference (1).
-    // Stations 1,2: endpoints of the non-reference shot global 1 -> 0.
-    // Station 3: section 2's only shot is invalid (missing endpoint) -> 1.
-    expect(Array.from(allRef)).toEqual([1, 0, 0, 1]);
+    // The value is a mask, not a bool (#27): 0 = a Normal shot touches it,
+    // 1 = only Jumps, 2 = only References, 3 = both / no legs at all. Splitting
+    // the virtual kinds is what lets a reference-only station disappear when
+    // References are hidden while Jumps are still drawn.
+    // Station 0: only endpoint of the Reference shot -> 2.
+    // Stations 1,2: endpoints of the Normal shot global 1 -> 0.
+    // Station 3: section 2's only shot is invalid (missing endpoint) -> no legs -> 3.
+    expect(Array.from(allRef)).toEqual([2, 0, 0, 3]);
   });
 
   it('a fully non-reference survey has no all-reference stations', () => {
     const d = makeFixture(); // all shotFlags 0
     const lookup = buildStationLookup(d);
     const allRef = computeStationAllReference(d, lookup);
-    // Stations 0,1,2 are all endpoints of non-reference shots; station 3 isolated.
-    expect(Array.from(allRef)).toEqual([0, 0, 0, 1]);
+    // Stations 0,1,2 are all endpoints of Normal shots -> 0; station 3 is
+    // isolated, so it has no legs and keeps the both-off default of 3.
+    expect(Array.from(allRef)).toEqual([0, 0, 0, 3]);
   });
 
   it('buildCircleBuffers propagates the all-reference flag to every vertex', () => {
@@ -482,12 +503,12 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
     const rel = projectStationsRel(d, null, 0, 0);
     const allRef = computeStationAllReference(d, lookup);
     const b = buildCircleBuffers(d, rel, fill, stroke, undefined, allRef);
-    // Station 0 (all-reference) -> its 4 verts are 1.
-    for (let c = 0; c < 4; c++) expect(b.allReference[0 * 4 + c]).toBe(1);
-    // Station 1 (has a non-reference shot) -> 0.
+    // Station 0 (Reference-only) -> its 4 verts carry the Reference bit, 2.
+    for (let c = 0; c < 4; c++) expect(b.allReference[0 * 4 + c]).toBe(2);
+    // Station 1 (has a Normal shot) -> 0.
     for (let c = 0; c < 4; c++) expect(b.allReference[1 * 4 + c]).toBe(0);
-    // Station 3 (isolated) -> 1.
-    for (let c = 0; c < 4; c++) expect(b.allReference[3 * 4 + c]).toBe(1);
+    // Station 3 (isolated, no legs) -> 3.
+    for (let c = 0; c < 4; c++) expect(b.allReference[3 * 4 + c]).toBe(3);
   });
 
   it('allReference defaults to 0 for every vertex when no flags are passed', () => {
@@ -633,12 +654,14 @@ describe('anchored/immovable dim flag (stock opacity parity)', () => {
     expect(Array.from(computeCircleDim(d, dimForStation, exclude))).toEqual(Array.from(circleEx.dim));
   });
 
-  it('the shaders dim by 0.25 and let dim WIN over the reference 0.5 case', () => {
-    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the reference
-    // 0.5 case in the ternary so a shot that is both dimmed and reference resolves
-    // to 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
+  it('the shaders dim by 0.25 and let dim WIN over the virtual cases', () => {
+    // Line vertex opacity multiplier: the dim 0.25 case must PRECEDE the virtual
+    // cases in the ternary so a shot that is both dimmed and virtual resolves to
+    // 0.25 (stock case order). The fragment applies v_alpha_mul to the color.
+    // #27 splits the single 0.5 virtual case: a jump keeps 0.5 so existing
+    // surveys look unchanged, a reference is fainter because it is not swum.
     expect(LINE_VERTEX_SRC).toContain(
-      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : ((a_reference > 0.5) ? 0.5 : 1.0);',
+      'v_alpha_mul = (a_dim > 0.5) ? 0.25 : (isRef ? 0.28 : (isJump ? 0.5 : 1.0));',
     );
     expect(LINE_FRAGMENT_SRC).toContain('col.a * v_alpha_mul * alpha');
     // Circle fragment folds the dim factor into the final alpha.
@@ -960,7 +983,7 @@ describe('color-only fast path (recomputeLine/CircleColors byte-identity)', () =
       for (let i = 0; i < nShots; i++) {
         shotIds.push(i);
         shotSectionIds.push(id);
-        shotFlags.push(rng() < 0.25 ? SHOT_FLAG_IS_REFERENCE : 0);
+        shotFlags.push(rng() < 0.25 ? shotKindToFlags('Reference') : 0);
       }
       sections.push({
         id, name: `S${id}`, surveyor: null, date: null, color: '#abcdef',
@@ -1077,7 +1100,7 @@ describe('planColorOnlyUpdate gate', () => {
   it('falls back when a shot reference flag changed (feeds reference/all-reference)', () => {
     const prev = makeFixture();
     const next = makeFixture();
-    next.shotFlags = Uint8Array.from([SHOT_FLAG_IS_REFERENCE, 0, 0]);
+    next.shotFlags = Uint8Array.from([shotKindToFlags('Reference'), 0, 0]);
     const [ax, ay] = computeMercatorAnchor(prev, null);
     expect(planColorOnlyUpdate(prev, next, baseCtx(), baseCtx({ showIssueSeverity: true }), null, null, ax, ay)).toBe(false);
   });

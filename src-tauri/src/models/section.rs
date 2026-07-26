@@ -5,7 +5,8 @@ use std::str::FromStr;
 use ts_rs::TS;
 
 use super::{
-    Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotUpdates, StationRef, FEATURE_ID_STRIDE,
+    Coordinates, GpsCoordinates, Shot, ShotData, ShotId, ShotKind, ShotUpdates, StationRef,
+    FEATURE_ID_STRIDE,
 };
 
 /// Unique identifier for a section
@@ -112,9 +113,21 @@ pub struct SectionUpdates {
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct SectionStats {
     pub shot_count: usize,
+    /// Sum of **every** shot's length, including both virtual kinds. Deliberately
+    /// unchanged by #27 so the length users already read does not silently shift
+    /// on upgrade; use [`swum_length`](Self::swum_length) for the divable figure.
     pub total_length: f64,
     pub min_depth: f64,
     pub max_depth: f64,
+    /// Sum of the lengths a diver actually swims: excludes
+    /// [`ShotKind::Reference`] (a non-swimmable survey tie) but keeps
+    /// [`ShotKind::Jump`] (a swum shortcut). Issue #27 q13.
+    pub swum_length: f64,
+    /// Count of [`ShotKind::Jump`] shots.
+    pub jump_shot_count: usize,
+    /// Count of [`ShotKind::Reference`] shots. Before #27 this counted every
+    /// virtual shot; it is now the Reference half only, with jumps in
+    /// [`jump_shot_count`](Self::jump_shot_count).
     pub reference_shot_count: usize,
 }
 
@@ -451,6 +464,8 @@ impl Section {
     /// (like station positions) not from raw shot depth_in/depth_out values.
     pub fn stats(&self) -> SectionStats {
         let mut total_length = 0.0;
+        let mut swum_length = 0.0;
+        let mut jump_count = 0;
         let mut reference_count = 0;
 
         // Compute min/max from accumulated z-coordinates (station depths)
@@ -461,8 +476,16 @@ impl Section {
 
         for shot in &self.shots {
             total_length += shot.length;
-            if shot.is_reference {
-                reference_count += 1;
+            match shot.kind {
+                ShotKind::Normal => swum_length += shot.length,
+                ShotKind::Jump => {
+                    jump_count += 1;
+                    // A jump IS swum, just at a higher RMV (#27 q7).
+                    swum_length += shot.length;
+                }
+                // A reference tie is not swimmable, so it never counts toward
+                // the divable length (#27 q13).
+                ShotKind::Reference => reference_count += 1,
             }
 
             // Accumulate depth change (same as station computation)
@@ -476,6 +499,8 @@ impl Section {
             total_length,
             min_depth,
             max_depth,
+            swum_length,
+            jump_shot_count: jump_count,
             reference_shot_count: reference_count,
         }
     }
@@ -485,7 +510,7 @@ impl Section {
 #[expect(clippy::unwrap_used, clippy::float_cmp)]
 mod tests {
     use super::*;
-    use crate::models::ShotData;
+    use crate::models::{ShotData, ShotKind};
 
     // === SurveyDirection Tests ===
 
@@ -588,16 +613,24 @@ mod tests {
         }
     }
 
-    fn test_reference_shot_data(length: f64) -> ShotData {
+    fn test_shot_data_of_kind(length: f64, kind: ShotKind) -> ShotData {
         ShotData {
             azimuth_in: 0.0,
             azimuth_out: 180.0,
             length,
             depth_in: 5.0,
             depth_out: 5.0,
-            is_reference: true,
+            kind,
             ..Default::default()
         }
+    }
+
+    fn test_reference_shot_data(length: f64) -> ShotData {
+        test_shot_data_of_kind(length, ShotKind::Reference)
+    }
+
+    fn test_jump_shot_data(length: f64) -> ShotData {
+        test_shot_data_of_kind(length, ShotKind::Jump)
     }
 
     // === Section Creation Tests ===
@@ -987,8 +1020,36 @@ mod tests {
         let stats = section.stats();
 
         assert_eq!(stats.shot_count, 4);
+        // total_length still counts everything (#27 keeps this figure raw).
         assert_eq!(stats.total_length, 17.0); // 5 + 3 + 7 + 2
+                                              // References are not swimmable, so they drop out of the swum figure.
+        assert_eq!(stats.swum_length, 12.0); // 5 + 7
         assert_eq!(stats.reference_shot_count, 2);
+        assert_eq!(stats.jump_shot_count, 0);
+    }
+
+    #[test]
+    fn test_stats_counts_jumps_separately_and_as_swum() {
+        let section = Section::new(
+            0,
+            SectionData {
+                shots: vec![
+                    test_shot_data(5.0),
+                    test_jump_shot_data(3.0),
+                    test_reference_shot_data(2.0),
+                ],
+                ..Default::default()
+            },
+        );
+
+        let stats = section.stats();
+
+        assert_eq!(stats.shot_count, 3);
+        assert_eq!(stats.total_length, 10.0);
+        // A jump IS swum (#27 q7), so only the Reference is excluded.
+        assert_eq!(stats.swum_length, 8.0); // 5 + 3
+        assert_eq!(stats.jump_shot_count, 1);
+        assert_eq!(stats.reference_shot_count, 1);
     }
 
     #[test]
@@ -1134,6 +1195,8 @@ mod tests {
             total_length: 42.5,
             min_depth: 3.0,
             max_depth: 25.0,
+            swum_length: 36.5,
+            jump_shot_count: 2,
             reference_shot_count: 1,
         };
 
@@ -1144,6 +1207,8 @@ mod tests {
         assert_eq!(deserialized.total_length, 42.5);
         assert_eq!(deserialized.min_depth, 3.0);
         assert_eq!(deserialized.max_depth, 25.0);
+        assert_eq!(deserialized.swum_length, 36.5);
+        assert_eq!(deserialized.jump_shot_count, 2);
         assert_eq!(deserialized.reference_shot_count, 1);
     }
 

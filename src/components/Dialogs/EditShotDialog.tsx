@@ -104,7 +104,7 @@ export default function EditShotDialog() {
         up: up ? parseFloat(up) : null,
         down: down ? parseFloat(down) : null,
         comment: comment.trim() || null,
-        is_reference: shot?.is_reference ?? false,
+        kind: shot?.kind ?? 'Normal',
         marker_index: shot?.marker_index ?? null,
         temperature: shot?.temperature ?? null,
       });

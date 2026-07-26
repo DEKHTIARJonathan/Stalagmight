@@ -1,11 +1,12 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationKey,
-    StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, SectionId, Shot,
+    ShotKind, StationKey, StationMerge, SurveyDirection, UnrecognisedShotKind, ZeroDatum,
+    FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -347,7 +348,7 @@ impl Database {
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_reference, marker_index, temperature, uuid
+                              comment, kind, marker_index, temperature, uuid
                        FROM shots ORDER BY section_id, sequence_order",
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
@@ -369,7 +370,31 @@ impl Database {
                             up: row.get(11)?,
                             down: row.get(12)?,
                             comment: row.get(13)?,
-                            is_reference: row.get::<_, i32>(14)? != 0,
+                            // Out-of-u8 values (a corrupt or newer file can hold
+                            // -1 or 256) must fail closed too. `unwrap_or(0)`
+                            // sent them to `Normal` - swimmable - which routed
+                            // straight past `from_u8`'s fail-closed rule, and
+                            // the dialog would then send no edit because it
+                            // assumes the in-memory value is already the safe
+                            // one. Map every failed conversion to a discriminant
+                            // `from_u8` rejects, so it lands on `Reference`.
+                            // Deliberately total: ANY value this build cannot
+                            // read becomes `Reference` rather than an error.
+                            // `INTEGER` here is a type AFFINITY, not a
+                            // constraint - the table is not STRICT, so a
+                            // hand-edited or corrupt row can hold TEXT, REAL or
+                            // a BLOB, and `row.get::<_, i64>` returns
+                            // InvalidColumnType for those. Propagating that
+                            // would make the whole project unopenable over one
+                            // bad cell; out-of-i64 and wrong-type alike now land
+                            // on a discriminant `from_u8` rejects, so the shot
+                            // loads safely and reaches the resolution prompt.
+                            kind: ShotKind::from_u8(
+                                row.get::<_, i64>(14)
+                                    .ok()
+                                    .and_then(|v| u8::try_from(v).ok())
+                                    .unwrap_or(u8::MAX),
+                            ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,
                             // `uuid` column was added in schema v6; pre-v6
@@ -945,6 +970,161 @@ impl Database {
     /// caller seed from the live global config (the "defaults for new projects")
     /// instead of the hardcoded ValidationConfig::default(); a present-but-
     /// unparseable row is treated as legacy too (`None`).
+    /// Whether the v12->v13 migration (#27) left a one-shot chain
+    /// classification pending. The migration seeds every legacy `is_reference`
+    /// row as Jump, which is only a guess; the real verdict needs the project
+    /// graph, so the flag defers it to the next load.
+    pub fn is_kind_classification_pending(&self) -> bool {
+        self.conn
+            .query_row(
+                "SELECT value FROM project_settings WHERE key = 'pending_kind_classification'",
+                [],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()
+            .unwrap_or(None)
+            .is_some_and(|v| v == "1")
+    }
+
+    /// Clear the flag set by the v12->v13 migration once the classification has
+    /// run, so it never runs a second time. Classification is import-time only
+    /// by design (#27 q14): re-running it later could flip a kind under the user.
+    ///
+    /// Only correct once the reclassified kinds are durably on disk - see
+    /// [`Self::persist_backfilled_shot_kinds`], which is the only caller that
+    /// should ever pair a non-empty backfill with this.
+    pub fn clear_pending_kind_classification(&self) -> Result<()> {
+        self.conn.execute(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
+            [],
+        )?;
+        Ok(())
+    }
+
+    /// Shots whose stored `kind` this build does not recognise (#27).
+    ///
+    /// There is no `CHECK` constraint on the column, so a corrupt byte, a manual
+    /// edit, or a file written by a newer build can hold anything. `from_u8`
+    /// fails those closed to `Reference` so they cannot invent a swimmable leg,
+    /// but silently substituting a kind would leave the user with a leg missing
+    /// from gas and penetration and no idea why - so the load path collects them
+    /// here and asks.
+    ///
+    /// Detected with a standalone query rather than during row decode: the loader
+    /// builds `Shot`s through `from_u8`, which has already discarded the raw
+    /// value by then, and threading a diagnostic out of `load_project` would
+    /// change a signature every caller shares.
+    ///
+    /// `shot_id` is the in-memory id the frontend addresses shots by
+    /// (`section_id * FEATURE_ID_STRIDE + sequence_order`), not the rowid.
+    pub fn unrecognised_shot_kinds(&self) -> Result<Vec<UnrecognisedShotKind>> {
+        // `kind` was added in v13; an older file legitimately has no such column.
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(Vec::new());
+        }
+        // `quote(...)`, not a raw read or a CAST: the column can legally hold any
+        // storage class (see the loader's note), and reading a TEXT/BLOB cell as
+        // i64 would error out the whole diagnostic - so the case most in need of
+        // the prompt would be the one that never reached it. `CAST(blob AS
+        // TEXT)` is no good either: it can yield invalid UTF-8. `quote` is total
+        // and renders every class legibly (7, 'abc', X'DEADBEEF'), which is
+        // exactly what the dialog wants to show.
+        let mut stmt = self.conn.prepare(
+            "SELECT s.section_id, s.sequence_order, quote(s.kind), sec.name
+             FROM shots s
+             LEFT JOIN sections sec ON sec.id = s.section_id
+             WHERE s.kind NOT IN (0, 1, 2)
+             ORDER BY s.section_id, s.sequence_order",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            let section_id: SectionId = row.get(0)?;
+            let sequence_order: u32 = row.get(1)?;
+            Ok(UnrecognisedShotKind {
+                section_id,
+                shot_id: section_id * FEATURE_ID_STRIDE + sequence_order,
+                shot_number: sequence_order + 1,
+                section_name: row.get(3)?,
+                raw_value: row.get(2)?,
+            })
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(row?);
+        }
+        Ok(out)
+    }
+
+    /// Rewrite every unreadable `kind` to `Reference` on disk (#27).
+    ///
+    /// The loader already substitutes `Reference` in memory, so without this the
+    /// two disagree: the app behaves correctly for the session, but the invalid
+    /// discriminant survives, the project is never dirty (nothing was edited),
+    /// and the same prompt reappears on every single open - while the dialog
+    /// tells the user their choice is saved with the project.
+    ///
+    /// Writing the fail-closed value is not a decision taken from the user: it
+    /// is the value already in force. Choosing anything else is still an
+    /// ordinary undoable `SetShotKind` on top.
+    pub fn repair_unrecognised_shot_kinds(&self) -> Result<usize> {
+        if self.conn.prepare("SELECT kind FROM shots LIMIT 0").is_err() {
+            return Ok(0);
+        }
+        // 2 == ShotKind::Reference, pinned like the migration's literals.
+        let repaired = self
+            .conn
+            .execute("UPDATE shots SET kind = 2 WHERE kind NOT IN (0, 1, 2)", [])?;
+        Ok(repaired)
+    }
+
+    /// Write the one-shot #27 backfill's verdicts straight to disk and clear the
+    /// pending flag, both in one transaction.
+    ///
+    /// The backfill runs on load and mutates only the in-memory `Project`.
+    /// Clearing the flag on its own (the first cut) destroyed the retry guard
+    /// while the result was still volatile: open a migrated project, close it
+    /// without editing, and the kinds were never written but the flag was gone -
+    /// so every later open kept the migration's Jump seed and non-swimmable ties
+    /// stayed counted as swum in gas, penetration and the ruler. Persisting here
+    /// makes the backfill durable without needing a user-visible save; pairing
+    /// it with the DELETE in one transaction means a crash mid-way leaves the
+    /// flag set and the (idempotent) pass simply repeats.
+    ///
+    /// (The in-memory pass does still `touch()` the project, so `modified_at`
+    /// moves on an open the user did not edit. That timestamp is not persisted
+    /// by this write, and the frontend keeps `isDirty: false` after load, so no
+    /// save is provoked.)
+    ///
+    /// Rows are addressed by `(section_id, sequence_order)` - the same tuple the
+    /// INSERT in `write.rs` writes - NOT by `Shot::id`. Those are two different
+    /// ID spaces: `shots.id` is an auto-increment rowid the INSERT never sets,
+    /// while the in-memory `Shot::id` is synthesised on load as
+    /// `section_id * FEATURE_ID_STRIDE + sequence_order`. Keying on `Shot::id`
+    /// silently writes the wrong rows in the first section and matches nothing
+    /// at all in the rest (the v7->v8 migration converts between the same two
+    /// spaces for `resolved_warnings`). Keying on `uuid` would be wrong too:
+    /// pre-v6 rows hold NULL on disk and `ensure_shot_uuids()` mints those in
+    /// memory only, so it would persist against a transient identity.
+    pub fn persist_backfilled_shot_kinds(
+        &self,
+        kinds: &[(SectionId, u32, ShotKind)],
+    ) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare(
+                "UPDATE shots SET kind = ?1 WHERE section_id = ?2 AND sequence_order = ?3",
+            )?;
+            for (section_id, seq, kind) in kinds {
+                stmt.execute(params![i32::from(kind.as_u8()), *section_id, *seq])?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
+            [],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub fn load_project_validation(&self) -> Result<Option<crate::config::ValidationConfig>> {
         let json: Option<String> = self
             .conn

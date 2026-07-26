@@ -32,7 +32,7 @@ function shotData(over: Record<string, unknown> = {}) {
     up: null,
     down: null,
     comment: null,
-    is_reference: false,
+    kind: 'Normal',
     marker_index: null,
     temperature: null,
     ...over,

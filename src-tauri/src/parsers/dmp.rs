@@ -665,7 +665,8 @@ impl DmpShot {
             up: Some(self.up),
             down: Some(self.down),
             comment: self.comment.clone(),
-            is_reference: false,
+            // DMP has no virtual-shot concept: every leg is a real survey shot.
+            kind: crate::models::ShotKind::Normal,
             marker_index: Some(u32::from(self.marker_index)),
             temperature: Some(self.temperature),
         }
@@ -717,6 +718,7 @@ impl DmpSection {
 )]
 mod tests {
     use super::*;
+    use crate::models::ShotKind;
     use chrono::Datelike;
     use std::io::Write;
     use tempfile::NamedTempFile;
@@ -1717,7 +1719,7 @@ mod tests {
         assert_eq!(shot_data.temperature, Some(18.0));
         assert_eq!(shot_data.marker_index, Some(7));
         assert_eq!(shot_data.comment.as_deref(), Some("test"));
-        assert!(!shot_data.is_reference);
+        assert_eq!(shot_data.kind, ShotKind::Normal);
     }
 
     #[test]
@@ -2186,7 +2188,7 @@ mod tests {
             suggest_all_placements, ExistingSection, ImportSectionForSuggestion, MatchDirection,
             TargetType,
         };
-        use crate::models::shot::Shot;
+        use crate::models::shot::{Shot, ShotKind};
 
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
         assert!(
@@ -2218,7 +2220,7 @@ mod tests {
                 up: Some(s.up),
                 down: Some(s.down),
                 comment: s.comment.clone(),
-                is_reference: false,
+                kind: ShotKind::Normal,
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
                 uuid: None,
@@ -2394,7 +2396,7 @@ mod tests {
             suggest_all_placements, CrossSectionSuggestion, ExistingSection,
             ImportSectionForSuggestion, TargetType,
         };
-        use crate::models::shot::Shot;
+        use crate::models::shot::{Shot, ShotKind};
         use std::collections::{HashMap, HashSet};
 
         let test_file = Path::new(env!("CARGO_MANIFEST_DIR")).join("../e2e/fixtures/kb5.dmp");
@@ -2436,7 +2438,7 @@ mod tests {
                 up: Some(s.up),
                 down: Some(s.down),
                 comment: s.comment.clone(),
-                is_reference: false,
+                kind: ShotKind::Normal,
                 marker_index: Some(u32::from(s.marker_index)),
                 temperature: Some(s.temperature),
                 uuid: None,
