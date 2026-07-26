@@ -18,7 +18,8 @@ import {
 } from '../common/icons';
 import {
   EntitySymbol,
-  EntityReferenceSymbol,
+  EntityJumpSymbol,
+  EntityReferenceKindSymbol,
   EntityDatumSymbol,
   EntityCommentSymbol,
   EntityDataSymbol,
@@ -59,13 +60,13 @@ interface ToggleItem {
    *  (--sh-<entity>, the same color the data-table/legend chips use). */
   entity?: BlobEntity;
   /** Badged entity-symbol variant overlaid on the entity glyph. */
-  symbol?: 'reference' | 'datum' | 'comment' | 'data' | 'label';
+  symbol?: 'reference' | 'jump' | 'datum' | 'comment' | 'data' | 'label';
 }
 
 const MAP_ELEMENTS: ToggleItem[] = [
   { key: 'showStations', labelKey: 'displayMenu.items.stations', descriptionKey: 'displayMenu.descriptions.stations', entity: 'station' },
   { key: 'showShots', labelKey: 'displayMenu.items.shots', descriptionKey: 'displayMenu.descriptions.shots', entity: 'shot' },
-  { key: 'showJumps', labelKey: 'displayMenu.items.jumps', descriptionKey: 'displayMenu.descriptions.jumps', disabledWhen: 'showShots', entity: 'shot', symbol: 'reference' },
+  { key: 'showJumps', labelKey: 'displayMenu.items.jumps', descriptionKey: 'displayMenu.descriptions.jumps', disabledWhen: 'showShots', entity: 'shot', symbol: 'jump' },
   { key: 'showReferenceShots', labelKey: 'displayMenu.items.referenceShots', descriptionKey: 'displayMenu.descriptions.referenceShots', disabledWhen: 'showShots', entity: 'shot', symbol: 'reference' },
   { key: 'showZeroDatum', labelKey: 'displayMenu.items.zeroDatum', descriptionKey: 'displayMenu.descriptions.zeroDatum', entity: 'station', symbol: 'datum' },
 ];
@@ -241,7 +242,10 @@ export default function DisplayMenu({
   const entitySymbolFor = (item: ToggleItem): ReactNode => {
     if (!item.entity || !showIcons) return undefined;
     switch (item.symbol) {
-      case 'reference': return <EntityReferenceSymbol entity={item.entity} size={14} />;
+      // #27: the same letter badges the data table and context menu use, so
+      // the two virtual kinds are not two identical crossed-eye icons here.
+      case 'jump': return <EntityJumpSymbol entity={item.entity} size={14} />;
+      case 'reference': return <EntityReferenceKindSymbol entity={item.entity} size={14} />;
       case 'datum': return <EntityDatumSymbol entity={item.entity} size={14} />;
       case 'comment': return <EntityCommentSymbol entity={item.entity} size={14} />;
       case 'data': return <EntityDataSymbol entity={item.entity} size={14} />;

@@ -1569,7 +1569,7 @@
       "connected": "Connected",
       "startStation": "Start station",
       "endStation": "End station",
-      "reference": "Jump/Reference shot",
+      "kindBadge": "{{kind}} shot",
       "markAs": "Mark as {{kind}}"
     },
     "section": {

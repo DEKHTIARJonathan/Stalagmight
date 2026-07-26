@@ -974,6 +974,8 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
     (s) => s.station_ref.section_id === section.id && s.station_ref.station_index === endStationIndex
   );
 
+  const kindBadge = t('detailPanel.shot.kindBadge', { kind: t(SHOT_KIND_LABEL_KEY[shot.kind]) });
+
   const handleCycleShotKind = async () => {
     trackContextMenuAction('cycle-shot-kind', 'detail-panel');
     await setShotKind(section.id, shot.id, nextShotKind(shot.kind));
@@ -1131,9 +1133,7 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
             </div>
           </div>
 
-          {shot.kind !== 'Normal' && (
-            <div className="text-warning text-sm">{t(SHOT_KIND_LABEL_KEY[shot.kind])}</div>
-          )}
+          {shot.kind !== 'Normal' && <div className="text-warning text-sm">{kindBadge}</div>}
 
           {shot.comment && (
             <div className="pt-2 border-t border-border">

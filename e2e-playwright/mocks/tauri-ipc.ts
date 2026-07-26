@@ -982,12 +982,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             });
 
             const envelope = {
-              // Bumped to 2 to match collab-mode's
-              // `core/load_binary.rs::BINARY_FORMAT_VERSION` which
-              // grew the `collab` field on the project header.  Keep
-              // this in lockstep with `EXPECTED_VERSION` in
-              // `src/utils/loadProjectBinary.ts`.
-              version: 2,
+              // Must match `core/load_binary.rs::BINARY_FORMAT_VERSION` and
+              // `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`; the
+              // binaryFormatVersion tripwire pins the other two to each other.
+              // 3 (#27): the per-shot flags byte carries a 2-bit ShotKind
+              // discriminant in bits 0-1 rather than a single is_reference bit.
+              version: 3,
               loading_id: jsonResult.loadingId,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',

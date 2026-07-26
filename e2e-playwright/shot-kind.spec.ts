@@ -112,6 +112,53 @@ test.describe('shot kind cell (#27)', () => {
   // the Rust test `test_set_shot_kind_undo_restores_previous_kind`.
 });
 
+test.describe('shot kind context menu (#27)', () => {
+  test.beforeEach(async ({ page }) => {
+    await setupMockedPage(page);
+  });
+
+  test('offers the two other kinds, and Unmark for the current one', async ({ page }) => {
+    await openDataTable(page);
+
+    const openMenu = async () =>
+      page.evaluate(() => {
+        const proj = (
+          window as unknown as { __E2E_TEST__: { projectStore: { getState: () => unknown } } }
+        ).__E2E_TEST__.projectStore.getState() as {
+          project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
+        };
+        const sec = proj.project.sections[0]!;
+        (
+          window as unknown as {
+            __E2E_TEST__: { uiStore: { getState: () => { openDialog: (t: string, p: unknown) => void } } };
+          }
+        ).__E2E_TEST__.uiStore.getState().openDialog('context-menu', {
+          target: { type: 'shot', sectionId: sec.id, shotId: sec.shots[0]!.id },
+          position: { x: 300, y: 260 },
+        });
+      });
+
+    // A permanent shot: both virtual kinds on offer, nothing to unmark.
+    await openMenu();
+    await expect(page.getByRole('button', { name: 'Mark as Jump' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Mark as Reference' })).toBeVisible();
+    await expect(page.getByRole('button', { name: /^Unmark/ })).toHaveCount(0);
+
+    // Make it a Jump: the permanent entry becomes "Unmark Jump", and the icon
+    // carries the struck-through letter badge.
+    await page.getByRole('button', { name: 'Mark as Jump' }).click();
+    await expect.poll(() => storedKind(page, 0)).toBe('Jump');
+    await openMenu();
+    await expect(page.getByRole('button', { name: 'Unmark Jump' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Mark as Reference' })).toBeVisible();
+    await expect(page.locator('svg .kind-jump-strike')).toHaveCount(1);
+
+    // Unmark returns it to permanent.
+    await page.getByRole('button', { name: 'Unmark Jump' }).click();
+    await expect.poll(() => storedKind(page, 0)).toBe('Normal');
+  });
+});
+
 test.describe('jump / reference display toggles (#27)', () => {
   test.beforeEach(async ({ page }) => {
     await setupMockedPage(page);

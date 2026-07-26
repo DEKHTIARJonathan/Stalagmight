@@ -60,8 +60,17 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
   frozen_shots: FrozenShotRef[];
 }
 
-/** Wire format version expected from the Rust encoder. */
-const EXPECTED_VERSION = 2;
+/**
+ * Wire format version expected from the Rust encoder. Must track
+ * `BINARY_FORMAT_VERSION` in `src-tauri/src/core/load_binary.rs` exactly - the
+ * version check below is the only thing standing between a format change and a
+ * silently misdecoded project.
+ *
+ * 3 (#27): the per-shot flags byte carries a 2-bit `ShotKind` discriminant in
+ * bits 0-1 instead of a single `is_reference` bit, so a v2 reader would decode
+ * a Reference (2) as "not virtual".
+ */
+const EXPECTED_VERSION = 3;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
 const SHOT_FLOAT_FIELDS = 12;
 /** u32 fields per shot. Mirror of SHOT_UINT_FIELDS in Rust. */
