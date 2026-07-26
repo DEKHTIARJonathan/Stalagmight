@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::models::SpeleoErrorDto;
+use super::models::{SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
@@ -49,6 +49,13 @@ pub enum SpeleoDbAction {
     /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
     /// action channel so the FE never branches on message text.
     Adopt,
+    /// The re-pull was REFUSED because the local copy still holds edits the server
+    /// has never seen. Like [`SpeleoDbAction::Adopt`] this is a routing signal, not
+    /// a failure, and it is NOT derived from an HTTP status - it is the local
+    /// [`SpeleoDbError::WouldDiscardLocalEdits`] guard crossing the same typed
+    /// channel. The FE offers the binary choice described on
+    /// [`super::models::UnpushedLocalEdits`], which the error carries.
+    UnpushedLocalEdits,
     /// Unmapped / 422 / 4xx we do not model - surface, fail closed.
     Fatal,
 }
@@ -196,6 +203,20 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         SpeleoDbError::Transport { cause, .. } => Some(*cause),
         _ => None,
     };
+    // Likewise the refused-replace payload: only the guard's own error carries it,
+    // so `unpushed_local` stays a sound discriminant on the FE side.
+    let unpushed_local = match err {
+        SpeleoDbError::WouldDiscardLocalEdits {
+            project_id,
+            local_path,
+            last_edit_at,
+        } => Some(UnpushedLocalEdits {
+            project_id: project_id.clone(),
+            local_path: local_path.clone(),
+            last_edit_at: last_edit_at.clone(),
+        }),
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -214,6 +235,11 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
         // than toasting the message.
         SpeleoDbError::AdoptAriane => (SpeleoDbAction::Adopt, None, err.to_string()),
+        // A refused re-pull: also a routing signal, not a failure. The FE reads
+        // `unpushed_local` (built above) and offers keep-local vs take-remote.
+        SpeleoDbError::WouldDiscardLocalEdits { .. } => {
+            (SpeleoDbAction::UnpushedLocalEdits, None, err.to_string())
+        }
         // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
         // AmbiguousDump / Io / InvalidProjectId - all fail closed; their Display is
         // already user-facing.
@@ -224,6 +250,7 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         action,
         status,
         transport,
+        unpushed_local,
     }
 }
 

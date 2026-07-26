@@ -634,6 +634,36 @@ pub struct SpeleoErrorDto {
     /// carries the raw cause (an OS errno such as "Invalid argument"), which is
     /// for the log, not for the user. `None` on every non-transport error.
     pub transport: Option<TransportCause>,
+    /// Set ONLY when a re-pull was REFUSED because the local copy still holds
+    /// edits the server has never seen (`action == UnpushedLocalEdits`). It is
+    /// what the frontend needs to offer the binary choice; `None` on every other
+    /// error, which is what makes it a sound discriminant.
+    pub unpushed_local: Option<UnpushedLocalEdits>,
+}
+
+/// The local work a refused re-pull would have destroyed, carried on
+/// [`SpeleoErrorDto::unpushed_local`] so the frontend can name it and act on it
+/// without a second round-trip.
+///
+/// The two branches the frontend offers, and exactly what each calls:
+///
+/// - **Keep local** - open [`Self::local_path`] through the normal
+///   `load_project_full` open flow. Nothing is downloaded and nothing is
+///   overwritten; the cached copy opens with its un-pushed edits intact.
+/// - **Take remote and discard local** - call
+///   `speleodb_open_project_discarding_local` with the same arguments the refused
+///   `speleodb_open_project` was given. That is the abandoning verb: it performs
+///   the very replace this error refused.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct UnpushedLocalEdits {
+    /// The SpeleoDB project whose local copy holds the un-pushed edits.
+    pub project_id: String,
+    /// The `.stalx` that holds them - the file "keep local" opens.
+    pub local_path: String,
+    /// When it was last edited (RFC-3339), when known. `None` for an older copy
+    /// that never recorded one.
+    pub last_edit_at: Option<String>,
 }
 
 #[cfg(test)]
@@ -687,6 +717,7 @@ mod tests {
             action: SpeleoDbAction::ReLogin,
             status: Some(401),
             transport: None,
+            unpushed_local: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

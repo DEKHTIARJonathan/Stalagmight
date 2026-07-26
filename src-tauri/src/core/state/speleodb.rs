@@ -22,7 +22,7 @@
 
 use std::path::{Path, PathBuf};
 
-use super::speleodb_cache::restore_display_settings;
+use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::{AppState, VirtualShotMode};
 use crate::speleodb::auth::{SecretStoreError, TokenStore};
 use crate::speleodb::client;
@@ -1018,6 +1018,45 @@ impl AppState {
         project_name: String,
         latest_commit_sha: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+        self.speleodb_pull_project(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            LocalEditsPolicy::Protect,
+        )
+    }
+
+    /// [`Self::speleodb_open_project`] with the un-pushed-edits guard WAIVED: pull
+    /// the server copy over the local one, destroying edits that were never pushed.
+    ///
+    /// The "take remote and discard local" branch of the prompt the refusal raises
+    /// (see [`crate::speleodb::UnpushedLocalEdits`]) - the frontend calls this with
+    /// the same arguments the refused open was given, and only after the user has
+    /// confirmed the loss. Named, not a flag, so there is no way to reach the
+    /// destructive pull without spelling it out (mirrors `speleodb_take_remote`
+    /// being its own verb rather than a parameter on `speleodb_update`).
+    pub(crate) fn speleodb_open_project_discarding_local(
+        &self,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+        self.speleodb_pull_project(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            LocalEditsPolicy::Discard,
+        )
+    }
+
+    /// Shared body of the two pull verbs above; `policy` is what separates them.
+    fn speleodb_pull_project(
+        &self,
+        project_id: String,
+        project_name: String,
+        latest_commit_sha: Option<String>,
+        policy: LocalEditsPolicy,
+    ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         // Validate the id at the trust boundary, before it reaches the download
         // URL or the cache-path join (closes the path/route-traversal vector).
         validate_project_id(&project_id).map_err(local_dto)?;
@@ -1050,8 +1089,15 @@ impl AppState {
         // Also drops the live handle when this very cache file is the open project
         // (a re-pull of what's already open); the FE re-opens it via `open_project`
         // once this returns.
+        //
+        // Under `Protect` this REFUSES when the cached copy still holds un-pushed
+        // edits: re-opening a project from the SpeleoDB list is an ordinary,
+        // non-destructive-looking action, so it must never be the thing that
+        // destroys a week of unpushed survey. The refusal crosses IPC typed, and
+        // the frontend re-enters through `speleodb_open_project_discarding_local`
+        // if - and only if - the user chose to abandon the local copy.
         let preserved_view = self
-            .replace_cache_stalx(&mut dump, &entry, &dest)
+            .replace_cache_stalx_with(&mut dump, &entry, &dest, &project_id, policy)
             .map_err(local_dto)?;
 
         // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
@@ -1194,6 +1240,14 @@ impl AppState {
         // Extract the `ariane.tml` to a scratch file beside the cache `.stalx`, import
         // it, then remove the scratch file. The importer needs a path on disk.
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
+        // The one cache replace that does NOT run through `replace_cache_stalx`:
+        // `adopt_import_and_save` deletes `dest` and rebuilds it from the imported
+        // `.tml`, so it needs the same data-safety gate. Re-adoption is reachable
+        // (an adopted project is stamped dirty, and the server type flip is
+        // best-effort - a failed flip leaves the project still offering Adopt), and
+        // it would otherwise delete the adopted copy's un-pushed edits.
+        self.guard_local_edits(&project_id, &dest)
+            .map_err(local_dto)?;
         let tml_scratch = dest.with_file_name("adopt-source.tml");
         dump.extract_entry_to(&tml_entry, &tml_scratch)
             .map_err(local_dto)?;
@@ -1540,6 +1594,7 @@ impl AppState {
                     insecure_http,
                     &link,
                     tip.as_deref(),
+                    LocalEditsPolicy::Protect,
                 ) {
                     Ok(p) => p,
                     Err(e) => {
@@ -1692,8 +1747,14 @@ impl AppState {
         // snapshot carries no history). This IS a fast-forward, minus the dirty guard
         // - the whole point of take-remote is to discard the local edits. The reload
         // re-derives the edit gate from is_remote, leaving the project read-only.
-        let result =
-            self.speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref());
+        let result = self.speleodb_fast_forward(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link,
+            tip.as_deref(),
+            LocalEditsPolicy::Discard,
+        );
         if result.is_err() {
             // The lock was already released above, so if the reset failed part-way we
             // must not leave the edit gate ON (it would violate "gate on <=> lock
@@ -1889,8 +1950,15 @@ impl AppState {
         // live handle to this file first - the reload below re-opens it anyway, so
         // hoisting the close ahead of the extract costs nothing and keeps the swap
         // off a mmap'd/locked destination.
+        //
+        // GUARDED (no abandoning caller): a revision swap replaces the whole working
+        // tree, so with un-pushed edits present it destroys them - for View just as
+        // much as for Restore, which makes the documented "non-destructive peek"
+        // untrue in exactly the case where the user has most to lose. Refuse; the FE
+        // offers no confirmed-discard route into a revision swap, and inventing one
+        // silently here is what the guard exists to prevent.
         let preserved_view = self
-            .replace_cache_stalx(&mut dump, &entry, &dest)
+            .replace_cache_stalx(&mut dump, &entry, &dest, &project_id)
             .map_err(local_dto)?;
 
         // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
@@ -2324,6 +2392,17 @@ impl AppState {
     /// re-stamp the link (`base = tip`, dirty cleared, `last_edit_at` reset), then
     /// reload the project in place (resetting undo/redo). Returns the reloaded
     /// `.stalx` path.
+    ///
+    /// `policy` because the two callers mean opposite things by the same mechanics:
+    ///
+    /// - `speleodb_start_editing` / `speleodb_update` reach the FF arm only on
+    ///   [`ReconcileVerdict::FastForward`], which `sync::fence` yields exclusively
+    ///   in its `!dirty` branch - so there are no un-pushed edits to lose and
+    ///   `Protect` is a no-op there. It is passed anyway, as the assertion: if that
+    ///   invariant ever breaks, the FF refuses instead of overwriting.
+    /// - `speleodb_take_remote` is only ever reached WITH un-pushed edits and exists
+    ///   to discard them, behind the frontend's second destroy-confirmation, so it
+    ///   passes `Discard`.
     fn speleodb_fast_forward(
         &self,
         endpoint: &str,
@@ -2331,6 +2410,7 @@ impl AppState {
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
         tip: Option<&str>,
+        policy: LocalEditsPolicy,
     ) -> Result<String, SpeleoDbError> {
         let project_id = &link.project_id;
         let zip = self.speleodb_handle_auth(
@@ -2346,7 +2426,8 @@ impl AppState {
         // file before the replace. The reload below re-opens it and already resets
         // undo/redo, so hoisting the close ahead of the extract is behaviour-
         // preserving.
-        let preserved_view = self.replace_cache_stalx(&mut dump, &entry, &dest)?;
+        let preserved_view =
+            self.replace_cache_stalx_with(&mut dump, &entry, &dest, project_id, policy)?;
 
         // Re-stamp the hand-off link onto the refreshed file: BASE advances to the
         // server tip, the dirty bit clears, last_edit_at resets (clean checkout).
@@ -2593,7 +2674,14 @@ impl AppState {
                 // dirty == false, so there are no un-pushed edits to strand.
                 let was_editing = self.edit_enabled();
                 let local_path = self
-                    .speleodb_fast_forward(&endpoint, &token, insecure_http, &link, tip.as_deref())
+                    .speleodb_fast_forward(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &link,
+                        tip.as_deref(),
+                        LocalEditsPolicy::Protect,
+                    )
                     .map_err(local_dto)?;
                 if was_editing {
                     self.set_edit_enabled(true);
@@ -2966,11 +3054,11 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
-        clear_snapshot_dirty, coord_json, head_with_empty_retry, lock_held_by_me, resolve_endpoint,
-        restore_display_settings, reverify_due, revision_swap_base, validate_hexsha,
-        validate_project_id, visibility_label, whoami_indicates_dead_token, Endpoint, PushOutcome,
-        SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility,
-        REVERIFY_INTERVAL_SECS,
+        clear_snapshot_dirty, coord_json, head_with_empty_retry, local_dto, lock_held_by_me,
+        resolve_endpoint, restore_display_settings, reverify_due, revision_swap_base,
+        validate_hexsha, validate_project_id, visibility_label, whoami_indicates_dead_token,
+        Endpoint, PushOutcome, SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams,
+        Visibility, REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::preserved_display_settings;
     use crate::models::{Project, SpeleoLink};
@@ -3391,7 +3479,7 @@ mod tests {
 
         let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
         let preserved = state
-            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest)
+            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
             .expect("replace the cache file");
 
         assert_eq!(
@@ -3417,6 +3505,193 @@ mod tests {
         assert!(
             leftovers.is_empty(),
             "the atomic swap must leave no temp file behind, found {leftovers:?}"
+        );
+    }
+
+    // --- the un-pushed-edits guard in front of every download-replace ---
+
+    /// A valid project id for the guard fixtures (the guard never parses it, but
+    /// the surrounding code validates ids, so keep it well-formed).
+    const GUARD_ID: &str = "44444444-4444-4444-4444-444444444444";
+
+    /// Write a cache `.stalx` at `path` carrying a SpeleoDB link for `project_id`
+    /// with the given dirty bit.
+    fn seed_linked_stalx(path: &Path, project_id: &str, dirty: bool) {
+        let mut db = Database::open(path).expect("open seed db");
+        db.save_project(&Project::new("Cached".to_owned(), None))
+            .expect("save seed project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://speleo.test/".to_owned(),
+            project_id: project_id.to_owned(),
+            project_name: "Cached".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: dirty,
+            last_edit_at: dirty.then(|| "2026-07-26T09:00:00Z".to_owned()),
+            last_verify_at: None,
+        }))
+        .expect("save link");
+    }
+
+    /// A one-entry server dump whose `.stalx` payload is recognisable on disk.
+    fn server_dump_zip() -> Vec<u8> {
+        use std::io::Write as _;
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer
+            .start_file("misc/project.stalx", opts)
+            .expect("start_file");
+        writer.write_all(b"SERVER-COPY").expect("write entry");
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn guard_refuses_a_cached_copy_that_has_unpushed_edits() {
+        // The data-loss hole: re-opening a project from the SpeleoDB list re-pulls
+        // over the cached copy. When that copy still holds edits the server has
+        // never seen, the replace is refused - un-pushed work exists in no git
+        // anywhere, so overwriting it cannot be undone.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, true);
+        let state = AppState::new().expect("state");
+
+        let err = state
+            .guard_local_edits(GUARD_ID, &dest)
+            .expect_err("a dirty local copy must not be overwritten");
+
+        // Typed, and the project + the file that holds the work are identifiable -
+        // the frontend needs both to offer keep-local vs take-remote.
+        let refusal = match err {
+            SpeleoDbError::WouldDiscardLocalEdits {
+                project_id,
+                local_path,
+                last_edit_at,
+            } => Some((project_id, local_path, last_edit_at)),
+            _ => None,
+        };
+        let (project_id, local_path, last_edit_at) =
+            refusal.expect("expected the un-pushed-edits refusal");
+        assert_eq!(project_id, GUARD_ID, "the refusal names the project");
+        assert_eq!(
+            local_path,
+            dest.to_string_lossy(),
+            "and the copy 'keep local' would open"
+        );
+        assert_eq!(
+            last_edit_at.as_deref(),
+            Some("2026-07-26T09:00:00Z"),
+            "and when the work was last touched"
+        );
+    }
+
+    #[test]
+    fn refusal_crosses_ipc_as_a_typed_routing_signal() {
+        // Not a hard error but a routing signal (like AdoptAriane): the frontend
+        // branches on `action` and reads the payload, never on message text.
+        let dto = local_dto(SpeleoDbError::WouldDiscardLocalEdits {
+            project_id: GUARD_ID.to_owned(),
+            local_path: "/cache/speleodb/p/project.stalx".to_owned(),
+            last_edit_at: Some("2026-07-26T09:00:00Z".to_owned()),
+        });
+        assert_eq!(
+            dto.action,
+            crate::speleodb::SpeleoDbAction::UnpushedLocalEdits
+        );
+        assert_eq!(dto.status, None, "a local guard has no HTTP status");
+        let payload = dto
+            .unpushed_local
+            .expect("the refusal carries what the choice needs");
+        assert_eq!(payload.project_id, GUARD_ID);
+        assert_eq!(payload.local_path, "/cache/speleodb/p/project.stalx");
+        assert_eq!(
+            payload.last_edit_at.as_deref(),
+            Some("2026-07-26T09:00:00Z")
+        );
+    }
+
+    #[test]
+    fn guard_allows_a_clean_or_absent_local_copy() {
+        // No behaviour change when there is nothing to lose: a clean cached copy,
+        // an unmanaged `.stalx` with no link row, and a first pull into an empty
+        // cache all replace exactly as before.
+        let temp = TempDir::new().expect("temp dir");
+        let state = AppState::new().expect("state");
+
+        let clean = temp.path().join("clean.stalx");
+        seed_linked_stalx(&clean, GUARD_ID, false);
+        assert!(state.guard_local_edits(GUARD_ID, &clean).is_ok());
+
+        let unlinked = temp.path().join("unlinked.stalx");
+        seed_stalx(&unlinked, "Unlinked");
+        assert!(state.guard_local_edits(GUARD_ID, &unlinked).is_ok());
+
+        let missing = temp.path().join("not-pulled-yet.stalx");
+        assert!(
+            state.guard_local_edits(GUARD_ID, &missing).is_ok(),
+            "a first pull has nothing to protect"
+        );
+    }
+
+    #[test]
+    fn guard_refuses_from_the_live_open_link_when_the_file_on_disk_looks_clean() {
+        // The case an on-disk-only check gets wrong, and the one where the user is
+        // most likely to be actively working: the project is OPEN with un-pushed
+        // edits in memory while some other copy of it on disk is still clean.
+        let temp = TempDir::new().expect("temp dir");
+        // The cached copy is CLEAN on disk...
+        let cached = temp.path().join("cached.stalx");
+        seed_linked_stalx(&cached, GUARD_ID, false);
+        // ...while the OPEN copy of the same project carries the un-pushed edits.
+        let open_path = temp.path().join("open.stalx");
+        seed_linked_stalx(&open_path, GUARD_ID, true);
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(open_path).success, "open the dirty copy");
+
+        let err = state
+            .guard_local_edits(GUARD_ID, &cached)
+            .expect_err("the live in-memory link must veto the replace");
+        assert!(
+            matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
+            "expected the un-pushed-edits refusal, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn protected_replace_refuses_and_abandoning_replace_still_overwrites() {
+        // The two chokepoint verbs, on the same dirty destination: the plain one
+        // leaves the file byte-identical, and the explicitly-named abandoning one
+        // (take-remote, behind the frontend's destroy-confirmation) still works.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, true);
+        let before = std::fs::read(&dest).expect("read seeded cache");
+        let zip = server_dump_zip();
+        let state = AppState::new().expect("state");
+
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
+        let refused = state
+            .replace_cache_stalx(&mut dump, "misc/project.stalx", &dest, GUARD_ID)
+            .expect_err("the guarded verb must refuse");
+        assert!(matches!(
+            refused,
+            SpeleoDbError::WouldDiscardLocalEdits { .. }
+        ));
+        assert_eq!(
+            std::fs::read(&dest).expect("read cache after the refusal"),
+            before,
+            "a refused replace must not touch the file at all"
+        );
+
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("reopen dump");
+        state
+            .replace_cache_stalx_abandoning(&mut dump, "misc/project.stalx", &dest)
+            .expect("the abandoning verb still discards on purpose");
+        assert_eq!(
+            std::fs::read(&dest).expect("read replaced file"),
+            b"SERVER-COPY",
+            "the confirmed-discard path keeps working"
         );
     }
 

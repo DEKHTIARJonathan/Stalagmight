@@ -95,6 +95,44 @@ impl AppState {
         self.speleodb_local_project_states_in(cache_root().as_deref(), project_ids)
     }
 
+    /// What this machine holds for ONE project at ONE path - the single-file form
+    /// of [`Self::speleodb_local_project_states`], for the guard that stands in
+    /// front of a download-replace (`AppState::guard_local_edits`). Takes the
+    /// destination path explicitly because a replace already knows which file it
+    /// is about to overwrite, and that file need not be reachable through the cache
+    /// walk (nor the app dirs resolvable at all).
+    ///
+    /// Reads through the SAME `local_state_at` the listing uses - one reader, one
+    /// set of degradation rules - and applies the same live-link rule: the OPEN
+    /// project's in-memory link is consulted for this project id because the file
+    /// on disk can be staler than the session.
+    ///
+    /// The two are ORed rather than one winning: a live dirty bit and a dirty copy
+    /// at `dest` are BOTH un-pushed work on this machine (they coincide for the
+    /// normal case, where the open project IS the cache file), and the guard must
+    /// never under-report. `is_open`/`last_edit_at` follow the live link when there
+    /// is one, falling back to the file's.
+    pub(super) fn local_copy_state(
+        &self,
+        project_id: &str,
+        dest: &Path,
+    ) -> SpeleoLocalProjectState {
+        let on_disk = local_state_at(dest);
+        let Some(live) = self
+            .speleodb_open_link()
+            .ok()
+            .filter(|l| l.project_id == project_id)
+        else {
+            return on_disk;
+        };
+        SpeleoLocalProjectState {
+            has_local_copy: true,
+            has_unpushed_edits: live.has_unpushed_edits || on_disk.has_unpushed_edits,
+            last_edit_at: live.last_edit_at.or(on_disk.last_edit_at),
+            is_open: true,
+        }
+    }
+
     /// [`Self::speleodb_local_project_states`] against an explicit cache root
     /// (`None` = the app dirs are not resolved, so only the open project can be
     /// reported). Split out so tests can point the walk at a temp directory.

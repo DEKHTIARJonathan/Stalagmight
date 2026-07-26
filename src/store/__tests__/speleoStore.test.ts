@@ -169,7 +169,7 @@ describe('speleoStore', () => {
     });
 
     it('surfaces an unexpected server_error, and clears it on the next clean poll (fix 12)', () => {
-      const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null };
+      const err = { message: 'No Project matches the given query.', action: 'Fatal' as const, status: 404, transport: null, unpushed_local: null };
       useSpeleoStore.getState().seedFromStatus(status({ server_error: err }));
       expect(useSpeleoStore.getState().link?.serverError).toEqual(err);
       useSpeleoStore.getState().seedFromStatus(status({ server_error: null }));

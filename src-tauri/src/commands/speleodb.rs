@@ -48,6 +48,7 @@ async fn run_blocking<T: Send + 'static>(
             action: SpeleoDbAction::Fatal,
             status: None,
             transport: None,
+            unpushed_local: None,
         })?
 }
 
@@ -93,6 +94,32 @@ pub async fn speleodb_open_project(
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
         s.speleodb_open_project(project_id, project_name, latest_commit_sha)
+    })
+    .await
+}
+
+/// Pull a project from SpeleoDB over a local copy that still holds UN-PUSHED
+/// EDITS, destroying them. The "take remote and discard local" branch of the
+/// prompt raised when [`speleodb_open_project`] refuses with
+/// `SpeleoDbAction::UnpushedLocalEdits`; call it with the same arguments the
+/// refused open was given, and only after the user has confirmed the loss.
+///
+/// The other branch, "keep local", calls NO SpeleoDB command: it opens the
+/// `local_path` carried on the refusal through the normal `load_project_full`
+/// flow, so nothing is downloaded and nothing is overwritten.
+///
+/// A separate command rather than a flag on [`speleodb_open_project`], for the
+/// same reason `speleodb_take_remote` is its own verb: the irreversible pull must
+/// be spelled out at the call site.
+#[tauri::command]
+pub async fn speleodb_open_project_discarding_local(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    latest_commit_sha: Option<String>,
+) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_open_project_discarding_local(project_id, project_name, latest_commit_sha)
     })
     .await
 }

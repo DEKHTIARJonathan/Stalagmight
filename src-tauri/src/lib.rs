@@ -1295,6 +1295,7 @@ pub fn run() {
             commands::speleodb::speleodb_login,
             commands::speleodb::speleodb_list_projects,
             commands::speleodb::speleodb_open_project,
+            commands::speleodb::speleodb_open_project_discarding_local,
             commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,

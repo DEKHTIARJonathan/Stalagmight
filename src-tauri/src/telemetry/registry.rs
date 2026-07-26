@@ -135,6 +135,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
+    "command.speleodb_open_project_discarding_local",
     "command.speleodb_patch_project",
     "command.speleodb_publish",
     "command.speleodb_push",
@@ -247,6 +248,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-divergence",
     "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
+    "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
     "action.dialog.speleodb-restore",
     "action.dialog.publish-to-speleodb",
@@ -311,6 +313,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-divergence",
     "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
+    "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.speleodb-restore",
     "dialog-cancel.publish-to-speleodb",
@@ -401,6 +404,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-divergence",
     "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
+    "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.speleodb-restore",
     "dwell.dialog.publish-to-speleodb",
@@ -541,6 +545,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-divergence",
     "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
+    "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.publish-to-speleodb",
@@ -890,7 +895,13 @@ mod tests {
         //   + 1 SpeleoDB per-project local-state command (the local half of the
         //       held-lock / GlobalView joins):
         //       command.speleodb_local_project_states = 662.
-        assert_eq!(EVENT_NAMES.len(), 662);
+        //   + 1 SpeleoDB discard-local re-pull command (the "take remote and
+        //       discard local" branch of the refused-open prompt):
+        //       command.speleodb_open_project_discarding_local = 663.
+        //   + 4 quit-with-unpushed-edits dialog events:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-quit = 667.
+        assert_eq!(EVENT_NAMES.len(), 667);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

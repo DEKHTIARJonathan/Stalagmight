@@ -12,6 +12,19 @@
 //!
 //! [`AppState::replace_cache_stalx`] is the single chokepoint that does all of
 //! it, so no call site can forget half of it.
+//!
+//! It also carries the DATA-SAFETY half: the copy being replaced may hold edits
+//! the server has never seen, and those exist in no git anywhere - overwriting
+//! them is unrecoverable. So the plain verb REFUSES that replace
+//! ([`SpeleoDbError::WouldDiscardLocalEdits`], which crosses IPC as a typed
+//! routing signal for the keep-local / take-remote choice), and a caller that
+//! genuinely means to discard has to say so by name through
+//! [`AppState::replace_cache_stalx_abandoning`]. Same shape as the lock release
+//! (`speleodb_release_held_lock_best_effort` vs `_abandoning`): the safe verb is
+//! the one you reach for by default, and abandoning is spelled out at the call
+//! site. Exactly ONE caller is entitled to it - `speleodb_take_remote`, whose
+//! whole purpose is discarding local edits behind the frontend's second
+//! destroy-confirmation.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -54,10 +67,67 @@ pub(super) fn restore_display_settings(
     }
 }
 
+/// Whether a re-pull may destroy un-pushed local edits at its destination.
+///
+/// For the two orchestration verbs that serve BOTH kinds of caller
+/// (`speleodb_fast_forward`, the shared body behind `speleodb_open_project` /
+/// `speleodb_open_project_discarding_local`) - so the intent is named at every
+/// call site instead of riding on a bare `bool`, and so the discarding call sites
+/// stay greppable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum LocalEditsPolicy {
+    /// Refuse the replace when the destination holds un-pushed edits. The default
+    /// for every path the user did not explicitly point at their own work.
+    Protect,
+    /// Discard them: the user confirmed it (take-remote's destroy-confirmation, or
+    /// the "take remote and discard local" branch of the open-project prompt).
+    Discard,
+}
+
 impl AppState {
+    /// Refuse when the copy of `project_id` at `dest` still holds edits the server
+    /// has never seen. The gate in front of every download-replace, and the reason
+    /// re-opening a project from the SpeleoDB list can no longer silently destroy a
+    /// week of unpushed survey.
+    ///
+    /// Reads through [`AppState::local_copy_state`], so the OPEN project's live
+    /// in-memory link counts - the case a naive on-disk-only check gets wrong, and
+    /// the one where the user is most likely to be actively working.
+    ///
+    /// Public to the module so the ONE replace that does not go through
+    /// [`AppState::replace_cache_stalx`] - Ariane adoption, which rebuilds the
+    /// cache `.stalx` from an imported `.tml` rather than extracting it - can share
+    /// the same gate.
+    pub(super) fn guard_local_edits(
+        &self,
+        project_id: &str,
+        dest: &Path,
+    ) -> Result<(), SpeleoDbError> {
+        let local = self.local_copy_state(project_id, dest);
+        if !local.has_unpushed_edits {
+            return Ok(());
+        }
+        tracing::info!(
+            project_id = %project_id,
+            path = %dest.display(),
+            is_open = local.is_open,
+            purpose = "avoid silently destroying un-pushed local work on a re-pull",
+            "speleodb: refusing to replace a local copy that has un-pushed edits"
+        );
+        Err(SpeleoDbError::WouldDiscardLocalEdits {
+            project_id: project_id.to_owned(),
+            local_path: dest.to_string_lossy().into_owned(),
+            last_edit_at: local.last_edit_at,
+        })
+    }
+
     /// Replace the cache `.stalx` at `dest` with `entry` extracted from `dump`,
     /// returning the local view toggles the caller must re-apply to the fresh file
     /// (see [`restore_display_settings`]).
+    ///
+    /// REFUSES (without touching `dest`) when the local copy of `project_id` holds
+    /// un-pushed edits - see [`AppState::guard_local_edits`]. A caller that means
+    /// to discard them calls [`AppState::replace_cache_stalx_abandoning`] instead.
     ///
     /// Order matters:
     ///
@@ -75,10 +145,82 @@ impl AppState {
         dump: &mut Dump<'_>,
         entry: &str,
         dest: &Path,
+        project_id: &str,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        self.guard_local_edits(project_id, dest)?;
+        self.replace_cache_stalx_abandoning(dump, entry, dest)
+    }
+
+    /// [`AppState::replace_cache_stalx`] or its abandoning sibling, chosen by an
+    /// explicit [`LocalEditsPolicy`]. For the orchestration verbs that serve both a
+    /// protected and a confirmed-discard caller and therefore cannot pick one verb
+    /// statically; their own callers name the policy.
+    pub(super) fn replace_cache_stalx_with(
+        &self,
+        dump: &mut Dump<'_>,
+        entry: &str,
+        dest: &Path,
+        project_id: &str,
+        policy: LocalEditsPolicy,
+    ) -> Result<HashMap<String, String>, SpeleoDbError> {
+        match policy {
+            LocalEditsPolicy::Protect => self.replace_cache_stalx(dump, entry, dest, project_id),
+            LocalEditsPolicy::Discard => self.replace_cache_stalx_abandoning(dump, entry, dest),
+        }
+    }
+
+    /// [`AppState::replace_cache_stalx`] WITHOUT the un-pushed-edits guard, for a
+    /// caller that is deliberately throwing the local edits away - today only
+    /// `speleodb_take_remote` (and the open-project prompt's "take remote and
+    /// discard local" branch, which routes through the same policy). Named so the
+    /// destruction is visible at the call site rather than implied by a flag.
+    pub(super) fn replace_cache_stalx_abandoning(
+        &self,
+        dump: &mut Dump<'_>,
+        entry: &str,
+        dest: &Path,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         let preserved_view = preserved_display_settings(dest);
         self.close_project_if_open_at(dest);
         dump.extract_entry_to(entry, dest)?;
         Ok(preserved_view)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// Tripwire: the abandoning replace stays reachable from exactly the sanctioned
+    /// places. Everything that pulls the server copy over the local one funnels
+    /// through this module, and the whole point of splitting the verb in two is
+    /// that opting out of the guard is a deliberate, reviewable act - a future call
+    /// site that quietly picks the discarding path would silently reintroduce the
+    /// data-loss hole this guard closes.
+    ///
+    /// The orchestration's source is scanned from HERE rather than from its own
+    /// test module so the needles do not match the test that looks for them.
+    #[test]
+    fn only_the_confirmed_discard_paths_waive_the_guard() {
+        let source = include_str!("speleodb.rs");
+        // Production code only: the orchestration's own test module drives both
+        // verbs on purpose.
+        let orchestration = source.split("#[cfg(test)]").next().unwrap_or(source);
+        assert_eq!(
+            orchestration.matches("LocalEditsPolicy::Discard").count(),
+            2,
+            "exactly two call sites may discard un-pushed local edits: \
+             speleodb_take_remote (the divergence prompt's destroy-confirmed \
+             'Take remote') and speleodb_open_project_discarding_local (the same \
+             confirmed choice on a refused open). Any other site must pass \
+             LocalEditsPolicy::Protect, or call replace_cache_stalx, so it refuses \
+             instead of destroying work that exists in no git anywhere."
+        );
+        assert_eq!(
+            orchestration
+                .matches("replace_cache_stalx_abandoning")
+                .count(),
+            0,
+            "the orchestration reaches the abandoning replace only through the \
+             named LocalEditsPolicy, so every waiver is spelled out at its call site"
+        );
     }
 }

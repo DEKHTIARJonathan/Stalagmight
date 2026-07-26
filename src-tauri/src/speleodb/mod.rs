@@ -41,7 +41,7 @@ pub use models::{
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
     SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, UpdateResult, Visibility,
+    StartEditingResult, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -117,6 +117,24 @@ pub(crate) enum SpeleoDbError {
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
+    /// A re-pull would have overwritten a local copy that still holds edits the
+    /// server has never seen. REFUSED rather than performed: un-pushed local work
+    /// exists in no git anywhere, so replacing it is unrecoverable, and the user
+    /// never asked for that - they asked to open / restore / refresh.
+    ///
+    /// Not a failure so much as a routing signal, like
+    /// [`SpeleoDbError::AdoptAriane`]: it crosses the typed action channel as
+    /// [`SpeleoDbAction::UnpushedLocalEdits`] so the frontend can offer the binary
+    /// choice (keep the local copy, or take the server's and discard the local
+    /// edits) instead of scraping the message. `local_path` is the copy that holds
+    /// the edits - the "keep local" branch opens exactly that path through the
+    /// normal open flow, no download.
+    #[error("this project has local edits that were never pushed to SpeleoDB")]
+    WouldDiscardLocalEdits {
+        project_id: String,
+        local_path: String,
+        last_edit_at: Option<String>,
+    },
 }
 
 #[cfg(test)]

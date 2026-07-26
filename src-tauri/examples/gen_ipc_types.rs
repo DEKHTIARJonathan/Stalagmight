@@ -71,7 +71,7 @@ use stalagmight_lib::speleodb::{
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
     SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, TransportCause, UpdateResult, Visibility,
+    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -319,6 +319,9 @@ fn main() {
     // #270: why a transport call never reached the server, so the FE can render a
     // translated line instead of a raw OS errno.
     export::<TransportCause>(&out_dir);
+    // The un-pushed local work a refused re-pull would have destroyed, carried on
+    // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
+    export::<UnpushedLocalEdits>(&out_dir);
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
     export::<RemoteState>(&out_dir);
@@ -529,6 +532,7 @@ fn main() {
         "SpeleoDbAction",
         "SpeleoErrorDto",
         "TransportCause",
+        "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",
         "SpeleoLocalProjectState",

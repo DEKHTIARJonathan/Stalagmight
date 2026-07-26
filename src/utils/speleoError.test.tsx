@@ -29,6 +29,7 @@ const dto = (over: Partial<SpeleoErrorDto> = {}): SpeleoErrorDto => ({
   action: 'Retry',
   status: null,
   transport: 'Unknown',
+  unpushed_local: null,
   ...over,
 });
 
