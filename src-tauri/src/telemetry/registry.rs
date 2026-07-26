@@ -115,6 +115,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.resolve_all_warnings",
     "command.resolve_warning",
     "command.restore_from_backup",
+    "command.reverse_section",
     "command.save_display_setting",
     "command.save_dive_plan",
     "command.save_project",
@@ -245,6 +246,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.new-project-for-import",
     "action.dialog.orphan-placement",
     "action.dialog.remove-closure",
+    "action.dialog.reverse-section",
     "action.dialog.section-adjust",
     "action.dialog.settings",
     "action.dialog.open-from-speleodb",
@@ -313,6 +315,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.new-project-for-import",
     "dialog-cancel.orphan-placement",
     "dialog-cancel.remove-closure",
+    "dialog-cancel.reverse-section",
     "dialog-cancel.section-adjust",
     "dialog-cancel.settings",
     "dialog-cancel.open-from-speleodb",
@@ -358,6 +361,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "undo-after.move_station",
     "undo-after.remove_loop_closure",
     "undo-after.remove_zero_datum",
+    "undo-after.reverse_section",
     "undo-after.set_shot_kind",
     "undo-after.set_station_comment",
     "undo-after.set_zero_datum",
@@ -407,6 +411,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.new-project-for-import",
     "dwell.dialog.orphan-placement",
     "dwell.dialog.remove-closure",
+    "dwell.dialog.reverse-section",
     "dwell.dialog.section-adjust",
     "dwell.dialog.settings",
     "dwell.dialog.open-from-speleodb",
@@ -551,6 +556,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.new-project-for-import",
     "active-dwell.dialog.orphan-placement",
     "active-dwell.dialog.remove-closure",
+    "active-dwell.dialog.reverse-section",
     "active-dwell.dialog.section-adjust",
     "active-dwell.dialog.settings",
     "active-dwell.dialog.open-from-speleodb",
@@ -933,7 +939,11 @@ mod tests {
         //       command.speleodb_{set_token_storage,retry_keychain} = 681.
         //   + 2 dive-profile export commands (#299):
         //       command.{export_dive_profile,render_dive_profile_text} = 683.
-        assert_eq!(EVENT_NAMES.len(), 683);
+        //   + 6 section-reverse events (#24):
+        //       command.reverse_section, undo-after.reverse_section,
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .reverse-section = 689.
+        assert_eq!(EVENT_NAMES.len(), 689);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

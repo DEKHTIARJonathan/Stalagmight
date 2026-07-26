@@ -484,6 +484,27 @@ export default function EditSectionDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          {/*
+            Reverse (#24) applies straight to the backend, so it cannot merge with
+            unsaved edits held in this dialog's local copy. Rather than prompting
+            to discard them, the action is simply unavailable while dirty - no
+            confirm hop, and no way to lose work by misreading a dialog.
+          */}
+          <Button
+            onClick={() => {
+              openDialog('reverse-section', { sectionIds: [section.id] });
+            }}
+            disabled={isLoading || isDirty || pendingMidDelete !== null}
+            title={
+              isDirty
+                ? 'Save or discard your edits first'
+                : 'Renumber this section end-to-end (the cave does not move)'
+            }
+            data-testid="edit-section-reverse"
+          >
+            Reverse Section
+          </Button>
+          <div className="flex-1" />
           <Button onClick={closeDialog} disabled={isLoading}>
             Cancel
           </Button>

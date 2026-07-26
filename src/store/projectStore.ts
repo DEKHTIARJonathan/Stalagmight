@@ -342,6 +342,14 @@ interface ProjectStore {
   ) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
+  /**
+   * Reverse a section end-to-end so the far end becomes station 0 (#24).
+   * Geometry is preserved - every station keeps its world coordinate and only
+   * the numbering direction changes. `swapLeftRight` also mirrors the left/right
+   * passage dimensions; it is opt-in because whether LRUD was recorded facing
+   * along travel is a survey convention we cannot infer, so the user is asked.
+   */
+  reverseSection: (sectionId: SectionId, swapLeftRight: boolean) => Promise<CommandResult>;
 
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
@@ -1659,6 +1667,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'delete_section',
       { sectionId },
       { purpose: 'remove section from project', fields: { sectionId } }
+    );
+  },
+
+  reverseSection: async (sectionId: SectionId, swapLeftRight: boolean) => {
+    return executeCommand(
+      'reverse_section',
+      { sectionId, swapLeftRight },
+      {
+        purpose: 'reverse section numbering end-to-end',
+        fields: { sectionId, swapLeftRight },
+      }
     );
   },
 
