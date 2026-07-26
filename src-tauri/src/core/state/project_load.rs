@@ -458,11 +458,15 @@ impl AppState {
 
         // === PHASE 4: Computing statistics (15%) - INDETERMINATE ===
         progress.start_phase(LoadingPhase::ComputingStatistics);
+        // Reference ties are not swimmable, so penetration excludes them unless
+        // the user opts them back in (#27 q13).
+        let include_reference_legs = self.get_config().gas.include_reference_legs;
         // Heartbeat at start to indicate phase is active
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         let mut stats = project.stats();
         // Calculate penetration distance with computed stations
-        stats.penetration_distance = project.calculate_penetration(&stations);
+        stats.penetration_distance =
+            project.calculate_penetration_with(&stations, include_reference_legs);
         // Heartbeat after computation to indicate work completed
         progress.heartbeat(LoadingPhase::ComputingStatistics);
         check_cancelled!();

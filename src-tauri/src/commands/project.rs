@@ -73,8 +73,11 @@ pub(crate) fn get_project_state_impl(state: &AppState) -> Option<ProjectState> {
     let stations = project.compute_station_coordinates();
     let mut stats = project.stats();
 
-    // Calculate penetration distance with computed stations
-    stats.penetration_distance = project.calculate_penetration(&stations);
+    // Calculate penetration distance with computed stations. Reference ties are
+    // not swimmable, so they leave the route unless opted back in (#27 q13).
+    let include_reference_legs = state.get_config().gas.include_reference_legs;
+    stats.penetration_distance =
+        project.calculate_penetration_with(&stations, include_reference_legs);
 
     let frozen_shots = project.compute_frozen_shots();
 

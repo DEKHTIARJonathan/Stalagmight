@@ -489,7 +489,10 @@ impl AppState {
         // identical either way (it's topological - shots/merges/closures - not
         // coordinate-dependent). Closure-solve perf is tracked separately (#81).
         let stations = project.compute_station_coordinates();
-        Some(project.distance_field_from(&stations, from))
+        // Reference ties are not swimmable, so they leave the route unless the
+        // user opts them back in (#27 q13).
+        let include_reference = self.get_config().gas.include_reference_legs;
+        Some(project.distance_field_from_with(&stations, from, include_reference))
     }
 
     /// Single-diver open-circuit gas reachability field (#38). Like [`distance_field`], the
@@ -539,7 +542,8 @@ impl AppState {
         let stations = self
             .get_adjusted_stations()
             .unwrap_or_else(|| project.compute_station_coordinates());
-        Some(project.along_line_between(&stations, a, b))
+        let include_reference = self.get_config().gas.include_reference_legs;
+        Some(project.along_line_between_with(&stations, a, b, include_reference))
     }
 
     /// Drop any cached closure-adjusted coordinates. Called from every

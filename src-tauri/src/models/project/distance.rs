@@ -20,33 +20,56 @@ impl Project {
     /// future gas-planning mode. All graph/geometry work stays here in the
     /// domain layer; callers (IPC, UI) only consume the resulting distances.
     pub fn compute_distances_from(&self, stations: &[Station], roots: &[usize]) -> Vec<f64> {
+        self.compute_distances_from_with(stations, roots, false)
+    }
+
+    /// [`compute_distances_from`](Self::compute_distances_from) with the #27
+    /// `gas.include_reference_legs` opt-in threaded in. `include_reference =
+    /// true` restores the pre-#27 behaviour of routing through reference ties.
+    pub fn compute_distances_from_with(
+        &self,
+        stations: &[Station],
+        roots: &[usize],
+        include_reference: bool,
+    ) -> Vec<f64> {
         let n = stations.len();
         if n == 0 || roots.is_empty() {
             return vec![f64::INFINITY; n];
         }
         let station_index = Self::station_index_map(stations);
-        let adj = self.build_survey_graph(n, &station_index, None);
+        let adj = self.build_survey_graph(n, &station_index, None, include_reference);
         Self::dijkstra(&adj, roots)
     }
 
     /// Per-station along-cave distance to the nearest zero datum: the
     /// shortest path through the survey graph summing each shot's measured
-    /// length. Edges are *all* shots (reference and non-reference, since
-    /// refs are real measured legs) plus zero-cost edges for
-    /// `station_merges` and all `loop_closures` (a closed loop ties two
-    /// stations to the same physical point). Unreachable stations get
-    /// `f64::INFINITY`. Empty projects / no zero datums → all `INFINITY`.
+    /// length. Edges are permanent shots and jumps (both swum) plus zero-cost
+    /// edges for `station_merges` and all `loop_closures` (a closed loop ties
+    /// two stations to the same physical point). Reference ties are excluded
+    /// since #27: they are not swimmable, so a dive route cannot use them.
+    /// Unreachable stations get `f64::INFINITY`. Empty projects / no zero
+    /// datums → all `INFINITY`.
     ///
     /// Equivalent to [`compute_distances_from`] seeded with the zero-datum
     /// station indices - the default origin for the distance-gradient overlay.
     pub fn compute_penetration_distances(&self, stations: &[Station]) -> Vec<f64> {
+        self.compute_penetration_distances_with(stations, false)
+    }
+
+    /// [`compute_penetration_distances`](Self::compute_penetration_distances)
+    /// with the #27 `gas.include_reference_legs` opt-in threaded in.
+    pub fn compute_penetration_distances_with(
+        &self,
+        stations: &[Station],
+        include_reference: bool,
+    ) -> Vec<f64> {
         let n = stations.len();
         if n == 0 || self.zero_datums.is_empty() {
             return vec![f64::INFINITY; n];
         }
         let station_index = Self::station_index_map(stations);
         let roots = self.zero_datum_roots(&station_index);
-        let adj = self.build_survey_graph(n, &station_index, None);
+        let adj = self.build_survey_graph(n, &station_index, None, include_reference);
         Self::dijkstra(&adj, &roots)
     }
 
@@ -54,7 +77,13 @@ impl Project {
     /// distance from any zero datum to any station through the survey
     /// graph. Zero if there are no zero datums or nothing is reachable.
     pub fn calculate_penetration(&self, stations: &[Station]) -> f64 {
-        self.compute_penetration_distances(stations)
+        self.calculate_penetration_with(stations, false)
+    }
+
+    /// [`calculate_penetration`](Self::calculate_penetration) with the #27
+    /// `gas.include_reference_legs` opt-in threaded in.
+    pub fn calculate_penetration_with(&self, stations: &[Station], include_reference: bool) -> f64 {
+        self.compute_penetration_distances_with(stations, include_reference)
             .into_iter()
             .filter(|d| d.is_finite())
             .fold(0.0_f64, f64::max)
@@ -73,6 +102,17 @@ impl Project {
         stations: &[Station],
         from: Option<&StationRef>,
     ) -> DistanceField {
+        self.distance_field_from_with(stations, from, false)
+    }
+
+    /// [`distance_field_from`](Self::distance_field_from) with the #27
+    /// `gas.include_reference_legs` opt-in threaded in.
+    pub fn distance_field_from_with(
+        &self,
+        stations: &[Station],
+        from: Option<&StationRef>,
+        include_reference: bool,
+    ) -> DistanceField {
         let n = stations.len();
         let station_index = Self::station_index_map(stations);
         let coords: Vec<Coordinates> = stations.iter().map(|s| s.coordinates).collect();
@@ -89,7 +129,7 @@ impl Project {
         let raw = if n == 0 || roots.is_empty() {
             vec![f64::INFINITY; n]
         } else {
-            let adj = self.build_survey_graph(n, &station_index, Some(&coords));
+            let adj = self.build_survey_graph(n, &station_index, Some(&coords), include_reference);
             Self::dijkstra(&adj, &roots)
         };
         let mut max_reachable = 0.0_f64;
@@ -132,6 +172,20 @@ impl Project {
         stations: &[Station],
         a: RulerEndpoint,
         b: RulerEndpoint,
+    ) -> AlongLineResult {
+        self.along_line_between_with(stations, a, b, false)
+    }
+
+    /// [`along_line_between`](Self::along_line_between) with the #27
+    /// `gas.include_reference_legs` opt-in threaded in. The ruler measures a
+    /// route a diver could follow, so a non-swimmable reference tie is excluded
+    /// by default; turning the opt-in on restores the pre-#27 behaviour.
+    pub fn along_line_between_with(
+        &self,
+        stations: &[Station],
+        a: RulerEndpoint,
+        b: RulerEndpoint,
+        include_reference: bool,
     ) -> AlongLineResult {
         const EPS: f64 = 1e-9;
         let none = || AlongLineResult {
@@ -236,7 +290,7 @@ impl Project {
         // order as `build_survey_graph` so reconstructed node pairs map back to a
         // shot. Zero-cost merge/closure edges are intentionally absent here ⇒ a
         // reconstructed pair not in the map is a tie to skip (never tinted).
-        let mut adj = self.build_survey_graph(n, &idx, Some(&coords));
+        let mut adj = self.build_survey_graph(n, &idx, Some(&coords), include_reference);
         let mut shot_edge: HashMap<(usize, usize), PathShot> = HashMap::new();
         for section in &self.sections {
             for (i, shot) in section.shots.iter().enumerate() {

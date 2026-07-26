@@ -4588,12 +4588,14 @@ fn reachability_keeps_jump_reference_shots() {
 }
 
 #[test]
-fn reachability_uses_reference_shot_shortcut() {
-    // A reference shot is a real connection: B's reference shot links B0-B1 (len
-    // 5). Even though B0/B1 are ALSO connected the long way through section A
-    // (A0-A1-A2 = 20), shortest-path takes the direct reference (5) - references
-    // are included, not dropped, so a real jump shortcut is honored. (#34)
-    let mut project = Project::new("RefShortcut".to_string(), None);
+fn reachability_uses_jump_shot_shortcut() {
+    // A JUMP is a swum connection, so it stays in the graph: B's jump links
+    // B0-B1 (len 5). Even though B0/B1 are ALSO connected the long way through
+    // section A (A0-A1-A2 = 20), shortest-path takes the direct jump (5). This
+    // is 88ccbaff's regression guard (#34); #27 narrowed it from "every virtual
+    // shot" to "jumps only", and the Reference half is pinned by the companion
+    // test below.
+    let mut project = Project::new("JumpShortcut".to_string(), None);
     let a = project
         .add_section(SectionData {
             shots: vec![
@@ -4646,7 +4648,34 @@ fn reachability_uses_reference_shot_shortcut() {
     let dist = project.compute_distances_from(&stations, &[pos(b, 0)]);
     assert!(
         (dist[pos(b, 1)] - 5.0).abs() < 1e-6,
-        "reference shortcut must be used (B1 direct = 5, not 20 via A), got {}",
+        "jump shortcut must be used (B1 direct = 5, not 20 via A), got {}",
+        dist[pos(b, 1)]
+    );
+
+    // Flipping the SAME fixture to Reference must route the long way instead:
+    // a reference tie is a tape measurement, not a swimmable passage. This is
+    // the false-shortcut risk #77 left open, now closed by #27.
+    project
+        .sections
+        .iter_mut()
+        .find(|s| s.id == b)
+        .unwrap()
+        .shots[0]
+        .kind = ShotKind::Reference;
+    let dist = project.compute_distances_from(&stations, &[pos(b, 0)]);
+    assert!(
+        (dist[pos(b, 1)] - 20.0).abs() < 1e-6,
+        "a reference tie is not swimmable, so the route must go the long way \
+         via A (20), got {}",
+        dist[pos(b, 1)]
+    );
+
+    // ...unless the user opts references back in, which restores the old
+    // inclusive behaviour exactly (#27 q13).
+    let dist = project.compute_distances_from_with(&stations, &[pos(b, 0)], true);
+    assert!(
+        (dist[pos(b, 1)] - 5.0).abs() < 1e-6,
+        "include_reference_legs must restore the pre-#27 shortcut, got {}",
         dist[pos(b, 1)]
     );
 }

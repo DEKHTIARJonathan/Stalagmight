@@ -513,19 +513,18 @@ mod tests {
         let legacy =
             r#"{"type":"set_shot_reference","section_id":1,"shot_id":2,"is_reference":true}"#;
         let parsed: Command = serde_json::from_str(legacy).unwrap();
-        match parsed {
-            Command::SetShotKind {
-                section_id,
-                shot_id,
-                kind,
-            } => {
-                assert_eq!(section_id, 1);
-                assert_eq!(shot_id, 2);
-                // q2: a legacy virtual shot reads as a Jump.
-                assert_eq!(kind, ShotKind::Jump);
-            }
-            other => panic!("expected SetShotKind, got {other:?}"),
-        }
+        // q2: a legacy virtual shot reads as a Jump, and the ids survive.
+        assert!(
+            matches!(
+                parsed,
+                Command::SetShotKind {
+                    section_id: 1,
+                    shot_id: 2,
+                    kind: ShotKind::Jump,
+                }
+            ),
+            "legacy set_shot_reference must map onto SetShotKind: {parsed:?}"
+        );
 
         // The false case, which is what an old inverse command carried.
         let legacy_false =

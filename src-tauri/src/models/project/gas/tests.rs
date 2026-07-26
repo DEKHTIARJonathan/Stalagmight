@@ -2084,6 +2084,66 @@ fn project_with_jump_second_leg() -> (Project, StationRef) {
 }
 
 #[test]
+fn gas_reach_field_excludes_reference_legs() {
+    // A Reference tie is not swimmable, so it must not carry a dive route at
+    // all (#27 q7). Station 2 sits beyond the tie and becomes unreachable, while
+    // station 1 (reached over a permanent shot) is untouched. This is the safe
+    // direction: excluding an edge can only shrink reach, never overstate it.
+    let (mut project, origin) = project_with_jump_second_leg();
+    let sec = origin.section_id;
+    project.sections[0].shots[1].kind = ShotKind::Reference;
+
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+
+    let field = project.compute_gas_reach_field(
+        Some(&origin),
+        None,
+        &diver,
+        std::slice::from_ref(&big),
+        &GasConfig::default(),
+    );
+    let reachable_at = |field: &GasReachField, i: u32| {
+        let target = StationRef::new(sec, i);
+        field
+            .station_refs
+            .iter()
+            .position(|r| *r == target)
+            .map(|idx| field.reachable[idx])
+    };
+    assert_eq!(
+        reachable_at(&field, 1),
+        Some(true),
+        "a permanent leg is unaffected by the reference exclusion"
+    );
+    assert_eq!(
+        reachable_at(&field, 2),
+        Some(false),
+        "a station reachable only across a reference tie must be unreachable"
+    );
+
+    // The opt-in restores the pre-#27 behaviour exactly (#27 q13).
+    let opted_in = GasConfig {
+        include_reference_legs: true,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[big], &opted_in);
+    assert_eq!(
+        reachable_at(&field, 2),
+        Some(true),
+        "include_reference_legs must make the leg divable again"
+    );
+}
+
+#[test]
 fn gas_reach_field_route_legs_flag_jumps() {
     // The route's reference (jump) leg is flagged `is_jump` so the UI can dash it (jumps are
     // normally hidden). Route origin → station 2 (deepest): leg 0 (0→1) regular, leg 1 (1→2) jump.
