@@ -266,6 +266,12 @@ pub async fn speleodb_get_revisions(
 /// top of the current server HEAD (a git-forward restore; the user pushes to
 /// persist); with `restore == false` it is a read-only View that a later Update
 /// fast-forwards away. Returns the local path for the FE to refresh from.
+///
+/// `discard_local` waives the un-pushed-edits guard, and the FE may pass `true`
+/// ONLY after a second, explicit confirmation naming what is being discarded. It
+/// exists because a restore itself stamps the working copy as un-pushed, so without
+/// it Restore was single-use: restoring a second revision refused over edits the
+/// first restore had just created.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -273,9 +279,11 @@ pub async fn speleodb_restore_revision(
     project_name: String,
     hexsha: String,
     restore: bool,
+    discard_local: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(project_id, project_name, hexsha, restore)
+        s.speleodb_restore_revision(project_id, project_name, hexsha, restore, discard_local)
     })
     .await
 }

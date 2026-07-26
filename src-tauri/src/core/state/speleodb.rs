@@ -1895,6 +1895,7 @@ impl AppState {
         project_name: String,
         hexsha: String,
         restore: bool,
+        discard_local: bool,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -1954,14 +1955,27 @@ impl AppState {
         // hoisting the close ahead of the extract costs nothing and keeps the swap
         // off a mmap'd/locked destination.
         //
-        // GUARDED (no abandoning caller): a revision swap replaces the whole working
-        // tree, so with un-pushed edits present it destroys them - for View just as
-        // much as for Restore, which makes the documented "non-destructive peek"
-        // untrue in exactly the case where the user has most to lose. Refuse; the FE
-        // offers no confirmed-discard route into a revision swap, and inventing one
-        // silently here is what the guard exists to prevent.
+        // GUARDED BY DEFAULT: a revision swap replaces the whole working tree, so
+        // with un-pushed edits present it destroys them - for View just as much as
+        // for Restore, which makes the documented "non-destructive peek" untrue in
+        // exactly the case where the user has most to lose.
+        //
+        // `discard_local` is the ONE waiver, and only a Restore may carry it, after
+        // the frontend's second confirmation has named the edits being discarded
+        // (`SpeleoRestoreDialog`'s armed discard step). It exists because a restore
+        // STAMPS the working copy as un-pushed itself, so the guard otherwise made
+        // Restore single-use: restoring a second revision - or reverting a restore
+        // the user disliked - refused over edits the previous restore had just
+        // created, reported as "local edits never pushed". A View can never waive
+        // it: a read-only peek has no confirmation surface and must stay
+        // non-destructive.
+        let policy = if restore && discard_local {
+            LocalEditsPolicy::Discard
+        } else {
+            LocalEditsPolicy::Protect
+        };
         let preserved_view = self
-            .replace_cache_stalx(&mut dump, &entry, &dest, &project_id)
+            .replace_cache_stalx_with(&mut dump, &entry, &dest, &project_id, policy)
             .map_err(local_dto)?;
 
         // Restore rides ON TOP of the current server HEAD (BASE = tip, dirty SET).
@@ -3054,6 +3068,10 @@ impl AppState {
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::panic,
+    reason = "one test POISONS a mutex, which requires panicking while its guard is held"
+)]
 mod tests {
     use super::{
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
@@ -3684,6 +3702,71 @@ mod tests {
         assert!(
             state.guard_local_edits(GUARD_ID, &missing).is_ok(),
             "a first pull has nothing to protect"
+        );
+    }
+
+    #[test]
+    fn guard_refuses_a_local_copy_that_is_present_but_unreadable() {
+        // The guard used to fail OPEN here: any read error mapped to
+        // `has_unpushed_edits: false`, so "I cannot read this file" was recorded as
+        // "this file is clean" and the server copy was pulled straight over it.
+        //
+        // The realistic causes are exactly the ones where work is recoverable: a hot
+        // journal after a kill or power loss, which a READ-ONLY connection cannot roll
+        // back (`SQLITE_READONLY_ROLLBACK`) though a read-write open would, and a
+        // transient `SQLITE_BUSY` while another writer is mid-commit. Refusing is
+        // recoverable (the prompt offers keep-local, or an explicit take-remote);
+        // overwriting is not.
+        let temp = TempDir::new().expect("temp dir");
+        let unreadable = temp.path().join("unreadable.stalx");
+        std::fs::write(&unreadable, b"not a sqlite database at all").expect("write junk");
+        let state = AppState::new().expect("state");
+
+        let err = state
+            .guard_local_edits(GUARD_ID, &unreadable)
+            .expect_err("an unreadable local copy must not be treated as clean");
+        assert!(
+            matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
+            "expected the un-pushed-edits refusal, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn a_failed_extract_reopens_the_project_it_closed() {
+        // The close has to come BEFORE the extract (a live mmap must not survive into
+        // the rename), so a failed extract left the project closed backend-side while
+        // the frontend still displayed it - and every later command, auto-save
+        // included, then failed with "no project open". The extract stages to a temp
+        // and renames, so on failure `dest` is untouched and re-opening restores the
+        // pre-call state.
+        let temp = TempDir::new().expect("temp dir");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, GUARD_ID, false);
+        let before = std::fs::read(&dest).expect("read seeded cache");
+        let zip = server_dump_zip();
+
+        let state = AppState::new().expect("state");
+        assert!(state.open_project(dest.clone()).success, "open the cache");
+        assert!(project_is_open(&state));
+
+        let mut dump = crate::speleodb::dump::Dump::open(&zip).expect("open dump");
+        let err = state
+            .replace_cache_stalx_abandoning(&mut dump, "no/such/entry.stalx", &dest)
+            .expect_err("extracting a missing entry must fail");
+        assert!(
+            !matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
+            "the failure here is the extract, not the guard: {err:?}"
+        );
+
+        assert_eq!(
+            std::fs::read(&dest).expect("read cache after the failure"),
+            before,
+            "a failed extract leaves the old copy intact"
+        );
+        assert!(
+            project_is_open(&state),
+            "and the project it closed to make room is re-opened, so the shell is \
+             not left showing a project the backend does not have open"
         );
     }
 

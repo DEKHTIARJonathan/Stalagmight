@@ -19,6 +19,13 @@ export interface RestoreRevisionArgs {
    * fast-forwards away).
    */
   restore: boolean;
+  /**
+   * Waive the backend's un-pushed-edits guard. Only ever `true` for a **Restore**
+   * the user has confirmed a SECOND time, having been told which local changes it
+   * discards (see `SpeleoRestoreDialog`'s armed step). A View never sets it - a
+   * read-only peek must stay non-destructive.
+   */
+  discardLocal?: boolean;
 }
 
 /**
@@ -37,7 +44,14 @@ export function useRestoreRevision() {
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
 
   return useCallback(
-    async ({ projectId, projectName, hexsha, shortSha, restore }: RestoreRevisionArgs) => {
+    async ({
+      projectId,
+      projectName,
+      hexsha,
+      shortSha,
+      restore,
+      discardLocal = false,
+    }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
       // concurrent-session notice to surface here.
@@ -46,6 +60,8 @@ export function useRestoreRevision() {
         projectName,
         hexsha,
         restore,
+        // Never waived for a View, whatever the caller passed.
+        discardLocal: restore && discardLocal,
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),

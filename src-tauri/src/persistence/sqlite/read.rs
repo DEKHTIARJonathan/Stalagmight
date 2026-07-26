@@ -873,15 +873,22 @@ impl Database {
     /// the #190/#191 tests. `base_commit_sha` is read as `Option<String>` so an
     /// on-disk NULL stays `None` (never coerced to `""`).
     pub fn load_speleo_link(&self) -> Result<Option<crate::models::SpeleoLink>> {
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
+        // The error is PROPAGATED, not swallowed. `count(*)` over `sqlite_master`
+        // returns a row for any readable database - including one that simply has no
+        // `speleo_link` table (count 0, handled below) - so a failure here means the
+        // FILE could not be read at all: not a database, a hot journal a read-only
+        // connection cannot roll back (`SQLITE_READONLY_ROLLBACK`), a transient
+        // `SQLITE_BUSY`. `unwrap_or(false)` rendered all of those as "no link row",
+        // i.e. indistinguishable from a perfectly readable unmanaged `.stalx`, which
+        // is what let the un-pushed-edits guard read an unreadable cached copy as
+        // clean and pull the server copy over recoverable work. Callers that only
+        // want "is this remote?" already treat `Err` as no (`matches!(.., Ok(Some(_)))`
+        // / `.ok().flatten()`), so nothing else changes shape.
+        let table_exists: bool = self.conn.query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='speleo_link'",
+            [],
+            |row| row.get::<_, i64>(0),
+        )? > 0;
 
         if !table_exists {
             return Ok(None);

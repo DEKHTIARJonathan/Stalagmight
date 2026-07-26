@@ -5,7 +5,7 @@ import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
-import { humanizeSpeleoError } from '../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits } from '../../utils/speleoError';
 
 /**
  * [#218] Restore-revision confirm. Opened from the Project Settings revision
@@ -33,8 +33,13 @@ export default function SpeleoRestoreDialog() {
 
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Set when the backend refused because the working copy holds un-pushed edits.
+  // A restore STAMPS the copy un-pushed itself, so this is the ordinary state of
+  // "restore a second revision" or "revert a restore I did not like" - without a
+  // way through it, Restore was single-use.
+  const [needsDiscard, setNeedsDiscard] = useState(false);
 
-  const handleConfirm = async () => {
+  const run = async (discardLocal: boolean) => {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
@@ -42,10 +47,25 @@ export default function SpeleoRestoreDialog() {
       // Restore mode: the backend reopens the swapped tree with editing re-enabled
       // and the hook pulls it into the view. Close the confirm only on success so a
       // failure keeps the inline error visible.
-      await restoreRevision({ projectId, projectName, hexsha, shortSha, restore: true });
+      await restoreRevision({
+        projectId,
+        projectName,
+        hexsha,
+        shortSha,
+        restore: true,
+        discardLocal,
+      });
       closeDialog();
     } catch (e) {
-      setError(humanizeSpeleoError(e, t('speleodb.restore.failed')));
+      // A refusal over un-pushed edits is not a dead end: arm the explicit
+      // discard step instead of showing the raw "local edits never pushed" line
+      // about changes this dialog is already about to replace.
+      if (unpushedLocalEdits(e)) {
+        setNeedsDiscard(true);
+        setError(null);
+      } else {
+        setError(humanizeSpeleoError(e, t('speleodb.restore.failed')));
+      }
       setBusy(false);
     }
   };
@@ -65,12 +85,18 @@ export default function SpeleoRestoreDialog() {
           </Button>
           <Button
             variant="danger"
-            onClick={() => void handleConfirm()}
+            onClick={() => void run(needsDiscard)}
             disabled={busy}
             data-primary-action=""
-            data-testid="speleodb-restore-confirm-btn"
+            data-testid={
+              needsDiscard ? 'speleodb-restore-discard-confirm-btn' : 'speleodb-restore-confirm-btn'
+            }
           >
-            {busy ? t('speleodb.restore.restoring') : t('speleodb.restore.confirmButton')}
+            {busy
+              ? t('speleodb.restore.restoring')
+              : needsDiscard
+                ? t('speleodb.restore.discardConfirm')
+                : t('speleodb.restore.confirmButton')}
           </Button>
         </>
       }
@@ -81,6 +107,15 @@ export default function SpeleoRestoreDialog() {
         {isDirty && (
           <p className="text-warning" data-testid="speleodb-restore-unsaved-warning">
             {t('speleodb.restore.unsavedWarning')}
+          </p>
+        )}
+        {needsDiscard && (
+          <p
+            className="rounded border border-error bg-error-20 text-error px-3 py-2"
+            role="alert"
+            data-testid="speleodb-restore-discard-warning"
+          >
+            {t('speleodb.restore.discardWarning')}
           </p>
         )}
         {error && (

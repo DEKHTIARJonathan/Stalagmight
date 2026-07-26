@@ -103,7 +103,27 @@ impl AppState {
         project_id: &str,
         dest: &Path,
     ) -> Result<(), SpeleoDbError> {
-        let local = self.local_copy_state(project_id, dest);
+        // `None` = the file is there but unreadable, so we CANNOT rule out un-pushed
+        // edits. A guard that stands in front of an overwrite has to fail closed on
+        // that: the likely causes are a hot journal after a kill or power loss (which
+        // a read-only connection cannot roll back - `SQLITE_READONLY_ROLLBACK`) and a
+        // transient `SQLITE_BUSY`, and in both cases a read-write open would have
+        // recovered work that reading the silence as "clean" would have overwritten.
+        // Refusing is recoverable in a way overwriting is not: the frontend's prompt
+        // offers keep-local (nothing is touched) or an explicit take-remote.
+        let Some(local) = self.local_copy_state(project_id, dest) else {
+            tracing::warn!(
+                project_id = %project_id,
+                path = %dest.display(),
+                purpose = "fail closed when the local copy cannot be read",
+                "speleodb: refusing to replace a local copy whose state could not be determined"
+            );
+            return Err(SpeleoDbError::WouldDiscardLocalEdits {
+                project_id: project_id.to_owned(),
+                local_path: dest.to_string_lossy().into_owned(),
+                last_edit_at: None,
+            });
+        };
         if !local.has_unpushed_edits {
             return Ok(());
         }
@@ -181,9 +201,40 @@ impl AppState {
         dest: &Path,
     ) -> Result<HashMap<String, String>, SpeleoDbError> {
         let preserved_view = preserved_display_settings(dest);
-        self.close_project_if_open_at(dest);
-        dump.extract_entry_to(entry, dest)?;
-        Ok(preserved_view)
+        // Closing BEFORE the extract is the point (a live mmap must not survive into
+        // the rename), so the failure path cannot simply reorder the two - it has to
+        // undo the close. Left un-undone, a failed extract returned `Err` with the
+        // project already closed backend-side while the frontend still displayed it:
+        // every later command, auto-save included, then failed with "no project
+        // open". The extract stages to a sibling temp and renames, so on failure
+        // `dest` is still the file we just closed and re-opening restores the
+        // pre-call state (bar the undo history, which the close spent either way).
+        let closed = self.close_project_if_open_at(dest);
+        match dump.extract_entry_to(entry, dest) {
+            Ok(()) => Ok(preserved_view),
+            Err(e) => {
+                if closed {
+                    let reopened = self.open_project(dest.to_path_buf());
+                    if reopened.success {
+                        tracing::info!(
+                            path = %dest.display(),
+                            purpose = "undo the pre-replace close after a failed extract",
+                            "speleodb: re-opened the project the failed replace had closed"
+                        );
+                    } else {
+                        // Nothing left to try: report it loudly, because the shell is
+                        // now showing a project the backend does not have open.
+                        tracing::error!(
+                            path = %dest.display(),
+                            error = ?reopened.error,
+                            purpose = "undo the pre-replace close after a failed extract",
+                            "speleodb: could not re-open the project after a failed replace"
+                        );
+                    }
+                }
+                Err(e.into())
+            }
+        }
     }
 }
 
@@ -206,13 +257,17 @@ mod tests {
         let orchestration = source.split("#[cfg(test)]").next().unwrap_or(source);
         assert_eq!(
             orchestration.matches("LocalEditsPolicy::Discard").count(),
-            2,
-            "exactly two call sites may discard un-pushed local edits: \
+            3,
+            "exactly three call sites may discard un-pushed local edits: \
              speleodb_take_remote (the divergence prompt's destroy-confirmed \
-             'Take remote') and speleodb_open_project_discarding_local (the same \
-             confirmed choice on a refused open). Any other site must pass \
-             LocalEditsPolicy::Protect, or call replace_cache_stalx, so it refuses \
-             instead of destroying work that exists in no git anywhere."
+             'Take remote'), speleodb_open_project_discarding_local (the same \
+             confirmed choice on a refused open), and speleodb_restore_revision \
+             under its `discard_local` waiver (a RESTORE only, never a View, after \
+             the restore confirm's armed discard step - a restore stamps the copy \
+             un-pushed itself, so without it Restore was single-use). Any other \
+             site must pass LocalEditsPolicy::Protect, or call \
+             replace_cache_stalx, so it refuses instead of destroying work that \
+             exists in no git anywhere."
         );
         assert_eq!(
             orchestration

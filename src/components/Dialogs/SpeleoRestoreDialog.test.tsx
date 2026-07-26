@@ -68,6 +68,9 @@ describe('SpeleoRestoreDialog (#218)', () => {
       projectName: 'Cave A',
       hexsha: 'abcdef0123',
       restore: true,
+      // The first attempt never waives the un-pushed-edits guard - only the armed
+      // second press does, after the refusal has named what is being discarded.
+      discardLocal: false,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();
@@ -88,5 +91,52 @@ describe('SpeleoRestoreDialog (#218)', () => {
       expect(screen.getByTestId('speleodb-restore-error')).toBeInTheDocument(),
     );
     expect(refreshProjectStateMock).not.toHaveBeenCalled();
+  });
+});
+
+describe('SpeleoRestoreDialog - a second restore (#270)', () => {
+  // A restore STAMPS the working copy as un-pushed, so the un-pushed-edits guard
+  // refuses the NEXT one - which made Restore single-use: restoring a second
+  // revision, or reverting a restore the user disliked, failed with a raw "local
+  // edits never pushed" line about edits the previous restore had just created.
+  const REFUSAL = {
+    message: 'local edits never pushed',
+    action: 'UnpushedLocalEdits',
+    unpushed_local: {
+      project_id: 'p1',
+      local_path: '/cache/p1.stalx',
+      last_edit_at: '2026-07-26T09:00:00Z',
+    },
+  };
+
+  it('arms an explicit discard step instead of dead-ending on the refusal', async () => {
+    invokeIpcMock.mockRejectedValue(REFUSAL);
+    render(<SpeleoRestoreDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-restore-discard-warning')).toBeInTheDocument(),
+    );
+    // The refusal is NOT shown as a plain error - it is an actionable choice.
+    expect(screen.queryByTestId('speleodb-restore-error')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-restore-discard-confirm-btn')).toBeInTheDocument();
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('the armed second press waives the guard and completes the restore', async () => {
+    invokeIpcMock.mockRejectedValueOnce(REFUSAL);
+    invokeIpcMock.mockResolvedValue({ local_path: '/cache/p1.stalx', concurrent_session: false });
+    render(<SpeleoRestoreDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-restore-confirm-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-restore-discard-confirm-btn'));
+
+    await waitFor(() => expect(refreshProjectStateMock).toHaveBeenCalled());
+    const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_restore_revision');
+    expect(calls).toHaveLength(2);
+    expect(calls[0]?.[1]).toMatchObject({ discardLocal: false });
+    expect(calls[1]?.[1]).toMatchObject({ restore: true, discardLocal: true });
+    expect(closeDialogMock).toHaveBeenCalled();
   });
 });

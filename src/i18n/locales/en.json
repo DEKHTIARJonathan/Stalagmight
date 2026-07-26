@@ -2862,6 +2862,8 @@
       "consequence": "The restore is kept as unsaved edits on top of the current version; push to make it the project's latest. Your project history is not rewritten.",
       "unsavedWarning": "You have unsaved changes that will be discarded.",
       "confirmButton": "Restore revision",
+      "discardWarning": "The working copy has changes that are not on SpeleoDB - including any earlier restore you have not pushed. Restoring this revision replaces them, and they are not on the server, so this cannot be undone.",
+      "discardConfirm": "Replace my changes & restore",
       "restoring": "Restoring…",
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",

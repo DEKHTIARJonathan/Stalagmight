@@ -44,34 +44,72 @@ pub(super) fn cache_path_in(root: &Path, project_id: &str) -> PathBuf {
     root.join(project_id).join(CACHE_STALX)
 }
 
+/// What a read of one cached `.stalx` established.
+///
+/// The two consumers need OPPOSITE defaults when the read fails, which is why the
+/// unknown case is a variant rather than a `default()`:
+///
+/// - the LISTING paints a row per project, so one bad file must cost only its own
+///   row - it degrades to "no local copy" ([`SpeleoLocalProjectState::default`]).
+/// - the GUARD decides whether to overwrite the file, so the same absence of
+///   information has to make it REFUSE. Reporting an unreadable file as clean let
+///   the server copy be pulled over work that a read-write open would have
+///   recovered: a hot journal after a kill or power loss cannot be rolled back by
+///   a read-only connection (`SQLITE_READONLY_ROLLBACK`), and a transient
+///   `SQLITE_BUSY` needs only another writer to be mid-commit.
+enum LocalRead {
+    /// The file was read. Includes "not a managed project" (no link row) and "not
+    /// there at all", both of which genuinely have nothing to push.
+    Known(SpeleoLocalProjectState),
+    /// The file EXISTS but could not be read, so nothing is known about it - in
+    /// particular NOT that it is free of un-pushed edits.
+    Unreadable,
+}
+
 /// Read one cached `.stalx`'s SpeleoDB link state, read-only and best-effort.
 ///
-/// Returns the default ("no local copy") for a missing, unreadable, corrupt or
-/// unlinked file: the caller is painting a list, so a single bad file must cost
-/// only its own row. A corrupt cache genuinely has no state that can be pushed or
-/// reconciled, so reporting it as absent is also the safe answer for the UI - it
-/// offers a plain re-pull instead of a push.
-fn local_state_at(path: &Path) -> SpeleoLocalProjectState {
+/// A missing file is `Known` (there is nothing on disk to lose); an unlinked one is
+/// `Known` too (a `.stalx` in the cache that is not a managed project has nothing
+/// to push). Only a file that is present and unreadable is `Unreadable`.
+fn read_local_state_at(path: &Path) -> LocalRead {
     let link = match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
         Ok(Some(link)) => link,
         // No link row: a `.stalx` sitting in the cache that is not a managed
         // project. Nothing to report, and nothing to push.
-        Ok(None) => return SpeleoLocalProjectState::default(),
+        Ok(None) => return LocalRead::Known(SpeleoLocalProjectState::default()),
         Err(e) => {
+            // `try_exists` rather than `exists`: an Err there (a permission denial
+            // on a parent component) is itself "cannot tell", and must not be
+            // rounded down to "absent".
+            let present = path.try_exists().unwrap_or(true);
             tracing::debug!(
                 path = %path.display(),
                 error = %e,
+                present,
                 purpose = "report local SpeleoDB state for a project list",
-                "speleodb: cached .stalx could not be read; reporting no local state"
+                "speleodb: cached .stalx could not be read"
             );
-            return SpeleoLocalProjectState::default();
+            return if present {
+                LocalRead::Unreadable
+            } else {
+                LocalRead::Known(SpeleoLocalProjectState::default())
+            };
         }
     };
-    SpeleoLocalProjectState {
+    LocalRead::Known(SpeleoLocalProjectState {
         has_local_copy: true,
         has_unpushed_edits: link.has_unpushed_edits,
         last_edit_at: link.last_edit_at,
         is_open: false,
+    })
+}
+
+/// [`read_local_state_at`] for the LISTING, which fails open: an unreadable file
+/// degrades to "no local copy" so a single bad file costs only its own row.
+fn local_state_at(path: &Path) -> SpeleoLocalProjectState {
+    match read_local_state_at(path) {
+        LocalRead::Known(state) => state,
+        LocalRead::Unreadable => SpeleoLocalProjectState::default(),
     }
 }
 
@@ -112,25 +150,44 @@ impl AppState {
     /// normal case, where the open project IS the cache file), and the guard must
     /// never under-report. `is_open`/`last_edit_at` follow the live link when there
     /// is one, falling back to the file's.
+    /// Returns `None` when the file at `dest` exists but could not be read AND the
+    /// open project cannot vouch for it - the guard must refuse there rather than
+    /// read the silence as "clean" (see [`LocalRead`]).
     pub(super) fn local_copy_state(
         &self,
         project_id: &str,
         dest: &Path,
-    ) -> SpeleoLocalProjectState {
-        let on_disk = local_state_at(dest);
-        let Some(live) = self
+    ) -> Option<SpeleoLocalProjectState> {
+        let read = read_local_state_at(dest);
+        let live = self
             .speleodb_open_link()
             .ok()
-            .filter(|l| l.project_id == project_id)
-        else {
-            return on_disk;
+            .filter(|l| l.project_id == project_id);
+        let on_disk = match read {
+            LocalRead::Known(state) => state,
+            LocalRead::Unreadable => {
+                // The LIVE link is first-hand knowledge of this project's dirty bit,
+                // read from the open database rather than from the file, so it stands
+                // in for a file we cannot read. Only when there is no live link
+                // either is the answer genuinely unknown.
+                let Some(live) = live else { return None };
+                return Some(SpeleoLocalProjectState {
+                    has_local_copy: true,
+                    has_unpushed_edits: live.has_unpushed_edits,
+                    last_edit_at: live.last_edit_at,
+                    is_open: true,
+                });
+            }
         };
-        SpeleoLocalProjectState {
+        let Some(live) = live else {
+            return Some(on_disk);
+        };
+        Some(SpeleoLocalProjectState {
             has_local_copy: true,
             has_unpushed_edits: live.has_unpushed_edits || on_disk.has_unpushed_edits,
             last_edit_at: live.last_edit_at.or(on_disk.last_edit_at),
             is_open: true,
-        }
+        })
     }
 
     /// [`Self::speleodb_local_project_states`] against an explicit cache root
@@ -348,5 +405,48 @@ mod tests {
         );
         assert!(a.is_open, "and is flagged as the open project");
         assert_eq!(a.last_edit_at.as_deref(), Some("2026-07-26T12:00:00Z"));
+    }
+    #[test]
+    fn the_listing_fails_open_for_an_unreadable_file_but_the_guard_does_not() {
+        // The two consumers need OPPOSITE defaults when a read fails, which is the
+        // whole reason `read_local_state_at` reports `Unreadable` instead of a
+        // `default()`:
+        //
+        // - the LISTING paints one row per project, so a single bad file may cost only
+        //   its own row and must never blank the list.
+        // - the GUARD decides whether to overwrite that very file, so the same absence
+        //   of information has to make it REFUSE. Reporting an unreadable file as clean
+        //   let the server copy be pulled over work a read-write open would have
+        //   recovered (a hot journal after a kill cannot be rolled back by a read-only
+        //   connection - SQLITE_READONLY_ROLLBACK; a transient SQLITE_BUSY needs only
+        //   another writer mid-commit).
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path();
+        let path = cache_path_in(root, ID_A);
+        std::fs::create_dir_all(path.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&path, b"not a sqlite database at all").expect("write junk");
+        let state = AppState::new().expect("state");
+
+        let out = state.speleodb_local_project_states_in(Some(root), Some(vec![ID_A.to_owned()]));
+        let row = out.get(ID_A).expect("the id was asked for explicitly");
+        assert!(
+            !row.has_local_copy && !row.has_unpushed_edits,
+            "the listing degrades to a 'no local copy' row: {row:?}"
+        );
+
+        assert!(
+            state.local_copy_state(ID_A, &path).is_none(),
+            "but the guard's reader reports UNKNOWN, so it can fail closed"
+        );
+
+        // A file that is simply not there is different: there is nothing to lose, so
+        // the guard must still allow a first pull.
+        let missing = cache_path_in(root, ID_B);
+        assert!(
+            state
+                .local_copy_state(ID_B, &missing)
+                .is_some_and(|s| !s.has_unpushed_edits),
+            "an absent copy is KNOWN-clean, not unknown"
+        );
     }
 }
