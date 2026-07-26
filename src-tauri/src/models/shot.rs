@@ -45,6 +45,82 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
     dz.atan2(horizontal).to_degrees()
 }
 
+/// What a shot represents on the line (#27).
+///
+/// Splits the old single `is_reference` boolean into the two things surveyors
+/// actually mean by a "virtual" shot:
+///
+/// * [`Jump`](ShotKind::Jump) - a **swum** shortcut between two mainlines. It
+///   counts toward gas and penetration, at a raised RMV (`jump_rmv_multiplier`),
+///   because tying in a jump is extra task-loading.
+/// * [`Reference`](ShotKind::Reference) - a **non-swimmable** survey tie (a tape
+///   measurement or backsight used to build the tree). It must not count toward
+///   gas, penetration or route swim distance: treating one as swimmable is the
+///   false-shortcut risk #77 closed with.
+///
+/// Both still export to Ariane TML as `VIRTUAL` (there is only one virtual
+/// category there), and collab reconcile compares only [`Shot::is_virtual`], so
+/// the Jump/Reference axis never produces sync noise.
+///
+/// The initial kind is chosen once at import by the chain classifier
+/// (`models::project::classify`); it is never recomputed afterwards.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, Default, PartialEq, Eq, TS)]
+pub enum ShotKind {
+    /// A permanent, surveyed leg of the cave line.
+    #[default]
+    Normal,
+    /// A swum shortcut between two mainlines. Counts as swum.
+    Jump,
+    /// A non-swimmable survey tie. Does not count as swum.
+    Reference,
+}
+
+impl ShotKind {
+    /// Compact discriminant for SQLite storage and the binary IPC flags byte.
+    /// Stable on the wire: do not renumber.
+    pub fn as_u8(self) -> u8 {
+        match self {
+            ShotKind::Normal => 0,
+            ShotKind::Jump => 1,
+            ShotKind::Reference => 2,
+        }
+    }
+
+    /// Inverse of [`as_u8`](Self::as_u8). Unknown discriminants fall back to
+    /// `Normal` rather than failing the load: a corrupt byte should not make a
+    /// project unopenable, and `Normal` is the conservative reading (it keeps
+    /// the shot visible and surveyed rather than silently hiding it).
+    pub fn from_u8(value: u8) -> Self {
+        match value {
+            1 => ShotKind::Jump,
+            2 => ShotKind::Reference,
+            _ => ShotKind::Normal,
+        }
+    }
+
+    /// True for the two virtual kinds. Most call sites only care about this,
+    /// not which virtual kind it is.
+    pub fn is_virtual(self) -> bool {
+        self != ShotKind::Normal
+    }
+
+    /// Whether a diver swims this leg, and so whether it counts toward gas,
+    /// penetration and route distance. A [`Jump`](ShotKind::Jump) does (at a
+    /// raised RMV); a [`Reference`](ShotKind::Reference) does not (#27 q7).
+    pub fn is_swum(self) -> bool {
+        self != ShotKind::Reference
+    }
+
+    /// User-facing label for undo history and command descriptions.
+    pub fn label(self) -> &'static str {
+        match self {
+            ShotKind::Normal => "Permanent",
+            ShotKind::Jump => "Jump",
+            ShotKind::Reference => "Reference",
+        }
+    }
+}
+
 /// A single survey measurement between two stations
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct Shot {
@@ -87,9 +163,15 @@ pub struct Shot {
     pub down: Option<f64>,
     /// Optional comment
     pub comment: Option<String>,
-    /// Whether this is a reference (temporary connection) shot
-    #[serde(alias = "is_virtual")]
-    pub is_reference: bool,
+    /// Whether this is a permanent leg, a swum jump, or a survey reference (#27).
+    /// Reads legacy `is_reference` / `is_virtual` booleans (see [`de_shot_kind`]).
+    #[serde(
+        default,
+        alias = "is_reference",
+        alias = "is_virtual",
+        deserialize_with = "de_shot_kind"
+    )]
+    pub kind: ShotKind,
     /// Physical marker index on cave line
     pub marker_index: Option<u32>,
     /// Water temperature in celsius
@@ -118,12 +200,60 @@ pub struct ShotData {
     pub down: Option<f64>,
     #[serde(default)]
     pub comment: Option<String>,
-    #[serde(default, alias = "is_virtual")]
-    pub is_reference: bool,
+    #[serde(
+        default,
+        alias = "is_reference",
+        alias = "is_virtual",
+        deserialize_with = "de_shot_kind"
+    )]
+    pub kind: ShotKind,
     #[serde(default)]
     pub marker_index: Option<u32>,
     #[serde(default)]
     pub temperature: Option<f64>,
+}
+
+/// Accepts either the modern [`ShotKind`] string or a legacy `is_reference` /
+/// `is_virtual` boolean, so projects and undo entries written before #27 still
+/// load. A legacy `true` becomes [`ShotKind::Jump`] (issue #27 q2: most
+/// user-toggled reference shots are swum shortcuts in practice); the chain
+/// classifier then refines that once, at the post-migration pass.
+fn de_shot_kind<'de, D>(de: D) -> Result<ShotKind, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Kind(ShotKind),
+        Legacy(bool),
+    }
+
+    Ok(match Wire::deserialize(de)? {
+        Wire::Kind(kind) => kind,
+        Wire::Legacy(true) => ShotKind::Jump,
+        Wire::Legacy(false) => ShotKind::Normal,
+    })
+}
+
+/// [`de_shot_kind`] for the optional patch field on [`ShotUpdates`]. Absent stays
+/// `None` (no change); a present legacy boolean maps the same way.
+fn de_shot_kind_opt<'de, D>(de: D) -> Result<Option<ShotKind>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Wire {
+        Kind(ShotKind),
+        Legacy(bool),
+    }
+
+    Ok(Option::<Wire>::deserialize(de)?.map(|w| match w {
+        Wire::Kind(kind) => kind,
+        Wire::Legacy(true) => ShotKind::Jump,
+        Wire::Legacy(false) => ShotKind::Normal,
+    }))
 }
 
 /// Deserialize an `Option<Option<T>>` field so JSON `null` means "clear":
@@ -210,9 +340,15 @@ pub struct ShotUpdates {
     )]
     #[ts(optional)]
     pub comment: Option<Option<String>>,
-    #[serde(default, alias = "is_virtual")]
+    #[serde(
+        default,
+        alias = "is_reference",
+        alias = "is_virtual",
+        deserialize_with = "de_shot_kind_opt",
+        skip_serializing_if = "Option::is_none"
+    )]
     #[ts(optional)]
-    pub is_reference: Option<bool>,
+    pub kind: Option<ShotKind>,
     #[serde(
         default,
         deserialize_with = "double_option",
@@ -359,7 +495,7 @@ impl Shot {
             up: data.up,
             down: data.down,
             comment: data.comment,
-            is_reference: data.is_reference,
+            kind: data.kind,
             marker_index: data.marker_index,
             temperature: data.temperature,
         }
@@ -409,8 +545,8 @@ impl Shot {
                 _ => v.clone(),
             };
         }
-        if let Some(v) = updates.is_reference {
-            self.is_reference = v;
+        if let Some(v) = updates.kind {
+            self.kind = v;
         }
         if let Some(v) = &updates.marker_index {
             self.marker_index = *v;
@@ -453,7 +589,7 @@ impl Shot {
             up: self.up,
             down: self.down,
             comment: self.comment.clone(),
-            is_reference: self.is_reference,
+            kind: self.kind,
             marker_index: self.marker_index,
             temperature: self.temperature,
         }
@@ -509,7 +645,7 @@ impl From<Shot> for ShotData {
             up: shot.up,
             down: shot.down,
             comment: shot.comment,
-            is_reference: shot.is_reference,
+            kind: shot.kind,
             marker_index: shot.marker_index,
             temperature: shot.temperature,
         }
@@ -535,7 +671,7 @@ mod tests {
             up: Some(0.7),
             down: Some(0.8),
             comment: Some("note".to_string()),
-            is_reference: false,
+            kind: ShotKind::Normal,
             marker_index: Some(3),
             temperature: Some(21.5),
         }
@@ -550,7 +686,7 @@ mod tests {
             pitch_in: Some(None),
             right: Some(Some(1.2)),
             comment: Some(Some("updated".to_string())),
-            is_reference: Some(true),
+            kind: Some(ShotKind::Jump),
             marker_index: Some(None),
             ..Default::default()
         };
@@ -562,7 +698,7 @@ mod tests {
         assert!(shot.pitch_in.is_none());
         assert_eq!(shot.right, Some(1.2));
         assert_eq!(shot.comment.as_deref(), Some("updated"));
-        assert!(shot.is_reference);
+        assert_eq!(shot.kind, ShotKind::Jump);
         assert!(shot.marker_index.is_none());
 
         assert_eq!(shot.azimuth_out, 20.0);
@@ -573,6 +709,78 @@ mod tests {
         assert_eq!(shot.up, Some(0.7));
         assert_eq!(shot.down, Some(0.8));
         assert_eq!(shot.temperature, Some(21.5));
+    }
+
+    #[test]
+    fn shot_kind_discriminants_round_trip() {
+        for kind in [ShotKind::Normal, ShotKind::Jump, ShotKind::Reference] {
+            assert_eq!(ShotKind::from_u8(kind.as_u8()), kind);
+        }
+        // Stable on the wire: these numbers are persisted in SQLite and in the
+        // binary IPC flags byte, so a renumber would silently corrupt projects.
+        assert_eq!(ShotKind::Normal.as_u8(), 0);
+        assert_eq!(ShotKind::Jump.as_u8(), 1);
+        assert_eq!(ShotKind::Reference.as_u8(), 2);
+        // An unrecognised discriminant degrades to Normal, never panics.
+        assert_eq!(ShotKind::from_u8(9), ShotKind::Normal);
+    }
+
+    #[test]
+    fn shot_kind_is_virtual_covers_both_virtual_kinds() {
+        assert!(!ShotKind::Normal.is_virtual());
+        assert!(ShotKind::Jump.is_virtual());
+        assert!(ShotKind::Reference.is_virtual());
+    }
+
+    #[test]
+    fn legacy_is_reference_boolean_deserializes_to_kind() {
+        // Projects and undo entries written before #27 carry a boolean. Per q2 a
+        // legacy `true` lands as Jump; the chain classifier refines it later.
+        let legacy_true: ShotData =
+            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0,"is_reference":true}"#)
+                .unwrap();
+        assert_eq!(legacy_true.kind, ShotKind::Jump);
+
+        let legacy_false: ShotData =
+            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0,"is_reference":false}"#)
+                .unwrap();
+        assert_eq!(legacy_false.kind, ShotKind::Normal);
+
+        // The even older `is_virtual` spelling still works too.
+        let ancient: ShotData =
+            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0,"is_virtual":true}"#)
+                .unwrap();
+        assert_eq!(ancient.kind, ShotKind::Jump);
+
+        // Absent entirely → Normal.
+        let absent: ShotData =
+            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0}"#)
+                .unwrap();
+        assert_eq!(absent.kind, ShotKind::Normal);
+    }
+
+    #[test]
+    fn modern_kind_string_deserializes() {
+        let modern: ShotData =
+            serde_json::from_str(r#"{"azimuth_in":1.0,"azimuth_out":2.0,"length":3.0,"depth_in":0.0,"depth_out":0.0,"kind":"Reference"}"#)
+                .unwrap();
+        assert_eq!(modern.kind, ShotKind::Reference);
+    }
+
+    #[test]
+    fn shot_updates_legacy_boolean_and_absent_kind() {
+        // A legacy undo entry patching the flag.
+        let legacy: ShotUpdates = serde_json::from_str(r#"{"is_reference":true}"#).unwrap();
+        assert_eq!(legacy.kind, Some(ShotKind::Jump));
+
+        // Absent means "no change", which must stay distinct from "set to Normal".
+        let absent: ShotUpdates = serde_json::from_str(r#"{"azimuth_in":1.0}"#).unwrap();
+        assert_eq!(absent.kind, None);
+
+        // Round-trips: an unset kind serializes as absent, not null, so undo's
+        // stored `values_json` never reads back as "clear to Normal".
+        let json = serde_json::to_string(&absent).unwrap();
+        assert!(!json.contains("kind"), "unset kind must not serialize: {json}");
     }
 
     #[test]

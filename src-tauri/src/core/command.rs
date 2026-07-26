@@ -5,7 +5,7 @@ use ts_rs::TS;
 
 use crate::models::{
     shot_display_position, ClosureStrategy, Coordinates, GpsCoordinates, SectionId, SectionUpdates,
-    ShotData, ShotId, ShotUpdates, StationRef, SurveyDirection,
+    ShotData, ShotId, ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 
 /// Identifies either a station or a shot as a comment holder
@@ -98,11 +98,16 @@ pub enum Command {
         section_id: SectionId,
         shot_id: ShotId,
     },
-    #[serde(alias = "set_shot_virtual")]
-    SetShotReference {
+    /// Set a shot's [`ShotKind`] (#27). Replaces the old boolean
+    /// `SetShotReference`. Persisted undo history written before #27 carries
+    /// the `set_shot_reference` tag with an `is_reference` bool; those stacks
+    /// are dropped on migration by `UNDO_FORMAT_SAFE_VERSION`, so no legacy
+    /// variant is needed here. The aliases stay only for in-flight payloads.
+    #[serde(alias = "set_shot_virtual", alias = "set_shot_reference")]
+    SetShotKind {
         section_id: SectionId,
         shot_id: ShotId,
-        is_reference: bool,
+        kind: ShotKind,
     },
 
     // Station commands
@@ -388,16 +393,16 @@ impl Command {
                 section_id,
                 shot_display_position(*shot_id, *section_id)
             ),
-            Command::SetShotReference {
+            Command::SetShotKind {
                 section_id,
                 shot_id,
-                is_reference,
+                kind,
             } => {
                 let pos = shot_display_position(*shot_id, *section_id);
-                if *is_reference {
-                    format!("Mark shot {section_id}:{pos} as reference")
-                } else {
-                    format!("Mark shot {section_id}:{pos} as permanent")
+                match kind {
+                    ShotKind::Normal => format!("Mark shot {section_id}:{pos} as permanent"),
+                    ShotKind::Jump => format!("Mark shot {section_id}:{pos} as jump"),
+                    ShotKind::Reference => format!("Mark shot {section_id}:{pos} as reference"),
                 }
             }
             Command::MergeStations {
@@ -667,18 +672,26 @@ mod tests {
                 "Delete shot 4:3",
             ),
             (
-                Command::SetShotReference {
+                Command::SetShotKind {
                     section_id: 4,
                     shot_id: 2,
-                    is_reference: true,
+                    kind: ShotKind::Reference,
                 },
                 "Mark shot 4:3 as reference",
             ),
             (
-                Command::SetShotReference {
+                Command::SetShotKind {
                     section_id: 4,
                     shot_id: 2,
-                    is_reference: false,
+                    kind: ShotKind::Jump,
+                },
+                "Mark shot 4:3 as jump",
+            ),
+            (
+                Command::SetShotKind {
+                    section_id: 4,
+                    shot_id: 2,
+                    kind: ShotKind::Normal,
                 },
                 "Mark shot 4:3 as permanent",
             ),

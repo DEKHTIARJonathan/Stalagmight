@@ -29,7 +29,7 @@ use compass_data::{
 };
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
-use crate::models::shot::ShotData;
+use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 use crate::parsers::geo::{non_empty, FEET_TO_METERS};
 
@@ -656,7 +656,7 @@ fn shot_to_shot_data(
     ctx: &SurveyCtx,
     depth_in: f64,
     depth_out: f64,
-    is_reference: bool,
+    is_virtual: bool,
 ) -> ShotData {
     let (azimuth, length_m, inclination) = shot_geometry(shot, ctx);
     // If the survey took back-sight readings (separate from the fore-sight),
@@ -682,7 +682,14 @@ fn shot_to_shot_data(
         up: lrud_meters(shot.up, ctx.length_to_m),
         down: lrud_meters(shot.down, ctx.length_to_m),
         comment: shot.comment.as_deref().and_then(non_empty),
-        is_reference,
+        // Compass `X` (exclude-all) marks a leg the surveyor pulled out of
+        // the computed cave. The chain classifier decides Jump vs Reference
+        // at import finalize (#27 q10); Reference is the conservative seed.
+        kind: if is_virtual {
+            ShotKind::Reference
+        } else {
+            ShotKind::Normal
+        },
         marker_index: None,
         temperature: None,
     }
@@ -1660,7 +1667,7 @@ mod tests {
         assert!(total_shots(&included_configs) > total_shots(&default_configs));
         assert!(included_configs
             .iter()
-            .any(|c| c.shots.iter().any(|s| s.is_reference)));
+            .any(|c| c.shots.iter().any(|s| s.kind.is_virtual())));
     }
 
     #[test]

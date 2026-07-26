@@ -4,8 +4,8 @@ use rusqlite::OptionalExtension;
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, StationKey,
-    StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, ShotKind,
+    StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -347,7 +347,7 @@ impl Database {
                 let mut shot_stmt = self.conn.prepare(
                     r"SELECT section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out,
                               pitch_in, pitch_out, left_distance, right_distance, up_distance, down_distance,
-                              comment, is_reference, marker_index, temperature, uuid
+                              comment, kind, marker_index, temperature, uuid
                        FROM shots ORDER BY section_id, sequence_order",
                 )?;
                 let shot_rows = shot_stmt.query_map([], |row| {
@@ -369,7 +369,9 @@ impl Database {
                             up: row.get(11)?,
                             down: row.get(12)?,
                             comment: row.get(13)?,
-                            is_reference: row.get::<_, i32>(14)? != 0,
+                            kind: ShotKind::from_u8(
+                                u8::try_from(row.get::<_, i32>(14)?).unwrap_or(0),
+                            ),
                             marker_index: row.get(15)?,
                             temperature: row.get(16)?,
                             // `uuid` column was added in schema v6; pre-v6

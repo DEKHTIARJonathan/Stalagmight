@@ -4,7 +4,7 @@ use anyhow::Result;
 use chrono::NaiveDate;
 
 use crate::models::section::{ImportClosure, ImportPlacement, ImportSectionConfig};
-use crate::models::shot::ShotData;
+use crate::models::shot::{ShotData, ShotKind};
 use crate::models::station::GpsCoordinates;
 
 use super::{
@@ -463,7 +463,14 @@ pub fn convert_walls_to_import_configs(
                     up,
                     down,
                     comment: v.comment.clone(),
-                    is_reference: v.is_reference,
+                    // A Walls splay (anonymous `-`/`--` endpoint) is a passage
+                    // cross-section, not a swum leg, so it seeds as Reference and
+                    // the chain classifier refines it at import finalize (#27 q10).
+                    kind: if v.is_reference {
+                        ShotKind::Reference
+                    } else {
+                        ShotKind::Normal
+                    },
                     marker_index: None,
                     temperature: None,
                 });

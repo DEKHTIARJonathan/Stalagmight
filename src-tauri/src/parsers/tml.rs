@@ -17,7 +17,7 @@ use quick_xml::Reader;
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData};
+use crate::models::{ImportClosure, ImportPlacement, ImportSectionConfig, ShotData, ShotKind};
 
 // ============================================================================
 // IPC-visible types
@@ -1505,7 +1505,7 @@ pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
 ///
 /// This is the SINGLE source of truth for the TML to Stalagmight field mapping
 /// (azimuth `rem_euclid(360)`, depth in/out, inclination to `pitch_in`, LRUD 0
-/// to None, VIRTUAL to `is_reference`). Both DMP/TML import and the
+/// to None, VIRTUAL to a virtual [`ShotKind`]). Both DMP/TML import and the
 /// collaboration reconcile engine call it, so a clean round-trip never appears
 /// as a phantom edit. `depth_in` must already be resolved via
 /// [`resolve_tml_depth_in`].
@@ -1536,7 +1536,18 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
         up: lrud_opt(shot.up),
         down: lrud_opt(shot.down),
         comment: shot.comment.clone(),
-        is_reference: shot.shot_type == TmlShotType::Virtual,
+        // Ariane has a single VIRTUAL category, so the parser can only decide
+        // virtual-vs-not. Which virtual kind it is comes from the chain
+        // classifier at import finalize (#27 q10/q19): a virtual chain bounded
+        // by real survey on both ends is a Jump, anything else a Reference.
+        // Reference is the provisional value because it is the conservative
+        // one - it keeps the leg out of gas and penetration until the graph
+        // proves it is a swum shortcut.
+        kind: if shot.shot_type == TmlShotType::Virtual {
+            ShotKind::Reference
+        } else {
+            ShotKind::Normal
+        },
         marker_index: None,
         temperature: None,
     }
@@ -2669,7 +2680,7 @@ mod tests {
         }];
 
         let shot_data = convert_shots_to_shot_data(&shots, 0.0, false);
-        assert!(shot_data[0].is_reference);
+        assert_eq!(shot_data[0].kind, ShotKind::Reference);
     }
 
     #[test]

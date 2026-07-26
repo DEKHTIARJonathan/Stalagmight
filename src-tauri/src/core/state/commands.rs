@@ -57,7 +57,7 @@ impl AppState {
             | CreateShot { .. }
             | UpdateShot { .. }
             | DeleteShot { .. }
-            | SetShotReference { .. }
+            | SetShotKind { .. }
             | MergeStations { .. }
             | UnmergeStations { .. }
             | UnmergeStationPair { .. }
@@ -115,7 +115,7 @@ impl AppState {
             | SaveProject { .. }
             | CloseProject
             | UpdateSectionMetadata { .. }
-            | SetShotReference { .. }
+            | SetShotKind { .. }
             // Station comments are metadata keyed by station identity; they are
             // never geometry-derived and can never introduce merge drift, so they
             // must NOT run the reconcile epilogue. Classifying them GEOMETRY_ONLY
@@ -527,11 +527,11 @@ impl AppState {
                 section_id,
                 shot_id,
             } => self.delete_shot(*section_id, *shot_id),
-            Command::SetShotReference {
+            Command::SetShotKind {
                 section_id,
                 shot_id,
-                is_reference,
-            } => self.set_shot_reference(*section_id, *shot_id, *is_reference),
+                kind,
+            } => self.set_shot_kind(*section_id, *shot_id, *kind),
             Command::MergeStations {
                 station_a,
                 station_b,

@@ -424,9 +424,15 @@ pub(crate) fn apply_changeset(project: &mut Project, cs: &CollabChangeSet) -> Ve
         shot.up = d.up;
         shot.down = d.down;
         shot.comment = d.comment.clone();
-        shot.is_reference = d.is_reference;
+        // Only virtualness round-trips through Ariane; the Jump/Reference axis
+        // is local-only (#27 q11). If the shot was already virtual and comes
+        // back virtual, keep whichever kind the user chose here rather than
+        // letting Ariane's single VIRTUAL category flatten it.
+        if shot.kind.is_virtual() != d.kind.is_virtual() {
+            shot.kind = d.kind;
+        }
         // Preserved (no TML equivalent): azimuth_out, pitch_out,
-        // marker_index, temperature.
+        // marker_index, temperature, and the Jump/Reference distinction.
 
         // The shot's `to` station picks up the station-portion of the
         // returned Comment. `None` clears any prior entry so a round-trip

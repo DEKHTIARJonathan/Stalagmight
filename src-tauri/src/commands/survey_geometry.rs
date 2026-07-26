@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use crate::models::{GpsCoordinates, Project, SectionId, StationRef};
+use crate::models::{GpsCoordinates, Project, SectionId, ShotKind, StationRef};
 use crate::persistence::Database;
 
 /// Minimum cosine value to avoid division by near-zero at extreme latitudes.
@@ -23,8 +23,10 @@ pub struct GeometryShot {
     pub from: [f64; 2],
     /// GPS coordinates of the to station [lng, lat] (MapLibre order)
     pub to: [f64; 2],
-    /// Whether this shot is a reference (temporary connection)
-    pub is_reference: bool,
+    /// Permanent, jump, or reference (#27). The map styles jumps and
+    /// references differently, so the full kind crosses the IPC boundary, not
+    /// just a virtual-vs-not bool.
+    pub kind: ShotKind,
     /// Section ID this shot belongs to (for coloring/filtering)
     pub section_id: SectionId,
 }
@@ -205,7 +207,7 @@ fn get_survey_geometry_for_project(
             shots.push(GeometryShot {
                 from: [from_gps.0, from_gps.1],
                 to: [to_gps.0, to_gps.1],
-                is_reference: shot.is_reference,
+                kind: shot.kind,
                 section_id: section.id,
             });
         }
@@ -416,7 +418,7 @@ mod tests {
             length: 10.0,
             depth_in: 0.0,
             depth_out: 0.0,
-            is_reference: true,
+            kind: ShotKind::Jump,
             ..Default::default()
         };
         let section_id = project
@@ -436,7 +438,7 @@ mod tests {
         assert_eq!(geometry.shots.len(), 1);
 
         let geom_shot = &geometry.shots[0];
-        assert!(geom_shot.is_reference);
+        assert_eq!(geom_shot.kind, ShotKind::Jump);
         assert_eq!(geom_shot.section_id, section_id);
         assert!((geom_shot.from[0]).abs() < 1e-9);
         assert!((geom_shot.from[1]).abs() < 1e-9);

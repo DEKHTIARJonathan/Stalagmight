@@ -6,7 +6,7 @@ use super::{
 use crate::core::{AppState, Command, CommandResult};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, Project, SectionData, SectionUpdates, ShotData,
-    ShotUpdates, StationRef, SurveyDirection,
+    ShotKind, ShotUpdates, StationRef, SurveyDirection,
 };
 use crate::persistence::Database;
 use crate::test_helpers::TestDb;
@@ -1900,34 +1900,71 @@ fn test_delete_last_shot_and_section_removes_section() {
 }
 
 #[test]
-fn test_set_shot_reference_fails_missing() {
+fn test_set_shot_kind_fails_missing() {
     let app = app_with_state();
     create_project(&app);
-    let result = shot::set_shot_reference(state(&app), 0, 999, true);
+    let result = shot::set_shot_kind(state(&app), 0, 999, ShotKind::Jump);
     assert_failure_contains(&result, "not found");
 }
 
 #[test]
-fn test_set_shot_reference_sets_true() {
+fn test_set_shot_kind_sets_jump() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let result = shot::set_shot_reference(state(&app), id, 0, true);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
-    assert!(section.shots[0].is_reference);
+    assert_eq!(section.shots[0].kind, ShotKind::Jump);
 }
 
 #[test]
-fn test_set_shot_reference_sets_false() {
+fn test_set_shot_kind_sets_reference() {
     let app = app_with_state();
     create_project(&app);
     let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
-    let _ = shot::set_shot_reference(state(&app), id, 0, true);
-    let result = shot::set_shot_reference(state(&app), id, 0, false);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Reference);
     assert_success(&result);
     let section = get_section(state(&app), id).unwrap();
-    assert!(!section.shots[0].is_reference);
+    assert_eq!(section.shots[0].kind, ShotKind::Reference);
+}
+
+#[test]
+fn test_set_shot_kind_back_to_normal() {
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    let _ = shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump);
+    let result = shot::set_shot_kind(state(&app), id, 0, ShotKind::Normal);
+    assert_success(&result);
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(section.shots[0].kind, ShotKind::Normal);
+}
+
+#[test]
+fn test_set_shot_kind_undo_restores_previous_kind() {
+    // The old boolean toggle inverted itself; a 3-way kind must carry the
+    // captured previous value (#27 q12). Jump -> Reference must undo to Jump,
+    // NOT to Normal.
+    let app = app_with_state();
+    create_project(&app);
+    let id = create_section_with_shots(&app, vec![shot_data(1.0)]);
+    assert_success(&shot::set_shot_kind(state(&app), id, 0, ShotKind::Jump));
+    assert_success(&shot::set_shot_kind(
+        state(&app),
+        id,
+        0,
+        ShotKind::Reference,
+    ));
+
+    assert_success(&crate::commands::history::undo_impl(state(&app).inner()));
+
+    let section = get_section(state(&app), id).unwrap();
+    assert_eq!(
+        section.shots[0].kind,
+        ShotKind::Jump,
+        "undo must restore the captured previous kind, not toggle to Normal"
+    );
 }
 
 // === Station commands ===
@@ -2364,7 +2401,12 @@ fn test_export_roundtrip_includes_reference_and_comment() {
         ..Default::default()
     };
     let section_id = create_section_with_shots(&app, vec![shot]);
-    assert_success(&shot::set_shot_reference(state(&app), section_id, 0, true));
+    assert_success(&shot::set_shot_kind(
+        state(&app),
+        section_id,
+        0,
+        ShotKind::Jump,
+    ));
 
     let dir = TempDir::new().unwrap();
     let csv_path = dir.path().join("export.csv");

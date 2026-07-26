@@ -479,7 +479,7 @@ pub fn generate_svg_string_with_stations(
     };
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if shot.is_reference {
+            if shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -611,7 +611,7 @@ pub fn generate_svg_string_with_stations(
             let (Some(&fi), Some(&ti)) = (station_index.get(&from), station_index.get(&to)) else {
                 continue;
             };
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 uf.union(fi, ti);
                 // Mark both roots as "has at least one real shot" after we
                 // settle roots below. For now, store the indices.
@@ -672,7 +672,7 @@ pub fn generate_svg_string_with_stations(
     }
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -692,7 +692,7 @@ pub fn generate_svg_string_with_stations(
     let mut cluster_segments: HashMap<usize, HashSet<usize>> = HashMap::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -808,7 +808,7 @@ pub fn generate_svg_string_with_stations(
     let mut ref_tied_segs_per_phys: HashMap<usize, HashSet<usize>> = HashMap::new();
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if !shot.is_reference {
+            if !shot.kind.is_virtual() {
                 continue;
             }
             let from = StationRef::new(section.id, i as u32);
@@ -910,7 +910,7 @@ pub fn generate_svg_string_with_stations(
         // trimming here - the color variation carries the visual, not line breaks.
         for section in &project.sections {
             for j in 0..section.shots.len() {
-                if section.shots[j].is_reference {
+                if section.shots[j].kind.is_virtual() {
                     continue;
                 }
                 let from_ref = StationRef::new(section.id, j as u32);
@@ -975,7 +975,7 @@ pub fn generate_svg_string_with_stations(
                 (mode == ColorMode::Section).then(|| sanitize_hex_color(&section.color));
             let mut i = 0;
             while i < section.shots.len() {
-                if section.shots[i].is_reference {
+                if section.shots[i].kind.is_virtual() {
                     i += 1;
                     continue;
                 }
@@ -986,7 +986,7 @@ pub fn generate_svg_string_with_stations(
                 let mut first_si: Option<usize> = None;
                 let mut last_si: Option<usize> = None;
                 let mut j = i;
-                while j < section.shots.len() && !section.shots[j].is_reference {
+                while j < section.shots.len() && !section.shots[j].kind.is_virtual() {
                     let from_ref = StationRef::new(section.id, j as u32);
                     let to_ref = StationRef::new(section.id, (j + 1) as u32);
                     let (Some(from), Some(to)) =
@@ -1278,7 +1278,7 @@ pub fn generate_svg_string_with_stations(
         let mut degree: HashMap<usize, u32> = HashMap::new();
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let from = StationRef::new(section.id, i as u32);
@@ -1406,7 +1406,7 @@ pub fn generate_svg_string_with_stations(
             let mut sum_y = 0.0;
             let mut summed = 0u32;
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 for sr in [
@@ -1507,7 +1507,7 @@ pub fn generate_svg_string_with_stations(
         let mut opened = false;
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let from_ref = StationRef::new(section.id, i as u32);
@@ -1559,7 +1559,7 @@ pub fn generate_svg_string_with_stations(
         let mut opened = false;
         for section in &project.sections {
             for (i, shot) in section.shots.iter().enumerate() {
-                if shot.is_reference {
+                if shot.kind.is_virtual() {
                     continue;
                 }
                 let Some(text) = shot.comment.clone() else {
@@ -1700,7 +1700,7 @@ fn label_open_space_angle(
     };
     for section in &project.sections {
         for (i, shot) in section.shots.iter().enumerate() {
-            if shot.is_reference {
+            if shot.kind.is_virtual() {
                 continue;
             }
             let from_ref = StationRef::new(section.id, i as u32);
@@ -1887,17 +1887,23 @@ impl UnionFind {
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use crate::models::{GpsCoordinates, SectionData, ShotData, StationMerge};
+    use crate::models::{GpsCoordinates, SectionData, ShotData, ShotKind, StationMerge};
     use tempfile::NamedTempFile;
 
-    fn make_shot(length: f64, azimuth: f64, is_reference: bool) -> ShotData {
+    fn make_shot(length: f64, azimuth: f64, is_virtual: bool) -> ShotData {
         ShotData {
             azimuth_in: azimuth,
             azimuth_out: azimuth,
             length,
             depth_in: 0.0,
             depth_out: 0.0,
-            is_reference,
+            // Image export only cares about virtual-vs-not, so either virtual
+            // kind exercises the same paths; Jump is the migration default.
+            kind: if is_virtual {
+                ShotKind::Jump
+            } else {
+                ShotKind::Normal
+            },
             ..Default::default()
         }
     }
@@ -3587,7 +3593,7 @@ mod tests {
                 length: 120.0, // >= the 100 m depth change so the geometry is valid
                 depth_in: 0.0,
                 depth_out: 100.0,
-                is_reference: false,
+                kind: ShotKind::Normal,
                 ..Default::default()
             }],
             ..Default::default()
@@ -4307,7 +4313,7 @@ mod tests {
                 length: 12.3,
                 depth_in: 3.0,
                 depth_out: 5.0,
-                is_reference: false,
+                kind: ShotKind::Normal,
                 ..Default::default()
             }],
             ..Default::default()
