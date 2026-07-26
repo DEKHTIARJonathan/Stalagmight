@@ -55,10 +55,22 @@ impl AppState {
             // more `left_as_closure` exclusion over there and the narrow check goes
             // silently wrong. Guarding the set being mutated is correct by
             // construction.
+            // Resolve the datums once against `connected` rather than asking
+            // rigid_group_has_datum per section - that rebuilds a whole merge
+            // component and rescans the datum list each time, which is quadratic
+            // on a large merge-connected survey. Equivalent because a merge edge
+            // is also a rigid edge, so every member's merge component is itself a
+            // subset of `connected`: "some member's merge group holds a datum" and
+            // "some datum resolves into `connected`" are the same predicate.
+            let connected_set: std::collections::HashSet<SectionId> =
+                connected.iter().copied().collect();
+            let group_has_datum = project
+                .zero_datums
+                .iter()
+                .filter_map(|zd| project.resolve_key(&zd.station_ref))
+                .any(|sr| connected_set.contains(&sr.section_id));
             if (offset.x.abs() > 1e-9 || offset.y.abs() > 1e-9 || offset.z.abs() > 1e-9)
-                && connected
-                    .iter()
-                    .any(|sid| project.rigid_group_has_datum(*sid))
+                && group_has_datum
             {
                 return CommandResult::failure(
                     "Cannot move a segment whose rigid group holds a zero datum".to_string(),

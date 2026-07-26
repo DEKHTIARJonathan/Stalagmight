@@ -101,6 +101,19 @@ impl AppState {
         // globally - a colliding UUID keeps a fresh mint to stay unique.
         let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();
 
+        // Bulk external ingest is the one path that can add sections faster than
+        // the per-command cap in create_section: combining N individually valid
+        // projects can exceed MAX_SECTION_ID even though none of them did. Past
+        // that bound a section's shot-id band collides with another's, and shot
+        // ids are immutable FKs for merges, closures and comments.
+        let total_sections: usize = source_projects.iter().map(|p| p.sections.len()).sum();
+        if total_sections > crate::models::MAX_SECTION_ID as usize + 1 {
+            return CommandResult::failure(format!(
+                "Merged project would exceed the maximum number of sections (limit = {}, requested = {total_sections})",
+                crate::models::MAX_SECTION_ID as u64 + 1
+            ));
+        }
+
         // Append sections from all projects
         for (proj_idx, source_project) in source_projects.iter().enumerate() {
             for section in &source_project.sections {

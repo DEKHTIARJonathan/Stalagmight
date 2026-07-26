@@ -945,7 +945,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 quality: section.quality ?? 1.0,
                 shot_offset,
                 shot_count,
-                next_shot_id: shot_offset + shot_count,
+                // The band this section's shot ids actually live in - a flat
+                // cursor here would advertise an id the backend could never mint.
+                next_shot_id: mockShotId(section.id as number, shot_count),
               });
             }
 
@@ -1797,6 +1799,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             ) => {
               sectionCounter += 1;
               const sectionId = sectionCounter;
+              // toShot() numbers shots 1..n before the destination section is
+              // known; re-key them onto this section's band so GPX-imported
+              // sections carry the same section-encoded ids as every other path.
+              const encodedShots = shots.map((shot, idx) => ({
+                ...shot,
+                id: mockShotId(sectionId, idx),
+              }));
               const section = {
                 id: sectionId,
                 name,
@@ -1804,7 +1813,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 date: new Date().toISOString().split('T')[0] ?? '',
                 color,
                 direction: 'in',
-                shots,
+                shots: encodedShots,
               };
               currentProject?.sections.push(section);
               createdSectionIds.push(sectionId);

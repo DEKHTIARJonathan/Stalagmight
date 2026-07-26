@@ -275,7 +275,9 @@ impl Section {
             Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
             None => Shot::new(self.next_shot_id, data),
         };
-        self.next_shot_id += 1;
+        // Saturating: an out-of-range section id is rejected at every ingest path,
+        // but a wrap or debug panic here would be far worse than a stuck counter.
+        self.next_shot_id = self.next_shot_id.saturating_add(1);
         self.shots.push(shot);
         let idx = self.shots.len() - 1;
         &self.shots[idx]
@@ -298,7 +300,7 @@ impl Section {
             Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
             None => Shot::new(self.next_shot_id, data),
         };
-        self.next_shot_id += 1;
+        self.next_shot_id = self.next_shot_id.saturating_add(1);
         self.shots.insert(pos + 1, shot);
         Some(&self.shots[pos + 1])
     }
@@ -356,13 +358,13 @@ impl Section {
         match forced_id {
             Some(id) => {
                 if id >= self.next_shot_id {
-                    self.next_shot_id = id + 1;
+                    self.next_shot_id = id.saturating_add(1);
                 }
                 id
             }
             None => {
                 let id = self.next_shot_id;
-                self.next_shot_id += 1;
+                self.next_shot_id = self.next_shot_id.saturating_add(1);
                 id
             }
         }
@@ -380,7 +382,7 @@ impl Section {
             Some(u) => Shot::with_uuid(self.next_shot_id, data, Some(u)),
             None => Shot::new(self.next_shot_id, data),
         };
-        self.next_shot_id += 1;
+        self.next_shot_id = self.next_shot_id.saturating_add(1);
         self.shots.insert(pos, shot);
         Some(&self.shots[pos])
     }
