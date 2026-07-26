@@ -38,6 +38,11 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
   free: 0,
 };
 
+/** Mirrors the Rust `MAX_MARKED_LABEL_CHARS` (core/state/dive_plan.rs). Capping the input here
+ *  means a label typed in the panel can never be the reason a whole plan fails to save; the
+ *  backend guard remains, for a hand-edited `.plnx`. */
+const MAX_MARKED_LABEL_CHARS = 120;
+
 // Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
 // Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
 // write always merges against current state rather than a stale snapshot. Module-scope
@@ -64,6 +69,9 @@ export function GasPlanPanel() {
   const { t } = useTranslation();
   const {
     origin,
+    endpoint,
+    waypoints,
+    markedPoints,
     diver,
     cylinders,
     gasConfig,
@@ -71,6 +79,11 @@ export function GasPlanPanel() {
     stageDropOverrides,
     pushyAck,
     setOrigin,
+    setEndpoint,
+    removeWaypoint,
+    moveWaypoint,
+    removeMarkedPoint,
+    setMarkedPointLabel,
     setDiver,
     setGasConfig,
     setPushyAck,
@@ -78,6 +91,9 @@ export function GasPlanPanel() {
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
+      endpoint: s.endpoint,
+      waypoints: s.waypoints,
+      markedPoints: s.markedPoints,
       diver: s.diver,
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
@@ -85,6 +101,11 @@ export function GasPlanPanel() {
       stageDropOverrides: s.stageDropOverrides,
       pushyAck: s.pushyAck,
       setOrigin: s.setOrigin,
+      setEndpoint: s.setEndpoint,
+      removeWaypoint: s.removeWaypoint,
+      moveWaypoint: s.moveWaypoint,
+      removeMarkedPoint: s.removeMarkedPoint,
+      setMarkedPointLabel: s.setMarkedPointLabel,
       setDiver: s.setDiver,
       setGasConfig: s.setGasConfig,
       setPushyAck: s.setPushyAck,
@@ -148,6 +169,21 @@ export function GasPlanPanel() {
   const originLabel = origin
     ? formatStationId(origin.section_id, origin.station_index)
     : t('gasPanel.origin.entrance');
+
+  // Way-point readouts, all from the engine (#298) - the panel never re-derives a
+  // budget-dependent number, or it drifts from the overlay the way #233's gauges did.
+  // `waypoint_gas_litres[i]` is the cumulative gas at way point i, or null from the first one the
+  // walk could not reach.
+  const waypointGas = reachField?.waypoint_gas_litres ?? [];
+  const stalledIdx = waypointGas.findIndex((g) => g == null);
+  // Only report a stall for a way point that actually exists in the CURRENT list: the field can
+  // lag a keystroke behind the store, and warning about a way point the user just removed reads
+  // as a bug.
+  const stalledWaypoint = stalledIdx >= 0 && stalledIdx < waypoints.length ? stalledIdx : null;
+  // Over budget = the detour alone costs more gas than the diver has. Distinct from a stall
+  // (which is "cannot be reached at all") and gets its own, actionable message.
+  const waypointsOverBudget =
+    reachField != null && waypointGas.some((g) => g != null && g > reachField.budget_litres);
 
   // Count only ENABLED stages: the engine filters disabled tanks before counting stages
   // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
@@ -260,6 +296,157 @@ export function GasPlanPanel() {
             </button>
           </div>
           <p className="text-xs opacity-60">{t('gasPanel.origin.hint')}</p>
+        </section>
+
+        {/* Route: the endpoint plus the ordered way points (#298). The way-point rows are the only
+            place the visit order can be CHANGED - the map pins can add and remove, but ordering is
+            a list operation, and order is what the engine actually routes on. */}
+        <section className="space-y-1" data-testid="gas-route-section">
+          <SectionLabel>{t('gasPanel.route.label')}</SectionLabel>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs opacity-70">{t('gasPanel.route.endpointLabel')}</span>
+            <div className="flex items-center gap-2">
+              <span data-testid="gas-endpoint-readout" className="font-mono text-xs">
+                {endpoint
+                  ? formatStationId(endpoint.section_id, endpoint.station_index)
+                  : t('gasPanel.route.endpointAuto')}
+              </span>
+              <button
+                type="button"
+                className="text-xs px-2 py-0.5 rounded border border-border hover:bg-border disabled:opacity-40"
+                onClick={() => setEndpoint(null)}
+                disabled={endpoint === null}
+                data-testid="gas-clear-endpoint"
+              >
+                {t('gasPanel.route.clearEndpoint')}
+              </button>
+            </div>
+          </div>
+
+          <div className="pt-1">
+            <span className="text-xs opacity-70">{t('gasPanel.route.waypointsLabel')}</span>
+            {waypoints.length === 0 ? (
+              <p className="text-xs opacity-60" data-testid="gas-waypoints-empty">
+                {t('gasPanel.route.waypointsEmpty')}
+              </p>
+            ) : (
+              <ol className="space-y-0.5 mt-0.5" data-testid="gas-waypoint-list">
+                {waypoints.map((w, i) => (
+                  <li
+                    key={`${w.section_id}:${w.station_index}:${i}`}
+                    className="flex items-center gap-2 text-xs"
+                    data-testid="gas-waypoint-row"
+                  >
+                    <span className="opacity-60 w-4 text-right">{i + 1}.</span>
+                    <span className="font-mono flex-1">
+                      {formatStationId(w.section_id, w.station_index)}
+                    </span>
+                    {/* Cumulative gas at this way point, straight from the engine - the panel must
+                        never re-derive a budget-dependent number (#233 lesson). `null` means the
+                        chain stalled here or before it. */}
+                    <span className={waypointGas[i] == null ? 'text-error' : 'opacity-70'}>
+                      {waypointGas[i] == null
+                        ? t('gasPanel.route.unreachable')
+                        : formatVolume(waypointGas[i]!, units)}
+                    </span>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border disabled:opacity-30"
+                      onClick={() => moveWaypoint(i, -1)}
+                      disabled={i === 0}
+                      aria-label={t('gasPanel.route.moveUp')}
+                      title={t('gasPanel.route.moveUp')}
+                      data-testid="gas-waypoint-up"
+                    >
+                      &uarr;
+                    </button>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border disabled:opacity-30"
+                      onClick={() => moveWaypoint(i, 1)}
+                      disabled={i === waypoints.length - 1}
+                      aria-label={t('gasPanel.route.moveDown')}
+                      title={t('gasPanel.route.moveDown')}
+                      data-testid="gas-waypoint-down"
+                    >
+                      &darr;
+                    </button>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border"
+                      onClick={() => removeWaypoint(i)}
+                      aria-label={t('gasPanel.route.remove')}
+                      title={t('gasPanel.route.remove')}
+                      data-testid="gas-waypoint-remove"
+                    >
+                      &times;
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {waypoints.length > 0 && (
+              <p className="text-xs opacity-60 mt-0.5">{t('gasPanel.route.waypointsHint')}</p>
+            )}
+            {stalledWaypoint !== null && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnUnreachable', { n: stalledWaypoint + 1 })}
+              </p>
+            )}
+            {stalledWaypoint === null && waypointsOverBudget && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnOverBudget')}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* Marked points (#298): annotation only, never a gas input. */}
+        <section className="space-y-1" data-testid="gas-marked-section">
+          <SectionLabel>{t('gasPanel.marked.label')}</SectionLabel>
+          {markedPoints.length === 0 ? (
+            <p className="text-xs opacity-60" data-testid="gas-marked-empty">
+              {t('gasPanel.marked.empty')}
+            </p>
+          ) : (
+            <ul className="space-y-0.5" data-testid="gas-marked-list">
+              {markedPoints.map((m, i) => (
+                <li
+                  key={`${m.station.section_id}:${m.station.station_index}:${i}`}
+                  className="flex items-center gap-2 text-xs"
+                  data-testid="gas-marked-row"
+                >
+                  <span className="font-mono">
+                    {formatStationId(m.station.section_id, m.station.station_index)}
+                  </span>
+                  <input
+                    type="text"
+                    value={m.label ?? ''}
+                    onChange={(e) => setMarkedPointLabel(i, e.target.value)}
+                    placeholder={t('gasPanel.marked.labelPlaceholder')}
+                    // Mirrors the backend's MAX_MARKED_LABEL_CHARS, so a label typed here can
+                    // never be long enough for the save to reject the whole plan.
+                    maxLength={MAX_MARKED_LABEL_CHARS}
+                    className="flex-1 min-w-0 bg-transparent border border-border rounded px-1 py-0.5"
+                    data-testid="gas-marked-label-input"
+                  />
+                  <button
+                    type="button"
+                    className="px-1 rounded border border-border hover:bg-border"
+                    onClick={() => removeMarkedPoint(i)}
+                    aria-label={t('gasPanel.marked.remove')}
+                    title={t('gasPanel.marked.remove')}
+                    data-testid="gas-marked-remove"
+                  >
+                    &times;
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {markedPoints.length > 0 && (
+            <p className="text-xs opacity-60">{t('gasPanel.marked.hint')}</p>
+          )}
         </section>
 
         {/* Diver RMV */}

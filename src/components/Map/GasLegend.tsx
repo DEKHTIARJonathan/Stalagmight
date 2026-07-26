@@ -27,6 +27,9 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
   // Re-render on theme change so text colors stay correct.
   useUIStore((s) => s.resolvedTheme);
   const origin = useGasPlanStore((s) => s.origin);
+  // Only key the symbols the map is actually showing, so the legend stays short on a plain plan.
+  const waypointCount = useGasPlanStore((s) => s.waypoints.length);
+  const markedCount = useGasPlanStore((s) => s.markedPoints.length);
   const textColor = getThemeColor('--cc-depth-text');
   const textHaloAlt = getThemeColor('--cc-text-halo-alt');
 
@@ -102,6 +105,20 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
         data-testid="gas-legend-key"
         style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2, color: textColor }}
       >
+        {/* The route line itself (#298). Both rows use the exact colour and opacity the
+            `survey-gas-route` layer paints, so the key cannot drift from the map. */}
+        {field.route.length > 0 && (
+          <>
+            <KeyRow label={t('map.gasLegend.key.route')}>
+              <RouteSwatch opacity={0.9} />
+            </KeyRow>
+            {field.route.some((leg) => leg.is_jump) && (
+              <KeyRow label={t('map.gasLegend.key.routeJump')}>
+                <RouteSwatch opacity={0.45} />
+              </KeyRow>
+            )}
+          </>
+        )}
         <KeyRow label={t('map.gasLegend.key.turnPoint')}>
           <span
             style={{
@@ -115,6 +132,34 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
             }}
           />
         </KeyRow>
+        {waypointCount > 0 && (
+          <KeyRow label={t('map.gasLegend.key.waypoint')}>
+            <span
+              style={{
+                width: 11,
+                height: 11,
+                borderRadius: '50%',
+                background: '#16a085',
+                border: '1.5px solid #ffffff',
+                boxShadow: '0 0 2px rgba(0,0,0,0.6)',
+                flexShrink: 0,
+              }}
+            />
+          </KeyRow>
+        )}
+        {markedCount > 0 && (
+          <KeyRow label={t('map.gasLegend.key.markedPoint')}>
+            <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
+              <path
+                d="M6 2h12v20l-6-5-6 5z"
+                fill="#d81b60"
+                stroke="#ffffff"
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+              />
+            </svg>
+          </KeyRow>
+        )}
         {field.stage_drop_bars.length > 0 && (
           <KeyRow label={t('map.gasLegend.key.stageDrop')}>
             <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
@@ -145,6 +190,26 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
         )}
       </div>
     </div>
+  );
+}
+
+/** The route-highlight colour, kept in step with the `survey-gas-route` layer's paint. */
+const ROUTE_LINE_COLOR = '#22d3ee';
+
+/** A short line swatch standing in for the drawn route (#298). `opacity` mirrors the layer's
+ *  data-driven line-opacity: full for a swum leg, faded for a jump leg. */
+function RouteSwatch({ opacity }: { opacity: number }) {
+  return (
+    <span
+      style={{
+        width: 14,
+        height: 3,
+        borderRadius: 2,
+        background: ROUTE_LINE_COLOR,
+        opacity,
+        flexShrink: 0,
+      }}
+    />
   );
 }
 

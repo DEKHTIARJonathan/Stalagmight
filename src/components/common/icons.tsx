@@ -629,6 +629,47 @@ export function DashedLineIcon(props: IconProps) {
   );
 }
 
+/* --- Plan-mode route picks (#298). One glyph per right-click entry, so the menu reads at a
+   glance rather than showing four identical fallback arrows. --- */
+
+/** Start point: a flag on a pole - "the dive begins here". */
+export function FlagIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <Bar x1={5} y1={3} x2={5} y2={17} />
+      <path d="M5 4h9l-2.5 3L14 10H5z" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}
+
+/** Way point: a map pin with a dot, distinct from the endpoint's target rings. */
+export function WaypointIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M10 18c3.5-4.2 5.5-7 5.5-9.5a5.5 5.5 0 1 0-11 0C4.5 11 6.5 13.8 10 18z" />
+      <circle cx="10" cy="8.5" r="1.8" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}
+
+/** Stage drop: the same downward triangle the map draws for a stage's drop marker. */
+export function StageDropIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M3 6h14l-7 11z" fill="currentColor" stroke="none" />
+    </BaseIcon>
+  );
+}
+
+/** Marked point: a bookmark - an annotation, deliberately not a route glyph. */
+export function BookmarkIcon(props: IconProps) {
+  return (
+    <BaseIcon {...props}>
+      <path d="M6 3h8v14l-4-3.5L6 17z" />
+    </BaseIcon>
+  );
+}
+
 export function LockIcon(props: IconProps) {
   return (
     <BaseIcon {...props}>
