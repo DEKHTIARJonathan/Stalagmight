@@ -408,16 +408,32 @@ impl AppState {
         // clears its own flag: classification is import-time only (q14), so a
         // later merge must never silently re-flip a kind.
         if db.is_kind_classification_pending() {
-            let reclassified = project.classify_virtual_shots();
+            let reclassified =
+                project.classify_virtual_shots(&crate::models::ClassifyScope::WholeProject);
             tracing::info!(
                 reclassified,
                 purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
                 "Classified virtual shots on first open after migration"
             );
-            if let Err(e) = db.clear_pending_kind_classification() {
-                // Non-fatal: the worst case is the backfill repeating on the
-                // next open, which is idempotent.
-                tracing::warn!(error = %e, "Failed to clear pending_kind_classification flag");
+            // Write the verdicts through and clear the flag together. The pass
+            // only touched the in-memory project, so clearing the flag on its
+            // own would burn the one retry on a result that dies with the
+            // process if the user closes without saving - and the next open
+            // would then keep the migration's Jump seed for good.
+            let verdicts: Vec<_> = project
+                .sections
+                .iter()
+                .flat_map(|section| section.shots.iter().map(|shot| (shot.id, shot.kind)))
+                .collect();
+            if let Err(e) = db.persist_backfilled_shot_kinds(&verdicts) {
+                // Non-fatal: the flag is cleared in the same transaction as the
+                // writes, so a failure here leaves both undone and the
+                // (idempotent) backfill simply runs again on the next open.
+                tracing::warn!(
+                    error = %e,
+                    purpose = "one-shot #27 Jump/Reference backfill after v12->v13 migration",
+                    "Failed to persist backfilled shot kinds; will retry on next open"
+                );
             }
         }
 

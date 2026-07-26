@@ -430,26 +430,43 @@ impl Database {
     /// `Project`, which is not available on this bare connection, hence the flag
     /// rather than doing it inline.
     ///
-    /// Idempotent: guarded on the old column still existing.
+    /// Idempotent: the column rewrite is guarded on the old column still
+    /// existing, but the pending flag is set unconditionally.
+    ///
+    /// The two halves are guarded separately on purpose. A pre-v2 file is run
+    /// through [`Self::rebuild_tables_with_foreign_keys`] first, and that rebuild
+    /// already creates `shots` with `kind` and maps the legacy `is_reference`
+    /// rows onto it - so by the time this runs there is no `is_reference` column
+    /// left to convert, yet the rows still hold nothing but q2's Jump seed and
+    /// still need the chain classifier. Guarding the flag on the column too
+    /// (which is what the first cut did) silently skipped the backfill for every
+    /// pre-v2 project, leaving its reference ties counted as swum jumps forever.
     fn migrate_is_reference_to_kind(conn: &Connection) -> Result<()> {
-        let needs_migration = conn
+        let needs_column_rewrite = conn
             .prepare("SELECT is_reference FROM shots LIMIT 0")
             .is_ok();
-        if !needs_migration {
-            return Ok(());
-        }
-        tracing::info!("Converting shots.is_reference → shots.kind (v12→v13, #27)");
+        if needs_column_rewrite {
+            tracing::info!("Converting shots.is_reference → shots.kind (v12→v13, #27)");
 
-        let has_kind = conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
-        if !has_kind {
-            conn.execute_batch("ALTER TABLE shots ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;")?;
+            let has_kind = conn.prepare("SELECT kind FROM shots LIMIT 0").is_ok();
+            if !has_kind {
+                conn.execute_batch(
+                    "ALTER TABLE shots ADD COLUMN kind INTEGER NOT NULL DEFAULT 0;",
+                )?;
+            }
+            // 1 == ShotKind::Jump. Kept as a literal because this migration must
+            // stay pinned to the v13 encoding even if the enum grows later.
+            conn.execute_batch(
+                r"
+                UPDATE shots SET kind = 1 WHERE is_reference = 1;
+                ALTER TABLE shots DROP COLUMN is_reference;
+                ",
+            )?;
         }
-        // 1 == ShotKind::Jump. Kept as a literal because this migration must
-        // stay pinned to the v13 encoding even if the enum grows later.
+        // Unconditional: reaching this function at all means the file predates
+        // v13, so its kinds are a seed and the next load owes it one chain pass.
         conn.execute_batch(
             r"
-            UPDATE shots SET kind = 1 WHERE is_reference = 1;
-            ALTER TABLE shots DROP COLUMN is_reference;
             INSERT OR REPLACE INTO project_settings (key, value)
                 VALUES ('pending_kind_classification', '1');
             ",

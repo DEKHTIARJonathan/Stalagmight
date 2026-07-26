@@ -1301,8 +1301,16 @@ impl AppState {
         let (sections, closures) =
             crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true)
                 .map_err(|e| local_dto(SpeleoDbError::Parse(e.to_string())))?;
-        let imported =
-            self.execute_import_sections(sections, closures, None, Vec::new(), Vec::new());
+        // Auto: a SpeleoDB adoption is an ordinary Ariane import with no dialog
+        // to carry a per-file override, so it gets the chain rule (#27).
+        let imported = self.execute_import_sections(
+            sections,
+            closures,
+            None,
+            Vec::new(),
+            Vec::new(),
+            crate::core::state::VirtualShotMode::Auto,
+        );
         if !imported.success {
             return Err(local_dto(SpeleoDbError::Parse(format!(
                 "could not import the Ariane .tml: {}",

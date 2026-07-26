@@ -207,32 +207,13 @@ impl AppState {
     /// Creates all sections with their placements (merges, zero datums, moves)
     /// and optionally tracks the file hash. Uses `ProjectSnapshotPair` so a
     /// single undo reverts everything including the hash.
-    /// Classify the virtual shots of a just-finished import (#27).
     ///
-    /// Runs here rather than in the parsers because the chain rule needs the
-    /// project graph: sections placed, merges and closures created. Every import
-    /// command funnels through this one call.
-    pub fn classify_imported_virtual_shots(&self, mode: VirtualShotMode) -> CommandResult {
-        self.with_project_mut(|project| {
-            let changed = match mode {
-                VirtualShotMode::Auto => project.classify_virtual_shots(),
-                VirtualShotMode::AllJumps => project.set_all_virtual_shots(ShotKind::Jump),
-                VirtualShotMode::AllReferences => {
-                    project.set_all_virtual_shots(ShotKind::Reference)
-                }
-            };
-            if changed > 0 {
-                tracing::info!(
-                    changed,
-                    ?mode,
-                    purpose = "assign Jump/Reference kinds at import finalize (#27)",
-                    "Classified imported virtual shots"
-                );
-            }
-            CommandResult::success()
-        })
-    }
-
+    /// `mode` picks how this file's virtual shots are split into Jump vs
+    /// Reference (#27). The pass runs inside this command, before the `after`
+    /// snapshot: doing it afterwards (the first cut) left the classified kinds
+    /// out of the redo state, so undo-then-redo of an import silently reverted
+    /// every shot to the parser's conservative `Reference` seed and dropped the
+    /// far side of each jump out of gas and penetration.
     pub fn execute_import_sections(
         &self,
         sections: Vec<crate::models::ImportSectionConfig>,
@@ -240,6 +221,7 @@ impl AppState {
         file_hash: Option<String>,
         section_hashes: Vec<String>,
         existing_shot_updates: Vec<crate::models::ExistingShotUpdate>,
+        mode: VirtualShotMode,
     ) -> CommandResult {
         use crate::models::{ImportPlacement, StationRef};
         use std::collections::{HashMap, HashSet};
@@ -925,6 +907,44 @@ impl AppState {
                     error = ?track_result.error,
                     "Failed to track imported section hashes"
                 );
+            }
+        }
+
+        // Split this file's virtual shots into Jump vs Reference (#27). Runs
+        // here, inside the command, because the chain rule needs the graph the
+        // loop above just built (sections placed, merges and closures created)
+        // AND because everything it writes has to be inside the `after` snapshot
+        // captured below, or redo would resurrect the unclassified state.
+        //
+        // Scoped to the sections this import created: the read stays
+        // project-wide (a new run is usually only bounded *through* a merge into
+        // existing survey), but a per-file setting must never rewrite a kind the
+        // user hand-set in an earlier session.
+        {
+            let imported: HashSet<SectionId> = all_section_ids.iter().copied().collect();
+            let scope = crate::models::ClassifyScope::Sections(&imported);
+            let mut proj_guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            if let Some(project) = proj_guard.as_mut() {
+                let changed = match mode {
+                    VirtualShotMode::Auto => project.classify_virtual_shots(&scope),
+                    VirtualShotMode::AllJumps => {
+                        project.set_all_virtual_shots(ShotKind::Jump, &scope)
+                    }
+                    VirtualShotMode::AllReferences => {
+                        project.set_all_virtual_shots(ShotKind::Reference, &scope)
+                    }
+                };
+                if changed > 0 {
+                    tracing::info!(
+                        changed,
+                        ?mode,
+                        purpose = "assign Jump/Reference kinds at import finalize (#27)",
+                        "Classified imported virtual shots"
+                    );
+                }
             }
         }
 

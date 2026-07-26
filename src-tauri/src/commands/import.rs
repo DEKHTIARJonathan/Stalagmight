@@ -133,19 +133,6 @@ pub fn check_section_hashes(
 /// the in-memory import under the close-guard) but carries a warning about the
 /// failed save. Returning a hard failure here would make the UI treat the import as
 /// failed, never mark dirty, and silently lose the imported data on exit.
-/// Classify the just-imported virtual shots, then let the deferred first save
-/// run. Every import command funnels through here.
-fn finalize_import(
-    state: &AppState,
-    import_result: CommandResult,
-    mode: VirtualShotMode,
-) -> CommandResult {
-    if import_result.success {
-        state.classify_imported_virtual_shots(mode);
-    }
-    finalize_deferred_import(state, import_result)
-}
-
 fn finalize_deferred_import(state: &AppState, import_result: CommandResult) -> CommandResult {
     if !import_result.success || !state.initial_save_deferred() {
         return import_result;
@@ -196,8 +183,9 @@ pub fn import_sections(
         file_hash,
         section_hashes.unwrap_or_default(),
         updates,
+        virtual_shot_mode.unwrap_or_default(),
     );
-    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a TML/TMLU file and return preview data for the import dialog.
@@ -282,14 +270,20 @@ pub fn execute_tml_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        virtual_shot_mode.unwrap_or_default(),
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a Compass `.DAT`/`.MAK` file and return preview data for the import dialog.
@@ -382,14 +376,20 @@ pub fn execute_compass_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        virtual_shot_mode.unwrap_or_default(),
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
+    finalize_deferred_import(state.inner(), result)
 }
 
 /// Parse a GPX file and return preview data for the import dialog.
@@ -475,7 +475,20 @@ pub fn execute_gpx_import(
 
     finalize_deferred_import(
         state.inner(),
-        state.execute_import_sections(sections, Vec::new(), file_hash, Vec::new(), Vec::new()),
+        // Auto, not a per-file override: the GPX dialog has no mode control, so
+        // there is nothing to pass through - but the chain rule still has to run.
+        // `parsers::gpx` seeds every leg as Reference on the promise that the
+        // classifier can promote it, and skipping the pass here (this path used
+        // to call `finalize_deferred_import` directly) left a GPS surface track
+        // tying two sumps together permanently excluded from the survey graph.
+        state.execute_import_sections(
+            sections,
+            Vec::new(),
+            file_hash,
+            Vec::new(),
+            Vec::new(),
+            VirtualShotMode::Auto,
+        ),
     )
 }
 
@@ -647,12 +660,18 @@ pub fn execute_walls_import(
     );
 
     emitter.start_phase(LoadingPhase::ImportApplyingChanges);
-    let result =
-        state.execute_import_sections(sections, closures, file_hash, Vec::new(), Vec::new());
+    let result = state.execute_import_sections(
+        sections,
+        closures,
+        file_hash,
+        Vec::new(),
+        Vec::new(),
+        virtual_shot_mode.unwrap_or_default(),
+    );
     emitter.complete_phase(LoadingPhase::ImportApplyingChanges);
 
     emitter.start_phase(LoadingPhase::ImportFinalizing);
     emitter.complete_phase(LoadingPhase::ImportFinalizing);
 
-    finalize_import(state.inner(), result, virtual_shot_mode.unwrap_or_default())
+    finalize_deferred_import(state.inner(), result)
 }

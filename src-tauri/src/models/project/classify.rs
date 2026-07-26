@@ -33,12 +33,51 @@
 //! This pass runs **only** at import finalize and once at the post-migration
 //! backfill. It deliberately never re-runs, so a later merge cannot silently
 //! flip a kind under the user.
+//!
+//! # Scope
+//!
+//! "Never re-runs" is enforced by [`ClassifyScope`], not just by call-site
+//! discipline. At import finalize the pass reads the whole graph but may only
+//! write to the sections that import created; without that the second import
+//! into a project re-kinds the first one's shots, undoing by hand-set choices
+//! with no undo entry. Only the post-migration backfill is project-wide.
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{ShotKind, StationRef};
+use crate::models::{SectionId, ShotId, ShotKind, StationRef};
 
 use super::Project;
+
+/// Which sections a classification pass is allowed to *write* to.
+///
+/// The distinction matters because the two halves of a pass have different
+/// scopes. Deciding whether a virtual run is bounded is inherently
+/// project-wide - a freshly imported run typically reaches real survey only
+/// *through* a merge into a section that was already there - but applying the
+/// verdict must not reach outside the file being imported, or a per-file
+/// setting silently re-kinds shots the user hand-set in an earlier session.
+pub enum ClassifyScope<'a> {
+    /// Rewrite any virtual shot in the project. Only correct for the one-shot
+    /// post-migration backfill, which is deliberately project-wide.
+    WholeProject,
+    /// Rewrite only shots in these sections - what an import uses. Everything
+    /// else still informs the graph, it just never gets written.
+    Sections(&'a HashSet<SectionId>),
+    /// Rewrite only these individual shots. The collab apply path needs this
+    /// granularity: a partner flipping one shot to VIRTUAL in Ariane must not
+    /// re-kind the rest of the section around it.
+    Shots(&'a HashSet<ShotId>),
+}
+
+impl ClassifyScope<'_> {
+    fn allows(&self, section_id: SectionId, shot_id: ShotId) -> bool {
+        match self {
+            ClassifyScope::WholeProject => true,
+            ClassifyScope::Sections(ids) => ids.contains(&section_id),
+            ClassifyScope::Shots(ids) => ids.contains(&shot_id),
+        }
+    }
+}
 
 /// Minimal union-find over station slots, used to collapse merges/closures into
 /// one canonical station and then to group virtual shots into components.
@@ -75,9 +114,13 @@ impl Project {
     /// [`ShotKind::Reference`] using the chain rule described in the module
     /// docs. Non-virtual shots are never touched.
     ///
+    /// The graph is always read project-wide (boundedness usually depends on a
+    /// merge into a pre-existing section), but only shots the `scope` admits are
+    /// rewritten - see [`ClassifyScope`].
+    ///
     /// Returns the number of shots whose kind actually changed, so callers can
     /// skip a redundant save.
-    pub fn classify_virtual_shots(&mut self) -> usize {
+    pub fn classify_virtual_shots(&mut self, scope: &ClassifyScope<'_>) -> usize {
         // Index every station slot: a section with N shots has N+1 stations.
         let mut station_slot: HashMap<StationRef, usize> = HashMap::new();
         for section in &self.sections {
@@ -177,12 +220,12 @@ impl Project {
 
         let mut changed = 0;
         for (sec_idx, shot_idx, kind) in verdicts {
-            if let Some(shot) = self
-                .sections
-                .get_mut(sec_idx)
-                .and_then(|s| s.shots.get_mut(shot_idx))
-            {
-                if shot.kind != kind {
+            let Some(section) = self.sections.get_mut(sec_idx) else {
+                continue;
+            };
+            let section_id = section.id;
+            if let Some(shot) = section.shots.get_mut(shot_idx) {
+                if scope.allows(section_id, shot.id) && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;
                 }
@@ -197,14 +240,18 @@ impl Project {
 }
 
 impl Project {
-    /// Force every virtual shot to one kind, bypassing the chain rule (#27 q3's
-    /// per-file import override). Non-virtual shots are untouched. Returns the
-    /// number of shots whose kind actually changed.
-    pub fn set_all_virtual_shots(&mut self, kind: ShotKind) -> usize {
+    /// Force every virtual shot in `scope` to one kind, bypassing the chain rule
+    /// (#27 q3's per-file import override). Non-virtual shots are untouched.
+    /// Returns the number of shots whose kind actually changed.
+    pub fn set_all_virtual_shots(&mut self, kind: ShotKind, scope: &ClassifyScope<'_>) -> usize {
         debug_assert!(kind.is_virtual(), "only the virtual kinds make sense here");
         let mut changed = 0;
         for section in &mut self.sections {
+            let section_id = section.id;
             for shot in &mut section.shots {
+                if !scope.allows(section_id, shot.id) {
+                    continue;
+                }
                 if shot.kind.is_virtual() && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;
@@ -223,6 +270,9 @@ impl Project {
 mod tests {
     use chrono::Utc;
 
+    use std::collections::HashSet;
+
+    use super::ClassifyScope;
     use crate::models::{
         ClosureStrategy, LoopClosure, Project, SectionData, ShotData, ShotKind, StationMerge,
         StationRef,
@@ -275,7 +325,10 @@ mod tests {
             shot(ShotKind::Normal),
         ]);
 
-        assert_eq!(project.classify_virtual_shots(), 2);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            2
+        );
         assert_eq!(
             kinds(&project),
             vec![
@@ -296,7 +349,10 @@ mod tests {
             shot(ShotKind::Reference),
         ]);
 
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(
             kinds(&project),
             vec![ShotKind::Normal, ShotKind::Reference, ShotKind::Reference]
@@ -307,7 +363,10 @@ mod tests {
     fn fully_detached_run_stays_reference() {
         let mut project = project_with(vec![shot(ShotKind::Reference), shot(ShotKind::Reference)]);
 
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(
             kinds(&project),
             vec![ShotKind::Reference, ShotKind::Reference]
@@ -320,7 +379,10 @@ mod tests {
         // does not support it comes back as Reference.
         let mut project = project_with(vec![shot(ShotKind::Normal), shot(ShotKind::Jump)]);
 
-        assert_eq!(project.classify_virtual_shots(), 1);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            1
+        );
         assert_eq!(kinds(&project), vec![ShotKind::Normal, ShotKind::Reference]);
     }
 
@@ -344,7 +406,10 @@ mod tests {
         let sec1 = project.sections[1].id;
 
         // Without the merge it is one-sided.
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(project.sections[0].shots[1].kind, ShotKind::Reference);
 
         merge(
@@ -353,7 +418,10 @@ mod tests {
             StationRef::new(sec1, 0),
         );
 
-        assert_eq!(project.classify_virtual_shots(), 1);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            1
+        );
         assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
     }
 
@@ -388,7 +456,10 @@ mod tests {
             is_aligned: false,
         });
 
-        assert_eq!(project.classify_virtual_shots(), 1);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            1
+        );
         assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
     }
 
@@ -414,7 +485,10 @@ mod tests {
             );
         }
 
-        assert_eq!(project.classify_virtual_shots(), 3);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            3
+        );
         for section in &project.sections {
             assert_eq!(section.shots[1].kind, ShotKind::Jump);
         }
@@ -442,7 +516,10 @@ mod tests {
             StationRef::new(sec, 1),
         );
 
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(
             kinds(&project),
             vec![ShotKind::Normal, ShotKind::Reference, ShotKind::Reference]
@@ -452,7 +529,10 @@ mod tests {
     #[test]
     fn non_virtual_shots_are_never_touched() {
         let mut project = project_with(vec![shot(ShotKind::Normal), shot(ShotKind::Normal)]);
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(kinds(&project), vec![ShotKind::Normal, ShotKind::Normal]);
     }
 
@@ -464,9 +544,15 @@ mod tests {
             shot(ShotKind::Normal),
         ]);
 
-        assert_eq!(project.classify_virtual_shots(), 1);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            1
+        );
         // Second run changes nothing, so a caller can use the count to skip a save.
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
         assert_eq!(project.sections[0].shots[1].kind, ShotKind::Jump);
     }
 
@@ -479,8 +565,14 @@ mod tests {
         ]);
 
         // The chain rule would call this bounded run a Jump; the override wins.
-        assert_eq!(project.set_all_virtual_shots(ShotKind::Reference), 0);
-        assert_eq!(project.set_all_virtual_shots(ShotKind::Jump), 1);
+        assert_eq!(
+            project.set_all_virtual_shots(ShotKind::Reference, &ClassifyScope::WholeProject),
+            0
+        );
+        assert_eq!(
+            project.set_all_virtual_shots(ShotKind::Jump, &ClassifyScope::WholeProject),
+            1
+        );
         assert_eq!(
             kinds(&project),
             vec![ShotKind::Normal, ShotKind::Jump, ShotKind::Normal],
@@ -489,8 +581,77 @@ mod tests {
     }
 
     #[test]
+    fn scoped_pass_reads_the_whole_graph_but_only_writes_its_own_sections() {
+        // The regression this pins: importing a second file must not re-kind the
+        // first one's shots. Section 0 is "already in the project" with a
+        // hand-set Reference; section 1 is the import, and its virtual shot is
+        // only bounded *through* a merge into section 0 - so the read has to stay
+        // project-wide even though the write must not.
+        let mut project = new_project();
+        project.add_section(SectionData {
+            shots: vec![shot(ShotKind::Normal), shot(ShotKind::Reference)],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            shots: vec![shot(ShotKind::Reference), shot(ShotKind::Normal)],
+            ..Default::default()
+        });
+        let sec0 = project.sections[0].id;
+        let sec1 = project.sections[1].id;
+        // Section 0's virtual tip meets section 1's virtual head, so the two
+        // virtual shots form one run bounded by real survey at both ends.
+        merge(
+            &mut project,
+            StationRef::new(sec0, 2),
+            StationRef::new(sec1, 0),
+        );
+
+        let imported: HashSet<_> = [sec1].into_iter().collect();
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::Sections(&imported)),
+            1,
+            "only the imported section's shot may be rewritten"
+        );
+        assert_eq!(
+            project.sections[0].shots[1].kind,
+            ShotKind::Reference,
+            "the pre-existing hand-set kind must survive a later import"
+        );
+        assert_eq!(
+            project.sections[1].shots[0].kind,
+            ShotKind::Jump,
+            "boundedness still resolves through the pre-existing section"
+        );
+    }
+
+    #[test]
+    fn the_all_x_override_is_scoped_too() {
+        let mut project = new_project();
+        project.add_section(SectionData {
+            shots: vec![shot(ShotKind::Reference)],
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            shots: vec![shot(ShotKind::Reference)],
+            ..Default::default()
+        });
+        let sec1 = project.sections[1].id;
+
+        let imported: HashSet<_> = [sec1].into_iter().collect();
+        assert_eq!(
+            project.set_all_virtual_shots(ShotKind::Jump, &ClassifyScope::Sections(&imported)),
+            1
+        );
+        assert_eq!(project.sections[0].shots[0].kind, ShotKind::Reference);
+        assert_eq!(project.sections[1].shots[0].kind, ShotKind::Jump);
+    }
+
+    #[test]
     fn empty_project_is_a_no_op() {
         let mut project = new_project();
-        assert_eq!(project.classify_virtual_shots(), 0);
+        assert_eq!(
+            project.classify_virtual_shots(&ClassifyScope::WholeProject),
+            0
+        );
     }
 }

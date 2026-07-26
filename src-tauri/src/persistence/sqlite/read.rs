@@ -1,11 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{NaiveDate, Utc};
-use rusqlite::OptionalExtension;
+use rusqlite::{params, OptionalExtension};
 use std::collections::HashMap;
 
 use crate::models::{
-    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, ShotKind,
-    StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
+    ClosureStrategy, GpsCoordinates, LoopClosure, Project, Section, SectionData, Shot, ShotId,
+    ShotKind, StationKey, StationMerge, SurveyDirection, ZeroDatum, FEATURE_ID_STRIDE,
 };
 
 use super::Database;
@@ -966,11 +966,43 @@ impl Database {
     /// Clear the flag set by the v12->v13 migration once the classification has
     /// run, so it never runs a second time. Classification is import-time only
     /// by design (#27 q14): re-running it later could flip a kind under the user.
+    ///
+    /// Only correct once the reclassified kinds are durably on disk - see
+    /// [`Self::persist_backfilled_shot_kinds`], which is the only caller that
+    /// should ever pair a non-empty backfill with this.
     pub fn clear_pending_kind_classification(&self) -> Result<()> {
         self.conn.execute(
             "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
             [],
         )?;
+        Ok(())
+    }
+
+    /// Write the one-shot #27 backfill's verdicts straight to disk and clear the
+    /// pending flag, both in one transaction.
+    ///
+    /// The backfill runs on load and mutates only the in-memory `Project`.
+    /// Clearing the flag on its own (the first cut) destroyed the retry guard
+    /// while the result was still volatile: open a migrated project, close it
+    /// without editing, and the kinds were never written but the flag was gone -
+    /// so every later open kept the migration's Jump seed and non-swimmable ties
+    /// stayed counted as swum in gas, penetration and the ruler. Persisting here
+    /// makes the backfill durable without marking an untouched project dirty;
+    /// pairing it with the DELETE in one transaction means a crash mid-way
+    /// leaves the flag set and the (idempotent) pass simply repeats.
+    pub fn persist_backfilled_shot_kinds(&self, kinds: &[(ShotId, ShotKind)]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        {
+            let mut stmt = tx.prepare("UPDATE shots SET kind = ?1 WHERE id = ?2")?;
+            for (shot_id, kind) in kinds {
+                stmt.execute(params![i32::from(kind.as_u8()), *shot_id])?;
+            }
+        }
+        tx.execute(
+            "DELETE FROM project_settings WHERE key = 'pending_kind_classification'",
+            [],
+        )?;
+        tx.commit()?;
         Ok(())
     }
 
