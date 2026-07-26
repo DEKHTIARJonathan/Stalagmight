@@ -10461,11 +10461,16 @@ fn test_move_segment_aligned_closure_connectivity() {
 }
 
 #[test]
-fn test_move_segment_blocked_by_datum_reachable_only_over_a_closure() {
-    // The datum guard must cover the set move_segment actually offsets. That set
-    // follows merges AND aligned closures, but `rigid_group_has_datum` only walks
-    // merges, so a datum reachable over a closure-only edge used to pass the guard
-    // and then get moved by the offset loop - silently relocating a GPS anchor.
+fn test_move_segment_blocked_by_datum_over_a_closure_only_link() {
+    // SYNTHETIC STATE - read this before trusting the test. The closure-only link
+    // built below cannot arise through the app: `convert_orphan_closures_to_merges`
+    // (models/project/offsets.rs) runs after every command and promotes a
+    // sole-bridge closure to a merge, skipping only the both-endpoints-anchored
+    // case, which the narrow guard would catch anyway. So this pins HARDENING, not
+    // a reachable bug: it fails if the guard ever stops covering the set
+    // move_segment actually offsets, which is what keeps `move_segment` correct
+    // independently of that conversion invariant. The closure is pushed directly
+    // for exactly that reason - the command path would convert it away.
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "ClosureDatum".to_string(),
@@ -10497,7 +10502,7 @@ fn test_move_segment_blocked_by_datum_reachable_only_over_a_closure() {
 
     // A <-> B joined ONLY by an aligned closure: no merge edge, so
     // get_merged_section_ids(B) is {B} while get_rigid_connected_section_ids(B)
-    // is {A, B}. That divergence is the hole.
+    // is {A, B}. That divergence is what the widened guard covers.
     {
         let mut proj_guard = state.project.lock().unwrap();
         let project = proj_guard.as_mut().unwrap();
