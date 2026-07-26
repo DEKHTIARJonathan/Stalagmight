@@ -468,15 +468,18 @@ test.describe('Toolbar Tool Groups', () => {
   // section id. This covers the other consumer of the anchored set: the interact
   // overlay, which must withhold the hover highlight for an anchored shot.
   //
+  // It also pins that a late-arriving anchored set invalidates the overlay's
+  // id-only cache key, by never moving the pointer after the first hover.
+  //
   // NOTE (#301): this does NOT pin the floor(fid / STRIDE) decode that #301 fixed.
   // That bug needed a shot whose id is section-encoded, and the IPC mock does not
-  // reproduce the backend's convention: add_shot allocates max(existing) + 1
+  // reproduce the backend's convention: insert_shot_* allocates max(existing) + 1
   // (mocks/tauri-ipc.ts), so every section's shots are 1, 2, 3 ..., while the real
   // backend seeds next_shot_id = section.id * FEATURE_ID_STRIDE
   // (src-tauri/src/models/section.rs). With flat ids the old decode happened to be
-  // right, so this test passed before the fix too. The decode contract is pinned
-  // at unit level in surveyLayer/__tests__/dragGhostHighlight.test.ts; teaching
-  // the mock the real id convention is tracked separately.
+  // right, so this test passed before the fix too. The decode itself is pinned at
+  // unit level in src/utils/__tests__/ids.test.ts; teaching the mock the real id
+  // convention would make this test cover it too, and is tracked separately.
   test('anchored section suppresses the shot hover highlight in Move Segment', async ({ page }) => {
     await createProjectWithSections(page);
 
@@ -527,44 +530,44 @@ test.describe('Toolbar Tool Groups', () => {
     if (!canvasOrigin) throw new Error('map canvas has no bounding box');
     const hoverPoint = { x: canvasOrigin.x + shot.mid.x, y: canvasOrigin.y + shot.mid.y };
 
-    const hoverShot = async (): Promise<void> => {
+    // Non-throwing: expect.poll awaits its generator OUTSIDE its try/catch, so a
+    // throw from here would abort the poll instead of retrying it.
+    const hoverShot = async (): Promise<boolean> => {
       await page.mouse.move(hoverPoint.x, hoverPoint.y, { steps: 4 });
-      await page.waitForFunction(
-        (expected) => {
-          const ui = (window as unknown as {
-            __E2E_TEST__?: { uiStore: { getState: () => { hoveredShot: { shotId: number } | null } } };
-          }).__E2E_TEST__;
-          return ui?.uiStore.getState().hoveredShot?.shotId === expected;
-        },
-        shot.shotId,
-        { timeout: 5000 }
-      );
+      return page
+        .waitForFunction(
+          (expected) => {
+            const ui = (window as unknown as {
+              __E2E_TEST__?: { uiStore: { getState: () => { hoveredShot: { shotId: number } | null } } };
+            }).__E2E_TEST__;
+            return ui?.uiStore.getState().hoveredShot?.shotId === expected;
+          },
+          shot.shotId,
+          { timeout: 2000 }
+        )
+        .then(() => true)
+        .catch(() => false);
     };
 
     // Positive control first: with no anchored set (Select tool), hovering that
     // exact pixel really does produce one shot highlight. Without this the
     // assertion below could pass simply because the hover never landed.
-    await hoverShot();
+    expect(await hoverShot()).toBe(true);
     await expect.poll(overlayShotCount, { timeout: 5000 }).toBe(1);
 
-    // Now Move Segment, with the whole section anchored by the zero datum.
-    await page.mouse.move(0, 0);
+    // Switch to Move Segment WITHOUT moving the pointer. The anchored ids arrive
+    // asynchronously, one IPC round-trip after activation, and they are not part
+    // of the interact overlay's cache key - so this also pins that
+    // setAnchoredSections invalidates that cache. If it stops doing so, the
+    // highlight painted above stays bright forever and this poll times out.
     await page.keyboard.press('v');
     await waitForActiveTool(page, 'move_segment');
+    await expect.poll(overlayShotCount, { timeout: 10000 }).toBe(0);
 
-    // The anchored-id fetch resolves after the tool activates, and
-    // setAnchoredSections does not itself rebuild the interact overlay, so
-    // re-hover on every attempt: a fresh hover is what recomputes the overlay
-    // under the new anchored set.
-    await expect
-      .poll(
-        async () => {
-          await page.mouse.move(0, 0);
-          await hoverShot();
-          return overlayShotCount();
-        },
-        { timeout: 10000 }
-      )
-      .toBe(0);
+    // And the inverse: leaving the tool empties the anchored set, which must
+    // bring the highlight back with the pointer still held still.
+    await page.keyboard.press('s');
+    await waitForActiveTool(page, 'select');
+    await expect.poll(overlayShotCount, { timeout: 10000 }).toBe(1);
   });
 });

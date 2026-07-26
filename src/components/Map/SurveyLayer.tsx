@@ -70,7 +70,7 @@ import {
 import { metersToMapCoords } from '../../utils/coordinates';
 import { getErrorColor } from '../../utils/colors';
 import { trackNav } from '../../utils/telemetry';
-import { FEATURE_ID_STRIDE } from '../../utils/ids';
+import { FEATURE_ID_STRIDE, sectionIdFromKey } from '../../utils/ids';
 import { MEASURE_TINT } from '../../utils/measurePath';
 import { watchDevicePixelRatio } from '../../utils/dprWatcher';
 import { clearFeatureCountsForPrefix } from '../../utils/memoryProbe';
@@ -889,7 +889,7 @@ export default class SurveyLayer {
         const hoveredId = newHoveredStationId || newHoveredShotId;
         if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
           // Check if hovered feature belongs to an anchored section
-          if (this.isSectionAnchored(parseInt(hoveredId.split(':')[0]!, 10))) {
+          if (this.isSectionAnchored(sectionIdFromKey(hoveredId))) {
             showPointer = false;
             suppressReason = 'anchored_section';
           }
@@ -1392,11 +1392,6 @@ export default class SurveyLayer {
     return sectionId! * FEATURE_ID_STRIDE + index!;
   }
 
-  // Section id out of a "sectionId:scopedId" feature key (NaN if malformed).
-  private sectionOfId(id: string): number {
-    return Number(id.split(':')[0]);
-  }
-
   // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
   // Takes the SECTION id, never a featureId: a shot's featureId is not decodable back
   // to one (shot.id is itself section-encoded, so floor(fid / STRIDE) yields 2*sectionId
@@ -1471,7 +1466,7 @@ export default class SurveyLayer {
     if (hoveredShot) {
       const fid = this.parseFeatureId(hoveredShot);
       // Old behavior: no hover feedback for anchored/immovable shots.
-      if (fid === null || (!this.isSectionAnchored(this.sectionOfId(hoveredShot)) && !this.isShotImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredShot)) && !this.isShotImmovable(fid))) {
         const f = this.shotOverlayFeature(hoveredShot, this.getShotHoverWidth());
         if (f) features.push(f);
       }
@@ -1487,7 +1482,7 @@ export default class SurveyLayer {
       keepStation(this.selectedStationId !== this.hoveredStationId ? this.selectedStationId : null);
     if (hoveredStation) {
       const fid = this.parseFeatureId(hoveredStation);
-      if (fid === null || (!this.isSectionAnchored(this.sectionOfId(hoveredStation)) && !this.isStationImmovable(fid))) {
+      if (fid === null || (!this.isSectionAnchored(sectionIdFromKey(hoveredStation)) && !this.isStationImmovable(fid))) {
         const f = this.stationOverlayFeature(hoveredStation, 'hover');
         if (f) features.push(f);
       }
@@ -2365,6 +2360,13 @@ export default class SurveyLayer {
     this.updateClosureAnchoredOpacity(sectionIds);
     // The custom renderer + label layer dim the anchored sections' geometry + labels.
     this.syncCustomDimming();
+    // The anchored set also gates the interact overlay (hover/selection highlight +
+    // its 0.25 opacity), but it is NOT part of the overlay's id-only cache key, and
+    // it lands asynchronously after move_segment activates. Without this the
+    // already-drawn highlight on a held-still pointer stays bright over geometry the
+    // renderer just dimmed - and stays suppressed after leaving the tool.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   /** Push the current anchored + immovable dim set to the custom-render layers so
@@ -2415,6 +2417,10 @@ export default class SurveyLayer {
     this.updateImmovableClosureOpacity(stationIds);
     // The custom renderer + label layer dim the immovable geometry + labels.
     this.syncCustomDimming();
+    // Same overlay-cache hazard as setAnchoredSections: these sets gate the
+    // hover/selection highlight but are not in the overlay's cache key.
+    this.lastInteractKey = null;
+    this.refreshInteractOverlay();
   }
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {
@@ -2526,7 +2532,7 @@ export default class SurveyLayer {
       movingEndForShot: (id) => this.dragMovingShots.get(id),
       isMovingStation: (id) => this.dragMovingStationKeys.has(id),
       parseFid: (id) => this.parseFeatureId(id),
-      isAnchored: (id) => this.isSectionAnchored(this.sectionOfId(id)),
+      isAnchored: (id) => this.isSectionAnchored(sectionIdFromKey(id)),
       isShotImmovable: (fid) => this.isShotImmovable(fid),
       isStationImmovable: (fid) => this.isStationImmovable(fid),
       shotFeature: (id, w) => this.shotOverlayFeature(id, w),
