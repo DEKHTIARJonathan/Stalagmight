@@ -300,6 +300,7 @@ impl Project {
         let view = budget_view(&walk, endpoint_idx, budget_litres);
         let BudgetView {
             reachable,
+            can_end_at,
             gas_to_reach,
             max_reachable_gas,
             target: route_target,
@@ -307,11 +308,26 @@ impl Project {
             route_gas,
         } = view;
 
-        // Turn frontier: reachable stations with at least one neighbour that is NOT reachable
-        // (out of budget or in another component). Topology only - `adj`'s edge SET (built
-        // above) is enough; the gas weights on it are irrelevant to "who borders whom".
+        // Turn frontier: stations the diver could END at that border one they could not (out of
+        // budget or in another component). Topology only - `adj`'s edge SET (built above) is
+        // enough; the gas weights on it are irrelevant to "who borders whom".
+        //
+        // Keyed on `can_end_at`, NOT the overlay's `reachable`. A turn marker is a clickable
+        // candidate endpoint, so the question it answers is "could the dive finish here", which
+        // is the after-chain price - never the cheaper pass-through price the overlay paints.
+        // The two masks are identical without way points.
+        //
+        // Stations on the committed chain are excluded outright: the diver has already said they
+        // are going to the way points, so a station on the way there is transit, not a
+        // destination. Picking one would route out past it to the way point and back.
+        let mut on_chain = vec![false; n];
+        for &node in &walk.chain {
+            on_chain[node] = true;
+        }
         let turn_frontier: Vec<StationRef> = (0..n)
-            .filter(|&u| reachable[u] && adj[u].iter().any(|&(v, _)| !reachable[v]))
+            .filter(|&u| {
+                can_end_at[u] && !on_chain[u] && adj[u].iter().any(|&(v, _)| !can_end_at[v])
+            })
             .map(|u| station_refs[u])
             .collect();
 
@@ -595,6 +611,7 @@ fn relax_zero_cost(adj: &[Vec<(usize, f64)>], gas: &mut [f64]) {
 /// origin → way points → target.
 struct BudgetView {
     reachable: Vec<bool>,
+    can_end_at: Vec<bool>,
     gas_to_reach: Vec<Option<f64>>,
     max_reachable_gas: f64,
     target: Option<usize>,
@@ -700,6 +717,7 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
     }
     BudgetView {
         reachable,
+        can_end_at,
         gas_to_reach,
         max_reachable_gas,
         target,

@@ -3069,3 +3069,109 @@ fn gas_reach_field_waypoint_does_not_put_a_turn_candidate_inside_the_endpoint() 
         );
     }
 }
+
+#[test]
+fn gas_reach_field_waypoint_does_not_offer_a_transit_station_as_a_turn_candidate() {
+    // The same manual inspection, one round later: red turn dots STILL sat on the route line, at
+    // every junction where a side passage left it. Pricing a swum-through station correctly had made
+    // it in-budget, and the frontier rule - "in budget, with an out-of-budget neighbour" - then fired
+    // on it. Two things were wrong. A turn marker is a clickable candidate ENDPOINT, so it has to ask
+    // whether the dive can finish there (the after-chain price), not whether the diver passes through
+    // (the pass-through price the overlay paints). And a station the route commits to swimming
+    // through is transit, never a destination.
+    //
+    // The entrance is the sharp case: it is a merge of the two sections, so the graph holds it as two
+    // zero-cost-joined nodes. Only ONE of them lies on the route, which is why the route-walking
+    // assertion in the test above did not catch this - the twin bordered the out-of-budget east
+    // branch and became a frontier on its own.
+    let (project, entrance, north, east, north_tip, _east_mid) = two_branch_project();
+    let waypoint = StationRef::new(north, 2);
+    let east_entrance = StationRef::new(east, 0);
+    let east_next = StationRef::new(east, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        170.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&north_tip),
+        &[waypoint],
+        &diver,
+        std::slice::from_ref(&bg),
+        &GasConfig::default(),
+        &[],
+    );
+
+    // SETUP - the border this test is about has to exist: the entrance is painted in reach (the dive
+    // starts there), while the east branch one shot along it is not, because reaching it AFTER the
+    // way point is a 260 m round trip back down the north passage and out again.
+    assert_eq!(field.final_turn_ref, Some(north_tip));
+    assert!(field_reachable(&field, entrance));
+    assert!(field_reachable(&field, east_entrance));
+    assert!(!field_reachable(&field, east_next));
+
+    // THE PROPERTY: neither node of that junction is offered as a place to turn the dive around.
+    // Both were before this fix - the east twin via the frontier rule, the north one on the route.
+    assert!(
+        !field.turn_frontier.contains(&entrance),
+        "the entrance is on the committed route but is offered as a turn candidate"
+    );
+    assert!(
+        !field.turn_frontier.contains(&east_entrance),
+        "the entrance's merge twin is offered as a turn candidate"
+    );
+}
+
+#[test]
+fn gas_reach_field_the_way_point_itself_is_not_a_turn_candidate() {
+    // The other half of the same rule, on the far end of the chain. Park the way point at the limit
+    // of the gas and the station one shot beyond it falls out of budget, so the way point borders
+    // unreachable ground and the frontier rule wants to mark it - putting a red "turn here" dot on
+    // top of the diver's own green way point marker. It is already a committed route point; offering
+    // it as a turnaround says nothing and reads as a competing suggestion.
+    let (project, entrance, north, _east, _north_tip, _east_mid) = two_branch_project();
+    let waypoint = StationRef::new(north, 2);
+    let beyond = StationRef::new(north, 3);
+    let diver = Diver::new(20.0, None).unwrap();
+    // ~115 bar in the 13 L steel lands the All-thirds budget between the way point (400 L) and the
+    // station past it (600 L), which is the whole point of the fixture.
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        115.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[waypoint],
+        &diver,
+        std::slice::from_ref(&bg),
+        &GasConfig::default(),
+        &[],
+    );
+
+    // SETUP - the way point is the end of the affordable route and the ground past it is not.
+    assert!(
+        field.budget_litres > 400.0 && field.budget_litres < 600.0,
+        "budget {} no longer straddles the way point",
+        field.budget_litres
+    );
+    assert_eq!(field.final_turn_ref, Some(waypoint));
+    assert!(!field_reachable(&field, beyond));
+
+    // THE PROPERTY. Before the fix this was a frontier station.
+    assert!(
+        !field.turn_frontier.contains(&waypoint),
+        "the way point is offered as a turn candidate on top of itself"
+    );
+}
