@@ -274,10 +274,18 @@ void main() {
     return;
   }
   // A station touched only by virtual shots disappears when every kind that
-  // touches it is hidden (#27). Conservative: it stays visible unless BOTH
-  // toggles are off, so a station never vanishes while one of its legs is still
-  // drawn (matches the stock layer's not-allShotsReference filter).
-  if (a_all_reference > 0.5 && u_hide_reference > 0.5 && u_hide_jump > 0.5) {
+  // touches it is hidden (#27). a_all_reference is a mask, not a bool:
+  // 0 = a Normal shot touches it, 1 = only Jumps, 2 = only References,
+  // 3 = both. Testing "any virtual kind is visible" instead left an orphan
+  // marker on, say, a reference-only station while References were hidden and
+  // Jumps were not - its own legs were all gone.
+  bool onlyVirtual = a_all_reference > 0.5;
+  bool touchedByJump = a_all_reference > 0.5 && a_all_reference < 1.5
+                    || a_all_reference > 2.5;
+  bool touchedByRef = a_all_reference > 1.5;
+  bool keptByJump = touchedByJump && u_hide_jump < 0.5;
+  bool keptByRef = touchedByRef && u_hide_reference < 0.5;
+  if (onlyVirtual && !keptByJump && !keptByRef) {
     gl_Position = vec4(2.0, 2.0, 2.0, 1.0);
     v_fill = vec4(0.0);
     v_stroke = vec4(0.0);

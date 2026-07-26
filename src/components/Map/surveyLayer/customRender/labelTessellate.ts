@@ -190,7 +190,7 @@ export function buildLabelDescriptors(
     viewport === undefined ||
     (x >= viewport.minX && x <= viewport.maxX && y >= viewport.minY && y <= viewport.maxY);
   const lookup = buildStationLookup(data);
-  // allRef[g] === 1 <=> every shot touching station g is a reference shot (or it
+  // allRef[g] !== 0 <=> every shot touching station g is virtual (or it
   // has none). Equivalently allRef[g] === 0 <=> g has a non-reference shot - the
   // `stationsWithNonReferenceShot` predicate features.ts uses.
   const allRef = computeStationAllReference(data, lookup);
@@ -285,7 +285,7 @@ export function buildLabelDescriptors(
       const z = data.stationCoords[g * 3 + 2]!;
       let flags = 0;
       if (stationIndex === sectionMinIndex.get(sid)) flags |= LABEL_FLAG.FIRST_IN_SECTION;
-      if (allRef[g] === 1) flags |= LABEL_FLAG.ALL_REFERENCE;
+      if (allRef[g] !== 0) flags |= LABEL_FLAG.ALL_REFERENCE;
       const ax = stationRel[g * 2]!;
       const ay = stationRel[g * 2 + 1]!;
       const stationInView = inView(ax, ay);
@@ -316,7 +316,7 @@ export function buildLabelDescriptors(
           // ALL_REFERENCE so the hide-reference uniform collapses it with its
           // geometry (the station comment shows below the station label). Without
           // it the comment orphans when reference shots are hidden.
-          flags: allRef[g] === 1 ? LABEL_FLAG.ALL_REFERENCE : 0,
+          flags: allRef[g] !== 0 ? LABEL_FLAG.ALL_REFERENCE : 0,
           sectionId: sid,
           stationGlobal: g,
           stationIndex,

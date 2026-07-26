@@ -262,6 +262,30 @@ describe('SurveyGeometryIndex equivalence with per-feature resolvers', () => {
     expect(stWithout?.ref).not.toEqual({ section_id: 1, station_index: 3 });
   });
 
+  it('a reference-only station goes non-interactive when only References are hidden (#27)', () => {
+    // The regression: station (1,3) touches nothing but the reference shot, but
+    // the gate asked "is ANY virtual kind visible anywhere?" rather than "is any
+    // kind touching THIS station visible?". With Jumps on and References off the
+    // answer was yes, so an orphan marker stayed hit-testable over geometry the
+    // line shader had already collapsed.
+    const stPx = (60 / 111320) * SCALE;
+    const stPy = -(25 / 111320) * SCALE;
+    const at = (visibleKinds: { jump: boolean; reference: boolean }) =>
+      index.nearestStation((c) => project(c), stPx, stPy, allSectionIds, 10, { visibleKinds });
+
+    expect(at({ jump: true, reference: true })?.ref).toEqual({ section_id: 1, station_index: 3 });
+    // Jumps still on - irrelevant to a station no jump touches.
+    expect(at({ jump: true, reference: false })?.ref).not.toEqual({
+      section_id: 1,
+      station_index: 3,
+    });
+    // And hiding jumps alone must NOT hide it: its own leg is still drawn.
+    expect(at({ jump: false, reference: true })?.ref).toEqual({
+      section_id: 1,
+      station_index: 3,
+    });
+  });
+
   it('t parameter matches projectParamOnSegment on the true endpoints', () => {
     // Probe near the midpoint of shot 101 ((0,0)-(30,0)).
     const px = (12 / 111320) * SCALE;

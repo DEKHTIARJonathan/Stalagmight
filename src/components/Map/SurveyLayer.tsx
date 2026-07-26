@@ -29,7 +29,6 @@ import {
 } from './surveyLayer/displayColor';
 import {
   SurveyGeometryIndex,
-  anyVirtualVisible,
   isKindVisible,
   type VisibleKinds,
 } from './surveyLayer/geometryIndex';
@@ -1621,7 +1620,7 @@ export default class SurveyLayer {
     if (!coords || g === null) return null;
     // A station hidden because every kind touching it is hidden must not
     // surface via a highlight (matches the circle shader's both-off test).
-    if (!anyVirtualVisible(this.visibleKinds()) && this.geoIndex.isAllReferenceStation(ref))
+    if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
       return null;
 
     const fid = this.parseFeatureId(idStr);
@@ -1858,7 +1857,7 @@ export default class SurveyLayer {
         const ref = { section_id: sectionId, station_index: stationIndex };
         // Match the interact-overlay guard: a station hidden because every
         // kind touching it is hidden must not surface.
-        if (!anyVirtualVisible(this.visibleKinds()) && this.geoIndex.isAllReferenceStation(ref))
+        if (!this.geoIndex.isStationDrawn(ref, this.visibleKinds()))
           continue;
         const coords = this.geoIndex.stationCoords(ref);
         if (coords) points.push({ center: coords });

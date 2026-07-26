@@ -27,7 +27,6 @@ import type { GpsOrigin } from '../../../../types/config';
 import {
   type SurveyData,
   type SectionMetadata,
-  isVirtualKind,
   shotKindFromFlags,
   shotKindToFlags,
   STATION_FLAG_IS_ZERO_DATUM,
@@ -199,20 +198,42 @@ export function buildStationLookup(data: SurveyData): Map<number, Map<number, nu
 }
 
 /**
- * Per global station index: 1 when every shot touching the station is a
- * reference shot (or the station has no shots at all), else 0. Mirrors
- * `buildSurveyFeatures`' `allShotsReference` property (features.ts): a station
- * is "all-reference" unless some non-reference shot names it as an endpoint.
- * `setShowReferenceShots(false)` hides exactly these stations in the stock
- * layer, so the custom layer needs the same per-station flag to match.
+ * Per global station index: which kinds of shot touch the station, as a small
+ * mask (#27).
+ *
+ *   0 = at least one Normal shot touches it - always drawn
+ *   1 = only Jumps
+ *   2 = only References
+ *   3 = both virtual kinds, no Normal
+ *
+ * `0` keeps the meaning the old boolean had (`allShotsReference === false`), so
+ * the common case is unchanged. The virtual cases are split because the toggles
+ * are: a station whose every leg is a Reference must disappear when References
+ * are hidden, even while Jumps are still drawn. A single "any virtual kind is
+ * visible" test kept an interactive orphan marker on it.
+ *
+ * A station with no feature-producing shots at all stays `3`, i.e. hidden only
+ * when both kinds are off - it has no legs to follow either way.
  */
 export function computeStationAllReference(
   data: SurveyData,
   lookup: Map<number, Map<number, number>>,
 ): Float32Array {
-  // Start all-reference; clear the flag for any station an unhidden
-  // (non-reference) shot connects to.
-  const allRef = new Float32Array(data.stationCount).fill(1);
+  // Start at "both virtual kinds" (3) - the no-legs default - then narrow:
+  // a Normal shot forces 0, and each virtual kind contributes only its own bit.
+  const mask = new Float32Array(data.stationCount).fill(3);
+  const seen = new Uint8Array(data.stationCount);
+  const touch = (global: number, bit: number) => {
+    if (mask[global] === 0) return; // a Normal shot already won
+    if (bit === 0) {
+      mask[global] = 0;
+      seen[global] = 1;
+      return;
+    }
+    // First virtual touch replaces the no-legs default rather than OR-ing into it.
+    mask[global] = seen[global] ? mask[global]! | bit : bit;
+    seen[global] = 1;
+  };
   for (const section of data.sections) {
     const inner = lookup.get(section.id);
     if (!inner) continue;
@@ -224,13 +245,13 @@ export function computeStationAllReference(
       // build's `stationsWithNonReferenceShot` (features.ts) and the set of
       // shots the line buffers actually draw.
       if (fromGlobal === undefined || toGlobal === undefined) continue;
-      const isReference = isVirtualKind(shotKindFromFlags(data.shotFlags[shotGlobalIdx]!));
-      if (isReference) continue;
-      allRef[fromGlobal] = 0;
-      allRef[toGlobal] = 0;
+      const kind = shotKindFromFlags(data.shotFlags[shotGlobalIdx]!);
+      const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;
+      touch(fromGlobal, bit);
+      touch(toGlobal, bit);
     }
   }
-  return allRef;
+  return mask;
 }
 
 /**
@@ -754,15 +775,30 @@ export function recomputeSectionAllReference(
 ): void {
   const inner = lookup.get(section.id);
   if (!inner) return;
-  for (const g of inner.values()) allRef[g] = 1;
+  // Same mask as the full build (see `computeStationAllReference`): reset to the
+  // no-legs default, then let each shot contribute only its own kind's bit. This
+  // has to stay byte-identical to the full path - the incremental property test
+  // compares every circle buffer against a from-scratch rebuild.
+  const seen = new Set<number>();
+  for (const g of inner.values()) allRef[g] = 3;
+  const touch = (global: number, bit: number) => {
+    if (allRef[global] === 0) return; // a Normal shot already won
+    if (bit === 0) {
+      allRef[global] = 0;
+      seen.add(global);
+      return;
+    }
+    allRef[global] = seen.has(global) ? allRef[global]! | bit : bit;
+    seen.add(global);
+  };
   for (let i = 0; i < section.shotCount; i++) {
     const fromGlobal = inner.get(i);
     const toGlobal = inner.get(i + 1);
     if (fromGlobal === undefined || toGlobal === undefined) continue;
-    const isReference = isVirtualKind(shotKindFromFlags(data.shotFlags[section.shotOffset + i]!));
-    if (isReference) continue;
-    allRef[fromGlobal] = 0;
-    allRef[toGlobal] = 0;
+    const kind = shotKindFromFlags(data.shotFlags[section.shotOffset + i]!);
+    const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;
+    touch(fromGlobal, bit);
+    touch(toGlobal, bit);
   }
 }
 

@@ -474,22 +474,27 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
     expect(Array.from(b.reference.slice(0, 4))).toEqual([1, 1, 1, 1]);
   });
 
-  it('computeStationAllReference flags stations touched only by reference/invalid shots', () => {
+  it('computeStationAllReference records WHICH kinds touch each station', () => {
     const d = refFixture();
     const lookup = buildStationLookup(d);
     const allRef = computeStationAllReference(d, lookup);
-    // Station 0: only endpoint of the reference shot -> all-reference (1).
-    // Stations 1,2: endpoints of the non-reference shot global 1 -> 0.
-    // Station 3: section 2's only shot is invalid (missing endpoint) -> 1.
-    expect(Array.from(allRef)).toEqual([1, 0, 0, 1]);
+    // The value is a mask, not a bool (#27): 0 = a Normal shot touches it,
+    // 1 = only Jumps, 2 = only References, 3 = both / no legs at all. Splitting
+    // the virtual kinds is what lets a reference-only station disappear when
+    // References are hidden while Jumps are still drawn.
+    // Station 0: only endpoint of the Reference shot -> 2.
+    // Stations 1,2: endpoints of the Normal shot global 1 -> 0.
+    // Station 3: section 2's only shot is invalid (missing endpoint) -> no legs -> 3.
+    expect(Array.from(allRef)).toEqual([2, 0, 0, 3]);
   });
 
   it('a fully non-reference survey has no all-reference stations', () => {
     const d = makeFixture(); // all shotFlags 0
     const lookup = buildStationLookup(d);
     const allRef = computeStationAllReference(d, lookup);
-    // Stations 0,1,2 are all endpoints of non-reference shots; station 3 isolated.
-    expect(Array.from(allRef)).toEqual([0, 0, 0, 1]);
+    // Stations 0,1,2 are all endpoints of Normal shots -> 0; station 3 is
+    // isolated, so it has no legs and keeps the both-off default of 3.
+    expect(Array.from(allRef)).toEqual([0, 0, 0, 3]);
   });
 
   it('buildCircleBuffers propagates the all-reference flag to every vertex', () => {
@@ -498,12 +503,12 @@ describe('reference-shot flags (setShowReferenceShots parity)', () => {
     const rel = projectStationsRel(d, null, 0, 0);
     const allRef = computeStationAllReference(d, lookup);
     const b = buildCircleBuffers(d, rel, fill, stroke, undefined, allRef);
-    // Station 0 (all-reference) -> its 4 verts are 1.
-    for (let c = 0; c < 4; c++) expect(b.allReference[0 * 4 + c]).toBe(1);
-    // Station 1 (has a non-reference shot) -> 0.
+    // Station 0 (Reference-only) -> its 4 verts carry the Reference bit, 2.
+    for (let c = 0; c < 4; c++) expect(b.allReference[0 * 4 + c]).toBe(2);
+    // Station 1 (has a Normal shot) -> 0.
     for (let c = 0; c < 4; c++) expect(b.allReference[1 * 4 + c]).toBe(0);
-    // Station 3 (isolated) -> 1.
-    for (let c = 0; c < 4; c++) expect(b.allReference[3 * 4 + c]).toBe(1);
+    // Station 3 (isolated, no legs) -> 3.
+    for (let c = 0; c < 4; c++) expect(b.allReference[3 * 4 + c]).toBe(3);
   });
 
   it('allReference defaults to 0 for every vertex when no flags are passed', () => {

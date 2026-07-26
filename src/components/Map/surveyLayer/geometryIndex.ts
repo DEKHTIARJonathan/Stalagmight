@@ -77,15 +77,6 @@ export function isKindVisible(flags: number, visible: VisibleKinds): boolean {
   return true;
 }
 
-/**
- * A station touched only by virtual shots stays visible while EITHER kind is
- * drawn, matching the circle shader's `u_hide_reference && u_hide_jump` test.
- * Conservative on purpose: a station never vanishes while one of its legs shows.
- */
-export function anyVirtualVisible(visible: VisibleKinds): boolean {
-  return visible.jump || visible.reference;
-}
-
 export interface ResolveOptions {
   /** Mirror of the per-kind visibility toggles: a hidden kind's shots (and
    *  stations touched only by hidden kinds) are skipped, since they are
@@ -121,7 +112,7 @@ export class SurveyGeometryIndex {
   private stationLookup = new Map<number, Map<number, number>>();
   /** Per-section cache: stationIndex values that touch >=1 non-reference shot
    *  (both endpoints present - mirrors the builder's feature-emission guard). */
-  private nonRefStationCache = new Map<number, Set<number>>();
+  private stationKindMaskCache = new Map<number, Map<number, number>>();
   /** Per-section world-coord (map coords) AABB over its stations, stored as flat
    *  parallel arrays (index 0..boundsCount-1) for cache-friendly projection.
    *  Lazily built by {@link ensureBounds} the first time the gate runs. */
@@ -262,26 +253,50 @@ export class SurveyGeometryIndex {
     );
   }
 
-  /** The set of stationIndex values in `sectionId` that are an endpoint of at
-   *  least one non-reference shot (with both endpoints present). Mirrors the
-   *  builder's `stationsWithNonReferenceShot` semantics per section. */
-  private nonRefStations(sectionId: number): Set<number> {
-    let cached = this.nonRefStationCache.get(sectionId);
+  /** Which kinds of shot touch each station in `sectionId`, keyed by station
+   *  index (#27). Same encoding as the circle shader's `a_all_reference`:
+   *  0 = at least one Normal shot, 1 = only Jumps, 2 = only References,
+   *  3 = both virtual kinds (also the no-legs default). Toggle-independent, so
+   *  it caches per section; the toggles are applied by
+   *  [`isStationVisible`](Self.isStationVisible) at query time. */
+  private stationKindMask(sectionId: number): Map<number, number> {
+    let cached = this.stationKindMaskCache.get(sectionId);
     if (cached) return cached;
-    cached = new Set<number>();
+    cached = new Map<number, number>();
     const section = this.sectionById.get(sectionId);
     const lookup = this.stationLookup.get(sectionId);
     if (section && lookup) {
+      const touch = (idx: number, bit: number) => {
+        const prev = cached!.get(idx);
+        if (prev === 0) return; // a Normal shot already won
+        cached!.set(idx, bit === 0 ? 0 : prev === undefined ? bit : prev | bit);
+      };
       for (let i = 0; i < section.shotCount; i++) {
         const shotGlobalIdx = section.shotOffset + i;
-        if (isVirtualKind(shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!))) continue;
         if (lookup.get(i) === undefined || lookup.get(i + 1) === undefined) continue;
-        cached.add(i);
-        cached.add(i + 1);
+        const kind = shotKindFromFlags(this.data.shotFlags[shotGlobalIdx]!);
+        const bit = kind === 'Jump' ? 1 : kind === 'Reference' ? 2 : 0;
+        touch(i, bit);
+        touch(i + 1, bit);
       }
     }
-    this.nonRefStationCache.set(sectionId, cached);
+    this.stationKindMaskCache.set(sectionId, cached);
     return cached;
+  }
+
+  /** Whether a station is currently drawn, and so hit-testable. Mirrors the
+   *  circle shader exactly: visible while ANY kind that touches it is visible.
+   *  A station with no legs at all keeps the both-off rule. */
+  private isStationVisible(
+    sectionId: number,
+    stationIndex: number,
+    visible: VisibleKinds,
+  ): boolean {
+    const mask = this.stationKindMask(sectionId).get(stationIndex) ?? 3;
+    if (mask === 0) return true; // a Normal shot touches it
+    if ((mask & 1) !== 0 && visible.jump) return true;
+    if ((mask & 2) !== 0 && visible.reference) return true;
+    return false;
   }
 
   /**
@@ -301,9 +316,9 @@ export class SurveyGeometryIndex {
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
-      const visibleIdxs = anyVirtualVisible(opts.visibleKinds) ? null : this.nonRefStations(sid);
+      const kinds = opts.visibleKinds;
       for (const g of idxs) {
-        if (visibleIdxs && !visibleIdxs.has(this.data.stationIndices[g]!)) continue;
+        if (!this.isStationVisible(sid, this.data.stationIndices[g]!, kinds)) continue;
         const lngLat = this.stationLngLat(g);
         const p = project(lngLat);
         const dist = Math.hypot(p.x - px, p.y - py);
@@ -384,9 +399,9 @@ export class SurveyGeometryIndex {
     for (const sid of sectionIds) {
       const idxs = this.sectionStationIdxs.get(sid);
       if (!idxs) continue;
-      const visibleIdxs = anyVirtualVisible(opts.visibleKinds) ? null : this.nonRefStations(sid);
+      const kinds = opts.visibleKinds;
       for (const g of idxs) {
-        if (visibleIdxs && !visibleIdxs.has(this.data.stationIndices[g]!)) continue;
+        if (!this.isStationVisible(sid, this.data.stationIndices[g]!, kinds)) continue;
         const p = project(this.stationLngLat(g));
         // Circle-rectangle intersection: clamp the center to the box, then
         // compare the residual distance to the radius.
@@ -566,7 +581,7 @@ export class SurveyGeometryIndex {
     for (let g = 0; g < this.data.stationCount; g++) {
       const sectionId = this.data.stationSectionIds[g]!;
       const stationIndex = this.data.stationIndices[g]!;
-      if (!anyVirtualVisible(visibleKinds) && !this.nonRefStations(sectionId).has(stationIndex)) continue;
+      if (!this.isStationVisible(sectionId, stationIndex, visibleKinds)) continue;
       stations.push({ sectionId, stationIndex, lngLat: this.stationLngLat(g) });
     }
     const shots: Array<{
@@ -667,9 +682,17 @@ export class SurveyGeometryIndex {
    *  station is filtered out while reference shots are hidden). Stations
    *  with no feature-producing shots at all also count as all-reference,
    *  mirroring the builder's `allShotsReference` property. */
+  /** Whether the station is currently DRAWN under `visible`, i.e. hit-testable.
+   *  The public form of the per-kind rule the resolvers use internally, so
+   *  callers outside the index cannot drift from the circle shader (#27). */
+  isStationDrawn(ref: StationRef, visible: VisibleKinds): boolean {
+    this.ensureBuilt();
+    return this.isStationVisible(ref.section_id, ref.station_index, visible);
+  }
+
   isAllReferenceStation(ref: StationRef): boolean {
     this.ensureBuilt();
-    return !this.nonRefStations(ref.section_id).has(ref.station_index);
+    return (this.stationKindMask(ref.section_id).get(ref.station_index) ?? 3) !== 0;
   }
 
   /** Section metadata by id (color lookup for overlay styling). */
