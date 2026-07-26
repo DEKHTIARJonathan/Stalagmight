@@ -54,6 +54,24 @@ export function overlayTouchesRemovedSections(
   return false;
 }
 
+/**
+ * Compact signature of how the currently-highlighted overlay ids are dimmed /
+ * suppressed. Compare one taken BEFORE a dim-set change with one taken AFTER: an
+ * unequal pair means the overlay the user is looking at right now really does
+ * change, so its stale tile must be hidden across the re-tile. An equal pair -
+ * the common case, e.g. a tool switch that sets empty dim sets while nothing is
+ * hovered - means hiding would only introduce flicker. Pure.
+ */
+export function overlayDimSignature(
+  highlightedIds: readonly (string | null | undefined)[],
+  isAnchored: (id: string) => boolean,
+  isImmovable: (id: string) => boolean,
+): string {
+  return highlightedIds
+    .map((id) => (id ? `${isAnchored(id) ? 'a' : ''}${isImmovable(id) ? 'i' : ''}` : '-'))
+    .join(',');
+}
+
 /** Narrow map surface the controller needs (visibility get/set + source-load
  *  events + layer existence). Keeps the controller unit-testable with a stub. */
 export type InteractHideMap = Pick<

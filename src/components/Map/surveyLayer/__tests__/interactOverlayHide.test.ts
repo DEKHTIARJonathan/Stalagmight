@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type maplibregl from 'maplibre-gl';
 import {
   overlayTouchesRemovedSections,
+  overlayDimSignature,
   InteractOverlayHideController,
   INTERACT_HIDE_FALLBACK_MS,
   type InteractHideMap,
@@ -185,5 +186,43 @@ describe('InteractOverlayHideController', () => {
     c.restore();
     expect(f.vis['survey-interact-shots']).toBe('visible');
     expect(f.listenerCount()).toBe(0);
+  });
+});
+
+// #301: a dim-set change must hide the overlay across its ~250ms re-tile ONLY
+// when what is actually on screen changes. setAnchoredSections /
+// setImmovableFeatures fire on every tool switch, usually with empty sets, so an
+// unconditional hide would blank the highlight and add flicker where there is none.
+describe('overlayDimSignature', () => {
+  const none = (): boolean => false;
+  const all = (): boolean => true;
+
+  it('is stable when nothing is highlighted, whatever the dim sets say', () => {
+    const ids = [null, null, null, null];
+    expect(overlayDimSignature(ids, none, none)).toBe(overlayDimSignature(ids, all, all));
+  });
+
+  it('changes when a highlighted feature becomes anchored', () => {
+    const ids = ['1:100000', null, null, null];
+    const before = overlayDimSignature(ids, none, none);
+    const after = overlayDimSignature(ids, (id) => id === '1:100000', none);
+    expect(after).not.toBe(before);
+  });
+
+  it('changes when a highlighted feature becomes immovable', () => {
+    const ids = [null, null, '2:0', null];
+    expect(overlayDimSignature(ids, none, all)).not.toBe(overlayDimSignature(ids, none, none));
+  });
+
+  it('does not change when the dim set only covers features that are NOT highlighted', () => {
+    const ids = ['1:100000', null, null, null];
+    const before = overlayDimSignature(ids, none, none);
+    const after = overlayDimSignature(ids, (id) => id === '7:700000', none);
+    expect(after).toBe(before);
+  });
+
+  it('distinguishes anchored from immovable rather than collapsing both to "dimmed"', () => {
+    const ids = ['1:100000', null, null, null];
+    expect(overlayDimSignature(ids, all, none)).not.toBe(overlayDimSignature(ids, none, all));
   });
 });

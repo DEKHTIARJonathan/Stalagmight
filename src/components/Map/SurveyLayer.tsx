@@ -78,6 +78,7 @@ import { shouldSuppressMapError, type MapErrorEventLike } from './surveyLayer/ma
 import { diffRemovedSectionIds } from './surveyLayer/sectionDiff';
 import {
   InteractOverlayHideController,
+  overlayDimSignature,
   overlayTouchesRemovedSections,
 } from './surveyLayer/interactOverlayHide';
 
@@ -883,47 +884,7 @@ export default class SurveyLayer {
         this.hoveredStationId = newHoveredStationId;
         this.hoveredShotId = newHoveredShotId;
 
-        // Update cursor - suppress for anchored/immovable features
-        let showPointer = Boolean(newHoveredStationId || newHoveredShotId);
-        let suppressReason: string | null = null;
-        const hoveredId = newHoveredStationId || newHoveredShotId;
-        if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
-          // Check if hovered feature belongs to an anchored section
-          if (this.isSectionAnchored(sectionIdFromKey(hoveredId))) {
-            showPointer = false;
-            suppressReason = 'anchored_section';
-          }
-        }
-        // Suppress cursor for immovable features in Move Station / Move Shot tools
-        if (showPointer && (this.activeTool === 'move_station' || this.activeTool === 'move_shot')) {
-          if (newHoveredStationId) {
-            const [secStr, idxStr] = newHoveredStationId.split(':');
-            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isStationImmovable(featureId)) {
-              showPointer = false;
-              suppressReason = 'immovable_station';
-            }
-          } else if (newHoveredShotId) {
-            const [secStr, idxStr] = newHoveredShotId.split(':');
-            const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
-            if (this.isShotImmovable(featureId)) {
-              showPointer = false;
-              suppressReason = 'immovable_shot';
-            }
-          }
-        }
-        // Move Station/Shot tools: use arrow cursor when not over a movable feature
-        // (prevents MapLibre's default grab cursor from showing through)
-        const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
-        this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
-        if (this.shouldLogInteraction() && suppressReason) {
-          console.debug('[HitDetection] Hover suppressed', {
-            activeTool: this.activeTool,
-            suppressReason,
-            newHoveredStationId,
-            newHoveredShotId,
-          });
-        }
+        this.refreshHoverCursor();
 
         // Update MapLibre visual state
         this.updateVisualState();
@@ -1390,6 +1351,61 @@ export default class SurveyLayer {
     const [sectionId, index] = id.split(':').map(Number);
     if (isNaN(sectionId!) || isNaN(index!)) return null;
     return sectionId! * FEATURE_ID_STRIDE + index!;
+  }
+
+  /** Point/arrow cursor for whatever is hovered RIGHT NOW, suppressed for anchored
+   *  or immovable features. Derived purely from current state so it can be re-run
+   *  when a dim set changes, not only when the hovered id changes - the anchored
+   *  and immovable sets arrive asynchronously, and without a recompute the cursor
+   *  disagrees with the highlight until the pointer leaves the feature (#301). */
+  private refreshHoverCursor(): void {
+    let showPointer = Boolean(this.hoveredStationId || this.hoveredShotId);
+    let suppressReason: string | null = null;
+    const hoveredId = this.hoveredStationId || this.hoveredShotId;
+    if (showPointer && this.activeTool === 'move_segment' && hoveredId) {
+      // Check if hovered feature belongs to an anchored section
+      if (this.isSectionAnchored(sectionIdFromKey(hoveredId))) {
+        showPointer = false;
+        suppressReason = 'anchored_section';
+      }
+    }
+    // Suppress cursor for immovable features in Move Station / Move Shot tools
+    const useArrowFallback = this.activeTool === 'move_station' || this.activeTool === 'move_shot';
+    if (showPointer && useArrowFallback && hoveredId) {
+      const [secStr, idxStr] = hoveredId.split(':');
+      const featureId = Number(secStr) * FEATURE_ID_STRIDE + Number(idxStr);
+      const immovable = this.hoveredStationId
+        ? this.isStationImmovable(featureId)
+        : this.isShotImmovable(featureId);
+      if (immovable) {
+        showPointer = false;
+        suppressReason = this.hoveredStationId ? 'immovable_station' : 'immovable_shot';
+      }
+    }
+    // Move Station/Shot tools: use arrow cursor when not over a movable feature
+    // (prevents MapLibre's default grab cursor from showing through)
+    this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
+    if (this.shouldLogInteraction() && suppressReason) {
+      console.debug('[HitDetection] Hover suppressed', {
+        activeTool: this.activeTool,
+        suppressReason,
+        hoveredStationId: this.hoveredStationId,
+        hoveredShotId: this.hoveredShotId,
+      });
+    }
+  }
+
+  /** {@link overlayDimSignature} over the ids the interact overlay paints, used to
+   *  decide whether a dim-set change actually alters what is on screen. */
+  private dimSignature(): string {
+    return overlayDimSignature(
+      [this.hoveredShotId, this.selectedShotId, this.hoveredStationId, this.selectedStationId],
+      (id) => this.isSectionAnchored(sectionIdFromKey(id)),
+      (id) => {
+        const fid = this.parseFeatureId(id);
+        return fid !== null && (this.isShotImmovable(fid) || this.isStationImmovable(fid));
+      },
+    );
   }
 
   // Check if a section is anchored (suppresses hover/interaction, dims its geometry).
@@ -2355,6 +2371,7 @@ export default class SurveyLayer {
    * Sections in this set get reduced opacity via feature-state.
    */
   setAnchoredSections(sectionIds: Set<number>): void {
+    const before = this.dimSignature();
     this.anchoredSectionIds = sectionIds;
     // Update loop closure line opacity - gray out closures where both endpoints are anchored.
     this.updateClosureAnchoredOpacity(sectionIds);
@@ -2365,8 +2382,7 @@ export default class SurveyLayer {
     // it lands asynchronously after move_segment activates. Without this the
     // already-drawn highlight on a held-still pointer stays bright over geometry the
     // renderer just dimmed - and stays suppressed after leaving the tool.
-    this.lastInteractKey = null;
-    this.refreshInteractOverlay();
+    this.applyDimChangeToOverlay(before);
   }
 
   /** Push the current anchored + immovable dim set to the custom-render layers so
@@ -2411,6 +2427,7 @@ export default class SurveyLayer {
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {
+    const before = this.dimSignature();
     this.immovableStationFeatureIds = stationIds;
     this.immovableShotFeatureIds = shotIds;
     // Loop closures dim if either endpoint is immovable (kept GeoJSON overlay).
@@ -2419,8 +2436,20 @@ export default class SurveyLayer {
     this.syncCustomDimming();
     // Same overlay-cache hazard as setAnchoredSections: these sets gate the
     // hover/selection highlight but are not in the overlay's cache key.
+    this.applyDimChangeToOverlay(before);
+  }
+
+  /** Re-derive everything a dim-set change feeds, given the {@link dimSignature}
+   *  captured before the change: the interact overlay (not in its own cache key),
+   *  the hover cursor (otherwise only recomputed when the hovered id changes), and
+   *  - only when the on-screen overlay actually changed - a hide across the
+   *  GeoJSON re-tile, which lags the synchronous custom-geometry dim by ~250ms and
+   *  would otherwise flash the old highlight over newly dimmed geometry. */
+  private applyDimChangeToOverlay(before: string): void {
     this.lastInteractKey = null;
     this.refreshInteractOverlay();
+    this.refreshHoverCursor();
+    if (this.dimSignature() !== before) this.interactHide.hideUntilRetile();
   }
 
   private updateImmovableClosureOpacity(immovableStationIds: Set<number>): void {

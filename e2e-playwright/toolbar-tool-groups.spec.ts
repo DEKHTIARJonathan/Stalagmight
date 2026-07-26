@@ -569,5 +569,22 @@ test.describe('Toolbar Tool Groups', () => {
     await page.keyboard.press('s');
     await waitForActiveTool(page, 'select');
     await expect.poll(overlayShotCount, { timeout: 10000 }).toBe(1);
+
+    // The cursor must agree with the highlight. It is only recomputed when the
+    // hovered id changes, so without a recompute on the dim-set change it stays
+    // as setActiveTool left it and the feature reads as un-grabbable while
+    // painting a hover highlight - the cursor/highlight disagreement #301 is about.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(() => {
+            const map = (window as unknown as {
+              __stalagmight_map__?: { getCanvas: () => HTMLCanvasElement };
+            }).__stalagmight_map__;
+            return map?.getCanvas().style.cursor ?? '';
+          }),
+        { timeout: 10000 }
+      )
+      .toBe('pointer');
   });
 });
