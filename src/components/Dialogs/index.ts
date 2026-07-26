@@ -48,5 +48,6 @@ export { default as SpeleoDivergenceDialog } from './SpeleoDivergenceDialog';
 export { default as SpeleoForceEditDialog } from './SpeleoForceEditDialog';
 export { default as SpeleoRestoreDialog } from './SpeleoRestoreDialog';
 export { default as SpeleoCloseDialog } from './SpeleoCloseDialog';
+export { default as SpeleoQuitDialog } from './SpeleoQuitDialog';
 export { default as SpeleoNoPermissionDialog } from './SpeleoNoPermissionDialog';
 export { default as HeldLockResumeDialog } from './HeldLockResumeDialog';

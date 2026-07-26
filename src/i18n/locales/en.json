@@ -2769,6 +2769,18 @@
       "saveLocally": "Save changes locally before closing",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet."
     },
+    "quit": {
+      "title": "Quit with changes not on SpeleoDB",
+      "message": "You still hold the SpeleoDB write lock, and you have changes that have not been uploaded to SpeleoDB yet.",
+      "saveLocally": "Save changes locally before quitting",
+      "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
+      "keepLockHint": "Keeping the lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",
+      "pushRelease": "Push, release & quit",
+      "keepLock": "Keep the lock & quit",
+      "discardRelease": "Discard & release the lock",
+      "discardWarning": "Releasing the lock without uploading leaves your changes on this computer only, and lets anyone else start editing from the older version on SpeleoDB. Quit anyway?",
+      "discardConfirm": "Yes, release & quit"
+    },
     "divergence": {
       "title": "Resolve SpeleoDB conflict",
       "description": "Your local changes and the version on SpeleoDB have diverged. Choose how to resolve it.",
@@ -2920,6 +2932,20 @@
       "releaseAll": "Release all locks",
       "releasing": "Releasing…",
       "releaseFailed": "Could not release the locks"
+    },
+    "localEdits": {
+      "titleSuffix": "These changes are only on this computer - SpeleoDB does not have them yet.",
+      "heldLocks": {
+        "hasLocalChanges": "Has changes only on this computer",
+        "continueEditing": "Continue editing",
+        "continueEditingAria": "Open {{name}} and keep its lock",
+        "opening": "Opening…",
+        "openFailed": "Could not find the local copy of {{name}} to open. Its lock is left alone so nothing is lost.",
+        "unknown": "Could not check which projects have changes only on this computer. Release with care.",
+        "releaseRest": "Release the others",
+        "releaseAllConfirm": "Release all anyway",
+        "releaseAllConfirmNote": "Some of these projects may hold changes that are only on this computer. Releasing their locks leaves that work behind. Click again to release every lock."
+      }
     },
     "recentBadge": {
       "remote": "Linked to SpeleoDB",

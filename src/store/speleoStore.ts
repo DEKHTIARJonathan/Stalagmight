@@ -798,11 +798,15 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  * the banner straight back, so the "your changes are only on this computer"
  * reminder is never lost.
  *
- * Both entries retry through their own primary button (`Upload & release` /
- * `Upload & keep editing` / `Push & release`), so neither needs a second retry
- * control and neither loses the commit message the user typed.
+ * Every entry retries through its own primary button (`Upload & release` /
+ * `Upload & keep editing` / `Push & release` / `Push, release & quit`), so none
+ * needs a second retry control and none loses the commit message the user typed.
  */
-export const PUSH_FAILURE_DIALOGS: readonly string[] = ['speleodb-done', 'speleodb-close'];
+export const PUSH_FAILURE_DIALOGS: readonly string[] = [
+  'speleodb-done',
+  'speleodb-close',
+  'speleodb-quit',
+];
 
 /**
  * The active push/unlock failure (the `push_failed` banner payload), or `null`.

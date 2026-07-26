@@ -8,6 +8,7 @@ import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
+import { guardQuit } from './utils/quit';
 import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
@@ -17,7 +18,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -127,12 +128,20 @@ function App() {
   // The gas store persists across mode switches now, so a dirty (loaded + diverged)
   // plan stays dirty in any mode - closing loses those edits regardless of the current
   // mode, so the close guard is correct without an appMode check.
+  // The OS window X lands here as `tauri://close-requested`, so this is also the
+  // only seam that can put it through the app's own exit guards (#270): without
+  // `guardQuit` the X destroyed the window whenever neither of the two states
+  // above was set, silently dropping unsaved-to-disk work and unpushed SpeleoDB
+  // edits that the menu Quit has always prompted for. X and Quit now share one
+  // guard.
   const planDirty = useGasPlanStore(selectIsPlanDirty);
   useBeforeUnload(
     isImportInProgress || planDirty,
     isImportInProgress
       ? 'Import is in progress. Discard all import data and close?'
-      : 'You have unsaved changes to this dive plan. Discard and close?'
+      : 'You have unsaved changes to this dive plan. Discard and close?',
+    undefined,
+    guardQuit
   );
 
   useEffect(() => {
@@ -524,6 +533,7 @@ function App() {
       {activeDialog === 'speleodb-force-edit' && <SpeleoForceEditDialog />}
       {activeDialog === 'speleodb-restore' && <SpeleoRestoreDialog />}
       {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
+      {activeDialog === 'speleodb-quit' && <SpeleoQuitDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (

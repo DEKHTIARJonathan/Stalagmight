@@ -20,6 +20,9 @@ import {
  * - Verify the hook is active during import (prevents accidental close)
  * - Verify the hook cleans up properly when dialog closes
  * - Verify import workflow dialog interactions work correctly
+ * - [#270] Verify the OS window X routes through the app's OWN exit guards
+ *   (unsaved-to-disk, and unpushed SpeleoDB edits under a held write lock)
+ *   instead of destroying the window silently.
  */
 
 test.describe('Window Close Protection', () => {
@@ -285,5 +288,120 @@ test.describe('Window Close Protection', () => {
     await expect(cancelButton).toBeVisible();
     await expect(cancelButton).toBeEnabled();
     await cancelFromWizard(page);
+  });
+  /**
+   * [#270 - bug 1] The OS window X used to bypass the unsaved-changes guard.
+   *
+   * `useBeforeUnload`'s shouldBlock only ever covered an in-flight import and a
+   * dirty dive plan, so an X press on a project with unsaved edits destroyed the
+   * window with no prompt at all - while the menu Quit had prompted since day
+   * one. X and Quit now share `guardQuit`.
+   *
+   * The X arrives as a `tauri://close-requested` event; the mocked IPC layer can
+   * emit it, which is exactly what the real backend's `on_window_event` handler
+   * does after preventing the close.
+   */
+  async function pressWindowCloseButton(page: Page): Promise<void> {
+    await page.evaluate(async () => {
+      await (
+        window as unknown as {
+          __TAURI_INTERNALS__?: { invoke: (cmd: string, args: unknown) => Promise<unknown> };
+        }
+      ).__TAURI_INTERNALS__?.invoke('plugin:event|emit', {
+        event: 'tauri://close-requested',
+        payload: null,
+      });
+    });
+  }
+
+  test('window X prompts on unsaved-to-disk changes instead of closing silently', async ({
+    page,
+  }) => {
+    await createProject(page, 'Window X Unsaved Test');
+
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: { projectStore?: { setState: (s: unknown) => void } };
+      }).__E2E_TEST__;
+      e2e?.projectStore?.setState({ isDirty: true });
+    });
+
+    await pressWindowCloseButton(page);
+
+    // The app's OWN dialog - not a native confirm string - and the app is still up.
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeVisible({ timeout: 5000 });
+    await expect(page.getByTestId('single-system-view')).toBeVisible();
+  });
+
+  test('window X prompts on unpushed SpeleoDB edits held under our write lock', async ({
+    page,
+  }) => {
+    await createProject(page, 'Window X Unpushed Test');
+
+    // Saved to disk (isDirty false) but NOT on the server: the exact state the old
+    // guard waved straight through.
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: { setState: (s: unknown) => void };
+          speleoStore?: { setState: (s: unknown) => void };
+        };
+      }).__E2E_TEST__;
+      e2e?.projectStore?.setState({ isDirty: false });
+      e2e?.speleoStore?.setState({
+        link: {
+          permission: 'READ_AND_WRITE',
+          editState: 'editing',
+          lockHolder: null,
+          lockedByOther: false,
+          hasUnpushedEdits: true,
+          forceEditing: false,
+          forceEditAllowed: false,
+          remoteState: 'up_to_date',
+          noAccess: false,
+          serverError: null,
+        },
+      });
+    });
+
+    await pressWindowCloseButton(page);
+
+    const dialog = page.getByTestId('speleodb-quit-dialog');
+    await expect(dialog).toBeVisible({ timeout: 5000 });
+    // All three choices, with the safe one primary and the destructive one neither
+    // primary nor armed on the first press.
+    await expect(dialog.getByTestId('speleodb-quit-push-release')).toHaveAttribute(
+      'data-primary-action',
+      ''
+    );
+    await expect(dialog.getByTestId('speleodb-quit-keep-lock')).toBeVisible();
+    await expect(dialog.getByTestId('speleodb-quit-discard-release')).not.toHaveAttribute(
+      'data-primary-action',
+      ''
+    );
+    await expect(page.getByTestId('speleodb-quit-discard-warning')).toBeHidden();
+
+    await dialog.getByTestId('speleodb-quit-discard-release').click();
+    await expect(page.getByTestId('speleodb-quit-discard-warning')).toBeVisible();
+  });
+
+  test('window X with a clean project raises no guard dialog', async ({ page }) => {
+    await createProject(page, 'Window X Clean Test');
+
+    await page.evaluate(() => {
+      const e2e = (window as unknown as {
+        __E2E_TEST__?: {
+          projectStore?: { setState: (s: unknown) => void };
+          speleoStore?: { setState: (s: unknown) => void };
+        };
+      }).__E2E_TEST__;
+      e2e?.projectStore?.setState({ isDirty: false });
+      e2e?.speleoStore?.setState({ link: null });
+    });
+
+    await pressWindowCloseButton(page);
+
+    await expect(page.getByTestId('unsaved-changes-dialog')).toBeHidden();
+    await expect(page.getByTestId('speleodb-quit-dialog')).toBeHidden();
   });
 });
