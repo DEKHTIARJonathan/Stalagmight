@@ -174,8 +174,15 @@ export function GasPlanPanel() {
   // budget-dependent number, or it drifts from the overlay the way #233's gauges did.
   // `waypoint_gas_litres[i]` is the cumulative gas at way point i, or null from the first one the
   // walk could not reach.
+  //
+  // ⚠ These are only meaningful once a field has ARRIVED. Every gas-input setter nulls
+  // `reachField` for the duration of the refetch, and an absent entry reads `undefined == null`,
+  // so keying "unreachable" off the value alone would flash every row red on each RMV keystroke,
+  // reorder or endpoint pick. Gate on the field's presence first (same shape as the route readout
+  // further down), and treat a not-yet-computed way point as "pending", not as bad news.
   const waypointGas = reachField?.waypoint_gas_litres ?? [];
-  const stalledIdx = waypointGas.findIndex((g) => g == null);
+  const gasKnown = reachField != null;
+  const stalledIdx = gasKnown ? waypointGas.findIndex((g) => g == null) : -1;
   // Only report a stall for a way point that actually exists in the CURRENT list: the field can
   // lag a keystroke behind the store, and warning about a way point the user just removed reads
   // as a bug.
@@ -225,7 +232,11 @@ export function GasPlanPanel() {
   // (origin == turnaround when only the origin is in budget) doesn't render a meaningless
   // "Distance to turnaround: 0 m". The distance is the one-way swum line length to the turnaround;
   // depths are the route's deepest point + the distance-weighted average depth.
-  const hasRoute = (reachField?.route.length ?? 0) > 0;
+  // ⚠ Also require a turnaround. Since #298 a route can be drawn with NO target: when the
+  // way-point chain itself is unflyable the engine still returns the committed chain so the diver
+  // can see where the plan broke, but there is no turnaround, so labelling that partial line
+  // "Distance to turnaround" would report a confident number for a dive that cannot be made.
+  const hasRoute = (reachField?.route.length ?? 0) > 0 && reachField?.final_turn_ref != null;
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
 
@@ -344,10 +355,15 @@ export function GasPlanPanel() {
                     {/* Cumulative gas at this way point, straight from the engine - the panel must
                         never re-derive a budget-dependent number (#233 lesson). `null` means the
                         chain stalled here or before it. */}
-                    <span className={waypointGas[i] == null ? 'text-error' : 'opacity-70'}>
-                      {waypointGas[i] == null
-                        ? t('gasPanel.route.unreachable')
-                        : formatVolume(waypointGas[i]!, units)}
+                    <span
+                      className={gasKnown && waypointGas[i] == null ? 'text-error' : 'opacity-70'}
+                      data-testid="gas-waypoint-gas"
+                    >
+                      {!gasKnown || waypointGas.length <= i
+                        ? t('gasPanel.route.pending')
+                        : waypointGas[i] == null
+                          ? t('gasPanel.route.unreachable')
+                          : formatVolume(waypointGas[i]!, units)}
                     </span>
                     <button
                       type="button"

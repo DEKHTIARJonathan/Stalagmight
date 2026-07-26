@@ -2701,10 +2701,82 @@ fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
 }
 
 #[test]
-fn gas_reach_field_stage_drop_override_on_a_revisited_station_picks_the_later_pass() {
+fn gas_reach_field_default_drop_on_a_revisited_station_reports_the_right_pass_distance() {
     // A way-point route doubles back over the entrance, so that station appears TWICE on the route.
-    // Its drop distance must come from the pass the drop actually sits on (the return leg), not
-    // from the first occurrence - the exact ambiguity a ref-based lookup could not resolve.
+    // The drop's reported distance must come from the pass it actually sits on (the return leg),
+    // which is why placement moved to route INDICES: a ref-based `position()` lookup would match the
+    // first occurrence and report 0 m for a drop made 200 m into the dive.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    // Sized so the plan actually exercises the revisit. Route gas runs
+    // 0 (entrance) → 300 (side tip) → 600 (back at the entrance) → 2100 (trunk tip), so the stage's
+    // IN gas must land strictly between 300 and 600 for its drop to fall on the RETURN pass through
+    // the entrance rather than at the side tip; and the back gas must be big enough that the trunk
+    // tip is still in budget, or the route would stop short of the doubling-back leg entirely.
+    let bg = Cylinder::new(
+        40.0,
+        232.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        130.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    // No override: this is about where the STRATEGY's own drop lands and what distance it reports.
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[bg, stage],
+        &cfg,
+        &[],
+    );
+    let route = route_stations(&field);
+    assert_eq!(
+        route.iter().filter(|r| **r == entrance).count(),
+        2,
+        "the detour must revisit the entrance for this test to mean anything"
+    );
+    // The stage's IN gas is first cleared on the way BACK through the entrance point (its outbound
+    // pass is at 0 L), so the drop sits on the return leg. (The entrance is a merged pair, so the
+    // engine may name it by either section's ref - what matters is the distance.)
+    assert_eq!(field.stage_drop_refs.len(), 1);
+    assert_eq!(
+        field.final_turn_ref,
+        Some(trunk_tip),
+        "the trunk tip must stay in budget or the route never doubles back"
+    );
+    // 100 m out to the side tip + 100 m back = 200 m swum at that pass. A ref-based lookup would
+    // have matched the entrance's FIRST appearance on the route and reported 0 m.
+    assert!(
+        (field.stage_drop_distances_m[0] - 200.0).abs() < 1e-6,
+        "expected 200 m, got {}",
+        field.stage_drop_distances_m[0]
+    );
+}
+
+#[test]
+fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget() {
+    // THE #298 safety regression for the #246 override path. `gas_in` is measured from the LAST way
+    // point, so for a station the diver passes on the way OUT it reports the cost of returning to it
+    // - here 600 L for the entrance, versus the 0 L actually burned when they swam past it. Scoring
+    // a pin there against `gas_in` would read a drop made at the entrance as a 600 L burn, flag it
+    // over-reserve and ADD ~600 L to the penetration budget: an action that should leave the stage
+    // FULL would instead extend the reach. Pinning must use the outbound (chain) gas.
     let (project, entrance, side_tip, trunk_tip) = branching_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
@@ -2729,25 +2801,33 @@ fn gas_reach_field_stage_drop_override_on_a_revisited_station_picks_the_later_pa
         default_reserve: ReservePreset::OneStage,
         ..GasConfig::default()
     };
-    let field = project.compute_gas_reach_field_with_overrides(
+    let rig = [bg, stage];
+    let unpinned = project.compute_gas_reach_field_with_overrides(
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
         &diver,
-        &[bg, stage],
+        &rig,
+        &cfg,
+        &[],
+    );
+    let pinned = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &rig,
         &cfg,
         &[Some(entrance)],
     );
-    let route = route_stations(&field);
-    assert_eq!(
-        route.iter().filter(|r| **r == entrance).count(),
-        2,
-        "the detour must revisit the entrance for this test to mean anything"
+
+    // Dropping the stage at the entrance leaves it full, so the plan can only get SHORTER.
+    assert!(
+        pinned.budget_litres <= unpinned.budget_litres + 1e-9,
+        "pinning a drop on the outbound chain must not grow the budget: {} > {}",
+        pinned.budget_litres,
+        unpinned.budget_litres
     );
-    // The drop lands back at the entrance point on the RETURN pass. (The entrance is a merged pair,
-    // so the engine may name it by either section's ref - what matters is the distance.)
-    assert_eq!(field.stage_drop_refs.len(), 1);
-    // 100 m out to the side tip + 100 m back = 200 m swum when the drop is made on the return pass.
-    // The first occurrence of that station on the route would have reported 0 m.
-    assert!((field.stage_drop_distances_m[0] - 200.0).abs() < 1e-6);
+    // And it is not a reserve breach - the diver breathed nothing off that stage.
+    assert_eq!(pinned.stage_drop_over_reserve, vec![false]);
 }

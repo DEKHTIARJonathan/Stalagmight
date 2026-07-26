@@ -2181,6 +2181,7 @@
       "moveDown": "Move later",
       "remove": "Remove",
       "unreachable": "unreachable",
+      "pending": "…",
       "warnUnreachable": "Way point {{n}} cannot be reached, so no route can be planned. Remove it, or reconnect the survey.",
       "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas."
     },

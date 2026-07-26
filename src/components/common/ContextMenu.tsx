@@ -53,10 +53,20 @@ interface ContextMenuItem {
  * drop" is offered; with more, one FLAT entry per stage names the slot explicitly - the shared
  * menu has no submenu support, and an unlabelled "set as stage drop" would leave you guessing
  * which of two markers you just moved.
+ *
+ * ⚠ The stage-drop entries appear ONLY when the right-clicked station is on the planned route
+ * (`onRoute`). A stage drop is a position ALONG the route, and every other writer enforces that:
+ * the drag snaps to the nearest route station and the arrow-key nudge is clamped to the route's
+ * index range. Writing an off-route station would put the diver's ▼ somewhere they did not click
+ * (the engine re-places it at the first route station past the new threshold) AND move the
+ * penetration budget using that station's shortest-path gas, which is not gas along the route the
+ * plan actually flies - i.e. the unsafe direction. Hiding the entry is the honest option: the
+ * action has no meaning off the route.
  */
 function buildPlanMenuItems(
   ref: StationRef,
   stageDropCount: number,
+  onRoute: boolean,
   closeDialog: () => void,
   t: TFunction
 ): ContextMenuItem[] {
@@ -70,14 +80,15 @@ function buildPlanMenuItems(
     },
   });
 
+  const slots = onRoute ? stageDropCount : 0;
   const stageDrops: ContextMenuItem[] =
-    stageDropCount === 1
+    slots === 1
       ? [
           pick(t('gasPanel.menu.setStageDrop'), <StageDropIcon size={16} />, () =>
             gas().setStageDropOverride(0, ref)
           ),
         ]
-      : Array.from({ length: stageDropCount }, (_unused, i) =>
+      : Array.from({ length: slots }, (_unused, i) =>
           pick(t('gasPanel.menu.setStageNDrop', { n: i + 1 }), <StageDropIcon size={16} />, () =>
             gas().setStageDropOverride(i, ref)
           )
@@ -107,7 +118,32 @@ export default function ContextMenu() {
   const { t } = useTranslation();
   // How many stage drops the CURRENT rig produces (#298) - the backend's own count, so the menu
   // can never offer a slot the engine would ignore (All-thirds and a stage-short rig report none).
-  const stageDropCount = useGasPlanStore((s) => s.reachField?.stage_drop_refs.length ?? 0);
+  //
+  // ⚠ Read ONCE, when the menu mounts, and never re-read. Two reasons, both real:
+  // (a) every gas-input setter nulls `reachField` for the length of the refetch - and a plain
+  //     left-click in Plan now sets the endpoint - so the very common click-then-right-click
+  //     gesture would otherwise open a menu with the stage rows silently missing;
+  // (b) as a live subscription the count can change WHILE the menu is open, inserting rows under
+  //     the pointer and shifting the whole menu (its `top` is derived from `items.length`).
+  // The last known count is the honest answer for the menu's lifetime: it is what the map is
+  // currently drawing. `useRef` + lazy init keeps it stable across the re-renders the layer's
+  // other subscriptions cause.
+  // The count is `stage_drop_bars`, the engine's override INDEX space (one entry per counted stage,
+  // always), not `stage_drop_refs` (emptied when nothing is reachable) - so the menu's slot numbers
+  // always match the slots `setStageDropOverride` writes and the rows the panel renders.
+  const planMenuRouteRef = useRef<{ slots: number; route: Set<string> } | null>(null);
+  if (planMenuRouteRef.current === null) {
+    const field = useGasPlanStore.getState().reachField;
+    const route = new Set<string>();
+    for (const leg of field?.route ?? []) {
+      route.add(`${leg.from.section_id}:${leg.from.station_index}`);
+      route.add(`${leg.to.section_id}:${leg.to.station_index}`);
+    }
+    planMenuRouteRef.current = { slots: field?.stage_drop_bars.length ?? 0, route };
+  }
+  const stageDropCount = planMenuRouteRef.current.slots;
+  const planRouteHasStation = (r: StationRef): boolean =>
+    planMenuRouteRef.current?.route.has(`${r.section_id}:${r.station_index}`) ?? false;
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -651,7 +687,7 @@ export default function ContextMenu() {
   if (appMode !== 'survey') {
     items =
       appMode === 'plan' && target?.type === 'station'
-        ? buildPlanMenuItems(target.ref, stageDropCount, closeDialog, t)
+        ? buildPlanMenuItems(target.ref, stageDropCount, planRouteHasStation(target.ref), closeDialog, t)
         : [];
   } else {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except

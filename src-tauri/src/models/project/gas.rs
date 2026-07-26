@@ -255,20 +255,27 @@ impl Project {
             self.resolve_key(&key)
                 .and_then(|sr| station_index.get(&sr).copied())
         });
-        // The un-overridden route: what the STRATEGY alone would fly, on the base budget. Its drop
-        // stations are the "defaults" a release-in-place must reproduce, so `apply` can recognise a
-        // pin to one and stay a true no-op (#246). Deriving them from a route rather than from the
-        // predecessor tree is what keeps that check exact once way points can make the route
-        // backtrack over a station it already visited (#298).
+        // The un-overridden route: what the STRATEGY alone would fly, on the base budget. It serves
+        // two purposes for the override walk, and BOTH need a route rather than the global field:
+        //   - its drop positions are the "defaults" a release-in-place must reproduce, so a jiggle
+        //     stays a true no-op (#246);
+        //   - it is the basis a pinned drop is scored against. A drop is a position ALONG the route,
+        //     so the gas it has cost is the route's cumulative gas at that position - NOT
+        //     `gas_in[station]`, which is the cheapest way to reach that station after the way-point
+        //     chain and corresponds to no pass the diver actually makes once a route doubles back
+        //     (#298). Scoring against `gas_in` reads a return-leg drop as if it were made on the way
+        //     in, which inflates the budget: the unsafe direction (§6).
+        // Using the BASE route keeps the ordering acyclic - the final route depends on the budget,
+        // which depends on these very overrides - and the two coincide whenever the delta is 0.
         let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
         let base_view = budget_view(&walk, endpoint_idx, base_budget);
-        let default_drop_nodes = drop_nodes(&base_view, &default_thresholds);
+        let default_drop_nodes = default_drop_stations(&base_view, &default_thresholds);
 
         let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
             apply_stage_drop_overrides(
                 &plans,
                 &resolved_overrides,
-                gas_in,
+                &walk,
                 &default_drop_nodes,
                 conservative,
             );
@@ -637,8 +644,8 @@ fn place_stage_drops(route_gas: &[f64], thresholds: &[f64]) -> Vec<usize> {
         .collect()
 }
 
-/// The station nodes a strategy's un-overridden drops land on, for the pin-to-default no-op check.
-fn drop_nodes(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
+/// The stations a strategy's un-overridden drops land on, for the pin-to-default no-op check.
+fn default_drop_stations(view: &BudgetView, thresholds: &[f64]) -> Vec<usize> {
     if view.target.is_none() {
         return Vec::new();
     }
@@ -767,51 +774,70 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// - `over_reserve[k]` is true only for a drag DEEPER than the safe point (breathing into reserve).
 /// - `budget_delta_litres` is `Σ(actual - safe)`, added to the base budget to move the reach.
 ///
-/// A pinned station's contribution is `gas_in[S] - effective-cumulative-so-far`, hard-clamped to
-/// `[0, phys_cap]` - so dragging past tank-empty snaps the drop back to the empty point, and dragging
-/// a drop shallower than the one before it contributes 0 (drops the stage full) rather than going
-/// negative. An unresolved / off-graph / non-finite override falls through to the strategy default.
+/// A pinned station's contribution is the gas the diver has burned by the time they reach it, minus
+/// the effective-cumulative-so-far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty
+/// snaps the drop back to the empty point, and dragging a drop shallower than the one before it
+/// contributes 0 (drops the stage full) rather than going negative. An unresolvable / off-graph /
+/// non-finite override falls through to the strategy default.
+///
+/// ⚠ "Gas burned by the time they reach it" is NOT always `gas_in[S]`. `gas_in` is measured from the
+/// LAST way point, so for a station the diver passes on the way OUT to that way point it reports the
+/// cost of coming back to it afterwards - which on a cave whose return leg does not retrace the
+/// outbound can be far larger than what the diver had actually burned when they swam past. Scoring
+/// an early drop against that inflated figure reads it as a deep one and GROWS the penetration
+/// budget: the unsafe direction (§6). So a station on the committed way-point chain is scored on
+/// `chain_gas` - its true outbound cost - and only stations beyond the last way point use `gas_in`.
+/// Both bases are budget-independent, which is what keeps this acyclic: the final budget depends on
+/// these contributions. With no way points the chain is empty and every station uses `gas_in`, so
+/// the no-way-point field is unchanged.
 ///
 /// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
 /// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
-/// threshold. Reading the override as `gas_in[station] - eff_cum` there would fabricate an
-/// over-reserve plan and extend the reach on a mere jiggle / release-in-place (the unsafe
-/// direction). `default_drop_nodes[k]` - stage `k`'s drop station on the UN-overridden route - lets
-/// us recognise that station exactly and reproduce the un-dragged default. (It replaces an earlier
-/// predecessor-tree heuristic, which could not stay exact once way points let a route double back
-/// over a station, #298.)
+/// threshold; reading it as a fresh contribution would fabricate an over-reserve plan and extend the
+/// reach on a mere jiggle / release-in-place. `default_drop_nodes[k]` - stage `k`'s drop station on
+/// the UN-overridden route - recognises it exactly. (It replaces an earlier predecessor-tree
+/// heuristic, which could not stay exact once way points let a route double back over a station.)
 fn apply_stage_drop_overrides(
     plans: &[StageDropPlan],
     overrides: &[Option<usize>],
-    gas_in: &[f64],
+    walk: &WaypointWalk,
     default_drop_nodes: &[usize],
     conservative: bool,
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
+    // Gas burned on arrival at `si`: its outbound cost when it sits on the way-point chain (first
+    // occurrence - the earliest, hence most conservative, pass), else its post-chain gas-to-reach.
+    let arrival_gas = |si: usize| -> Option<f64> {
+        walk.chain
+            .iter()
+            .position(|&n| n == si)
+            .and_then(|p| walk.chain_gas.get(p).copied())
+            .or_else(|| walk.gas_in.get(si).copied())
+            .filter(|g| g.is_finite())
+    };
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());
     let mut over = Vec::with_capacity(plans.len());
     let mut eff_cum = 0.0_f64;
     let mut delta = 0.0_f64;
     for (k, p) in plans.iter().enumerate() {
-        let pinned = overrides
-            .get(k)
-            .copied()
-            .flatten()
-            .filter(|&si| gas_in.get(si).is_some_and(|g| g.is_finite()));
+        let pinned = overrides.get(k).copied().flatten();
         let (contribution, bar, is_over) = match pinned {
             // Pinned to the stage's OWN default drop station: reproduce the un-dragged default so a
             // jiggle / release-in-place can't fabricate over-reserve or extend the reach.
             Some(si) if default_drop_nodes.get(k) == Some(&si) => {
                 (p.safe_in_litres, p.default_bar, false)
             }
-            Some(si) => {
-                let contribution = (gas_in[si] - eff_cum).clamp(0.0, p.phys_cap_litres);
-                (
-                    contribution,
-                    drop_pressure_for_contribution(p, contribution, conservative),
-                    contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
-                )
-            }
+            Some(si) => match arrival_gas(si) {
+                Some(gas) => {
+                    let contribution = (gas - eff_cum).clamp(0.0, p.phys_cap_litres);
+                    (
+                        contribution,
+                        drop_pressure_for_contribution(p, contribution, conservative),
+                        contribution > p.safe_in_litres + OVER_RESERVE_EPS_LITRES,
+                    )
+                }
+                None => (p.safe_in_litres, p.default_bar, false),
+            },
             None => (p.safe_in_litres, p.default_bar, false),
         };
         delta += contribution - p.safe_in_litres;

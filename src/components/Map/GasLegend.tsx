@@ -160,7 +160,10 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
             </svg>
           </KeyRow>
         )}
-        {field.stage_drop_bars.length > 0 && (
+        {/* Keyed off the drops actually DRAWN, not the gauge rows: `stage_drop_bars` always has one
+            entry per counted stage, but `stage_drop_refs` empties when there is no route (an
+            unflyable way-point chain), and a key for a symbol that is nowhere on the map is noise. */}
+        {field.stage_drop_refs.length > 0 && (
           <KeyRow label={t('map.gasLegend.key.stageDrop')}>
             <svg width="11" height="11" viewBox="0 0 24 24" aria-hidden="true" style={{ flexShrink: 0 }}>
               <path

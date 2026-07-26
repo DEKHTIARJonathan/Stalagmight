@@ -201,10 +201,11 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     set((s) => {
       if (index < 0 || index >= s.markedPoints.length) return {};
       const next = s.markedPoints.slice();
-      // An all-whitespace label is stored as null, so a cleared input round-trips as "no label"
-      // rather than persisting a blank string the panel would render as an empty row.
+      // Store the TRIMMED value: an all-whitespace label becomes null (a cleared input round-trips
+      // as "no label" rather than a blank string), and surrounding padding is never persisted -
+      // it would otherwise count against the backend's label cap for no visible benefit.
       const trimmed = label.trim();
-      next[index] = { ...next[index]!, label: trimmed === '' ? null : label };
+      next[index] = { ...next[index]!, label: trimmed === '' ? null : trimmed };
       return { markedPoints: next };
     }),
   setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),

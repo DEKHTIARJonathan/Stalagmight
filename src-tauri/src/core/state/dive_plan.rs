@@ -24,10 +24,23 @@ use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 /// the UI input widget (guards an unbounded untrusted string from a hand-edited `.plnx`; #244).
 const MAX_PLAN_NAME_CHARS: usize = 200;
 
-/// Upper bound on a marked point's optional label (#298), enforced on the same trusted
-/// write path and for the same reason as [`MAX_PLAN_NAME_CHARS`]: the UI caps its input,
-/// but a hand-edited `.plnx` must not be able to smuggle an unbounded string back in.
+/// Upper bound on a marked point's optional label (#298). Enforced on BOTH directions: the
+/// write path rejects (a buggy or compromised frontend), and the read path truncates - because
+/// the threat this actually names, a hand-edited `.plnx`, enters through the READ path, where a
+/// write-side check can never see it.
 const MAX_MARKED_LABEL_CHARS: usize = 120;
+
+/// Upper bound on a plan's ordered way points (#298). Every way point costs the engine a full
+/// extra Dijkstra and can extend the returned route by the whole station count, so an unbounded
+/// list from a hand-edited `.plnx` is a compute/memory amplifier, not just untidy data. 64 is far
+/// past any real dive (the ballot's use case is "hit this passage on the way") while staying
+/// trivially cheap. Enforced on save (reject) and on load (truncate).
+const MAX_WAYPOINTS: usize = 64;
+
+/// Upper bound on a plan's marked points (#298). They cost nothing in the engine - they never
+/// reach it - but each one is a DOM element plus a station lookup on the frontend, so the same
+/// hand-edited-file reasoning applies.
+const MAX_MARKED_POINTS: usize = 500;
 
 /// The open project's `.plnx` sibling path plus the identity we stamp/verify it
 /// with (`created_at` is immutable, so it survives a file rename).
@@ -152,6 +165,15 @@ fn from_keys(project: &Project, keys: Vec<StationKey>, stale: &mut u32) -> Vec<S
     keys.into_iter()
         .filter_map(|k| from_key(project, Some(k), stale))
         .collect()
+}
+
+/// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
+/// mid-scalar into invalid text.
+fn truncate_chars(s: String, max: usize) -> String {
+    if s.chars().count() <= max {
+        return s;
+    }
+    s.chars().take(max).collect()
 }
 
 impl AppState {
@@ -330,14 +352,49 @@ impl AppState {
         let Some(project) = guard.as_ref() else {
             return Err("No project open.".to_string());
         };
+        if snap.waypoints.len() > MAX_WAYPOINTS {
+            return Err("That plan has too many way points.".to_string());
+        }
+        if snap.marked_points.len() > MAX_MARKED_POINTS {
+            return Err("That plan has too many marked points.".to_string());
+        }
+        // A route point that no longer anchors is REFUSED, not dropped. Dropping is what the load
+        // path does (there is no empty slot in a list), but on save it would be data loss the user
+        // is never told about: the frontend rebaselines its dirty check on the snapshot it SENT, so
+        // the plan would read "saved" while the file on disk quietly held a shorter route. Refusing
+        // keeps the file and the panel in agreement, and matches the engine's own doctrine that a
+        // way point is a constraint rather than a hint.
+        let waypoints = snap
+            .waypoints
+            .iter()
+            .map(|w| {
+                to_key(project, Some(*w)).ok_or_else(|| {
+                    "A way point in this plan no longer exists in the survey. Remove it from the \
+                     route and save again."
+                        .to_string()
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let marked_points = snap
+            .marked_points
+            .iter()
+            .map(|m| {
+                to_key(project, Some(m.station))
+                    .map(|station| PersistedMarkedPoint {
+                        station,
+                        label: m.label.clone(),
+                    })
+                    .ok_or_else(|| {
+                        "A marked point in this plan no longer exists in the survey. Remove it and \
+                         save again."
+                            .to_string()
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(PersistedDivePlanSnapshot {
             origin: to_key(project, snap.origin),
             endpoint: to_key(project, snap.endpoint),
-            waypoints: snap
-                .waypoints
-                .iter()
-                .filter_map(|w| to_key(project, Some(*w)))
-                .collect(),
+            waypoints,
             diver: snap.diver.clone(),
             cylinders: snap.cylinders.clone(),
             gas_config: snap.gas_config.clone(),
@@ -346,16 +403,7 @@ impl AppState {
                 .iter()
                 .map(|o| to_key(project, *o))
                 .collect(),
-            marked_points: snap
-                .marked_points
-                .iter()
-                .filter_map(|m| {
-                    to_key(project, Some(m.station)).map(|station| PersistedMarkedPoint {
-                        station,
-                        label: m.label.clone(),
-                    })
-                })
-                .collect(),
+            marked_points,
         })
     }
 
@@ -375,7 +423,16 @@ impl AppState {
         let mut stale = 0u32;
         let origin = from_key(project, p.origin, &mut stale);
         let endpoint = from_key(project, p.endpoint, &mut stale);
-        let waypoints = from_keys(project, p.waypoints, &mut stale);
+        // The caps are re-applied HERE, not only on save: the threat they exist for is a
+        // hand-edited `.plnx`, which by definition never crosses the write path. Every way point
+        // costs the engine a full extra Dijkstra and every marked point a DOM node plus a station
+        // lookup, so an unbounded list from a doctored file would be a compute amplifier on every
+        // recompute. Truncating (rather than refusing the load) keeps the rest of the plan usable.
+        let waypoints = from_keys(
+            project,
+            p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
+            &mut stale,
+        );
         let stage_drop_overrides = p
             .stage_drop_overrides
             .into_iter()
@@ -384,10 +441,13 @@ impl AppState {
         let marked_points = p
             .marked_points
             .into_iter()
+            .take(MAX_MARKED_POINTS)
             .filter_map(|m| {
                 from_key(project, Some(m.station), &mut stale).map(|station| MarkedPoint {
                     station,
-                    label: m.label,
+                    // Same reasoning as the list caps: the save path rejects an over-long label,
+                    // but a doctored file bypasses it entirely, so truncate on the way in.
+                    label: m.label.map(|l| truncate_chars(l, MAX_MARKED_LABEL_CHARS)),
                 })
             })
             .collect();
@@ -730,6 +790,107 @@ mod tests {
         assert!(snapshot.marked_points.is_empty());
         // origin + endpoint + way point + marked point all dangled.
         assert_eq!(stale, 4);
+    }
+
+    #[test]
+    fn save_refuses_a_route_point_that_no_longer_anchors_rather_than_dropping_it() {
+        // Silently dropping was the original behaviour and it was data loss the user could not see:
+        // the frontend rebaselines its dirty check on the snapshot it SENT, so the plan would read
+        // "saved" while the file held a shorter route. Refusing keeps file and panel in agreement.
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_3_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = AppState::new().unwrap();
+
+        // A way point on a section that is then deleted cannot be anchored at save time.
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.waypoints = vec![StationRef::new(sec + 99, 1)];
+        *state.project.lock().unwrap() = Some(project.clone());
+        let err = state
+            .save_dive_plan(None, "Plan".to_string(), snapshot)
+            .unwrap_err();
+        assert!(err.contains("way point"), "got: {err}");
+
+        // Same for a marked point, with its own message.
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.waypoints = Vec::new();
+        snapshot.marked_points = vec![MarkedPoint {
+            station: StationRef::new(sec + 99, 1),
+            label: None,
+        }];
+        let err = state
+            .save_dive_plan(None, "Plan".to_string(), snapshot)
+            .unwrap_err();
+        assert!(err.contains("marked point"), "got: {err}");
+
+        // Sanity: the same snapshot with anchorable points saves fine, so the refusals above are
+        // about the dangling ref and not about some unrelated guard.
+        project.ensure_shot_uuids();
+        *state.project.lock().unwrap() = Some(project);
+        assert!(state
+            .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
+            .is_ok());
+    }
+
+    #[test]
+    fn over_long_lists_and_labels_are_capped_on_the_way_in() {
+        // The caps exist for a hand-edited `.plnx`, which by definition never crosses the save
+        // path - so the LOAD path has to enforce them too. Way points are the expensive one: each
+        // costs the engine a full extra Dijkstra on every recompute.
+        let (project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project.clone());
+        let key = to_key(&project, Some(StationRef::new(sec, 2))).unwrap();
+
+        let persisted = PersistedDivePlanSnapshot {
+            origin: None,
+            endpoint: None,
+            waypoints: vec![key.clone(); MAX_WAYPOINTS + 25],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: vec![
+                PersistedMarkedPoint {
+                    station: key,
+                    label: Some("x".repeat(MAX_MARKED_LABEL_CHARS + 500)),
+                };
+                MAX_MARKED_POINTS + 25
+            ],
+        };
+        let (snapshot, _stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(snapshot.waypoints.len(), MAX_WAYPOINTS);
+        assert_eq!(snapshot.marked_points.len(), MAX_MARKED_POINTS);
+        assert_eq!(
+            snapshot.marked_points[0]
+                .label
+                .as_ref()
+                .unwrap()
+                .chars()
+                .count(),
+            MAX_MARKED_LABEL_CHARS
+        );
+    }
+
+    #[test]
+    fn a_pre_298_plnx_blob_still_loads() {
+        // The claim "no schema bump needed" rests on the ON-DISK struct's serde defaults, not the
+        // IPC one - `load_dive_plan` parses the blob as PersistedDivePlanSnapshot. Deserialize a
+        // blob with neither new field to pin that directly, so dropping a `#[serde(default)]` there
+        // cannot make every existing user's plan unloadable with a green suite.
+        let json = serde_json::json!({
+            "origin": null,
+            "endpoint": null,
+            "diver": { "rmv_l_per_min": 20.0, "label": null },
+            "cylinders": [],
+            "gas_config": serde_json::to_value(GasConfig::default()).unwrap(),
+            "stage_drop_overrides": []
+        })
+        .to_string();
+        let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
+        assert!(persisted.waypoints.is_empty());
+        assert!(persisted.marked_points.is_empty());
     }
 
     #[test]
