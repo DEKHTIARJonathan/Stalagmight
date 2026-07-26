@@ -1411,107 +1411,15 @@ impl AppState {
         })
     }
 
-    /// Snapshot of what a best-effort lock release needs (endpoint, token, the
-    /// insecure-http allowance, project id), or `None` when no held remote edit
-    /// session is active. Cheap + non-blocking (reads the open link + config, no
-    /// network), so a caller that must not block on the OLD project's server - the
-    /// app-exit path, a project switch - can hand the actual HTTP release to a
-    /// bounded / detached thread. Reads the link BEFORE the caller tears down or
-    /// swaps the database.
-    fn speleodb_held_lock_release_params(&self) -> Option<(String, String, bool, String)> {
-        // #213: a force-editor is edit-enabled but holds NO lock, so there is nothing
-        // to release on close / app-exit / project-switch.
-        if !self.edit_enabled() || self.force_editing() {
-            return None;
-        }
-        let link = self.speleodb_open_link().ok()?;
-        let (endpoint, token) = self.speleodb_active_token().ok()?;
-        Some((
-            endpoint,
-            token,
-            self.speleodb_insecure_http(),
-            link.project_id,
-        ))
-    }
-
-    /// Best-effort release of a held SpeleoDB write lock when a remote EDIT session
-    /// is closed, so a normal close/quit doesn't strand the server mutex locked for
-    /// every other editor (fix 1). Unlike [`Self::speleodb_logout`] it keeps the
-    /// token and the edit gate (the caller's close teardown resets the gate) - it
-    /// only surrenders the server lock. Reads the link BEFORE the caller tears down
-    /// the database. The keep-lock close path skips this by passing
-    /// `release_lock = false` to the close command. A read-only-open or local
-    /// project holds no lock, so this is a no-op there. Synchronous: acceptable on
-    /// the close command (Tauri runs it off the main thread); the app-exit and
-    /// project-switch paths use the bounded / detached variants below instead.
-    pub(crate) fn speleodb_release_held_lock_best_effort(&self) {
-        if let Some((endpoint, token, insecure_http, project_id)) =
-            self.speleodb_held_lock_release_params()
-        {
-            self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &project_id);
-        }
-    }
-
-    /// Snapshot the release params, then run the network release on a detached
-    /// thread, returning a receiver for its outcome (or `None` when no lock is held,
-    /// so nothing was spawned). Because the params are captured synchronously first,
-    /// the release targets the CURRENT project even if the caller swaps the database
-    /// immediately after. Shared by the two non-blocking callers below.
-    fn speleodb_spawn_lock_release(
-        &self,
-    ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
-        let (endpoint, token, insecure_http, project_id) =
-            self.speleodb_held_lock_release_params()?;
-        let (tx, rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let _ = tx.send(
-                client::release_lock(&endpoint, &token, insecure_http, &project_id).map(|_| ()),
-            );
-        });
-        Some(rx)
-    }
-
-    /// Release a held write lock WITHOUT blocking the caller: fire the network
-    /// release on a detached thread and return immediately. For a project switch,
-    /// where waiting would stall opening the NEXT project on the OLD project's
-    /// (possibly unreachable) server (fix M1). No-op when no lock is held.
-    pub(crate) fn speleodb_release_held_lock_detached(&self) {
-        // Drop the receiver: the release still runs on its thread (best-effort); we
-        // just don't wait for or read the result.
-        let _ = self.speleodb_spawn_lock_release();
-    }
-
-    /// Release a held write lock with a hard deadline, for the app-exit path: run
-    /// the network release on a detached thread and wait at most `deadline`. A hung
-    /// / unreachable server must not freeze quit for the full HTTP timeout; on
-    /// timeout we return and let the process exit (the server lock times out on its
-    /// own). (fix M2). No-op when no lock is held.
-    pub(crate) fn speleodb_release_held_lock_bounded(&self, deadline: std::time::Duration) {
-        let Some(rx) = self.speleodb_spawn_lock_release() else {
-            return;
-        };
-        match rx.recv_timeout(deadline) {
-            Ok(Ok(())) => {}
-            Ok(Err(e)) => tracing::warn!(
-                error = %e,
-                purpose = "release held lock on exit",
-                "speleodb: exit-time lock release failed"
-            ),
-            Err(_) => tracing::warn!(
-                purpose = "release held lock on exit",
-                "speleodb: exit-time lock release timed out; exiting anyway"
-            ),
-        }
-    }
-
     /// Where a pulled `.stalx` is cached: `<cache>/speleodb/<project_id>/project.stalx`.
-    fn speleodb_cache_path(&self, project_id: &str) -> Result<PathBuf, SpeleoDbError> {
-        let cache = crate::app_dirs::cache_dir()
+    /// The layout itself lives in `speleodb_local_state`, which also walks it to
+    /// report per-project local state without opening anything read-write.
+    pub(super) fn speleodb_cache_path(&self, project_id: &str) -> Result<PathBuf, SpeleoDbError> {
+        let root = super::speleodb_local_state::cache_root()
             .ok_or_else(|| SpeleoDbError::Io("no app cache directory available".to_owned()))?;
-        Ok(cache
-            .join("speleodb")
-            .join(project_id)
-            .join("project.stalx"))
+        Ok(super::speleodb_local_state::cache_path_in(
+            &root, project_id,
+        ))
     }
 
     /// [#213] Optimistic force-edit (E2): enable editing on the open remote project
@@ -1706,8 +1614,11 @@ impl AppState {
     pub(crate) fn speleodb_unlink(&self) -> Result<(), SpeleoErrorDto> {
         // Release the server lock if this is a held remote edit session, so we don't
         // leave it stranded. Best-effort: an offline / no-access release just no-ops.
-        // Reuses the shared helper so this can't drift from the close/quit release.
-        self.speleodb_release_held_lock_best_effort();
+        // The ABANDONING variant: un-pushed edits do not veto this release the way
+        // they veto the silent close/quit/switch one, because unlink deletes the link
+        // row - a lock kept back here could never be released from this project
+        // again, and the user has said outright that the managed copy is abandoned.
+        self.speleodb_release_held_lock_abandoning();
         {
             let db_guard = self
                 .database
@@ -1770,7 +1681,11 @@ impl AppState {
 
         // Abandoning local edits: release the held lock (if any) so it isn't left
         // stranded, mirroring speleodb_unlink. Best-effort - an offline release no-ops.
-        self.speleodb_release_held_lock_best_effort();
+        // The ABANDONING variant, necessarily: take-remote is only ever reached WITH
+        // un-pushed edits, and discarding them is the whole point of the verb (behind
+        // the frontend's second destroy-confirmation), so the veto that protects the
+        // silent close/quit/switch release must not apply here.
+        self.speleodb_release_held_lock_abandoning();
 
         // Re-pull + reset to the tip: BASE = tip, dirty cleared, last_edit_at reset,
         // and the in-place reload starts the undo/redo stacks empty (the server
@@ -2388,7 +2303,7 @@ impl AppState {
 
     /// Best-effort lock release for when start-editing took the lock but can't
     /// proceed (divergence / anomaly). A failure is logged, never surfaced.
-    fn speleodb_release_best_effort(
+    pub(super) fn speleodb_release_best_effort(
         &self,
         endpoint: &str,
         token: &str,
@@ -3882,6 +3797,138 @@ mod tests {
             state.speleodb_held_lock_release_params().is_none(),
             "a force-editor has no held lock to release"
         );
+    }
+
+    /// An authenticated session pointed at `endpoint` (the loopback stub below, or
+    /// any unreachable host), so the release paths get past `speleodb_active_token`.
+    fn authed_session_at(endpoint: &str) -> SpeleoDbSession {
+        let mut token_store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+        token_store.store(endpoint, "u@x", "tok-1", false);
+        SpeleoDbSession {
+            endpoint: Some(endpoint.to_owned()),
+            email: Some("u@x".to_owned()),
+            token_store,
+            rehydrate_attempted: true,
+        }
+    }
+
+    /// The remote fixture mid-edit-session: the write lock is held (edit gate on,
+    /// not force-editing) and a token is available, so the silent release gate has
+    /// everything it needs. Clean to start with - the dirty bit is the test's lever.
+    fn editing_fixture(endpoint: &str) -> (TempDir, AppState) {
+        let (temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(endpoint);
+        state.set_edit_enabled(true);
+        (temp, state)
+    }
+
+    /// A one-shot loopback HTTP server that answers a single request with 200 and a
+    /// minimal project body - enough for `release_lock` to parse a success.
+    fn release_stub(project_id: &str) -> (String, std::thread::JoinHandle<()>) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let body = format!(r#"{{"id":"{project_id}","name":"Remote"}}"#);
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // Drain the request until the socket goes quiet, then answer.
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+            let mut chunk = vec![0u8; 8 * 1024];
+            while let Ok(n) = stream.read(&mut chunk) {
+                if n == 0 {
+                    break;
+                }
+            }
+            let resp = format!(
+                "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.flush();
+        });
+        (format!("http://127.0.0.1:{port}"), handle)
+    }
+
+    #[test]
+    fn silent_lock_release_is_skipped_when_the_project_has_unpushed_edits() {
+        // The close / project-switch / app-exit release is SILENT, so it must never
+        // free the server mutex while local edits are stranded on this machine:
+        // the project would immediately be lockable by someone else and the edits
+        // could then only come back through a divergence. Keeping the lock is
+        // recoverable; stranding the edits is not.
+        let (_temp, state) = editing_fixture("https://x/");
+        assert!(
+            state.speleodb_held_lock_release_params().is_some(),
+            "a CLEAN edit session still releases its lock on close/exit/switch"
+        );
+
+        state.mark_remote_dirty();
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "fixture is now dirty"
+        );
+        assert!(
+            state.speleodb_held_lock_release_params().is_none(),
+            "un-pushed edits veto the silent release"
+        );
+        assert!(
+            state.speleodb_abandon_lock_release_params().is_some(),
+            "the abandon variant (unlink / take-remote) is NOT vetoed - both verbs \
+             are only ever reached with un-pushed edits"
+        );
+    }
+
+    #[test]
+    fn silent_lock_release_still_honours_the_force_edit_and_read_only_gates() {
+        // The dirty-bit veto is additive: the pre-existing gates behave as before.
+        let (_temp, state) = editing_fixture("https://x/");
+        state.set_force_editing(true);
+        assert!(
+            state.speleodb_held_lock_release_params().is_none(),
+            "a force-editor holds no lock to release (#213)"
+        );
+        state.set_force_editing(false);
+        state.set_edit_enabled(false);
+        assert!(
+            state.speleodb_held_lock_release_params().is_none(),
+            "a read-only open holds no lock to release"
+        );
+        state.set_edit_enabled(true);
+        assert!(
+            state.speleodb_held_lock_release_params().is_some(),
+            "and a clean, lock-held session is unaffected by the new veto"
+        );
+    }
+
+    #[test]
+    fn an_explicit_release_still_works_with_unpushed_edits() {
+        // The veto is on the SILENT paths only. `speleodb_release_lock` is the
+        // user's own "release anyway" (the held-lock prompt's per-project Release,
+        // and the quit prompt's discard-and-release), so it must still go through
+        // with the dirty bit set - it never consults the silent gate.
+        let link_id = "11111111-1111-1111-1111-111111111111";
+        let (base, handle) = release_stub(link_id);
+        let (_temp, state) = editing_fixture(&base);
+        state.mark_remote_dirty();
+        assert!(
+            state.speleodb_held_lock_release_params().is_none(),
+            "the silent path is refusing at this point"
+        );
+
+        state
+            .speleodb_release_lock(link_id.to_owned())
+            .expect("an explicit release is not gated by the dirty bit");
+        assert!(
+            !state.edit_enabled(),
+            "releasing the open project's own lock drops the edit gate"
+        );
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "and the edits are still marked un-pushed for the next session"
+        );
+        let _ = handle.join();
     }
 
     #[test]

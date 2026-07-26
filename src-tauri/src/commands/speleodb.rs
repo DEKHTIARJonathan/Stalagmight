@@ -17,6 +17,8 @@
 //! thread via `spawn_blocking`: Tauri executes synchronous commands on the main
 //! thread, so doing the network/keychain round-trips inline would freeze the UI.
 
+use std::collections::HashMap;
+
 use tauri::{AppHandle, Manager};
 
 use crate::core::AppState;
@@ -26,10 +28,10 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, UpdateResult,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -197,6 +199,27 @@ pub async fn speleodb_release_lock(
     project_id: String,
 ) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
+}
+
+/// Per-project LOCAL state for a set of SpeleoDB projects: whether this machine
+/// has a readable local copy and whether that copy has un-pushed edits. Joins the
+/// local half onto the server-only scans (the held-lock resume prompt, the
+/// GlobalView remote list), so the UI can offer "push and release" rather than a
+/// bare "release" - and can say which listed projects are even present here.
+///
+/// `project_ids` limits the reply to those ids (each still gets a row, reporting
+/// "nothing here" when absent); omitting it reports every project in the local
+/// pull cache plus the open one. Keyed by project id for direct indexing. Purely
+/// local: no token, no network, and an unreadable file costs only its own row.
+#[tauri::command]
+pub async fn speleodb_local_project_states(
+    app: AppHandle,
+    project_ids: Option<Vec<String>>,
+) -> Result<HashMap<String, SpeleoLocalProjectState>, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        Ok(s.speleodb_local_project_states(project_ids))
+    })
+    .await
 }
 
 /// [#218] Read a project's revision history for the Project Settings history view:

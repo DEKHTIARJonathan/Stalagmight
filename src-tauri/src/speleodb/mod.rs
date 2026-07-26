@@ -37,10 +37,11 @@ pub(crate) mod tls;
 pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
-    SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
-    SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
+    SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, UpdateResult, Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.

@@ -1312,6 +1312,9 @@ pub fn run() {
             // SpeleoDB held-lock resume/release prompt - release all + per-project (#201)
             commands::speleodb::speleodb_release_all_locks,
             commands::speleodb::speleodb_release_lock,
+            // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
+            // local half of the held-lock / GlobalView project joins
+            commands::speleodb::speleodb_local_project_states,
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,

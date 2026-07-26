@@ -23,6 +23,8 @@ mod recent_projects;
 mod speleodb;
 mod speleodb_admin;
 mod speleodb_cache;
+mod speleodb_local_state;
+mod speleodb_lock_release;
 mod undo;
 mod undo_capture;
 mod undo_restore;

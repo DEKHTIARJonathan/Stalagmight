@@ -185,6 +185,7 @@ export * from './ipc/SpeleoErrorDto';
 export * from './ipc/TransportCause';
 export * from './ipc/SpeleoLinkStatus';
 export * from './ipc/RemoteState';
+export * from './ipc/SpeleoLocalProjectState';
 export * from './ipc/StartEditingResult';
 export * from './ipc/DoneResult';
 export * from './ipc/UpdateResult';

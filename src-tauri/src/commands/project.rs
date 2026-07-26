@@ -48,6 +48,12 @@ pub(crate) fn save_project_impl(
 /// Close the current project. `release_lock` (default `true`) best-effort releases
 /// a held SpeleoDB write lock first so a close doesn't strand the server mutex
 /// (fix 1); the close dialog's "Keep lock" path passes `false`.
+///
+/// `true` is a REQUEST, not a guarantee: like every other silent release it goes
+/// through `speleodb_held_lock_release_params`, which declines while the project
+/// has un-pushed edits (see `core::state::speleodb_lock_release`). A caller that
+/// must release regardless - "discard my edits and release" - calls
+/// `speleodb_release_lock` explicitly and then closes.
 #[tauri::command]
 pub fn close_project(state: State<AppState>, release_lock: Option<bool>) -> CommandResult {
     close_project_impl(state.inner(), release_lock.unwrap_or(true))

@@ -122,6 +122,32 @@ impl From<RevisionCommit> for SpeleoRevision {
     }
 }
 
+/// What this machine holds LOCALLY for one SpeleoDB project, joined onto the
+/// server-side scans (held locks, the GlobalView project list) that know nothing
+/// about the local cache. Purely local: no token, no network, no server fields.
+///
+/// Reported per project id by `speleodb_local_project_states`. Every field is a
+/// statement about the local copy only, so an absent / unreadable file degrades to
+/// "nothing here" (`has_local_copy: false`) rather than failing the whole listing.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoLocalProjectState {
+    /// A local `.stalx` for this project exists AND its SpeleoDB link row could be
+    /// read. False when the file is missing, unreadable, corrupt, or carries no
+    /// link row - in every one of those cases there is no usable local state to
+    /// act on, so the UI treats them identically.
+    pub has_local_copy: bool,
+    /// The local copy has edits that are not on the server yet
+    /// (`speleo_link.has_unpushed_edits`). Always false without a local copy.
+    pub has_unpushed_edits: bool,
+    /// When the local copy was last edited (RFC-3339), when known. `None` for a
+    /// clean copy, an older file that never recorded one, or no local copy.
+    pub last_edit_at: Option<String>,
+    /// This is the project currently open in the app, so the reported state came
+    /// from the live open database rather than a file on disk.
+    pub is_open: bool,
+}
+
 /// The active lock ("mutex") on a project, when one is held.
 #[derive(Debug, Clone, Deserialize)]
 pub(crate) struct ActiveMutex {

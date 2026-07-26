@@ -67,11 +67,11 @@ use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
     DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
-    SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant,
-    SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, TransportCause, UpdateResult,
-    Visibility,
+    SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, TransportCause, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -322,6 +322,9 @@ fn main() {
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
     export::<RemoteState>(&out_dir);
+    // Per-project LOCAL state (cached copy + un-pushed edits) for the held-lock /
+    // GlobalView project joins
+    export::<SpeleoLocalProjectState>(&out_dir);
     // SpeleoDB single-writer hand-off DTOs (#194/#197) + push-without-unlock (T2d)
     export::<StartEditingResult>(&out_dir);
     export::<DoneResult>(&out_dir);
@@ -528,6 +531,7 @@ fn main() {
         "TransportCause",
         "SpeleoLinkStatus",
         "RemoteState",
+        "SpeleoLocalProjectState",
         "StartEditingResult",
         "DoneResult",
         "UpdateResult",

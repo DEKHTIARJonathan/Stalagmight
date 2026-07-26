@@ -131,6 +131,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_list_collaborators",
     "command.speleodb_list_projects",
     "command.speleodb_list_teams",
+    "command.speleodb_local_project_states",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
@@ -886,7 +887,10 @@ mod tests {
         //   + 4 unrecognised-shot-kind dialog events (#27):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .unrecognised-shot-kind = 661.
-        assert_eq!(EVENT_NAMES.len(), 661);
+        //   + 1 SpeleoDB per-project local-state command (the local half of the
+        //       held-lock / GlobalView joins):
+        //       command.speleodb_local_project_states = 662.
+        assert_eq!(EVENT_NAMES.len(), 662);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
