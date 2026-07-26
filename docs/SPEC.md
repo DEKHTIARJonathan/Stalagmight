@@ -976,6 +976,65 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 
 For manual entry (no DMP file), use the generic Import dialog with an empty shot table.
 
+#### Reverse Section Dialog (ReverseSectionDialog.tsx)
+
+Confirms reversing a section end-to-end, so the far end becomes station 0.
+
+```
+┌─ Reverse Section ────────────────────────────────────────────────┐
+│                                                                  │
+│  Renumber this section end-to-end, so the last station becomes   │
+│  station 0.                                                      │
+│                                                                  │
+│   • Main Line (station 0 → 14, station 14 → 0)                   │
+│                                                                  │
+│  The cave does not move: every station keeps its position on     │
+│  the map, and merges, loop closures, zero datums and comments    │
+│  stay on the station they were set on.                           │
+│                                                                  │
+│  [ ] Swap left/right passage measurements                        │
+│      Tick this if LRUD was recorded facing along the survey      │
+│      direction, so what was on the left is now on the right.     │
+│                                                                  │
+│  [ Cancel ]                                     [ Reverse ]      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Semantics.** Reverse is a one-shot action, not persisted state. Geometry is
+invariant - every station keeps its world coordinate, and `reverse(reverse(s))`
+is the identity. Per shot:
+
+| field | operation |
+|-------|-----------|
+| shot order | reversed; ids stay attached to positions, `uuid` travels with the record |
+| `azimuth_in` / `azimuth_out` | reciprocated (`+180`) **and** swapped |
+| `depth_in` / `depth_out` | swapped |
+| `pitch_in` / `pitch_out` | swapped **and negated** |
+| `left` / `right` | swapped only when the user opts in |
+| `up`, `down`, `length`, `marker_index`, `comment`, `is_reference` | unchanged |
+
+`azimuth_in`/`azimuth_out` are two **forward** readings and geometry uses their
+circular mean, so swapping them alone is a no-op - the reciprocal is what
+actually turns the shot around.
+
+Beyond the shots, `section_offsets` gains the section's old total displacement
+(station 0 is now the far end), and every external station ref in the section -
+merges, loop closures, zero datums, station offsets and comments - is remapped
+to its mirrored station so each relationship stays on its original physical
+station.
+
+Frozen shots do not block a reverse: the physical line is preserved exactly, so
+the frozen invariant still holds. Undo is a before/after project snapshot pair.
+
+**Entry points.** Sections-panel, map-station and map-shot context menus
+("Reverse Section", plus "Reverse N Sections" when several sections are
+multi-selected), and a button in the Edit Section dialog that is disabled while
+that dialog has unsaved edits.
+
+**On import.** `ImportSectionConfig.reverse` applies the same transform before
+the section is created, so placement and station-comment indices address the
+final order. Left/right is never swapped on the import path (no dialog to ask).
+
 #### Merge Stations Dialog
 
 Shown when merging two **unconnected** stations (different section groups).

@@ -15,7 +15,7 @@ import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import { mirrorPlacementForReverse } from '../../utils/reversePlacement';
+import { mirrorPlacementForReverse, targetShotCountForMirror } from '../../utils/reversePlacement';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
@@ -1089,23 +1089,9 @@ function buildBatchImport(
       const reverseValue = edits?.reverse ?? false;
 
       // #24 / q14: the backend reverses before creating the section, so every
-      // placement index must address the post-reverse order. Mirror the indices
-      // the wizard collected against the file's order, so the connection stays
-      // on the physical station the user picked. The target of a from_importing
-      // connection renumbers independently - it has its own flag and shot count.
-      const targetIdx =
-        placement.type === 'from_importing' ? conn?.targetImportIndex ?? null : null;
-      const targetEditsForMirror = targetIdx !== null ? sectionEdits?.get(targetIdx) : undefined;
-      const targetShotsForMirror =
-        targetEditsForMirror?.reverse
-          ? targetEditsForMirror.shots.filter((sh) => !sh.isDeleted).length
-          : null;
-      const finalPlacement = mirrorPlacementForReverse(
-        placement,
-        reverseValue,
-        backendShots.length,
-        targetShotsForMirror
-      );
+      // placement index must address the post-reverse order.
+      const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length,
+        targetShotCountForMirror(placement, conn?.targetImportIndex, sectionEdits));
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,

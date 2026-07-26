@@ -12,6 +12,23 @@
  * station they chose.
  */
 import type { ImportPlacement } from '../types/commands';
+import type { SectionEditState } from './batchImportHelpers';
+
+/**
+ * Resolve a from_importing target's post-deletion shot count, but only when
+ * that target is itself being reversed (otherwise its indices must not move).
+ * Returns `null` when there is nothing to mirror on the target side.
+ */
+export function targetShotCountForMirror(
+  placement: ImportPlacement,
+  targetImportIndex: number | null | undefined,
+  sectionEdits: Map<number, SectionEditState> | undefined
+): number | null {
+  if (placement.type !== 'from_importing' || targetImportIndex == null) return null;
+  const edits = sectionEdits?.get(targetImportIndex);
+  if (!edits?.reverse) return null;
+  return edits.shots.filter((s) => !s.isDeleted).length;
+}
 
 /** Mirror one station index within a section of `shotCount` shots (N+1 stations). */
 export function mirrorStationIndex(stationIndex: number, shotCount: number): number {
