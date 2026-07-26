@@ -323,9 +323,18 @@ export default function Toolbar({
   // squash the tool buttons; in flow they must not steal room from the carousel's
   // slot either. Pinned in both cases so the carousel's slot is what gives.
   const clusterCls = 'flex-shrink-0';
-  const centerCls = centerInFlow
-    ? 'min-w-0 shrink overflow-hidden px-2'
-    : 'absolute -translate-x-1/2';
+  // Positioning only. The two center consumers want OPPOSITE overflow policies, so
+  // each adds its own below rather than sharing one that silently suits neither.
+  const centerCls = centerInFlow ? 'min-w-0 shrink px-2' : 'absolute -translate-x-1/2';
+  // The carousel SCROLLS, never clips. `overflow-hidden` here silently ATE the
+  // right-hand modes when the gap was narrower than even the compact carousel -
+  // Export first, then Plan - and `ModeCarousel` is the only `setAppMode` caller in
+  // the app (no menu item, no shortcut), so those workspaces became unreachable
+  // rather than merely cramped. That is worse than the overlap this ladder
+  // replaced, which at least stayed clickable. The slot still gives up width, but
+  // every mode stays reachable: by wheel/trackpad, and by Tab, since focusing a
+  // scrolled-out button brings it into view.
+  const carouselOverflowCls = centerInFlow ? 'overflow-x-auto' : '';
   const centerStyle: CSSProperties | undefined = centerInFlow
     ? undefined
     : { left: carouselLeft ?? '50%' };
@@ -463,7 +472,11 @@ export default function Toolbar({
            right cluster can't overlap "Export". The gap center is independent of the
            carousel's own width, so cycling modes never drifts it. At the final stage
            it joins the flex flow instead, where overlap cannot happen at all. */
-        <div ref={centerRef} className={centerCls} style={centerStyle}>
+        <div
+          ref={centerRef}
+          className={`${centerCls} ${carouselOverflowCls}`}
+          style={centerStyle}
+        >
           <ModeCarousel disabled={placementModeActive} compact={centerInFlow} />
         </div>
       )}

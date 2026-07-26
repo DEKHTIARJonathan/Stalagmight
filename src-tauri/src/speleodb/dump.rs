@@ -69,6 +69,19 @@ fn is_ariane_tml(path: &str) -> bool {
         .is_some_and(|n| n.eq_ignore_ascii_case("ariane.tml"))
 }
 
+/// Write `bytes` to `path`, then flush them all the way to the device.
+///
+/// `std::fs::write` returns once the bytes are in the page cache, which is enough
+/// for a process death but not for a power loss. Callers that go on to `rename`
+/// this file over a destination they must not destroy need the stronger promise -
+/// see `Dump::extract_entry_to`.
+fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
 /// The sibling temp path used to stage an extraction before it replaces `dest`.
 ///
 /// Lives in the SAME directory as `dest` so the follow-up `rename` stays on one
@@ -163,11 +176,24 @@ impl<'a> Dump<'a> {
                 "dump entry `{entry_path}` exceeded the {max_bytes}-byte limit while reading"
             )));
         }
-        // Replace `dest` ATOMICALLY: stage the bytes in a sibling temp file, then
-        // rename over the destination. A write that dies part-way (crash, full disk,
-        // killed process) then leaves the PREVIOUS cache `.stalx` intact instead of a
-        // truncated stub, and no reader ever observes a half-written file - which a
-        // plain `fs::write` could not promise, because it truncates `dest` in place.
+        // Replace `dest` ATOMICALLY: stage the bytes in a sibling temp file, FLUSH
+        // them to the device, then rename over the destination. A write that dies
+        // part-way (crash, full disk, killed process, power loss) then leaves the
+        // PREVIOUS cache `.stalx` intact instead of a truncated stub, and no reader
+        // ever observes a half-written file - which a plain `fs::write` could not
+        // promise, because it truncates `dest` in place.
+        //
+        // The `sync_all` is what makes that true across POWER LOSS specifically, and
+        // not merely across a process death. Without it the rename is only ordered
+        // against the write in the page cache, not on the device: ext4's default
+        // `data=ordered` happens to cover this case, but that is a filesystem
+        // accident rather than a guarantee, and on a filesystem that reorders them
+        // the crash window leaves `dest` renamed to a file whose contents never
+        // landed - i.e. exactly the destroyed-previous-copy outcome the staging
+        // exists to prevent. The parent directory is synced too, so the rename
+        // itself survives; that one is best-effort because opening a directory as a
+        // file is not portable (it fails on Windows, where the rename is journaled
+        // by the filesystem anyway).
         //
         // Closing any live SQLite handle to `dest` first is the CALLER's job (see
         // `AppState::close_project_if_open_at`). The two halves fix different failure
@@ -176,7 +202,7 @@ impl<'a> Dump<'a> {
         // under a live handle is denied), and the rename is what keeps an interrupted
         // write from tearing the file even when nothing has it open.
         let temp = download_temp_path(dest);
-        if let Err(e) = std::fs::write(&temp, &buf) {
+        if let Err(e) = write_and_sync(&temp, &buf) {
             let _ = std::fs::remove_file(&temp);
             return Err(SpeleoDbError::Io(format!(
                 "could not write {}: {e}",
@@ -189,6 +215,14 @@ impl<'a> Dump<'a> {
                 "could not replace {}: {e}",
                 dest.display()
             )));
+        }
+        // Best-effort: makes the rename itself durable. A failure here means the
+        // content is on the device but the directory entry may not be, which is the
+        // pre-existing behaviour and not worth failing an otherwise-complete replace.
+        if let Some(parent) = dest.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
         }
         Ok(())
     }

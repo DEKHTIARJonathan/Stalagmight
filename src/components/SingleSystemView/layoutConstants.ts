@@ -48,6 +48,27 @@ export const PANEL_SIZE_BOUNDS = {
 export const MAP_MIN_WIDTH = 360;
 
 /**
+ * Minimum height (px, CSS pixels) the map row must keep (#260).
+ *
+ * The vertical axis has exactly the same defect as the horizontal one, and the
+ * original fix only covered the width: `dataTableHeight` is persisted in pixels up
+ * to 500, the Data dock's flow spacer is `flex-shrink-0`, and the map wrapper is
+ * the `flex-1` remainder - so once Main is shorter than the panel, the spacer wins
+ * outright and the map collapses to 0px. At the 250% zoom this work targets Main is
+ * only ~330 CSS px tall, which is less than a 500px panel: the map disappeared
+ * entirely, both side opener bars got height-0 overlays, and the Data tab was
+ * clipped above Main's top - so the panel could not even be closed again without
+ * zooming back out.
+ *
+ * Smaller than MAP_MIN_WIDTH because the map's overlay chrome is wider than it is
+ * tall: the binding vertical constraint is the top control row (~40) plus the
+ * bottom legend/scale/attribution row (~40) with enough map between them to be
+ * worth looking at, and a floor that is too tall would squeeze the Data panel for
+ * no benefit.
+ */
+export const MAP_MIN_HEIGHT = 200;
+
+/**
  * Panel reveal/close timing budget (ms). Centralized so the interacting graces are
  * tuned together (a short transit grace vs a generous post-resize grace - usePanelReveal's
  * scheduleClose has explicit "don't shorten a longer grace" logic precisely because

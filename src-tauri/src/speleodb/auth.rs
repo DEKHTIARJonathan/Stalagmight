@@ -490,9 +490,31 @@ impl TokenStore {
     pub(crate) fn clear(&mut self, endpoint: &str, email: &str) -> Result<(), SecretStoreError> {
         let key = account_key(endpoint, email);
         let mut failure = None;
+        // The keychain is ALWAYS swept, but its failure is only REPORTED when the
+        // keychain is where this session's credential actually lives.
+        //
+        // On a keychain-less box - headless Linux with no secret service, a
+        // supported configuration with the plaintext tier as its escape hatch -
+        // `KeyringStore::delete` fails at `Entry::new`, before it ever asks about
+        // the entry (a missing entry is already `Ok`: `NoEntry` is mapped to
+        // success). So every single logout warned the user that a credential "may
+        // still be stored on this machine" about a store that cannot hold one and
+        // was never written to - `store` fails there for the same reason. A warning
+        // that fires on every ordinary logout is one the user learns to ignore,
+        // which costs them the case where it is real.
+        let keychain_holds_it = self.active_tier == Some(TokenTier::Keychain);
         if let Err(e) = self.keychain.delete(&key) {
-            tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
-            failure = Some(e);
+            if keychain_holds_it {
+                tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
+                failure = Some(e);
+            } else {
+                tracing::debug!(
+                    error = %e,
+                    active_tier = ?self.active_tier,
+                    purpose = "defensive sweep of a tier this session did not use",
+                    "SpeleoDB keychain delete failed for a tier that does not hold this token"
+                );
+            }
         }
         if let Some(plaintext) = &self.plaintext {
             if let Err(e) = plaintext.delete(&key) {
@@ -858,12 +880,49 @@ mod tests {
             Box::new(FailingSecretStore),
             Some(Box::new(PlaintextStore::new(dir.path().to_path_buf()))),
         );
+        // The keychain is where this session's token lives, so its failure IS
+        // reported - stated explicitly because that is now what makes it reportable.
+        store.active_tier = Some(TokenTier::Keychain);
         assert!(store.clear(EP, EMAIL).is_err());
         assert_eq!(
             seeded.load(&key).unwrap(),
             None,
             "the plaintext copy must still be deleted after the keychain delete failed"
         );
+    }
+
+    #[test]
+    fn clear_does_not_warn_about_a_keychain_that_never_held_the_token() {
+        // A keychain-less box - headless Linux with no secret service, a SUPPORTED
+        // configuration whose escape hatch is the plaintext tier - fails the keychain
+        // delete at `Entry::new`, before it can even ask about the entry (a missing
+        // entry is already Ok: `NoEntry` maps to success). So every ordinary logout
+        // used to warn that a credential "may still be stored on this machine" about
+        // a store that cannot hold one and was never written to. A warning that fires
+        // on every logout is one the user learns to ignore.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let key = account_key(EP, EMAIL);
+        let seeded = PlaintextStore::new(dir.path().to_path_buf());
+        seeded.store(&key, "pt").unwrap();
+
+        let mut store = TokenStore::from_stores(
+            Box::new(FailingSecretStore),
+            Some(Box::new(PlaintextStore::new(dir.path().to_path_buf()))),
+        );
+        // The token came from the plaintext tier, not the keychain.
+        store.in_memory = Some("pt".to_owned());
+        store.active_tier = Some(TokenTier::Plaintext);
+
+        store
+            .clear(EP, EMAIL)
+            .expect("an unusable keychain that never held the token is not a warning");
+        // The tier that DID hold it is still wiped, and the session is gone.
+        assert_eq!(
+            seeded.load(&key).unwrap(),
+            None,
+            "the plaintext copy - the one that could resurrect the session - is deleted"
+        );
+        assert_eq!(store.load(EP, EMAIL), None);
     }
 
     #[test]

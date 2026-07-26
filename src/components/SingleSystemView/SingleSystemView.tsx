@@ -20,8 +20,13 @@ import ExportPreview from '../Dialogs/ExportPreview';
 import { useExportStore } from '../../store/exportStore';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
-import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS, MAP_MIN_WIDTH } from './layoutConstants';
-import { useSidePanelSqueeze } from './sidePanelSqueeze';
+import {
+  PANEL_SIZE_BOUNDS,
+  DETAIL_REVEAL_AUTOCLOSE_MS,
+  MAP_MIN_WIDTH,
+  MAP_MIN_HEIGHT,
+} from './layoutConstants';
+import { useSidePanelSqueeze, useDataPanelSqueeze } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
@@ -194,13 +199,34 @@ export default function SingleSystemView() {
   const sectionsDisplayWidth = squeeze.sections.width;
   const detailDisplayWidth = squeeze.detail.width;
 
+  // The same squeeze on the VERTICAL axis (#260). The original fix covered only
+  // the width, but `dataTableHeight` has the identical shape: persisted in pixels
+  // up to 500, against a Main box that shrinks with the UI zoom, with a
+  // `flex-shrink-0` spacer that beats the `flex-1` map wrapper outright - so at
+  // 250% zoom (Main ~330 CSS px) the map collapsed to 0px, both side opener bars
+  // got height-0 overlays, and the Data tab was clipped above Main's top, leaving
+  // no way to close the panel again without zooming back out.
+  const dataPinnedOpen = useUIStore((s) => s.dataTableMode === 'pin' && s.dataTableOpen);
+  const dataSqueeze = useDataPanelSqueeze(mainEl, {
+    height: dataTableHeight,
+    min: PANEL_SIZE_BOUNDS['data-table'].min,
+    mapMinHeight: MAP_MIN_HEIGHT,
+    // Fullscreen is a deliberate, explicit "cover everything" state, so it is
+    // exempt: there is no map row to protect while it is on.
+    pinnedOpen: dataPinnedOpen && !dataTableFullScreen,
+  });
+  // Display-only height, used everywhere `dataTableHeight` fed layout: the Dock's
+  // own size AND the two side Docks' `closedBottomInset`, which were both passing
+  // the unclamped persisted value.
+  const dataDisplayHeight = dataSqueeze.height;
+
   // Two-mode (hover/pin) reveal state for each panel. The store holds the
   // persisted mode/open; these hooks add transient hover visibility + handlers.
   // `forcedClosed` layers the transient viewport collapse on top without touching
   // either persisted field.
   const sectionsReveal = usePanelReveal('sections', { forcedClosed: squeeze.sections.collapsed });
   const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
-  const dataReveal = usePanelReveal('data-table');
+  const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
 
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
   // through a drag (these props feed useResizeHandle, which re-binds listeners
@@ -621,7 +647,7 @@ export default function SingleSystemView() {
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
-          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
           onResizingChange={onSectionsResizing}
         >
@@ -660,7 +686,7 @@ export default function SingleSystemView() {
           <Dock
             reveal={dataReveal}
             edge="bottom"
-            size={dataTableHeight}
+            size={dataDisplayHeight}
             minSize={PANEL_SIZE_BOUNDS['data-table'].min}
             maxSize={PANEL_SIZE_BOUNDS['data-table'].max}
             onResize={setDataTableHeight}
@@ -703,7 +729,7 @@ export default function SingleSystemView() {
           testId="detail"
           tabLabels={panelLabels.detail}
           tabTop={DETAILS_TAB_TOP}
-          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
           onResizingChange={onDetailResizing}
         >

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 
 /**
  * Viewport-driven squeeze for the two side Docks (#260).
@@ -189,29 +189,131 @@ export function computeSidePanelLayout(opts: SidePanelSqueezeOpts): SidePanelSqu
   return build(attempt(squeezed, true, true), true, true);
 }
 
+// ---------------------------------------------------------------------------
+// The same policy on the VERTICAL axis, for the bottom Data dock.
+//
+// Simpler than the horizontal case because there is only one panel to solve for -
+// no proportional split, no ordering question about which collapses first - but
+// the defect is identical: a pixel height persisted up to 500 against a Main box
+// that shrinks with the UI zoom, and a `flex-shrink-0` spacer that wins outright,
+// leaving the `flex-1` map wrapper at 0px.
+// ---------------------------------------------------------------------------
+
+export interface DataPanelSqueezeOpts {
+  /** Height (CSS px) of the column that holds the map plus the Data panel. */
+  viewportHeight: number;
+  /** The user's own height (px): the persisted/live store value, never modified. */
+  height: number;
+  /** Panel's resize minimum (PANEL_SIZE_BOUNDS['data-table'].min). */
+  min: number;
+  /** Floor the map row must keep (MAP_MIN_HEIGHT). */
+  mapMinHeight: number;
+  /** Pinned open, i.e. it reflows the map. A hover-floating panel overlays it. */
+  pinnedOpen: boolean;
+}
+
+export interface DataPanelLayout {
+  /** Height to RENDER at. Equals the input height unless squeezed. */
+  height: number;
+  /** Force the panel to its closed / hover-tab state for this viewport. */
+  collapsed: boolean;
+}
+
+/**
+ * Decide how tall the Data panel should render, and whether it must fall back to
+ * its closed / hover-tab state, so the map keeps `mapMinHeight`.
+ *
+ * Same escalation and the same DISPLAY-TIME-ONLY rule as
+ * {@link computeSidePanelLayout}: shrink toward the resize minimum first, collapse
+ * only when even the minimum will not fit, and never write the result back to the
+ * store (a temporary squeeze persisted would leave the panel tiny forever).
+ *
+ * A non-positive `viewportHeight` means "not measured yet" and is passed through
+ * untouched, so nothing collapses on a degenerate measurement.
+ */
+export function computeDataPanelLayout(opts: DataPanelSqueezeOpts): DataPanelLayout {
+  const { viewportHeight, height, min, mapMinHeight, pinnedOpen } = opts;
+  const untouched: DataPanelLayout = { height, collapsed: false };
+  if (!Number.isFinite(viewportHeight) || viewportHeight <= 0) return untouched;
+  // A floating (hover) panel overlays the map instead of taking layout height, so
+  // there is nothing to squeeze.
+  if (!pinnedOpen) return untouched;
+
+  const available = viewportHeight - mapMinHeight;
+  if (height <= available) return untouched;
+  // Shrink toward the resize minimum. Note `min` is a floor on the RENDERED
+  // height, not on what fits: below it the panel is unusable, so collapsing to the
+  // opener bar is the honest outcome rather than a stub the user cannot read.
+  if (available >= min) return { height: Math.floor(available), collapsed: false };
+  // Even the minimum starves the map: fall back to the opener bar, which is
+  // reachable (its tab floats the panel over the map at no layout cost) and is the
+  // floor - if the map still cannot reach its minimum beside a bar, there is
+  // nothing further to give. `height` is reported unchanged so the user's value is
+  // what returns when the viewport grows again.
+  return { height, collapsed: true };
+}
+
+/** Stable "not measured yet" value, so the first render has one object identity. */
+const ZERO_SIZE = { width: 0, height: 0 };
+
+/**
+ * Observe an element's content-box size. Returns 0 for either axis until the first
+ * measurement, which the compute functions read as "not measured yet".
+ */
+export function useElementSize(el: HTMLElement | null): { width: number; height: number } {
+  const [size, setSize] = useState(ZERO_SIZE);
+  // Keep the SAME object when the numbers have not moved. Returning `prev` makes
+  // React bail out of the re-render, which is load-bearing rather than an
+  // optimization: a caller that recreates its element on each render (the squeeze
+  // tests do exactly that) re-runs this effect every render, and a fresh
+  // `{width, height}` with identical values would re-render forever. It also keeps
+  // the object identity stable for callers' `useMemo` dependency lists.
+  const apply = useCallback((width: number, height: number) => {
+    setSize((prev) => (prev.width === width && prev.height === height ? prev : { width, height }));
+  }, []);
+
+  useEffect(() => {
+    if (!el) {
+      apply(0, 0);
+      return undefined;
+    }
+    // ResizeObserver is absent in the node test tier; fall back to the one-shot
+    // measurement so the hook degrades to "measured once" instead of throwing.
+    const rect = el.getBoundingClientRect();
+    apply(rect.width, rect.height);
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver((entries) => {
+      const box = entries[0]?.contentRect;
+      if (box) apply(box.width, box.height);
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, [el, apply]);
+  return size;
+}
+
 /**
  * Observe an element's content-box width. Returns 0 until the first measurement,
  * which `computeSidePanelLayout` reads as "not measured yet".
  */
 export function useElementWidth(el: HTMLElement | null): number {
-  const [width, setWidth] = useState(0);
-  useEffect(() => {
-    if (!el) {
-      setWidth(0);
-      return undefined;
-    }
-    // ResizeObserver is absent in the node test tier; fall back to the one-shot
-    // measurement so the hook degrades to "measured once" instead of throwing.
-    setWidth(el.getBoundingClientRect().width);
-    if (typeof ResizeObserver === 'undefined') return undefined;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect.width;
-      if (w != null) setWidth(w);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [el]);
-  return width;
+  return useElementSize(el).width;
+}
+
+/**
+ * `computeDataPanelLayout` bound to a live container element. Read-only with
+ * respect to the UI store, exactly like {@link useSidePanelSqueeze}.
+ */
+export function useDataPanelSqueeze(
+  container: HTMLElement | null,
+  opts: Omit<DataPanelSqueezeOpts, 'viewportHeight'>,
+): DataPanelLayout {
+  const { height: viewportHeight } = useElementSize(container);
+  const { height, min, mapMinHeight, pinnedOpen } = opts;
+  return useMemo(
+    () => computeDataPanelLayout({ viewportHeight, height, min, mapMinHeight, pinnedOpen }),
+    [viewportHeight, height, min, mapMinHeight, pinnedOpen],
+  );
 }
 
 /**
