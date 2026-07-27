@@ -2270,6 +2270,35 @@ impl AppState {
             }
         }
 
+        // 5. If the initial push did not confirm, BASE is still the empty-repo
+        //    sentinel from step 3 while the copy is dirty - and that pair fences
+        //    straight to Diverged, so the user's first Start editing on a project
+        //    they JUST published would open the divergence prompt. Resolve the
+        //    server tip and adopt it instead: we created this project moments ago
+        //    and nobody else can have pushed to it, so the tip is exactly the state
+        //    our local content sits on top of. The dirty bit stays set (our content
+        //    genuinely is not on the server), which makes the next push a clean
+        //    Upload rather than a reconcile. Best-effort and non-fatal: on failure
+        //    we are no worse off than before. A confirmed push already advanced BASE
+        //    in `speleodb_upload`, so this is a no-op on the happy path.
+        if self
+            .speleodb_open_link()
+            .is_ok_and(|l| l.base_commit_sha.is_none())
+        {
+            match self.speleodb_server_head(&endpoint, &token, insecure_http, &project_id) {
+                Ok((tip, _)) if tip.is_some() => {
+                    let _ = self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone());
+                }
+                Ok(_) => {}
+                Err(e) => tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "publish BASE recovery",
+                    "speleodb_publish: could not resolve the server tip to stamp BASE; the first Start editing may report a divergence"
+                ),
+            }
+        }
+
         Ok(SpeleoPublishResult {
             project_id,
             endpoint,
@@ -2700,8 +2729,18 @@ impl AppState {
         // `my_email` identifies our own landed commits in the BASE..tip gap (#193).
         // We are authenticated to be here; if it is somehow absent, plan_push can't
         // match any commit as "mine" and safely routes to the divergence prompt
-        // rather than guessing.
-        let my_email = self.speleodb_my_email().unwrap_or_default();
+        // rather than guessing. That is the right default, but it is indistinguishable
+        // from a genuine divergence in the UI, so say so in the log - otherwise a
+        // "conflict" nobody can explain has no trace of why it was reported.
+        let my_email = self.speleodb_my_email().unwrap_or_else(|| {
+            tracing::warn!(
+                project_id,
+                purpose = "push ancestry recovery (#193)",
+                "no session email: our own landed commits cannot be identified, so a moved \
+                 tip will fail closed to the divergence prompt"
+            );
+            String::new()
+        });
 
         // push-start is not persisted, so the ancestry timing stays conservative
         // (clear_dirty == false → AdoptThenUpload, never AdoptConfirmed) and we
@@ -2842,12 +2881,32 @@ impl AppState {
             // 200: BASE advances to the adopted hexsha. Clear the dirty bit ONLY if
             // no edit was recorded after push_start (else a concurrent edit during
             // the upload would be dropped - keep it dirty so the next Done re-pushes
-            // it). BASE advances unconditionally: the uploaded snapshot IS the new
-            // base; a kept late edit is a clean second commit on top of it.
+            // it). BASE advances: the uploaded snapshot IS the new base; a kept late
+            // edit is a clean second commit on top of it.
             Ok(pushed) => {
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
-                    l.base_commit_sha = new_base;
+                    // NEVER let a successful push move BASE BACKWARD to the
+                    // empty-repo sentinel. `parse_upload_auto_response` prefers the
+                    // 200 envelope's top-level `hexsha` and falls back to the nested
+                    // `latest_commit`, but both are Options, so a deployment that
+                    // omitted them would land here with `None` - and a None BASE over
+                    // a dirty copy fences straight to Diverged, then walks the whole
+                    // history to the service-account creation root and calls that a
+                    // stranger's commit. The user gets a divergence prompt against
+                    // their own just-landed push. Keeping the previous BASE instead
+                    // costs at most one redundant ancestry recovery on the next push,
+                    // which is exactly what that machinery is for. Mirrors the same
+                    // guard the revision-restore path already applies.
+                    if new_base.is_some() {
+                        l.base_commit_sha = new_base;
+                    } else {
+                        tracing::warn!(
+                            project_id,
+                            "upload 200 carried no commit sha; keeping the previous BASE \
+                             rather than resetting it to the empty-repo sentinel"
+                        );
+                    }
                     if sync::edits_captured_by_push(l.last_edit_at.as_deref(), Some(&push_start)) {
                         l.has_unpushed_edits = false;
                         l.last_edit_at = None;
@@ -3952,9 +4011,14 @@ mod tests {
         // updating it. (#192/#193/#197)
         //
         //   mutate `l.base_commit_sha =` (inside speleodb_mutate_link closures):
-        //     1. push 200 confirmed - advance to the adopted hexsha
+        //     1. push 200 confirmed - advance to the adopted hexsha (never BACKWARD
+        //        to the empty-repo sentinel: a None there would fence the next push
+        //        to Diverged against our own landed commit)
         //     2. push ancestry Landed - advance BASE to tip
         //     3. push ancestry Landed - already-up-to-date sub-case
+        //     4. speleodb_publish recovery - adopt the server tip when the
+        //        best-effort initial push did not confirm, so a just-published
+        //        project does not open the divergence prompt on its first edit
         //   struct-init `base_commit_sha:` (a fresh SpeleoLink):
         //     1. speleodb_open_project - stamp BASE on pull
         //     2. speleodb_fast_forward - re-stamp BASE = tip after a clean FF
@@ -3973,8 +4037,8 @@ mod tests {
             .expect("production region precedes the test module");
         assert_eq!(
             prod.matches("base_commit_sha =").count(),
-            3,
-            "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2)"
+            4,
+            "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2, publish tip recovery)"
         );
         assert_eq!(
             prod.matches("base_commit_sha:").count(),
@@ -5681,6 +5745,46 @@ mod tests {
             !matches!(verdict, RemoteState::Conflict),
             "a tip that moved ahead of a stale BASE by OUR OWN commit must not read as \
              a conflict - this is the self-conflict the user reported, got {verdict:?}"
+        );
+    }
+
+    /// Releasing our own write lock from the admin surface must also close the local
+    /// edit gate.
+    ///
+    /// The gate is what `guard_mutation` reads, and the status poll only ever OPENS
+    /// it, so leaving it set left the shell editable over a lock that no longer
+    /// exists - an unflagged lockless edit session. The revert flow (#8) hands a
+    /// lock back through this path, so it has to be true.
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_release_current_lock_closes_the_edit_gate() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-release-gate", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-release-gate");
+        assert!(matches!(
+            state.speleodb_start_editing().expect("start_editing"),
+            StartEditingResult::Editing
+        ));
+        assert!(state.edit_enabled(), "editing after a clean Start editing");
+
+        state
+            .speleodb_release_current_lock()
+            .expect("release our own lock");
+
+        assert!(
+            !state.edit_enabled(),
+            "releasing our own write lock must close the edit gate - otherwise the shell \
+             stays editable over a lock that is gone"
         );
     }
 

@@ -296,13 +296,27 @@ impl AppState {
     /// lock (single endpoint; role decided server-side). A recovery action for a
     /// stuck lock: it does NOT push, so the FE warns when the caller holds it. The
     /// FE re-probes link status afterward to reflect the freed lock.
+    ///
+    /// Dropping our own edit gate is part of the release, not an afterthought. The
+    /// gate is what `guard_mutation` reads, and the status poll only ever OPENS it,
+    /// so leaving it set here left the shell editable over a lock that no longer
+    /// exists - an unflagged lockless edit session, which is precisely the state
+    /// `force_editing` exists to make visible. Its two siblings
+    /// (`speleodb_release_lock` / `speleodb_release_all_locks`) already do this.
+    /// Only when the lock was OURS: an ADMIN force-releasing someone else's lock
+    /// never held the gate, and clearing it would drop them out of an unrelated
+    /// edit session of their own.
     pub(crate) fn speleodb_release_current_lock(&self) -> Result<(), SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
+        let was_ours = self.edit_enabled() && !self.force_editing();
         self.speleodb_handle_auth(
             Endpoint::Release,
             client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
         )
         .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
+        if was_ours {
+            self.set_edit_enabled(false);
+        }
         Ok(())
     }
 
