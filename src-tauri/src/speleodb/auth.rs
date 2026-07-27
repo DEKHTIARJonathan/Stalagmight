@@ -749,6 +749,39 @@ impl TokenStore {
         result
     }
 
+    /// Whether the keychain may STILL be holding a credential for `account_key`
+    /// after a delete that just failed - the question [`Self::clear`] reports on.
+    ///
+    /// The probe has three outcomes and only two of them are answers. `Ok(Some(_))`
+    /// is a survivor. `Ok(None)` proves the keychain holds nothing for this account.
+    /// An `Err` proves nothing at all, and reading it as "holds nothing" is how a
+    /// LOCKED keyring - which fails the probe and the delete alike - let `clear`
+    /// return `Ok` over a live, non-revoked bearer token it had just refused to
+    /// delete. Logout then reported a clean sign-out, the one outcome the reporting
+    /// exists to prevent. So an indeterminate probe counts as "may hold it".
+    ///
+    /// Except on a keychain this session has ALREADY LEARNED is unusable here
+    /// ([`KeychainState::Unavailable`], recorded only by a real read/write, never by
+    /// a probe). That is the keychain-less box - headless Linux with no secret
+    /// service, a supported configuration whose escape hatch is the plaintext tier -
+    /// where every op fails at `Entry::new` before it can even ask about the entry
+    /// (a missing entry is already `Ok`: `NoEntry` maps to success). Nothing can have
+    /// been stored there, so reporting would fire on every ordinary logout, and a
+    /// warning that always fires is one the user learns to ignore - which costs them
+    /// the case where it is real.
+    ///
+    /// A keyring that was already LOCKED when this session's login ran records
+    /// `Unavailable` too, and is suppressed with it: nothing we are willing to ask
+    /// tells the two apart (asking harder IS the desktop unlock prompt). What this
+    /// does catch is the keyring that WORKED - the one a login actually put a token
+    /// in - and went unreadable afterwards.
+    fn keychain_may_hold(&self, account_key: &str) -> bool {
+        match self.keychain.load(account_key) {
+            Ok(entry) => entry.is_some(),
+            Err(_) => self.keychain_state != KeychainState::Unavailable,
+        }
+    }
+
     /// Forget the token from **every** tier (keychain + plaintext + memory),
     /// **reporting** a persistent-tier delete failure to the caller.
     ///
@@ -778,15 +811,8 @@ impl TokenStore {
         // Logout then returned `Ok` with a working credential still in the OS
         // keychain, which is the one outcome this reporting exists to prevent.
         //
-        // An `Err` from the probe keeps the original suppression, and for the
-        // original reason: on a keychain-less box - headless Linux with no secret
-        // service, a supported configuration with the plaintext tier as its escape
-        // hatch - every keyring op fails at `Entry::new`, before it ever asks about
-        // the entry (a missing entry is already `Ok`: `NoEntry` maps to success). So
-        // `load`, `store` and `delete` all fail there, and warning that a credential
-        // "may still be stored on this machine" about a store that cannot hold one
-        // fires on every ordinary logout - a warning the user learns to ignore,
-        // which costs them the case where it is real.
+        // The probe answers in THREE ways, though, and only `Ok(None)` suppresses
+        // outright. [`Self::keychain_may_hold`] owns that discrimination.
         //
         // A DECLINED keychain is skipped outright, probe included. `forget` routes
         // both the user's logout and the background 401 auto-drop through here, so
@@ -801,7 +827,7 @@ impl TokenStore {
         // A DISABLED keychain is NOT skipped, because none of that last sentence is
         // true of it - see `clear_may_sweep_keychain`.
         if self.clear_may_sweep_keychain() {
-            let keychain_may_hold_it = matches!(self.keychain.load(&key), Ok(Some(_)));
+            let keychain_may_hold_it = self.keychain_may_hold(&key);
             if let Err(e) = self.keychain.delete(&key) {
                 if keychain_may_hold_it {
                     tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
@@ -810,7 +836,8 @@ impl TokenStore {
                     tracing::debug!(
                         error = %e,
                         active_tier = ?self.active_tier,
-                        purpose = "defensive sweep of a keychain that holds nothing for this account",
+                        keychain_state = ?self.keychain_state,
+                        purpose = "defensive sweep of a keychain with nothing of ours to strand",
                         "SpeleoDB keychain delete failed for an account it does not hold"
                     );
                 }
@@ -954,11 +981,12 @@ mod tests {
     /// A WORKING keychain that refuses to delete: `store`/`load` behave normally, so
     /// it can hold (and report holding) an entry, while `delete` fails.
     ///
-    /// This is the shape that actually matters for logout, and the one
+    /// One of the two shapes that matter for logout, and the one
     /// [`FailingSecretStore`] cannot express: a keychain that IS usable on this
     /// machine and IS holding a live bearer token that the delete just failed to
     /// remove. `FailingSecretStore` models the opposite case - a box with no secret
     /// service at all, where nothing can be stored and so nothing can survive.
+    /// [`LockableStore`] is the third: usable, holding, and unreadable at once.
     struct DeleteFailsStore(InMemoryStore);
 
     impl DeleteFailsStore {
@@ -968,6 +996,12 @@ mod tests {
             let inner = InMemoryStore::new();
             inner.store(account_key, token).expect("seed entry");
             Self(inner)
+        }
+
+        /// The same refusal over an EMPTY store: the probe answers `Ok(None)`, which
+        /// is the one outcome that proves there is nothing here to strand.
+        fn empty() -> Self {
+            Self(InMemoryStore::new())
         }
     }
 
@@ -983,6 +1017,55 @@ mod tests {
         }
         fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
             Err(SecretStoreError("delete refused".to_owned()))
+        }
+    }
+
+    /// A working keychain that can be LOCKED part-way through a session: until then
+    /// it stores and reads like the real one, and afterwards EVERY op fails.
+    ///
+    /// The desktop keyring shape neither fixture above can express. A locked keyring
+    /// still holds what an earlier `store` put in it, but `load` and `delete` fail
+    /// identically - so the delete leaves a live bearer token behind and the probe
+    /// that would notice cannot see it either.
+    struct LockableStore {
+        inner: InMemoryStore,
+        locked: Arc<AtomicBool>,
+    }
+
+    impl LockableStore {
+        /// The store plus the switch that locks it, since [`SecretStore`] is moved
+        /// into the [`TokenStore`] and cannot be reached afterwards.
+        fn pair() -> (Box<dyn SecretStore>, Arc<AtomicBool>) {
+            let locked = Arc::new(AtomicBool::new(false));
+            let store = Self {
+                inner: InMemoryStore::new(),
+                locked: Arc::clone(&locked),
+            };
+            (Box::new(store), locked)
+        }
+
+        fn locked_err(&self) -> Option<SecretStoreError> {
+            self.locked
+                .load(Ordering::SeqCst)
+                .then(|| SecretStoreError("the keyring is locked".to_owned()))
+        }
+    }
+
+    impl SecretStore for LockableStore {
+        fn kind(&self) -> &'static str {
+            "lockable"
+        }
+        fn store(&self, account_key: &str, token: &str) -> Result<(), SecretStoreError> {
+            self.locked_err()
+                .map_or_else(|| self.inner.store(account_key, token), Err)
+        }
+        fn load(&self, account_key: &str) -> Result<Option<String>, SecretStoreError> {
+            self.locked_err()
+                .map_or_else(|| self.inner.load(account_key), Err)
+        }
+        fn delete(&self, account_key: &str) -> Result<(), SecretStoreError> {
+            self.locked_err()
+                .map_or_else(|| self.inner.delete(account_key), Err)
         }
     }
 
@@ -1341,19 +1424,22 @@ mod tests {
         let dir = tempfile::tempdir().expect("tempdir");
         let key = account_key(EP, EMAIL);
         let seeded = PlaintextStore::new(dir.path().to_path_buf());
-        seeded.store(&key, "pt").unwrap();
 
         let mut store = TokenStore::from_stores(
             Box::new(FailingSecretStore),
             Some(Box::new(PlaintextStore::new(dir.path().to_path_buf()))),
         );
-        // The token came from the plaintext tier, not the keychain - and, crucially,
-        // this keychain cannot be READ either, which is what the suppression now keys
-        // on (see `clear`): an unreadable keychain is one that cannot be holding
-        // anything. A readable keychain that merely refuses to delete DOES report -
+        // Signed in exactly as production does it, rather than by poking the fields:
+        // the failed keychain write is BOTH how the token ends up on the plaintext
+        // tier AND how the session learns the keychain is unusable here. The two
+        // arrive together on this box, and the second is what the suppression keys on
+        // (see `keychain_may_hold`) - an `Err` probe on a keychain we have no reason
+        // to think usable is not evidence of a stranded credential. A keychain that
+        // merely refuses to DELETE still reports:
         // `clear_reports_a_stale_keychain_entry_even_when_this_session_used_another_tier`.
-        store.in_memory = Some("pt".to_owned());
-        store.active_tier = Some(TokenTier::Plaintext);
+        assert_eq!(store.store(EP, EMAIL, "pt", true), TokenTier::Plaintext);
+        assert_eq!(store.keychain_state(), KeychainState::Unavailable);
+        assert_eq!(seeded.load(&key).unwrap(), Some("pt".to_owned()));
 
         store
             .clear(EP, EMAIL)
@@ -1365,6 +1451,58 @@ mod tests {
             "the plaintext copy - the one that could resurrect the session - is deleted"
         );
         assert_eq!(store.load(EP, EMAIL), None);
+    }
+
+    #[test]
+    fn clear_reports_a_keychain_that_locked_while_holding_the_token() {
+        // The third probe outcome, which used to be folded into the second. A locked
+        // keyring fails the probe AND the delete, and `matches!(.., Ok(Some(_)))` read
+        // that silence as "holds nothing": logout returned Ok, the UI reported a clean
+        // sign-out, and the bearer token it had just failed to delete stayed in the OS
+        // keychain - live, because logout does not revoke it server-side.
+        //
+        // The session ran ON the keychain here, which is what makes the `Err`
+        // indeterminate rather than merely uninformative: this login put the token
+        // there itself.
+        let (keychain, locked) = LockableStore::pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        assert_eq!(
+            store.store(EP, EMAIL, "live-token", false),
+            TokenTier::Keychain
+        );
+
+        locked.store(true, Ordering::SeqCst); // the screen locks; so does the keyring
+
+        assert!(
+            store.clear(EP, EMAIL).is_err(),
+            "a keychain that answers neither the delete nor the probe may still be \
+             holding the token, and must be reported"
+        );
+        assert!(
+            store.in_memory.is_none(),
+            "the session still ends - the Err is a warning, not a refusal"
+        );
+
+        // And it really did survive: unlock the keyring and it hands the token back,
+        // which is exactly the resurrection the report warns about.
+        locked.store(false, Ordering::SeqCst);
+        assert_eq!(store.load(EP, EMAIL), Some("live-token".to_owned()));
+    }
+
+    #[test]
+    fn clear_stays_quiet_when_the_probe_proves_the_keychain_is_empty() {
+        // The other side of the same discrimination, and the case the debug-only
+        // branch was written for: `Ok(None)` is a real answer. The delete failing over
+        // an account the keychain demonstrably does not hold strands nothing, so it
+        // must not turn an ordinary logout into a credential warning.
+        let mut store = TokenStore::from_stores(Box::new(DeleteFailsStore::empty()), None);
+        store.in_memory = Some("tok".to_owned());
+        store.active_tier = Some(TokenTier::Memory);
+
+        store
+            .clear(EP, EMAIL)
+            .expect("a delete that failed over an entry that is not there is not a warning");
+        assert!(store.in_memory.is_none(), "the session is gone either way");
     }
 
     #[test]

@@ -767,12 +767,18 @@ impl AppState {
     ) -> RemoteState {
         let my_email = self.speleodb_my_email().unwrap_or_default();
         // What licenses the authorship recovery in `poll_verdict`: a commit in the
-        // BASE..tip gap can only be OUR unrecorded push if we were the single
-        // writer when it was made. Both halves are required - the server says the
-        // lock is ours (and a same-account second session reads identically there),
-        // and THIS process opened its own edit gate, which only its own successful
-        // Start editing does. Anything less falls through to the divergence prompt.
+        // BASE..tip gap can only be OUR unrecorded push if we were the single writer
+        // when it was made. All THREE halves are required. The server has to name us
+        // as the holder (a same-account second session reads identically there), this
+        // process has to have its own edit gate open, and it must not be a #213
+        // force-edit session - that opens the gate while deliberately holding NO
+        // lock, so a matching holder there is the other session that actually took
+        // it, and its commits are precisely what the shortcut would explain away as
+        // our own unrecorded push. Anything less falls through to the divergence
+        // prompt. (The frontend's `holdsWriteLock` is the same pair: `editing &&
+        // !forceEditing`.)
         let we_hold_the_lock = self.edit_enabled()
+            && !self.force_editing()
             && lock_holder.is_some_and(|holder| holder.eq_ignore_ascii_case(&my_email));
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
@@ -1847,7 +1853,7 @@ impl AppState {
         // local project's always-true gate is left untouched (open_link fails → no
         // reset). The FE refreshes link status afterwards to re-seed the indicator.
         //
-        // A force-editor (#213) is exempt, matching `was_ours` in
+        // A force-editor (#213) is exempt, matching the gate check in
         // `speleodb_release_current_lock`: they hold NO server lock, so this call
         // released a stale or someone else's claim, not theirs, and ending an editing
         // session the release had nothing to do with is both wrong and the way the
@@ -4694,10 +4700,10 @@ mod tests {
         // scan lists a STALE lock from an earlier session on the very project the
         // user is now force-editing.
         //
-        // Both sites now match `was_ours` in `speleodb_release_current_lock`
-        // (`edit_enabled() && !force_editing()`), which had it right all along; the
-        // frontend already models the two as independent (`holdsWriteLock` is
-        // `editing && !forceEditing`).
+        // All three release verbs now ask the same pair (`edit_enabled() &&
+        // !force_editing()`), which `speleodb_release_current_lock` had right all
+        // along; the frontend already models the two as independent
+        // (`holdsWriteLock` is `editing && !forceEditing`).
         let link_id = "11111111-1111-1111-1111-111111111111";
         for per_project in [true, false] {
             let (base, handle) = release_stub(link_id);
@@ -4725,6 +4731,115 @@ mod tests {
             );
             let _ = handle.join();
         }
+    }
+
+    #[test]
+    fn a_release_that_lands_after_an_unlink_leaves_the_gate_open() {
+        // `speleodb_release_current_lock` used to sample "was this lock ours?" BEFORE
+        // its blocking release and apply the answer after it, holding nothing across
+        // the round trip. Dismiss the Settings dialog and unlink the same project in
+        // that window and the two collide: the unlink makes it a plain local project
+        // and reopens the edit gate, and this stale completion closes it again.
+        // Nothing reopens it from there - status polling needs a link the project no
+        // longer has - so an ordinary local project was stuck read-only until it was
+        // closed and reopened.
+        //
+        // The unlink runs FROM the stub, between the request arriving and the response
+        // going out, which is exactly the window and needs no timing luck. The
+        // listener is dropped first so the unlink's own best-effort lock release is
+        // refused instantly (`release_lock` is a non-idempotent POST - one attempt, no
+        // backoff), which is just the offline no-op that path is written for.
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let base = format!(
+            "http://127.0.0.1:{}",
+            listener.local_addr().expect("addr").port()
+        );
+        let (_temp, state) = editing_fixture(&base);
+        assert!(state.edit_enabled(), "precondition: we hold the lock");
+
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                use std::io::{Read as _, Write as _};
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                }
+                drop(listener);
+                state.speleodb_unlink().expect("unlink mid-flight");
+                let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote"}"#;
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            });
+            state
+                .speleodb_release_current_lock()
+                .expect("the release itself succeeds");
+        });
+
+        assert!(
+            state.speleodb_open_link().is_err(),
+            "precondition: the project is no longer linked"
+        );
+        assert!(
+            state.edit_enabled(),
+            "a release completing over a project that is no longer remote must not \
+             close the gate the unlink just opened"
+        );
+    }
+
+    #[test]
+    fn a_force_editor_does_not_claim_another_sessions_commit_as_its_own() {
+        // The authorship shortcut in `poll_verdict` explains a commit in the BASE..tip
+        // gap as OUR unrecorded push, and it is licensed by holding the single-writer
+        // lock. A #213 force-editor holds NO lock - it opens the edit gate precisely
+        // because it could not take one - so `edit_enabled` alone was not the claim
+        // the comment above `we_hold_the_lock` said it was.
+        //
+        // The setup is the concurrent-session case `poll_verdict` already refuses on
+        // its own inputs: a second session on the SAME account holds the real lock and
+        // has pushed, so the lock holder's email matches ours. Reported as UpToDate the
+        // status button keeps its resting state, and the divergence the user will
+        // actually hit on Reconnect goes unannounced.
+        let (base, _listener) = always_answering_stub(
+            r#"{"commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
+                           {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#,
+        );
+        let (_temp, state) = editing_fixture(&base);
+        let link = SpeleoLink {
+            endpoint: base.clone(),
+            project_id: "11111111-1111-1111-1111-111111111111".to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: true,
+            last_edit_at: None,
+            last_verify_at: None,
+        };
+
+        state.set_force_editing(true);
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::Conflict,
+            "a force-editor holds no lock, so a gap commit carrying our email is the \
+             other session's - fail closed to the divergence prompt"
+        );
+
+        state.set_force_editing(false);
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::UpToDate,
+            "a session that really does hold the lock still gets the shortcut - our \
+             own landed push must not be painted as a conflict"
+        );
     }
 
     /// A loopback stub that answers EVERY request with the same 200 + body, for a

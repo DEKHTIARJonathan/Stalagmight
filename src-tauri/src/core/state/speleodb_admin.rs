@@ -305,16 +305,29 @@ impl AppState {
     /// (`speleodb_release_lock` / `speleodb_release_all_locks`) already do this.
     /// Only when the lock was OURS: an ADMIN force-releasing someone else's lock
     /// never held the gate, and clearing it would drop them out of an unrelated
-    /// edit session of their own.
+    /// edit session of their own, and a #213 force-editor never held a lock at all.
+    ///
+    /// That verdict is reached AFTER the round trip, over the link that is open
+    /// then, exactly as `speleodb_release_lock` does it. Sampling it beforehand and
+    /// applying it afterwards spanned a blocking network call with nothing held
+    /// across it: dismiss the dialog and unlink the same project in that window and
+    /// the unlink reopens the gate for what is now a plain local project, which this
+    /// completion then closed again. Nothing reopens it from there - status polling
+    /// needs a link the project no longer has - so it stayed read-only until it was
+    /// closed and reopened.
     pub(crate) fn speleodb_release_current_lock(&self) -> Result<(), SpeleoErrorDto> {
         let (link, endpoint, token, insecure_http) = self.speleodb_admin_context()?;
-        let was_ours = self.edit_enabled() && !self.force_editing();
         self.speleodb_handle_auth(
             Endpoint::Release,
             client::release_lock(&endpoint, &token, insecure_http, &link.project_id),
         )
         .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
-        if was_ours {
+        if self.edit_enabled()
+            && !self.force_editing()
+            && self
+                .speleodb_open_link()
+                .is_ok_and(|open| open.project_id == link.project_id)
+        {
             self.set_edit_enabled(false);
         }
         Ok(())
