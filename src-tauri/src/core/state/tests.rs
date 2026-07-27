@@ -263,12 +263,17 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     let mut db = Database::open(&project_path).unwrap();
     db.save_project(&project).unwrap();
 
+    // The UNDO entry needs real undo data: `load_from_persisted_with_timestamps`
+    // drops `UndoData::None` from the undo stack, so `None` here would test that
+    // filter instead of the restore. The REDO entry deliberately keeps `None` -
+    // the redo stack is not filtered (a `None` redo entry re-executes its command
+    // correctly), and `redo_len() == 1` below is the pin for that.
     let undo_entry = UndoEntry {
         command: Command::CreateProject {
             name: "Undo Project".to_string(),
             location: None,
         },
-        undo_data: UndoData::None,
+        undo_data: UndoData::InverseCommand(Command::CloseProject),
         timestamp: None,
     };
     let redo_entry = UndoEntry {
@@ -21266,4 +21271,309 @@ fn repair_and_settings_gated_on_locked_remote() {
         .error
         .as_deref()
         .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)));
+}
+
+// === Wedge healing: entries `undo()` cannot apply (Q8) ===
+
+/// A stack persisted before the forward guard existed still carries the poison on
+/// disk, and `load_from_persisted_with_timestamps` used to restore it verbatim:
+/// `undo()` pops the `UndoData::None` entry, maps it to a failure, and the epilogue
+/// pushes it straight back, so every older entry is unreachable forever.
+#[test]
+fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Wedged".to_string(),
+        location: None,
+    });
+    for name in ["First", "Second"] {
+        let created = state.execute(Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        assert!(created.success);
+    }
+
+    // Serialize the live stack, then splice the poison on top - exactly the shape
+    // a pre-guard build wrote to the database.
+    let mut persisted: Vec<(String, String, Option<String>)> = {
+        let stack = state.undo_stack.lock().unwrap();
+        assert_eq!(stack.len(), 2);
+        stack
+            .entries_to_persist(20)
+            .map(|e| UndoStack::serialize_entry_with_timestamp(e).unwrap())
+            .collect()
+    };
+    persisted.push(
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::ReverseSection {
+                section_id: 1,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        })
+        .unwrap(),
+    );
+
+    // Restore it the way `project_load.rs` does.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.load_from_persisted_with_timestamps(persisted, vec![]);
+    }
+
+    let first = state.undo();
+    assert!(
+        first.success,
+        "undo blocked by the persisted unundoable entry: {:?}",
+        first.error
+    );
+    let second = state.undo();
+    assert!(
+        second.success,
+        "history beneath the persisted unundoable entry was unreachable: {:?}",
+        second.error
+    );
+
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.sections.is_empty(),
+        "both sections should be undone, still have: {:?}",
+        project.sections.iter().map(|s| s.id).collect::<Vec<_>>()
+    );
+}
+
+/// The redo stack is deliberately NOT filtered - a `UndoData::None` redo entry
+/// re-executes its command correctly. But the redo epilogue must not then move it
+/// onto the undo stack, or the wedge is recreated at runtime.
+#[test]
+fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Redo Wedge".to_string(),
+        location: None,
+    });
+
+    // A shot-less (waypoint-style) section, so the redone reverse is a no-op.
+    let waypoint = state.execute(Command::CreateSection {
+        name: Some("Waypoint".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    let waypoint_id = waypoint.section_id.unwrap();
+
+    let real = state.execute(Command::CreateSection {
+        name: Some("Real".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let real_id = real.section_id.unwrap();
+
+    // The kind of entry a pre-guard build could leave on the persisted redo stack.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_redo(UndoEntry {
+            command: Command::ReverseSection {
+                section_id: waypoint_id,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        });
+    }
+
+    let redone = state.redo();
+    assert!(redone.success, "redo failed: {:?}", redone.error);
+
+    let undone = state.undo();
+    assert!(
+        undone.success,
+        "the redone unundoable entry wedged the undo stack: {:?}",
+        undone.error
+    );
+    let project = state.get_project_state().unwrap();
+    assert!(
+        !project.sections.iter().any(|s| s.id == real_id),
+        "undo should have reached the real entry beneath"
+    );
+}
+
+/// `UnmergeStations` on a station that is in no merge returns success
+/// unconditionally while `generate_undo_data` yields `UndoData::None`, and it is
+/// classified as affecting geometry - so the epilogue reconciles derived state with
+/// no undo entry pushed. The redo branch replays onto a state the project has left,
+/// so it must be cleared even though nothing was pushed.
+#[test]
+fn a_no_undo_data_command_still_clears_the_redo_branch() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Redo Clear".to_string(),
+        location: None,
+    });
+
+    let mut ids: Vec<SectionId> = Vec::new();
+    for name in ["A", "B", "C"] {
+        let created = state.execute(Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        assert!(created.success);
+        ids.push(created.section_id.unwrap());
+    }
+
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    assert!(state.can_redo(), "two undos should leave a redo branch");
+
+    // Section A survived both undos, and A:0 is in no merge.
+    let unmerge = state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(ids[0], 0),
+    });
+    assert!(unmerge.success, "unmerge failed: {:?}", unmerge.error);
+
+    assert!(
+        !state.can_redo(),
+        "a successful forward command must invalidate the redo branch even when it \
+         produced no undo entry"
+    );
+}
+
+/// The accepted cost of making the redo clear unconditional, pinned so it cannot
+/// regress silently: a shot-less `ReverseSection` is a provable no-op, and it now
+/// drops the redo branch too. "A successful forward command invalidates redo"
+/// outranks preserving redo across a no-op.
+#[test]
+fn a_shotless_reverse_also_clears_the_redo_branch() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "No-op Reverse".to_string(),
+        location: None,
+    });
+
+    let waypoint = state.execute(Command::CreateSection {
+        name: Some("Waypoint".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    let waypoint_id = waypoint.section_id.unwrap();
+
+    let real = state.execute(Command::CreateSection {
+        name: Some("Real".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    assert!(real.success);
+
+    assert!(state.undo().success);
+    assert!(state.can_redo());
+
+    let reversed = state.execute(Command::ReverseSection {
+        section_id: waypoint_id,
+        swap_left_right: false,
+    });
+    assert!(reversed.success, "reverse failed: {:?}", reversed.error);
+
+    assert!(
+        !state.can_redo(),
+        "the redo branch must be dropped by any successful forward command"
+    );
+}
+
+/// `entries_to_persist` copies the stack verbatim, so an unfiltered load would
+/// write the poison straight back to disk on the next save.
+#[test]
+fn a_loaded_none_entry_is_not_re_persisted() {
+    let state = AppState::new().unwrap();
+
+    let persisted: Vec<(String, String, Option<String>)> = vec![
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::DeleteSection { section_id: 7 },
+            undo_data: UndoData::InverseCommand(Command::DeleteSection { section_id: 7 }),
+            timestamp: None,
+        })
+        .unwrap(),
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::ReverseSection {
+                section_id: 1,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        })
+        .unwrap(),
+    ];
+
+    let mut stack = state.undo_stack.lock().unwrap();
+    stack.load_from_persisted_with_timestamps(persisted, vec![]);
+
+    let to_persist: Vec<&UndoEntry> = stack.entries_to_persist(20).collect();
+    assert_eq!(to_persist.len(), 1);
+    assert!(
+        !to_persist
+            .iter()
+            .any(|e| matches!(e.undo_data, UndoData::None)),
+        "the poison must not be written back to disk"
+    );
+}
+
+/// The load-time filter must not weaken the deliberate push-back-on-failure
+/// contract: an entry that CAN be applied but fails while applying it stays on the
+/// undo stack. `PreviousValues` with unparseable JSON is such an entry, and it is
+/// fed through the same load path so the filter is provably in the way.
+#[test]
+fn a_failed_undo_still_pushes_its_entry_back() {
+    let state = AppState::new().unwrap();
+
+    let persisted: Vec<(String, String, Option<String>)> =
+        vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::UpdateShot {
+                section_id: 1,
+                shot_id: 1,
+                updates: ShotUpdates::default(),
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: Some(1),
+                values_json: "not-valid-json".to_string(),
+            },
+            timestamp: None,
+        })
+        .unwrap()];
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.load_from_persisted_with_timestamps(persisted, vec![]);
+        assert_eq!(stack.len(), 1, "an applicable entry must survive the load");
+    }
+
+    let result = state.undo();
+    assert!(!result.success);
+    assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
+
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.len(), 1, "a failed undo must preserve its entry");
+    assert!(
+        !stack.can_redo(),
+        "the entry must not move to the redo stack"
+    );
 }

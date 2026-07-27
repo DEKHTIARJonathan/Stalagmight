@@ -706,7 +706,19 @@ impl AppState {
         // This ensures undo after redo works correctly
         if result.success {
             result = self.settle_reversed_sections(&entry.command, result);
-            if let Ok(mut stack) = self.undo_stack.lock() {
+            // A redo entry carrying `UndoData::None` redoes correctly (the catch-all
+            // arm above just re-executes `entry.command`), which is why the redo
+            // stack is NOT filtered at load. But moving it to the undo stack would
+            // re-create the wedge `UndoStack::is_applicable` exists to heal: `undo()`
+            // would pop it, fail, and push it straight back, sealing off everything
+            // beneath. Drop it here instead - the redo itself already succeeded.
+            if matches!(entry.undo_data, UndoData::None) {
+                tracing::warn!(
+                    command = %entry.command.description(),
+                    purpose = "keep the undo stack applicable",
+                    "Redone entry carries no undo data; not pushing it onto the undo stack"
+                );
+            } else if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_undo(entry);
             }
             tracing::info!("Redo performed");

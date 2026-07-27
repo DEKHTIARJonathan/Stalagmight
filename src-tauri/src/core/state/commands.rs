@@ -671,21 +671,35 @@ impl AppState {
             // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
             // the entry straight BACK - so that pop is unproductive forever and
             // every older entry underneath it is permanently unreachable. The
-            // stack is persisted, so the wedge survives close/reopen. Reachable
-            // today by reversing a shot-less section (a GPX waypoint section, and
-            // the context menu offers Reverse with no shot-count guard): the
-            // command succeeds as a no-op while `generate_undo_data` returns
-            // `None`. Guarded here rather than per command so any future command
-            // with the same shape is covered. Only a command that changed nothing
-            // reaches here with `None`, so dropping the entry (and, with it, the
-            // redo-stack clear `push_with_data` would have done) loses no history.
-            if matches!(final_undo_data, UndoData::None) {
-                tracing::debug!(
-                    command = %cmd.description(),
-                    "Command produced no undo data; not pushing an unundoable entry"
-                );
-            } else if let Ok(mut undo_stack) = self.undo_stack.lock() {
-                undo_stack.push_with_data(cmd.clone(), final_undo_data);
+            // stack is persisted, so the wedge survives close/reopen (stacks
+            // written before this guard are healed at load - see
+            // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
+            // section (a GPX waypoint section, and the context menu offers Reverse
+            // with no shot-count guard): the command succeeds as a no-op while
+            // `generate_undo_data` returns `None`. Guarded here rather than per
+            // command so any future command with the same shape is covered.
+            //
+            // The redo stack is cleared REGARDLESS. `None` here does NOT imply the
+            // command changed nothing: `UnmergeStations` on a station that is in no
+            // merge returns `CommandResult::success()` unconditionally
+            // (`command_station.rs`) while `generate_undo_data` yields `None`, and
+            // it is classified as affecting geometry - so the epilogue above has
+            // already reconciled derived state. What the entry loses is the ability
+            // to be undone, not the fact that a forward command ran; the redo branch
+            // replays onto a state the project has left either way. (Accepted cost:
+            // a provably-no-op forward command, such as reversing a shot-less
+            // section, also drops the redo branch. "A successful forward command
+            // invalidates redo" outranks preserving redo across a no-op.)
+            if let Ok(mut undo_stack) = self.undo_stack.lock() {
+                if matches!(final_undo_data, UndoData::None) {
+                    tracing::debug!(
+                        command = %cmd.description(),
+                        "Command produced no undo data; not pushing an unundoable entry, clearing redo"
+                    );
+                    undo_stack.clear_redo();
+                } else {
+                    undo_stack.push_with_data(cmd.clone(), final_undo_data);
+                }
             }
             // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
             // remote project marks it has_unpushed_edits. Set-only; no-op for
