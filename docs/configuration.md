@@ -100,15 +100,18 @@ satellite_provider = "esri"         # Tile provider (selects from backend regist
 satellite_enabled = false           # Show satellite imagery
 # GPS origin for coordinate alignment (required for satellite tiles)
 satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
-zoom_default = 15                   # Initial map zoom
+zoom_default = 15                   # Currently unread - the map always opens at 15 (hard-coded in uiStore)
 zoom_min = 0                        # Zoom range clamp
 zoom_max = 22
 zoom_step = 1.0                     # Zoom delta per +/- keypress
 
+# The whole [map.controls] block is currently inert: it parses and persists,
+# but no runtime code reads these keys (panning and wheel zoom use MapLibre's
+# defaults). Changing them has no effect.
 [map.controls]
-pan_speed = 1.0                     # Keyboard/edge pan multiplier
-zoom_speed = 1.0                    # Wheel zoom multiplier
-invert_scroll = false               # Reverse wheel zoom direction
+pan_speed = 1.0                     # Keyboard/edge pan multiplier (unwired)
+zoom_speed = 1.0                    # Wheel zoom multiplier (unwired)
+invert_scroll = false               # Reverse wheel zoom direction (unwired)
 
 [map.station]
 radius = 4                          # Visual circle radius in pixels (1-50)
@@ -328,11 +331,14 @@ The following shortcuts are reserved and cannot be reassigned:
 | `Tab` / `Enter` | UI navigation |
 | `Ctrl+A` | Select all stations |
 | `Ctrl+,` (`Cmd+,` on macOS) | Open Settings |
-| `?` | Keyboard shortcuts overlay |
 
-`Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset. They are
-global keys but not enforced as reserved: the shortcut editor will let you bind
-them to an action, and the UI-zoom handler still fires alongside it.
+Two more sets of keys are global but not enforced as reserved - the shortcut
+editor will let you record them anyway:
+
+- `?` opens the keyboard shortcuts overlay. The global handler intercepts it
+  before configurable shortcuts run, so an action bound to `?` never fires.
+- `Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset. The
+  UI-zoom handler still fires alongside whatever you bound.
 
 ### Shortcut Feedback
 

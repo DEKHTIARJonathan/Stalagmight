@@ -27,7 +27,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [project-structure.md](project-structure.md) | Directory tree and tech stack. |
 | [architecture.md](architecture.md) | State flow (Zustand -> IPC -> Rust command executor), the command pattern, key files, backend idioms. |
 | [SPEC.md](SPEC.md) | Data model, UI, workflows, file formats, validation rules. Defers to code for the enums, schema, and config keys. |
-| [roadmap.md](roadmap.md) | Historical record of the v1.0 scope. All of it shipped; live work is in the issue tracker. |
+| [roadmap.md](roadmap.md) | Historical record of the v1.0 scope; live work is in the issue tracker. |
 
 ## Core reference
 

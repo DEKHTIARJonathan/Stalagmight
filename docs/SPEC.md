@@ -139,11 +139,16 @@ All formats required:
 - Plus Codes
 - What3words
 
+MGRS and What3words are recognized and validated but not converted to
+coordinates: MGRS needs a dedicated conversion library and What3words an API,
+so both return an explanatory error pointing at the offline formats
+(`src/utils/gps.ts`).
+
 ### 2.8 Testing Requirements
 - **80% code coverage** target
 - Rust unit and integration tests for the backend
 - vitest for TypeScript unit and component tests
-- Playwright E2E against mocked IPC: a fast `@smoke` tier on every push, the full suite nightly
+- Playwright E2E against mocked IPC: a fast `@smoke` tier on pushes that can affect it (the workflow's `paths-ignore` skips docs-only, Rust-only, and legacy-suite-only changes), the full suite nightly
 - The WebdriverIO suite drives the real Tauri app but is quarantined under `e2e/legacy/` and runs on demand only
 
 See [TESTING.md](TESTING.md) for the tiers and their commands.
@@ -1239,10 +1244,14 @@ The zero datum establishes the coordinate system origin and enables GPS-accurate
 
 ### 8.1 Command Pattern
 
-Every persistent operation is a variant of the `Command` enum, executed through
-`AppState::execute`: acquire the command lock, run the read-only edit gate,
-capture undo data, apply the command, finalize the undo entry, push it, log.
-Persistence to SQLite happens on save, not per command.
+Persistent operations are variants of the `Command` enum, almost all executed
+through `AppState::execute`: acquire the command lock, run the read-only edit
+gate, capture undo data, apply the command, finalize the undo entry, push it,
+log. Persistence to SQLite happens on save, not per command. Two variants are
+labels rather than executable commands: `RepairIntegrity` and
+`UpdateProjectSettings` name snapshot undo entries recorded by their dedicated
+methods (`repair_project_integrity`, `update_project_settings`), and
+`AppState::execute` rejects them with an error.
 
 The variants cover project lifecycle (create/open/save/close/merge), sections,
 shots, station merges, loop closures, zero datums, station comments, the move
@@ -1373,8 +1382,11 @@ removed keys are ignored (no `deny_unknown_fields`), and the optional blocks
 `import`, `placement_suggestion`, `syntactic_highlighting`, `gas`, `speleodb`)
 default when absent - but the core tables (`general`, `units`, `display`,
 `section_colors`, `map`, `validation`, `export`, `logging`, `shortcuts`) and
-their non-defaulted fields are required, and a file that fails to parse falls
-back to the full compiled-in defaults, not a per-key merge.
+their non-defaulted fields are required. A file that fails to parse is
+discarded whole at startup (`Config::load().unwrap_or_default()` in
+`AppState::new`) - the app runs on the full compiled-in defaults, not a per-key
+merge. The Reload Config path instead surfaces the parse error and keeps the
+current in-memory config.
 
 ---
 
@@ -2141,9 +2153,11 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 ### 18.2 Dependencies and Build Configuration
 
 Exact versions drift with every upgrade, so they are not restated here:
-`package.json` for the frontend, `src-tauri/Cargo.toml` for the backend. The pnpm
-and node versions are pinned by `packageManager` in `package.json` and by
-`.nvmrc`, so every machine and CI run the same toolchain.
+`package.json` for the frontend, `src-tauri/Cargo.toml` for the backend. The
+pnpm version is pinned by `packageManager` in `package.json` (corepack reads it
+locally and in CI). `.nvmrc` pins node for CI and for developers whose version
+manager honors it; locally the `engines` range is advisory - a newer node warns
+but does not block.
 
 TypeScript runs in strict mode with `noUncheckedIndexedAccess` and
 `exactOptionalPropertyTypes` on top of it; `tsconfig.json` is the source of truth
@@ -2160,7 +2174,8 @@ See [project-structure.md](project-structure.md) for the directory tree.
 There are no versioned roadmap buckets. Queued and in-flight work lives in the
 GitHub issue tracker - currently the Plan-mode profile view (#299), slate-photo
 OCR import (#274), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
-historical record of the v1.0 phases, all of which shipped.
+historical record of the v1.0 phases, all of which shipped (one caveat: GPS
+entry validates but does not convert MGRS and What3words - see 2.7).
 
 Regularly asked about, and not currently being worked on: 3D visualization, a web
 version, direct mNemo device communication, LRUD passage-wall rendering,
