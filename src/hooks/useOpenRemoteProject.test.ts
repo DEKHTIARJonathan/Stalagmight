@@ -493,13 +493,130 @@ describe('useOpenRemoteProject (#218)', () => {
     });
 
     it('does not re-ask on the branches reached THROUGH a guarded open', async () => {
-      // `keepLocalCopy` / `takeRemoteDiscardingLocal` / `adoptRemote` are only
-      // reachable from the prompts an already-guarded `openRemote` raised, so a
-      // second refusal there would block a decision the user has just made. Driven
-      // with the open project as dirty as the cases above.
+      // `keepLocalCopy` / `takeRemoteDiscardingLocal` are the ANSWER to the prompt an
+      // already-guarded `openRemote` raised, reached without leaving that flow, so a
+      // second refusal there would block a decision the user has just made - and
+      // refusing the keep-local branch would shut the only door out of a refused
+      // open. Driven with the open project as dirty as the cases above.
       anotherOpen(openLink({ hasUnpushedEdits: true }), true);
       expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
       expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    });
+
+    /**
+     * [#270] The adopt route is the OTHER command that replaces the open project, and
+     * it ran no guard of its own - only whatever `openRemote` had concluded, which by
+     * then is stale by an unbounded amount. `openRemote` hands `adopt` back to the
+     * HOST, which parks the summary in its own state and puts up a confirm the user
+     * may sit on indefinitely, while the status poll (30 s to a user-configurable
+     * 24 h) keeps writing to the very link the guard reads. `adoptRemote` is also an
+     * exported entry point three components call from their own state, so its safety
+     * rested on a call-site convention rather than on anything in the hook.
+     *
+     * Driven at the hook boundary, the way the entry-guard cases above drive
+     * `openRemote`, with the adopt SUCCEEDING - so an unguarded adopt runs all the
+     * way to the load that replaces the open project.
+     */
+    const arianeThenAdopts = () => {
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'speleodb_open_project')
+          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+        if (cmd === 'speleodb_adopt_ariane')
+          return Promise.resolve({
+            local_path: '/cache/p1.stalx',
+            type_flipped: true,
+            concurrent_session: false,
+          });
+        return Promise.resolve(null);
+      });
+    };
+
+    it('adoptRemote refuses over work SpeleoDB has never seen, before it adopts anything', async () => {
+      arianeThenAdopts();
+      anotherOpen(openLink({ hasUnpushedEdits: true }));
+      const outcome = await hook().adoptRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      // Not a dead token - there is nothing to re-login for.
+      if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+      // Nothing adopted, nothing seeded, nothing loaded: `speleodb_adopt_ariane`
+      // replaces the cache `.stalx` too, so the guard has to run before it.
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
+      expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('adoptRemote refuses while we still hold the write lock', async () => {
+      arianeThenAdopts();
+      anotherOpen(openLink({ editState: 'editing' }));
+      const outcome = await hook().adoptRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
+    });
+
+    it('adoptRemote refuses over unsaved-to-disk changes in a plain local project', async () => {
+      arianeThenAdopts();
+      useProjectStore.setState({ project: { file_path: '/cave/local.stalx' } as never, isDirty: true });
+      const outcome = await hook().adoptRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses the adopt when the open project goes unpushed while the confirm is up', async () => {
+      // The real sequence rather than a synthetic one: the open IS guarded and the
+      // project on screen is clean, so it routes to the host's adopt confirm; the
+      // status poll then lands and marks that project un-pushed while the user is
+      // still reading the confirm. The stale "clean" answer must not carry.
+      arianeThenAdopts();
+      anotherOpen(openLink());
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'adopt' });
+
+      useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
+
+      const outcome = await hook().adoptRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('still adopts the already-open project over its OWN un-pushed cache copy', async () => {
+      // The exemption is load-bearing on the adopt route too: the take-remote branch
+      // routes to an adopt for a project that is un-pushed BY DEFINITION (that is why
+      // the refused-open prompt was up), and it is the only way out of that state.
+      // Nothing is handed back to a project we are re-adopting, so the hand-back half
+      // must stay exempt - and the discard the user just confirmed is no waiver for
+      // it, because it answers about the TARGET, not about the project on screen.
+      arianeThenAdopts();
+      useProjectStore.setState({
+        project: { file_path: '/cache/p1.stalx' } as never,
+        isDirty: false,
+      });
+      useSpeleoStore.setState({
+        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
+        remoteProjectId: 'p1',
+      });
+
+      expect(await hook().adoptRemote(SUMMARY, { discardLocal: true })).toEqual({
+        status: 'opened',
+      });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    });
+
+    it('still refuses re-adopting the open project over unsaved-to-disk edits', async () => {
+      // Disk-dirty is NOT part of that exemption: `speleodb_adopt_ariane` replaces the
+      // cache `.stalx` exactly as the open command does, dropping unsaved in-memory
+      // survey with it.
+      arianeThenAdopts();
+      useProjectStore.setState({
+        project: { file_path: '/cache/p1.stalx' } as never,
+        isDirty: true,
+      });
+      useSpeleoStore.setState({ link: openLink(), remoteProjectId: 'p1' });
+
+      const outcome = await hook().adoptRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
   });
 

@@ -200,10 +200,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    *
    * Checked at the ENTRY point rather than in the shared `finishOpen` tail, where the
    * sibling `alreadyOpen` test lives: the tail runs AFTER the pull, and its first act
-   * is the optimistic seed that overwrites the very link this reads.
-   * `keepLocalCopy` / `takeRemoteDiscardingLocal` / `adoptRemote` are reached ONLY
-   * through a guarded `openRemote`, so they are covered without re-asking mid-flow a
-   * question that was answered before anything was fetched.
+   * is the optimistic seed that overwrites the very link this reads. So it runs at
+   * BOTH entry points that issue a project-replacing command of their own -
+   * `openRemote` and `adoptRemote` - never in the tail they share.
+   *
+   * `keepLocalCopy` / `takeRemoteDiscardingLocal` are the two that deliberately do
+   * NOT re-run it: they are the ANSWER to the prompt a guarded `openRemote` raised,
+   * reached without leaving that flow, and refusing "keep the local copy" would shut
+   * the only door out of a refused open. `adoptRemote` is not like them - see there.
    *
    * It REFUSES rather than raising the shared hand-back prompt, the way
    * `HeldLockResumeDialog`'s Continue-editing row does. `speleodb-close` replays what
@@ -365,6 +369,33 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       summary: SpeleoProjectSummary,
       opts: { discardLocal?: boolean } = {},
     ): Promise<OpenRemoteOutcome> => {
+      /**
+       * [#270] The same entry guard `openRemote` runs, re-evaluated HERE - an adopt
+       * is a second project-replacing command, not a continuation of the first one.
+       *
+       * The `openRemote` that routed here ran the guard, but that answer is stale by
+       * an unbounded amount: `adopt` is returned to the HOST, which parks it in its
+       * own state and puts up a confirm the user may sit on indefinitely, while the
+       * status poll (30 s to a user-configurable 24 h) keeps writing to the very link
+       * the guard reads - so the open project can acquire un-pushed work, or have its
+       * lock resolved, between the check and the command that discards it. Every
+       * other hand-back exit evaluates its guard immediately before the destructive
+       * step, synchronously in the same handler (`newProjectGuarded`, `routeOpenedFile`,
+       * `handleCloseProject`); this is that same immediacy for the adopt route. It is
+       * also what stops `adoptRemote` - an exported entry point that three components
+       * call from their own state - resting its safety on a call-site convention.
+       *
+       * Idempotent on every route that reaches it, so it cannot re-ask a question the
+       * user has already answered: the ordinary open->adopt route was just guarded,
+       * and the take-remote->adopt route's target is either the already-open project
+       * (exempt from the hand-back half) or one whose swap `openRemote` already
+       * cleared, with `speleodb_open_project_discarding_local` classifying the dump
+       * before it replaces anything. Only a genuine CHANGE since that check refuses.
+       * `discardLocal` is no waiver here: it answers for the TARGET's cache copy,
+       * whereas this asks about the project on screen.
+       */
+      const refusal = handBackRefusal(summary);
+      if (refusal) return { status: 'error', message: refusal, reLogin: false };
       let result: SpeleoAdoptResult;
       try {
         result = await invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
@@ -402,7 +433,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         },
       });
     },
-    [finishOpen, t],
+    [finishOpen, handBackRefusal, t],
   );
 
   return { openRemote, adoptRemote, keepLocalCopy, takeRemoteDiscardingLocal };
