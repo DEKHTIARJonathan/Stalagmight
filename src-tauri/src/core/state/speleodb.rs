@@ -645,8 +645,9 @@ impl AppState {
         // switch / reopen. Drop the record HERE, before the verdict below reads it -
         // the re-derivation at the bottom of this function can reopen the gate from
         // nothing but the holder email, and it must never hand back an authorship
-        // licence this process no longer holds. (Both fast-forward arms restore the
-        // record after their in-place reload, which shuts the gate for a moment while
+        // licence this process no longer holds. (All THREE in-place reload sites -
+        // both fast-forward arms and the Restore half of `speleodb_restore_revision` -
+        // re-record afterwards, because the reload shuts the gate for a moment while
         // the lock is still genuinely ours.)
         //
         // The clear re-checks the gate for itself rather than acting on the snapshot
@@ -810,7 +811,15 @@ impl AppState {
         // shut the gate but before the poll that clears the record has run.
         // (The frontend's `holdsWriteLock` is the same shape: `editing &&
         // !forceEditing`.)
+        //
+        // The gate is asked for TOO - not as evidence of authorship, but as a veto.
+        // The record can outlive a gate that shut underneath an in-flight poll (a
+        // concurrent same-path reopen re-derives the gate from `is_remote` and the
+        // catch-all clear may not have run yet), and a session that may no longer
+        // edit must not still be handed a licence to explain a gap commit away as
+        // its own. Gate AND record AND holder, or no shortcut.
         let we_hold_the_lock = self.speleodb_lock_acquired_here(&link.project_id)
+            && self.edit_enabled()
             && !self.force_editing()
             && lock_holder.is_some_and(|holder| holder.eq_ignore_ascii_case(&my_email));
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
@@ -833,11 +842,15 @@ impl AppState {
     /// [`Self::speleodb_remote_state`].
     ///
     /// Set in the two arms of [`Self::speleodb_start_editing`] that KEEP the lock
-    /// they just acquired, right after the edit gate opens (its other arms release
-    /// the lock again, and the publish push acquires and releases inside one call
-    /// without ever opening an edit session, so neither records anything), and
-    /// and restored by [`Self::speleodb_update`]'s fast-forward arm - but only where
-    /// a record already existed, never conjured from the gate alone (see there).
+    /// they just acquired, right after the edit gate opens - and only where its
+    /// pre-acquire probe found the mutex UNHELD, since re-acquiring a lock the
+    /// account already holds is a server-side no-op that proves nothing (its other
+    /// arms release the lock again, and the publish push acquires and releases inside
+    /// one call without ever opening an edit session, so neither records anything).
+    /// Restored after the two other in-place reloads -
+    /// [`Self::speleodb_update`]'s fast-forward arm and
+    /// [`Self::speleodb_restore_revision`]'s Restore half - but only where a record
+    /// already existed, never conjured from the gate alone (see there).
     /// Cleared by
     /// every release verb in this file, and - covering the release paths that live
     /// elsewhere, plus close / project switch / logout / take-remote - by the poll in
@@ -1661,6 +1674,31 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
+        // Whether the acquire below is OURS to claim - probed BEFORE it, because the
+        // acquire itself cannot tell us. Re-acquiring a lock the ACCOUNT already holds
+        // is a successful server-side no-op (only ANOTHER holder produces the 400 that
+        // reports contention), and `ActiveMutex` parses no timestamp, so a 200 here
+        // says nothing about whether this process caused the transition. Without the
+        // probe a restarted process, a second window, or the held-lock dialog's
+        // "Continue editing" - which calls this verb precisely to resume an INHERITED
+        // lock - would all mint an authorship claim they never earned.
+        //
+        // Only a mutex the server says is UNHELD proves the unheld -> ours transition
+        // is ours. A FAILED probe is not "unheld": reading it as one would mint the
+        // record on a network blip, so `Err` fails safe to false. The user then edits
+        // exactly as before, just without an authorship claim - the shortcut is lost,
+        // never wrongly granted.
+        //
+        // Residual, and irreducible without a server-side compare-and-set: between
+        // this probe and the acquire another session on our account could take the
+        // lock, and we would record an acquisition that was really theirs. That is the
+        // same fail direction as today, over a window of milliseconds rather than a
+        // whole process lifetime.
+        let acquired_here = matches!(
+            self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &link.project_id),
+            Ok(None)
+        );
+
         // Acquire the lock. A 400 is the server's "someone else holds it" signal;
         // it has no first-class map_status row, so it is handled here (per #194).
         let acquired = self.speleodb_handle_auth(
@@ -1709,8 +1747,12 @@ impl AppState {
                 // This process took the lock and is keeping it: record the
                 // acquisition, which is what licenses the authorship shortcut in
                 // `speleodb_remote_state`. AFTER the gate opens, never before - a poll
-                // landing in between would see a shut gate and clear it again.
-                self.speleodb_note_lock_acquired(Some(&link.project_id));
+                // landing in between would see a shut gate and clear it again. Only
+                // where the pre-acquire probe proved the mutex was free: keeping a
+                // lock we INHERITED is an edit session, not an acquisition.
+                if acquired_here {
+                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                }
                 // #213: we now genuinely hold the lock, so clear force-edit. This is
                 // the "reconnect" transition for a force-editor (no-op for a normal
                 // read-only Start editing, where force_editing was already false).
@@ -1747,10 +1789,13 @@ impl AppState {
                     }
                 };
                 self.set_edit_enabled(true);
-                // As in the UpToDate arm, and likewise after the gate reopens: the
+                // As in the UpToDate arm, and likewise after the gate reopens (the
                 // reload shut it, which is exactly the window in which a concurrent
-                // poll drops the record.
-                self.speleodb_note_lock_acquired(Some(&link.project_id));
+                // poll drops the record) and likewise only where the probe proved the
+                // mutex was free before we asked for it.
+                if acquired_here {
+                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                }
                 // #213: reconnect transition - the FF reload already cleared it, but
                 // clear force-edit explicitly now that we hold the lock.
                 self.set_force_editing(false);
@@ -2257,6 +2302,18 @@ impl AppState {
         // a whole file rather than a possibly-torn one. This close stays because it
         // is not guaranteed to have fired (a stale/never-opened cache path) and it is
         // a cheap no-op when it did.
+        //
+        // Captured BEFORE the reload, which shuts the gate: a status poll landing in
+        // that window clears the acquisition record for a lock we still genuinely
+        // hold, and the `if restore` block below reopens the GATE without it - so the
+        // record would be gone for good and our own landed push would later read as a
+        // conflict. The third in-place reload site, alongside both fast-forward arms.
+        //
+        // Unlike `speleodb_update`'s arm this needs no gate/force PAIR: Restore's
+        // entry guards above already refused a force-editor and already required an
+        // open gate, so the record alone cannot mint - it is only ever handed back to
+        // a session that demonstrably had one on the way in.
+        let had_lock_record = self.speleodb_lock_acquired_here(&project_id);
         self.close_project();
         self.do_load_project_full(dest).map_err(|e| {
             local_dto(SpeleoDbError::Io(format!(
@@ -2265,6 +2322,9 @@ impl AppState {
         })?;
         if restore {
             self.set_edit_enabled(true);
+            if had_lock_record {
+                self.speleodb_note_lock_acquired(Some(&project_id));
+            }
         }
         self.set_force_editing(false);
 
@@ -2602,9 +2662,30 @@ impl AppState {
         insecure_http: bool,
         project_id: &str,
     ) -> Option<String> {
-        client::get_project(endpoint, token, insecure_http, project_id)
+        self.speleodb_lock_holder_checked(endpoint, token, insecure_http, project_id)
             .ok()
-            .and_then(|p| p.active_mutex.map(|m| m.user))
+            .flatten()
+    }
+
+    /// The same probe with all THREE outcomes kept apart: `Ok(None)` is a mutex the
+    /// server says is UNHELD, `Ok(Some(user))` names its holder, and `Err` means we
+    /// could not find out.
+    ///
+    /// [`Self::speleodb_lock_holder`] collapses the last two into `None`, which is
+    /// right for the display probes that feed it (an unknown holder and no holder
+    /// both render as "unknown") and wrong for
+    /// [`Self::speleodb_start_editing`]'s acquisition provenance, where reading a
+    /// failed GET as "unheld" would MINT a record on a network blip. Both views
+    /// share this one implementation so they cannot drift.
+    fn speleodb_lock_holder_checked(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+    ) -> Result<Option<String>, SpeleoDbError> {
+        client::get_project(endpoint, token, insecure_http, project_id)
+            .map(|p| p.active_mutex.map(|m| m.user))
     }
 
     /// Re-GET the project to report who holds the contended lock. Best-effort: a
@@ -5010,6 +5091,54 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_shut_edit_gate_withdraws_the_shortcut_even_with_the_record_intact() {
+        // The record answers "did I take this lock?", the gate answers "may I edit?",
+        // and the shortcut needs BOTH. The poll's catch-all clear is what normally
+        // keeps them in step, but it runs at the TOP of `speleodb_link_status` while
+        // the verdict is folded further down, after a network round trip - so a path
+        // that shuts the gate in between (a concurrent same-path reopen re-deriving it
+        // from `is_remote`) leaves a live record over a project that is no longer
+        // editable, and the shortcut was still granted. A session that may not edit
+        // must not be licensed to claim a gap commit as its own push.
+        //
+        // Same fixture and body as the force-editor sibling above: BASE behind the tip
+        // by one commit carrying our email, so the verdict flips on this input alone.
+        let (base, _listener) = always_answering_stub(
+            r#"{"commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
+                           {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#,
+        );
+        let (_temp, state) = editing_fixture(&base);
+        let link = SpeleoLink {
+            endpoint: base.clone(),
+            project_id: REMOTE_ID.to_owned(),
+            project_name: "Remote".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: true,
+            last_edit_at: None,
+            last_verify_at: None,
+        };
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::UpToDate,
+            "precondition: gate + record + holder together DO license the shortcut"
+        );
+
+        state.set_edit_enabled(false);
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "precondition: nothing on this path clears the record, which is the whole \
+             point - the two signals really can disagree"
+        );
+        assert_eq!(
+            state.speleodb_remote_state(&base, "tok-1", false, &link, Some("u@x")),
+            RemoteState::Conflict,
+            "a shut gate withdraws the licence on its own - fail closed to the \
+             divergence prompt rather than explaining away a commit we may not have \
+             made"
+        );
+    }
+
     /// A get_project body and a revisions body in one: serde ignores the fields the
     /// other endpoint owns, so the single-body stub can serve a whole poll. The
     /// mutex holder is OUR OWN account - a second session signed in as the same
@@ -5115,6 +5244,53 @@ mod tests {
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
             "handing the lock back ends the claim it licensed"
+        );
+    }
+
+    /// [`SAME_ACCOUNT_HOLDER_BODY`]'s mutex - our own account already holding the
+    /// lock - over a history whose tip IS our BASE, so `speleodb_start_editing`
+    /// reconciles UpToDate and KEEPS the lock. (The fast-forward arm needs an app
+    /// cache dir only the env-gated live tests initialise, so UpToDate is the only
+    /// keep-the-lock arm a unit test can reach.)
+    const HELD_BY_SAME_ACCOUNT_AT_BASE_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "active_mutex":{"user":"u@x"},
+        "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn a_successful_acquire_over_an_inherited_lock_records_no_authorship() {
+        // A 200 from `acquire` is NOT proof that this process took the lock:
+        // re-acquiring a lock the ACCOUNT already holds is a successful server-side
+        // no-op (only ANOTHER holder produces the 400), and `ActiveMutex` carries no
+        // timestamp to tell the two apart. So a restarted process, a second window, or
+        // the held-lock dialog's "Continue editing" - which calls this verb precisely
+        // to resume an INHERITED lock - used to walk out of Start editing holding an
+        // authorship claim they never earned, and the shortcut in
+        // `speleodb_remote_state` would then explain a sibling session's commit away
+        // as our own unrecorded push. Exactly the defect this branch exists to remove.
+        //
+        // The stub names our own account as the holder BEFORE the acquire, which is
+        // what the pre-acquire probe reads.
+        let (base, _listener) = always_answering_stub(HELD_BY_SAME_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        assert!(
+            matches!(
+                state.speleodb_start_editing().expect("start editing"),
+                StartEditingResult::Editing
+            ),
+            "the tip IS our BASE, so the reconcile is clean and the lock is kept"
+        );
+        assert!(
+            state.edit_enabled(),
+            "resuming an inherited lock still opens the edit gate - the user edits \
+             exactly as before, they simply carry no authorship claim"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "but a lock the account ALREADY held was not taken by this process, so \
+             nothing may be recorded"
         );
     }
 
@@ -5234,6 +5410,56 @@ mod tests {
             capture < reload,
             "the capture must precede the reload - the reload shuts the gate, and a \
              poll landing in that window is exactly what clears the record"
+        );
+    }
+
+    #[test]
+    fn restore_hands_the_acquisition_record_back_across_its_reload() {
+        // The THIRD in-place reload site, and the one that was missed. A Restore is
+        // only reachable with the write lock genuinely held (its entry guards refuse a
+        // force-editor and require an open gate), yet it closes the project and
+        // reloads it - and a fresh load of a remote project is read-only, so the gate
+        // is shut for the length of that reload. A status poll landing in the window
+        // clears the acquisition record, and the `if restore` block reopened the GATE
+        // without it: the record was gone permanently, and our own next landed push
+        // came back as a Conflict.
+        //
+        // Structural for the same reason as its two siblings above: the reload
+        // resolves an app cache dir that only the env-gated live tests initialise, so
+        // there is no unit-level seam to observe the restore through.
+        let restore = prod_source()
+            .split_once("fn speleodb_restore_revision")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    /// ").next())
+            .expect("speleodb_restore_revision body precedes the next item's doc");
+        assert!(
+            restore.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
+            "Restore must capture the acquisition record before its reload"
+        );
+        assert!(
+            restore.contains("self.speleodb_note_lock_acquired(Some(&project_id));"),
+            "and hand it back afterwards - reopening the gate alone leaves a lock we \
+             still hold with no provenance for the push we are about to make"
+        );
+        let capture = restore
+            .find("let had_lock_record")
+            .expect("capture present (asserted above)");
+        let reload = restore
+            .find("self.do_load_project_full(")
+            .expect("the in-place reload is what shuts the gate");
+        let restore_back = restore
+            .find("self.speleodb_note_lock_acquired(Some(&project_id));")
+            .expect("re-record present (asserted above)");
+        assert!(
+            capture < reload && reload < restore_back,
+            "capture BEFORE the reload (it is the last point the pre-reload truth \
+             exists) and re-record AFTER it (a record written before the reload is \
+             what the poll in that window drops)"
+        );
+        assert!(
+            restore.contains("if had_lock_record {"),
+            "and gate the hand-back on the captured record - re-recording \
+             unconditionally would MINT provenance for an inherited lock"
         );
     }
 
