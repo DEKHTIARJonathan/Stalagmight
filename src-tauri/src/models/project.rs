@@ -835,7 +835,8 @@ impl Project {
     /// its entries at once, so every later `resolve_key` into that section pays the
     /// O(shots) scan until something else rebuilds the cache.
     pub(crate) fn reindex_section_shot_uuids(&mut self, section_id: SectionId) {
-        self.shot_uuid_index.retain(|(sid, _), _| *sid != section_id);
+        self.shot_uuid_index
+            .retain(|(sid, _), _| *sid != section_id);
         let Some(section) = self.get_section(section_id) else {
             return;
         };

@@ -684,13 +684,16 @@ mod tests {
             shot(0.0, 3.0, 0.0, 0.0),
         ]);
         project.rebuild_shot_uuid_index();
-        let first_uuid = project.get_section(id).unwrap().shots[0].uuid.clone().unwrap();
+        let first_uuid = project.get_section(id).unwrap().shots[0]
+            .uuid
+            .clone()
+            .unwrap();
 
         assert!(project.reverse_section(id, false));
 
         // The record that was at index 0 is now last.
         assert_eq!(
-            project.shot_uuid_index.get(&(id, first_uuid.clone())),
+            project.shot_uuid_index.get(&(id, first_uuid)),
             Some(&2),
             "the uuid index must follow the record to its mirrored position"
         );
@@ -710,11 +713,12 @@ mod tests {
     fn reverse_invalidates_a_stale_collab_baseline() {
         use crate::models::{CollabState, ShotBaselineEntry};
 
-        let (mut project, id) = project_with_shots(vec![
-            shot(0.0, 1.0, 0.0, 0.0),
-            shot(90.0, 2.0, 0.0, 0.0),
-        ]);
-        let uuid = project.get_section(id).unwrap().shots[0].uuid.clone().unwrap();
+        let (mut project, id) =
+            project_with_shots(vec![shot(0.0, 1.0, 0.0, 0.0), shot(90.0, 2.0, 0.0, 0.0)]);
+        let uuid = project.get_section(id).unwrap().shots[0]
+            .uuid
+            .clone()
+            .unwrap();
         project.collab = Some(CollabState {
             enabled: true,
             sibling_tml_relative: "sibling.tml".to_string(),

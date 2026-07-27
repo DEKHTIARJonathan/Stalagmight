@@ -1103,9 +1103,8 @@ export function buildBatchImport(
       // connection for the same index, whose target shot count would mirror the
       // user's chosen station onto the wrong physical end (or out of range,
       // failing the whole batch in merge_stations).
-      const placementConn = directPlacement ? undefined : conn;
-      const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length,
-        targetShotCountForMirror(placement, placementConn?.targetType, placementConn?.targetImportIndex, sectionEdits));
+      const targetShots = directPlacement ? null : targetShotCountForMirror(placement, conn?.targetType, conn?.targetImportIndex, sectionEdits);
+      const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length, targetShots);
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,
