@@ -175,4 +175,27 @@ mod tests {
     fn no_rig_means_no_cap() {
         assert_eq!(scooter_range_limit(None), f64::INFINITY);
     }
+
+    #[test]
+    fn usable_range_matches_the_settings_preview_for_the_shared_case() {
+        // ⚠ CROSS-LANGUAGE PIN. Settings > Gas shows the diver a usable-range preview before any
+        // plan exists, so it cannot read `scooter_range_limit_m` off a computed field and has to
+        // duplicate this formula in TypeScript (`dpvUsableRangeM`, GasSettings.tsx). A duplicated
+        // formula drifts silently - the #233 gauge-divergence class - so both sides pin THIS SAME
+        // case, and the twin is named in each so a change to either breaks a test that says where
+        // its counterpart lives.
+        //
+        // The pair is chosen so a wrong rule is detectable: the primary has the LONGER burn
+        // (100 min vs 20) but the SHORTER range (1000 m vs 800), so comparing burn times picks the
+        // wrong unit. Halving would give 400, not 600.
+        //
+        // Twin: `the computed usable-range line matches the Rust formula for a hand-picked pair`
+        // in `src/components/Dialogs/settings/GasSettings.test.tsx`.
+        let rig = DpvRig {
+            primary: unit(10.0, 100.0),
+            backup: unit(40.0, 20.0),
+            range_reserve_fraction: 0.25,
+        };
+        assert_eq!(rig.usable_range_m(), 600.0);
+    }
 }
