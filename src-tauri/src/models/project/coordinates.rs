@@ -8,6 +8,30 @@ use crate::models::{
 
 use super::Project;
 
+/// One merge or loop closure incident on a station: its kind and the section its
+/// far end lives in. Building block of the incidence part of
+/// [`Project::station_reverse_identity`].
+type Incidence = (&'static str, SectionId);
+
+/// Every station of one section mapped to its sorted [`Incidence`] multiset,
+/// keyed by station index. Built once per section by
+/// [`Project::station_incidence`].
+type SectionIncidence = HashMap<u32, Vec<Incidence>>;
+
+/// The incidence signature of a station that no merge or closure touches.
+const NO_INCIDENCE: &[Incidence] = &[];
+
+/// Sort key of one station under [`Project::station_reverse_identity`]: the
+/// neighbouring shots' UUIDs, then the incidence multiset, then the neighbouring
+/// depths, then the neighbouring `|pitch|`es - each field sorted so it does not
+/// depend on which way the section is numbered.
+type AnchorKey<'a> = (
+    (Option<&'a str>, Option<&'a str>),
+    &'a [Incidence],
+    [Option<u64>; 2],
+    [Option<u64>; 2],
+);
+
 impl Project {
     /// Get all stations colocated with the given station (via merges and aligned closures).
     ///
@@ -289,37 +313,141 @@ impl Project {
         self.compute_station_coordinates_with_progress(None)
     }
 
-    /// Reverse-invariant identity of station `idx` inside one section: the UUIDs
-    /// of the two shots it sits between, ordered so the pair does not depend on
-    /// which way the section is numbered.
+    /// The merges and loop closures incident on each station of `section_id`, as
+    /// a sorted multiset of `(kind, partner section)` pairs per station index.
+    ///
+    /// Built from `station_merges` and `loop_closures` **only**. Both are
+    /// mirrored onto the physical station by a reverse (its write pass rewrites
+    /// every stored [`StationKey`](crate::models::StationKey) through
+    /// `map_station_refs`), so the signature travels with the station rather than
+    /// with the index - which is what makes it usable inside
+    /// [`Self::station_reverse_identity`]. `station_offsets`, `station_comments`
+    /// and `zero_datums` are mirrored just the same, but they are deliberately
+    /// left out: a datum-less component has no zero datum by construction, and
+    /// folding in the cosmetic two would let typing a station comment re-pick the
+    /// component's gauge and shift the adjusted view.
+    ///
+    /// The partner's station INDEX is left out for the same reason the pick can't
+    /// use an index at all: it is stable under a reverse of `section_id` but not
+    /// under a reverse of the partner's own section, and the identity has to be
+    /// invariant under every reverse, not just this one. The partner's section id
+    /// survives all of them.
+    fn station_incidence(&self, section_id: SectionId) -> SectionIncidence {
+        let merges = self
+            .station_merges
+            .iter()
+            .map(|m| ("merge", &m.station_a, &m.station_b));
+        let closures = self
+            .loop_closures
+            .iter()
+            .map(|c| ("closure", &c.station_a, &c.station_b));
+
+        let mut out: SectionIncidence = HashMap::new();
+        for (kind, key_a, key_b) in merges.chain(closures) {
+            let (Some(a), Some(b)) = (self.resolve_key(key_a), self.resolve_key(key_b)) else {
+                continue;
+            };
+            if a.section_id == section_id {
+                out.entry(a.station_index)
+                    .or_default()
+                    .push((kind, b.section_id));
+            }
+            if b.section_id == section_id {
+                out.entry(b.station_index)
+                    .or_default()
+                    .push((kind, a.section_id));
+            }
+        }
+        // Canonical order, so the key does not depend on the order the merges and
+        // closures happen to sit in on the project.
+        for incidences in out.values_mut() {
+            incidences.sort_unstable();
+        }
+        out
+    }
+
+    /// Reverse-invariant identity of station `idx` inside one section, used to
+    /// pick a gauge anchor that stays on the same PHYSICAL station when the
+    /// section is reversed.
     ///
     /// A station is the boundary between shots `idx - 1` and `idx`. A reverse
-    /// sends station `i` to `shots.len() - i` and keeps each UUID with its
-    /// record, so the mirrored station has exactly the same two neighbouring
-    /// shots with their sides swapped - the *ordered* pair is therefore identical
-    /// before and after. `None` marks a missing neighbour (a section end) or a
-    /// shot minted before UUIDs existed; `None` sorts first, so an end station
-    /// always outranks an interior one and the anchor stays at an end of the
-    /// section, as it was when this picked station 0.
-    fn station_reverse_identity(section: &Section, idx: usize) -> (Option<&str>, Option<&str>) {
-        let before = idx
-            .checked_sub(1)
-            .and_then(|i| section.shots.get(i))
-            .and_then(|s| s.uuid.as_deref());
-        let after = section.shots.get(idx).and_then(|s| s.uuid.as_deref());
-        if before <= after {
-            (before, after)
+    /// sends station `i` to `shots.len() - i` and keeps each record's identity
+    /// with the record, so the mirrored station has exactly the same two
+    /// neighbouring shots with their sides swapped. Every field below is
+    /// therefore built from the two neighbours and sorted, which makes it
+    /// side-agnostic and so identical before and after:
+    ///
+    /// 1. **Shot UUIDs.** `None` marks a missing neighbour (a section end) or a
+    ///    shot minted before UUIDs existed; `None` sorts first, so an end station
+    ///    outranks an interior one and the anchor stays at an end of the section.
+    ///    For a section with **two or more** shots this pair is already
+    ///    injective (the two ends give `(None, u_0)` and `(None, u_{N-1})`, and
+    ///    any two interior stations share at most one UUID), so nothing below is
+    ///    ever consulted there. The rest exists for `N <= 1`, and is appended
+    ///    afterwards precisely so it cannot move an anchor on a longer section.
+    /// 2. **Incidence multiset** (see [`Self::station_incidence`]) - the merges
+    ///    and closures hanging off the station, which a reverse mirrors onto the
+    ///    physical station.
+    /// 3. **Depths**, as raw `f64::to_bits`. Invariant because `reverse_shots`
+    ///    swaps `depth_in`/`depth_out` with `mem::swap` - bit-exact, no
+    ///    arithmetic - so the reading beside a station travels with it.
+    /// 4. **`|pitch|`**, as raw `f64::to_bits`. `reverse_shots` negates and
+    ///    re-associates pitch, and clearing the sign bit after flipping it is the
+    ///    same as clearing it, so the magnitude is bit-exact too.
+    ///
+    /// The bit patterns order NaN and negative values in no physically meaningful
+    /// way; that is fine, this is a deterministic tie-break and not a
+    /// measurement comparison.
+    fn station_reverse_identity<'a>(
+        section: &'a Section,
+        incidence: &'a SectionIncidence,
+        idx: usize,
+    ) -> AnchorKey<'a> {
+        let before = idx.checked_sub(1).and_then(|i| section.shots.get(i));
+        let after = section.shots.get(idx);
+
+        let (b_uuid, a_uuid) = (
+            before.and_then(|s| s.uuid.as_deref()),
+            after.and_then(|s| s.uuid.as_deref()),
+        );
+        let uuids = if b_uuid <= a_uuid {
+            (b_uuid, a_uuid)
         } else {
-            (after, before)
-        }
+            (a_uuid, b_uuid)
+        };
+
+        let neighbours = incidence
+            .get(&(idx as u32))
+            .map_or(NO_INCIDENCE, Vec::as_slice);
+
+        let mut depths = [
+            before.map(|s| s.depth_out.to_bits()),
+            after.map(|s| s.depth_in.to_bits()),
+        ];
+        depths.sort_unstable();
+
+        let mut pitches = [
+            before.and_then(|s| s.pitch_out).map(|p| p.abs().to_bits()),
+            after.and_then(|s| s.pitch_in).map(|p| p.abs().to_bits()),
+        ];
+        pitches.sort_unstable();
+
+        (uuids, neighbours, depths, pitches)
     }
 
     /// Pick a deterministic anchor station for a component that has no zero datum.
     ///
-    /// The anchor only fixes the otherwise-free absolute translation (gauge) of a
-    /// datum-less component - the *shape* of the adjusted geometry is independent
-    /// of this choice - but the gauge has to be pinned to the same PHYSICAL
-    /// station every time, or the adjusted view jumps.
+    /// The anchor is two things at once, and only the first is a pure gauge:
+    ///
+    /// * it fixes the otherwise-free absolute translation of a datum-less
+    ///   component, by pinning that one station at its MEASURED coordinates
+    ///   (`adjust_least_squares`'s `fixed_groups` fallback);
+    /// * it is also a member of the spur-prune `pinned` set in the same solve, so
+    ///   moving it can change which stations count as spurs and are skipped by the
+    ///   update phase. Making it a pure gauge is tracked separately.
+    ///
+    /// Either way the pin has to land on the same PHYSICAL station every time, or
+    /// the adjusted view jumps.
     ///
     /// Picking the lex-min `(section_id, station_index)` did not do that. A
     /// section id survives every edit, but a station INDEX does not: reversing a
@@ -328,22 +456,38 @@ impl Project {
     /// residual - breaking the reverse's "every station keeps its position"
     /// guarantee exactly where closure-adjusted geometry is forced (Plan/Export).
     ///
-    /// So: lowest section id in the component (stable), then the station with the
-    /// smallest [`Self::station_reverse_identity`] within it - an identity built
-    /// from the neighbouring shots' UUIDs, which travel with their records
-    /// through a reverse. Ties (a section whose shots predate UUIDs, so every
-    /// identity is `(None, None)`) fall back to the lowest index, i.e. the old
-    /// behaviour; the load-time mint means a loaded project never hits that.
-    /// UUIDs persist, so the choice is still reproducible across reloads.
+    /// So the pick is made only from data a reverse carries with the record:
+    ///
+    /// 1. **Section**: prefer one with two or more shots, then the lowest id.
+    ///    [`Self::station_reverse_identity`]'s UUID pair is injective on such a
+    ///    section, so the anchor is exactly reverse-invariant there with no
+    ///    tie-break at all; only `N <= 1` can tie. A reverse leaves the shot count
+    ///    alone, so the preference is itself invariant.
+    /// 2. **Station**: the smallest [`Self::station_reverse_identity`] within it,
+    ///    then the lowest index as a last resort.
+    ///
+    /// **Residual, not a total guarantee.** A component in which *every* section
+    /// has at most one shot, and whose chosen section has the same incidence,
+    /// depth and `|pitch|` signature at both of its ends, still ties on every
+    /// field and still falls through to the index - so a reverse still flips it
+    /// and still translates the adjusted component. A datum-less component only
+    /// reaches this solve because it carries an eligible closure, and the closure
+    /// and the merge that ties the loop usually land on opposite ends, which
+    /// separates them - but that is a tendency, not a guarantee. This is a
+    /// narrower hole than before, not a closed one, and no invariant is claimed.
+    ///
+    /// UUIDs, merges, closures, depths and pitches all persist, so the choice is
+    /// reproducible across reloads.
     fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
         let section = self
             .sections
             .iter()
             .filter(|s| component.contains(&s.id))
-            .min_by_key(|s| s.id)?;
+            .min_by_key(|s| (s.shots.len() < 2, s.id))?;
+        let incidence = self.station_incidence(section.id);
         let index = (0..=section.shots.len()).min_by(|&a, &b| {
-            Self::station_reverse_identity(section, a)
-                .cmp(&Self::station_reverse_identity(section, b))
+            Self::station_reverse_identity(section, &incidence, a)
+                .cmp(&Self::station_reverse_identity(section, &incidence, b))
                 .then(a.cmp(&b))
         })?;
         Some(StationRef::new(section.id, index as u32))
@@ -859,5 +1003,225 @@ impl Project {
         );
 
         stations
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod tests {
+    use super::*;
+    use crate::models::{LoopClosure, SectionData, ShotData, StationMerge};
+    use chrono::Utc;
+
+    fn shot(azimuth: f64, length: f64) -> ShotData {
+        ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        }
+    }
+
+    fn add_section(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+        project
+            .add_section(SectionData {
+                shots,
+                ..Default::default()
+            })
+            .id
+    }
+
+    /// The station index [`Project::default_anchor_for_component`] picks for the
+    /// component `section_id` belongs to.
+    fn anchor_index(project: &Project, section_id: SectionId) -> u32 {
+        let component = project.get_connected_section_ids(section_id);
+        let anchor = project.default_anchor_for_component(&component).unwrap();
+        assert_eq!(
+            anchor.section_id, section_id,
+            "fixture expects the anchor to come from section {section_id}"
+        );
+        anchor.station_index
+    }
+
+    fn adjusted_xy(stations: &[Station], sr: StationRef) -> (f64, f64) {
+        stations
+            .iter()
+            .find(|s| s.station_ref == sr)
+            .map(|s| (s.coordinates.x, s.coordinates.y))
+            .unwrap()
+    }
+
+    /// One loop built from two SINGLE-shot sections: merged at their station 0,
+    /// tied by an eligible closure at their station 1, 0.25 m of misclosure and
+    /// no zero datum - so the component's translation is gauged by
+    /// [`Project::default_anchor_for_component`] alone.
+    ///
+    /// A 1-shot section is the shape the shot-UUID identity cannot separate on
+    /// its own (both stations sit between the same single shot and a section
+    /// end), so this is the fixture the incidence tie-break exists for.
+    fn project_with_a_one_shot_loop() -> (Project, SectionId, SectionId) {
+        let mut project = Project::new("one-shot loop".to_string(), None);
+        let a = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        // 0.25 m longer, so the loop does not quite close.
+        let b = add_section(&mut project, vec![shot(0.0, 10.25)]);
+        project.ensure_shot_uuids();
+        project.station_merges.push(StationMerge {
+            station_a: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(b, 0)).unwrap(),
+            merged_at: Utc::now(),
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(b, 1)).unwrap(),
+            path_length: 20.25,
+            misclosure_distance: 0.25,
+            error_percentage: 1.2,
+            horizontal_misclosure: 0.25,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::LeastSquaresWeighted,
+            is_aligned: false,
+        });
+        (project, a, b)
+    }
+
+    /// The reverse promises every station keeps its world position, and Plan /
+    /// Export mode FORCES the closure-adjusted view - so the promise has to hold
+    /// for the ADJUSTED coordinates of a section the user did not even touch.
+    ///
+    /// With every section in the component down to a single shot, the shot-UUID
+    /// identity is the same at both ends (station 0 is `(None, u0)`; station 1 is
+    /// `(Some(u0), None)`, which the sort flips onto the same pair), so the pick
+    /// fell through to the lowest index - the far physical end after a reverse.
+    /// The gauge then re-pinned on the other end of the loop and the untouched
+    /// section slid by half the misclosure, 0.125 m.
+    #[test]
+    fn reverse_of_a_one_shot_anchor_section_does_not_move_the_component() {
+        let (project, a, b) = project_with_a_one_shot_loop();
+        let config = ClosureAdjustmentConfig::default();
+
+        let before = project.clone().into_adjusted_station_coordinates(&config);
+        let mut project = project;
+        assert!(project.reverse_section(a, false));
+        let after = project.into_adjusted_station_coordinates(&config);
+
+        // Precondition: the solve actually ran and fused the closure, so the
+        // assertions below are about the gauge and not about a no-op.
+        let (fused_a, fused_b) = (
+            adjusted_xy(&before, StationRef::new(a, 1)),
+            adjusted_xy(&before, StationRef::new(b, 1)),
+        );
+        assert!(
+            (fused_a.0 - fused_b.0).abs() < 1e-6 && (fused_a.1 - fused_b.1).abs() < 1e-6,
+            "precondition: the closure should have been adjusted, got {fused_a:?} / {fused_b:?}"
+        );
+
+        // Section `b` was not touched at all, so not one of its stations may move.
+        for i in 0..=1 {
+            let p = adjusted_xy(&before, StationRef::new(b, i));
+            let q = adjusted_xy(&after, StationRef::new(b, i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
+                "adjusted station b:{i} moved: {p:?} -> {q:?}"
+            );
+        }
+        // And `a`'s station `i` is now station `1 - i`, in the same place.
+        for i in 0..=1 {
+            let p = adjusted_xy(&before, StationRef::new(a, i));
+            let q = adjusted_xy(&after, StationRef::new(a, 1 - i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
+                "adjusted station a:{i} moved: {p:?} -> {q:?}"
+            );
+        }
+    }
+
+    /// A section with two or more shots separates its stations by shot UUID with
+    /// no tie-break at all, so the anchor prefers one even when a shorter section
+    /// owns the lower id. Shot count survives a reverse unchanged, so preferring
+    /// on it cannot itself flip the anchor.
+    #[test]
+    fn anchor_prefers_a_multi_shot_section() {
+        let mut project = Project::new("mixed".to_string(), None);
+        let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let three = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+        project.station_merges.push(StationMerge {
+            station_a: project.key_for_ref(StationRef::new(one, 1)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(three, 0)).unwrap(),
+            merged_at: Utc::now(),
+        });
+        assert!(one < three, "fixture: the 1-shot section owns the lower id");
+
+        let component = project.get_connected_section_ids(one);
+        let anchor = project.default_anchor_for_component(&component).unwrap();
+
+        assert_eq!(
+            anchor.section_id, three,
+            "the anchor must come from the section whose identity is injective"
+        );
+    }
+
+    /// Due north end to end: `sin(0.0)` is exactly 0 but `sin(180.0)` is
+    /// 1.22e-16, so a rule that ordered stations by their computed coordinates
+    /// would pick a different end after the reverse turned every bearing around.
+    /// A guard, not a regression - the shot-UUID identity already handles a
+    /// multi-shot section - kept so nobody reintroduces a coordinate rule.
+    #[test]
+    fn anchor_identity_is_stable_across_a_due_north_reverse() {
+        let mut project = Project::new("due north".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(0.0, 10.0), shot(0.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+
+        let before = anchor_index(&project, s);
+        assert!(project.reverse_section(s, false));
+        let after = anchor_index(&project, s);
+
+        assert_eq!(
+            after,
+            3 - before,
+            "the anchor left its physical station: {before} -> {after}"
+        );
+    }
+
+    /// The residual case the incidence multiset cannot reach: a lone 1-shot
+    /// section with no merge and no closure on either end. Its two stations are
+    /// still told apart, because a reverse swaps `depth_in`/`depth_out`
+    /// bit-exactly rather than recomputing them, so the depth beside a station
+    /// travels with it.
+    #[test]
+    fn anchor_identity_survives_a_reverse_for_a_depth_distinguished_one_shot_section() {
+        let mut project = Project::new("depth".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
+        );
+        project.ensure_shot_uuids();
+
+        let before = anchor_index(&project, s);
+        assert!(project.reverse_section(s, false));
+        let after = anchor_index(&project, s);
+
+        assert_eq!(
+            after,
+            1 - before,
+            "the anchor left its physical station: {before} -> {after}"
+        );
     }
 }
