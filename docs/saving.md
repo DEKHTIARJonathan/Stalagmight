@@ -2,7 +2,7 @@
 
 ## Overview
 
-Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`; a failure there degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard). The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
+Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. Saves are triggered manually (Ctrl+S), automatically via a frontend debounced timer, or by the first import into a new project whose initial save was deferred (`finalize_deferred_import` in `src-tauri/src/commands/import.rs`). A failed deferred-import save degrades to a successful import carrying a warning, never a hard failure, so the imported data stays in memory under the close-guard. The save pipeline is optimized to return quickly by deferring non-critical work to background threads and avoiding unnecessary recomputation.
 
 ## Save Pipeline
 
@@ -16,15 +16,16 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 5. Close temp database, atomically rename to final path
 6. Reopen database at final path
 7. Persist undo/redo stacks synchronously to the database
-8. Update project.file_path and database handle
+8. Update project.file_path
 9. Collaboration mode only: write the sibling .tml (best-effort)
-10. Update recent projects list in config
-11. Return CommandResult with saved_path
+10. Swap in the new database handle
+11. Update recent projects list in config
+12. Return CommandResult with saved_path
 ```
 
 Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
 
-Step 9 runs only when collab mode is enabled, and an auto-save skips it unless `CollabState.write_tml_on_autosave` is set, so the file Ariane has open doesn't churn every 30 seconds. `write_collab_sibling` exports the sibling `.tml` and refreshes the stored baseline; a failed `.tml` write never fails the `.stalx` save - the result stays successful and carries a `COLLAB_SIBLING_WRITE_FAILED` warning, because a green checkmark would otherwise hide the fact that the collaborator's copy is now stale. See [Collaboration](collaboration.md).
+Step 9 runs only when collab mode is enabled. An auto-save also rewrites the sibling unless `CollabState.write_tml_on_autosave` is turned off (it defaults to true); turning it off keeps the file Ariane has open from churning on every debounce, while manual saves always rewrite. `write_collab_sibling` exports the sibling `.tml` and refreshes the stored baseline; a failed `.tml` write never fails the `.stalx` save - the result stays successful and carries a `COLLAB_SIBLING_WRITE_FAILED` warning, because a green checkmark would otherwise hide the fact that the collaborator's copy is now stale. See [Collaboration](collaboration.md).
 
 ### Frontend (`saveProject` in `projectStore.ts`)
 

@@ -152,9 +152,8 @@ comment in `src/components/MemoryProbe/MemoryProbe.tsx::takeSnapshot`.
 
 ### Per-feature-flag config debug panels
 
-A few panels are gated by a runtime config flag set in `config.toml` (locations in
-[`configuration.md`](configuration.md))
-(see [`configuration.md`](configuration.md) for full schema). The hit-detection
+A few panels are gated by a runtime config flag set in `config.toml` (locations
+and full schema in [`configuration.md`](configuration.md)). The hit-detection
 log at the click handler in `SurveyLayer.tsx` is the clearest example -
 controlled by `debug.map.log_hit_detection`. Off by default; toggle in the
 config file when you need to see which feature was picked on each click.

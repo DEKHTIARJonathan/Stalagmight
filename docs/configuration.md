@@ -20,6 +20,9 @@ The directory is Tauri's per-app config dir, named for the bundle identifier
 ```toml
 [general]
 auto_save = true                    # Enable auto-save after modifications
+auto_save_interval_seconds = 30     # Debounce delay before an auto-save fires
+undo_history_limit = 100            # In-memory undo stack depth
+undo_persist_limit = 20             # Undo entries persisted into the .stalx on save
 recent_projects = []                # List of recently opened project paths
 recent_projects_max = 20            # Maximum recent projects to track
 locale = "system"                   # "system" or a specific locale tag like "en-US"
@@ -28,10 +31,26 @@ date_format = "locale"              # "locale" (follow language) or a locale tag
 
 [units]
 length = "meters"                   # meters, feet
+depth = "meters"                    # meters, feet (independent of length)
 angle = "degrees"                   # degrees, gradians
+# Display decimals per quantity (length 1, coordinates 2, depth 1, azimuth 1,
+# inclination 1, gps 6); any subset may be overridden:
+decimal_precision = { length = 1, coordinates = 2, depth = 1, azimuth = 1, inclination = 1, gps = 6 }
 
 [display]
 default_background = "#1a1a2e"      # Map background color
+grid_color = "#333366"              # Grid overlay line color
+grid_spacing = 10.0                 # Grid spacing in meters
+font_size = 12                      # Map label font size
+font_color = "#f5f5f5"              # Map label color
+measure_path_color = "#22d3ee"      # Along-line tint for the measure tool's path
+
+[display.depth_gradient]
+enabled = false                     # Color shots by depth
+shallow_color = "#00bfff"           # Gradient endpoint at shallow_depth
+deep_color = "#ff4444"              # Gradient endpoint at deep_depth
+shallow_depth = 0.0
+deep_depth = 50.0
 
 [section_colors]
 # Colors handed to new sections, in order; wraps around when all are used
@@ -73,14 +92,23 @@ min_shot_score = 0.15               # Minimum per-shot score to continue matchin
 min_aggregate_score = 0.45          # Minimum aggregate score to include a suggestion
 max_reference_shots = 5             # Maximum reference shots to try from each leaf
 # Further cutoffs and penalties (max_suggestions, min_partial_ratio,
-# single_shot_penalty, max_azimuth_error_*, max_depth_error,
-# max_length_error_*) are in config/types.rs.
+# single_shot_penalty, short_shot_threshold, max_azimuth_error_*,
+# max_depth_error, max_length_error_*) are in config/types.rs.
 
 [map]
 satellite_provider = "esri"         # Tile provider (selects from backend registry via get_tile_providers IPC)
 satellite_enabled = false           # Show satellite imagery
 # GPS origin for coordinate alignment (required for satellite tiles)
 satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
+zoom_default = 15                   # Initial map zoom
+zoom_min = 0                        # Zoom range clamp
+zoom_max = 22
+zoom_step = 1.0                     # Zoom delta per +/- keypress
+
+[map.controls]
+pan_speed = 1.0                     # Keyboard/edge pan multiplier
+zoom_speed = 1.0                    # Wheel zoom multiplier
+invert_scroll = false               # Reverse wheel zoom direction
 
 [map.station]
 radius = 4                          # Visual circle radius in pixels (1-50)
@@ -96,7 +124,7 @@ enabled_merge = true                # Enable snap-to-station in merge tool
 enabled_measure = true              # Enable snap-to-station in measure tool
 
 [cache]
-tile_cache_enabled = true           # Cache satellite tiles for offline use
+tile_cache_enabled = true           # Master switch; the default esri provider still opts out below
 tile_cache_max_mb = 500             # Maximum cache size in MB
 tile_ttl_days = 30                  # Days before tiles are stale
 # Per-provider override. Note: the default config ships esri (the default
@@ -115,7 +143,7 @@ warn_shot_length_min = 0.3              # Flag shots shorter than this (meters)
 warn_shot_length_max = 50.0             # Flag shots longer than this (meters)
 warn_depth_change_per_shot_max = 10.0   # Flag depth change over this per shot (meters)
 warn_azimuth_deviation_max = 30.0       # Flag azimuth deviation over this (degrees)
-azimuth_diff_threshold = 20.0           # Flag when |azimuth in/out difference - 180| exceeds this (degrees)
+azimuth_diff_threshold = 20.0           # Flag when the two (both forward) azimuth readings differ by more than this, after 360-degree wraparound (degrees)
 pitch_diff_threshold = 10.0             # Flag when the two recorded inclination legs disagree by more (degrees)
 inclination_depth_diff_threshold = 15.0 # Flag recorded inclination vs the one implied by length + depth change (degrees)
 
@@ -150,7 +178,7 @@ default_include_labels = true       # Include labels
 
 [logging]
 level = "info"                      # trace, debug, info, warn, error
-max_directory_size_mb = 128         # Log directory cap; oldest logs and crash markers pruned first
+max_directory_size_mb = 128         # Cap read by logging::cleanup_logs; nothing invokes it automatically yet
 
 [gas]
 units = "metric"                    # "metric" (bar / litres) or "imperial" (psi / cuft)
@@ -301,7 +329,10 @@ The following shortcuts are reserved and cannot be reassigned:
 | `Ctrl+A` | Select all stations |
 | `Ctrl+,` (`Cmd+,` on macOS) | Open Settings |
 | `?` | Keyboard shortcuts overlay |
-| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the interface in / out / reset |
+
+`Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset. They are
+global keys but not enforced as reserved: the shortcut editor will let you bind
+them to an action, and the UI-zoom handler still fires alongside it.
 
 ### Shortcut Feedback
 
@@ -367,12 +398,18 @@ The Settings dialog provides a UI for common configuration changes. Access it by
 
 ## Logging
 
-Logs are written using the `tracing` crate with `tracing-appender` for file output.
+Logs are written using the `tracing` crate with `tracing-appender` for file
+output, as `stalagmight.log.YYYY-MM-DD`, rotated daily.
+
+Unlike config, the log directory is **not** under the bundle-identifier dir:
+`logging::init()` runs before Tauri's path API is initialised
+(`src-tauri/src/lib.rs`), so `log_directory()` always takes its
+`directories`-crate fallback:
 
 | Platform | Log Path |
 |----------|----------|
-| Linux | `~/.local/share/com.stalagmight.desktop/logs/` |
-| macOS | `~/Library/Application Support/com.stalagmight.desktop/logs/` |
-| Windows | `%LOCALAPPDATA%\com.stalagmight.desktop\logs\` |
+| Linux | `~/.local/share/stalagmight/logs/` |
+| macOS | `~/Library/Application Support/com.stalagmight.Stalagmight/logs/` |
+| Windows | `%LOCALAPPDATA%\stalagmight\Stalagmight\data\logs\` |
 
 Level and the directory size cap are the `[logging]` settings above.

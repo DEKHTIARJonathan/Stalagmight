@@ -102,7 +102,7 @@ stalagmight/
 │   ├── TESTING.md                # Testing guide
 │   ├── architecture.md           # System design
 │   ├── project-structure.md      # This file
-│   └── ...                       # see the docs table in README.md
+│   └── ...                       # full table in AGENTS.md's Documentation section
 │
 └── CLAUDE.md                     # Agent instructions (AGENTS.md symlinks to it)
 ```

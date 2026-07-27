@@ -60,7 +60,7 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 ### 1.4 Scope
 
 **Shipped:**
-- Import: DMP (mNemo devices), Walls, Compass, Ariane `.tml`, GPX - see `src-tauri/src/parsers/`
+- Import: DMP (mNemo devices), Walls (experimental), Compass, Ariane `.tml`/`.tmlu`, GPX - see `src-tauri/src/parsers/`
 - Manual data entry via a spreadsheet interface
 - 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
@@ -80,8 +80,8 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Direct mNemo device communication
 - LRUD passage-wall rendering on the map
 
-In-flight work lives in the GitHub issue tracker rather than a list here -
-currently the profile view (#299) and slate-photo OCR import (#274).
+In-flight work lives in the GitHub issue tracker rather than a list here
+(examples in section 19).
 
 ---
 
@@ -405,7 +405,9 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 An open project is worked in one of three top-level workspace modes, chosen from
 the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
 **Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
-read-only closure-adjusted map, so the left Sections dock and every
+read-only closure-adjusted map (on a project with no eligible closures the
+geometry falls back to measured; the modes are read-only regardless - gating keys
+off `appMode`, not the geometry), so the left Sections dock and every
 geometry-mutating tool are Survey-only; selection, inspection and measurement stay
 available in all three.
 
@@ -781,10 +783,10 @@ defaults from `src-tauri/src/config/defaults.rs` and are all rebindable.
 | **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
 | **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
 
-There is no Draw or Delete tool. Shots are added from the map context menu
-(**Add Shot Before/After**, offered at the ends of a section) or from the data
-table's row menu (**Insert Station...**, which splits a shot in two); deletion is
-select plus Delete/Backspace, or the context menu.
+There is no Draw or Delete tool. Shots are added from the map context menu:
+**Add Shot Before/After** at the ends of a section, or **Insert Station...** on
+any shot, which splits it in two (also available from the data table's row
+menu). Deletion is select plus Delete/Backspace, or the context menu.
 
 The three move tools are documented in detail in [move-tools.md](move-tools.md).
 
@@ -1365,10 +1367,14 @@ rather than the `directories` crate, which returns nothing on Android.
 
 `Config::load` reads that file if it exists and otherwise uses the compiled-in
 defaults. There is no system-wide layer to merge: a file that is present is parsed
-whole, then put through legacy-key migration and normalization. Missing, unknown
-and removed keys are all tolerated - every config struct is `#[serde(default)]` -
-so an old config file still loads and simply picks up the current defaults for
-anything it does not name.
+whole, then put through legacy-key migration and normalization. Unknown and
+removed keys are ignored (no `deny_unknown_fields`), and the optional blocks
+(`closure_adjustment`, `panels`, `cache`, `debug`, `global_view`, `appearance`,
+`import`, `placement_suggestion`, `syntactic_highlighting`, `gas`, `speleodb`)
+default when absent - but the core tables (`general`, `units`, `display`,
+`section_colors`, `map`, `validation`, `export`, `logging`, `shortcuts`) and
+their non-defaulted fields are required, and a file that fails to parse falls
+back to the full compiled-in defaults, not a per-key merge.
 
 ---
 
@@ -1396,7 +1402,7 @@ The sidebar displays 12 settings categories, with a visual separator before the 
 | Category | Contents |
 |----------|----------|
 | General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
-| Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 9 color themes |
+| Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 10 color themes |
 | Units | Length/depth/angle units, decimal precision |
 | Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
 | Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
@@ -1892,11 +1898,10 @@ All dialogs must have:
 
 ### 16.2 Log File Management
 
-- **Location**: `~/.local/share/stalagmight/logs/` (Linux), `~/Library/Application Support/stalagmight/logs/` (Mac), `%APPDATA%\stalagmight\logs\` (Windows)
-- **Naming**: `stalagmight_YYYY-MM-DD_HH-MM-SS.log`
-- **New file**: Created each application session
-- **Rotation**: Delete oldest logs when directory exceeds `max_directory_size_mb` (default 128MB)
-- **Level**: Configurable in settings
+- **Location**: see the Logging section of [configuration.md](configuration.md)
+  (not the bundle-identifier dir - logging initialises before Tauri's path API)
+- **Naming**: `stalagmight.log.YYYY-MM-DD`, rotated daily (not per session)
+- **Level and size cap**: the `[logging]` config settings
 
 ### 16.3 Log Format
 
@@ -2254,7 +2259,7 @@ The dropdown also closes when pressing Ctrl+Z or Ctrl+Y (global undo/redo shortc
 
 ## Appendix C: Color Themes
 
-Stalagmight supports 9 color themes, selectable independently for day (light) and night (dark) modes:
+Stalagmight supports 10 color themes, selectable independently for day (light) and night (dark) modes:
 
 | Theme | Type | Description |
 |-------|------|-------------|
@@ -2267,6 +2272,7 @@ Stalagmight supports 9 color themes, selectable independently for day (light) an
 | `catppuccin_latte` | Light | Catppuccin Latte (light) with blue accent |
 | `nord` | Dark | Nord-inspired with cyan accent |
 | `catppuccin_mocha` | Dark | Catppuccin Mocha (dark) with blue accent |
+| `kaleido_eink` | Light | High-contrast, pre-composited for e-ink displays; CSS transitions disabled to prevent ghosting |
 
 Theme tokens are defined in `src/theme/tokens.ts` as CSS custom properties (`--cc-*`). Each theme provides tokens for UI chrome, map visualization, map controls, canvas preview, and opacity variants.
 

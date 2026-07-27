@@ -42,7 +42,7 @@ the Playwright suite is split into two tiers:
 
 | Tier | What | When it runs | Command |
 |------|------|--------------|---------|
-| **Smoke** | ~85 critical-path tests tagged `@smoke` | pre-push hook + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
+| **Smoke** | ~85 critical-path tests tagged `@smoke` | manual pre-push checklist + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
 | **Nightly / full** | the entire Playwright suite | `nightly-e2e.yml` on a schedule (+ `workflow_dispatch`) | `pnpm test:ui` |
 | **On-demand** | WebdriverIO real-app suite | manual only | `./scripts/wdio.sh` |
 | **On-demand** | Agent harness (MCP + WDIO, real app) - see [Agent Harness](agent-harness.md) | manual only, Node 22 | `pnpm agent:smoke` / `pnpm agent:scenarios` |
@@ -1488,7 +1488,8 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 ## CI Integration
 
-Three GitHub Actions run on every push/PR to `master`:
+Three GitHub Actions gate pushes/PRs to `master` (check and smoke skip docs-only
+changes via `paths-ignore`; leak-scan runs on everything):
 
 1. **`ci.yml` (`check`)** - the historical merge gate, and no longer just tests:
    `cargo fmt --check`, `pnpm tsc --noEmit`, `pnpm typecheck:agent` (the agent
