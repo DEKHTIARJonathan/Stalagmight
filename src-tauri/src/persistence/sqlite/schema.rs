@@ -733,6 +733,118 @@ impl Database {
         Ok(())
     }
 
+    /// Normalise stored azimuth readings into `[0, 360)` (schema v13 to v14).
+    ///
+    /// Returns the sections holding at least one shot whose walked BEARING actually
+    /// changed, so the caller can invalidate what was derived from the old one.
+    ///
+    /// ## What changed, and why this is not a v11-to-v12-shaped flip
+    ///
+    /// `Shot::average_azimuth` is the circular mean of the two forward readings. It used
+    /// Rust's `%`, which is *truncated* and keeps the sign of the dividend, so for a
+    /// reading pair more than 540 degrees apart in the negative direction
+    /// (`azimuth_out - azimuth_in < -540`) the intermediate `diff` stayed outside
+    /// `(-180, 180]` and the mean came back as the ANTIPODE of the true bearing. It now
+    /// wraps with `rem_euclid` and returns the true mean.
+    ///
+    /// Unlike the pitch flip, NO stored value changed meaning: an azimuth is still degrees
+    /// clockwise from north, and the old rendering was simply wrong. So this migration must
+    /// NOT rewrite readings to preserve the old geometry - that would bake the 180-degree
+    /// error in permanently. What it does instead is remove the ambiguity from the file: a
+    /// reading in `[0, 360)` cannot reach the truncation bug, in this build or an older one,
+    /// so the same `.stalx` now renders identically either side of the change.
+    ///
+    /// ## Reachability
+    ///
+    /// Both readings in `[0, 360)` put their difference in `(-360, 360)`, so an affected
+    /// shot always has at least one out-of-range reading. Compass and TML normalise on
+    /// import and `DmpShot::to_shot_data` now does too, so this is a one-off cleanup of
+    /// what earlier builds admitted: DMP legs (raw `i16 * 0.1`, `-3276.8..3276.7`) and
+    /// hand-entered values, which `Validator::validate_shot` only WARNS about.
+    ///
+    /// ## What is deliberately NOT invalidated
+    ///
+    /// * **Persisted undo/redo.** The v11-to-v12 flip had to drop it because replaying a
+    ///   pre-flip payload wrote a geometrically WRONG pitch into a migrated file. Here a
+    ///   payload's raw azimuth means what it always meant and walks to the same place under
+    ///   `rem_euclid`, so replaying one is geometrically exact - it can only reintroduce an
+    ///   unnormalised READING, which the next open of a v14 file no longer re-examines but
+    ///   which is still rendered correctly. Losing the history would cost more than it buys.
+    /// * **Warning dismissals.** `INVALID_AZIMUTH` simply stops firing once the reading is
+    ///   in range, so its rows go inert rather than suppressing something live.
+    ///   `AZIMUTH_DEVIATION` measures `(azimuth_out - azimuth_in).abs()` folded about 180:
+    ///   for an out-of-range pair that fold produced a NEGATIVE "difference" and the warning
+    ///   could never fire, so there is no dismissal to clear - and after normalisation it
+    ///   starts firing correctly, which is the user-visible signal that these shots were
+    ///   touched.
+    pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<Vec<i64>> {
+        let mut stmt = conn.prepare(
+            "SELECT id, section_id, azimuth_in, azimuth_out
+             FROM shots
+             WHERE azimuth_in < 0.0 OR azimuth_in >= 360.0
+                OR azimuth_out < 0.0 OR azimuth_out >= 360.0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+
+        // (shot id, normalised in, normalised out) plus the sections whose bearing moved.
+        let mut updates: Vec<(i64, f64, f64)> = Vec::new();
+        let mut reinterpreted: Vec<i64> = Vec::new();
+        for row in rows {
+            let (id, section_id, azimuth_in, azimuth_out) = row?;
+            // A non-finite reading (SQLite rejects NaN into a NOT NULL REAL, but stores
+            // infinities) has no canonical form - `rem_euclid` would write NaN. Leave it
+            // for `ShotData::all_finite` and the integrity banner to surface.
+            if !azimuth_in.is_finite() || !azimuth_out.is_finite() {
+                continue;
+            }
+            // The exact condition under which the old truncated wrap returned the antipode.
+            if azimuth_out - azimuth_in < -540.0 {
+                reinterpreted.push(section_id);
+            }
+            updates.push((
+                id,
+                azimuth_in.rem_euclid(360.0),
+                azimuth_out.rem_euclid(360.0),
+            ));
+        }
+        drop(stmt);
+
+        if updates.is_empty() {
+            return Ok(reinterpreted);
+        }
+        // No transaction here on purpose: the caller wraps this call and the invalidation
+        // that follows it in one, so a crash cannot separate them (as v11 to v12 does).
+        for (id, azimuth_in, azimuth_out) in &updates {
+            conn.execute(
+                "UPDATE shots SET azimuth_in = ?2, azimuth_out = ?3 WHERE id = ?1",
+                params![id, azimuth_in, azimuth_out],
+            )?;
+        }
+        reinterpreted.sort_unstable();
+        reinterpreted.dedup();
+        tracing::info!(
+            shots_normalised = updates.len(),
+            sections_reinterpreted = reinterpreted.len(),
+            "Normalised stored azimuth readings into [0, 360) (v13 to v14)"
+        );
+        if !reinterpreted.is_empty() {
+            tracing::warn!(
+                sections = ?reinterpreted,
+                "These sections held a shot whose two azimuth readings were more than 540 \
+                 degrees apart; earlier builds walked it 180 degrees off, and it now walks \
+                 to the bearing its readings actually describe"
+            );
+        }
+        Ok(reinterpreted)
+    }
+
     /// Drop the persisted undo/redo stacks. Called by every migration whose
     /// change makes older payloads unsafe to replay.
     ///
@@ -988,6 +1100,24 @@ impl Database {
             // in gas, penetration and the ruler, with no classifier pass to
             // correct it. The history is not worth an unsafe shortcut.
             self.drop_legacy_undo_history()?;
+        }
+        if current < 14 {
+            // One transaction, for the same reason v11 to v12 uses one: the verdict is
+            // re-derived from the rows themselves, so a normalisation that committed alone
+            // would look already-correct on the next open - the migration would decline, the
+            // invalidation would never run, and v14 would be stamped over a permanently
+            // stale collab baseline.
+            let tx = self.conn.unchecked_transaction()?;
+            let reinterpreted = Self::migrate_azimuths_to_canonical_range(&tx)?;
+            if !reinterpreted.is_empty() {
+                // Gated, unlike the v12 call: the TML convention did not change here, so a
+                // sibling `.tml` is only stale for a project that actually held a shot whose
+                // bearing moved - its exported geometry was the antipode of what this build
+                // now walks, and reconciling against it would report a phantom azimuth edit
+                // on that shot and write the old bearing back.
+                self.invalidate_collab_tml_baseline()?;
+            }
+            tx.commit()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.

@@ -5798,6 +5798,189 @@ fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
     );
 }
 
+/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`.
+///
+/// Nothing changed meaning - `Shot::average_azimuth` used Rust's truncated `%`, which
+/// returned the ANTIPODE of the circular mean for a pair more than 540 degrees apart, and
+/// now wraps with `rem_euclid`. Normalising takes the ambiguity out of the FILE so the
+/// same `.stalx` renders identically on either build, and the sibling `.tml` baseline is
+/// dropped for the projects whose bearing actually moved (their export carried the old,
+/// antipodal geometry, so reconciling against it would write that bearing back).
+#[test]
+fn migrate_v14_normalises_stored_azimuths_and_invalidates_a_reinterpreted_sidecar() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v13_azimuth.stalx");
+
+    let out_of_range = |azimuth_in: f64, azimuth_out: f64| ShotData {
+        azimuth_in,
+        azimuth_out,
+        length: 10.0,
+        depth_in: 0.0,
+        depth_out: 0.0,
+        ..Default::default()
+    };
+    let mut project = Project::new("Legacy".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Wide".to_string()),
+        shots: vec![
+            // 600 and 0 are 600 apart: the truncated wrap walked this 180 degrees off.
+            out_of_range(600.0, 0.0),
+            // Out of range but only 20 apart - normalised, never misread.
+            out_of_range(370.0, 350.0),
+            // Already canonical: must be left exactly alone.
+            out_of_range(12.5, 13.5),
+        ],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.conn
+            .execute(
+                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+            )
+            .unwrap();
+        db.set_user_version(13).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+    let stored: Vec<(f64, f64)> = db
+        .conn
+        .prepare("SELECT azimuth_in, azimuth_out FROM shots ORDER BY sequence_order")
+        .unwrap()
+        .query_map([], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))
+        .unwrap()
+        .map(|r| r.unwrap())
+        .collect();
+    assert_eq!(
+        stored,
+        vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5)],
+        "every reading must land in [0, 360) and an in-range one must be untouched"
+    );
+
+    // The 600/0 shot's bearing moved, so the sibling .tml is in the old frame.
+    let state_json: String = db
+        .conn
+        .query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        !state_json.contains("last_export_tml_sha256"),
+        "a project whose bearing moved must re-export before the next reconcile: {state_json}"
+    );
+    assert!(
+        state_json.contains(r#""enabled":true"#),
+        "clearing the baseline must not disable collab: {state_json}"
+    );
+}
+
+/// The sidecar invalidation is GATED, unlike v11 to v12's: the TML convention did not
+/// change here, so a project that merely held an unnormalised reading - one no build ever
+/// misread - keeps its baseline and does not pay a phantom re-export.
+#[test]
+fn migrate_v14_keeps_the_sidecar_when_no_bearing_moved() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v13_benign.stalx");
+
+    let mut project = Project::new("Benign".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Wide".to_string()),
+        shots: vec![ShotData {
+            azimuth_in: 370.0,
+            azimuth_out: 350.0,
+            length: 10.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.conn
+            .execute(
+                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+            )
+            .unwrap();
+        db.set_user_version(13).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    let stored: (f64, f64) = db
+        .conn
+        .query_row("SELECT azimuth_in, azimuth_out FROM shots", [], |r| {
+            Ok((r.get(0)?, r.get(1)?))
+        })
+        .unwrap();
+    assert_eq!(stored, (10.0, 350.0), "precondition: it was normalised");
+
+    let state_json: String = db
+        .conn
+        .query_row(
+            "SELECT state_json FROM collab_state WHERE id = 1",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert!(
+        state_json.contains("last_export_tml_sha256"),
+        "no bearing moved, so the sibling .tml is still ours: {state_json}"
+    );
+}
+
+/// Normalising must not move the cave: the walked bearing of a normalised pair is the one
+/// the raw readings always described. This is the whole justification for rewriting stored
+/// data instead of leaving it - it is a no-op for geometry under this build, and it takes
+/// the truncated-`%` trap away from every older build too.
+#[test]
+fn migrate_v14_normalisation_leaves_the_walked_bearing_alone() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v13_geometry.stalx");
+
+    let mut project = Project::new("Geometry".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Wide".to_string()),
+        shots: vec![ShotData {
+            azimuth_in: 600.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let before = project.compute_station_coordinates();
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(13).unwrap();
+    }
+
+    let migrated = Database::open_existing(&path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let after = migrated.compute_station_coordinates();
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        assert!(
+            (a.coordinates.x - b.coordinates.x).abs() < 1e-9
+                && (a.coordinates.y - b.coordinates.y).abs() < 1e-9,
+            "normalisation moved a station: {:?} -> {:?}",
+            a.coordinates,
+            b.coordinates
+        );
+    }
+}
+
 /// Dismissals of a warning the convention change cannot affect must survive.
 ///
 /// `LENGTH_BELOW_DEPTH_CHANGE` compares length against the depth change and
