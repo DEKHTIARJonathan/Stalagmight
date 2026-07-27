@@ -1,10 +1,12 @@
 use std::path::{Path, PathBuf};
 use tauri::{AppHandle, Manager, State};
+use ts_rs::TS;
 
+use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
-use crate::export::ExportImageOptions;
-use crate::models::Project;
+use crate::export::{ExportImageOptions, ProfileFormat};
+use crate::models::{Cylinder, Diver, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
 /// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
@@ -297,51 +299,58 @@ pub(crate) fn export_image_impl(
     }
 }
 
-/// The plan inputs a dive-profile export needs - byte-identical to `compute_gas_reach_field`'s.
+/// The plan inputs a dive-profile export needs - the same tuple `compute_gas_reach_field` takes,
+/// and put through the same `validate_plan_inputs` before it reaches the engine.
 ///
-/// The field is recomputed here rather than accepted from the frontend. The exported file is a
-/// document the diver may act on months later, so it has to be what the engine says *now*, not a
+/// The field is recomputed from these rather than accepted from the frontend. The exported file is
+/// a document the diver may act on months later, so it has to be what the engine says *now*, not a
 /// snapshot the UI happened to be holding: a client-supplied field could be stale (every plan edit
 /// nulls it), or simply not match the plan on screen.
-#[derive(serde::Deserialize)]
+#[derive(serde::Deserialize, TS)]
 pub struct DiveProfileRequest {
-    pub origin: Option<crate::models::StationRef>,
-    pub endpoint: Option<crate::models::StationRef>,
-    pub waypoints: Vec<crate::models::StationRef>,
-    pub diver: crate::models::Diver,
-    pub cylinders: Vec<crate::models::Cylinder>,
-    pub gas_config: crate::config::GasConfig,
-    pub stage_drop_overrides: Vec<Option<crate::models::StationRef>>,
+    pub origin: Option<StationRef>,
+    pub endpoint: Option<StationRef>,
+    pub waypoints: Vec<StationRef>,
+    pub diver: Diver,
+    pub cylinders: Vec<Cylinder>,
+    pub gas_config: GasConfig,
+    pub stage_drop_overrides: Vec<Option<StationRef>>,
 }
 
 /// Recompute the reach field for `request` and render its profile in `format`.
+///
+/// Runs `validate_plan_inputs` exactly as `compute_gas_reach_field` does. Skipping it would make
+/// this the one entry point where a NaN RMV or an uncapped way-point list reaches the engine - and
+/// unlike the compute, which would just show nothing, this path renders a document the diver
+/// carries underwater.
 fn render_profile(
     app_handle: &AppHandle,
     request: DiveProfileRequest,
-    format: &str,
-) -> Result<(String, String), String> {
-    let format = crate::export::ProfileFormat::from_wire(format).map_err(|e| e.to_string())?;
+    format: ProfileFormat,
+) -> Result<String, String> {
+    let (diver, cylinders, gas_config) = crate::commands::gas::validate_plan_inputs(
+        &request.waypoints,
+        request.diver,
+        request.cylinders,
+        request.gas_config,
+    )?;
     let state = app_handle.state::<AppState>();
     let project = state
         .get_project_state()
         .ok_or_else(|| "No project open".to_string())?;
-    let mut gas_config = request.gas_config;
-    gas_config.normalize();
     let field = state
         .inner()
         .gas_reach_field(
             request.origin.as_ref(),
             request.endpoint.as_ref(),
             &request.waypoints,
-            &request.diver,
-            &request.cylinders,
+            &diver,
+            &cylinders,
             &gas_config,
             &request.stage_drop_overrides,
         )
         .ok_or_else(|| "No project open".to_string())?;
-    let rendered =
-        crate::export::render(&field, format, &project.name).map_err(|e| e.to_string())?;
-    Ok((rendered, project.name))
+    crate::export::render_dive_profile(&field, format, &project.name).map_err(|e| e.to_string())
 }
 
 /// Write the planned dive profile to `path` (#299).
@@ -355,6 +364,9 @@ pub async fn export_dive_profile(
     format: String,
     request: DiveProfileRequest,
 ) -> Result<(), String> {
+    // Parse BEFORE anything else logs it. `format` is arbitrary caller input, and the refusal
+    // branch below records it with Display - a newline-bearing value would forge log records.
+    let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
         if let Some(project) = state.get_project_state() {
@@ -363,24 +375,30 @@ pub async fn export_dive_profile(
                     tracing::warn!(
                         path = ?path,
                         open_project = ?open_path,
-                        format = %format,
+                        format = format.label(),
                         "Refused to export a dive profile over the open project file"
                     );
                     return Err("Cannot export over the open project file".to_string());
                 }
             }
         }
-        let (rendered, _) = render_profile(&app_handle, request, &format)?;
+        let rendered = render_profile(&app_handle, request, format)?;
         tracing::info!(
             path = ?path,
             purpose = "export the planned dive profile",
-            format = %format,
+            format = format.label(),
             "Exporting dive profile"
         );
         std::fs::write(&path, rendered).map_err(|e| {
             tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
             e.to_string()
-        })
+        })?;
+        tracing::info!(
+            path = ?path,
+            format = format.label(),
+            "Dive profile export completed"
+        );
+        Ok(())
     })
     .await
     .map_err(|e| format!("Dive profile export task panicked: {e}"))?
@@ -393,7 +411,7 @@ pub async fn render_dive_profile_text(
     request: DiveProfileRequest,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        render_profile(&app_handle, request, "text").map(|(rendered, _)| rendered)
+        render_profile(&app_handle, request, ProfileFormat::PlainText)
     })
     .await
     .map_err(|e| format!("Dive profile render task panicked: {e}"))?
@@ -460,5 +478,54 @@ mod tests {
         std::fs::write(&recreated, b"db").unwrap();
         let absent_same = dir.path().join("cave.stalx");
         assert!(is_open_project_file(&absent_same, &recreated));
+    }
+
+    /// A plan whose inputs the compute command would reject must be rejected here too.
+    ///
+    /// `render_profile` is a second door into the gas engine, and the engine validates nothing -
+    /// its contract says the COMMAND owns that. The way-point cap in particular exists, in the
+    /// sibling command's own words, "so the limit cannot be walked past by a caller that never
+    /// touches a file"; these two commands are exactly such callers. Asserted against the shared
+    /// helper rather than through Tauri, which needs an AppHandle a unit test cannot build.
+    #[test]
+    fn the_export_path_rejects_plans_the_compute_path_would_reject() {
+        use crate::commands::gas::validate_plan_inputs;
+        use crate::core::state::dive_plan::MAX_WAYPOINTS;
+        use crate::models::{CylRole, TankMaterial};
+
+        let good_diver = Diver::new(20.0, None).unwrap();
+        let cyl = Cylinder::new(
+            12.0,
+            232.0,
+            200.0,
+            TankMaterial::Steel,
+            CylRole::BackGas,
+            None,
+        )
+        .unwrap();
+        let ok = |wp: &[StationRef], d: Diver| {
+            validate_plan_inputs(wp, d, vec![cyl.clone()], GasConfig::default())
+        };
+
+        assert!(ok(&[], good_diver.clone()).is_ok());
+
+        // Over the cap: each way point is a full extra Dijkstra, so an unbounded list is unbounded
+        // compute on a blocking thread.
+        let too_many = vec![StationRef::new(1, 0); MAX_WAYPOINTS + 1];
+        let err = ok(&too_many, good_diver.clone()).unwrap_err();
+        assert!(err.contains("Too many way points"), "{err}");
+        assert!(ok(&vec![StationRef::new(1, 0); MAX_WAYPOINTS], good_diver).is_ok());
+
+        // A NaN/zero RMV built straight by serde, bypassing `Diver::new`'s guard.
+        let poisoned = Diver {
+            rmv_l_per_min: f64::NAN,
+            label: None,
+        };
+        assert!(ok(&[], poisoned).is_err());
+        let zero = Diver {
+            rmv_l_per_min: 0.0,
+            label: None,
+        };
+        assert!(ok(&[], zero).is_err());
     }
 }

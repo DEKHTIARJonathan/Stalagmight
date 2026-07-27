@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
+use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
@@ -135,6 +136,7 @@ fn main() {
     export::<DivePlan>(&out_dir);
     export::<RouteLeg>(&out_dir);
     export::<RouteProfilePoint>(&out_dir);
+    export::<DiveProfileRequest>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -378,6 +380,7 @@ fn main() {
         "DivePlan",
         "RouteLeg",
         "RouteProfilePoint",
+        "DiveProfileRequest",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",

@@ -309,8 +309,14 @@ pub struct GasReachField {
     /// no way points.
     pub waypoint_gas_litres: Vec<Option<f64>>,
     /// The anticipated dive profile (#299): depth / distance / runtime / gas at every route station,
-    /// origin→turnaround and back. Empty when nothing is reachable. See [`RouteProfilePoint`] for
-    /// why the return leg is not a mirror in time or gas.
+    /// origin→turnaround and back. See [`RouteProfilePoint`] for why the return leg is not a mirror
+    /// in time or gas.
+    ///
+    /// Empty whenever there is no turnaround - i.e. exactly when `final_turn_ref` is `None`, which
+    /// includes the case where `route` is NOT empty: an unaffordable way point keeps its committed
+    /// chain for the map (so the diver can see which one blew the gas) while leaving the plan
+    /// unflyable. A profile claims "out to the turnaround and back", so it needs the turnaround, not
+    /// merely a drawn route.
     pub route_profile: Vec<RouteProfilePoint>,
     /// Route index of each stage drop, aligned 1:1 with `stage_drop_refs` / `stage_drop_bars` /
     /// `stage_drop_distances_m`, in `route_profile`'s outbound `route_index` space.

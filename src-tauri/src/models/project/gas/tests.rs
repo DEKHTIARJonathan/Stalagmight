@@ -2798,6 +2798,25 @@ fn gas_reach_field_default_drop_on_a_revisited_station_reports_the_right_pass_di
         "expected 200 m, got {}",
         field.stage_drop_distances_m[0]
     );
+    // The published route index (#299) must name the SAME pass - it is what a profile marker is
+    // drawn at, and this is the one fixture where a ref-keyed lookup and an index-keyed one
+    // disagree. Resolve it through the profile exactly as the chart does.
+    assert_eq!(field.stage_drop_route_indices.len(), 1);
+    let drop_at = field.stage_drop_route_indices[0];
+    let point = field
+        .route_profile
+        .iter()
+        .find(|p| p.outbound && p.route_index == drop_at)
+        .expect("the drop index must resolve to a point on the profile");
+    assert!(
+        (point.distance_m - 200.0).abs() < 1e-6,
+        "the profile marker landed on the wrong pass: {} m",
+        point.distance_m
+    );
+    assert!(
+        drop_at > 0,
+        "index 0 is the entrance's FIRST pass - the one a ref lookup would have wrongly matched"
+    );
 }
 
 #[test]
@@ -3604,6 +3623,9 @@ fn route_profile_charges_a_zero_distance_tie_no_distance_time_or_gas() {
     for w in &ties {
         assert!((w[1].distance_m - w[0].distance_m).abs() < 1e-9);
         assert!((w[1].elapsed_min - w[0].elapsed_min).abs() < 1e-9);
+        // "or gas" is in this test's name, so assert it on the way IN too rather than only on the
+        // way home: the two directions are priced by different code.
+        assert!((w[1].gas_l - w[0].gas_l).abs() < 1e-9);
     }
     // Same on the way home - the tie must not cost exit gas either. Counted, not just asserted
     // inside an `if`: a version of this loop that never enters its tie branch would pass while
@@ -3645,4 +3667,89 @@ fn route_profile_is_empty_when_no_route_exists() {
     assert!(field.route_profile.is_empty());
     assert!(field.stage_drop_route_indices.is_empty());
     assert_eq!(field.waypoint_route_indices, vec![None]);
+}
+
+#[test]
+fn route_profile_is_empty_when_the_chain_has_no_affordable_turnaround() {
+    // The committed way-point chain is deliberately KEPT for the map when the detour alone blows the
+    // budget (see `gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain`) - the diver
+    // needs to see which way point cost them the dive. A dive PROFILE is a different claim: it says
+    // "out to the turnaround and back", and there is no turnaround here. Publishing one anyway hands
+    // the export a complete round-trip dive - with a `Turn:` line naming a station the diver cannot
+    // afford to reach - for a plan the engine has just declared unflyable.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let tiny = Cylinder::new(
+        10.0,
+        207.0,
+        20.0,
+        TankMaterial::Aluminium,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[tiny],
+        &GasConfig::default(),
+        &[],
+    );
+
+    // SETUP - the state this guards: a drawn route, but no turnaround.
+    assert!(field.final_turn_ref.is_none());
+    assert_eq!(route_stations(&field).last(), Some(&side_tip));
+
+    // THE PROPERTY.
+    assert!(
+        field.route_profile.is_empty(),
+        "published a {}-point profile for a plan with no turnaround",
+        field.route_profile.len()
+    );
+    assert!(field.stage_drop_route_indices.is_empty());
+}
+
+#[test]
+fn route_profile_exit_leg_charges_a_jump_the_jump_rmv_bump() {
+    // The exit leg re-prices every virtual (jump/reference) leg at the higher RMV, exactly as the
+    // in-leg graph does - that parity is the whole reason `route_leg_kinds` exists as a shared scan
+    // rather than being derived from `RouteLeg::is_jump`. Nothing else covers it: both other profile
+    // fixtures use only default-kind shots, so dropping the multiplier from the return leg would
+    // not fail a single assertion.
+    let (project, origin) = project_with_jump_second_leg();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 10.0,
+        survey_speed_m_per_min: None,
+        jump_rmv_multiplier: 3.0,
+        ..GasConfig::default()
+    };
+    let field = plain_field(&project, origin, &cfg);
+
+    let out = outbound(&field);
+    let back = inbound(&field);
+    assert_eq!(out.len(), 3, "origin, jump start, jump end");
+
+    // Leg 0 (stations 0→1) is a Normal shot; leg 1 (1→2) is the Jump. On the way home they are
+    // re-swum in reverse, so the FIRST return step is the jump and the second is the normal leg.
+    let jump_back = back[0].gas_l - out[2].gas_l;
+    let normal_back = back[1].gas_l - back[0].gas_l;
+
+    // Same length, same depths on the way back? No - the two legs sit at different depths, so
+    // compare each against its own hand-computed edge_gas rather than against each other.
+    let expect_jump = edge_gas(20.0 * 3.0, 10.0, 100.0, out[2].depth_m, out[1].depth_m);
+    let expect_normal = edge_gas(20.0, 10.0, 100.0, out[1].depth_m, out[0].depth_m);
+    assert!(
+        (jump_back - expect_jump).abs() < 1e-6,
+        "jump leg not charged the {}x bump on the way out: {jump_back} vs {expect_jump}",
+        cfg.jump_rmv_multiplier
+    );
+    assert!(
+        (normal_back - expect_normal).abs() < 1e-6,
+        "normal leg mis-priced on the way out: {normal_back} vs {expect_normal}"
+    );
+    // And the bump is real, not a coincidence of equal depths.
+    assert!(jump_back > normal_back);
 }

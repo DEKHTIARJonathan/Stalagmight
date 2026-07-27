@@ -1,23 +1,22 @@
 import { invokeIpc } from './ipc';
-import type { Cylinder, Diver, DivePlan, DivePlanMeta, DivePlanSnapshot, GasConfig, StationRef } from '../types/ipc.generated';
+import type {
+  DivePlan,
+  DivePlanMeta,
+  DivePlanSnapshot,
+  DiveProfileRequest,
+} from '../types/ipc.generated';
 
 /**
- * The plan inputs the profile export takes - the same tuple `compute_gas_reach_field` takes.
+ * `DiveProfileRequest` is the plan-input tuple `compute_gas_reach_field` takes, and it is GENERATED
+ * from the Rust struct rather than hand-declared here - a rename on either side would otherwise
+ * compile clean on both and fail only at runtime, as a serde error.
  *
  * The backend recomputes the reach field from these rather than accepting the one the UI is
  * holding: an exported profile is a document the diver may act on later, so it has to be what the
  * engine says now. Every plan edit nulls the cached field, so a client-supplied one could easily be
  * a route the diver has already changed.
  */
-export interface DiveProfileRequest {
-  origin: StationRef | null;
-  endpoint: StationRef | null;
-  waypoints: StationRef[];
-  diver: Diver;
-  cylinders: Cylinder[];
-  gas_config: GasConfig;
-  stage_drop_overrides: (StationRef | null)[];
-}
+export type { DiveProfileRequest };
 
 /** Wire values the backend's `ProfileFormat::from_wire` accepts. */
 export type DiveProfileFormat = 'subsurface-xml' | 'text';

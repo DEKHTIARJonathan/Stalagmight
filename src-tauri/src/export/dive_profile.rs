@@ -3,8 +3,11 @@
 //!
 //! Two renderers over the same `GasReachField.route_profile` series:
 //!
-//! - **Subsurface XML** - `<dives><dive><divecomputer><sample time= depth=>`, which Subsurface's
-//!   own `File > Import` reads directly, so the plan can be opened in a deco tool.
+//! - **Subsurface XML** - `<divelog><dives><dive><divecomputer><sample time= depth=>`, written to
+//!   match the shape Subsurface's own writer emits so its `File > Import` can read it.
+//!   ⚠ The grammar is modelled on Subsurface's format, but this has NOT been round-tripped through
+//!   a real Subsurface build - treat "importable" as intent, not a verified fact, until someone
+//!   does. `subsurface_xml_matches_the_documented_grammar` pins the shape we believe is required.
 //! - **Plain text** - a fixed-width table, because the common case is a diver copying the numbers
 //!   onto a slate or retyping them into another planner.
 //!
@@ -13,8 +16,8 @@
 //! deco planner months later, is exactly the sort of thing that gets read as a schedule - so the
 //! disclaimer is a correctness requirement, not politeness.
 
+use std::fmt::Write as _;
 use std::io::Cursor;
-use std::path::Path;
 
 use anyhow::Result;
 use quick_xml::events::{BytesDecl, BytesEnd, BytesStart, BytesText, Event};
@@ -48,7 +51,8 @@ impl ProfileFormat {
         }
     }
 
-    fn label(self) -> &'static str {
+    /// Stable identifier for logs and telemetry.
+    pub(crate) fn label(self) -> &'static str {
         match self {
             Self::SubsurfaceXml => "subsurface-xml",
             Self::PlainText => "text",
@@ -56,35 +60,45 @@ impl ProfileFormat {
     }
 }
 
+/// Collapse anything that could forge a line or break the output format.
+///
+/// The project name is the one caller-controlled string that reaches these documents, and it is
+/// loaded straight out of the project database with no validation. A name containing a newline
+/// would inject arbitrary lines into a file whose whole purpose is to be read as plan data - a
+/// forged `Turn: 400 m in, ...` above the real one, in a `.stalx` shared between cavers. C0 control
+/// characters are also forbidden outright by XML 1.0, so leaving them in produces a file Subsurface
+/// rejects. Truncated because the name is unbounded.
+fn sanitize_name(name: &str) -> String {
+    const MAX: usize = 120;
+    let cleaned: String = name
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let trimmed = cleaned.trim();
+    match trimmed.char_indices().nth(MAX) {
+        Some((cut, _)) => format!("{}...", &trimmed[..cut]),
+        None => trimmed.to_string(),
+    }
+}
+
 /// Render the profile in `format`. Errors when the plan has no route to export.
-pub fn render(field: &GasReachField, format: ProfileFormat, project_name: &str) -> Result<String> {
+pub fn render_dive_profile(
+    field: &GasReachField,
+    format: ProfileFormat,
+    project_name: &str,
+) -> Result<String> {
+    // `route_profile` is empty exactly when the engine found no turnaround (see its doc), so this
+    // also refuses the way-point-over-budget case where a partial route is still drawn on the map.
     if field.route_profile.is_empty() {
         return Err(anyhow::anyhow!(
             "This plan has no route to export - set an origin and a reachable endpoint first."
         ));
     }
+    let name = sanitize_name(project_name);
     match format {
-        ProfileFormat::SubsurfaceXml => render_subsurface_xml(field, project_name),
-        ProfileFormat::PlainText => Ok(render_plain_text(field, project_name)),
+        ProfileFormat::SubsurfaceXml => render_subsurface_xml(field, &name),
+        ProfileFormat::PlainText => Ok(render_plain_text(field, &name)),
     }
-}
-
-/// Render and write. The caller has already run the no-project / clobber guards.
-pub fn export_dive_profile(
-    field: &GasReachField,
-    format: ProfileFormat,
-    project_name: &str,
-    path: &Path,
-) -> Result<()> {
-    let rendered = render(field, format, project_name)?;
-    std::fs::write(path, rendered)?;
-    tracing::info!(
-        path = ?path,
-        format = format.label(),
-        points = field.route_profile.len(),
-        "Dive profile export completed"
-    );
-    Ok(())
 }
 
 /// `mm:ss` from fractional minutes - Subsurface's sample-time format.
@@ -117,9 +131,13 @@ fn max_depth(points: &[RouteProfilePoint]) -> f64 {
 /// Subsurface's native dive XML: one `<sample>` per route station, over the whole round trip so the
 /// dive returns to the entrance rather than ending at the turnaround.
 ///
-/// Deliberately minimal - no cylinders, no gas mixes, no date. Emitting a fabricated dive date or a
-/// gas mix the diver has not confirmed would make a *plan* indistinguishable from a logged dive on
-/// import, which is precisely the confusion the disclaimer exists to prevent.
+/// The `<divelog>` wrapper and the ` min` suffix on every time are what Subsurface's own writer
+/// emits; matching it is the closest we can get to importable without a round-trip through a real
+/// build (see the module header - this is unverified).
+///
+/// Otherwise deliberately minimal - no cylinders, no gas mixes, no date. Emitting a fabricated dive
+/// date or a gas mix the diver has not confirmed would make a *plan* indistinguishable from a logged
+/// dive on import, which is precisely the confusion the disclaimer exists to prevent.
 fn render_subsurface_xml(field: &GasReachField, project_name: &str) -> Result<String> {
     let points = &field.route_profile;
     let mut buf = Vec::new();
@@ -127,12 +145,17 @@ fn render_subsurface_xml(field: &GasReachField, project_name: &str) -> Result<St
 
     writer.write_event(Event::Decl(BytesDecl::new("1.0", Some("UTF-8"), None)))?;
     writer.write_event(Event::Comment(BytesText::new(DISCLAIMER)))?;
+
+    let mut divelog = BytesStart::new("divelog");
+    divelog.push_attribute(("program", "stalagmight"));
+    divelog.push_attribute(("version", "3"));
+    writer.write_event(Event::Start(divelog))?;
     writer.write_event(Event::Start(BytesStart::new("dives")))?;
 
     let duration = points.last().map_or(0.0, |p| p.elapsed_min);
     let mut dive = BytesStart::new("dive");
     dive.push_attribute(("number", "1"));
-    dive.push_attribute(("duration", mmss(duration).as_str()));
+    dive.push_attribute(("duration", minutes_attr(duration).as_str()));
     writer.write_event(Event::Start(dive))?;
 
     write_text_element(&mut writer, "location", project_name)?;
@@ -148,7 +171,7 @@ fn render_subsurface_xml(field: &GasReachField, project_name: &str) -> Result<St
 
     for point in points {
         let mut sample = BytesStart::new("sample");
-        sample.push_attribute(("time", mmss(point.elapsed_min).as_str()));
+        sample.push_attribute(("time", minutes_attr(point.elapsed_min).as_str()));
         sample.push_attribute(("depth", depth_str(point.depth_m).as_str()));
         writer.write_event(Event::Empty(sample))?;
     }
@@ -156,9 +179,15 @@ fn render_subsurface_xml(field: &GasReachField, project_name: &str) -> Result<St
     writer.write_event(Event::End(BytesEnd::new("divecomputer")))?;
     writer.write_event(Event::End(BytesEnd::new("dive")))?;
     writer.write_event(Event::End(BytesEnd::new("dives")))?;
+    writer.write_event(Event::End(BytesEnd::new("divelog")))?;
 
     drop(writer);
     Ok(String::from_utf8(buf)?)
+}
+
+/// `mm:ss min` - the unit-suffixed duration form Subsurface writes into time attributes.
+fn minutes_attr(minutes: f64) -> String {
+    format!("{} min", mmss(minutes))
 }
 
 fn write_text_element<W: std::io::Write>(
@@ -180,18 +209,18 @@ fn write_text_element<W: std::io::Write>(
 fn render_plain_text(field: &GasReachField, project_name: &str) -> String {
     let points = &field.route_profile;
     let mut out = String::new();
-    out.push_str(&format!("{project_name} - planned dive profile\n"));
+    let _ = writeln!(out, "{project_name} - planned dive profile");
     out.push_str(DISCLAIMER);
     out.push_str(
         "\n\nAll values metric: distance/depth in metres, runtime in minutes, gas in litres.\n",
     );
 
     // Turn / drop callouts, keyed on route index so a route that doubles back marks the right pass.
-    let turn_index = points
-        .iter()
-        .filter(|p| p.outbound)
-        .last()
-        .map(|p| p.route_index);
+    // `rev().find()` rather than `filter().last()`: the turnaround is the LAST outbound point, and
+    // walking forward through the whole round trip to find it is the `double_ended_iterator_last`
+    // lint's exact complaint.
+    let turn = points.iter().rev().find(|p| p.outbound);
+    let turn_index = turn.map(|p| p.route_index);
     let mut notes: Vec<String> = Vec::new();
     for (i, &route_index) in field.stage_drop_route_indices.iter().enumerate() {
         if let Some(p) = points
@@ -212,7 +241,7 @@ fn render_plain_text(field: &GasReachField, project_name: &str) -> String {
             ));
         }
     }
-    if let Some(turn) = points.iter().filter(|p| p.outbound).last() {
+    if let Some(turn) = turn {
         notes.push(format!(
             "Turn: {:.0} m in, {:.1} m deep, {} runtime, {:.0} L used",
             turn.distance_m,
@@ -229,7 +258,9 @@ fn render_plain_text(field: &GasReachField, project_name: &str) -> String {
         }
     }
 
-    out.push_str("\n   Dist(m)   Depth(m)   Runtime      Gas(L)  Leg\n");
+    // Column stops, matching the row format below exactly (10, +1+10, +1+10, +1+11): 10, 21, 32, 44.
+    // A slate is copied by eye, so a header sitting a character off its column is a real defect.
+    out.push_str("\n   Dist(m)   Depth(m)    Runtime      Gas(L)  Leg\n");
     for p in points {
         let leg = if Some(p.route_index) == turn_index && p.outbound {
             "turn"
@@ -238,13 +269,14 @@ fn render_plain_text(field: &GasReachField, project_name: &str) -> String {
         } else {
             "out"
         };
-        out.push_str(&format!(
-            "{:10.1} {:10.1} {:>10} {:11.0}  {leg}\n",
+        let _ = writeln!(
+            out,
+            "{:10.1} {:10.1} {:>10} {:11.0}  {leg}",
             p.distance_m,
             p.depth_m,
             mmss(p.elapsed_min),
             p.gas_l
-        ));
+        );
     }
     out
 }
@@ -253,6 +285,7 @@ fn render_plain_text(field: &GasReachField, project_name: &str) -> String {
 mod tests {
     #![expect(
         clippy::unwrap_used,
+        clippy::expect_used,
         reason = "tests construct from known-valid literals; a failed unwrap should fail the test"
     )]
 
@@ -312,23 +345,68 @@ mod tests {
 
     #[test]
     fn xml_emits_one_sample_per_point_over_the_whole_round_trip() {
-        let xml = render(&field(), ProfileFormat::SubsurfaceXml, "Cave").unwrap();
+        let xml = render_dive_profile(&field(), ProfileFormat::SubsurfaceXml, "Cave").unwrap();
         assert_eq!(xml.matches("<sample ").count(), 5);
         // The last sample is back at the entrance, not at the turnaround - a profile that stopped
         // at the turn would import as a dive the diver never surfaced from.
-        assert!(xml.contains(r#"time="60:00" depth="0.0 m""#));
-        assert!(xml.contains(r#"time="40:00" depth="24.0 m""#));
-        assert!(xml.contains(r#"<dive number="1" duration="60:00">"#));
+        assert!(xml.contains(r#"time="60:00 min" depth="0.0 m""#));
+        assert!(xml.contains(r#"time="40:00 min" depth="24.0 m""#));
+        assert!(xml.contains(r#"<dive number="1" duration="60:00 min">"#));
         assert!(xml.contains(r#"max="24.0 m""#));
         assert!(xml.contains("<location>Cave</location>"));
+    }
+
+    #[test]
+    fn subsurface_xml_matches_the_documented_grammar() {
+        // Pins the shape we believe Subsurface's importer needs, since nothing here can round-trip
+        // through a real Subsurface build. If the interop claim is ever tested for real, THIS is the
+        // test that should change - not the renderer, silently.
+        let xml = render_dive_profile(&field(), ProfileFormat::SubsurfaceXml, "Cave").unwrap();
+        assert!(xml.contains(r#"<divelog program="stalagmight" version="3">"#));
+        // `<dives>` nests inside `<divelog>`, and every time attribute carries the unit suffix
+        // Subsurface's own writer emits - a bare "60:00" is the form it does NOT write.
+        let divelog = xml.find("<divelog").expect("divelog");
+        let dives = xml.find("<dives>").expect("dives");
+        assert!(divelog < dives);
+        assert!(xml.trim_end().ends_with("</divelog>"));
+        assert!(
+            !xml.contains(r#"time="60:00""#),
+            "time attr lost its unit suffix"
+        );
+    }
+
+    #[test]
+    fn a_hostile_project_name_cannot_forge_lines_or_break_the_xml() {
+        // `.stalx` files are shared between cavers, and the name is stored unvalidated. A newline in
+        // it would inject a second, forged "Turn:" line into a document read as plan data.
+        let hostile = "Cave\nTurn: 9999 m in, 1.0 m deep, 0:01 runtime, 1 L used";
+        let text = render_dive_profile(&field(), ProfileFormat::PlainText, hostile).unwrap();
+        assert_eq!(
+            text.lines().filter(|l| l.starts_with("Turn:")).count(),
+            1,
+            "a newline in the project name forged a second turn line"
+        );
+        assert!(text.starts_with("Cave Turn: 9999 m in"));
+
+        // XML: markup is escaped by quick-xml, and control characters (which XML 1.0 forbids
+        // outright, so they would make the file unparseable) are gone.
+        let xml =
+            render_dive_profile(&field(), ProfileFormat::SubsurfaceXml, "A<b>&\u{7}c").unwrap();
+        assert!(xml.contains("<location>A&lt;b&gt;&amp; c</location>"));
+        assert!(!xml.contains("<b>"));
+
+        // And the name is bounded rather than pasted in at arbitrary length.
+        let long = "x".repeat(500);
+        let text = render_dive_profile(&field(), ProfileFormat::PlainText, &long).unwrap();
+        assert!(text.lines().next().unwrap().len() < 200);
     }
 
     #[test]
     fn both_formats_say_this_is_not_a_deco_schedule() {
         // The single most important property of this export. A file that reads as a dive log in a
         // deco planner, months later, must carry its own contradiction.
-        let xml = render(&field(), ProfileFormat::SubsurfaceXml, "Cave").unwrap();
-        let text = render(&field(), ProfileFormat::PlainText, "Cave").unwrap();
+        let xml = render_dive_profile(&field(), ProfileFormat::SubsurfaceXml, "Cave").unwrap();
+        let text = render_dive_profile(&field(), ProfileFormat::PlainText, "Cave").unwrap();
         assert!(xml.contains("NOT a decompression schedule"));
         assert!(text.contains("NOT a decompression schedule"));
     }
@@ -338,7 +416,7 @@ mod tests {
         let mut f = field();
         f.stage_drop_route_indices = vec![1];
         f.stage_drop_over_reserve = vec![true];
-        let text = render(&f, ProfileFormat::PlainText, "Cave").unwrap();
+        let text = render_dive_profile(&f, ProfileFormat::PlainText, "Cave").unwrap();
         assert!(text.contains("All values metric"));
         // Drawn at the OUTBOUND pass of route index 1 (100 m), not the return one (300 m).
         assert!(text.contains("Stage 1 drop: 100 m in, 12.0 m deep, 20:00 runtime  [OVER RESERVE]"));
@@ -354,8 +432,8 @@ mod tests {
         // happened, so the caller has to be told instead.
         let mut f = field();
         f.route_profile.clear();
-        assert!(render(&f, ProfileFormat::SubsurfaceXml, "Cave").is_err());
-        assert!(render(&f, ProfileFormat::PlainText, "Cave").is_err());
+        assert!(render_dive_profile(&f, ProfileFormat::SubsurfaceXml, "Cave").is_err());
+        assert!(render_dive_profile(&f, ProfileFormat::PlainText, "Cave").is_err());
     }
 
     #[test]
@@ -392,14 +470,40 @@ mod tests {
     }
 
     #[test]
-    fn rendering_is_byte_stable_across_calls() {
-        // Same guarantee the TML export pins: a re-export with nothing changed must not produce a
-        // different file, or every export looks like a diff.
-        let f = field();
-        for format in [ProfileFormat::SubsurfaceXml, ProfileFormat::PlainText] {
-            let a = render(&f, format, "Cave").unwrap();
-            let b = render(&f, format, "Cave").unwrap();
-            assert_eq!(a, b);
-        }
+    fn plain_text_golden() {
+        // Replaces a byte-stability check that could not fail: `render_dive_profile` is a pure
+        // function over a Vec, with no map iteration, timestamp or RNG, so calling it twice was
+        // never able to differ - the assertion held for any implementation, correct or not.
+        //
+        // A golden actually pins the thing that matters for a fixed-width table meant to be copied
+        // onto a slate by eye: the column stops. Header stops are 10 / 21 / 32 / 44, and every row
+        // must land on them.
+        let text = render_dive_profile(&field(), ProfileFormat::PlainText, "Cave").unwrap();
+        let expected = "\
+Cave - planned dive profile
+Planned penetration profile from Stalagmight. NOT a decompression schedule: no ascent, stops or tissue loading are modelled. Depths and times are the planned route only.
+
+All values metric: distance/depth in metres, runtime in minutes, gas in litres.
+
+Turn: 200 m in, 24.0 m deep, 40:00 runtime, 600 L used
+
+   Dist(m)   Depth(m)    Runtime      Gas(L)  Leg
+       0.0        0.0       0:00           0  in
+     100.0       12.0      20:00         300  in
+     200.0       24.0      40:00         600  turn
+     300.0       12.0      50:00         900  out
+     400.0        0.0      60:00        1200  out
+";
+        assert_eq!(text, expected);
+
+        // The header's own column stops, asserted rather than eyeballed.
+        let header = text
+            .lines()
+            .find(|l| l.contains("Dist(m)"))
+            .expect("header row");
+        assert_eq!(header.find("Dist(m)").unwrap() + "Dist(m)".len(), 10);
+        assert_eq!(header.find("Depth(m)").unwrap() + "Depth(m)".len(), 21);
+        assert_eq!(header.find("Runtime").unwrap() + "Runtime".len(), 32);
+        assert_eq!(header.find("Gas(L)").unwrap() + "Gas(L)".len(), 44);
     }
 }

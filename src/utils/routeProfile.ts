@@ -39,6 +39,12 @@ export interface ProfileGeometry {
   markers: ProfileMarker[];
   /** Axis value at the turnaround - where the diver stops going in and starts coming out. */
   turnX: number;
+  /**
+   * One-way swum PENETRATION in metres: the turnaround's `distance_m`, always, whichever axis is
+   * selected. Distinct from `xMax`, which on the distance axis is the round trip at 2L - reporting
+   * that as penetration doubles the number a diver plans against.
+   */
+  turnDistanceM: number;
   xMax: number;
   /** Deepest point on the route; the depth axis runs 0 (surface) to here. */
   depthMax: number;
@@ -62,10 +68,10 @@ export function buildRouteProfile(
   field: GasReachField | null | undefined,
   axis: ProfileAxis
 ): ProfileGeometry | null {
-  const points = field?.route_profile ?? [];
-  if (points.length === 0) {
+  if (!field || field.route_profile.length === 0) {
     return null;
   }
+  const points = field.route_profile;
   const xs = points.map((p) => axisValue(p, axis));
   const outbound = points.filter((p) => p.outbound);
   const turn = outbound[outbound.length - 1];
@@ -73,7 +79,9 @@ export function buildRouteProfile(
     outbound.find((p) => p.route_index === routeIndex);
 
   const markers: ProfileMarker[] = [];
-  field?.stage_drop_route_indices.forEach((routeIndex, i) => {
+  // `?? []` on the arrays, not `?.` on `field`: the guard above already proves `field` is present,
+  // while the arrays are the part an older or partial field could genuinely be missing.
+  (field.stage_drop_route_indices ?? []).forEach((routeIndex, i) => {
     const point = atIndex(routeIndex);
     if (point) {
       markers.push({
@@ -85,7 +93,7 @@ export function buildRouteProfile(
       });
     }
   });
-  field?.waypoint_route_indices.forEach((routeIndex, i) => {
+  (field.waypoint_route_indices ?? []).forEach((routeIndex, i) => {
     // `null` from the first way point that stalls - there is no pass to mark.
     const point = routeIndex === null ? undefined : atIndex(routeIndex);
     if (point) {
@@ -108,13 +116,18 @@ export function buildRouteProfile(
     });
   }
 
+  // Reduced rather than spread: `Math.max(...xs)` passes one argument per point, and V8 throws
+  // RangeError past ~125k of them. A long route in a big cave is 2n-1 points.
+  const maxOf = (values: number[]) => values.reduce((a, b) => (b > a ? b : a), 0);
+
   return {
     points,
     xs,
     markers,
     turnX: turn ? axisValue(turn, axis) : 0,
-    xMax: xs.length > 0 ? Math.max(...xs) : 0,
-    depthMax: Math.max(...points.map((p) => p.depth_m), 0),
+    turnDistanceM: turn?.distance_m ?? 0,
+    xMax: maxOf(xs),
+    depthMax: maxOf(points.map((p) => p.depth_m)),
     axis,
   };
 }
@@ -159,7 +172,13 @@ export function projectProfile(geo: ProfileGeometry, box: ProfileBox): ProfilePr
   const depthSpan = geo.depthMax > 0 ? geo.depthMax : 1;
 
   const x = (value: number) => plotLeft + (value / xSpan) * (plotRight - plotLeft);
-  const y = (depth_m: number) => plotTop + (depth_m / depthSpan) * (plotBottom - plotTop);
+  // Clamped to the plot box. A station above the datum has a negative depth - the exporter has a
+  // guard for exactly that case - and unclamped it would map above `plotTop`, painting the line out
+  // through the header band and inverting the filled water column, which closes back to `plotTop`.
+  const y = (depth_m: number) => {
+    const t = Math.min(Math.max(depth_m / depthSpan, 0), 1);
+    return plotTop + t * (plotBottom - plotTop);
+  };
 
   const linePath = geo.points
     .map((p, i) => `${i === 0 ? 'M' : 'L'}${x(geo.xs[i] ?? 0).toFixed(2)},${y(p.depth_m).toFixed(2)}`)
@@ -185,6 +204,12 @@ export function niceTicks(max: number, target: number = 4): number[] {
   const magnitude = 10 ** Math.floor(Math.log10(raw));
   const normalized = raw / magnitude;
   const step = (normalized > 5 ? 10 : normalized > 2 ? 5 : normalized > 1 ? 2 : 1) * magnitude;
+  // A denormal `max` underflows `magnitude` to 0, making `step` 0 - and `v += 0` never terminates,
+  // hanging the render thread rather than drawing a bad axis. Unreachable from real cave depths,
+  // but a hang is not a pixel bug.
+  if (!(step > 0)) {
+    return [0];
+  }
   const ticks: number[] = [];
   for (let v = 0; v <= max + step * 1e-9; v += step) {
     ticks.push(Number(v.toFixed(10)));

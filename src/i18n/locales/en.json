@@ -2339,7 +2339,10 @@
         "copyHint": "Copy the profile as plain text, for a slate or another planner.",
         "xml": "Export XML",
         "xmlHint": "Write a Subsurface-importable XML profile. Not a decompression schedule.",
-        "xmlFilter": "Subsurface XML"
+        "xmlFilter": "Subsurface XML",
+        "written": "Dive profile exported",
+        "failed": "Dive profile export failed",
+        "clipboardUnavailable": "Copy failed - clipboard unavailable"
       },
       "aria": "Dive profile: max depth {{depth}}, {{distance}} penetration, about {{runtime}} minutes round trip."
     }

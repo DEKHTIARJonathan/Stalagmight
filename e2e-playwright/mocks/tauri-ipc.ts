@@ -1647,12 +1647,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 });
               }
             }
-            const stage_drop_route_indices = stage_drop_refs.map((d) => {
-              const j = routeRefsOrdered.findIndex(
+            // ⚠ Mock-only shortcut: a REF lookup, which is exactly the ambiguity the real engine's
+            // route indices exist to remove (a way-point route revisits stations, and `findIndex`
+            // matches the first pass). Adequate here because the seeded e2e cave is linear, so no
+            // station appears twice - but do not read this as a model of the backend.
+            const stage_drop_route_indices = stage_drop_refs.map((d) =>
+              routeRefsOrdered.findIndex(
                 (r) => r.section_id === d.section_id && r.station_index === d.station_index,
-              );
-              return j >= 0 ? j : 0;
-            });
+              ),
+            ).filter((j) => j >= 0);
             const waypoint_route_indices = waypointArgs.map((w) => {
               const j = routeRefsOrdered.findIndex(
                 (r) => r.section_id === w.section_id && r.station_index === w.station_index,

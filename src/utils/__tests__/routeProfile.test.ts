@@ -80,6 +80,32 @@ describe('buildRouteProfile', () => {
     expect(byDistance?.depthMax).toBe(20);
   });
 
+  it('reports penetration as the one-way distance, never the round trip', () => {
+    // The series' LAST point is the return to the origin at 2L. Anything labelled "penetration" -
+    // the aria summary, a readout - must come from the turnaround instead, or it doubles the number
+    // the diver plans against. Holds on both axes, since penetration is a distance either way.
+    for (const axis of ['distance', 'time'] as const) {
+      const geo = buildRouteProfile(field(), axis);
+      expect(geo?.turnDistanceM).toBe(200);
+      expect(geo?.turnDistanceM).not.toBe(400);
+    }
+    // ...and it is genuinely distinct from the axis maximum on the distance axis.
+    const byDistance = buildRouteProfile(field(), 'distance');
+    expect(byDistance?.xMax).toBe(400);
+    expect(byDistance?.turnDistanceM).toBe(200);
+  });
+
+  it('survives a field whose marker arrays are absent', () => {
+    // A partial/older field can be missing the index arrays entirely; indexing into undefined would
+    // throw and blank the whole tab rather than just dropping the markers.
+    const partial = field();
+    delete (partial as Partial<GasReachField>).stage_drop_route_indices;
+    delete (partial as Partial<GasReachField>).waypoint_route_indices;
+    const geo = buildRouteProfile(partial, 'distance');
+    expect(geo).not.toBeNull();
+    expect(geo?.markers.filter((m) => m.kind === 'turn')).toHaveLength(1);
+  });
+
   it('always marks the turnaround, at the end of the outbound leg', () => {
     const geo = buildRouteProfile(field(), 'distance');
     const turn = geo?.markers.filter((m) => m.kind === 'turn') ?? [];
@@ -160,6 +186,28 @@ describe('projectProfile', () => {
     expect(p.areaPath).not.toContain('NaN');
   });
 
+  it('clamps a station above the datum into the plot instead of painting over the header', () => {
+    // Negative depth is a supported value, not a corner case - the exporter has a guard for exactly
+    // it. Unclamped it maps above plotTop, so the line paints through the header band and the
+    // filled water column (which closes back to plotTop) inverts.
+    const geo = buildRouteProfile(
+      field({
+        route_profile: [
+          point({ route_index: 0, distance_m: 0, depth_m: -3, elapsed_min: 0 }),
+          point({ route_index: 1, distance_m: 100, depth_m: 24, elapsed_min: 20 }),
+        ],
+      }),
+      'distance'
+    );
+    if (!geo) throw new Error('geometry');
+    const p = projectProfile(geo, box);
+    expect(p.y(-3)).toBe(p.plotTop);
+    expect(p.y(-999)).toBe(p.plotTop);
+    // Nothing in the drawn path escapes the plot box.
+    const ys = [...p.linePath.matchAll(/,(-?[\d.]+)/g)].map((m) => Number(m[1]));
+    expect(ys.every((y) => y >= p.plotTop && y <= p.plotBottom)).toBe(true);
+  });
+
   it('keeps the plot non-degenerate in a box smaller than its own padding', () => {
     // The panel is user-resizable down to 100 px and the chart shares that height with a tab strip
     // and an axis, so a box narrower/shorter than the padding is reachable by dragging.
@@ -189,6 +237,14 @@ describe('niceTicks', () => {
     expect(niceTicks(Number.NaN)).toEqual([0]);
     expect(niceTicks(Number.POSITIVE_INFINITY)).toEqual([0]);
     expect(niceTicks(100, 0)).toEqual([0]);
+  });
+
+  it('terminates on a denormal max instead of hanging the renderer', () => {
+    // `magnitude` underflows to 0 for a denormal, making the step 0 - and `v += 0` loops forever,
+    // freezing the UI thread rather than drawing a bad axis. Guarded by a step > 0 check; without
+    // it this test does not fail, it hangs.
+    expect(niceTicks(Number.MIN_VALUE, 4)).toEqual([0]);
+    expect(niceTicks(5e-324, 1)).toEqual([0]);
   });
 
   it('does not accumulate float drift across steps', () => {

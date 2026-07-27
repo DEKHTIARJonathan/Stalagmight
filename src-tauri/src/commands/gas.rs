@@ -12,28 +12,24 @@ use crate::models::{Cylinder, Diver, GasReachField, StationRef};
 /// frontier off the UI thread via `spawn_blocking` (mirrors `get_station_distances_from`; the
 /// engine reads the instant MEASURED coords, never the slow closure-adjusted solve). Returns
 /// `Ok(None)` when no project is open; `Err(msg)` on invalid input.
-#[tauri::command]
-pub async fn compute_gas_reach_field(
-    app_handle: tauri::AppHandle,
-    origin: Option<StationRef>,
-    endpoint: Option<StationRef>,
-    // Ordered way points (#298) the dive must visit, in order, between the origin and the endpoint.
-    // The frontend always sends it (empty when the plan has none). Each is re-resolved by the
-    // engine; an entry that no longer resolves stalls the plan rather than being skipped.
-    waypoints: Vec<StationRef>,
+/// Validate a plan's inputs before they reach the engine, and normalize its config.
+///
+/// Shared by every command that computes a reach field. `AppState::gas_reach_field` validates
+/// nothing - it clones the project and delegates - and its contract says so explicitly: "the diver /
+/// cylinders are assumed already validated and `gas_config` normalized **by the command**". So each
+/// entry point owes this, and a second one that skipped it would reintroduce exactly the holes this
+/// closes: a NaN/zero RMV or cylinder poisoning the field, and an unbounded way-point list walking
+/// past the cap that exists "so the limit cannot be walked past by a caller that never touches a
+/// file".
+pub(crate) fn validate_plan_inputs(
+    waypoints: &[StationRef],
     diver: Diver,
     cylinders: Vec<Cylinder>,
-    gas_config: GasConfig,
-    // Per-stage drop overrides (#246), aligned 1:1 with the field's `stage_drop_refs`: the station
-    // the diver dragged each ▼ marker to (`None` = keep the strategy default). The frontend always
-    // sends it (empty when nothing is dragged); the engine clamps each pinned drop before it can
-    // move the budget, so a stray ref can only fall through to the default.
-    stage_drop_overrides: Vec<Option<StationRef>>,
-) -> Result<Option<GasReachField>, String> {
-    // Every way point costs the engine a full extra Dijkstra, and this command re-runs on every
-    // gas-input keystroke, so an over-long list is a compute amplifier on the hottest path there
-    // is. The `.plnx` write path already caps it for that reason; enforce the same bound here so
-    // the limit cannot be walked past by a caller that never touches a file.
+    mut gas_config: GasConfig,
+) -> Result<(Diver, Vec<Cylinder>, GasConfig), String> {
+    // Every way point costs the engine a full extra Dijkstra, so an over-long list is a compute
+    // amplifier on the hottest path there is. The `.plnx` write path already caps it for that
+    // reason; enforce the same bound for any caller that never touches a file.
     //
     // REJECT rather than truncate. A way point is a constraint the dive must satisfy, and the
     // engine's whole contract is that an unusable one stalls the plan instead of being quietly
@@ -72,8 +68,32 @@ pub async fn compute_gas_reach_field(
             })
         })
         .collect::<Result<Vec<_>, _>>()?;
-    let mut gas_config = gas_config;
     gas_config.normalize();
+    Ok((diver, cylinders, gas_config))
+}
+
+#[tauri::command]
+pub async fn compute_gas_reach_field(
+    app_handle: tauri::AppHandle,
+    origin: Option<StationRef>,
+    endpoint: Option<StationRef>,
+    // Ordered way points (#298) the dive must visit, in order, between the origin and the endpoint.
+    // The frontend always sends it (empty when the plan has none). Each is re-resolved by the
+    // engine; an entry that no longer resolves stalls the plan rather than being skipped.
+    waypoints: Vec<StationRef>,
+    diver: Diver,
+    cylinders: Vec<Cylinder>,
+    gas_config: GasConfig,
+    // Per-stage drop overrides (#246), aligned 1:1 with the field's `stage_drop_refs`: the station
+    // the diver dragged each ▼ marker to (`None` = keep the strategy default). The frontend always
+    // sends it (empty when nothing is dragged); the engine clamps each pinned drop before it can
+    // move the budget, so a stray ref can only fall through to the default.
+    stage_drop_overrides: Vec<Option<StationRef>>,
+) -> Result<Option<GasReachField>, String> {
+    // This command re-runs on every gas-input keystroke, so the way-point cap inside is a compute
+    // amplifier guard on the hottest path there is.
+    let (diver, cylinders, gas_config) =
+        validate_plan_inputs(&waypoints, diver, cylinders, gas_config)?;
 
     let field = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();

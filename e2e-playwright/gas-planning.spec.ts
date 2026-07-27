@@ -448,16 +448,21 @@ test.describe('Gas planning', () => {
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible({ timeout: 3000 });
 
-    // Copy renders server-side and lands on the clipboard. Granting permission explicitly: the
-    // component treats navigator.clipboard as best-effort, so without this the button would still
-    // "succeed" and the assertion would be on nothing.
+    // Copy renders server-side and lands on the clipboard.
     await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
     const copy = page.locator('[data-testid="plan-profile-copy"]');
     await expect(copy).toBeEnabled();
     await copy.click();
-    await expect(copy).toContainText('Copied');
+    // What this proves is the WIRING - button to IPC to clipboard - and nothing more. The text
+    // itself comes from the mock, so asserting the disclaimer here would pass even if the real
+    // renderer dropped it; `both_formats_say_this_is_not_a_deco_schedule` (Rust) is that guard.
+    // Asserted on the table header the mock and the renderer both emit.
     const clipboard = await page.evaluate(() => navigator.clipboard.readText());
-    expect(clipboard).toContain('NOT a decompression schedule');
+    expect(clipboard).toContain('Dist(m)');
+    // The "Copied" badge self-clears after 2 s, which is INSIDE Playwright's 5 s poll window - a
+    // slow machine could start polling after it has gone and then burn the full timeout. Bound the
+    // wait below the badge's own lifetime so a miss reports promptly instead of flaking late.
+    await expect(copy).toContainText('Copied', { timeout: 1500 });
 
     // The XML export sends the plan INPUTS - the backend recomputes the reach field from them
     // rather than trusting whatever the UI is holding, so a request missing them would silently

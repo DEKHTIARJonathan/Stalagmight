@@ -7,7 +7,12 @@ import { getThemeColor } from '../../utils/themeColors';
 import { formatGasLength } from '../../utils/formatGas';
 import { formatFixed } from '../../i18n/format';
 import { saveDialog, exportSaveFilters, ensureExtension } from '../../utils/fileDialogs';
-import { exportDiveProfile, renderDiveProfileText } from '../../utils/divePlanApi';
+import {
+  exportDiveProfile,
+  renderDiveProfileText,
+  type DiveProfileRequest,
+} from '../../utils/divePlanApi';
+import { getErrorMessage } from '../../utils/ipc';
 import {
   buildRouteProfile,
   projectProfile,
@@ -43,7 +48,7 @@ const MIN_LABELLED_HEIGHT = 130;
  */
 export function ProfileChart() {
   const { t } = useTranslation();
-  const clipId = useId();
+  const gradientId = useId();
   // Subscribe to the theme so getThemeColor re-reads the CSS vars on a light/dark flip.
   useUIStore((s) => s.resolvedTheme);
   const { reachField, units } = useGasPlanStore(
@@ -72,7 +77,7 @@ export function ProfileChart() {
       <ProfileHeader axis={axis} onAxis={setAxis} exportable={geo !== null} />
       <div ref={containerRef} className="flex-1 min-h-0 px-2 pb-2" data-testid="plan-profile-plot">
         {geo ? (
-          <ProfilePlot geo={geo} units={units} size={size} clipId={clipId} />
+          <ProfilePlot geo={geo} units={units} size={size} gradientId={gradientId} />
         ) : (
           <div
             className="h-full flex items-center justify-center text-xs text-text-secondary text-center px-4"
@@ -130,24 +135,25 @@ function ProfileHeader({
  * Export the plan straight from the tab it is drawn in, rather than through the project Export
  * panel: a dive profile is not project data, and it only exists while a plan is live.
  *
- * Both actions send the plan INPUTS and let the backend recompute - see `DiveProfileRequest`. Copy
- * is best-effort on the clipboard write (`navigator.clipboard` is unavailable in some contexts),
- * matching how the debug-log copy handles it.
+ * Both actions send the plan INPUTS and let the backend recompute - see `DiveProfileRequest`. The
+ * backend refuses on several reachable paths (no route, writing over the open project, any I/O
+ * error), and every one of them is surfaced: a refusal that silently un-greys the button reads as
+ * "the file was written", which is the failure mode this app's mutation paths are audited for.
  */
 function ProfileExportControls({ enabled }: { enabled: boolean }) {
   const { t } = useTranslation();
+  const showToast = useUIStore((s) => s.showToast);
   const [busy, setBusy] = useState(false);
   const [copied, setCopied] = useState(false);
-  const request = useGasPlanStore(
-    useShallow((s) => ({
-      origin: s.origin,
-      endpoint: s.endpoint,
-      waypoints: s.waypoints,
-      diver: s.diver,
-      cylinders: s.cylinders,
-      gas_config: s.gasConfig,
-      stage_drop_overrides: s.stageDropOverrides,
-    }))
+  const copiedTimer = useRef<number | undefined>(undefined);
+
+  // Clear the "Copied" badge timer on unmount - the tab strip unmounts this component on every
+  // switch, so copy-then-switch inside 2 s would otherwise fire a setter into a dead tree.
+  useEffect(
+    () => () => {
+      if (copiedTimer.current !== undefined) window.clearTimeout(copiedTimer.current);
+    },
+    []
   );
 
   const run = async (fn: () => Promise<void>) => {
@@ -155,10 +161,26 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
     try {
       await fn();
     } catch (e) {
-      console.error('Dive profile export failed:', e);
+      showToast(getErrorMessage(e, t('planTables.profile.export.failed')), 'profile-export-failed');
     } finally {
       setBusy(false);
     }
+  };
+
+  // Read the plan at CLICK time, not render time. The XML path awaits a save dialog first, and on
+  // Android that dialog is an in-app picker the user can edit the plan behind - a render-time
+  // closure would then export inputs that no longer match the plan on screen.
+  const currentRequest = (): DiveProfileRequest => {
+    const s = useGasPlanStore.getState();
+    return {
+      origin: s.origin,
+      endpoint: s.endpoint,
+      waypoints: s.waypoints,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gas_config: s.gasConfig,
+      stage_drop_overrides: s.stageDropOverrides,
+    };
   };
 
   const onExport = () =>
@@ -167,15 +189,22 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
         filters: exportSaveFilters(t('planTables.profile.export.xmlFilter'), 'xml'),
       });
       if (!path) return;
-      await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', request);
+      await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
+      showToast(t('planTables.profile.export.written'), 'profile-export-ok');
     });
 
   const onCopy = () =>
     run(async () => {
-      const text = await renderDiveProfileText(request);
-      await navigator.clipboard?.writeText(text);
+      const text = await renderDiveProfileText(currentRequest());
+      // NOT optional-chained: `navigator.clipboard?.writeText(...)` resolves to `undefined` where
+      // the API is absent (it is, on WebKitGTK and in insecure contexts), and the caller would then
+      // flip the button to "Copied" over an empty clipboard.
+      if (!navigator.clipboard?.writeText) {
+        throw new Error(t('planTables.profile.export.clipboardUnavailable'));
+      }
+      await navigator.clipboard.writeText(text);
       setCopied(true);
-      window.setTimeout(() => setCopied(false), 2000);
+      copiedTimer.current = window.setTimeout(() => setCopied(false), 2000);
     });
 
   return (
@@ -208,12 +237,12 @@ function ProfilePlot({
   geo,
   units,
   size,
-  clipId,
+  gradientId,
 }: {
   geo: NonNullable<ReturnType<typeof buildRouteProfile>>;
   units: 'metric' | 'imperial';
   size: { width: number; height: number };
-  clipId: string;
+  gradientId: string;
 }) {
   const { t } = useTranslation();
   // Fall back to a sane box before the first ResizeObserver callback (and under jsdom, where
@@ -230,19 +259,32 @@ function ProfilePlot({
     padBottom: labelled ? PAD_BOTTOM : 4,
   };
   const p = projectProfile(geo, box);
-  const shallow = getThemeColor('--cc-depth-shallow');
-  const deep = getThemeColor('--cc-depth-deep');
-  const accent = getThemeColor('--cc-accent');
-  const border = getThemeColor('--cc-border');
-  const text = getThemeColor('--cc-text-secondary');
-  const error = getThemeColor('--cc-error');
+  // Each `getThemeColor` is a getComputedStyle call, i.e. a forced style recalc. The panel is
+  // live-resized at ~60 fps, so reading six of them per render put six recalcs in the drag loop.
+  // `resolvedTheme` is subscribed in the parent, which is what re-runs this on a light/dark flip.
+  const theme = useUIStore((s) => s.resolvedTheme);
+  const colors = useMemo(
+    () => ({
+      shallow: getThemeColor('--cc-depth-shallow'),
+      deep: getThemeColor('--cc-depth-deep'),
+      accent: getThemeColor('--cc-accent'),
+      border: getThemeColor('--cc-border'),
+      text: getThemeColor('--cc-text-secondary'),
+      error: getThemeColor('--cc-error'),
+    }),
+    [theme]
+  );
+  const { shallow, deep, accent, border, text, error } = colors;
 
   const xTicks = axisTicks(geo, units, 4);
   const yTicks = depthTicks(geo, units, 3);
-  const turnDepth = geo.markers.find((m) => m.kind === 'turn')?.depth_m ?? 0;
+  const turn = geo.markers.find((m) => m.kind === 'turn');
+  const turnDepth = turn?.depth_m ?? 0;
 
   const axisSuffix =
-    geo.axis === 'time' ? t('planTables.profile.units.minutes') : units === 'imperial' ? 'ft' : 'm';
+    geo.axis === 'time'
+      ? t('planTables.profile.units.minutes')
+      : t(`common.units.${units === 'imperial' ? 'feet' : 'meters'}`);
 
   return (
     <svg
@@ -255,12 +297,15 @@ function ProfilePlot({
       data-axis={geo.axis}
       aria-label={t('planTables.profile.aria', {
         depth: formatGasLength(geo.depthMax, units),
-        distance: formatGasLength(geo.points[geo.points.length - 1]?.distance_m ?? 0, units),
+        // PENETRATION is the one-way distance to the turnaround, so it must come from the last
+        // OUTBOUND point. The series' last point is the return to the origin at 2L, and announcing
+        // that as penetration told a screen-reader user double the real number.
+        distance: formatGasLength(geo.turnDistanceM, units),
         runtime: formatFixed(geo.points[geo.points.length - 1]?.elapsed_min ?? 0, undefined, 0),
       })}
     >
       <defs>
-        <linearGradient id={`${clipId}-fill`} x1="0%" y1="0%" x2="0%" y2="100%">
+        <linearGradient id={`${gradientId}-fill`} x1="0%" y1="0%" x2="0%" y2="100%">
           <stop offset="0%" stopColor={shallow} stopOpacity="0.35" />
           <stop offset="100%" stopColor={deep} stopOpacity="0.15" />
         </linearGradient>
@@ -289,7 +334,7 @@ function ProfilePlot({
           </g>
         ))}
 
-      <path d={p.areaPath} fill={`url(#${clipId}-fill)`} stroke="none" />
+      <path d={p.areaPath} fill={`url(#${gradientId}-fill)`} stroke="none" />
       <path
         d={p.linePath}
         fill="none"

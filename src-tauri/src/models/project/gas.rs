@@ -442,19 +442,31 @@ impl Project {
         // The anticipated dive profile (#299). Built last, from the route vectors above, so it is a
         // pure re-presentation of numbers the compute has already committed to - except the return
         // leg, which is priced here at the exit-leg rates the reach field never uses.
-        let route_profile = build_route_profile(
-            &route_refs,
-            &route_pts,
-            &leg_kinds,
-            &cum_route_distance,
-            &route_gas,
-            in_speed,
-            &ExitLegRates {
-                speed_m_per_min: gas_config.swim_speed_m_per_min,
-                rmv_l_per_min: diver.rmv_l_per_min,
-                jump_multiplier: gas_config.jump_rmv_multiplier,
-            },
-        );
+        //
+        // Gated on a target, exactly as `drop_indices` is above, and NOT merely on a non-empty
+        // route. When a mandated way point costs more than the budget, the committed chain is
+        // deliberately kept so the map can show the diver which way point blew the gas - but there
+        // is no turnaround, and a profile is the specific claim "out to the turnaround and back".
+        // Publishing one from the chain alone would hand the export a complete round-trip dive, with
+        // a turn naming a station the diver cannot afford to reach, for a plan the engine has just
+        // declared unflyable.
+        let route_profile = if route_target.is_some() {
+            build_route_profile(
+                &route_refs,
+                &route_pts,
+                &leg_kinds,
+                &cum_route_distance,
+                &route_gas,
+                in_speed,
+                &ExitLegRates {
+                    speed_m_per_min: gas_config.swim_speed_m_per_min,
+                    rmv_l_per_min: diver.rmv_l_per_min,
+                    jump_multiplier: gas_config.jump_rmv_multiplier,
+                },
+            )
+        } else {
+            Vec::new()
+        };
 
         // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.

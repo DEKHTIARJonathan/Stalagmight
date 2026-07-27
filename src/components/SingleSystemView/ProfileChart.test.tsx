@@ -8,11 +8,25 @@
  * that window opens on literally every edit, and a chart that kept painting the previous route
  * would be showing a depth profile for a plan the diver has already changed.
  */
-import { describe, it, expect, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+
+// The export IPC is mocked so the failure path is reachable; `saveDialog` must resolve to a path or
+// the export short-circuits before the command is ever called.
+vi.mock('../../utils/divePlanApi', () => ({
+  exportDiveProfile: vi.fn(async () => undefined),
+  renderDiveProfileText: vi.fn(async () => 'profile text'),
+}));
+vi.mock('../../utils/fileDialogs', () => ({
+  saveDialog: vi.fn(async () => '/tmp/profile.xml'),
+  exportSaveFilters: vi.fn(() => []),
+  ensureExtension: (p: string) => p,
+}));
 
 import { ProfileChart } from './ProfileChart';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useUIStore } from '../../store/uiStore';
+import { exportDiveProfile } from '../../utils/divePlanApi';
 import { defaultConfig } from '../../types/config';
 import type { GasReachField, RouteProfilePoint } from '../../types/ipc.generated';
 
@@ -80,7 +94,11 @@ const seed = (reachField: GasReachField | null) => {
   });
 };
 
-beforeEach(() => seed(null));
+beforeEach(() => {
+  // Without this, `mock.calls[0]` in one test is the call another test made.
+  vi.clearAllMocks();
+  seed(null);
+});
 
 describe('ProfileChart (#299)', () => {
   it('shows the computing state, not a stale chart, while the field is null', () => {
@@ -144,6 +162,67 @@ describe('ProfileChart (#299)', () => {
     const dropX = Number(drop.querySelector('line')?.getAttribute('x1'));
     const turn = Number(screen.getByTestId('plan-profile-turn-line').getAttribute('x1'));
     expect(dropX).toBeLessThan(turn);
+  });
+
+  it('announces the one-way penetration, not the round-trip distance', () => {
+    // The series ends at 400 m (back at the entrance); penetration is 200 m. Announcing 400 told a
+    // screen-reader user double the distance they are planning to swim in on.
+    seed(fakeField());
+    render(<ProfileChart />);
+    const label = screen.getByTestId('plan-profile-svg').getAttribute('aria-label') ?? '';
+    expect(label).toContain('200 m penetration');
+    expect(label).not.toContain('400 m penetration');
+    // Runtime IS the round trip, and stays so.
+    expect(label).toContain('60 minutes round trip');
+  });
+
+  it('does not claim "Copied" when there is no clipboard, and says why', async () => {
+    // `navigator.clipboard?.writeText(...)` resolves to undefined where the API is absent - it is,
+    // on WebKitGTK and in insecure contexts - so an optional-chained write flips the button to
+    // "Copied" over an empty clipboard. A refusal must not read as success.
+    const original = Object.getOwnPropertyDescriptor(navigator, 'clipboard');
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    const toasts: string[] = [];
+    useUIStore.setState({ showToast: (m: string) => toasts.push(m) });
+    try {
+      seed(fakeField());
+      render(<ProfileChart />);
+      fireEvent.click(screen.getByTestId('plan-profile-copy'));
+      await waitFor(() => expect(toasts.length).toBe(1));
+      expect(toasts[0]).toContain('clipboard unavailable');
+      expect(screen.getByTestId('plan-profile-copy').textContent).not.toContain('Copied');
+    } finally {
+      if (original) Object.defineProperty(navigator, 'clipboard', original);
+    }
+  });
+
+  it('surfaces a backend refusal instead of silently re-enabling the button', async () => {
+    // The backend refuses on reachable paths (no route, clobbering the open project, any I/O
+    // error). Swallowed to console, the user picks a filename and simply gets no file.
+    vi.mocked(exportDiveProfile).mockRejectedValueOnce(
+      new Error('Cannot export over the open project file')
+    );
+    const toasts: string[] = [];
+    useUIStore.setState({ showToast: (m: string) => toasts.push(m) });
+    seed(fakeField());
+    render(<ProfileChart />);
+    fireEvent.click(screen.getByTestId('plan-profile-export-xml'));
+    await waitFor(() => expect(toasts.length).toBe(1));
+    expect(toasts[0]).toContain('Cannot export over the open project file');
+  });
+
+  it('sends the plan as it is at click time, not as it was at render time', async () => {
+    // The XML path awaits a save dialog first; on Android that dialog is an in-app picker the user
+    // can edit the plan behind. A render-time closure would export a plan that is no longer on
+    // screen.
+    seed(fakeField());
+    render(<ProfileChart />);
+    const moved = { section_id: 9, station_index: 9 };
+    useGasPlanStore.setState({ endpoint: moved });
+    fireEvent.click(screen.getByTestId('plan-profile-export-xml'));
+    await waitFor(() => expect(vi.mocked(exportDiveProfile)).toHaveBeenCalled());
+    const call = vi.mocked(exportDiveProfile).mock.calls[0];
+    expect(call?.[2].endpoint).toEqual(moved);
   });
 
   it('recovers when the field flips back to null mid-session', () => {
