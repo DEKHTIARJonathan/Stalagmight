@@ -175,6 +175,8 @@ export * from './ipc/SpeleoDbConfig';
 export * from './ipc/TokenFallback';
 export * from './ipc/Permission';
 export * from './ipc/SpeleoProjectSummary';
+export * from './ipc/TokenStorage';
+export * from './ipc/KeychainReport';
 export * from './ipc/SpeleoLoginResult';
 export * from './ipc/SpeleoOpenResult';
 export * from './ipc/SpeleoAdoptResult';
