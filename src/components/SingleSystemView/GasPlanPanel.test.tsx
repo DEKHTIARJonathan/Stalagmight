@@ -19,6 +19,46 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
+import type { DpvRig, GasReachField } from '../../types/ipc.generated';
+
+const RIG: DpvRig = {
+  primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
+  backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+  range_reserve_fraction: 0.2,
+};
+
+/** A full GasReachField with a real turnaround (satisfies `hasRoute`), overridable per test. */
+function makeReachField(overrides: Partial<GasReachField> = {}): GasReachField {
+  const origin = { section_id: 1, station_index: 0 };
+  const turn = { section_id: 1, station_index: 1 };
+  return {
+    station_refs: [origin, turn],
+    gas_to_reach: [0, 100],
+    reachable: [true, true],
+    turn_frontier: [turn],
+    max_reachable_gas: 100,
+    budget_litres: 1000,
+    route: [{ from: origin, to: turn, is_jump: false }],
+    stage_drop_refs: [],
+    final_turn_ref: turn,
+    turn_toward_endpoint: false,
+    backgas_turn_bar: 150,
+    stage_drop_bars: [],
+    stage_drop_over_reserve: [],
+    stage_drop_distances_m: [],
+    cylinder_usable_bars: [],
+    route_line_length_m: 200,
+    route_max_depth_m: 20,
+    route_avg_depth_m: 10,
+    waypoint_gas_litres: [],
+    scooter_distance_m: 0,
+    scooter_range_limit_m: null,
+    scooter_drop_ref: null,
+    route_runtime_min: 20,
+    turn_on_scooter_range: false,
+    ...overrides,
+  };
+}
 
 beforeEach(() => {
   vi.useFakeTimers();
@@ -94,5 +134,62 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     expect(updateConfig).toHaveBeenCalledWith(
       expect.objectContaining({ gas: expect.objectContaining({ swim_speed_m_per_min: 15 }) }),
     );
+  });
+});
+
+describe('GasPlanPanel scooter (DPV) readout (#317)', () => {
+  it('does not render the scooter rows without a configured rig, but still shows runtime', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: null },
+      reachField: makeReachField(),
+    });
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-readout-scooter-range')).toBeNull();
+    expect(screen.queryByTestId('gas-readout-scooter-turn-warning')).toBeNull();
+    // Runtime is useful with or without a rig - the segment speed still applies either way.
+    expect(screen.getByTestId('gas-readout-route-runtime')).toHaveTextContent('20.0 min');
+  });
+
+  it('renders the scooter distance/range row and runtime once a rig is configured', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: RIG },
+      reachField: makeReachField({ scooter_distance_m: 150, scooter_range_limit_m: 220 }),
+    });
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-readout-scooter-range')).toHaveTextContent('150 m / 220 m');
+    expect(screen.getByTestId('gas-readout-route-runtime')).toHaveTextContent('20.0 min');
+    expect(screen.queryByTestId('gas-readout-scooter-turn-warning')).toBeNull();
+  });
+
+  it('reports a scooter-range turn ONLY from the engine flag, never re-derived from the numbers', () => {
+    // Adversarial case: distance == limit (the two would read as "equal" under a naive
+    // re-derivation) but the engine says gas, not scooter range, is what turned this dive.
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: RIG },
+      reachField: makeReachField({
+        scooter_distance_m: 220,
+        scooter_range_limit_m: 220,
+        turn_on_scooter_range: false,
+      }),
+    });
+    render(<GasPlanPanel />);
+
+    expect(screen.queryByTestId('gas-readout-scooter-turn-warning')).toBeNull();
+  });
+
+  it('shows the scooter-range turn message when the engine flag is true', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: RIG },
+      reachField: makeReachField({
+        scooter_distance_m: 200,
+        scooter_range_limit_m: 220,
+        turn_on_scooter_range: true,
+      }),
+    });
+    render(<GasPlanPanel />);
+
+    expect(screen.getByTestId('gas-readout-scooter-turn-warning')).toBeInTheDocument();
   });
 });

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { useGasPlanStore, selectIsPlanDirty } from '../gasPlanStore';
+import { useGasPlanStore, selectIsPlanDirty, MAX_SEGMENTS } from '../gasPlanStore';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import { defaultConfig } from '../../types/config';
 import type { GasReachField } from '../../types/ipc.generated';
@@ -27,6 +27,11 @@ const fakeField = (): GasReachField => ({
   route_profile: [],
   stage_drop_route_indices: [],
   waypoint_route_indices: [],
+  scooter_distance_m: 0,
+  scooter_range_limit_m: null,
+  scooter_drop_ref: null,
+  route_runtime_min: null,
+  turn_on_scooter_range: false,
 });
 
 describe('gasPlanStore', () => {
@@ -210,6 +215,121 @@ describe('gasPlanStore way points (#298)', () => {
     useGasPlanStore.getState().addWaypoint(a);
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().waypoints).toEqual([]);
+  });
+});
+
+describe('gasPlanStore segments (#317)', () => {
+  const a = { section_id: 1, station_index: 1 };
+  const b = { section_id: 1, station_index: 5 };
+  const c = { section_id: 1, station_index: 9 };
+
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('starts with exactly one segment (no way points yet - a plan always has waypoints.length + 1)', () => {
+    expect(useGasPlanStore.getState().waypoints).toEqual([]);
+    expect(useGasPlanStore.getState().segments).toHaveLength(1);
+  });
+
+  it('stays length-synced (segments.length === waypoints.length + 1) through add/remove/move', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    expect(useGasPlanStore.getState().segments).toHaveLength(2);
+    useGasPlanStore.getState().addWaypoint(b);
+    expect(useGasPlanStore.getState().segments).toHaveLength(3);
+    useGasPlanStore.getState().moveWaypoint(1, -1);
+    expect(useGasPlanStore.getState().segments).toHaveLength(3);
+    useGasPlanStore.getState().addWaypoint(c);
+    expect(useGasPlanStore.getState().segments).toHaveLength(4);
+    useGasPlanStore.getState().removeWaypoint(1);
+    expect(useGasPlanStore.getState().waypoints).toHaveLength(2);
+    expect(useGasPlanStore.getState().segments).toHaveLength(3);
+  });
+
+  it('stays synced at the way-point cap too (MAX_SEGMENTS mirrors MAX_WAYPOINTS + 1)', () => {
+    for (let i = 0; i < 70; i++) {
+      useGasPlanStore.getState().addWaypoint({ section_id: 9, station_index: i });
+    }
+    expect(useGasPlanStore.getState().waypoints).toHaveLength(64);
+    expect(useGasPlanStore.getState().segments).toHaveLength(MAX_SEGMENTS);
+  });
+
+  it('addWaypoint splits the last span; both halves inherit the split segment\'s values', () => {
+    useGasPlanStore.getState().setSegments([{ speed_m_per_min: 25, on_scooter: true }]);
+    useGasPlanStore.getState().addWaypoint(a);
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 25, on_scooter: true },
+      { speed_m_per_min: 25, on_scooter: true },
+    ]);
+  });
+
+  it('removeWaypoint merges its two adjacent spans to the SLOWER speed and ANDs on_scooter', () => {
+    // Two way points -> 3 segments; dropping way point 0 merges segments 0 and 1. Built so
+    // neither "take the first", "take the second", "max", nor "OR the flag" reproduces the
+    // right answer - only min(speed) + (a && b) lands on {8, false}, mirroring the Rust
+    // `merge_segments_for_surviving_waypoints` reconciliation on a stale-way-point load.
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 20, on_scooter: true },
+      { speed_m_per_min: 8, on_scooter: false },
+      { speed_m_per_min: 30, on_scooter: true },
+    ]);
+    useGasPlanStore.getState().removeWaypoint(0);
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 8, on_scooter: false },
+      { speed_m_per_min: 30, on_scooter: true },
+    ]);
+  });
+
+  it('setSegments nulls reachField and clears stageDropOverrides (a gas input, like setCylinders)', () => {
+    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    useGasPlanStore.setState({ reachField: fakeField() });
+    useGasPlanStore.getState().setSegments([{ speed_m_per_min: 15, on_scooter: false }]);
+    expect(useGasPlanStore.getState().reachField).toBeNull();
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
+  });
+
+  it.each([
+    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint(b)],
+    ['removeWaypoint', () => useGasPlanStore.getState().removeWaypoint(0)],
+  ])('%s (which restructures segments) also nulls reachField', (_name, mutate) => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.setState({ reachField: fakeField() });
+    mutate();
+    expect(useGasPlanStore.getState().reachField).toBeNull();
+  });
+
+  it('the snapshot carries the live segments verbatim (round-trips through divePlanSnapshotOf)', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 12, on_scooter: true },
+      { speed_m_per_min: 9, on_scooter: false },
+    ]);
+    const snap = divePlanSnapshotOf(useGasPlanStore.getState());
+    expect(snap.segments).toEqual(useGasPlanStore.getState().segments);
+  });
+
+  it('a segment edit is dirty-tracked, so an unsaved speed/scooter change still hits the close guard', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(5, snapshot);
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+    const segs = useGasPlanStore.getState().segments;
+    useGasPlanStore.getState().setSegments(
+      segs.map((s, i) => (i === 0 ? { ...s, on_scooter: !s.on_scooter } : s))
+    );
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
+  });
+
+  it('reset restores the single default segment (no leak across plan sessions)', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 5, on_scooter: false },
+      { speed_m_per_min: 5, on_scooter: false },
+    ]);
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().segments).toHaveLength(1);
   });
 });
 

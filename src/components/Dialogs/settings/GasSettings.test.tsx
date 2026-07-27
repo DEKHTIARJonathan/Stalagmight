@@ -78,3 +78,94 @@ describe('GasSettings numeric fields use PositiveNumberField (#241)', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+describe('GasSettings DPV rig (#317)', () => {
+  it('enabling the rig seeds a rig object (null -> DpvRig)', () => {
+    renderPanel({ dpv: null });
+    fireEvent.click(screen.getByTestId('toggle-gas-dpv-enabled'));
+    expect(onChange).toHaveBeenCalledWith({
+      gas: expect.objectContaining({ dpv: expect.objectContaining({ primary: expect.any(Object) }) }),
+    });
+  });
+
+  it('disabling the rig clears it back to null (DpvRig -> null)', () => {
+    const rig = {
+      primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
+      backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+      range_reserve_fraction: 0.2,
+    };
+    renderPanel({ dpv: rig });
+    fireEvent.click(screen.getByTestId('toggle-gas-dpv-enabled'));
+    expect(onChange).toHaveBeenCalledWith({ gas: expect.objectContaining({ dpv: null }) });
+  });
+
+  it('a rig with an invalid primary unit blocks Save', () => {
+    const onValidationError = vi.fn();
+    const config: Config = {
+      ...defaultConfig,
+      gas: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 0, burn_minutes: 60, label: null },
+          backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+          range_reserve_fraction: 0.2,
+        },
+      },
+    };
+    render(
+      <GasSettings
+        config={config}
+        onChange={onChange}
+        changedFields={new Set()}
+        onValidationError={onValidationError}
+        panelIdBase="settings"
+      />
+    );
+    expect(onValidationError).toHaveBeenCalledWith('gas', true);
+  });
+
+  it('a valid rig does not block Save', () => {
+    const onValidationError = vi.fn();
+    const config: Config = {
+      ...defaultConfig,
+      gas: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
+          backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+          range_reserve_fraction: 0.2,
+        },
+      },
+    };
+    render(
+      <GasSettings
+        config={config}
+        onChange={onChange}
+        changedFields={new Set()}
+        onValidationError={onValidationError}
+        panelIdBase="settings"
+      />
+    );
+    // The validation effect is edge-triggered (fires only on a hasError TRANSITION, matching
+    // the swim/jump checks above) - a valid rig on the initial render matches the ref's initial
+    // `false` and never fires at all.
+    expect(onValidationError).not.toHaveBeenCalled();
+  });
+
+  it('the computed usable-range line matches the Rust formula for a hand-picked pair', () => {
+    // Primary: 10 m/min x 100 min = 1000 m range but a slow burn. Backup: 40 m/min x 20 min =
+    // 800 m range on a much shorter burn - picking the "weaker" unit by burn time (20 < 100)
+    // would (wrongly) still land on the backup, so this pair does not distinguish the two
+    // methods on its own; what matters is the number itself only comes out right - 800 m, not
+    // 1000 m - when the engine compares RANGE (speed x burn), never burn alone.
+    renderPanel({
+      dpv: {
+        primary: { speed_m_per_min: 10, burn_minutes: 100, label: null },
+        backup: { speed_m_per_min: 40, burn_minutes: 20, label: null },
+        range_reserve_fraction: 0.25,
+      },
+    });
+    // weaker = min(1000, 800) = 800; usable = 800 * (1 - 0.25) = 600
+    expect(screen.getByTestId('gas-dpv-usable-range-value').textContent).toBe('600 m');
+  });
+});

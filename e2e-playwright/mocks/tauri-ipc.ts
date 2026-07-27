@@ -1431,6 +1431,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // #298: the ordered way points, so an e2e can assert the pick reached the engine
                 // and in what order.
                 waypoints: args?.waypoints ?? [],
+                // #317: the per-span speed + propulsion, so an e2e can assert a segment edit
+                // reached the engine rather than only re-rendering the table.
+                segments: args?.segments ?? [],
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
@@ -1473,6 +1476,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               conservative_tank_gas?: boolean;
               swim_speed_m_per_min?: number;
               survey_speed_m_per_min?: number | null;
+              dpv?: {
+                primary?: { speed_m_per_min?: number; burn_minutes?: number };
+                backup?: { speed_m_per_min?: number; burn_minutes?: number };
+                range_reserve_fraction?: number;
+              } | null;
             };
             const cylinders = (args?.cylinders ?? []) as Array<{
               role?: string;
@@ -1759,6 +1767,69 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               return j >= 0 ? j : null;
             });
+            // Scooter + per-segment readouts (#317). Same standing caveat as the drop math above:
+            // a shape-correct stand-in for UI wiring, NOT the engine's rule. In particular the mock
+            // does NOT enforce the range cap on `reachable` / `turn_frontier` - the engine ANDs it
+            // into both masks, and the Rust unit tests are the source of truth for that. So an e2e
+            // here may assert that the readout rows render the numbers it was handed; it may NOT
+            // assert which stations grey out under a rig.
+            //
+            // With no rig (`dpv: null`, which is what both mock config blocks ship) every value
+            // below is inert, so the 31 existing gas specs - all calibrated against the fixed
+            // 1500 L budget and `|x| * 20` field - are untouched.
+            const segmentArgs = (args?.segments ?? []) as Array<{
+              speed_m_per_min?: number;
+              on_scooter?: boolean;
+            }>;
+            const rig = gasConfig.dpv ?? null;
+            const unitRange = (u?: { speed_m_per_min?: number; burn_minutes?: number }) =>
+              (u?.speed_m_per_min ?? 0) * (u?.burn_minutes ?? 0);
+            const scooter_range_limit_m = rig
+              ? Math.max(
+                  0,
+                  Math.min(unitRange(rig.primary), unitRange(rig.backup)) *
+                    (1 - (rig.range_reserve_fraction ?? 0)),
+                )
+              : null;
+            // Which segment each route leg belongs to: way points split the route, so leg j sits in
+            // the segment named by how many way points the route has already passed at that point.
+            const routeIndexOf = (r: { section_id: number; station_index: number }) =>
+              routeRefsOrdered.findIndex(
+                (x) => x.section_id === r.section_id && x.station_index === r.station_index,
+              );
+            const waypointRouteIdx = waypointArgs.map(routeIndexOf).filter((i) => i >= 0);
+            const segmentAtLeg = (legIdx: number) =>
+              waypointRouteIdx.filter((wi) => wi <= legIdx).length;
+            let scooter_distance_m = 0;
+            let route_runtime_min: number | null = null;
+            if (routePts.length > 1) {
+              let minutes = 0;
+              for (let i = 1; i < routePts.length; i += 1) {
+                const a = routePts[i - 1];
+                const b = routePts[i];
+                const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+                const s = segmentArgs[segmentAtLeg(i - 1)];
+                const speed = s?.speed_m_per_min && s.speed_m_per_min > 0 ? s.speed_m_per_min : 10;
+                minutes += seg / speed;
+                if (rig && s?.on_scooter) scooter_distance_m += seg;
+              }
+              route_runtime_min = minutes;
+            }
+            // The park point is DERIVED, never placed: the boundary after the last scootered
+            // segment. Null when nothing is scootered, and when the units are carried all the way
+            // to the turnaround (the last segment is scootered, so its boundary is the turn).
+            let scooter_drop_ref: { section_id: number; station_index: number } | null = null;
+            if (rig) {
+              let lastOn = -1;
+              for (let i = 0; i < segmentArgs.length; i += 1) {
+                if (segmentArgs[i]?.on_scooter) lastOn = i;
+              }
+              if (lastOn >= 0 && lastOn + 1 < segmentArgs.length) {
+                scooter_drop_ref = waypointArgs[lastOn] ?? null;
+              }
+            }
+            const turn_on_scooter_range =
+              scooter_range_limit_m != null && scooter_distance_m > scooter_range_limit_m;
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1782,6 +1853,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route_profile,
               stage_drop_route_indices,
               waypoint_route_indices,
+              scooter_distance_m,
+              scooter_range_limit_m,
+              scooter_drop_ref,
+              route_runtime_min,
+              turn_on_scooter_range,
             };
           }
 

@@ -15,8 +15,8 @@ use std::path::PathBuf;
 use super::AppState;
 use crate::config::GasConfig;
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, Project, StationKey,
-    StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanSegment, Project,
+    StationKey, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -37,6 +37,11 @@ const MAX_MARKED_LABEL_CHARS: usize = 120;
 /// trivially cheap. Enforced on save (reject), on load (truncate), and on the live compute command
 /// (reject - see `commands::gas`), so the bound cannot be walked past from any direction.
 pub(crate) const MAX_WAYPOINTS: usize = 64;
+
+/// Upper bound on a plan's per-span pace/propulsion segments (#317). A plan has exactly one
+/// segment per span, and a span is bounded by way points, so the ceiling on segments tracks the
+/// ceiling on way points plus the one span left over on either end: `waypoints.len() + 1`.
+pub(crate) const MAX_SEGMENTS: usize = MAX_WAYPOINTS + 1;
 
 /// Upper bound on a plan's marked points (#298). They cost nothing in the engine - they never
 /// reach it - but each one is a DOM element plus a station lookup on the frontend, so the same
@@ -128,6 +133,14 @@ struct PersistedDivePlanSnapshot {
     stage_drop_overrides: Vec<Option<StoredAnchor>>,
     #[serde(default)]
     marked_points: Vec<PersistedMarkedPoint>,
+    /// Per-span pace/propulsion (#317), persisted VERBATIM: a segment names a span between way
+    /// points, not a station, so there is no reference inside it to canonicalize - no
+    /// `PersistedSegment` mirror type is needed here, unlike `PersistedMarkedPoint` above. What
+    /// still needs handling is the INDEXING: dropping way point `k` on load merges spans `k` and
+    /// `k+1` into one, so `segments` must be reconciled against which way points survived - see
+    /// `merge_segments_for_surviving_waypoints`.
+    #[serde(default)]
+    segments: Vec<PlanSegment>,
 }
 
 /// On-disk form of a [`MarkedPoint`] (#298): the annotated station as a stable anchor.
@@ -410,6 +423,74 @@ fn from_anchors(project: &Project, anchors: Vec<StoredAnchor>, stale: &mut u32) 
         .collect()
 }
 
+/// [`from_anchors`], also reporting - as a same-length boolean mask over the INPUT positions -
+/// which entries survived.
+///
+/// The mask exists for `segments` (#317): the segment list is positional against way points, so
+/// reconciling it after a drop needs to know exactly WHICH way point vanished, not just how many
+/// - see `merge_segments_for_surviving_waypoints`.
+fn from_anchors_with_survival(
+    project: &Project,
+    anchors: Vec<StoredAnchor>,
+    stale: &mut u32,
+) -> (Vec<StationRef>, Vec<bool>) {
+    let mut refs = Vec::with_capacity(anchors.len());
+    let mut survived = Vec::with_capacity(anchors.len());
+    for a in anchors {
+        match from_anchor(project, &a, stale) {
+            Some(r) => {
+                refs.push(r);
+                survived.push(true);
+            }
+            None => survived.push(false),
+        }
+    }
+    (refs, survived)
+}
+
+/// Merge a persisted segment list against which way points survived resolution (#317).
+///
+/// Segments are positional against way points (`segments.len() == waypoints.len() + 1`): span
+/// `k` runs between way point `k-1` and way point `k` (span 0 runs from the origin, the last span
+/// covers the open reach field past the final way point). When way point `j` is DROPPED (its
+/// station no longer resolves), the two spans it used to separate collapse into one - the diver's
+/// actual route no longer stops there, so there is no longer a boundary across which two
+/// different speeds could apply. The merged span takes the SLOWER of the two speeds and requires
+/// BOTH halves to have been scootered (`on_scooter = a && b`): both are the conservative
+/// direction - the merged segment can only ever cost MORE gas or LESS scooter range than either
+/// half implied on its own, never less of either (the safe direction, section 6).
+///
+/// `survived[j]` reports whether way point `j` (0-indexed into the pre-drop list) resolved - the
+/// mask [`from_keys_with_survival`] returns. A length mismatch against `segments` is only
+/// reachable via a hand-edited `.plnx` (the trusted write path always saves
+/// `segments.len() == waypoints.len() + 1`); it degrades gracefully by treating any waypoint
+/// position past the end of `survived` as surviving, so a malformed file can only ever leave a
+/// span un-merged, never merge across a boundary the mask does not actually describe.
+fn merge_segments_for_surviving_waypoints(
+    segments: Vec<PlanSegment>,
+    survived: &[bool],
+) -> Vec<PlanSegment> {
+    let last_index = segments.len().saturating_sub(1);
+    let mut merged = Vec::new();
+    let mut pending: Option<PlanSegment> = None;
+    for (j, seg) in segments.into_iter().enumerate() {
+        pending = Some(match pending {
+            None => seg,
+            Some(prev) => PlanSegment {
+                speed_m_per_min: prev.speed_m_per_min.min(seg.speed_m_per_min),
+                on_scooter: prev.on_scooter && seg.on_scooter,
+            },
+        });
+        let waypoint_survived = survived.get(j).copied().unwrap_or(true);
+        if j == last_index || waypoint_survived {
+            if let Some(finished) = pending.take() {
+                merged.push(finished);
+            }
+        }
+    }
+    merged
+}
+
 /// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
 /// mid-scalar into invalid text.
 fn truncate_chars(s: String, max: usize) -> String {
@@ -647,6 +728,12 @@ impl AppState {
                 .map(|o| to_anchor(project, *o))
                 .collect(),
             marked_points,
+            // Unlike a dangling way point (refused above) or an over-long list (also refused via
+            // the MAX_WAYPOINTS/MAX_MARKED_POINTS checks), a segment past MAX_SEGMENTS describes a
+            // span that cannot exist for ANY plan (segments are already bounded by way points, so
+            // this only fires on a malformed caller) - truncating it drops nothing a real plan could
+            // have meant, so there is no user-facing refusal to write here.
+            segments: snap.segments.iter().copied().take(MAX_SEGMENTS).collect(),
         })
     }
 
@@ -671,10 +758,18 @@ impl AppState {
         // costs the engine a full extra Dijkstra and every marked point a DOM node plus a station
         // lookup, so an unbounded list from a doctored file would be a compute amplifier on every
         // recompute. Truncating (rather than refusing the load) keeps the rest of the plan usable.
-        let waypoints = from_anchors(
+        let (waypoints, waypoints_survived) = from_anchors_with_survival(
             project,
             p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
             &mut stale,
+        );
+        // Segments are positional against the PRE-drop way points, so the merge must run against
+        // the survival mask above BEFORE anything about waypoints changes shape - see
+        // `merge_segments_for_surviving_waypoints`. Same reasoning as the other caps: truncate
+        // rather than refuse, since the threat is a hand-edited file the write path never produced.
+        let segments = merge_segments_for_surviving_waypoints(
+            p.segments.into_iter().take(MAX_SEGMENTS).collect(),
+            &waypoints_survived,
         );
         // Capped on the way IN like the way points and marked points, and for the same reason:
         // the threat is a hand-edited `.plnx`, which by definition never crosses the write
@@ -709,6 +804,7 @@ impl AppState {
             gas_config: p.gas_config,
             stage_drop_overrides,
             marked_points,
+            segments,
         };
         Ok((snapshot, stale))
     }
@@ -739,6 +835,28 @@ mod tests {
         let sec = project
             .add_section(SectionData {
                 shots: vec![make_shot(), make_shot(), make_shot()],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        (project, sec)
+    }
+
+    /// A one-section project with 6 shots (stations 0..=6), for the #317 segment-merge test:
+    /// it needs headroom for an origin, three way points, and an endpoint - five distinct
+    /// stations - without any of them coinciding.
+    fn project_6_shots() -> (Project, u32) {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: vec![
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                ],
                 ..Default::default()
             })
             .id;
@@ -1208,6 +1326,7 @@ mod tests {
                 station: only,
                 label: Some("wp".to_string()),
             }],
+            segments: Vec::new(),
         };
 
         let persisted = state
@@ -1311,6 +1430,7 @@ mod tests {
                 station: StationRef::new(sec, 2),
                 label: Some("photo".to_string()),
             }],
+            segments: Vec::new(),
         }
     }
 
@@ -1525,6 +1645,7 @@ mod tests {
                 };
                 MAX_MARKED_POINTS + 25
             ],
+            segments: Vec::new(),
         };
         let (snapshot, _stale) = state.resolve_persisted(persisted).unwrap();
 
@@ -1559,6 +1680,9 @@ mod tests {
         let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
         assert!(persisted.waypoints.is_empty());
         assert!(persisted.marked_points.is_empty());
+        // Same claim holds for #317's addition: the blob predates segments too, and it must not
+        // become unloadable either.
+        assert!(persisted.segments.is_empty());
     }
 
     /// A `.plnx` written before #24 stores `{section_id, anchor}` and must keep working. The
@@ -1631,5 +1755,157 @@ mod tests {
         assert!(state
             .save_dive_plan(None, "Plan".to_string(), snapshot)
             .is_ok());
+    }
+
+    #[test]
+    fn segments_round_trip_when_the_survey_is_unchanged() {
+        // Unlike origin/endpoint/waypoints, a segment carries no station of its own (#317 - see
+        // the model doc comment), so with nothing dangling there is nothing to merge: the list
+        // must pass through save+load unchanged.
+        let (project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.segments = vec![
+            PlanSegment {
+                speed_m_per_min: 12.0,
+                on_scooter: true,
+            },
+            PlanSegment {
+                speed_m_per_min: 20.0,
+                on_scooter: false,
+            },
+        ];
+        let persisted = state.to_persisted(&snapshot).unwrap();
+        let (resolved, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(stale, 0);
+        assert_eq!(resolved.segments, snapshot.segments);
+    }
+
+    #[test]
+    fn dropping_a_waypoint_merges_its_two_adjacent_segments_to_the_slower_speed_and_ands_the_flag()
+    {
+        // THE #317 headline case. Segments are positional against way points, so dropping way
+        // point `j` collapses the spans on either side of it (segments `j` and `j+1`) into one.
+        // The merge must go the SAFE direction on both fields - the slower of the two speeds, and
+        // scootered only if BOTH halves were - never the opposite, because either would
+        // understate the gas the merged span actually costs (section 6).
+        //
+        // The two segments to merge are built so neither "take the first", "take the second",
+        // "max" nor "OR the flag" reproduces the correct answer: only min(speed) + (a && b)
+        // lands on {8.0, false}.
+        let (mut project, sec) = project_6_shots();
+        let state = AppState::new().unwrap();
+
+        let snapshot = DivePlanSnapshot {
+            origin: Some(StationRef::new(sec, 0)),
+            endpoint: Some(StationRef::new(sec, 6)),
+            waypoints: vec![
+                StationRef::new(sec, 1),
+                StationRef::new(sec, 3),
+                StationRef::new(sec, 5),
+            ],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: vec![
+                PlanSegment {
+                    speed_m_per_min: 20.0,
+                    on_scooter: true,
+                }, // origin -> waypoint 0
+                PlanSegment {
+                    speed_m_per_min: 8.0,
+                    on_scooter: true,
+                }, // waypoint 0 -> waypoint 1 (merges away)
+                PlanSegment {
+                    speed_m_per_min: 15.0,
+                    on_scooter: false,
+                }, // waypoint 1 -> waypoint 2 (merges away)
+                PlanSegment {
+                    speed_m_per_min: 30.0,
+                    on_scooter: true,
+                }, // waypoint 2 -> endpoint
+            ],
+        };
+
+        *state.project.lock().unwrap() = Some(project.clone());
+        let persisted = state.to_persisted(&snapshot).unwrap();
+
+        // Delete the shot backing way point 1 (station 3 = the boundary after shot index 2): that
+        // anchor can no longer resolve, but the shots on either side keep their own uuids, so way
+        // points 0 and 2 are unaffected.
+        project.sections[0].shots.remove(2);
+        *state.project.lock().unwrap() = Some(project);
+        let (resolved, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(stale, 1, "only way point 1's anchor should dangle");
+        assert_eq!(resolved.waypoints.len(), 2);
+        assert_eq!(resolved.segments.len(), 3);
+        assert_eq!(
+            resolved.segments[0],
+            PlanSegment {
+                speed_m_per_min: 20.0,
+                on_scooter: true,
+            },
+            "the untouched leading segment must pass through unchanged"
+        );
+        assert_eq!(
+            resolved.segments[1],
+            PlanSegment {
+                speed_m_per_min: 8.0,
+                on_scooter: false,
+            },
+            "the merged span must take the SLOWER speed and require BOTH halves scootered"
+        );
+        assert_eq!(
+            resolved.segments[2],
+            PlanSegment {
+                speed_m_per_min: 30.0,
+                on_scooter: true,
+            },
+            "the untouched trailing segment must pass through unchanged"
+        );
+    }
+
+    #[test]
+    fn over_long_segment_list_is_capped_on_save_and_on_load() {
+        // Mirrors the way point / marked point caps: MAX_SEGMENTS exists for a hand-edited
+        // `.plnx` (the trusted write path never saves more than `waypoints.len() + 1`), so both
+        // directions must enforce it independently.
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_3_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        // Save-side: truncated, not refused - a segment past MAX_SEGMENTS describes a span that
+        // cannot exist for any plan, so there is nothing to warn the user about.
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.segments = vec![
+            PlanSegment {
+                speed_m_per_min: 5.0,
+                on_scooter: false,
+            };
+            MAX_SEGMENTS + 25
+        ];
+        let persisted = state.to_persisted(&snapshot).unwrap();
+        assert_eq!(persisted.segments.len(), MAX_SEGMENTS);
+
+        // Load-side: a hand-edited file bypasses the save-time cap entirely, so resolve_persisted
+        // must re-apply it independently of whatever to_persisted already did.
+        let mut doctored = persisted;
+        doctored.segments = vec![
+            PlanSegment {
+                speed_m_per_min: 5.0,
+                on_scooter: false,
+            };
+            MAX_SEGMENTS + 25
+        ];
+        let (resolved, _stale) = state.resolve_persisted(doctored).unwrap();
+        assert_eq!(resolved.segments.len(), MAX_SEGMENTS);
     }
 }

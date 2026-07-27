@@ -18,7 +18,7 @@ use stalagmight_lib::commands::survey_geometry::{
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
     ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig,
-    DpvProfile, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
+    DpvRig, DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
     ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
     MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
@@ -49,7 +49,7 @@ use stalagmight_lib::models::{
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, Project,
+    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, PlanSegment, Project,
     ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
     RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
     ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire,
@@ -131,6 +131,7 @@ fn main() {
     export::<Diver>(&out_dir);
     export::<Cylinder>(&out_dir);
     export::<Team>(&out_dir);
+    export::<PlanSegment>(&out_dir);
     export::<GasReachField>(&out_dir);
     // Dive-plan persistence (#244)
     export::<MarkedPoint>(&out_dir);
@@ -272,7 +273,8 @@ fn main() {
     export::<GasUnits>(&out_dir);
     export::<ReservePreset>(&out_dir);
     export::<ReserveProfile>(&out_dir);
-    export::<DpvProfile>(&out_dir);
+    export::<DpvUnit>(&out_dir);
+    export::<DpvRig>(&out_dir);
     export::<DisplayConfig>(&out_dir);
     export::<DepthGradientConfig>(&out_dir);
     export::<SectionColorsConfig>(&out_dir);
@@ -389,6 +391,7 @@ fn main() {
         "Diver",
         "Cylinder",
         "Team",
+        "PlanSegment",
         "GasReachField",
         "MarkedPoint",
         "DivePlanSnapshot",
@@ -527,7 +530,8 @@ fn main() {
         "GasUnits",
         "ReservePreset",
         "ReserveProfile",
-        "DpvProfile",
+        "DpvUnit",
+        "DpvRig",
         "ShortcutFeedback",
         "ThemeMode",
         "ColorTheme",

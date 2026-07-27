@@ -5,6 +5,7 @@ import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
 import { formatStationId } from '../../utils/formatters';
+import { formatFixed } from '../../i18n/format';
 import {
   formatGasLength,
   formatPressure,
@@ -42,6 +43,11 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
  *  means a label typed in the panel can never be the reason a whole plan fails to save; the
  *  backend guard remains, for a hand-edited `.plnx`. */
 const MAX_MARKED_LABEL_CHARS = 120;
+
+/** One-way runtime readout (#317), always in minutes - the engine's own value, never re-derived. */
+function formatRouteRuntime(min: number): string {
+  return `${formatFixed(min, undefined, 1)} min`;
+}
 
 // Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
 // Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
@@ -267,6 +273,19 @@ export function GasPlanPanel() {
   const hasRoute = (reachField?.route.length ?? 0) > 0 && reachField?.final_turn_ref != null;
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
+
+  // Scooter (DPV) readout (#317) - every value here is read straight off the field, never
+  // re-derived. Runtime is shown whenever a route exists, rig or not (the segment speed still
+  // applies either way - see gas_reach_field_without_a_rig_ignores_the_scooter_flag); the range
+  // comparison and the turn reason need a configured rig, since with none nothing is scootered.
+  const routeRuntimeMin = reachField?.route_runtime_min ?? null;
+  const hasDpvRig = gasConfig.dpv != null;
+  const scooterDistance = reachField?.scooter_distance_m ?? null;
+  const scooterRangeLimit = reachField?.scooter_range_limit_m ?? null;
+  // ⚠ The engine's own answer - comparing scooterDistance against scooterRangeLimit looks
+  // equivalent and is not: the route already stops at whichever cap bound first, so the two read
+  // as merely equal in exactly the case being asked about (GasReachField::turn_on_scooter_range).
+  const turnOnScooterRange = reachField?.turn_on_scooter_range === true;
 
   // Advanced strategies route through an inline acknowledgment the first time per session: the
   // staged (Half-Minus) presets AND Free, which lets the diver set reserves by hand (incl. a
@@ -768,6 +787,40 @@ export function GasPlanPanel() {
                         {formatGasLength(routeAvgDepth, units, 1)}
                       </dd>
                     </>
+                  )}
+                  {routeRuntimeMin != null && (
+                    <>
+                      <dt className="opacity-70" title={t('gasPanel.readout.routeRuntimeHint')}>
+                        {t('gasPanel.readout.routeRuntime')}
+                      </dt>
+                      <dd
+                        data-testid="gas-readout-route-runtime"
+                        className="text-right font-mono"
+                        title={t('gasPanel.readout.routeRuntimeHint')}
+                      >
+                        {formatRouteRuntime(routeRuntimeMin)}
+                      </dd>
+                    </>
+                  )}
+                  {hasDpvRig && scooterRangeLimit != null && (
+                    <>
+                      <dt className="opacity-70" title={t('gasPanel.readout.scooterRangeHint')}>
+                        {t('gasPanel.readout.scooterRange')}
+                      </dt>
+                      <dd data-testid="gas-readout-scooter-range" className="text-right font-mono">
+                        {formatGasLength(scooterDistance ?? 0, units)}
+                        {' / '}
+                        {formatGasLength(scooterRangeLimit, units)}
+                      </dd>
+                    </>
+                  )}
+                  {hasDpvRig && turnOnScooterRange && (
+                    <div
+                      data-testid="gas-readout-scooter-turn-warning"
+                      className="col-span-2 text-warning"
+                    >
+                      {t('gasPanel.readout.turnOnScooterRange')}
+                    </div>
                   )}
                 </>
               )}

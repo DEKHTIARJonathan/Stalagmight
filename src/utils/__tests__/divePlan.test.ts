@@ -12,6 +12,10 @@ const baseInputs = (): DivePlanInputs => ({
   gasConfig: structuredClone(defaultConfig.gas),
   stageDropOverrides: [null, { section_id: 1, station_index: 3 }],
   markedPoints: [{ station: { section_id: 2, station_index: 1 }, label: 'photo' }],
+  segments: [
+    { speed_m_per_min: 10, on_scooter: false },
+    { speed_m_per_min: 30, on_scooter: true },
+  ],
 });
 
 describe('divePlanSnapshotOf', () => {
@@ -23,6 +27,9 @@ describe('divePlanSnapshotOf', () => {
     expect(snap.gas_config).toBe(inputs.gasConfig);
     expect(snap.stage_drop_overrides).toBe(inputs.stageDropOverrides);
     expect(snap.waypoints).toBe(inputs.waypoints);
+    // Segments are a plain gas input (no free-text label to trim), so unlike marked_points they
+    // round-trip by reference.
+    expect(snap.segments).toBe(inputs.segments);
     // Marked points are the ONE exception: they are rebuilt so the labels can be trimmed here
     // rather than in the store setter, which runs per keystroke against a controlled input and
     // would eat the space the user just typed. Structural equality, not identity.
@@ -38,6 +45,7 @@ describe('divePlanSnapshotOf', () => {
         'gas_config',
         'marked_points',
         'origin',
+        'segments',
         'stage_drop_overrides',
         'waypoints',
       ].sort()

@@ -2,15 +2,16 @@ import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CylindersTable } from './CylindersTable';
 import { ProfileChart } from './ProfileChart';
+import { SegmentsTable } from './SegmentsTable';
 
-type PlanTab = 'cylinders' | 'profile';
+type PlanTab = 'cylinders' | 'segments' | 'profile';
 
 /**
  * The Plan-mode bottom panel (#38): tabbed tabular data that replaces the survey data
- * table while planning. "Cylinders" is the rig editor; "Profile" is the anticipated
- * depth/distance/runtime profile of the planned route (#299), drawn from the round-trip
- * series the gas engine now publishes on `GasReachField.route_profile`. Tab state is
- * local + transient (never persisted).
+ * table while planning. "Cylinders" is the rig editor; "Segments" (#317) is the per-span
+ * pace/propulsion editor; "Profile" is the anticipated depth/distance/runtime profile of the
+ * planned route (#299), drawn from the round-trip series the gas engine publishes on
+ * `GasReachField.route_profile`. Tab state is local + transient (never persisted).
  */
 export function PlanTablesPanel() {
   const { t } = useTranslation();
@@ -21,13 +22,22 @@ export function PlanTablesPanel() {
         <TabButton active={tab === 'cylinders'} onClick={() => setTab('cylinders')} testId="plan-tab-cylinders">
           {t('planTables.tabs.cylinders')}
         </TabButton>
+        <TabButton active={tab === 'segments'} onClick={() => setTab('segments')} testId="plan-tab-segments">
+          {t('planTables.tabs.segments')}
+        </TabButton>
         <TabButton active={tab === 'profile'} onClick={() => setTab('profile')} testId="plan-tab-profile">
           {t('planTables.tabs.profile')}
         </TabButton>
       </div>
       {/* The chart sizes itself to the panel, so its pane must not scroll - it clips instead. */}
-      <div className={`flex-1 min-h-0 ${tab === 'cylinders' ? 'overflow-auto' : 'overflow-hidden'}`}>
-        {tab === 'cylinders' ? <CylindersTable /> : <ProfileChart />}
+      <div className={`flex-1 min-h-0 ${tab === 'profile' ? 'overflow-hidden' : 'overflow-auto'}`}>
+        {tab === 'cylinders' ? (
+          <CylindersTable />
+        ) : tab === 'segments' ? (
+          <SegmentsTable />
+        ) : (
+          <ProfileChart />
+        )}
       </div>
     </div>
   );

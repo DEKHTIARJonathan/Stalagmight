@@ -51,6 +51,12 @@ describe('buildGasReachFeatureState', () => {
     route_profile: [],
     stage_drop_route_indices: [],
     waypoint_route_indices: [],
+    // #317: no scooter on this fixture - the overlay it exercises is gas-only.
+    scooter_distance_m: 0,
+    scooter_range_limit_m: null,
+    scooter_drop_ref: null,
+    route_runtime_min: null,
+    turn_on_scooter_range: false,
   };
 
   it('maps each reachable station to its litres-to-reach, keyed by encodeFeatureId', () => {

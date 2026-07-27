@@ -44,6 +44,8 @@ export function useGasPlanDropMarkers({
   const { t } = useTranslation();
   const gasDropMarkersRef = useRef<maplibregl.Marker[]>([]);
   const gasFinalTurnMarkerRef = useRef<maplibregl.Marker | null>(null);
+  /// Where the scooters are parked (#317) - derived by the engine, never dragged.
+  const gasScooterDropMarkerRef = useRef<maplibregl.Marker | null>(null);
   // Same story as the turn-frontier dots (`pendingTurnFocusRef` in MapCanvas): a keyboard-nudged /
   // reset ▼ drop marker (#246) rebuilds every drop marker on recompute, so remember the drop INDEX
   // (stable across the move - the ref itself shifts) to restore focus to its rebuilt element.
@@ -228,11 +230,39 @@ export function useGasPlanDropMarkers({
       }
     }
 
+    // Where the scooters end up (#317). Non-interactive, like the final-turn marker and for the
+    // same reason: this point is DERIVED by the engine (the boundary after the last scootered
+    // segment) rather than placed, so there is nothing here to drag. Move it by changing which
+    // segments are flown on the scooter in the segments table; dragging this would be a second,
+    // conflicting way to express the same state.
+    const parkRef = gasReachField.scooter_drop_ref;
+    if (parkRef) {
+      const lngLat = lngLatFor(parkRef);
+      if (lngLat) {
+        const el = document.createElement('div');
+        el.setAttribute('data-testid', 'gas-scooter-drop-marker');
+        el.title = t('gasPanel.map.scooterDropTooltip');
+        el.style.cssText =
+          'width:18px;height:18px;border-radius:3px;border:2px solid #ffffff;' +
+          'background:#1f7a8c;box-shadow:0 0 4px rgba(0,0,0,0.7);pointer-events:none;' +
+          'display:flex;align-items:center;justify-content:center;';
+        el.innerHTML =
+          '<svg width="12" height="12" viewBox="0 0 24 24" aria-hidden="true">' +
+          '<path d="M4 14h16M7 14a3 3 0 106 0M14 14a3 3 0 106 0M6 14V9h8l3 5" ' +
+          'fill="none" stroke="#ffffff" stroke-width="2.5" stroke-linecap="round"/></svg>';
+        gasScooterDropMarkerRef.current = new maplibregl.Marker({ element: el })
+          .setLngLat(lngLat)
+          .addTo(mapInst);
+      }
+    }
+
     return () => {
       for (const m of gasDropMarkersRef.current) m.remove();
       gasDropMarkersRef.current = [];
       gasFinalTurnMarkerRef.current?.remove();
       gasFinalTurnMarkerRef.current = null;
+      gasScooterDropMarkerRef.current?.remove();
+      gasScooterDropMarkerRef.current = null;
     };
     // NB: intentionally NOT keyed on `gasStageDropOverrides`: rebuild the ▼ markers only when the
     // recomputed FIELD lands (mirrors the turn markers). Keying on the override would rebuild against

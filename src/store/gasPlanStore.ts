@@ -9,6 +9,7 @@ import type {
   GasConfig,
   GasReachField,
   MarkedPoint,
+  PlanSegment,
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
@@ -20,6 +21,14 @@ import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
  * building a plan the app will later refuse to store.
  */
 const MAX_WAYPOINTS = 64;
+/**
+ * Upper bound on a plan's per-span pace/propulsion segments (#317), mirroring the Rust
+ * `MAX_SEGMENTS` (`core/state/dive_plan.rs`). Not independently enforced anywhere below:
+ * `segments` is always exactly `waypoints.length + 1` (the length-sync invariant the
+ * setters below maintain), so the `MAX_WAYPOINTS` cap on way points already caps this too.
+ * Kept as its own named constant so a reader doesn't have to re-derive the relationship.
+ */
+export const MAX_SEGMENTS = MAX_WAYPOINTS + 1;
 const MAX_MARKED_POINTS = 500;
 
 /**
@@ -45,6 +54,12 @@ function defaultCylinders(): Cylinder[] {
   return al80 ? [cylinderFromPreset(al80), cylinderFromPreset(al80)] : [];
 }
 
+/** A fresh span's default pace/propulsion (#317): the configured swim speed, no scooter -
+ *  the same assumption the engine already made about every leg before segments existed. */
+function defaultSegment(): PlanSegment {
+  return { speed_m_per_min: defaultConfig.gas.swim_speed_m_per_min, on_scooter: false };
+}
+
 interface GasPlanState {
   /** Penetration origin; `null` = the zero-datum entrance default. */
   origin: StationRef | null;
@@ -54,6 +69,11 @@ interface GasPlanState {
    *  endpoint. The engine re-bases the whole reach field through them, so adding one costs
    *  real gas rather than only re-drawing the route line. */
   waypoints: StationRef[];
+  /** #317: per-span pace/propulsion, one entry per span between way points - always exactly
+   *  `waypoints.length + 1` (span 0 runs from the origin, the last covers the open field past
+   *  the final way point). A GAS INPUT like way points themselves: the engine derates in-leg gas
+   *  consumption while `on_scooter`, so every setter nulls `reachField` the same way. */
+  segments: PlanSegment[];
   /** #298: arbitrary map annotations saved with the plan (a photo stop, a lead, a restriction).
    *  Never sent to the gas engine - marking a station cannot change the route or the budget. */
   markedPoints: MarkedPoint[];
@@ -107,6 +127,9 @@ interface GasPlanState {
   /** #298: swap way point `index` with its neighbour (`-1` earlier, `+1` later). Out-of-range
    *  moves are a no-op, so the panel's arrows need no bounds logic of their own. */
   moveWaypoint: (index: number, delta: number) => void;
+  /** #317: replace the whole segment list (the Segments-tab idiom - mirrors `setCylinders`: the
+   *  caller computes the new array, the store just nulls the stale gas-dependent state). */
+  setSegments: (segments: PlanSegment[]) => void;
   /** #298: drop a marked point on `ref`. */
   addMarkedPoint: (ref: StationRef) => void;
   /** #298: remove marked point `index`. */
@@ -163,6 +186,7 @@ const initialState = (): Pick<
   | 'origin'
   | 'endpoint'
   | 'waypoints'
+  | 'segments'
   | 'markedPoints'
   | 'diver'
   | 'cylinders'
@@ -178,6 +202,7 @@ const initialState = (): Pick<
   origin: null,
   endpoint: null,
   waypoints: [],
+  segments: [defaultSegment()],
   markedPoints: [],
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
@@ -242,18 +267,43 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
         (w) => w.section_id === ref.section_id && w.station_index === ref.station_index,
       );
       if (dup || s.waypoints.length >= MAX_WAYPOINTS) return {};
-      return { waypoints: [...s.waypoints, ref], reachField: null, stageDropOverrides: [] };
+      // A new way point is always appended at the end of the visit order, so it always splits
+      // the LAST span (the open field past the previous final way point) into two: the leg
+      // leading up to it and the leg leading on from it. Both inherit the split segment's
+      // pace/propulsion - the diver hasn't said anything different about either half yet.
+      const splitSeg = s.segments[s.segments.length - 1] ?? defaultSegment();
+      return {
+        waypoints: [...s.waypoints, ref],
+        segments: [...s.segments.slice(0, -1), splitSeg, { ...splitSeg }],
+        reachField: null,
+        stageDropOverrides: [],
+      };
     }),
   removeWaypoint: (index) =>
-    set((s) =>
-      index < 0 || index >= s.waypoints.length
-        ? {}
-        : {
-            waypoints: s.waypoints.filter((_w, i) => i !== index),
-            reachField: null,
-            stageDropOverrides: [],
-          },
-    ),
+    set((s) => {
+      if (index < 0 || index >= s.waypoints.length) return {};
+      // Dropping way point `index` collapses the two spans it used to separate - segment
+      // `index` (leading into it) and segment `index + 1` (leading on from it) - into one.
+      // The merge takes the SLOWER of the two speeds and requires BOTH halves to have been
+      // scootered: the safe direction, mirroring the backend's own reconciliation of a stale
+      // way point on load (`merge_segments_for_surviving_waypoints`, core/state/dive_plan.rs).
+      // Either half taken alone would understate the gas the merged span actually costs.
+      const before = s.segments[index];
+      const after = s.segments[index + 1];
+      const merged: PlanSegment =
+        before && after
+          ? {
+              speed_m_per_min: Math.min(before.speed_m_per_min, after.speed_m_per_min),
+              on_scooter: before.on_scooter && after.on_scooter,
+            }
+          : (before ?? after ?? defaultSegment());
+      return {
+        waypoints: s.waypoints.filter((_w, i) => i !== index),
+        segments: [...s.segments.slice(0, index), merged, ...s.segments.slice(index + 2)],
+        reachField: null,
+        stageDropOverrides: [],
+      };
+    }),
   moveWaypoint: (index, delta) =>
     set((s) => {
       const to = index + delta;
@@ -264,8 +314,19 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
       const moved = next[index]!;
       next[index] = next[to]!;
       next[to] = moved;
+      // `segments` is deliberately NOT permuted (#317). A segment is bounded by TWO way points, so
+      // there is no segment that "belongs to" the one being moved and could travel with it. The
+      // pace pattern is therefore POSITIONAL: span 1 keeps its speed and propulsion whatever the
+      // diver reorders the route into. Length-sync holds trivially since a swap changes no counts.
       return { waypoints: next, reachField: null, stageDropOverrides: [] };
     }),
+  // A segment is a GAS INPUT: its speed divides straight into every edge cost on that span
+  // (`gas = rmv x ata(depth) x length / speed`), so a slower span costs more gas and reaches less
+  // far. `on_scooter` spends the rig's range but does NOT derate the breathing rate - scootering
+  // gets no reduced-RMV credit (PRD section 10), which is the conservative direction. Either way
+  // the field is stale, so this nulls `reachField` and clears `stageDropOverrides` exactly like
+  // `setCylinders`/`setGasConfig`.
+  setSegments: (segments) => set({ segments, reachField: null, stageDropOverrides: [] }),
   addMarkedPoint: (ref) =>
     set((s) =>
       s.markedPoints.length >= MAX_MARKED_POINTS
@@ -324,6 +385,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
       cylinders: snapshot.cylinders,
       gasConfig: snapshot.gas_config,
       stageDropOverrides: snapshot.stage_drop_overrides,
+      segments: snapshot.segments,
       reachField: null,
       loadedPlanId: planId,
       loadedPlanBaseline: snapshot,

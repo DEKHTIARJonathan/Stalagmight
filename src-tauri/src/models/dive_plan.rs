@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 use crate::config::GasConfig;
-use crate::models::{Cylinder, Diver, StationRef};
+use crate::models::{Cylinder, Diver, PlanSegment, StationRef};
 
 /// Payload schema version stamped into every saved snapshot. Bump only on a
 /// breaking change to `DivePlanSnapshot`; additive changes need no bump because
@@ -62,6 +62,17 @@ pub struct DivePlanSnapshot {
     /// Map annotations saved with this plan (#298); never an input to the gas engine.
     #[serde(default)]
     pub marked_points: Vec<MarkedPoint>,
+    /// Per-span pace and propulsion (#317). Positional against `waypoints`, NOT a
+    /// `StationKey`-anchored reference: segment `k` covers the span from way point
+    /// `k-1` to way point `k` (with `k = 0` running from origin and the last segment
+    /// covering the open reach field past the final way point), so there are always
+    /// `waypoints.len() + 1` of them. Because a segment names a SPAN rather than a
+    /// station, it carries no station of its own to canonicalize - unlike
+    /// origin/endpoint/waypoints it needs no `StationKey` round trip on save/load; a
+    /// dropped way point instead triggers a segment MERGE (see
+    /// `core::state::dive_plan::resolve_persisted`).
+    #[serde(default)]
+    pub segments: Vec<PlanSegment>,
 }
 
 /// A dive plan's dropdown row: identity + name + timestamps (RFC3339). Carries no
@@ -108,6 +119,10 @@ mod tests {
             "marked_points": [
                 { "station": { "section_id": 2, "station_index": 1 }, "label": "photo" },
                 { "station": { "section_id": 2, "station_index": 4 } }
+            ],
+            "segments": [
+                { "speed_m_per_min": 10.0, "on_scooter": true },
+                { "speed_m_per_min": 15.0, "on_scooter": false }
             ]
         })
         .to_string()
@@ -127,12 +142,17 @@ mod tests {
         assert_eq!(snap.marked_points[0].label.as_deref(), Some("photo"));
         // A bare pin carries no label - the field defaults rather than failing the parse.
         assert!(snap.marked_points[1].label.is_none());
+        assert_eq!(snap.segments.len(), 2);
+        assert_eq!(snap.segments[0].speed_m_per_min, 10.0);
+        assert!(snap.segments[0].on_scooter);
+        assert!(!snap.segments[1].on_scooter);
         // Re-serialize and reload: the round trip is lossless for the known fields.
         let again: DivePlanSnapshot =
             serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
         assert_eq!(again.endpoint.unwrap().station_index, 5);
         assert_eq!(again.waypoints, snap.waypoints);
         assert_eq!(again.marked_points, snap.marked_points);
+        assert_eq!(again.segments, snap.segments);
     }
 
     #[test]
@@ -163,5 +183,7 @@ mod tests {
         // failing the parse, which is why the schema version did not need a bump.
         assert!(snap.waypoints.is_empty());
         assert!(snap.marked_points.is_empty());
+        // Same for a plan written before #317: no segments, no bump needed either.
+        assert!(snap.segments.is_empty());
     }
 }

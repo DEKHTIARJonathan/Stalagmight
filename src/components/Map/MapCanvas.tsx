@@ -474,6 +474,7 @@ function MapCanvas() {
     origin: gasOrigin,
     endpoint: gasEndpoint,
     waypoints: gasWaypoints,
+    segments: gasSegments,
     markedPoints: gasMarkedPoints,
     diver: gasDiver,
     cylinders: gasCylinders,
@@ -488,6 +489,7 @@ function MapCanvas() {
       origin: s.origin,
       endpoint: s.endpoint,
       waypoints: s.waypoints,
+      segments: s.segments,
       markedPoints: s.markedPoints,
       diver: s.diver,
       cylinders: s.cylinders,
@@ -1973,6 +1975,9 @@ function MapCanvas() {
         // Ordered way points (#298): the engine re-bases the whole field through them, so this is
         // a gas input, not a drawing hint.
         waypoints: gasWaypoints,
+        // Per-span pace/propulsion (#317): also a gas input - the engine derates in-leg
+        // consumption while a span is `on_scooter`.
+        segments: gasSegments,
         diver: gasDiver,
         cylinders: gasCylinders,
         gasConfig: gasPlanConfig,
@@ -1991,7 +1996,7 @@ function MapCanvas() {
         if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasEndpoint, gasWaypoints, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasOrigin, gasEndpoint, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.
