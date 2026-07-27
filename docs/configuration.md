@@ -1,12 +1,19 @@
 # Stalagmight Configuration
 
+The reference for `config.toml`. Ground truth is the `Config` struct in
+`src-tauri/src/config/types.rs` plus the defaults in
+`src-tauri/src/config/defaults.rs` - change those and this file together.
+
 ## Config File Location
+
+The directory is Tauri's per-app config dir, named for the bundle identifier
+(`com.stalagmight.desktop`).
 
 | Platform | Path |
 |----------|------|
-| Linux | `~/.config/stalagmight/config.toml` |
-| macOS | `~/Library/Application Support/stalagmight/config.toml` |
-| Windows | `%APPDATA%\stalagmight\config.toml` |
+| Linux | `~/.config/com.stalagmight.desktop/config.toml` |
+| macOS | `~/Library/Application Support/com.stalagmight.desktop/config.toml` |
+| Windows | `%APPDATA%\com.stalagmight.desktop\config.toml` |
 
 ## Key Config Options
 
@@ -14,7 +21,7 @@
 [general]
 auto_save = true                    # Enable auto-save after modifications
 recent_projects = []                # List of recently opened project paths
-recent_projects_max = 10            # Maximum recent projects to track
+recent_projects_max = 20            # Maximum recent projects to track
 locale = "system"                   # "system" or a specific locale tag like "en-US"
 number_format = "locale"            # "locale" (follow language) or a locale tag like "de-DE"
 date_format = "locale"              # "locale" (follow language) or a locale tag like "en-GB"
@@ -26,13 +33,18 @@ angle = "degrees"                   # degrees, gradians
 [display]
 default_background = "#1a1a2e"      # Map background color
 
+[section_colors]
+# Colors handed to new sections, in order; wraps around when all are used
+palette = ["#4ecdc4", "#ff6b6b", "#95e1d3", "#f38181",
+           "#aa96da", "#fcbad3", "#a8d8ea", "#ffcb77"]
+
 [appearance]
-theme = "auto"                      # "dark", "light", or "auto" (follows OS preference)
+theme = "dark"                      # "dark", "light", or "auto" (follows OS preference)
 day_color_theme = "light"           # Color palette for light/day mode
-night_color_theme = "dark"          # Color palette for dark/night mode
+night_color_theme = "cave"          # Color palette for dark/night mode
 # Available color themes:
-#   dark, light, cave, dracula, one_dark,
-#   solarized_light, catppuccin_latte, nord, catppuccin_mocha
+#   dark, light, cave, dracula, one_dark, solarized_light,
+#   catppuccin_latte, nord, catppuccin_mocha, kaleido_eink
 
 [syntactic_highlighting]
 level = "full"                      # "off", "toolbar_only", "icons", or "full" (default)
@@ -44,19 +56,25 @@ preset = "default"                  # "default", "deuteranopia", "protanopia", "
 # station = "#36b96a"
 
 [import]
-overlap_mode = "skip"               # How to handle overlapping shots during import: "skip", "replace", "append"
+# Which data wins where an imported section overlaps existing shots:
+#   "import_data" (use the orphan's), "existing_data" (use the target's),
+#   "interpolate" (average), "keep_both" (mark the duplicate as reference)
+overlap_mode = "import_data"
 
 [placement_suggestion]
-azimuth_sigma = 5.0                 # Sigma for azimuth error (degrees)
-length_sigma = 0.3                  # Sigma for length error (meters)
-depth_sigma = 0.3                   # Sigma for depth error (meters)
-azimuth_weight = 1.0                # Weight for azimuth score component
-length_weight = 1.0                 # Weight for length score component
-depth_in_weight = 1.0               # Weight for depth_in score component
-depth_out_weight = 1.0              # Weight for depth_out score component
-min_shot_score = 0.1                # Minimum per-shot score to continue matching
-min_aggregate_score = 0.3           # Minimum aggregate score to include a suggestion
+azimuth_sigma = 18.0                # Sigma for azimuth error (degrees)
+length_sigma = 0.8                  # Sigma for length error (meters)
+depth_sigma = 0.35                  # Sigma for depth error (meters)
+azimuth_weight = 0.35               # Weight for azimuth score component
+length_weight = 0.25                # Weight for length score component
+depth_in_weight = 0.20              # Weight for depth_in score component
+depth_out_weight = 0.20             # Weight for depth_out score component
+min_shot_score = 0.15               # Minimum per-shot score to continue matching
+min_aggregate_score = 0.45          # Minimum aggregate score to include a suggestion
 max_reference_shots = 5             # Maximum reference shots to try from each leaf
+# Further cutoffs and penalties (max_suggestions, min_partial_ratio,
+# single_shot_penalty, max_azimuth_error_*, max_depth_error,
+# max_length_error_*) are in config/types.rs.
 
 [map]
 satellite_provider = "esri"         # Tile provider (selects from backend registry via get_tile_providers IPC)
@@ -81,6 +99,11 @@ enabled_measure = true              # Enable snap-to-station in measure tool
 tile_cache_enabled = true           # Cache satellite tiles for offline use
 tile_cache_max_mb = 500             # Maximum cache size in MB
 tile_ttl_days = 30                  # Days before tiles are stale
+# Per-provider override. Note: the default config ships esri (the default
+# provider) with offline_caching = false, so satellite tiles are NOT cached
+# out of the box - flip this to opt in.
+# [cache.providers.esri]
+# offline_caching = false
 
 [global_view]
 fps_threshold = 30                  # FPS below which auto-throttle activates
@@ -88,14 +111,82 @@ tolerance = 0.5                     # GeoJSON simplification tolerance (normal)
 throttle_tolerance = 1.0            # GeoJSON simplification tolerance (throttled)
 
 [validation]
-# Validation thresholds for warnings
+warn_shot_length_min = 0.3              # Flag shots shorter than this (meters)
+warn_shot_length_max = 50.0             # Flag shots longer than this (meters)
+warn_depth_change_per_shot_max = 10.0   # Flag depth change over this per shot (meters)
+warn_azimuth_deviation_max = 30.0       # Flag azimuth deviation over this (degrees)
+azimuth_diff_threshold = 20.0           # Flag when |azimuth in/out difference - 180| exceeds this (degrees)
+pitch_diff_threshold = 10.0             # Flag when the two recorded inclination legs disagree by more (degrees)
+inclination_depth_diff_threshold = 15.0 # Flag recorded inclination vs the one implied by length + depth change (degrees)
+
+[closure_adjustment]
+base_sigma_length_m = 0.05          # Per-shot length sigma feeding the least-squares weights
+base_sigma_azimuth_deg = 1.0        # Per-shot azimuth sigma (degrees)
+base_sigma_depth_m = 0.05           # Per-shot depth sigma (meters)
+
+[panels]
+sections_panel_width = 250          # Pixels (clamped to 150-400 on load)
+detail_panel_width = 300            # Pixels (clamped to 200-500)
+data_table_height = 200             # Pixels (clamped to 100-500)
+sections_panel_open = true          # Pinned open at startup
+sections_panel_mode = "pin"         # "pin" (click to open, stays open) or "hover"
+detail_panel_open = true
+detail_panel_mode = "pin"
+data_table_open = false
+data_table_mode = "pin"
+# The data table's column layout is persisted here too:
+# data_table_shot_column_order / data_table_station_column_order (empty = declaration
+# order), data_table_shot_hidden_columns (default ["section_id", "shot_id"]),
+# data_table_station_hidden_columns (default ["_x", "_y", "_lat", "_long"]),
+# data_table_azimuth_mode ("avg" | "inout" | "off", default "avg") and
+# data_table_inclination_mode (same values, default "off").
+
+[export]
+default_image_format = "png"        # Default image format for exports
+default_dpi = 300                   # Default raster export DPI
+default_include_satellite = true    # Include satellite imagery
+default_include_grid = false        # Include the grid overlay
+default_include_labels = true       # Include labels
+
+[logging]
+level = "info"                      # trace, debug, info, warn, error
+max_directory_size_mb = 128         # Log directory cap; oldest logs and crash markers pruned first
+
+[gas]
+units = "metric"                    # "metric" (bar / litres) or "imperial" (psi / cuft)
+default_reserve = "all_thirds"      # "all_thirds", "one_stage", "two_stage", or "free"
+swim_speed_m_per_min = 10.0         # Exit-leg swim speed
+survey_rmv_multiplier = 1.0         # Task-loading RMV bump on the survey-in leg (never below 1.0)
+stressed_rmv_multiplier = 1.5       # Stressed-RMV multiplier for bailout / contingency
+jump_rmv_multiplier = 1.5           # Extra RMV on jump legs; stacks multiplicatively with survey_rmv_multiplier
+include_reference_legs = false      # Escape hatch: treat reference shots as swimmable again
+conservative_tank_gas = true        # "Call it an 80" derate instead of precise fill x volume x Z
+# survey_speed_m_per_min (unset = same speed both ways) and the dpv scooter
+# profile (unset = no scooter) are optional; see config/gas.rs.
+
+[gas.reserve_profile]
+stage_reserve_bar = 30.0            # Gas held back in each stage under Half-Minus
+all_thirds_safety_margin_bar = 0.0  # Extra bar held back from every cylinder under All-thirds
+recalc_hold_stage2_bar = 100.0      # Back-gas held pressures for the Phase-2 return-leg
+recalc_hold_stage1_bar = 70.0       # recalc (carried now; that path is not implemented yet)
+
+[speleodb]
+# The auth token is never stored here (OS keychain, or the fallback below).
+# endpoint = "https://www.speleodb.org"   # Unset by default; DEV_SPELEODB_URL overrides at runtime
+# email = "you@example.com"               # Last-used account, prefills the login dialog
+token_fallback = "session_only"     # Without a keychain: "session_only" (memory) or "plaintext" (0600 file)
+insecure_http = false               # Allow an http:// endpoint to a public host; never relaxes TLS verification
+allow_force_edit = false            # Allow editing a remote project without holding the server write lock
+poll_interval_seconds = 60          # Remote-state poll cadence; raised to 30 on load if set lower
 
 [debug.map]
 show_hitboxes = false               # Show red overlay for interaction hitbox areas
 log_hit_detection = false           # Log hit detection events to browser console
 ```
 
-Default config is defined in `src-tauri/src/config/defaults.rs`. See [SPEC.md](SPEC.md) Section 9 for full config schema.
+`[webkit_memory]` exists only for Linux WebKit memory-pressure tuning. It is
+backend-only (kept out of the frontend config types and out of `get_config`), so
+it is not documented here - see the field comment in `src-tauri/src/config/types.rs`.
 
 ## Keyboard Shortcuts
 
@@ -120,9 +211,14 @@ Shortcuts use the format `Modifier+Modifier+Key`, where:
 
 ```toml
 [shortcuts]
-# File - import/export operations (user-configurable)
+# File - project and import/export operations
+new_file = ["Ctrl+N"]
+open_file = ["Ctrl+O"]
+save = ["Ctrl+S"]
+save_as = ["Ctrl+Shift+S"]
 import_dmp = ["Ctrl+I"]
 export = ["Ctrl+E"]
+quit = ["Ctrl+Q"]
 
 # Tools - single letter keys for quick access
 select = ["S"]
@@ -131,14 +227,17 @@ zoom = ["Z"]
 merge = ["M"]
 measure = ["R"]
 move_station = ["T"]
+move_segment = ["V"]
+move_shot = ["G"]
+comment_tool = ["C"]
+move_comment_tool = ["Shift+C"]
 
 # Edit - standard modifier combinations
 undo = ["Ctrl+Z"]
 redo = ["Ctrl+Y", "Ctrl+Shift+Z"]   # Two bindings for redo
-save = ["Ctrl+S"]
 
 # View toggles
-toggle_depth_gradient = ["G"]
+toggle_depth_gradient = ["Shift+D"]
 toggle_grid = ["Shift+G"]
 toggle_satellite = ["B"]
 toggle_station_labels = ["L"]
@@ -158,18 +257,26 @@ toggle_data_table = ["Ctrl+3"]
 
 | Category | Action | Default | Description |
 |----------|--------|---------|-------------|
-| **File** | `import_dmp` | `Ctrl+I` | Import DMP file |
+| **File** | `new_file` | `Ctrl+N` | New project |
+| | `open_file` | `Ctrl+O` | Open project |
+| | `save` | `Ctrl+S` | Save project |
+| | `save_as` | `Ctrl+Shift+S` | Save project as |
+| | `import_dmp` | `Ctrl+I` | Import DMP file |
 | | `export` | `Ctrl+E` | Export project |
+| | `quit` | `Ctrl+Q` | Quit the application |
 | **Tools** | `select` | `S` | Select tool |
 | | `pan` | `P` | Pan/hand tool |
 | | `zoom` | `Z` | Zoom tool |
 | | `merge` | `M` | Merge tool |
 | | `measure` | `R` | Measure tool |
 | | `move_station` | `T` | Move station tool |
+| | `move_segment` | `V` | Move segment tool |
+| | `move_shot` | `G` | Move shot tool |
+| | `comment_tool` | `C` | Comment tool |
+| | `move_comment_tool` | `Shift+C` | Move comment tool |
 | **Edit** | `undo` | `Ctrl+Z` | Undo last action |
 | | `redo` | `Ctrl+Y`, `Ctrl+Shift+Z` | Redo last undone action |
-| | `save` | `Ctrl+S` | Save project |
-| **View** | `toggle_depth_gradient` | `G` | Toggle depth gradient coloring |
+| **View** | `toggle_depth_gradient` | `Shift+D` | Toggle depth gradient coloring |
 | | `toggle_grid` | `Shift+G` | Toggle grid overlay |
 | | `toggle_satellite` | `B` | Toggle satellite imagery |
 | | `toggle_station_labels` | `L` | Toggle station name labels |
@@ -190,8 +297,11 @@ The following shortcuts are reserved and cannot be reassigned:
 |----------|--------|
 | `Escape` | Close dialogs, clear selection, cancel operations |
 | `Delete` / `Backspace` | Delete selected item (with confirmation) |
+| `Tab` / `Enter` | UI navigation |
 | `Ctrl+A` | Select all stations |
 | `Ctrl+,` (`Cmd+,` on macOS) | Open Settings |
+| `?` | Keyboard shortcuts overlay |
+| `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom the interface in / out / reset |
 
 ### Shortcut Feedback
 
@@ -225,15 +335,18 @@ Missing shortcut fields are filled with defaults during config loading.
 
 ## Deprecated Settings
 
-The following settings have been removed and migrated to new locations:
+The old top-level `[snap]` block is migrated on load (`Config::migrate_legacy`),
+and only while `map.snap` is still at its defaults. The `display.*` keys were
+removed outright: an old config still loads, but the values are ignored rather
+than carried over.
 
-| Old Setting | New Setting |
-|-------------|-------------|
-| `display.station_size` | `map.station.radius` |
-| `display.line_thickness` | `map.shot.width` |
-| `snap.enabled_merge` | `map.snap.enabled_merge` |
-| `snap.enabled_measure` | `map.snap.enabled_measure` |
-| `snap.threshold_pixels` | `map.snap.threshold` |
+| Old Setting | Replacement | Migrated on load |
+|-------------|-------------|------------------|
+| `display.station_size` | `map.station.radius` | no |
+| `display.line_thickness` | `map.shot.width` | no |
+| `snap.enabled_merge` | `map.snap.enabled_merge` | yes |
+| `snap.enabled_measure` | `map.snap.enabled_measure` | yes |
+| `snap.threshold_pixels` | `map.snap.threshold` | yes |
 
 ## Settings Dialog
 
@@ -258,8 +371,8 @@ Logs are written using the `tracing` crate with `tracing-appender` for file outp
 
 | Platform | Log Path |
 |----------|----------|
-| Linux | `~/.local/share/stalagmight/logs/` |
-| macOS | `~/Library/Application Support/stalagmight/logs/` |
-| Windows | `%APPDATA%\stalagmight\logs\` |
+| Linux | `~/.local/share/com.stalagmight.desktop/logs/` |
+| macOS | `~/Library/Application Support/com.stalagmight.desktop/logs/` |
+| Windows | `%LOCALAPPDATA%\com.stalagmight.desktop\logs\` |
 
-Log level is configurable in the config file.
+Level and the directory size cap are the `[logging]` settings above.
