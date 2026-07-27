@@ -1816,7 +1816,13 @@ impl AppState {
         let (_, commits) = self
             .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
-        Ok(commits.into_iter().map(SpeleoRevision::from).collect())
+        // Display ordering + the creation-commit filter live in `sync` so they are
+        // unit-tested offline, and so it is obvious they touch ONLY this view: every
+        // fence reads the raw history through `speleodb_server_head` directly.
+        Ok(sync::display_history(commits)
+            .into_iter()
+            .map(SpeleoRevision::from)
+            .collect())
     }
 
     /// [#218] Check the open remote project's working copy out to a past revision.

@@ -474,6 +474,71 @@ pub(crate) fn poll_verdict(
     }
 }
 
+/// The revision history as a person should SEE it: newest first, ordered by the
+/// parent chain rather than by timestamp, and without SpeleoDB's own
+/// project-creation commit.
+///
+/// Two complaints, one cause. The server orders by `authored_date`, and project
+/// creation plus the first upload land inside the same second - so the tie breaks
+/// arbitrarily and the creation commit can sort ABOVE the publish that came after
+/// it. That is the same unreliable ordering every fence in this module already
+/// refuses to trust, so the fix is the same: walk the parent chain, which has no
+/// ties to break.
+///
+/// The root is dropped because it is not a revision of the survey. SpeleoDB writes
+/// it when the project is created, before any data exists, authored by the service
+/// account rather than by anyone who has touched the cave. In a list whose two
+/// actions are View and Revert, offering it invites someone to roll their project
+/// back to nothing.
+///
+/// Falls back to the server's order when the chain cannot be walked - a fork, a
+/// merge, or a commit outside the fetched range. The completeness check is the
+/// point of that: a walk that does not account for every commit would silently
+/// HIDE real revisions, which is far worse than showing them in a debatable order.
+/// The root is dropped either way.
+#[must_use]
+pub(crate) fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
+    let by_id: HashMap<&str, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.as_str(), i))
+        .collect();
+
+    let walked = tip_of(&commits)
+        .and_then(|tip| {
+            let mut order = Vec::with_capacity(commits.len());
+            let mut cursor = tip;
+            loop {
+                let &i = by_id.get(cursor)?;
+                order.push(i);
+                if order.len() > commits.len() {
+                    return None; // cycle / runaway guard
+                }
+                match commits[i].parent_ids.first() {
+                    Some(parent) => cursor = parent.as_str(),
+                    None => break, // reached the root
+                }
+            }
+            Some(order)
+        })
+        // Every commit must be accounted for, or we would be hiding revisions.
+        .filter(|order| order.len() == commits.len());
+
+    let order = walked.unwrap_or_else(|| (0..commits.len()).collect());
+    let mut slots: Vec<Option<RevisionCommit>> = commits.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(order.len());
+    for i in order {
+        if let Some(commit) = slots[i].take() {
+            // Parentless == SpeleoDB's "[Automated] Project Creation" commit.
+            if commit.parent_ids.is_empty() {
+                continue;
+            }
+            out.push(commit);
+        }
+    }
+    out
+}
+
 /// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
 /// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
 /// "this session's push"; a second session under the same account editing the same
@@ -490,7 +555,7 @@ pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_emai
 #[cfg(test)]
 mod tests {
     use super::{
-        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice,
+        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
         edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, tip_of,
         AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
     };
@@ -1030,6 +1095,74 @@ mod tests {
             poll_verdict(Some("c0"), None, true, &[], ME, Some(T1)),
             RemoteState::Unknown
         );
+    }
+
+    // ---- display_history: what the revision list shows ----
+
+    /// The shape of a real project: SpeleoDB's creation commit, the publish that
+    /// followed it inside the same second, then ordinary edits. The server returns
+    /// these newest-first by `authored_date`, and the tie between the first two
+    /// breaks arbitrarily - here, the wrong way round, exactly as observed live.
+    fn creation_then_publish() -> Vec<RevisionCommit> {
+        vec![
+            commit("8899f253", &["09f326b7"], ME),
+            commit("09f326b7", &["a14d46cf"], ME),
+            // The tie: sorted above the publish it actually precedes.
+            commit("e2ad104b", &[], "contact@speleodb.org"),
+            commit("a14d46cf", &["e2ad104b"], ME),
+        ]
+    }
+
+    #[test]
+    fn display_history_hides_the_project_creation_commit() {
+        // It is not a revision of the survey - it predates any data, and it is
+        // authored by the service account, not by anyone who has been in the cave.
+        // Offering it in a list whose actions are View and Revert invites someone to
+        // roll their project back to an empty one.
+        let shown = display_history(creation_then_publish());
+        assert!(
+            !shown.iter().any(|c| c.id == "e2ad104b"),
+            "the automated creation commit must not be listed"
+        );
+        assert_eq!(shown.len(), 3);
+    }
+
+    #[test]
+    fn display_history_orders_by_ancestry_not_by_a_tied_timestamp() {
+        // The bug this fixes: creation and the first publish share a timestamp, so
+        // the server's `-authored_date` order put the root ABOVE the publish that
+        // descends from it. The parent chain has no tie to break.
+        let shown = display_history(creation_then_publish());
+        let ids: Vec<&str> = shown.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["8899f253", "09f326b7", "a14d46cf"]);
+    }
+
+    #[test]
+    fn display_history_falls_back_rather_than_hiding_revisions() {
+        // A history we cannot walk (here a fork: two leaves, so no single tip) must
+        // still list every real revision. Showing them in a debatable order is a
+        // small cost; silently dropping someone's work from their own history is not.
+        let forked = vec![
+            commit("b1", &["root"], ME),
+            commit("b2", &["root"], ME),
+            commit("root", &[], "contact@speleodb.org"),
+        ];
+        let shown = display_history(forked);
+        let ids: Vec<&str> = shown.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["b1", "b2"],
+            "both branches survive; only the root goes"
+        );
+    }
+
+    #[test]
+    fn display_history_leaves_nothing_for_a_project_that_was_only_created() {
+        // A project created but never pushed to has no survey revisions at all, and
+        // saying so is more honest than listing a commit that holds nothing.
+        let shown = display_history(vec![commit("root", &[], "contact@speleodb.org")]);
+        assert!(shown.is_empty());
+        assert!(display_history(vec![]).is_empty());
     }
 
     // ---- concurrent_session_notice (#193 b8) ----
