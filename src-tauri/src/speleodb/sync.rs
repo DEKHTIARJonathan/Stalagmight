@@ -422,6 +422,25 @@ pub(crate) fn plan_push(
 /// nobody else was involved in. Classifying the gap by authorship keeps the
 /// passive button honest about what Done would actually do on click.
 ///
+/// `we_hold_the_lock` is what makes that authorship test SAFE, and it is not
+/// optional. `author_email == my_email` is a proxy for "this session pushed it",
+/// and a second session signed in as the SAME account breaks the proxy exactly:
+/// its commit reads as ours, so the gap classifies as `Landed` and the mark keeps
+/// its resting state over a genuine conflict - the case
+/// [`concurrent_session_notice`] exists to warn about (#193 b8), ending in Done
+/// superseding the other session's revision with no prompt at any point. Our own
+/// landed-but-unrecorded push can only have been made while we held the
+/// single-writer lock, so requiring it costs the recovery nothing and denies the
+/// same-account session the shortcut.
+///
+/// It also keeps this verdict AGREEING with [`reconcile_verdict`], which has no
+/// authorship recovery. That function drives Start editing - reachable only while
+/// the lock is NOT ours - so the two now answer the same thing in every state a
+/// user can click through. Without the gate the poll could paint the resting,
+/// unbadged mark while the click behind it raised the divergence prompt: the same
+/// passive/active disagreement this function exists to remove, moved from the
+/// badge to the click.
+///
 /// `FailClosed` stays separate from [`reconcile_verdict`]'s handling: a recorded
 /// BASE with no server tip is a transient empty response, and nothing local is at
 /// risk, so it degrades to `Unknown` rather than shouting `Conflict`.
@@ -432,7 +451,7 @@ pub(crate) fn poll_verdict(
     dirty: bool,
     commits: &[RevisionCommit],
     my_email: &str,
-    last_edit_at: Option<&str>,
+    we_hold_the_lock: bool,
 ) -> RemoteState {
     match fence(base, tip, dirty) {
         FenceOutcome::UpToDate => RemoteState::UpToDate,
@@ -448,15 +467,19 @@ pub(crate) fn poll_verdict(
                 RemoteState::Conflict
             }
         }
+        // Not our lock, so a commit in the gap is not ours to explain away - even
+        // when it carries our email. Fail closed to the divergence prompt, which is
+        // also exactly what `reconcile_verdict` will say when the mark is clicked.
+        FenceOutcome::Diverged if !we_hold_the_lock => RemoteState::Conflict,
         FenceOutcome::Diverged => match classify_ancestry(
-            base,
-            tip,
-            commits,
-            my_email,
-            last_edit_at,
-            // Push-start is not persisted, so the freshness fold stays
-            // conservative; only the authorship half of the answer is used here.
-            None,
+            base, tip, commits, my_email,
+            // Both timing inputs are `None` on purpose: only the AUTHORSHIP half of
+            // the answer is read below (`clear_dirty` is destructured away), so
+            // threading a `last_edit_at` that cannot change the verdict would be a
+            // live wire - a later change making it load-bearing in
+            // `classify_ancestry` would silently move this verdict with no test
+            // noticing. `plan_push` is where the freshness fold is actually used.
+            None, None,
         ) {
             // Every commit between BASE and the tip is ours - our push landed.
             // Nothing remote to reconcile, so the button keeps showing the
@@ -1042,8 +1065,47 @@ mod tests {
         // their next click to the divergence dialog.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, Some(T1)),
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
             RemoteState::UpToDate
+        );
+    }
+
+    #[test]
+    fn poll_verdict_reports_a_same_account_second_session_as_a_conflict() {
+        // #193 b8, the case `concurrent_session_notice` warns about. The gap commit
+        // carries OUR email but was pushed by our other session, so the authorship
+        // proxy - "same email means this session pushed it" - is exactly wrong here.
+        // We are not the lock holder, which is what says so: our own unrecorded push
+        // could only have been made while we held the single writer lock.
+        //
+        // Getting this wrong is silent data loss, not a bad badge: the mark keeps
+        // its resting state, the user edits on and presses Done, and `plan_push`
+        // classifies the same gap as `Landed` and supersedes the other session's
+        // revision with no prompt at any point.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_agrees_with_reconcile_verdict_wherever_the_mark_is_clickable() {
+        // The passive mark and the verb behind it must not disagree. `poll_verdict`
+        // has authorship recovery and `reconcile_verdict` (which drives Start
+        // editing) has none, so the recovery is gated on holding the lock -
+        // reachable only when Start editing is NOT the click action. Pin the
+        // agreement: with the lock not ours, both say the same thing.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            RemoteState::Conflict
+        );
+        assert_eq!(
+            reconcile_verdict(Some("c0"), Some("c1"), true, &commits),
+            ReconcileVerdict::Diverged,
+            "a calm, unbadged mark whose click raises the divergence prompt is the \
+             same passive/active split the recovery was added to remove"
         );
     }
 
@@ -1053,7 +1115,7 @@ mod tests {
         // commit sits between BASE and the tip.
         let commits = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, Some(T1)),
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
             RemoteState::Conflict
         );
     }
@@ -1064,7 +1126,7 @@ mod tests {
         // fails closed. The passive button says the same thing Done would.
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), true, &commits, "", Some(T1)),
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, "", true),
             RemoteState::Conflict
         );
     }
@@ -1074,25 +1136,25 @@ mod tests {
         let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
         // base == tip: nothing to reconcile.
         assert_eq!(
-            poll_verdict(Some("c1"), Some("c1"), true, &commits, ME, Some(T1)),
+            poll_verdict(Some("c1"), Some("c1"), true, &commits, ME, true),
             RemoteState::UpToDate
         );
         // Clean copy, tip genuinely descends from BASE: a real pull is available.
         assert_eq!(
-            poll_verdict(Some("c0"), Some("c1"), false, &commits, ME, None),
+            poll_verdict(Some("c0"), Some("c1"), false, &commits, ME, false),
             RemoteState::RemoteAhead
         );
         // Clean copy but BASE is NOT an ancestor (a server-side history rewrite):
         // never advertise a pull the Update verb would immediately fail closed on.
         let forked = vec![commit("x1", &["x0"], ME), commit("x0", &[], ME)];
         assert_eq!(
-            poll_verdict(Some("c0"), Some("x1"), false, &forked, ME, None),
+            poll_verdict(Some("c0"), Some("x1"), false, &forked, ME, false),
             RemoteState::Conflict
         );
         // A recorded BASE with no server tip is a transient empty response, not a
         // conflict - nothing local is at risk of being clobbered.
         assert_eq!(
-            poll_verdict(Some("c0"), None, true, &[], ME, Some(T1)),
+            poll_verdict(Some("c0"), None, true, &[], ME, true),
             RemoteState::Unknown
         );
     }

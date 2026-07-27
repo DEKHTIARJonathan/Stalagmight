@@ -632,15 +632,21 @@ impl AppState {
                                 // error arm below the remote state is Unknown anyway
                                 // (get_revisions would fail the same way get_project
                                 // just did), so skip the doomed extra GET (N5).
+                                let lock_holder = p.active_mutex.map(|m| m.user);
+                                // The lock holder is what licenses the poll's
+                                // authorship recovery, so it has to be read from the
+                                // SAME get_project response the verdict is folded
+                                // from - not re-fetched or inferred.
                                 let remote_state = self.speleodb_remote_state(
                                     &endpoint,
                                     &token,
                                     insecure_http,
                                     &link,
+                                    lock_holder.as_deref(),
                                 );
                                 (
                                     p.permission,
-                                    p.active_mutex.map(|m| m.user),
+                                    lock_holder,
                                     remote_state,
                                     false,
                                     None,
@@ -732,7 +738,17 @@ impl AppState {
         token: &str,
         insecure_http: bool,
         link: &crate::models::SpeleoLink,
+        lock_holder: Option<&str>,
     ) -> RemoteState {
+        let my_email = self.speleodb_my_email().unwrap_or_default();
+        // What licenses the authorship recovery in `poll_verdict`: a commit in the
+        // BASE..tip gap can only be OUR unrecorded push if we were the single
+        // writer when it was made. Both halves are required - the server says the
+        // lock is ours (and a same-account second session reads identically there),
+        // and THIS process opened its own edit gate, which only its own successful
+        // Start editing does. Anything less falls through to the divergence prompt.
+        let we_hold_the_lock = self.edit_enabled()
+            && lock_holder.is_some_and(|holder| holder.eq_ignore_ascii_case(&my_email));
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
         }) {
@@ -741,8 +757,8 @@ impl AppState {
                 tip.as_deref(),
                 link.has_unpushed_edits,
                 &commits,
-                &self.speleodb_my_email().unwrap_or_default(),
-                link.last_edit_at.as_deref(),
+                &my_email,
+                we_hold_the_lock,
             ),
             Err(_) => RemoteState::Unknown,
         }
@@ -5838,8 +5854,11 @@ mod tests {
         ));
 
         // Now the poll's revisions GET returns - resolving a tip that has moved on
-        // by our own commit. Nobody else has touched this project.
-        let verdict = state.speleodb_remote_state(&url, &token, false, &link_before_push);
+        // by our own commit. Nobody else has touched this project, and we are still
+        // the lock holder (push_only keeps the session editing), which is what
+        // licenses the authorship recovery.
+        let verdict =
+            state.speleodb_remote_state(&url, &token, false, &link_before_push, Some(&email));
         assert!(
             !matches!(verdict, RemoteState::Conflict),
             "a tip that moved ahead of a stale BASE by OUR OWN commit must not read as \
