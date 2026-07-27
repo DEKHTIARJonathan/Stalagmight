@@ -3411,9 +3411,14 @@ fn route_profile_outbound_reports_the_same_numbers_the_readout_does() {
 
 #[test]
 fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
-    // Time is not a second, independently-derived axis - it is distance over the same in-leg speed
-    // the engine divided by to get the gas beside it. Pinning `d / in_speed` exactly is what stops
-    // the two axes drifting apart when the config changes.
+    // Time is not a second, independently-derived axis - it is the runtime the engine already
+    // divided by to get the gas beside it.
+    //
+    // ⚠ Pinned to hand-computed constants, NOT to `distance_m / 8.0`. Re-deriving the expected
+    // value with production's own expression proves only that the expression evaluates the same way
+    // twice; it cannot fail for the reason this test is named after. The gas column below is worked
+    // out here from the physics independently (rate = rmv x (1 + avg_depth / 10), gas = rate x
+    // time), so runtime and gas can no longer drift apart without one of them breaking.
     let (project, origin) = linear_descent_project();
     let cfg = GasConfig {
         swim_speed_m_per_min: 20.0,
@@ -3422,12 +3427,52 @@ fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
     };
     let field = plain_field(&project, origin, &cfg);
 
-    for p in outbound(&field) {
-        assert!(
-            (p.elapsed_min - p.distance_m / 8.0).abs() < 1e-9,
-            "outbound runtime is not distance / survey speed at {p:?}"
-        );
+    // 3 legs of 100 m at 8 m/min = 12.5 min each, descending 0 -> 10 -> 20 -> 30 m, on a 20 L/min
+    // diver with the default 1.0 survey RMV multiplier and an unlimited back-gas budget.
+    // Leg gas: 20 x 1.5 x 12.5 = 375, then 20 x 2.5 x 12.5 = 625, then 20 x 3.5 x 12.5 = 875.
+    let expected = [
+        // distance_m, depth_m, elapsed_min, cumulative gas_l
+        (0.0, 0.0, 0.0, 0.0),
+        (100.0, 10.0, 12.5, 375.0),
+        (200.0, 20.0, 25.0, 1000.0),
+        (300.0, 30.0, 37.5, 1875.0),
+    ];
+    let out = outbound(&field);
+    assert_eq!(out.len(), expected.len());
+    for (p, (distance, depth, elapsed, gas)) in out.iter().zip(expected) {
+        assert!((p.distance_m - distance).abs() < 1e-9, "distance at {p:?}");
+        assert!((p.depth_m - depth).abs() < 1e-9, "depth at {p:?}");
+        assert!((p.elapsed_min - elapsed).abs() < 1e-9, "runtime at {p:?}");
+        assert!((p.gas_l - gas).abs() < 1e-6, "gas at {p:?}");
     }
+}
+
+#[test]
+fn route_profile_is_empty_when_the_route_has_no_leg_to_swim() {
+    // A turnaround is necessary but not sufficient. With nothing to breathe the budget is zero,
+    // which the ORIGIN satisfies for free (reaching it costs nothing), so the engine picks the
+    // origin as its own turnaround and the route is one station long. Published, that one point
+    // renders as a dive of zero distance over zero duration - and the exporter would happily write
+    // a valid Subsurface file for it.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let field =
+        project.compute_gas_reach_field(Some(&origin), None, &diver, &[], &GasConfig::default());
+
+    // The degenerate state really is reached - otherwise this test would pass for the wrong reason.
+    // A turnaround IS published (which is what `route_profile` used to gate on, and why it emitted a
+    // one-point series), while `route` - a list of LEGS, `windows(2)` over the stations - is empty
+    // because one station spans none. That is also why `GasPlanPanel`'s `route.length > 0` readout
+    // guard was already correct for this case and needed no change.
+    assert!(field.budget_litres.abs() < 1e-9);
+    assert_eq!(field.final_turn_ref, Some(origin));
+    assert!(field.route.is_empty());
+    // ...and the profile refuses it anyway.
+    assert!(
+        field.route_profile.is_empty(),
+        "a legless route published {} profile point(s)",
+        field.route_profile.len()
+    );
 }
 
 #[test]
@@ -3719,7 +3764,6 @@ fn route_profile_exit_leg_charges_a_jump_the_jump_rmv_bump() {
     // fixtures use only default-kind shots, so dropping the multiplier from the return leg would
     // not fail a single assertion.
     let (project, origin) = project_with_jump_second_leg();
-    let diver = Diver::new(20.0, None).unwrap();
     let cfg = GasConfig {
         swim_speed_m_per_min: 10.0,
         survey_speed_m_per_min: None,

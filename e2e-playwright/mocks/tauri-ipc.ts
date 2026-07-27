@@ -1651,11 +1651,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // route indices exist to remove (a way-point route revisits stations, and `findIndex`
             // matches the first pass). Adequate here because the seeded e2e cave is linear, so no
             // station appears twice - but do not read this as a model of the backend.
+            // NOT filtered: the real engine maps `drop_indices` straight through, so this array is
+            // always the same length as `stage_drop_refs` / `stage_drop_over_reserve`, and the
+            // consumer indexes all three positionally. Dropping a miss would shift every later
+            // entry and silently pin an over-reserve flag to the wrong stage. A miss surfaces as a
+            // visibly wrong -1 instead, which is the direction a mock should fail in.
             const stage_drop_route_indices = stage_drop_refs.map((d) =>
               routeRefsOrdered.findIndex(
                 (r) => r.section_id === d.section_id && r.station_index === d.station_index,
               ),
-            ).filter((j) => j >= 0);
+            );
             const waypoint_route_indices = waypointArgs.map((w) => {
               const j = routeRefsOrdered.findIndex(
                 (r) => r.section_id === w.section_id && r.station_index === w.station_index,

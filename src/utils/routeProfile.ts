@@ -68,7 +68,11 @@ export function buildRouteProfile(
   field: GasReachField | null | undefined,
   axis: ProfileAxis
 ): ProfileGeometry | null {
-  if (!field || field.route_profile.length === 0) {
+  // `< 2`, not `=== 0`: a one-point series is a dive of zero distance over zero duration. The engine
+  // already refuses to publish one, so this is belt-and-braces - but this is also the check that
+  // decides whether the export buttons light up, and offering to write a file describing a dive that
+  // never happened is the failure this guards.
+  if (!field || field.route_profile.length < 2) {
     return null;
   }
   const points = field.route_profile;
@@ -89,7 +93,7 @@ export function buildRouteProfile(
         x: axisValue(point, axis),
         depth_m: point.depth_m,
         ordinal: i,
-        overReserve: field.stage_drop_over_reserve[i] ?? false,
+        overReserve: (field.stage_drop_over_reserve ?? [])[i] ?? false,
       });
     }
   });

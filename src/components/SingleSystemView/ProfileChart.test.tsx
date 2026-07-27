@@ -243,13 +243,32 @@ describe('ProfileChart (#299)', () => {
 
   it('stops the turnaround rule at the profile, not at the plot floor', () => {
     // The turn is not always the deepest point; a full-height rule then hangs below the depth curve
-    // and reads as a drawing error. The fixture's turn IS the deepest point, so assert against the
-    // marker dot rather than a constant - they must terminate together.
-    seed(fakeField());
+    // and reads as a drawing error.
+    //
+    // This needs a fixture where the turn is NOT the deepest point. With the default one (turn ==
+    // deepest) `p.y(turnDepth)` IS the plot floor, so the assertion held for the broken
+    // implementation too - it compared the rule against the marker dot, and production draws both
+    // from the same expression, making it a tautology. Here the turn is at 10 m over a 30 m
+    // maximum, so the correct y2 is a third of the way down and the bug's y2 is the floor.
+    const shallowTurn: RouteProfilePoint[] = [
+      point({ route_index: 0, distance_m: 0, depth_m: 0, elapsed_min: 0 }),
+      point({ route_index: 1, distance_m: 100, depth_m: 30, elapsed_min: 20 }),
+      point({ route_index: 2, distance_m: 200, depth_m: 10, elapsed_min: 40 }),
+      point({ route_index: 1, distance_m: 300, depth_m: 30, elapsed_min: 50, outbound: false }),
+      point({ route_index: 0, distance_m: 400, depth_m: 0, elapsed_min: 60, outbound: false }),
+    ];
+    seed(fakeField({ route_profile: shallowTurn, route_max_depth_m: 30 }));
     render(<ProfileChart />);
     const lineY2 = Number(screen.getByTestId('plan-profile-turn-line').getAttribute('y2'));
+    const lineY1 = Number(screen.getByTestId('plan-profile-turn-line').getAttribute('y1'));
     const dotY = Number(screen.getByTestId('plan-profile-marker-turn').getAttribute('cy'));
+    // The plot floor the broken version reached to: the deepest gridline, whichever tick that is.
+    const depthTicks = screen.getAllByTestId(/^plan-profile-depth-tick-/);
+    const floor = Number(depthTicks[depthTicks.length - 1]?.getAttribute('y')) - 3;
     expect(lineY2).toBeCloseTo(dotY, 5);
+    expect(lineY2).toBeLessThan(floor);
+    // And it is a real rule, not a zero-length one that would trivially satisfy the above.
+    expect(lineY2).toBeGreaterThan(lineY1);
   });
 
   it('recovers when the field flips back to null mid-session', () => {

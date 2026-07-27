@@ -65,6 +65,27 @@ describe('buildRouteProfile', () => {
     expect(buildRouteProfile(field({ route_profile: [] }), 'distance')).toBeNull();
   });
 
+  it('refuses a one-point series, which is a dive of zero distance and zero duration', () => {
+    // This is what decides whether the export buttons light up. A single point comes from a route
+    // with a turnaround but no leg (the origin as its own turnaround, when only the origin is in
+    // budget); offering to write a file for it means offering to export a dive that never happened.
+    const single = field().route_profile.slice(0, 1);
+    expect(single).toHaveLength(1);
+    expect(buildRouteProfile(field({ route_profile: single }), 'distance')).toBeNull();
+    // Two points is a real leg and must still plot - the guard is `< 2`, not "small".
+    const pair = field().route_profile.slice(0, 2);
+    expect(buildRouteProfile(field({ route_profile: pair }), 'distance')).not.toBeNull();
+  });
+
+  it('survives a field whose over-reserve flags are absent', () => {
+    // The sibling marker arrays were already defended; `stage_drop_over_reserve` was read bare, so a
+    // partial field threw a TypeError and blanked the whole tab rather than dropping one flag.
+    const partial = field({ stage_drop_route_indices: [1] }) as unknown as Record<string, unknown>;
+    delete partial.stage_drop_over_reserve;
+    const geo = buildRouteProfile(partial as unknown as GasReachField, 'distance');
+    expect(geo?.markers.find((m) => m.kind === 'stage-drop')?.overReserve).toBe(false);
+  });
+
   it('reads the chosen axis, and the two axes genuinely differ', () => {
     const byDistance = buildRouteProfile(field(), 'distance');
     const byTime = buildRouteProfile(field(), 'time');
@@ -168,12 +189,18 @@ describe('projectProfile', () => {
   });
 
   it('never emits NaN for a degenerate route', () => {
-    // A single-station plan (or an entirely flat one) has a zero span on an axis. Dividing by it
-    // would put every coordinate at NaN, which renders as a silently blank chart rather than an
-    // error - so the spans floor instead.
+    // An entirely flat plan has a zero span on both axes. Dividing by it would put every coordinate
+    // at NaN, which renders as a silently blank chart rather than an error - so the spans floor.
+    //
+    // Two points, not one: a one-point series is refused upstream now. This is the shape that
+    // survives - a route whose only leg is a zero-distance merge/closure tie, which the engine
+    // deliberately charges no distance, time or gas for, so every value collapses to 0.
     const flat = buildRouteProfile(
       field({
-        route_profile: [point({ route_index: 0, distance_m: 0, depth_m: 0, elapsed_min: 0 })],
+        route_profile: [
+          point({ route_index: 0, distance_m: 0, depth_m: 0, elapsed_min: 0 }),
+          point({ route_index: 1, distance_m: 0, depth_m: 0, elapsed_min: 0 }),
+        ],
         route_line_length_m: 0,
       }),
       'distance'

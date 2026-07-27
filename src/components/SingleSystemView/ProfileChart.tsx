@@ -50,8 +50,6 @@ const MIN_LABELLED_HEIGHT = 130;
 export function ProfileChart() {
   const { t } = useTranslation();
   const gradientId = useId();
-  // Subscribe to the theme so getThemeColor re-reads the CSS vars on a light/dark flip.
-  useUIStore((s) => s.resolvedTheme);
   const { reachField, units } = useGasPlanStore(
     useShallow((s) => ({ reachField: s.reachField, units: s.gasConfig.units }))
   );
@@ -262,7 +260,9 @@ function ProfilePlot({
   const p = projectProfile(geo, box);
   // Each `getThemeColor` is a getComputedStyle call, i.e. a forced style recalc. The panel is
   // live-resized at ~60 fps, so reading six of them per render put six recalcs in the drag loop.
-  // `resolvedTheme` is subscribed in the parent, which is what re-runs this on a light/dark flip.
+  // Subscribing here (not in the parent) is what re-runs them on a light/dark flip - this is the
+  // only component that reads a theme colour, so a second subscription upstairs bought nothing but
+  // an extra parent render.
   const theme = useUIStore((s) => s.resolvedTheme);
   const colors = useMemo(
     () => ({
@@ -282,10 +282,8 @@ function ProfilePlot({
   const turn = geo.markers.find((m) => m.kind === 'turn');
   const turnDepth = turn?.depth_m ?? 0;
 
-  const axisSuffix =
-    geo.axis === 'time'
-      ? t('planTables.profile.units.minutes')
-      : t(`common.units.${units === 'imperial' ? 'feet' : 'meters'}`);
+  const lengthUnit = t(`common.units.${units === 'imperial' ? 'feet' : 'meters'}`);
+  const axisSuffix = geo.axis === 'time' ? t('planTables.profile.units.minutes') : lengthUnit;
 
   return (
     <svg
@@ -313,7 +311,7 @@ function ProfilePlot({
       </defs>
 
       {labelled &&
-        yTicks.map((tick) => (
+        yTicks.map((tick, i) => (
           <g key={`y${tick.display}`}>
             <line
               x1={p.plotLeft}
@@ -329,8 +327,13 @@ function ProfilePlot({
               textAnchor="end"
               fontSize="9"
               fill={text}
+              data-testid={`plan-profile-depth-tick-${i}`}
             >
-              {formatFixed(tick.display, undefined, 0)}
+              {/* The depth axis carries its unit on the SURFACE tick, at the top: bare numbers down
+                  one side of a dive chart are exactly the ambiguity a metric/imperial app cannot
+                  afford. It goes on the first tick rather than the deepest because the deepest sits
+                  in the bottom-left corner, hard against the x axis's own first label. */}
+              {`${formatFixed(tick.display, undefined, 0)}${i === 0 ? ` ${lengthUnit}` : ''}`}
             </text>
           </g>
         ))}
@@ -393,16 +396,21 @@ function ProfilePlot({
       )}
 
       {labelled &&
-        xTicks.map((tick) => (
+        xTicks.map((tick, i) => (
           <text
             key={`x${tick.display}`}
             x={p.x(tick.value)}
             y={height - 6}
-            textAnchor="middle"
+            /* First and last labels are anchored INWARD rather than centred. Centred, the "0" spills
+               half its width left of the plot and lands under the deepest depth label, which sits in
+               that same bottom-left corner - the two collided. Anchoring also keeps the last label
+               (which carries the unit) from overhanging the right edge. */
+            textAnchor={i === 0 ? 'start' : i === xTicks.length - 1 ? 'end' : 'middle'}
             fontSize="9"
             fill={text}
+            data-testid={`plan-profile-x-tick-${i}`}
           >
-            {`${formatFixed(tick.display, undefined, 0)}${tick.display === xTicks[xTicks.length - 1]?.display ? ` ${axisSuffix}` : ''}`}
+            {`${formatFixed(tick.display, undefined, 0)}${i === xTicks.length - 1 ? ` ${axisSuffix}` : ''}`}
           </text>
         ))}
     </svg>

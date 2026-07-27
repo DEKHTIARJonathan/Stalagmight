@@ -450,7 +450,15 @@ impl Project {
         // Publishing one from the chain alone would hand the export a complete round-trip dive, with
         // a turn naming a station the diver cannot afford to reach, for a plan the engine has just
         // declared unflyable.
-        let route_profile = if route_target.is_some() {
+        //
+        // ⚠ A target is necessary but NOT sufficient: the route must also have a leg. When only the
+        // origin is in budget - delete or disable every cylinder and `budget_litres` is 0, which
+        // `can_end_at` satisfies at the origin for free, since reaching it costs nothing - `deepest`
+        // resolves to the origin itself and the route is one station long. `path_to` always returns
+        // at least the target, so nothing below would have caught it. One point is not a dive: it
+        // renders as zero distance over zero duration, and the exporter would write a syntactically
+        // valid Subsurface file describing a dive that never happened.
+        let route_profile = if route_target.is_some() && route_refs.len() >= 2 {
             build_route_profile(
                 &route_refs,
                 &route_pts,

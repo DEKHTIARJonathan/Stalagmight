@@ -37,6 +37,26 @@ fn is_open_project_file(target: &Path, existing: &Path) -> bool {
     std::fs::canonicalize(parent).is_ok_and(|p| p.join(name) == existing_canon)
 }
 
+/// True when `target` is a file the OPEN PROJECT owns - either its `.stalx`, or the `.plnx`
+/// dive-plan store that lives beside it.
+///
+/// The `.stalx` half has always been guarded. The `.plnx` was not, and it holds every saved dive
+/// plan for that project: an export written over it destroys all of them, which for a dive-profile
+/// export means destroying the very plans the feature exists to publish. It is not reachable by
+/// picking `cave.plnx` in the save dialog (the frontend forces the extension), but the IPC boundary
+/// takes an arbitrary path from the webview, and that is the boundary this guard is for.
+///
+/// The sibling is derived exactly as `AppState::plnx_context` derives it - same directory, same
+/// stem, `.plnx` extension - which `with_extension` expresses in one call. A `.plnx` that does not
+/// exist yet canonicalizes to nothing and is correctly not refused.
+fn is_project_owned_file(target: &Path, project: &Project) -> bool {
+    let Some(open_path) = project.file_path.as_deref() else {
+        return false;
+    };
+    is_open_project_file(target, open_path)
+        || is_open_project_file(target, &open_path.with_extension("plnx"))
+}
+
 /// Generic helper that handles the shared export logic for all text-based formats.
 fn export_format_impl(
     state: &AppState,
@@ -54,18 +74,17 @@ fn export_format_impl(
         "No project open".to_string()
     })?;
 
-    // Never clobber the open project `.stalx` (same guard as the image export):
-    // a text export named to the open DB would overwrite it with CSV/JSON/TML.
-    if let Some(open_path) = project.file_path.as_deref() {
-        if is_open_project_file(&path, open_path) {
-            tracing::warn!(
-                path = ?path,
-                open_project = ?open_path,
-                format = format,
-                "Refused to export over the open project file"
-            );
-            return Err("Cannot export over the open project file".to_string());
-        }
+    // Never clobber a file the open project owns (same guard as the image export): a text export
+    // named to the open DB would overwrite it with CSV/JSON/TML, and one named to the `.plnx`
+    // sibling would take every saved dive plan with it.
+    if is_project_owned_file(&path, &project) {
+        tracing::warn!(
+            path = ?path,
+            open_project = ?project.file_path,
+            format = format,
+            "Refused to export over a file the open project owns"
+        );
+        return Err("Cannot export over the open project file".to_string());
     }
 
     tracing::info!(
@@ -323,8 +342,16 @@ pub struct DiveProfileRequest {
 /// this the one entry point where a NaN RMV or an uncapped way-point list reaches the engine - and
 /// unlike the compute, which would just show nothing, this path renders a document the diver
 /// carries underwater.
-fn render_profile(
-    app_handle: &AppHandle,
+/// Takes the project by reference so ONE snapshot serves the whole command.
+///
+/// `AppState::get_project_state` is a whole-`Project` deep clone, which is multi-second on a large
+/// survey; going through `AppState::gas_reach_field` (which clones again internally) on top of a
+/// snapshot taken for the name and another for the clobber guard meant three clones per export
+/// click. Calling the `Project` method directly on one clone also removes a real correctness wart:
+/// with three snapshots, the name, the guard and the computed field could each come from a
+/// different project state if a load landed between them.
+fn render_profile_for(
+    project: &Project,
     request: DiveProfileRequest,
     format: ProfileFormat,
 ) -> Result<String, String> {
@@ -334,23 +361,25 @@ fn render_profile(
         request.cylinders,
         request.gas_config,
     )?;
-    let state = app_handle.state::<AppState>();
-    let project = state
-        .get_project_state()
-        .ok_or_else(|| "No project open".to_string())?;
-    let field = state
-        .inner()
-        .gas_reach_field(
-            request.origin.as_ref(),
-            request.endpoint.as_ref(),
-            &request.waypoints,
-            &diver,
-            &cylinders,
-            &gas_config,
-            &request.stage_drop_overrides,
-        )
-        .ok_or_else(|| "No project open".to_string())?;
-    crate::export::render_dive_profile(&field, format, &project.name).map_err(|e| e.to_string())
+    let field = project.compute_gas_reach_field_with_overrides(
+        request.origin.as_ref(),
+        request.endpoint.as_ref(),
+        &request.waypoints,
+        &diver,
+        &cylinders,
+        &gas_config,
+        &request.stage_drop_overrides,
+    );
+    crate::export::render_dive_profile(
+        &field,
+        format,
+        &crate::export::ProfileContext {
+            project_name: &project.name,
+            units: gas_config.units,
+            endpoint: request.endpoint,
+        },
+    )
+    .map_err(|e| e.to_string())
 }
 
 /// Write the planned dive profile to `path` (#299).
@@ -369,26 +398,34 @@ pub async fn export_dive_profile(
     let format = ProfileFormat::from_wire(&format).map_err(|e| e.to_string())?;
     tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
-        if let Some(project) = state.get_project_state() {
-            if let Some(open_path) = project.file_path.as_deref() {
-                if is_open_project_file(&path, open_path) {
-                    tracing::warn!(
-                        path = ?path,
-                        open_project = ?open_path,
-                        format = format.label(),
-                        "Refused to export a dive profile over the open project file"
-                    );
-                    return Err("Cannot export over the open project file".to_string());
-                }
-            }
+        let project = state
+            .get_project_state()
+            .ok_or_else(|| "No project open".to_string())?;
+        let refuse = |path: &PathBuf| {
+            tracing::warn!(
+                path = ?path,
+                open_project = ?project.file_path,
+                format = format.label(),
+                "Refused to export a dive profile over a file the open project owns"
+            );
+            "Cannot export over the open project file".to_string()
+        };
+        if is_project_owned_file(&path, &project) {
+            return Err(refuse(&path));
         }
-        let rendered = render_profile(&app_handle, request, format)?;
+        let rendered = render_profile_for(&project, request, format)?;
         tracing::info!(
             path = ?path,
             purpose = "export the planned dive profile",
             format = format.label(),
             "Exporting dive profile"
         );
+        // Re-check immediately before the write. Rendering runs the whole multi-Dijkstra compute, so
+        // unlike the sibling exports - which check and write adjacently - this path would otherwise
+        // leave a wide window in which `path` could be swapped for a symlink to the open project.
+        if is_project_owned_file(&path, &project) {
+            return Err(refuse(&path));
+        }
         std::fs::write(&path, rendered).map_err(|e| {
             tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
             e.to_string()
@@ -411,7 +448,11 @@ pub async fn render_dive_profile_text(
     request: DiveProfileRequest,
 ) -> Result<String, String> {
     tauri::async_runtime::spawn_blocking(move || {
-        render_profile(&app_handle, request, ProfileFormat::PlainText)
+        let state = app_handle.state::<AppState>();
+        let project = state
+            .get_project_state()
+            .ok_or_else(|| "No project open".to_string())?;
+        render_profile_for(&project, request, ProfileFormat::PlainText)
     })
     .await
     .map_err(|e| format!("Dive profile render task panicked: {e}"))?
@@ -480,15 +521,14 @@ mod tests {
         assert!(is_open_project_file(&absent_same, &recreated));
     }
 
-    /// A plan whose inputs the compute command would reject must be rejected here too.
+    /// The shared validator rejects the inputs the compute command rejects.
     ///
-    /// `render_profile` is a second door into the gas engine, and the engine validates nothing -
-    /// its contract says the COMMAND owns that. The way-point cap in particular exists, in the
-    /// sibling command's own words, "so the limit cannot be walked past by a caller that never
-    /// touches a file"; these two commands are exactly such callers. Asserted against the shared
-    /// helper rather than through Tauri, which needs an AppHandle a unit test cannot build.
+    /// ⚠ This tests the HELPER, not the export path's use of it. Named for what it shows: an
+    /// earlier version claimed to prove "the export path rejects..." while never calling the export
+    /// path, so deleting `validate_plan_inputs` from `render_profile_for` left it green. The wiring
+    /// is covered by `the_export_path_actually_runs_the_validator` below - keep both.
     #[test]
-    fn the_export_path_rejects_plans_the_compute_path_would_reject() {
+    fn the_shared_plan_validator_rejects_bad_inputs() {
         use crate::commands::gas::validate_plan_inputs;
         use crate::core::state::dive_plan::MAX_WAYPOINTS;
         use crate::models::{CylRole, TankMaterial};
@@ -527,5 +567,83 @@ mod tests {
             label: None,
         };
         assert!(ok(&[], zero).is_err());
+    }
+
+    /// The export path must actually CALL the validator, not merely have one available.
+    ///
+    /// `render_profile_for` is a second door into the gas engine, and the engine validates nothing -
+    /// its contract says the COMMAND owns that. This is the test that fails if the call is dropped:
+    /// an over-cap way-point list must come back as the CAP error. Without the validator the same
+    /// request reaches the engine and fails later with the no-route message instead, so the two
+    /// outcomes are distinguishable and the assertion cannot pass vacuously.
+    ///
+    /// Reachable as a unit test only because `render_profile_for` takes a `&Project` rather than an
+    /// `AppHandle` - the tuple `Project::new` builds is enough, since validation runs before any
+    /// survey data is touched.
+    #[test]
+    fn the_export_path_actually_runs_the_validator() {
+        use crate::core::state::dive_plan::MAX_WAYPOINTS;
+
+        let project = Project::new("Cave".to_string(), None);
+        let request = |waypoints: Vec<StationRef>| DiveProfileRequest {
+            origin: None,
+            endpoint: None,
+            waypoints,
+            diver: Diver {
+                rmv_l_per_min: 20.0,
+                label: None,
+            },
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+        };
+
+        let err = render_profile_for(
+            &project,
+            request(vec![StationRef::new(1, 0); MAX_WAYPOINTS + 1]),
+            ProfileFormat::PlainText,
+        )
+        .unwrap_err();
+        assert!(
+            err.contains("Too many way points"),
+            "the export path skipped validate_plan_inputs: {err}"
+        );
+
+        // The control: an in-cap plan gets PAST validation and fails for the other reason, proving
+        // the assertion above discriminates rather than matching any error at all.
+        let err = render_profile_for(&project, request(Vec::new()), ProfileFormat::PlainText)
+            .unwrap_err();
+        assert!(err.contains("no route to export"), "{err}");
+    }
+
+    /// An empty project cannot produce an exportable profile, whichever door is used.
+    ///
+    /// The degenerate shape this pins is a route of ONE station: the engine picks the origin as its
+    /// own turnaround whenever only the origin is in budget, and a one-point series renders as a
+    /// dive of zero distance over zero duration - a syntactically valid Subsurface file for a dive
+    /// that never happened.
+    #[test]
+    fn a_plan_with_no_swimmable_leg_is_refused_by_both_formats() {
+        let project = Project::new("Cave".to_string(), None);
+        for format in [ProfileFormat::PlainText, ProfileFormat::SubsurfaceXml] {
+            let err = render_profile_for(
+                &project,
+                DiveProfileRequest {
+                    origin: None,
+                    endpoint: None,
+                    waypoints: Vec::new(),
+                    diver: Diver {
+                        rmv_l_per_min: 20.0,
+                        label: None,
+                    },
+                    cylinders: Vec::new(),
+                    gas_config: GasConfig::default(),
+                    stage_drop_overrides: Vec::new(),
+                },
+                format,
+            )
+            .unwrap_err();
+            assert!(err.contains("no route to export"), "{format:?}: {err}");
+        }
     }
 }
