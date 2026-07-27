@@ -46,6 +46,10 @@ const rejects = (error: unknown) => () => {
 const restoreCalls = () =>
   invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_restore_revision');
 
+/** The speleodb_* commands actually issued, in order. */
+const issued = () =>
+  invokeIpcMock.mock.calls.map((c) => c[0] as string).filter((c) => c.startsWith('speleodb_'));
+
 let closeDialogMock: ReturnType<typeof vi.fn>;
 let openDialogMock: ReturnType<typeof vi.fn>;
 
@@ -219,7 +223,8 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
     const retry = await screen.findByTestId('speleodb-revert-retry-upload-btn');
 
     // The retry runs against a working copy that now HAS un-pushed edits (the revert
-    // itself), so it must waive the pre-flight guard or it would never reach `done`.
+    // itself) under a lock that is still ours - the state the resume skips the
+    // pre-flight guard for, since that guard tests the bit the restore just set.
     useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
@@ -230,6 +235,69 @@ describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', (
 
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
     expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_done')).toBe(true);
+  });
+
+  it('retries the upload ALONE - it does not re-acquire or re-restore', async () => {
+    // The whole point of the control. The acquire and the restore both SUCCEEDED and
+    // their results are still standing, so re-running them would re-download the
+    // revision and swap in a tree that is already correct, discarding anything edited
+    // since. Worse, on the failure whose upload actually landed (a 200 whose body did
+    // not parse), the acquire's reconcile has no authorship recovery: it reads the
+    // user's own just-landed revert as a divergence, releases the lock, and prompts
+    // them to resolve a conflict against themselves. The push path recognises that
+    // commit as ours and finishes, so the retry has to stay on the push path.
+    pushFails();
+    render(<SpeleoRevertDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    const retry = await screen.findByTestId('speleodb-revert-retry-upload-btn');
+
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
+    invokeIpcMock.mockClear();
+    // Every verb stays routed, so anything the retry issues is recorded.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(issued()).toEqual(['speleodb_done']);
+    expect(issued()).not.toContain('speleodb_start_editing');
+    expect(issued()).not.toContain('speleodb_restore_revision');
+  });
+
+  it('offers the same upload-only retry when the push comes back unconfirmed', async () => {
+    // `push_unconfirmed` is the classic lost-response case, and the backend keeps BOTH
+    // the lock and the dirty bit on that arm expressly so a retry recovers by
+    // ancestry - adopting the commit if it landed, re-uploading if it did not. So it
+    // is the same footing as a thrown push, one step further along, and it gets the
+    // same control. The composite would take the one route that cannot recognise our
+    // own commit.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+    });
+    render(<SpeleoRevertDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+
+    const retry = await screen.findByTestId('speleodb-revert-retry-upload-btn');
+    // Not the plain Revert, whose three presses end in a lock-releasing divergence
+    // prompt over the user's own revert.
+    expect(screen.queryByTestId('speleodb-revert-confirm-btn')).not.toBeInTheDocument();
+
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
+    invokeIpcMock.mockClear();
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(issued()).toEqual(['speleodb_done']);
   });
 });
 

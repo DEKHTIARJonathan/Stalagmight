@@ -310,3 +310,78 @@ describe('useRevertRevision - a restore that landed but a push that did not', ()
     expect(outcome).toEqual({ kind: 'push_unconfirmed' });
   });
 });
+
+/**
+ * `resumeAtPush` exists for the state a failed (or unconfirmed) upload leaves behind:
+ * the revision IS in the working copy and the lock IS still held, so the upload is the
+ * only step outstanding. Re-running the composite there re-downloads and re-swaps a
+ * tree that is already correct, and - on the attempt whose upload really landed -
+ * routes the retry through the acquire's reconcile, which has no authorship recovery
+ * and so calls our own commit a divergence and releases the lock to prompt about it.
+ */
+describe('useRevertRevision - resuming at the push', () => {
+  beforeEach(() => {
+    // The state the resume is for, as the restore leaves it: lock held, dirty bit set.
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
+  });
+
+  it('issues ONLY the push - no second acquire, no second restore', async () => {
+    // Every verb is routed, so anything the resume issues shows up in `issued()`.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ resumeAtPush: true });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual(['speleodb_done']);
+    expect(issued()).not.toContain('speleodb_start_editing');
+    expect(issued()).not.toContain('speleodb_restore_revision');
+    // And with the SAME message: a resume publishes the revert the user confirmed.
+    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+  });
+
+  it('runs past the pre-flight guard the restore itself tripped', async () => {
+    // `hasUnpushedEdits` is set by the restore, so the ordinary route would refuse
+    // this retry outright - offering to "replace my changes" over the user's own
+    // revert. The resume must not consult that guard at all.
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    const outcome = await run({ resumeAtPush: true });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+
+  it('reports the pushing step and no other', async () => {
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+    const steps: string[] = [];
+
+    await run({ resumeAtPush: true, onStep: (s) => steps.push(s) });
+
+    expect(steps).toEqual(['pushing']);
+  });
+
+  it('maps a still-failing resume through the same tail as the first attempt', async () => {
+    // One copy of the done-result -> outcome mapping: a resume that fails again has
+    // to describe itself exactly as the first failure did, or the dialog would offer
+    // a different way out of the same state.
+    ipc({ speleodb_done: rejects({ message: 'still offline' }) });
+
+    const outcome = await run({ resumeAtPush: true });
+
+    expect(outcome).toEqual({ kind: 'push_failed' });
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+
+  it('maps an unconfirmed resume through that tail too', async () => {
+    ipc({ speleodb_done: ok({ kind: 'push_unconfirmed' }) });
+
+    const outcome = await run({ resumeAtPush: true });
+
+    expect(outcome).toEqual({ kind: 'push_unconfirmed' });
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+});

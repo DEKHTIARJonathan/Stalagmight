@@ -8,6 +8,15 @@ import { useRevertRevision } from '../../hooks/useRevertRevision';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
+ * What a press asks `useRevertRevision` for.
+ * - `revert`: the whole composite - take the lock, check the revision out, upload it.
+ * - `discard`: the same, after the armed confirm, waiving the un-pushed-edits guard.
+ * - `resume-upload`: ONLY the upload, against the copy this dialog already restored
+ *   and the lock it is still holding (see `RevertRevisionArgs.resumeAtPush`).
+ */
+type RunMode = 'revert' | 'discard' | 'resume-upload';
+
+/**
  * Revert-to-revision confirm, opened from the revision history of a READ-ONLY
  * project with `{ projectId, projectName, hexsha, shortSha, returnTo?, returnData? }`.
  *
@@ -54,11 +63,14 @@ export default function SpeleoRevertDialog() {
   // True when the failure left us holding a lock we did not have before, so the
   // dialog can say so instead of leaving the user to discover it from the toolbar.
   const [lockHeld, setLockHeld] = useState(false);
-  // The upload - and ONLY the upload - failed: the revision is already in the working
-  // copy and the write lock is still ours, so everything except the last round trip
-  // is done. That earns its own primary control, because re-running the whole revert
-  // from the top would hit the pre-flight un-pushed-edits refusal and offer to
-  // "replace my changes" - where "my changes" would be the user's own revert.
+  // The upload - and ONLY the upload - is outstanding: the revision is already in the
+  // working copy and the write lock is still ours, so everything except the last round
+  // trip is done. That earns its own primary control, which re-issues the upload ALONE
+  // (`resume-upload`). Re-running the whole revert from the top would instead hit the
+  // pre-flight un-pushed-edits refusal and offer to "replace my changes" - where "my
+  // changes" would be the user's own revert - and, on the attempt whose upload really
+  // landed, would re-enter the acquire's strict reconcile and raise a divergence
+  // against that very commit.
   const [retryUpload, setRetryUpload] = useState(false);
   const [message, setMessage] = useState(() =>
     t('speleodb.revert.commitMessage', { sha: hexsha.slice(0, 8) }),
@@ -78,7 +90,7 @@ export default function SpeleoRevertDialog() {
     else closeDialog();
   };
 
-  const run = async (discardLocal: boolean) => {
+  const run = async (mode: RunMode) => {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
@@ -92,7 +104,8 @@ export default function SpeleoRevertDialog() {
       hexsha,
       shortSha,
       message: message.trim() || null,
-      discardLocal,
+      discardLocal: mode === 'discard',
+      resumeAtPush: mode === 'resume-upload',
       onStep: setStep,
     });
     setStep(null);
@@ -150,6 +163,16 @@ export default function SpeleoRevertDialog() {
         setBusy(false);
         return;
       case 'push_unconfirmed':
+        // Same footing as `push_failed`, one step further along: the upload went out
+        // but came back unconfirmed, and the backend KEEPS both the lock and the dirty
+        // bit on that arm expressly so a retry can recover by ancestry - a landed
+        // commit is then adopted, a lost one re-uploaded. Re-issuing the upload is
+        // therefore the whole recovery, and it is what every other surface offers for
+        // this state ("click Done again to retry"). The composite is never the right
+        // answer here: it would replace a tree that is already correct, and take the
+        // one route - the acquire's reconcile - with no way to recognise our own
+        // landed commit.
+        setRetryUpload(true);
         setError(t('speleodb.revert.errors.pushUnconfirmed'));
         setBusy(false);
         return;
@@ -187,7 +210,7 @@ export default function SpeleoRevertDialog() {
                   setDiscardArmed(true);
                   return;
                 }
-                void run(true);
+                void run('discard');
               }}
               disabled={busy}
               data-testid={
@@ -203,14 +226,18 @@ export default function SpeleoRevertDialog() {
                   : t('speleodb.revert.discardOffer')}
             </Button>
           ) : retryUpload ? (
-            // Re-issue the upload. `discardLocal` is honest here and needed: the
-            // un-pushed edits the pre-flight would refuse over ARE the revision this
-            // revert already wrote into the working copy, so waiving that guard
-            // waives it against the user's own confirmed revert, nothing else. Not
-            // `danger` - the destructive part already happened and was consented to.
+            // Re-issue the upload and NOTHING else: `resume-upload` skips the acquire
+            // and the restore, because both already succeeded and their results are
+            // still standing - the lock is ours and the revision is in the working
+            // copy. Re-running them would re-download and re-swap a tree that is
+            // already correct, and would put the one attempt whose upload actually
+            // landed through the acquire's reconcile, which cannot tell that commit
+            // is ours and so releases the lock to prompt about a conflict with
+            // ourselves. Not `danger` - the destructive part already happened and was
+            // consented to.
             <Button
               variant="primary"
-              onClick={() => void run(true)}
+              onClick={() => void run('resume-upload')}
               disabled={busy}
               data-primary-action=""
               data-testid="speleodb-revert-retry-upload-btn"
@@ -220,7 +247,7 @@ export default function SpeleoRevertDialog() {
           ) : (
             <Button
               variant="danger"
-              onClick={() => void run(false)}
+              onClick={() => void run('revert')}
               disabled={busy}
               data-primary-action=""
               data-testid="speleodb-revert-confirm-btn"

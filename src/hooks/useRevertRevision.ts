@@ -20,9 +20,42 @@ export interface RevertRevisionArgs {
    * armed second press, after the user has been told which local work it replaces.
    */
   discardLocal?: boolean;
+  /**
+   * Resume a revert whose restore already landed: re-issue ONLY the upload +
+   * release, against the working copy this flow already swapped in and the write
+   * lock it is still holding.
+   *
+   * Valid in exactly the two outcomes that leave things standing that way -
+   * `push_failed` and `push_unconfirmed` - which both keep the lock AND the dirty
+   * bit precisely so a retry can recover (`DoneResult::PushUnconfirmed` says so in
+   * as many words). Re-running the whole composite from either is wrong twice
+   * over. It re-downloads the revision and swaps the tree in again under the
+   * discard policy, resetting undo/redo and dropping anything edited since. And
+   * where the upload actually LANDED but the local record of it did not (a 200
+   * whose body did not parse), it re-enters Start editing's reconcile, which has
+   * no authorship recovery: our own just-landed commit reads as a divergence, so
+   * the lock is released and the user is asked to resolve a conflict against
+   * themselves, with a discard as the loudest way out. The push path classifies
+   * that same commit as ours and finishes cleanly, so the retry has to stay on it.
+   *
+   * Skips the pre-flight un-pushed-edits guard by construction: the restore is
+   * what SET that bit, so the guard would refuse the retry over the revert's own
+   * tree.
+   */
+  resumeAtPush?: boolean;
   /** Progress callback, so a three-round-trip operation is legible while it runs. */
   onStep?: (step: 'locking' | 'restoring' | 'pushing') => void;
 }
+
+/**
+ * What the publish tail needs - a subset of {@link RevertRevisionArgs}. `onStep` is
+ * spelled out rather than `Pick`ed because `exactOptionalPropertyTypes` stops a
+ * picked optional accepting an EXPLICIT `undefined`, which is exactly what a caller
+ * forwarding its own optional callback passes.
+ */
+type PublishArgs = Pick<RevertRevisionArgs, 'message' | 'shortSha'> & {
+  onStep?: RevertRevisionArgs['onStep'];
+};
 
 /**
  * What the revert ended up doing, so the dialog can say it exactly. `lockHeld`
@@ -52,12 +85,48 @@ export type RevertOutcome =
  * revert quietly skipping the acquire. So this composes the three existing verbs and
  * owns the unwinding when a middle step fails - the part a caller would otherwise get
  * wrong, because "release what we took" is only correct while the copy is clean.
+ *
+ * It also owns RESUMING (`resumeAtPush`), for the same reason: once the restore has
+ * landed, the only correct retry is the upload on its own, and the caller that most
+ * wants to retry is the one holding the least context about why.
  */
 export function useRevertRevision() {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
   const { startEditing, done } = useSpeleoActions();
   const restoreRevision = useRestoreRevision();
+
+  // The tail of the revert - upload the restored tree, release the lock, and say
+  // what came back. Split out so the `resumeAtPush` retry enters HERE instead of at
+  // the top, and so the done-result -> RevertOutcome mapping stays in ONE place: a
+  // second copy of it (in the dialog, say) would be free to drift from this one.
+  const publish = useCallback(
+    async ({ message, shortSha, onStep }: PublishArgs): Promise<RevertOutcome> => {
+      onStep?.('pushing');
+      const result = await done(message);
+      // A thrown call returns null; `useSpeleoActions.done` has already toasted it and
+      // raised the #260 push-failure banner, whose Retry re-issues the upload. Never
+      // auto-release from here: that would leave the reverted tree sitting as un-pushed
+      // edits with no lock over them.
+      if (result === null) return { kind: 'push_failed' };
+      const kind = asDoneKind(result.kind);
+      if (kind === 'released') {
+        showToast(t('speleodb.revert.done', { sha: shortSha }), 'speleodb-revert', 'success');
+        return { kind: 'reverted' };
+      }
+      if (kind === 'push_unconfirmed') return { kind: 'push_unconfirmed' };
+      if (kind === 'divergence_needed') return { kind: 'diverged' };
+      // `not_editing`: the edit gate dropped under us mid-flight (a 401 auto-drop is
+      // the usual way in), so nothing was uploaded and nothing released. It reaches
+      // the same dead end as a failed push - the revert exists only in the working
+      // copy - but it is NOT the same situation and must not borrow that message:
+      // `push_failed` tells the user they are holding the write lock and can Retry
+      // from the banner, and here they are holding nothing. Sending them to a Retry
+      // that cannot work is worse than saying plainly that they were signed out.
+      return { kind: 'not_editing' };
+    },
+    [t, showToast, done],
+  );
 
   return useCallback(
     async ({
@@ -67,8 +136,15 @@ export function useRevertRevision() {
       shortSha,
       message,
       discardLocal = false,
+      resumeAtPush = false,
       onStep,
     }: RevertRevisionArgs): Promise<RevertOutcome> => {
+      // The restore already landed and the lock is still ours, so the upload is the
+      // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of the
+      // pre-flight below: the restore is what set the bit that guard tests, so
+      // running it here would refuse the retry over the revert's own tree.
+      if (resumeAtPush) return publish({ message, shortSha, onStep });
+
       // Pre-flight, deliberately BEFORE any IPC: a copy with un-pushed edits will be
       // refused by the restore anyway, so taking the lock first would block another
       // user for the duration of a call we already know fails. Read fresh from the
@@ -154,29 +230,8 @@ export function useRevertRevision() {
         };
       }
 
-      onStep?.('pushing');
-      const result = await done(message);
-      // A thrown call returns null; `useSpeleoActions.done` has already toasted it and
-      // raised the #260 push-failure banner, whose Retry re-issues the upload. Never
-      // auto-release from here: that would leave the reverted tree sitting as un-pushed
-      // edits with no lock over them.
-      if (result === null) return { kind: 'push_failed' };
-      const kind = asDoneKind(result.kind);
-      if (kind === 'released') {
-        showToast(t('speleodb.revert.done', { sha: shortSha }), 'speleodb-revert', 'success');
-        return { kind: 'reverted' };
-      }
-      if (kind === 'push_unconfirmed') return { kind: 'push_unconfirmed' };
-      if (kind === 'divergence_needed') return { kind: 'diverged' };
-      // `not_editing`: the edit gate dropped under us mid-flight (a 401 auto-drop is
-      // the usual way in), so nothing was uploaded and nothing released. It reaches
-      // the same dead end as a failed push - the revert exists only in the working
-      // copy - but it is NOT the same situation and must not borrow that message:
-      // `push_failed` tells the user they are holding the write lock and can Retry
-      // from the banner, and here they are holding nothing. Sending them to a Retry
-      // that cannot work is worse than saying plainly that they were signed out.
-      return { kind: 'not_editing' };
+      return publish({ message, shortSha, onStep });
     },
-    [t, showToast, startEditing, done, restoreRevision],
+    [t, startEditing, done, restoreRevision, publish],
   );
 }
