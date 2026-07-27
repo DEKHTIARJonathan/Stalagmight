@@ -194,6 +194,46 @@ describe('speleoStore', () => {
     });
   });
 
+  describe('refreshLinkStatus staleness guard', () => {
+    it('drops a reply whose link changed under it, so a push cannot be un-cleared', async () => {
+      // The self-conflict race, frontend half. The backend reads the link row and
+      // THEN makes two network round trips, and nothing holds a command-level
+      // lock, so a push lands inside that window. The reply therefore carries the
+      // PRE-push snapshot (`has_unpushed_edits: true`); applying it would
+      // resurrect a dirty bit the push had just cleared, re-arming the quit guard
+      // and re-painting the un-pushed warning over work that IS on the server.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+
+      let release!: (s: SpeleoLinkStatus) => void;
+      invokeIpcMock.mockImplementation(
+        () =>
+          new Promise<SpeleoLinkStatus>((resolve) => {
+            release = resolve;
+          }),
+      );
+      const inFlight = useSpeleoStore.getState().refreshLinkStatus();
+
+      // The push lands while that poll is still waiting on the network.
+      useSpeleoStore.getState().markDirty();
+      useSpeleoStore.getState().applyPush({ kind: 'pushed' });
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+
+      // Now the stale reply arrives, still describing the world before the push.
+      release(status({ edit_enabled: true, has_unpushed_edits: true }));
+      await inFlight;
+
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(false);
+    });
+
+    it('applies a reply when nothing mutated the link while it was in flight', async () => {
+      // The guard must not be so strict that ordinary polling stops working.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      invokeIpcMock.mockResolvedValue(status({ edit_enabled: true, has_unpushed_edits: true }));
+      await useSpeleoStore.getState().refreshLinkStatus();
+      expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    });
+  });
+
   describe('setLinkOnOpen', () => {
     it('seeds a read-only link with the summary permission', () => {
       useSpeleoStore.getState().setLinkOnOpen({ permission: 'READ_ONLY' });

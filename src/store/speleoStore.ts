@@ -592,9 +592,25 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // remote-state / permission onto the newly-open one. Mirrors the load-time collab
     // detection + `checkProjectIntegrity` staleness guards. (fix S3)
     const requestedPath = useProjectStore.getState().project?.file_path ?? null;
+    // Also drop the reply when the link CHANGED under it, not just when the
+    // project did. The backend reads the link row and then makes two network
+    // round trips, and `run_blocking` holds no command-level lock, so a push can
+    // land inside that window; the reply then carries the PRE-push snapshot, and
+    // `seedFromStatus` overwrites `hasUnpushedEdits` wholesale - resurrecting a
+    // dirty bit the push had just cleared, which re-arms the quit guard and
+    // re-paints the un-pushed warning over work that IS on the server.
+    //
+    // Object identity is the check on purpose: every action that mutates link
+    // truth builds a NEW link object (they all spread `...state.link`), so any
+    // future mutator is covered without having to remember to bump a counter.
+    // The no-op arms that return `{}` (markDirty when already dirty, applyPush's
+    // not_editing) keep the same object, and a reply is genuinely still valid
+    // there.
+    const requestedLink = get().link;
     try {
       const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
       if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
+      if (get().link !== requestedLink) return;
       get().seedFromStatus(status);
     } catch {
       // Best-effort - leave the prior link state (the backend gate is the
