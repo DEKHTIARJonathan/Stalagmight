@@ -589,7 +589,7 @@ impl TokenStore {
     }
 
     /// Re-persist the token this session ALREADY holds, at whatever tier the
-    /// current gates allow. `None` when there is nothing to move (a logged-out
+    /// current gates allow. `Ok(None)` when there is nothing to move (a logged-out
     /// session), which the caller reports rather than treating as success.
     ///
     /// This is what makes the storage question askable at all: when the keychain
@@ -599,58 +599,66 @@ impl TokenStore {
     ///
     /// Runs the full [`Self::store`] path so the decline flag and the two-gate
     /// plaintext opt-in apply exactly as they do at login.
+    ///
+    /// `Err` means the token DID move - it is on the session-only tier - but a
+    /// persistent copy of it survived the sweep, so the caller must not report the
+    /// answer as settled. See [`Self::sweep_persistent_tiers`]. No tier is returned
+    /// alongside it because the tier is not the interesting fact there: "memory"
+    /// over a file the next launch reads back is accurate and misleading at once.
     pub(crate) fn restore(
         &mut self,
         endpoint: &str,
         email: &str,
         allow_plaintext: bool,
-    ) -> Option<TokenTier> {
-        let token = self.in_memory.clone()?;
+    ) -> Result<Option<TokenTier>, SecretStoreError> {
+        let Some(token) = self.in_memory.clone() else {
+            return Ok(None);
+        };
         let tier = self.store(endpoint, email, &token, allow_plaintext);
         // "This session only" has to be true ON DISK, not just in the label the
         // user is shown: a copy from an earlier choice would otherwise sit there
         // and be re-loaded on the next launch, which is the opposite of what they
         // just asked for. The keychain tier self-heals plaintext inside `store`;
         // only the memory landing needs sweeping here.
-        //
-        // BOTH persistent tiers are swept, not just plaintext. A working login on
-        // an earlier day writes the key to the keychain, and leaving that entry
-        // behind makes "you will be signed out when the app closes" false the
-        // moment the next launch rehydrates through it - the promise then rests
-        // entirely on `keychain_declined` reaching disk, which is best-effort.
-        //
-        // This delete deliberately bypasses `keychain_off` - gating it on the flag
-        // would disable it exactly when it is needed, since the session-only answer
-        // is given by setting that flag. It is not the nag the flow exists to stop:
-        // `restore` is reached only from the two explicit credential verbs (the
-        // post-login storage answer and the Settings button), never from a
-        // background path, so the user is inside the interaction that asks for it.
-        //
-        // It is not free either, and the honest version is worth writing down: on a
-        // keyring that is absent (no secret service at all) the delete fails without
-        // side effects, but on one that is merely LOCKED it can raise the unlock
-        // prompt once more, right after the user asked us not to use the keychain.
-        // We take that over the alternative, which is telling them the key will be
-        // gone when the app closes while an entry that signs them straight back in
-        // survives on disk.
         if tier == TokenTier::Memory {
-            let key = account_key(endpoint, email);
-            if let Err(e) = self.keychain.delete(&key) {
-                tracing::debug!(
-                    error = %e,
-                    "no keychain entry swept after a session-only choice (the keychain is unavailable here)"
-                );
-            }
-            if let Some(plaintext) = &self.plaintext {
-                if let Err(e) = plaintext.delete(&key) {
-                    tracing::warn!(
-                        error = %e,
-                        "failed to delete the plaintext SpeleoDB token after a session-only choice"
-                    );
-                }
-            }
+            self.sweep_persistent_tiers(&account_key(endpoint, email))?;
         }
-        Some(tier)
+        Ok(Some(tier))
+    }
+
+    /// Remove this account from BOTH persistent tiers after the token landed in
+    /// session-only memory, and REPORT a copy that survived.
+    ///
+    /// Both tiers, not just plaintext. A working login on an earlier day writes the
+    /// key to the keychain, and leaving that entry behind makes "you will be signed
+    /// out when the app closes" false the moment the next launch rehydrates through
+    /// it - the promise then rests entirely on `keychain_declined` reaching disk,
+    /// which is best-effort.
+    ///
+    /// The keychain delete deliberately bypasses `keychain_off` - gating it on the
+    /// flag would disable it exactly when it is needed, since the session-only
+    /// answer is given by setting that flag. It is not the nag the flow exists to
+    /// stop: [`Self::restore`] is reached only from the two explicit credential
+    /// verbs (the post-login storage answer and the Settings button), never from a
+    /// background path, so the user is inside the interaction that asks for it.
+    ///
+    /// It is not free either, and the honest version is worth writing down: on a
+    /// keyring that is absent (no secret service at all) the delete fails without
+    /// side effects, but on one that is merely LOCKED it can raise the unlock
+    /// prompt once more, right after the user asked us not to use the keychain. We
+    /// take that over the alternative, which is telling them the key will be gone
+    /// when the app closes while an entry that signs them straight back in survives
+    /// on disk.
+    ///
+    /// Every tier is swept even when an earlier one fails, mirroring [`Self::clear`];
+    /// the first survivor is the one reported.
+    fn sweep_persistent_tiers(&self, key: &str) -> Result<(), SecretStoreError> {
+        let keychain = sweep_tier(self.keychain.as_ref(), key);
+        let plaintext = self
+            .plaintext
+            .as_ref()
+            .map_or(Ok(()), |p| sweep_tier(p.as_ref(), key));
+        keychain.and(plaintext)
     }
 
     /// Whether the active token is backed by the OS keychain (vs the plaintext or
@@ -824,6 +832,40 @@ impl TokenStore {
         self.active_tier = None;
         failure.map_or(Ok(()), Err)
     }
+}
+
+/// Delete `key` from one tier, reporting the failure only when the credential is
+/// STILL there afterwards.
+///
+/// The same discrimination [`TokenStore::clear`] makes, asked the other way round.
+/// `clear` probes before deleting because it has to warn about a keychain whose
+/// entry the delete may have removed; here the delete has already failed, so the
+/// probe answers the question directly: `Ok(Some(_))` means the credential both
+/// survived and is still readable, which is exactly the pair [`TokenStore::load`]
+/// needs to hand it back on the next launch. Anything else - an absent keyring
+/// that fails every op at `Entry::new`, a store that cannot be read - cannot
+/// resurrect a session, and warning about it would fire on every ordinary
+/// session-only choice made on a headless box, which is a warning the user learns
+/// to ignore.
+fn sweep_tier(store: &dyn SecretStore, key: &str) -> Result<(), SecretStoreError> {
+    let Err(e) = store.delete(key) else {
+        return Ok(());
+    };
+    if matches!(store.load(key), Ok(Some(_))) {
+        tracing::warn!(
+            error = %e,
+            tier = store.kind(),
+            "the SpeleoDB token survived the sweep for a session-only choice"
+        );
+        return Err(e);
+    }
+    tracing::debug!(
+        error = %e,
+        tier = store.kind(),
+        purpose = "defensive sweep of a tier that holds nothing for this account",
+        "SpeleoDB token delete failed for an account this tier does not hold"
+    );
+    Ok(())
 }
 
 #[cfg(test)]
@@ -1463,7 +1505,10 @@ mod tests {
         store.in_memory = Some("tok".to_owned());
         store.set_keychain_declined(true);
 
-        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+        assert_eq!(
+            store.restore(EP, EMAIL, true).expect("nothing to sweep"),
+            Some(TokenTier::Plaintext)
+        );
         assert!(!touched.load(Ordering::SeqCst), "no keychain access");
         let probe = PlaintextStore::new(temp.path().to_path_buf());
         assert_eq!(
@@ -1491,7 +1536,12 @@ mod tests {
         store.in_memory = Some("tok".to_owned());
         store.set_keychain_declined(true);
 
-        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("the sweep succeeds here"),
+            Some(TokenTier::Memory)
+        );
         assert_eq!(seeded.load(&key).unwrap(), None);
     }
 
@@ -1506,10 +1556,16 @@ mod tests {
         );
         store.in_memory = Some("tok".to_owned());
         store.set_keychain_declined(true);
-        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+        assert_eq!(
+            store.restore(EP, EMAIL, true).expect("moved"),
+            Some(TokenTier::Plaintext)
+        );
 
         store.set_keychain_declined(false);
-        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Keychain));
+        assert_eq!(
+            store.restore(EP, EMAIL, true).expect("moved"),
+            Some(TokenTier::Keychain)
+        );
         assert!(store.keychain_backed());
         assert_eq!(store.keychain_state(), KeychainState::Available);
         // The keychain supersedes, so the plaintext copy it displaced is gone.
@@ -1535,7 +1591,12 @@ mod tests {
         // Tuesday: the keyring is locked at login, and the user answers the storage
         // question with "this session only".
         store.set_keychain_declined(true);
-        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("the sweep succeeds here"),
+            Some(TokenTier::Memory)
+        );
 
         // The next launch: nothing in memory, and the probe re-enabled, so `load`
         // can only answer from a persisted tier.
@@ -1546,6 +1607,90 @@ mod tests {
             store.load(EP, EMAIL),
             None,
             "Monday's keychain entry must not survive a session-only choice and sign the user back in"
+        );
+    }
+
+    #[test]
+    fn a_session_only_choice_reports_a_plaintext_copy_it_could_not_remove() {
+        // "You will be signed out when the app closes" has to be true ON DISK or not
+        // be said at all. The sweep used to `warn!` and hand `Memory` back anyway, so
+        // the verb persisted the choice and the UI reported success over a cleartext
+        // file that the next cold `load` reads straight back and signs the user in
+        // with - the same shape as the keychain half of this bug, one tier down.
+        let key = account_key(EP, EMAIL);
+        let mut store = TokenStore::from_stores(
+            Box::new(InMemoryStore::new()),
+            Some(Box::new(DeleteFailsStore::holding(&key, "yesterdays-copy"))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert!(
+            store.restore(EP, EMAIL, false).is_err(),
+            "a plaintext copy that survived the sweep must be reported, not just logged"
+        );
+    }
+
+    #[test]
+    fn a_session_only_choice_reports_a_keychain_entry_it_could_not_remove() {
+        // The other persistent tier, same hazard: an entry a working login wrote on
+        // an earlier day is what the next launch's rehydrate finds, and finding it is
+        // precisely what the user just asked not to happen.
+        let key = account_key(EP, EMAIL);
+        let mut store = TokenStore::from_stores(
+            Box::new(DeleteFailsStore::holding(&key, "mondays-entry")),
+            None,
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert!(store.restore(EP, EMAIL, false).is_err());
+    }
+
+    #[test]
+    fn a_session_only_choice_does_not_report_a_tier_that_holds_nothing() {
+        // The discrimination `clear` makes, made here for the same reason. On a
+        // headless box with no secret service EVERY keyring op fails at `Entry::new`,
+        // so reporting each `Err` would refuse the session-only answer on every
+        // ordinary Linux machine the escape hatch exists for - over a store that
+        // cannot hold a credential and so cannot have stranded one.
+        let mut store = TokenStore::from_stores(
+            Box::new(FailingSecretStore),
+            Some(Box::new(FailingSecretStore)),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("an unusable tier never held the token, so nothing was stranded"),
+            Some(TokenTier::Memory)
+        );
+    }
+
+    #[test]
+    fn a_session_only_sweep_reaches_every_tier_despite_an_earlier_failure() {
+        // A keychain that refuses must not skip the plaintext delete: the plaintext
+        // copy is the one `load` falls back to, so short-circuiting on the first
+        // failure would leave behind exactly the file being warned about.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let key = account_key(EP, EMAIL);
+        let seeded = PlaintextStore::new(temp.path().to_path_buf());
+        seeded.store(&key, "yesterdays-copy").unwrap();
+
+        let mut store = TokenStore::from_stores(
+            Box::new(DeleteFailsStore::holding(&key, "mondays-entry")),
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert!(store.restore(EP, EMAIL, false).is_err());
+        assert_eq!(
+            seeded.load(&key).unwrap(),
+            None,
+            "the plaintext copy must still be deleted after the keychain delete failed"
         );
     }
 
@@ -1619,7 +1764,10 @@ mod tests {
         store.in_memory = Some("tok".to_owned());
         store.set_keychain_disabled(true);
 
-        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+        assert_eq!(
+            store.restore(EP, EMAIL, true).expect("nothing to sweep"),
+            Some(TokenTier::Plaintext)
+        );
         assert!(!touched.load(Ordering::SeqCst), "still no keychain access");
         let probe = PlaintextStore::new(temp.path().to_path_buf());
         assert_eq!(
@@ -1702,7 +1850,12 @@ mod tests {
         store.evict_from_keychain(EP, EMAIL).expect("evicted");
         store.set_keychain_disabled(true);
         // The token is still in hand, so it re-lands at a tier the new gates allow.
-        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("the sweep succeeds here"),
+            Some(TokenTier::Memory)
+        );
         assert!(
             !store.keychain_backed(),
             "the report must not keep claiming a keychain we just emptied"
@@ -1761,7 +1914,10 @@ mod tests {
         // A logged-out store must not answer "moved it" - the caller turns this into
         // "not signed in" rather than a silent success.
         let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
-        assert_eq!(store.restore(EP, EMAIL, false), None);
+        assert_eq!(
+            store.restore(EP, EMAIL, false).expect("no sweep to fail"),
+            None
+        );
     }
 
     #[test]

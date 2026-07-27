@@ -1,9 +1,21 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TokenStorage } from '../../types/ipc.generated';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+
+/**
+ * The tier each button is ASKING for, so "did they get what they clicked?" is one
+ * comparison instead of a second copy of the vocabulary. The two names differ
+ * because a request is a preference (`TokenFallback`) while the answer is a place
+ * (`TokenStorage`): "this session only" is the preference whose place is memory.
+ */
+const STORAGE_FOR: Record<'session_only' | 'plaintext', TokenStorage> = {
+  session_only: 'memory',
+  plaintext: 'plaintext',
+};
 
 /**
  * "Where should your SpeleoDB API key be kept?" - raised by a login whose OS
@@ -41,11 +53,29 @@ export default function SpeleoStorageChoiceDialog() {
     try {
       // On failure the prompt STAYS OPEN. Closing it would look like the choice
       // landed while the key sits wherever the failed login left it.
-      if (await setTokenStorage(mode)) {
-        showToast(t(`speleodb.storageChoice.toasts.${mode}`), 'speleodb-storage-choice', 'success');
-      } else {
+      const landed = await setTokenStorage(mode);
+      if (landed === null) {
         showToast(t('speleodb.storageChoice.failed'), 'speleodb-storage-choice', 'error');
+        return;
       }
+      // Report the tier that TOOK the key, never the button that was pressed. Asking
+      // for a file on a full or read-only filesystem falls back to session-only
+      // memory, and the backend says so truthfully - so echoing `mode` here promised
+      // a saved file to someone who will be signed out at the next exit and has no
+      // idea why.
+      //
+      // The mismatch gets its OWN sentence rather than just the landed tier's,
+      // because "kept for this session only" on its own, right after clicking "Save
+      // it to a file", reads as the app ignoring them or as a misclick. It has to say
+      // the file could not be written, or the toast is true and still useless.
+      const asAsked = landed === STORAGE_FOR[mode];
+      showToast(
+        asAsked
+          ? t(`speleodb.storageChoice.toasts.${mode}`)
+          : t(`speleodb.storageChoice.landedElsewhere.${landed}`),
+        'speleodb-storage-choice',
+        asAsked ? 'success' : 'warning',
+      );
     } finally {
       setBusy(false);
     }

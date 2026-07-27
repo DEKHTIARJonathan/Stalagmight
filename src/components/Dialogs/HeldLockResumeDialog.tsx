@@ -7,6 +7,7 @@ import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { hasUnpushedEdits, localStateUnknown, UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { needsSpeleoHandBackPrompt } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -163,16 +164,32 @@ export default function HeldLockResumeDialog() {
       const openPath = useProjectStore.getState().project?.file_path ?? null;
       if (openPath !== path) {
         // This prompt is app-wide and is raised on LOGIN as well as app-open, and
-        // login is reachable from Settings with a dirty project open. `loadProject`
-        // for a DIFFERENT project closes the current one backend-side, dropping its
-        // in-memory edits - which is exactly why `useProject.handleOpenProject`
-        // routes through the unsaved-changes prompt. Refuse rather than open a
-        // second modal over this overlay: the lock stays held and resolvable, and
-        // nothing is lost.
+        // login is reachable from Settings with a project open. `loadProject` for a
+        // DIFFERENT project closes the current one backend-side - which is exactly why
+        // `useProject.handleOpenProject` routes through the exit guards. Refuse rather
+        // than open a second modal over this overlay: the lock stays held and
+        // resolvable, and nothing is lost.
+        //
+        // BOTH kinds of work at risk, in the guards' own order. Disk-dirty is the
+        // obvious one. The other is the reason `needsSpeleoHandBackPrompt` exists:
+        // the open project can be perfectly clean on disk and still hold un-pushed
+        // edits or our write lock, and closing it backend-side hands neither back -
+        // it just hides the local copy and drops the lock this very prompt is about.
+        // Checking only `isDirty` made this a fifth exit that skipped the guard the
+        // other four share, which is the drift that guard was extracted to stop.
+        const openLink = useSpeleoStore.getState().link;
         if (useProjectStore.getState().isDirty) {
           showToast(
             t('speleodb.localEdits.heldLocks.unsavedChanges', { name: lock.projectName }),
             'speleodb-continue-editing-dirty',
+            'warning',
+          );
+          return;
+        }
+        if (needsSpeleoHandBackPrompt(openLink)) {
+          showToast(
+            t('speleodb.localEdits.heldLocks.unpushedWork', { name: lock.projectName }),
+            'speleodb-continue-editing-unpushed',
             'warning',
           );
           return;

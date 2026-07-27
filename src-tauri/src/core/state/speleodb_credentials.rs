@@ -43,7 +43,13 @@ impl AppState {
     ///
     /// Returns the refreshed status so the frontend renders where the key actually
     /// landed rather than where it asked for it to go: the plaintext write can
-    /// itself fail, and then the honest answer is session-only.
+    /// itself fail, and then the honest answer is session-only. `status.storage` is
+    /// what the storage prompt reports, so its toast names the tier that took the
+    /// key rather than the button that was pressed.
+    ///
+    /// Errors - including a session-only answer whose sweep left a persistent copy
+    /// behind (see [`Self::speleodb_move_token`]) - leave the preference unwritten,
+    /// so a failure never looks settled.
     pub(crate) fn speleodb_set_token_storage(
         &self,
         mode: TokenFallback,
@@ -111,6 +117,12 @@ impl AppState {
     /// session ended underneath them (a 401 auto-drop, a logout in another window).
     /// Silently succeeding would report a storage tier for a key that no longer
     /// exists, and would persist a preference the user never got the benefit of.
+    ///
+    /// Refuses too when the key landed in session-only memory but a persistent copy
+    /// of it survived the sweep. The tier reported would be perfectly accurate and
+    /// completely misleading: "Memory" over a cleartext file that the next cold
+    /// `TokenStore::load` reads straight back is the promise "the key disappears
+    /// when the app closes" made about a machine where it demonstrably does not.
     fn speleodb_move_token(
         &self,
         declined: bool,
@@ -140,16 +152,34 @@ impl AppState {
             .token_store
             .restore(&endpoint, &email, allow_plaintext)
         {
-            Some(tier) => {
+            Ok(Some(tier)) => {
                 drop(session);
                 self.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
                 Ok(tier)
             }
-            None => {
+            // Nothing was settled, by either route, so the live flag goes back the
+            // way it came in both - a settled-looking store over an unsettled config
+            // is the disagreement described above.
+            Ok(None) => {
                 session
                     .token_store
                     .set_keychain_declined(previously_declined);
                 Err(local_dto(SpeleoDbError::NotAuthenticated))
+            }
+            // The key DID move, but a persistent copy of it survived the
+            // session-only sweep, so "gone when the app closes" is not true on this
+            // machine. Reporting it is the whole point: the caller must not persist
+            // the choice, and the user has to be told, because the surviving copy is
+            // what signs them straight back in on the next launch.
+            Err(e) => {
+                session
+                    .token_store
+                    .set_keychain_declined(previously_declined);
+                Err(local_dto(SpeleoDbError::Io(format!(
+                    "Your API key was moved, but an older copy could not be removed \
+                     from this computer ({e}), so it may sign you back in the next \
+                     time you open the app"
+                ))))
             }
         }
     }
@@ -201,9 +231,12 @@ mod tests {
     use super::AppState;
     use crate::config::TokenFallback;
     use crate::speleodb::auth::{
-        InMemoryStore, PlaintextStore, SecretStore, SecretStoreError, TokenStore,
+        account_key, InMemoryStore, PlaintextStore, SecretStore, SecretStoreError, TokenStore,
     };
     use crate::speleodb::{KeychainReport, TokenStorage};
+
+    const EP: &str = "https://sdb.example";
+    const EMAIL: &str = "u@x";
 
     /// A keychain that refuses every op - the locked / headless keyring that makes
     /// "Try again" a button worth having, and worth pressing twice.
@@ -224,13 +257,41 @@ mod tests {
         }
     }
 
+    /// A tier that IS holding a copy of the key and will not give it up - a
+    /// read-only or full filesystem under the plaintext root, or a keyring entry
+    /// the OS refuses to delete.
+    ///
+    /// [`FailingSecretStore`] cannot express this and is the wrong fixture for it:
+    /// a store nothing can be written to is a store nothing can survive in, which
+    /// is exactly the case the sweep must NOT report.
+    struct DeleteFailsStore(InMemoryStore);
+
+    impl DeleteFailsStore {
+        fn holding(account_key: &str, token: &str) -> Self {
+            let inner = InMemoryStore::new();
+            inner.store(account_key, token).expect("seed the copy");
+            Self(inner)
+        }
+    }
+
+    impl SecretStore for DeleteFailsStore {
+        fn kind(&self) -> &'static str {
+            "delete-fails"
+        }
+        fn store(&self, k: &str, v: &str) -> Result<(), SecretStoreError> {
+            self.0.store(k, v)
+        }
+        fn load(&self, k: &str) -> Result<Option<String>, SecretStoreError> {
+            self.0.load(k)
+        }
+        fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
+            Err(SecretStoreError::for_test("delete refused"))
+        }
+    }
+
     /// A state whose session already holds a token, over a WORKING fake keychain
     /// and a plaintext tier in `plaintext_root`. The working keychain is the point:
     /// it makes "we did not touch it" observable as a tier that is not Keychain.
-    ///
-    /// `rehydrate_attempted` is left alone - a seeded `endpoint` already
-    /// short-circuits `speleodb_ensure_rehydrated`, so the fixture never reaches
-    /// the config/keychain read.
     fn holding(plaintext_root: Option<std::path::PathBuf>) -> AppState {
         holding_over(Box::new(InMemoryStore::new()), plaintext_root)
     }
@@ -241,12 +302,26 @@ mod tests {
         keychain: Box<dyn SecretStore>,
         plaintext_root: Option<std::path::PathBuf>,
     ) -> AppState {
+        holding_over_tiers(
+            keychain,
+            plaintext_root.map(|r| Box::new(PlaintextStore::new(r)) as Box<dyn SecretStore>),
+        )
+    }
+
+    /// [`holding`] with BOTH backends chosen by the caller, so a test can ask what
+    /// happens when the session-only sweep cannot remove an older copy.
+    ///
+    /// `rehydrate_attempted` is left alone - a seeded `endpoint` already
+    /// short-circuits `speleodb_ensure_rehydrated`, so the fixture never reaches
+    /// the config/keychain read.
+    fn holding_over_tiers(
+        keychain: Box<dyn SecretStore>,
+        plaintext: Option<Box<dyn SecretStore>>,
+    ) -> AppState {
         let state = AppState::new().expect("state");
-        let plaintext =
-            plaintext_root.map(|r| Box::new(PlaintextStore::new(r)) as Box<dyn SecretStore>);
         let mut session = state.speleodb.lock().expect("session");
-        session.endpoint = Some("https://sdb.example".to_owned());
-        session.email = Some("u@x".to_owned());
+        session.endpoint = Some(EP.to_owned());
+        session.email = Some(EMAIL.to_owned());
         session.token_store = TokenStore::from_stores_holding("tok-1", keychain, plaintext);
         drop(session);
         state
@@ -302,6 +377,41 @@ mod tests {
             assert!(
                 std::fs::read_dir(dir.path()).is_ok_and(|mut d| d.next().is_none()),
                 "a session-only choice must leave no token file behind"
+            );
+        });
+    }
+
+    #[test]
+    fn a_session_only_choice_that_left_a_copy_behind_is_not_settled() {
+        // The prompt says the key will be gone when the app closes. When the sweep
+        // cannot remove an older copy that promise is false ON THIS MACHINE, and the
+        // tier reported ("memory") is accurate and completely misleading: the next
+        // cold `TokenStore::load` falls back to the surviving file and signs the user
+        // straight back in. The verb used to persist the choice and report success
+        // over exactly that, because the failed delete was only `warn!`-ed.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = holding_over_tiers(
+                Box::new(InMemoryStore::new()),
+                Some(Box::new(DeleteFailsStore::holding(
+                    &account_key(EP, EMAIL),
+                    "yesterdays-copy",
+                ))),
+            );
+
+            let err = state
+                .speleodb_set_token_storage(TokenFallback::SessionOnly)
+                .expect_err("a promise the filesystem did not keep is not a success");
+
+            assert!(
+                err.message.contains("could not be removed"),
+                "the user has to be told WHAT survived, not just that something did: {}",
+                err.message
+            );
+            assert_eq!(
+                persisted(&state),
+                (TokenFallback::SessionOnly, false),
+                "and the question stays open - recording the refusal would settle an \
+                 answer that did not land, and stop the keychain being offered again"
             );
         });
     }

@@ -82,6 +82,33 @@ describe('SpeleoStorageChoiceDialog', () => {
     expect(useSpeleoStore.getState().session?.storage).toBe('plaintext');
   });
 
+  it('does not claim a file when the key actually fell back to memory', async () => {
+    // The backend deliberately falls back to session-only when the plaintext write
+    // fails (a full or read-only filesystem) and reports that truthfully. The toast
+    // was keyed on the button that was pressed, so it said the key had been saved to
+    // a file - and the user was signed out on the next launch with no explanation.
+    invokeIpcMock.mockResolvedValue(SESSION_ONLY);
+    render(<SpeleoStorageChoiceDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-storage-choice-file'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const [message, , kind] = showToastMock.mock.calls[0] ?? [];
+    expect(message).not.toContain('is saved to a file');
+    expect(message).toContain('could not be written to a file');
+    expect(kind).toBe('warning');
+  });
+
+  it('says the file was written when the file is what took the key', async () => {
+    invokeIpcMock.mockResolvedValue({ ...SESSION_ONLY, storage: 'plaintext' });
+    render(<SpeleoStorageChoiceDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-storage-choice-file'));
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    const [message, , kind] = showToastMock.mock.calls[0] ?? [];
+    expect(message).toContain('saved to a file');
+    expect(kind).toBe('success');
+  });
+
   it('dismissing persists nothing and leaves the session alone', async () => {
     render(<SpeleoStorageChoiceDialog />);
     await userEvent.click(screen.getByTestId('speleodb-storage-choice-dismiss'));

@@ -334,9 +334,13 @@ interface SpeleoStore {
       of rather than answered. */
   closeStorageChoice: () => void;
   /** Answer the storage question: persist the tier + the settled refusal, and move
-      the held token there (no re-login - the backend still has it). Resolves false
-      on failure, leaving the prompt open so the choice isn't silently lost. */
-  setTokenStorage: (mode: 'session_only' | 'plaintext') => Promise<boolean>;
+      the held token there (no re-login - the backend still has it).
+      Resolves the tier the key ACTUALLY LANDED ON, which is not always the one that
+      was asked for: a plaintext write onto a full or read-only filesystem falls back
+      to session-only memory, and a caller that reports the request instead promises a
+      file the user will not have on the next launch. `null` on failure, which leaves
+      the prompt open so the choice isn't silently lost. */
+  setTokenStorage: (mode: 'session_only' | 'plaintext') => Promise<TokenStorage | null>;
   /** Settings' "Try again": lift the refusal and re-store the held token, which now
       reaches the keychain again. Resolves false on failure. */
   retryKeychain: () => Promise<boolean>;
@@ -792,9 +796,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       get().setSession(status);
       set({ storageChoiceOpen: false });
       await useProjectStore.getState().loadConfig();
-      return true;
+      // The landed tier, handed back rather than collapsed to a bare `true`, so the
+      // caller can say where the key went instead of where it was sent. `storage` is
+      // null only when the backend reports logged-out, which this verb refuses
+      // outright - it is treated as a failure rather than dropped on the floor.
+      return status.storage ?? null;
     } catch {
-      return false;
+      return null;
     }
   },
 

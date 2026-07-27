@@ -186,6 +186,37 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
+  it('refuses to open over a disk-clean project that still owes SpeleoDB work', async () => {
+    // The sibling above covers disk-dirty. This is the case that made this a FIFTH
+    // exit: the open project is saved to disk - so `isDirty` is false and the old
+    // guard waved it through - while still holding un-pushed edits and our write
+    // lock. Closing it backend-side hands neither back; it hides the local copy and
+    // drops the lock. Every other way out of a project routes through
+    // `needsSpeleoHandBackPrompt`, and this one has to as well.
+    useProjectStore.setState({
+      project: { file_path: '/other/open.stalx' } as never,
+      isDirty: false,
+    });
+    useSpeleoStore.setState({
+      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
+    });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    // Same shape as the dirty case: nothing acquired, nothing discarded, every lock
+    // still listed so the user can hand the open project back and return here.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+  });
+
   it('offers no bulk release at all', async () => {
     // Removed deliberately, not overlooked. The server verb is all-or-nothing and
     // this prompt is exactly where locks sitting over un-pushed work surface, so a

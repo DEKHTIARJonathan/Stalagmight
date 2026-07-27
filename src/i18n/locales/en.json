@@ -2771,6 +2771,11 @@
       "toasts": {
         "session_only": "Your API key is kept for this session only.",
         "plaintext": "Your API key is saved to a file on this computer."
+      },
+      "landedElsewhere": {
+        "memory": "Your API key could not be written to a file, so it is kept for this session only. You will be signed out when the app closes.",
+        "plaintext": "Your API key was saved to a file on this computer instead of being kept for this session only.",
+        "keychain": "This computer's keychain accepted your API key after all, so it is stored there."
       }
     },
     "button": {
@@ -3040,7 +3045,8 @@
         "openFailed": "Could not find the local copy of {{name}} to open. Its write lock is left alone so nothing is lost.",
         "unknown": "Could not check which projects have changes only on this computer. Release with care.",
         "localStateUnknown": "Its local copy could not be read, so it may hold unsent changes",
-        "unsavedChanges": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them."
+        "unsavedChanges": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them.",
+        "unpushedWork": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer."
       }
     },
     "recentBadge": {

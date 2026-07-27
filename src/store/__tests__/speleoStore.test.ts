@@ -180,9 +180,12 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
     });
 
-    it('setTokenStorage seeds the session from the reply, not from the request', async () => {
+    it('setTokenStorage resolves the tier that took the key, not the one asked for', async () => {
       // The plaintext write can itself fail, and then the truthful thing to show is
-      // session-only - so the answer is authoritative over what was asked for.
+      // session-only - so the answer is authoritative over what was asked for. It is
+      // handed back rather than collapsed to `true` because the caller has to report
+      // where the key went: a bare success over a fallback told the user their key
+      // was written to a file that does not exist, and they get signed out at exit.
       useSpeleoStore.setState({ storageChoiceOpen: true });
       invokeIpcMock.mockResolvedValue({
         logged_in: true,
@@ -193,7 +196,7 @@ describe('speleoStore', () => {
         keychain: 'declined',
       });
 
-      expect(await useSpeleoStore.getState().setTokenStorage('plaintext')).toBe(true);
+      expect(await useSpeleoStore.getState().setTokenStorage('plaintext')).toBe('memory');
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_token_storage', {
         mode: 'plaintext',
       });
@@ -205,7 +208,7 @@ describe('speleoStore', () => {
       useSpeleoStore.setState({ storageChoiceOpen: true });
       invokeIpcMock.mockRejectedValue({ message: 'not signed in' });
 
-      expect(await useSpeleoStore.getState().setTokenStorage('session_only')).toBe(false);
+      expect(await useSpeleoStore.getState().setTokenStorage('session_only')).toBeNull();
       expect(useSpeleoStore.getState().storageChoiceOpen).toBe(true);
     });
 

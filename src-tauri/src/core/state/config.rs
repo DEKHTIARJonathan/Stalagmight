@@ -29,18 +29,27 @@ impl AppState {
         // first, saving any setting would persist defaults and silently reset a
         // user's hand-tuned knobs.
         //
-        // The two credential-storage fields are preserved for a different reason:
-        // they ARE serialized, but the Settings form does not own them. Where the
-        // API key is kept is settled by the login-time storage prompt and the
-        // "Try again" button, both of which write `config.toml` through the backend
-        // while the Settings dialog stays mounted over its snapshot of the config
-        // (`SpeleoStorageChoiceDialog` is a top-layer overlay precisely so Settings
-        // is not unmounted). Saving any unrelated setting afterwards posted the
-        // stale pair back and silently undid the answer - re-arming the launch-time
-        // keyring nag, or worse: a successful "Try again" moves the key into the
-        // keychain and deletes the plaintext copy, so restoring a stale
-        // `keychain_declined = true` made the next launch skip the keychain read
-        // and find nothing, signing the user out with no way to explain it.
+        // The credential fields below are preserved for a different reason: they ARE
+        // serialized, but the Settings form does not own them. Who is signed in and
+        // where their API key is kept are settled by the login itself, the
+        // login-time storage prompt and the "Try again" button, all of which write
+        // `config.toml` through the backend while the Settings dialog stays mounted
+        // over its snapshot of the config (`SpeleoStorageChoiceDialog` is a
+        // top-layer overlay precisely so Settings is not unmounted, and the account
+        // panel's "Log in now" runs without closing anything). Saving any unrelated
+        // setting afterwards posted the stale values back and silently undid what
+        // the backend had just recorded - re-arming the launch-time keyring nag, or
+        // worse: a successful "Try again" moves the key into the keychain and
+        // deletes the plaintext copy, so restoring a stale `keychain_declined = true`
+        // made the next launch skip the keychain read and find nothing, signing the
+        // user out with no way to explain it.
+        //
+        // `email` belongs in that list for exactly the same reason and costs the
+        // same when it is missing: it is the rehydrate seed - `speleodb_ensure_
+        // rehydrated` keys the credential lookup by it - so posting back the stale
+        // (usually null) snapshot from before an inline login left the next launch
+        // unable to find the token of the account that is signed in, forcing another
+        // sign-in.
         //
         // A POISONED config mutex is RECOVERED (`into_inner`) rather than skipped,
         // for that last reason: skipping restores nothing, so the form's serde
@@ -55,6 +64,7 @@ impl AppState {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             config.webkit_memory = existing.webkit_memory.clone();
+            config.speleodb.email.clone_from(&existing.speleodb.email);
             config.speleodb.token_fallback = existing.speleodb.token_fallback;
             config.speleodb.keychain_declined = existing.speleodb.keychain_declined;
             // Backend-owned for the same reason: it records what the keychain
@@ -202,15 +212,32 @@ impl AppState {
         // The key is still in hand, so honour the instruction now: re-store it at
         // whatever tier the closed gate allows (the `token_fallback` preference
         // still decides between a `0o600` file and session-only memory).
-        let landed =
-            session
-                .token_store
-                .restore(&endpoint, &email, fallback == TokenFallback::Plaintext);
-        tracing::info!(
-            ?landed,
-            emptied,
-            "OS keyring turned off; the SpeleoDB key was moved out of it"
-        );
+        //
+        // A survivor of the session-only sweep is LOGGED here rather than failing
+        // the settings save, unlike `speleodb_move_token` which refuses on it. The
+        // two verbs make different promises: answering the storage prompt with "this
+        // session only" IS the promise that nothing persists, so a surviving copy
+        // falsifies the very thing being reported, whereas turning the keyring off
+        // promises only that the keyring stops being used - where the key goes
+        // instead is `token_fallback`, which this save did not change. Failing here
+        // would also abandon the rest of the user's settings over a residue, having
+        // already emptied the keyring.
+        match session
+            .token_store
+            .restore(&endpoint, &email, fallback == TokenFallback::Plaintext)
+        {
+            Ok(landed) => tracing::info!(
+                ?landed,
+                emptied,
+                "OS keyring turned off; the SpeleoDB key was moved out of it"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                emptied,
+                "OS keyring turned off, but an older copy of the SpeleoDB key could not be \
+                 removed from this machine"
+            ),
+        }
         emptied
     }
 
@@ -406,6 +433,32 @@ mod tests {
             assert!(
                 !saved.speleodb.keychain_disabled,
                 "the switch itself IS the form's to set, in both directions"
+            );
+        });
+    }
+
+    #[test]
+    fn a_settings_save_keeps_an_email_persisted_underneath_it() {
+        // The account panel's "Log in now" signs in WITHOUT closing Settings, so the
+        // backend writes the account email while the form still holds the snapshot it
+        // opened with - one where nobody was signed in. Saving any unrelated setting
+        // afterwards posted that snapshot back and cleared the email, which is the
+        // rehydrate seed: `speleodb_ensure_rehydrated` keys the credential lookup by
+        // it, so the next launch could not find the token of the account that was
+        // signed in and asked for another login instead.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(InMemoryStore::new()));
+            // The form's copy, taken before the inline login resolved the account.
+            let staged = state.get_config();
+            assert_eq!(staged.speleodb.email, None);
+            state.speleodb_persist_email(EMAIL);
+
+            state.update_config(staged).expect("settings saved");
+
+            assert_eq!(
+                state.get_config().speleodb.email.as_deref(),
+                Some(EMAIL),
+                "a save behind an inline login must not clear the rehydrate seed"
             );
         });
     }
