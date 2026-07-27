@@ -23,7 +23,10 @@ describe('divePlanSnapshotOf', () => {
     expect(snap.gas_config).toBe(inputs.gasConfig);
     expect(snap.stage_drop_overrides).toBe(inputs.stageDropOverrides);
     expect(snap.waypoints).toBe(inputs.waypoints);
-    expect(snap.marked_points).toBe(inputs.markedPoints);
+    // Marked points are the ONE exception: they are rebuilt so the labels can be trimmed here
+    // rather than in the store setter, which runs per keystroke against a controlled input and
+    // would eat the space the user just typed. Structural equality, not identity.
+    expect(snap.marked_points).toEqual(inputs.markedPoints);
     // Exactly the IPC keys, snake_case. This list is the dirty-tracking contract: a plan input
     // missing here is silently NOT compared, so an edit to it would read as clean and be lost
     // past the close guard.

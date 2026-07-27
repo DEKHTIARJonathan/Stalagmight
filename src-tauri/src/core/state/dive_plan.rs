@@ -34,8 +34,9 @@ const MAX_MARKED_LABEL_CHARS: usize = 120;
 /// extra Dijkstra and can extend the returned route by the whole station count, so an unbounded
 /// list from a hand-edited `.plnx` is a compute/memory amplifier, not just untidy data. 64 is far
 /// past any real dive (the ballot's use case is "hit this passage on the way") while staying
-/// trivially cheap. Enforced on save (reject) and on load (truncate).
-const MAX_WAYPOINTS: usize = 64;
+/// trivially cheap. Enforced on save (reject), on load (truncate), and on the live compute command
+/// (reject - see `commands::gas`), so the bound cannot be walked past from any direction.
+pub(crate) const MAX_WAYPOINTS: usize = 64;
 
 /// Upper bound on a plan's marked points (#298). They cost nothing in the engine - they never
 /// reach it - but each one is a DOM element plus a station lookup on the frontend, so the same

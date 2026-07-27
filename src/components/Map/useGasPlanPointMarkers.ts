@@ -174,7 +174,13 @@ export function useGasPlanPointMarkers({
   useEffect(() => {
     for (const m of waypointMarkersRef.current) m.remove();
     waypointMarkersRef.current = [];
-    if (!map || !mapLoaded || !showGasPlan) return undefined;
+    // Drop any pending keyboard focus when the markers are not going to be rebuilt. Without this a
+    // pin activated by keyboard right before leaving Plan leaves the index set, and the NEXT entry
+    // into Plan would move focus onto a map pin the diver never touched.
+    if (!map || !mapLoaded || !showGasPlan) {
+      pendingWaypointFocusRef.current = null;
+      return undefined;
+    }
     const lngLatOf = lngLatIndex(activeStations, gpsOrigin);
     waypoints.forEach((ref, i) => {
       const lngLat = lngLatOf(ref);
@@ -219,7 +225,10 @@ export function useGasPlanPointMarkers({
   useEffect(() => {
     for (const m of markedMarkersRef.current) m.remove();
     markedMarkersRef.current = [];
-    if (!map || !mapLoaded || !showGasPlan) return undefined;
+    if (!map || !mapLoaded || !showGasPlan) {
+      pendingMarkedFocusRef.current = null;
+      return undefined;
+    }
     const lngLatOf = lngLatIndex(activeStations, gpsOrigin);
     markedPoints.forEach((mp, i) => {
       const lngLat = lngLatOf(mp.station);

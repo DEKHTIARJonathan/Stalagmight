@@ -133,7 +133,13 @@ export default function ContextMenu() {
   // always match the slots `setStageDropOverride` writes and the rows the panel renders.
   const planMenuRouteRef = useRef<{ slots: number; route: Set<string> } | null>(null);
   if (planMenuRouteRef.current === null) {
-    const field = useGasPlanStore.getState().reachField;
+    // Read the LAST KNOWN field, not the live one. `reachField` is null for the length of every
+    // refetch, and in Plan a plain left-click is itself an input (it sets the endpoint) - so the
+    // click-then-right-click gesture opens this menu inside that window, where the live field would
+    // report zero stage slots and an empty route, hiding the stage-drop entries and marking every
+    // station off-route. `lastReachField` is the plan the map is still drawing.
+    const gas = useGasPlanStore.getState();
+    const field = gas.reachField ?? gas.lastReachField;
     const route = new Set<string>();
     for (const leg of field?.route ?? []) {
       route.add(`${leg.from.section_id}:${leg.from.station_index}`);

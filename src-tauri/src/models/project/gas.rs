@@ -70,7 +70,8 @@ impl Project {
     /// strategy default; over-long / unresolvable refs fall through to the default).
     ///
     /// A pinned drop redefines how much of that stage is breathed IN: the litres consumed to reach
-    /// the pinned station (`gas_in[S] - cumulative-at-prior-drop`), hard-clamped to `[0, tank-empty]`.
+    /// the pinned station (its route gas minus the cumulative at the prior drop), hard-clamped to
+    /// `[0, tank-empty]`.
     /// The penetration budget becomes `base + Σ(actual - safe)`, so a drop dragged **shallower**
     /// strands surplus stage gas (budget shrinks → reach shortens) and one dragged **deeper** breathes
     /// into reserve (budget grows → reach extends, flagged `stage_drop_over_reserve`). Non-overridden
@@ -80,11 +81,21 @@ impl Project {
     /// curve. With an empty `stage_drop_overrides` this is byte-identical to the no-override field.
     ///
     /// `waypoints` (#298) are ordered intermediate route points the dive MUST visit, in order,
-    /// between the origin and the endpoint. They re-base the whole field: `gas_to_reach` becomes the
-    /// gas to reach a station AFTER flying the whole way-point chain, so the reachable overlay, the
-    /// turn frontier and the stage drops all cost the mandated detour instead of quietly planning
-    /// the shortest origin-to-endpoint line. With an empty `waypoints` this is byte-identical to the
-    /// single-Dijkstra field it replaces.
+    /// between the origin and the endpoint. They re-base the field: a station's gas is the gas to
+    /// reach it AFTER flying the whole way-point chain, so the reachable overlay, the turn frontier
+    /// and the stage drops all cost the mandated detour instead of quietly planning the shortest
+    /// origin-to-endpoint line.
+    ///
+    /// That re-basing is not uniform, and the distinction is the load-bearing part of the design:
+    /// a station the committed chain SWIMS THROUGH is reported at its pass-through cost, not at the
+    /// after-chain cost of returning to it (see [`WaypointWalk::reach_gas`]). Only the destination
+    /// question - can the dive END here, which drives the turn frontier and the route target - uses
+    /// the after-chain price throughout.
+    ///
+    /// With an empty `waypoints` the chain is empty, the two prices coincide and the field is the
+    /// plain single-Dijkstra one. ⚠ It is NOT byte-identical to the pre-#298 engine even so: the
+    /// out-of-budget-endpoint rule changed for every plan, with or without way points (see
+    /// [`route_target`]).
     pub(crate) fn compute_gas_reach_field_with_overrides(
         &self,
         origin: Option<&StationRef>,
@@ -276,6 +287,7 @@ impl Project {
             apply_stage_drop_overrides(
                 &plans,
                 &resolved_overrides,
+                &base_view,
                 &walk,
                 &default_drop_nodes,
                 conservative,
@@ -304,6 +316,7 @@ impl Project {
             gas_to_reach,
             max_reachable_gas,
             target: route_target,
+            target_toward_endpoint: turn_toward_endpoint,
             route: route_nodes,
             route_gas,
         } = view;
@@ -320,9 +333,29 @@ impl Project {
         // Stations on the committed chain are excluded outright: the diver has already said they
         // are going to the way points, so a station on the way there is transit, not a
         // destination. Picking one would route out past it to the way point and back.
+        //
+        // ⚠ That exclusion has to be settled across zero-cost ties, exactly like `reach_gas`. A
+        // merge or an aligned closure holds ONE physical station as several graph nodes joined at
+        // weight 0, and `chain` is a predecessor-tree walk, so it names only the node the walk
+        // happened to pick. Marking that node alone leaves its twin unexcluded, sitting at the same
+        // place with the same gas - and the twin is usually the one carrying the side passage, so
+        // it borders the out-of-budget ground and lands on the frontier. The result is a turn dot
+        // drawn on top of a committed route station, which is the bug this exclusion exists to stop.
         let mut on_chain = vec![false; n];
+        let mut chain_queue: VecDeque<usize> = VecDeque::new();
         for &node in &walk.chain {
-            on_chain[node] = true;
+            if !on_chain[node] {
+                on_chain[node] = true;
+                chain_queue.push_back(node);
+            }
+        }
+        while let Some(u) = chain_queue.pop_front() {
+            for &(v, w) in &adj[u] {
+                if w <= 0.0 && !on_chain[v] {
+                    on_chain[v] = true;
+                    chain_queue.push_back(v);
+                }
+            }
         }
         let turn_frontier: Vec<StationRef> = (0..n)
             .filter(|&u| {
@@ -420,6 +453,7 @@ impl Project {
             route,
             stage_drop_refs,
             final_turn_ref,
+            turn_toward_endpoint,
             backgas_turn_bar,
             stage_drop_bars,
             stage_drop_over_reserve,
@@ -591,8 +625,12 @@ fn waypoint_walk(
 /// Settle gas-to-reach across zero-cost edges. Station merges and loop closures join nodes that are
 /// the SAME physical point, so they must report the same gas - otherwise lowering one chain node
 /// leaves its co-located twin on the old (higher) number, which reads as an unreachable station
-/// sitting exactly on top of a reachable one and puts a spurious dot on the frontier. A real shot
-/// always costs gas, so a zero-weight relaxation can never leak into a different place.
+/// sitting exactly on top of a reachable one and puts a spurious dot on the frontier.
+///
+/// A zero-weight edge therefore only ever joins coincident points: a tie, or the degenerate case of
+/// a zero-length shot with no depth change (nothing floors shot length project-wide, so that edge
+/// really can weigh 0). Both mean "the same place", so the relaxation cannot leak gas somewhere the
+/// diver has not paid to reach.
 fn relax_zero_cost(adj: &[Vec<(usize, f64)>], gas: &mut [f64]) {
     let mut queue: VecDeque<usize> = (0..gas.len()).filter(|&i| gas[i].is_finite()).collect();
     while let Some(u) = queue.pop_front() {
@@ -615,6 +653,10 @@ struct BudgetView {
     gas_to_reach: Vec<Option<f64>>,
     max_reachable_gas: f64,
     target: Option<usize>,
+    /// Whether `target` is genuinely on the way to the diver's chosen endpoint, as opposed to the
+    /// deepest-in-budget station anywhere. False when no endpoint is set, and when one is set but
+    /// unusable (unresolvable, or in another graph component).
+    target_toward_endpoint: bool,
     route: Vec<usize>,
     route_gas: Vec<f64>,
 }
@@ -638,22 +680,32 @@ fn route_target(
     walk: &WaypointWalk,
     reachable: &[bool],
     deepest: Option<usize>,
-) -> Option<usize> {
+) -> (Option<usize>, bool) {
     let Some(endpoint) = endpoint else {
-        return deepest;
+        return (deepest, false);
     };
     if reachable.get(endpoint).copied().unwrap_or(false) {
-        return Some(endpoint);
+        return (Some(endpoint), true);
     }
     // Walk the path toward the endpoint and keep the last station still in budget. Gas along a
     // shortest path is monotone non-decreasing, so that is exactly where the gas runs out. An
     // endpoint in another component has no path (its `pred` is unset), leaving just itself - which
     // is unreachable - so this yields nothing and we fall through.
-    path_to(&walk.pred, endpoint)
+    //
+    // The returned flag says whether the target is genuinely ON THE WAY to the endpoint, which is
+    // the only case the UI may describe that way. It is false for both deepest-anywhere fallbacks -
+    // no endpoint set, and an endpoint that is set but unusable (deleted under a loaded plan, or in
+    // another component). Telling a diver "turning at X on the way there" when X sits in an
+    // unrelated passage is the very failure the walk-toward-the-endpoint rule was added to kill; it
+    // would just have survived in the branches that rule cannot reach.
+    match path_to(&walk.pred, endpoint)
         .into_iter()
         .take_while(|&n| reachable.get(n).copied().unwrap_or(false))
         .last()
-        .or(deepest)
+    {
+        Some(n) => (Some(n), true),
+        None => (deepest, false),
+    }
 }
 fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64) -> BudgetView {
     // What the OVERLAY shows: can the diver be at this station, within budget, on this dive.
@@ -702,7 +754,7 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
         }
     }
 
-    let target = route_target(endpoint, walk, &can_end_at, deepest);
+    let (target, target_toward_endpoint) = route_target(endpoint, walk, &can_end_at, deepest);
     // The committed way-point chain, then the last leg's path to the target. That path starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
     // way points the chain is empty and the route is exactly the origin→target path.
@@ -721,6 +773,7 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
         gas_to_reach,
         max_reachable_gas,
         target,
+        target_toward_endpoint,
         route,
         route_gas,
     }
@@ -888,18 +941,20 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 /// the effective-cumulative-so-far, hard-clamped to `[0, phys_cap]` - so dragging past tank-empty
 /// snaps the drop back to the empty point, and dragging a drop shallower than the one before it
 /// contributes 0 (drops the stage full) rather than going negative. An unresolvable / off-graph /
-/// non-finite override falls through to the strategy default.
+/// non-finite override falls through to the strategy default, as does one that is not ON the route.
 ///
-/// ⚠ "Gas burned by the time they reach it" is NOT always `gas_in[S]`. `gas_in` is measured from the
-/// LAST way point, so for a station the diver passes on the way OUT to that way point it reports the
-/// cost of coming back to it afterwards - which on a cave whose return leg does not retrace the
-/// outbound can be far larger than what the diver had actually burned when they swam past. Scoring
-/// an early drop against that inflated figure reads it as a deep one and GROWS the penetration
-/// budget: the unsafe direction (§6). So a station on the committed way-point chain is scored on
-/// `chain_gas` - its true outbound cost - and only stations beyond the last way point use `gas_in`.
-/// Both bases are budget-independent, which is what keeps this acyclic: the final budget depends on
-/// these contributions. With no way points the chain is empty and every station uses `gas_in`, so
-/// the no-way-point field is unchanged.
+/// ⚠ "Gas burned by the time they reach it" is the ROUTE's cumulative gas at the drop, never
+/// `gas_in[S]`. `gas_in` is measured from the LAST way point, so for a station the diver passes on
+/// the way OUT to that way point it reports the cost of coming back to it afterwards - which on a
+/// cave whose return leg does not retrace the outbound can be far larger than what the diver had
+/// actually burned when they swam past. Scoring an early drop against that inflated figure reads it
+/// as a deep one and GROWS the penetration budget: the unsafe direction (§6). Reading the route
+/// instead is right by construction, and it is also what makes an off-route pin fall back to the
+/// default rather than being priced from a passage the plan never enters.
+///
+/// The route passed in is the BASE-budget one, which keeps the ordering acyclic: the final route
+/// depends on the budget, which depends on these very contributions. The two coincide whenever the
+/// delta is 0, i.e. whenever nothing is overridden.
 ///
 /// ⚠ Pin-to-the-default-station is a NO-OP. The default ▼ is rendered at the first route station
 /// whose route gas ≥ the stage's threshold, so that station's gas usually OVERSHOOTS the sub-station
@@ -910,19 +965,37 @@ const OVER_RESERVE_EPS_LITRES: f64 = 1e-6;
 fn apply_stage_drop_overrides(
     plans: &[StageDropPlan],
     overrides: &[Option<usize>],
+    base: &BudgetView,
     walk: &WaypointWalk,
     default_drop_nodes: &[usize],
     conservative: bool,
 ) -> (Vec<f64>, Vec<f64>, Vec<bool>, f64) {
-    // Gas burned on arrival at `si`: its outbound cost when it sits on the way-point chain (first
-    // occurrence - the earliest, hence most conservative, pass), else its post-chain gas-to-reach.
+    // Gas burned on arrival at `si`, in the two cases where "along the route" is meaningful:
+    //
+    //   1. `si` IS on the route - take the route's own cumulative gas at the FIRST pass. First
+    //      because a way-point route can double back over a station, and the earliest pass is the
+    //      smallest figure, hence the smallest budget: the conservative direction.
+    //   2. `si` is past the end of the route on the SAME line, i.e. the route's target lies on the
+    //      path to it. The route here is the BASE-budget one, and a drop pinned deeper legitimately
+    //      pushes the budget out past it, so the deeper station the diver dragged to is off the base
+    //      route by construction. Its `gas_in` IS the gas along that continuation, so it is exact.
+    //
+    // Anything else - a station on a DIFFERENT branch - yields `None`, which the caller reads as
+    // "keep the strategy default". That is the only honest answer: a drop is a position along the
+    // route, so a station the plan never passes has no arrival gas at all, and pricing it from its
+    // own shortest path folds a passage the dive never enters into the penetration budget, which
+    // extends the reach: the unsafe direction (§6). Reachable without a hand-edited file, since
+    // `.plnx` persists overrides and a plan reloaded after the survey, the endpoint or the way
+    // points moved can carry a pin the new route no longer passes.
     let arrival_gas = |si: usize| -> Option<f64> {
-        walk.chain
-            .iter()
-            .position(|&n| n == si)
-            .and_then(|p| walk.chain_gas.get(p).copied())
-            .or_else(|| walk.gas_in.get(si).copied())
-            .filter(|g| g.is_finite())
+        if let Some(p) = base.route.iter().position(|&n| n == si) {
+            return base.route_gas.get(p).copied().filter(|g| g.is_finite());
+        }
+        let target = base.target?;
+        if path_to(&walk.pred, si).contains(&target) {
+            return walk.gas_in.get(si).copied().filter(|g| g.is_finite());
+        }
+        None
     };
     let mut thresholds = Vec::with_capacity(plans.len());
     let mut bars = Vec::with_capacity(plans.len());

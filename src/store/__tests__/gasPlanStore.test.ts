@@ -14,6 +14,7 @@ const fakeField = (): GasReachField => ({
   route: [],
   stage_drop_refs: [],
   final_turn_ref: null,
+  turn_toward_endpoint: false,
   backgas_turn_bar: null,
   stage_drop_bars: [],
   stage_drop_over_reserve: [],
@@ -140,6 +141,29 @@ describe('gasPlanStore way points (#298)', () => {
     expect(useGasPlanStore.getState().waypoints).toEqual([b]);
   });
 
+  it('re-adding the same station is a no-op (a duplicate way point means nothing)', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().addWaypoint(a);
+    // Right-clicking an existing pin offers "Set as way point" again, so this is one gesture away.
+    // A duplicate burns a cap slot, adds a second identical panel row, and makes that row's gas read
+    // the LATER cumulative while the overlay paints the earlier pass.
+    expect(useGasPlanStore.getState().waypoints).toEqual([a, b]);
+  });
+
+  it('stops at the backend cap instead of building a plan that cannot be saved', () => {
+    // `save_dive_plan` REJECTS a list past 64. Without a cap here the diver pays an extra Dijkstra
+    // per way point on every keystroke and only meets the wall at save time, on a message naming
+    // neither the limit nor which entry to drop. Same reasoning as the label's maxLength.
+    for (let i = 0; i < 70; i++) {
+      useGasPlanStore.getState().addWaypoint({ section_id: 9, station_index: i });
+    }
+    expect(useGasPlanStore.getState().waypoints).toHaveLength(64);
+    // Non-vacuous: the cap is what stopped it, not the duplicate guard - every ref here is distinct.
+    const kept = useGasPlanStore.getState().waypoints;
+    expect(kept[kept.length - 1]).toEqual({ section_id: 9, station_index: 63 });
+  });
+
   it('moveWaypoint swaps with the neighbour and clamps at both ends', () => {
     useGasPlanStore.getState().addWaypoint(a);
     useGasPlanStore.getState().addWaypoint(b);
@@ -160,7 +184,9 @@ describe('gasPlanStore way points (#298)', () => {
   });
 
   it.each([
-    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint(b)],
+    // A ref not already on the list - re-adding an existing one is deliberately a no-op, which
+    // would make this case pass for the wrong reason (nothing changed, so nothing was invalidated).
+    ['addWaypoint', () => useGasPlanStore.getState().addWaypoint({ section_id: 2, station_index: 3 })],
     ['removeWaypoint', () => useGasPlanStore.getState().removeWaypoint(0)],
     ['moveWaypoint', () => useGasPlanStore.getState().moveWaypoint(0, 1)],
   ])(
@@ -200,11 +226,30 @@ describe('gasPlanStore marked points (#298)', () => {
     expect(useGasPlanStore.getState().markedPoints).toEqual([]);
   });
 
-  it('an all-whitespace label stores as null (a cleared input is "no label", not a blank one)', () => {
+  it('keeps a label EXACTLY as typed, so a space survives the next keystroke', () => {
+    // The panel's input is controlled off this value. Trimming here made the store answer "photo"
+    // to the DOM's "photo ", React restored the shorter string, and the space was eaten on every
+    // keystroke - so a multi-word label could not be typed by hand at all. These three calls are
+    // the exact per-keystroke sequence; an e2e `fill()` dispatches one event and never sees it.
     useGasPlanStore.getState().addMarkedPoint(at);
     useGasPlanStore.getState().setMarkedPointLabel(0, 'photo');
+    useGasPlanStore.getState().setMarkedPointLabel(0, 'photo ');
+    expect(useGasPlanStore.getState().markedPoints[0]?.label).toBe('photo ');
+    useGasPlanStore.getState().setMarkedPointLabel(0, 'photo stop');
+    expect(useGasPlanStore.getState().markedPoints[0]?.label).toBe('photo stop');
+  });
+
+  it('normalises the label at the SAVE boundary instead - padding trimmed, blank becomes null', () => {
+    // The trim did not disappear, it moved to `divePlanSnapshotOf`, which is both what the backend
+    // receives and what dirty-tracking diffs. So a trailing space cannot leave a plan permanently
+    // dirty against a value the save would have normalised away.
+    useGasPlanStore.getState().addMarkedPoint(at);
+    useGasPlanStore.getState().setMarkedPointLabel(0, '  photo stop  ');
+    expect(divePlanSnapshotOf(useGasPlanStore.getState()).marked_points[0]?.label).toBe(
+      'photo stop'
+    );
     useGasPlanStore.getState().setMarkedPointLabel(0, '   ');
-    expect(useGasPlanStore.getState().markedPoints[0]?.label).toBeNull();
+    expect(divePlanSnapshotOf(useGasPlanStore.getState()).marked_points[0]?.label).toBeNull();
   });
 
   it.each([

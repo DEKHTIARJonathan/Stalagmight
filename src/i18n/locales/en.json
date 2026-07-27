@@ -2183,6 +2183,7 @@
       "unreachable": "unreachable",
       "pending": "…",
       "endpointOutOfReach": "Out of reach on this gas. Turning at {{id}}, on the way there.",
+      "endpointUnusable": "Your endpoint can no longer be reached from here. Showing the deepest point in budget instead, at {{id}} - it is not on the way to your endpoint.",
       "warnUnreachable": "Way point {{n}} cannot be reached, so no route can be planned. Remove it, or reconnect the survey.",
       "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas."
     },

@@ -196,6 +196,12 @@ export function GasPlanPanel() {
   // toward it as the gas allows). The station it actually turns at, or null when the endpoint IS
   // the turnaround. `final_turn_ref` is the engine's own answer - never re-derived here.
   const turn = reachField?.final_turn_ref ?? null;
+  // Whether the engine's turn station is genuinely on the way to the pick, or the deepest-anywhere
+  // fallback (endpoint deleted under a loaded plan, or in another component). The two look the same
+  // from here - both are "a turn station that is not the endpoint" - so the engine reports which.
+  // Saying "on the way there" about an unrelated passage is the exact failure the walk-toward-the-
+  // endpoint rule exists to prevent.
+  const turnTowardEndpoint = reachField?.turn_toward_endpoint === true;
   const endpointOutOfReach =
     endpoint != null &&
     turn != null &&
@@ -224,7 +230,16 @@ export function GasPlanPanel() {
   // Per-stage drops (pressure + swum distance from origin), aligned 1:1; one readout row each - any
   // number of stages (Free is uncapped). When drops exist the diver switches to back gas after
   // dropping the stages, so the back-gas gauge reads "switch pressure", not "turn pressure".
-  const stageDrops = reachField
+  //
+  // ⚠ Gate on a real turnaround, the same way `hasRoute` below does. `stage_drop_bars` comes out of
+  // the strategy and the cylinders, so it is populated whenever the rig has stages - even when the
+  // engine found no target at all and emptied `stage_drop_refs`/`stage_drop_distances_m`. Since
+  // #298 that state is reachable in ordinary use (a way point that is disconnected, deleted
+  // mid-edit, or out of budget stalls the whole plan). Rendering "Stage 1 drop: 119 bar" for a dive
+  // that cannot be flown is worse than the turnaround case these rows sit next to: it names a
+  // pressure at which to leave a tank behind, and the map is drawing no ▼ to go with it.
+  const stageDropsKnown = reachField != null && reachField.final_turn_ref != null;
+  const stageDrops = stageDropsKnown && reachField
     ? reachField.stage_drop_bars.map((bar, i) => ({
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
@@ -349,12 +364,17 @@ export function GasPlanPanel() {
               rather than leaving the diver to wonder where their endpoint went. */}
           {endpointOutOfReach && (
             <p className="text-xs opacity-70" data-testid="gas-endpoint-out-of-reach">
-              {t('gasPanel.route.endpointOutOfReach', {
-                id: formatStationId(
-                  endpointOutOfReach.section_id,
-                  endpointOutOfReach.station_index
-                ),
-              })}
+              {t(
+                turnTowardEndpoint
+                  ? 'gasPanel.route.endpointOutOfReach'
+                  : 'gasPanel.route.endpointUnusable',
+                {
+                  id: formatStationId(
+                    endpointOutOfReach.section_id,
+                    endpointOutOfReach.station_index
+                  ),
+                }
+              )}
             </p>
           )}
 

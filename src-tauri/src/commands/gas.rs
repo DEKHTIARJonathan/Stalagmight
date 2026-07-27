@@ -1,6 +1,7 @@
 use tauri::Manager;
 
 use crate::config::GasConfig;
+use crate::core::state::dive_plan::MAX_WAYPOINTS;
 use crate::core::AppState;
 use crate::models::{Cylinder, Diver, GasReachField, StationRef};
 
@@ -29,6 +30,21 @@ pub async fn compute_gas_reach_field(
     // move the budget, so a stray ref can only fall through to the default.
     stage_drop_overrides: Vec<Option<StationRef>>,
 ) -> Result<Option<GasReachField>, String> {
+    // Every way point costs the engine a full extra Dijkstra, and this command re-runs on every
+    // gas-input keystroke, so an over-long list is a compute amplifier on the hottest path there
+    // is. The `.plnx` write path already caps it for that reason; enforce the same bound here so
+    // the limit cannot be walked past by a caller that never touches a file.
+    //
+    // REJECT rather than truncate. A way point is a constraint the dive must satisfy, and the
+    // engine's whole contract is that an unusable one stalls the plan instead of being quietly
+    // skipped - silently dropping the 65th would hand back a route that ignores it, which is the
+    // unsafe direction. The UI caps at the same number, so this is unreachable from normal use.
+    if waypoints.len() > MAX_WAYPOINTS {
+        return Err(format!(
+            "Too many way points: {} (max {MAX_WAYPOINTS}).",
+            waypoints.len()
+        ));
+    }
     // Re-validate through the guarding constructors - a NaN/zero RMV or cylinder from the
     // frontend would otherwise reach the engine and poison the field.
     let diver = Diver::new(diver.rmv_l_per_min, diver.label)?;

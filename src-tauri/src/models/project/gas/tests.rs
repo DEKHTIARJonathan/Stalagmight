@@ -2522,11 +2522,27 @@ fn gas_reach_field_no_waypoints_is_identical_to_the_plain_field() {
         &cfg,
         &[],
     );
+    // ⚠ This equality is STRUCTURALLY VACUOUS on its own and is kept only as a wiring check:
+    // `compute_gas_reach_field` now forwards to `compute_gas_reach_field_with_overrides` with an
+    // empty slice, so both sides run the same code with the same arguments and the compiler
+    // guarantees the assert. It cannot go red for any regression in the no-way-point path.
     assert_eq!(plain, with_empty);
     assert!(plain.waypoint_gas_litres.is_empty());
-    // Sanity: the comparison is not vacuous - this rig really does produce a route and a drop.
     assert!(!plain.route.is_empty());
     assert_eq!(plain.stage_drop_refs.len(), 1);
+
+    // THE REAL GUARD: hand-computed gas, independent of the engine. At the default 1.0 survey
+    // multiplier and 10 m/min, a 100 m leg costs `20 · ata(avg depth) · 10 min`, so the trunk's
+    // 0→10 / 10→20 / 20→30 legs cost 300 / 500 / 700 L and the side branch's 0→10 leg costs 300 L.
+    // These are the numbers the single-Dijkstra engine produced before way points existed; if the
+    // chain machinery ever perturbs the empty-chain case, they move and this fails.
+    let (_p, entrance2, side_tip, _tip) = branching_project();
+    assert_eq!(entrance2, entrance);
+    assert!(field_gas(&plain, entrance).abs() < 1e-6);
+    assert!((field_gas(&plain, StationRef::new(trunk_tip.section_id, 1)) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&plain, StationRef::new(trunk_tip.section_id, 2)) - 800.0).abs() < 1e-6);
+    assert!((field_gas(&plain, trunk_tip) - 1500.0).abs() < 1e-6);
+    assert!((field_gas(&plain, side_tip) - 300.0).abs() < 1e-6);
 }
 
 #[test]
@@ -3126,6 +3142,152 @@ fn gas_reach_field_waypoint_does_not_offer_a_transit_station_as_a_turn_candidate
         !field.turn_frontier.contains(&east_entrance),
         "the entrance's merge twin is offered as a turn candidate"
     );
+}
+
+#[test]
+fn gas_reach_field_a_merge_twin_of_a_route_station_is_not_a_turn_candidate() {
+    // The test above holds for the wrong reason at 170 bar: the twin is ALSO out of budget there, so
+    // the destination check alone suppresses it. Raise the gas until the twin is affordable and the
+    // real question is exposed - whether excluding the committed chain covers the twin at all.
+    //
+    // It did not. The chain is a predecessor-tree walk, so it names one node per physical station;
+    // a merge holds the entrance as TWO zero-cost-joined nodes and only the north one is on that
+    // walk. The east twin sits at the same place, at the same gas, carrying the east branch - so it
+    // bordered the out-of-budget branch and put a turn dot back on the entrance, at a different gas
+    // load than the one the first fix was written against.
+    let (project, entrance, north, east, north_tip, _east_mid) = two_branch_project();
+    let waypoint = StationRef::new(north, 2);
+    let east_entrance = StationRef::new(east, 0);
+    let east_next = StationRef::new(east, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    // 220 bar in the 13 L steel gives ~905 L of All-thirds budget, which straddles the entrance's
+    // after-chain price (800 L) and the east branch's (1060 L). That window is what makes the twin
+    // affordable as a destination while the ground past it is not - i.e. a genuine frontier, but on
+    // a station the dive is committed to swimming through.
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        220.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&north_tip),
+        &[waypoint],
+        &diver,
+        std::slice::from_ref(&bg),
+        &GasConfig::default(),
+        &[],
+    );
+
+    // SETUP - pin the window. If the budget ever drifts outside it the test stops measuring the
+    // twin case and silently passes for the same wrong reason as its predecessor.
+    assert!(
+        field.budget_litres > 800.0 && field.budget_litres < 1060.0,
+        "budget {} no longer straddles the entrance and the east branch",
+        field.budget_litres
+    );
+    assert!(field_reachable(&field, east_entrance));
+    assert!(!field_reachable(&field, east_next));
+
+    // THE PROPERTY. Red before the zero-cost settling of `on_chain`, green after.
+    assert!(
+        !field.turn_frontier.contains(&east_entrance),
+        "the entrance's merge twin is offered as a turn candidate at a higher gas load"
+    );
+    assert!(!field.turn_frontier.contains(&entrance));
+}
+
+#[test]
+fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default() {
+    // A stage drop is a position ALONG the route, and the UI only ever writes route stations (the
+    // drag snaps, the nudge is index-clamped, the menu entry hides off-route). But `.plnx` PERSISTS
+    // overrides, so a plan reloaded after the survey, the endpoint or the way points moved can carry
+    // a pin the new route no longer passes - no hand-edited file required.
+    //
+    // Scoring such a pin from the station's own shortest-path gas prices a passage the plan never
+    // enters and folds the difference into the penetration budget, which EXTENDS the reach: the
+    // unsafe direction. An off-route pin has no route gas, so the only honest answer is the
+    // strategy default.
+    let (project, entrance, north, east, north_tip, east_mid) = two_branch_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        13.0,
+        232.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        11.1,
+        207.0,
+        207.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let rig = [bg, stage];
+    let plan_north = |overrides: &[Option<StationRef>]| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            Some(&north_tip),
+            &[],
+            &diver,
+            &rig,
+            &cfg,
+            overrides,
+        )
+    };
+
+    let baseline = plan_north(&[]);
+    // SETUP - the route runs down the north passage, so an east station is genuinely off it, and
+    // the rig really does have a stage slot to override.
+    assert_eq!(baseline.stage_drop_refs.len(), 1);
+    let route = route_stations(&baseline);
+    assert!(route.contains(&north_tip));
+    assert!(!route.contains(&east_mid));
+    // ...and it is not off-GRAPH: it resolves fine, which is what let it reach the scoring code.
+    assert!(baseline.station_refs.contains(&east_mid));
+    // Non-vacuity: the east station's own gas-to-reach is a real, different number, so the old
+    // `gas_in` basis had something to score and would not have coincided with the default.
+    let east_gas = field_gas(&baseline, east_mid);
+    assert!(east_gas > 0.0);
+
+    let pinned_off_route = plan_north(&[Some(east_mid)]);
+    assert!(
+        (pinned_off_route.budget_litres - baseline.budget_litres).abs() < 1e-6,
+        "an off-route pin moved the penetration budget by {} L",
+        pinned_off_route.budget_litres - baseline.budget_litres
+    );
+    assert_eq!(pinned_off_route.stage_drop_refs, baseline.stage_drop_refs);
+    assert_eq!(pinned_off_route.stage_drop_bars, baseline.stage_drop_bars);
+    assert!(!pinned_off_route.stage_drop_over_reserve[0]);
+
+    // The guard must not have been bought by disabling overrides altogether: an ON-route pin, one
+    // station deeper than the default drop, still moves the budget.
+    let default_drop = baseline.stage_drop_refs[0];
+    let deeper = route
+        .iter()
+        .skip_while(|r| **r != default_drop)
+        .find(|r| **r != default_drop && r.section_id == north)
+        .copied();
+    if let Some(deeper) = deeper {
+        let pinned_on_route = plan_north(&[Some(deeper)]);
+        assert!(
+            (pinned_on_route.budget_litres - baseline.budget_litres).abs() > 1e-6,
+            "an on-route pin at {deeper:?} left the budget unchanged - the override path is dead"
+        );
+    }
 }
 
 #[test]

@@ -38,7 +38,19 @@ export function divePlanSnapshotOf(i: DivePlanInputs): DivePlanSnapshot {
     cylinders: i.cylinders,
     gas_config: i.gasConfig,
     stage_drop_overrides: i.stageDropOverrides,
-    marked_points: i.markedPoints,
+    // Trim marked-point labels HERE, not in the store setter: the setter runs per keystroke against
+    // a controlled input, where normalising would eat the space the user just typed. This is the
+    // boundary that actually cares - surrounding padding would otherwise count against the backend's
+    // label cap for no visible benefit, and an all-whitespace label round-trips as "no label"
+    // rather than a blank string.
+    //
+    // It also has to be the dirty-tracking basis, and it is: `selectIsPlanDirty` diffs this same
+    // snapshot against the baseline, so typing a trailing space does not leave a plan permanently
+    // dirty against a value the save would have normalised away.
+    marked_points: i.markedPoints.map((m) => {
+      const trimmed = m.label?.trim();
+      return { ...m, label: trimmed ? trimmed : null };
+    }),
   };
 }
 

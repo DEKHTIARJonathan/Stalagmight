@@ -1425,6 +1425,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ? stations[deepestIdx].station_ref
                 : null;
             const final_turn_ref = targetRef;
+            // Mirrors the engine's own flag: true when the endpoint IS the target, false for the
+            // deepest-in-budget fallback (no endpoint set, or one that cannot be used). The mock has
+            // no partial walk toward an out-of-reach endpoint, so those two cases are all it can
+            // distinguish - enough to keep the panel's two messages apart.
+            const turn_toward_endpoint = endpointReachable && endpoint != null;
             // Drop stages: staged presets drop their first `dropCount` enabled stages; Free drops
             // every enabled stage with a positive usable (no cap). Each gets a ref, clamped to the
             // turnaround when the route is shorter - mirroring the engine so refs/bars/distances align.
@@ -1606,6 +1611,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route,
               stage_drop_refs,
               final_turn_ref,
+              turn_toward_endpoint,
               backgas_turn_bar,
               stage_drop_bars,
               stage_drop_over_reserve,
