@@ -11,7 +11,7 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
-import { applyReverseAftermath, netReversedShotCounts } from '../utils/reverseAftermath';
+import { applyReverseAftermath, composeReverseTransforms } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -36,6 +36,7 @@ import type {
   Coordinates,
   FrozenShotRef,
 } from '../types/project';
+import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
@@ -509,16 +510,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE
-    // physical station, silently and persistably. The backend names the sections
-    // it renumbered on the result (undo/redo of a reverse re-reverses the same
-    // ones), so re-mirror them once the refreshed state lands; the mirror is an
-    // involution, so this inverts the forward one. Absent on everything else,
-    // which is the common case and costs nothing.
-    let reversedSectionIds: readonly SectionId[] | undefined;
+    // physical station, silently and persistably. The backend reports what it
+    // renumbered on the result (undo/redo of a reverse re-reverses the same
+    // sections), one entry per reversing STEP with the shot count in force at it,
+    // so compose them and re-mirror once the refreshed state lands. Absent on
+    // everything else, which is the common case and costs nothing.
+    let reversedSections: readonly ReversedSection[] | undefined;
     try {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
-        reversedSectionIds = result.reversed_section_ids;
+        reversedSections = result.reversed_sections;
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
@@ -527,6 +528,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
           useSpeleoStore.getState().markDirty();
+          // A partial multi-step failure still renumbered: the steps BEFORE the
+          // failing one already flipped their sections and cannot be rolled back,
+          // which is why the backend attaches the entries it applied to the
+          // failure return too. Dropping them here would leave the plan pins and
+          // the distance origin mirrored onto the opposite physical stations with
+          // no error the user could connect to it.
+          reversedSections = result.reversed_sections;
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string - mashing Ctrl+Z
@@ -545,11 +553,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
-      // Shot counts read from the REFRESHED project, which is the numbering the
-      // pins now have to match (a reverse never changes a count, so this is the
-      // same figure either way - see netReversedShotCounts).
+      // The per-step counts come off the wire; the REFRESHED project supplies only
+      // the range to clamp into, which is the numbering the pins now have to fit.
+      // A multi-step undo_to can walk past a CreateShot, so the post-range count
+      // is NOT the divisor the earlier steps mirrored against - composing the
+      // entries is what keeps those steps landing on the right station.
       applyReverseAftermath(
-        netReversedShotCounts(reversedSectionIds, get().project?.sections ?? [])
+        composeReverseTransforms(reversedSections, get().project?.sections ?? [])
       );
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a

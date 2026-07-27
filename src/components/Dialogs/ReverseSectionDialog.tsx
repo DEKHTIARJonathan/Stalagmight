@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { applyReverseAftermath } from '../../utils/reverseAftermath';
+import { applyReverseAftermath, singleReverseTransform } from '../../utils/reverseAftermath';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -112,11 +112,19 @@ export default function ReverseSectionDialog() {
       // the dialog is already gone - the reverse landed either way - but not
       // across a project switch, whose refs belong to a different project.
       // Keyed off the sections this dialog submitted rather than the result's
-      // `reversed_section_ids`: the call is synchronous and all-or-nothing, so on
+      // `reversed_sections`: the call is synchronous and all-or-nothing, so on
       // success the two lists are the same, and unlike undo/redo - which replays a
       // history entry the frontend never saw - there is nothing here to discover.
+      // Deliberately NOT consuming the wire field, which is why nothing here has
+      // to compose: this is exactly one reverse per section against a count read
+      // from the very project state the user confirmed against, so each section's
+      // transform is a plain `i -> N - i`. The composing path exists for undo/redo
+      // only, where a range can hold several reverses of one section at DIFFERENT
+      // counts.
       if (projectKeyOf(useProjectStore.getState().project) === projectKey) {
-        applyReverseAftermath(new Map(changing.map((s) => [s.id, s.shots.length] as const)));
+        applyReverseAftermath(
+          new Map(changing.map((s) => [s.id, singleReverseTransform(s.shots.length)] as const))
+        );
       }
 
       if (useUIStore.getState().dialogData !== dialogKey) return;

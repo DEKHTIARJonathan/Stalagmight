@@ -210,8 +210,11 @@ export default function ContextMenu() {
    * so it is always obvious how many sections are about to change.
    */
   const reverseItems = (sectionId: SectionId): ContextMenuItem[] => {
-    // Deduped: a repeated id would reverse that section twice in the batch (the
-    // second is a silent no-op) and inflate the count the menu label promises.
+    // Deduped so the count the menu label promises matches the sections it acts
+    // on. Defence in depth on the behaviour: a repeat is NOT a silent no-op - it
+    // reverses the section twice, and the backend parity-reduces such a pair out
+    // of `reversed_sections` (see `Command::reversed_section_ids`) precisely
+    // because the second reverse is a real renumbering that cancels the first.
     const selectedSectionIds = [
       ...new Set(
         multiSelection

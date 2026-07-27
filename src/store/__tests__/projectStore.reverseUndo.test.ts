@@ -9,15 +9,22 @@
  * straight into the saved dive plan. No error is ever raised.
  *
  * `executeUndoRedo` therefore re-mirrors the sections the backend reports on the
- * result as renumbered (`CommandResult.reversed_section_ids`, populated for a
+ * result as renumbered (`CommandResult.reversed_sections`, populated for a
  * forward reverse and for the undo/redo that re-reverses it). These tests drive
  * the real store action with the IPC mocked, so deleting that wiring fails here.
+ *
+ * From `undo_to`/`redo_to` the field is an ORDERED PER-STEP LOG - one entry per
+ * reversing step, repeats intact, each carrying the shot count in force at ITS
+ * step - so the store composes the entries into one transform per section and
+ * applies it once. The Playwright IPC mock stubs undo/redo as no-ops that never
+ * emit the field, so this path is only reachable at the store level, here.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useProjectStore } from '../projectStore';
 import { useGasPlanStore } from '../gasPlanStore';
 import { useUIStore } from '../uiStore';
+import type { ReversedSection } from '../../types/ipc/ReversedSection';
 import type { Station } from '../../types/project';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -45,6 +52,12 @@ const FORWARD = [0, 10, 25, 40];
 const REVERSED = [40, 25, 10, 0];
 /** Reversed AND translated, as one batch that reverses and moves produces. */
 const REVERSED_AND_MOVED = REVERSED.map((x) => x + 1000);
+
+/** One `reversed_sections` entry: the section, and the count in force at that step. */
+const reversed = (shot_count: number): ReversedSection => ({
+  section_id: SECTION,
+  shot_count,
+});
 
 function projectWith(stations: Station[]) {
   return {
@@ -78,24 +91,29 @@ function projectWith(stations: Station[]) {
 
 /**
  * Point every read-only refresh IPC at a project whose stations are `stations`,
- * and have undo/redo report `reversedSectionIds` as renumbered. Omit it for an
+ * and have undo/redo report `reversedSections` as renumbered. Omit it for an
  * operation that reversed nothing: the field is then absent from the wire, which
- * is what the backend does for every other command.
+ * is what the backend does for every other command. `error` turns the undo into
+ * a FAILED one that still reports what it managed to apply.
  */
-function serveState(stations: Station[], reversedSectionIds?: number[]) {
+function serveState(
+  stations: Station[],
+  reversedSections?: ReversedSection[],
+  error?: string
+) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
       case 'undo_to':
         return {
-          success: true,
+          success: error === undefined,
           warnings: [],
-          error: null,
+          error: error ?? null,
           section_ids: [],
-          ...(reversedSectionIds === undefined
+          ...(reversedSections === undefined
             ? {}
-            : { reversed_section_ids: reversedSectionIds }),
+            : { reversed_sections: reversedSections }),
         };
       case 'get_project_state':
         return {
@@ -137,7 +155,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     gas.addMarkedPoint(ref(0));
     gas.setStageDropOverride(0, ref(2));
 
-    serveState(line(FORWARD), [SECTION]);
+    serveState(line(FORWARD), [reversed(3)]);
     await useProjectStore.getState().undo();
 
     const after = useGasPlanStore.getState();
@@ -152,7 +170,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(3) });
     // With the plan empty, the distance origin has to be enough on its own.
-    serveState(line(FORWARD), [SECTION]);
+    serveState(line(FORWARD), [reversed(3)]);
     await useProjectStore.getState().undo();
 
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
@@ -162,14 +180,14 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('re-mirrors on redo too, and on a multi-step undo_to', async () => {
     useGasPlanStore.getState().setOrigin(ref(3));
 
-    serveState(line(FORWARD), [SECTION]);
+    serveState(line(FORWARD), [reversed(3)]);
     await useProjectStore.getState().redo();
     expect(useGasPlanStore.getState().origin).toEqual(ref(0));
 
     // And back again through the history dropdown's multi-step path, which
-    // reports the sections every step it walked past renumbered.
+    // reports one entry per reversing step it walked past.
     useProjectStore.setState({ stations: line(FORWARD) });
-    serveState(line(REVERSED), [SECTION]);
+    serveState(line(REVERSED), [reversed(3)]);
     await useProjectStore.getState().undoTo(2);
     expect(useGasPlanStore.getState().origin).toEqual(ref(3));
   });
@@ -177,8 +195,8 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('leaves the pins alone on an undo that did not renumber anything', async () => {
     useGasPlanStore.getState().setOrigin(ref(3));
 
-    // No `reversed_section_ids` on the wire: an ordinary undo must not churn
-    // the plan.
+    // No `reversed_sections` on the wire: an ordinary undo must not churn the
+    // plan.
     serveState(line(REVERSED));
     await useProjectStore.getState().undo();
 
@@ -194,26 +212,70 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     useGasPlanStore.getState().setOrigin(ref(3));
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
 
-    serveState(line(REVERSED_AND_MOVED), [SECTION]);
+    serveState(line(REVERSED_AND_MOVED), [reversed(3)]);
     await useProjectStore.getState().undo();
 
     expect(useGasPlanStore.getState().origin).toEqual(ref(0));
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
   });
 
-  it('applies the mirror once per reported entry, so a doubled section is a no-op', async () => {
-    // The ids come in command order WITH repeats - a batch that reverses one
-    // section twice lists it twice, and that numbering is back where it started.
-    // Mirroring per DISTINCT id would move the pins off their stations.
+  it('treats an equal-count double reverse as a TOTAL no-op', async () => {
+    // Two reverses of one section at the same count, undone as one range: the
+    // composed transform is exactly `i -> i`, so nothing may move and nothing may
+    // be cleared. The out-of-range origin is the discriminator - it is what a
+    // per-entry replay would drag onto an end station (`9 -> 0 -> 7`), because
+    // each replayed mirror clamps, and it is what the identity map would clamp to
+    // `maxIndex` if `applyReverseAftermath` ran at all.
+    useGasPlanStore.getState().setOrigin(ref(9));
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(2) });
+
+    serveState(line(REVERSED), [reversed(7), reversed(7)]);
+    await useProjectStore.getState().undoTo(1);
+
+    expect(useGasPlanStore.getState().origin).toEqual(ref(9));
+    // The four UI clears are gated on the same "did anything actually renumber"
+    // question, and a cancelled-out range did not: the user's selection and
+    // half-staged merge are still valid.
+    expect(useUIStore.getState().selection).not.toBeNull();
+  });
+
+  it('composes two reverses at DIFFERENT counts instead of cancelling them', async () => {
+    // `[Reverse, CreateShot, Reverse]` walked back by one `undo_to`: the steps
+    // mirrored against 4 shots then 3, so the net map is `i -> 3 - (4 - i)`, i.e.
+    // one station down. Cancelling the repeat (parity) would leave the pin at 3;
+    // dividing by the post-range count alone would send it to 0.
     useGasPlanStore.getState().setOrigin(ref(3));
 
-    serveState(line(REVERSED), [SECTION, SECTION]);
-    await useProjectStore.getState().undo();
-    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
+    serveState(line(FORWARD), [reversed(4), reversed(3)]);
+    await useProjectStore.getState().undoTo(2);
 
-    // An odd number of entries is one net flip.
-    serveState(line(FORWARD), [SECTION, SECTION, SECTION]);
-    await useProjectStore.getState().undo();
+    expect(useGasPlanStore.getState().origin).toEqual(ref(2));
+  });
+
+  it('mirrors what a PARTIALLY failed undo_to already applied', async () => {
+    // The earlier steps flipped their sections and cannot be rolled back, so the
+    // backend attaches them to the failure return. Ignoring the field on
+    // `success === false` leaves the pins on the opposite physical stations with
+    // only a step-N-of-M toast to explain it.
+    useGasPlanStore.getState().setOrigin(ref(3));
+    useUIStore.setState({ distanceGradientOrigin: ref(1) });
+
+    serveState(line(FORWARD), [reversed(3)], 'Undo failed at step 2 of 3: boom');
+    const result = await useProjectStore.getState().undoTo(2);
+
+    expect(result.success).toBe(false);
     expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
+  });
+
+  it('ignores the field on a failure that mutated nothing', async () => {
+    // Step 1 of N failing means no step landed, so there is nothing to mirror -
+    // and `executeUndoRedo` only reads the field for the partial case.
+    useGasPlanStore.getState().setOrigin(ref(3));
+
+    serveState(line(REVERSED), [reversed(3)], 'Undo failed at step 1 of 3: boom');
+    await useProjectStore.getState().undoTo(2);
+
+    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
   });
 });

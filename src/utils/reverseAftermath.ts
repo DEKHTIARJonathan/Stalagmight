@@ -24,42 +24,110 @@
  * The same mirror has to run again whenever an undo or redo flips the numbering
  * BACK - otherwise Ctrl+Z restores the old numbering while the pins stay
  * mirrored onto the opposite physical stations, which then persists into the
- * saved plan. Mirroring is an involution, so re-applying it is the inverse; the
- * only question is which sections flipped, and the backend answers that
- * outright - `CommandResult.reversed_section_ids` names them on the forward
- * command AND on the undo/redo of one (see `netReversedShotCounts`).
+ * saved plan. The backend answers "which sections, against which shot count"
+ * outright on `CommandResult.reversed_sections`, because the geometry cannot: a
+ * reverse keeps every world coordinate, so a section that was reversed AND moved
+ * in one action matches neither arrangement afterwards.
+ *
+ * Those entries are COMPOSED into one affine map per section and applied once
+ * (see `composeReverseTransforms`), never replayed per entry. The mirror is not
+ * an involution - it CLAMPS - and a multi-step `undo_to` can walk past a
+ * `CreateShot`, so the count differs between steps; either fact on its own
+ * breaks a per-entry fold.
  */
 import type { Section, SectionId, StationRef } from '../types/project';
+import type { ReversedSection } from '../types/ipc/ReversedSection';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
 
-/** Station `i` of a section with `shotCount` shots becomes station `shotCount - i`. */
+/**
+ * The NET renumbering one section came out of an operation with, as the affine
+ * map `i -> shift + sign * i` over station indices.
+ *
+ * One reverse of an `N`-shot section is `{ shift: N, sign: -1 }`; composing two
+ * with counts `c1` then `c2` gives `{ shift: c2 - c1, sign: +1 }`, which is the
+ * IDENTITY exactly when the counts match. That is the whole reason for carrying a
+ * transform rather than a divisor: `i -> N - i` applied twice is only the
+ * identity when nothing changed the count in between, and only for an in-range
+ * index (see `applyTransform`'s clamp).
+ */
+export interface ReverseTransform {
+  /** `A` in `i -> A + s * i`. */
+  shift: number;
+  /** `s` in `i -> A + s * i`: `-1` after an odd number of reverses, `+1` after an even one. */
+  sign: 1 | -1;
+  /** Highest valid station index in the section as it stands NOW (== its shot count). */
+  maxIndex: number;
+}
+
+/**
+ * The transform ONE reverse of a section with `shotCount` shots applies:
+ * station `i` becomes station `shotCount - i`.
+ *
+ * This is what the Reverse dialog's forward path installs. It knows the sections
+ * it submitted and their counts outright, so it never has to compose anything.
+ */
+export function singleReverseTransform(shotCount: number): ReverseTransform {
+  return { shift: shotCount, sign: -1, maxIndex: shotCount };
+}
+
+/** True when the composed transform is `i -> i`: the numbering ended where it started. */
+export function isIdentityTransform(transform: ReverseTransform): boolean {
+  return transform.sign === 1 && transform.shift === 0;
+}
+
+/** True when `transforms` actually renumbered `sectionId`; an identity entry did not. */
+function flipsSection(
+  transforms: Map<SectionId, ReverseTransform>,
+  sectionId: SectionId
+): boolean {
+  const transform = transforms.get(sectionId);
+  return transform !== undefined && !isIdentityTransform(transform);
+}
+
+/**
+ * Apply a composed transform to one index, clamping ONCE at the end.
+ *
+ * Clamped, not a bare affine map: a plan pin outlives the shots it was dropped
+ * on (its only reset is a project switch), so `station_index` can already sit
+ * past the end of a shortened section - and `shotCount - index` then goes
+ * NEGATIVE. `StationRef.station_index` is a `u32`, so serde rejects the whole
+ * `compute_gas_reach_field` payload and the reach overlay fails permanently on
+ * one poisoned pin rather than degrading. The backend's import-side mirror clamps
+ * for the same reason. An already-broken pin lands on an end station instead of a
+ * negative index; it was not naming a real station either way, and the clamp
+ * keeps every other pin working.
+ *
+ * ONCE is load-bearing: clamping per step would send an out-of-range pin
+ * `p -> 0 -> shotCount` across two reverses that between them changed nothing.
+ * Composing first and clamping at the end keeps a net no-op a no-op.
+ */
+export function applyTransform(ref: StationRef, transform: ReverseTransform): StationRef {
+  const moved = transform.shift + transform.sign * ref.station_index;
+  if (moved < 0) return { ...ref, station_index: 0 };
+  if (moved > transform.maxIndex) return { ...ref, station_index: transform.maxIndex };
+  return { ...ref, station_index: moved };
+}
+
+/** Re-point `ref` by whatever its section's numbering ended up doing. */
 export function mirrorRef(
   ref: StationRef,
-  shotCounts: Map<SectionId, number>
+  transforms: Map<SectionId, ReverseTransform>
 ): StationRef {
-  const shotCount = shotCounts.get(ref.section_id);
-  if (shotCount === undefined) return ref;
-  // Clamped, not a bare subtraction: a plan pin outlives the shots it was
-  // dropped on (its only reset is a project switch), so `station_index` can
-  // already sit past the end of a shortened section - and `shotCount - index`
-  // then goes NEGATIVE. `StationRef.station_index` is a `u32`, so serde rejects
-  // the whole `compute_gas_reach_field` payload and the reach overlay fails
-  // permanently on one poisoned pin rather than degrading. The backend's
-  // import-side mirror clamps for the same reason. An already-broken pin lands
-  // on an end station instead of a negative index; it was not naming a real
-  // station either way, and the clamp keeps every other pin working.
-  const mirrored = shotCount - ref.station_index;
-  if (mirrored < 0) return { ...ref, station_index: 0 };
-  if (mirrored > shotCount) return { ...ref, station_index: shotCount };
-  return { ...ref, station_index: mirrored };
+  const transform = transforms.get(ref.section_id);
+  // An identity entry is a section whose numbering ended exactly where it
+  // started. Returning `ref` itself rather than running the clamp keeps that a
+  // TOTAL no-op: `applyTransform` would still pull an already out-of-range pin
+  // down to `maxIndex`, which is a silent move nothing asked for.
+  if (transform === undefined || isIdentityTransform(transform)) return ref;
+  return applyTransform(ref, transform);
 }
 
 function mirrorNullable(
   ref: StationRef | null,
-  shotCounts: Map<SectionId, number>
+  transforms: Map<SectionId, ReverseTransform>
 ): StationRef | null {
-  return ref === null ? null : mirrorRef(ref, shotCounts);
+  return ref === null ? null : mirrorRef(ref, transforms);
 }
 
 /** The pieces of the gas plan that are keyed by station position. */
@@ -72,33 +140,33 @@ export interface PlanPins {
 }
 
 /**
- * Rewrite every plan pin that sits in a reversed section onto its mirrored
+ * Rewrite every plan pin that sits in a renumbered section onto its mirrored
  * station. Pins in other sections are returned untouched (by identity where
  * possible, so an unaffected plan produces no spurious state change).
  */
 export function mirrorPlanPins(
   pins: PlanPins,
-  shotCounts: Map<SectionId, number>
+  transforms: Map<SectionId, ReverseTransform>
 ): PlanPins {
   return {
-    origin: mirrorNullable(pins.origin, shotCounts),
-    endpoint: mirrorNullable(pins.endpoint, shotCounts),
-    waypoints: pins.waypoints.map((w) => mirrorRef(w, shotCounts)),
+    origin: mirrorNullable(pins.origin, transforms),
+    endpoint: mirrorNullable(pins.endpoint, transforms),
+    waypoints: pins.waypoints.map((w) => mirrorRef(w, transforms)),
     markedPoints: pins.markedPoints.map((m) => ({
       ...m,
-      station: mirrorRef(m.station, shotCounts),
+      station: mirrorRef(m.station, transforms),
     })),
-    stageDropOverrides: pins.stageDropOverrides.map((s) => mirrorNullable(s, shotCounts)),
+    stageDropOverrides: pins.stageDropOverrides.map((s) => mirrorNullable(s, transforms)),
   };
 }
 
-/** True when any pin sits in one of the reversed sections. */
+/** True when any pin sits in a section this operation actually renumbered. */
 export function planPinsAffected(
   pins: PlanPins,
-  shotCounts: Map<SectionId, number>
+  transforms: Map<SectionId, ReverseTransform>
 ): boolean {
   const inReversed = (ref: StationRef | null) =>
-    ref !== null && shotCounts.has(ref.section_id);
+    ref !== null && flipsSection(transforms, ref.section_id);
   return (
     inReversed(pins.origin) ||
     inReversed(pins.endpoint) ||
@@ -109,76 +177,82 @@ export function planPinsAffected(
 }
 
 /**
- * The sections a `CommandResult.reversed_section_ids` renumbered, mapped to
- * their shot count - i.e. exactly the `shotCounts` the mirrors above take.
+ * Compose a `CommandResult.reversed_sections` log into one transform per section.
  *
  * Taken from the backend rather than inferred from the geometry: a reverse keeps
  * every station's world position, so a section that was reversed AND moved in
  * the same action matches NEITHER arrangement afterwards and a position diff
  * reports nothing for it, leaving its pins on the opposite end.
  *
- * The ids arrive in command order and WITH REPEATS - a batch that reverses the
- * same section twice lists it twice. Mirroring is an involution, so the mirror
- * is applied once per entry: an even number of entries for one section is a net
- * no-op, an odd number is a single mirror.
+ * The entries arrive in step order and WITH REPEATS, each carrying the shot count
+ * in force AT ITS STEP. `m_c(i) = c - i`, so over counts `c1..ck` the composition
+ * is `i -> A + s*i` with `s = (-1)^k` and `A_m = c_m - A_(m-1)` (`A_0 = 0`). Two
+ * equal counts collapse to the exact identity; two different ones (a `CreateShot`
+ * undone between two reverses of the same section) leave a pure shift, which is
+ * the answer neither "cancel the repeat" nor "replay the mirror twice" can give.
  *
- * `sections` is the project state AFTER the operation. A reverse only renumbers -
- * `Project::reverse_section` reverses the shot vector in place and never adds or
- * removes one - so the count is the same before and after, and reading it after
- * keeps it consistent with everything else the same batch (or undone entry) did.
- * A section the refreshed project no longer has is dropped: there is nothing
- * left to mirror into.
+ * `sections` is the project state AFTER the operation, and supplies `maxIndex`:
+ * the numbering the pins now have to fit. A section the refreshed project no
+ * longer has is dropped - there is nothing left to mirror into - and so is a
+ * shot-less one, which is a single station with no other end (mirroring it would
+ * only churn the UI state `applyReverseAftermath` clears).
  */
-export function netReversedShotCounts(
-  reversedSectionIds: readonly SectionId[] | undefined,
+export function composeReverseTransforms(
+  entries: readonly ReversedSection[] | undefined,
   sections: readonly Pick<Section, 'id' | 'shots'>[]
-): Map<SectionId, number> {
-  const out = new Map<SectionId, number>();
-  if (reversedSectionIds === undefined || reversedSectionIds.length === 0) return out;
-  const netFlipped = new Set<SectionId>();
-  for (const id of reversedSectionIds) {
-    // Toggle: the second listing of a section cancels the first.
-    if (!netFlipped.delete(id)) netFlipped.add(id);
+): Map<SectionId, ReverseTransform> {
+  const out = new Map<SectionId, ReverseTransform>();
+  if (entries === undefined || entries.length === 0) return out;
+
+  const composed = new Map<SectionId, { shift: number; sign: 1 | -1 }>();
+  for (const entry of entries) {
+    const soFar = composed.get(entry.section_id) ?? { shift: 0, sign: 1 as const };
+    composed.set(entry.section_id, {
+      shift: entry.shot_count - soFar.shift,
+      sign: soFar.sign === 1 ? -1 : 1,
+    });
   }
+
   for (const section of sections) {
-    // A shot-less section is a single station and reverses to itself, so the
-    // backend lists it while nothing actually moved. Skipping it keeps
-    // `applyReverseAftermath` from clearing the user's selection for nothing.
-    if (netFlipped.has(section.id) && section.shots.length > 0) {
-      out.set(section.id, section.shots.length);
-    }
+    const transform = composed.get(section.id);
+    if (transform === undefined || section.shots.length === 0) continue;
+    out.set(section.id, { ...transform, maxIndex: section.shots.length });
   }
   return out;
 }
 
 /**
  * Re-point (or drop) every frontend-held positional ref after the sections in
- * `shotCounts` were renumbered end-to-end.
+ * `transforms` were renumbered.
  *
- * Shared by the Reverse dialog and by undo/redo, so the forward action and the
- * flip back cannot drift apart - the mirror is an involution, so running this
- * again with the same shot counts undoes it exactly. (An already out-of-range
- * ref is the one exception: it gets clamped rather than round-tripped, which is
- * what `mirrorRef` is for.)
+ * Shared by the Reverse dialog (which builds its own `singleReverseTransform`
+ * map from the sections it submitted) and by undo/redo (which composes the
+ * backend's per-step log), so the forward action and the flip back cannot drift
+ * apart.
+ *
+ * An all-identity map returns immediately instead of running an identity mirror.
+ * That is not an optimisation: the four clears below are destructive, and a range
+ * of reverses that cancelled out renumbered nothing, so the user's selection and
+ * half-staged merge are still valid.
  */
-export function applyReverseAftermath(shotCounts: Map<SectionId, number>): void {
-  if (shotCounts.size === 0) return;
+export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
+  if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
   const plan = useGasPlanStore.getState();
-  if (planPinsAffected(plan, shotCounts)) {
+  if (planPinsAffected(plan, transforms)) {
     // Mirrored, not cleared: the diver picked these stations, and the point of a
     // reverse is that the physical cave did not move.
-    plan.applyReversedPins(mirrorPlanPins(plan, shotCounts));
+    plan.applyReversedPins(mirrorPlanPins(plan, transforms));
   }
 
   const ui = useUIStore.getState();
   const origin = ui.distanceGradientOrigin;
-  if (origin !== null && shotCounts.has(origin.section_id)) {
+  if (origin !== null && flipsSection(transforms, origin.section_id)) {
     // Same reasoning as the plan pins: the penetration ramp is rooted on a
     // station the user chose, and its only other reset is a project switch, so
     // without this the ramp silently re-roots from the opposite end of the
     // section while the origin ring and the DetailPanel badge agree with it.
-    ui.setDistanceGradientOrigin(mirrorRef(origin, shotCounts));
+    ui.setDistanceGradientOrigin(mirrorRef(origin, transforms));
   }
 
   // Cleared instead - there is no "same place" for a highlight, and a
