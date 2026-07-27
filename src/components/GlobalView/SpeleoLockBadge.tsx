@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { SpeleoBadgedIcon, HourglassGlyph } from '../common/SpeleoBadgedIcon';
+import { SpeleoBadgedIcon, HourglassGlyph, PenGlyph } from '../common/SpeleoBadgedIcon';
 import { Tooltip } from '../common';
 import { emailsMatch } from '../../utils/email';
 import {
@@ -67,23 +67,17 @@ export function unpushedAccentStyle(hasLocalEdits: boolean): { boxShadow: string
   return hasLocalEdits ? { boxShadow: `inset 3px 0 0 0 ${UNPUSHED_ACCENT}` } : undefined;
 }
 
-/** Small filled padlock glyph (drawn FILLED, not stroked - WebKit fattens strokes
-    under the UI zoom, invisible in Chromium/Playwright). */
-function LockGlyph({ size = 10 }: { size?: number }) {
-  return (
-    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-      <path d="M5 7V5a3 3 0 016 0v2h1v7H4V7h1zm1.5 0h3V5a1.5 1.5 0 00-3 0v2z" />
-    </svg>
-  );
-}
-
 /**
  * Lock-state badge for a recents / GlobalView entry (#201). A local project shows
- * nothing; a SpeleoDB project shows the mark, with a lock glyph overlaid when the
- * scan resolved a holder:
- * - locked by you (green padlock),
- * - locked by another (warning hourglass),
+ * nothing; a SpeleoDB project shows the mark, badged when the scan resolved a
+ * holder:
+ * - you hold the write lock (green pen - you may edit),
+ * - someone else holds it (warning hourglass - you are waiting),
  * - free / not-yet-scanned: the bare mark.
+ *
+ * The pen rather than a padlock, matching the toolbar status button: the badge
+ * answers "what can I do here", and a padlock reads as "shut" to anyone who has
+ * not learned that holding the lock is the permissive state.
  */
 export function SpeleoLockBadge({
   isRemote,
@@ -109,7 +103,12 @@ export function SpeleoLockBadge({
     return (
       <Tooltip content={t('speleodb.recentBadge.lockedByYou')}>
         <span data-testid="speleo-recent-badge-locked-me">
-          <SpeleoBadgedIcon badge={<LockGlyph />} badgeColor="text-success" size={size} tint={tint} />
+          <SpeleoBadgedIcon
+            badge={<PenGlyph size={10} />}
+            badgeColor="text-success"
+            size={size}
+            tint={tint}
+          />
         </span>
       </Tooltip>
     );

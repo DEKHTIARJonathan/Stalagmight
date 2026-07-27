@@ -101,8 +101,8 @@ describe('a remote project without the write lock (#270)', () => {
     // would recover), so a remote project must never be left without one.
     expect(link).not.toBeNull();
     expect(link?.editState).toBe('read-only');
-    // The button derives its 'unlocked' kind (yellow pencil -> Start editing)
-    // from exactly these: no access denial, no server error, no other holder.
+    // The button derives its 'unlocked' kind (bare mark -> Start editing) from
+    // exactly these: no access denial, no server error, no other holder.
     expect(link?.noAccess).toBe(false);
     expect(link?.serverError).toBeNull();
     expect(link?.lockedByOther).toBe(false);

@@ -44,7 +44,7 @@ import { installPanZoomDebug } from './panZoomDebug';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { FitToViewIcon, LockIcon } from '../common/icons';
+import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
@@ -288,6 +288,10 @@ function MapCanvas() {
 
   // Geometry display mode (measured vs read-only closure-adjusted).
   const geometryMode = useUIStore((s) => s.geometryMode);
+  // Derived once for the top-left overlay, so its two gates share a single raw
+  // comparison and `scripts/check-readonly-gates.mjs`'s exact-count allow-list for
+  // this file stays put. NOT an editability gate - that is `useEditingBlocked()`.
+  const closureAdjustedView = geometryMode === 'closureAdjusted';
   // T2b: a remote SpeleoDB project opened without the write lock shows a
   // top-left read-only badge, mirroring the closure-adjusted view-only badge.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -4036,32 +4040,29 @@ function MapCanvas() {
         />
       )}
 
-      {/* Fit-to-view button (+ exit-focus, #50). The SpeleoDB read-only badge (T2b)
-          sits to its RIGHT in the same top-left flex row when a remote project is
-          open without the lock - the flex gap tracks the button's variable width
-          (it widens with the exit-focus label). */}
-      <div className="absolute top-2 left-2 flex items-center gap-2">
-        <button
-          onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-          className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-          title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-          aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-          data-testid="fit-to-view-button"
-        >
-          <FitToViewIcon size={16} />
-          {/* In focus mode the button also exits focus - label it so that's clear. */}
-          {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
-        </button>
-        {speleoReadOnly && !placementMode && appMode === 'survey' && (
-          <div
-            className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
-            data-testid="speleodb-readonly-banner"
-          >
-            <LockIcon size={13} />
-            <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
-          </div>
-        )}
-      </div>
+      {/* Fit-to-view / exit-focus (#50) plus the read-only notices, laid out as
+          one flex row so they can never overlap. The closure notice is shown ONLY
+          when nothing else already explains the read-only state: in Survey mode,
+          and only while the project is otherwise editable. That makes it the exact
+          complement of the SpeleoDB badge inside Survey, so the two are mutually
+          exclusive by construction rather than by luck.
+
+          `speleoReadOnly` is the right predicate here, not `holdsWriteLock`: a
+          force-editor genuinely CAN edit (so the SpeleoDB badge is already hidden
+          for them), which makes the closure view the only thing blocking their
+          edits - exactly when the notice earns its space. */}
+      <MapTopLeftOverlay
+        focused={focusedSectionId !== null}
+        onFitOrExitFocus={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
+        showSpeleoReadOnly={speleoReadOnly && !placementMode && appMode === 'survey'}
+        showClosureReadOnly={
+          closureAdjustedView && !placementMode && appMode === 'survey' && !speleoReadOnly
+        }
+        // The solve still runs where the notice is hidden (Plan/Export force
+        // closure-adjusted geometry), and it is the only progress signal there -
+        // so the indicator is gated on the solve, not on the notice.
+        showClosureComputing={closureAdjustedView && !placementMode && adjustedLoading}
+      />
 
       {/* Placement mode indicator */}
       {placementMode && (
@@ -4135,21 +4136,6 @@ function MapCanvas() {
             :
           </span>{' '}
           {t('map.move.instructions')}
-        </div>
-      )}
-
-      {/* Closure-adjusted read-only banner (+ "computing" while solving) */}
-      {geometryMode === 'closureAdjusted' && !placementMode && (
-        <div
-          className="absolute top-2 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
-          data-testid="geometry-readonly-banner"
-        >
-          <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
-          {adjustedLoading && (
-            <span className="text-text-secondary" data-testid="geometry-computing">
-              {t('map.geometry.computing')}
-            </span>
-          )}
         </div>
       )}
 

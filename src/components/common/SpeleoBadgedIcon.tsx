@@ -13,8 +13,14 @@ export function SpeleoBadgedIcon({
   size = 20,
   tint,
 }: {
-  badge: ReactNode;
-  badgeColor: string;
+  /**
+   * Omit for the bare mark. "No badge" is a real state, not an absence: an
+   * unlocked SpeleoDB project is the resting case, and a resting case should not
+   * be decorated. Expressing it here keeps callers on one code path instead of
+   * special-casing a bare `SpeleoDbLogo`.
+   */
+  badge?: ReactNode;
+  badgeColor?: string | undefined;
   size?: number;
   /** Recolour the MARK itself (#270: yellow while there are un-pushed local edits). */
   tint?: string | undefined;
@@ -25,12 +31,41 @@ export function SpeleoBadgedIcon({
       {/* The disc is the panel BACKGROUND colour (like the DisplayMenu badge-bg,
           fill: var(--cc-panel)) so it knocks the icon out around the badge - a
           cutout, not a coloured circle. */}
-      <span
-        className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor}`}
-      >
-        {badge}
-      </span>
+      {badge != null && (
+        <span
+          className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor ?? ''}`}
+          data-testid="speleo-badged-icon-badge"
+        >
+          {badge}
+        </span>
+      )}
     </span>
+  );
+}
+
+/**
+ * Filled pen glyph: we hold the SpeleoDB write lock and may edit.
+ *
+ * Deliberately a DIAGONAL body, because the family's other two writing glyphs -
+ * `CrossedPencilGlyph` (read-only access) and `EditNoLockGlyph` (force-edit) -
+ * are both vertical pencils. Differing on axis as well as adornment means "you
+ * may write" separates from them before colour is read at all, which matters at
+ * badge scale and for anyone who cannot rely on the green.
+ *
+ * Solid, never stroked: WebKit fattens strokes under the app's setZoom UI scale,
+ * and Chromium/Playwright will not show you. The ferrule band is a
+ * panel-coloured knockout, the same trick `CrossedPencilGlyph` uses for its slash.
+ */
+export function PenGlyph({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* barrel, running top-right to bottom-left */}
+      <path d="M10.6 1.4l2.6 2.6-7.4 7.4-2.6-2.6z" />
+      {/* nib, tapering to the writing tip */}
+      <path d="M3.2 8.8l2.6 2.6-4 2z" />
+      {/* ferrule band, knocked out in the panel colour */}
+      <path d="M8.8 3.2l2.6 2.6-0.7 0.7-2.6-2.6z" style={{ fill: 'var(--cc-panel)' }} />
+    </svg>
   );
 }
 

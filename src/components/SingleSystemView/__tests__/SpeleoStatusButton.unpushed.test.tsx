@@ -129,3 +129,31 @@ describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
     expect(badge()).toBeInTheDocument();
   });
 });
+
+describe('SpeleoStatusButton state badge', () => {
+  const stateBadge = () => screen.queryByTestId('speleo-badged-icon-badge');
+
+  it('leaves the resting unlocked state bare', () => {
+    // The read-only, up-to-date, nothing-outstanding case: nothing is wrong and
+    // nothing is held, so the mark carries no badge at all. Without this the
+    // requirement is unpinnable - the corner badge has no other assertion on it.
+    seed();
+    render(<SpeleoStatusButton />);
+    expect(button()).toHaveAttribute('data-kind', 'unlocked');
+    expect(stateBadge()).not.toBeInTheDocument();
+  });
+
+  it('badges the state where we hold the write lock', () => {
+    seed({ editState: 'editing' });
+    render(<SpeleoStatusButton />);
+    expect(button()).toHaveAttribute('data-kind', 'editing');
+    expect(stateBadge()).toBeInTheDocument();
+  });
+
+  it('keeps badging the states that are waiting on someone else', () => {
+    seed({ editState: 'read-only', lockedByOther: true, lockHolder: 'other@example.com' });
+    render(<SpeleoStatusButton />);
+    expect(button()).toHaveAttribute('data-kind', 'locked_by_other');
+    expect(stateBadge()).toBeInTheDocument();
+  });
+});

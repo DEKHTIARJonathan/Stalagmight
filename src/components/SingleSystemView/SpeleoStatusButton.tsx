@@ -8,7 +8,7 @@ import { permissionAtLeast } from '../../utils/speleoPermission';
 import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
 import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
 import { holdsWriteLock } from '../../utils/quit';
-import { LockIcon, PencilIcon } from '../common/icons';
+import { LockIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
   HourglassGlyph,
@@ -17,6 +17,7 @@ import {
   CrossedPencilGlyph,
   QuestionMarkGlyph,
   EditNoLockGlyph,
+  PenGlyph,
 } from '../common/SpeleoBadgedIcon';
 
 type ButtonKind =
@@ -34,8 +35,10 @@ type ButtonKind =
  * The single SpeleoDB status button (T2c), mounted right of the hamburger when a
  * remote project is open. The white logo carries a state glyph + color; one click
  * drives the hand-off:
- * - 🟡 pencil (read-only, up to date) → acquire the lock (Start editing)
- * - 🟢 lock (we hold it) → release; if dirty, the push&release dialog
+ * - (no badge) read-only, up to date - the resting state → acquire the write lock
+ *   (Start editing). Bare on purpose: nothing is wrong and nothing is held, so it
+ *   is the one state with nothing to announce.
+ * - 🟢 pen (we hold the write lock) → release; if dirty, the push&release dialog
  * - 🟥 crossed-pencil on faint red (force-editing WITHOUT the lock, #213) → Reconnect
  * - 🟠 hourglass (someone else holds it) → pull the latest; if dirty, resolve
  * - 🔵 pull (remote advanced) → pull the latest; if dirty, resolve
@@ -254,11 +257,14 @@ export function SpeleoStatusButton() {
     }
   };
 
+  // `unlocked` gets NO badge: it is the resting state of a remote project - nothing
+  // is wrong, nothing is held, nothing needs doing - and decorating it spent the
+  // badge slot on the one case that has nothing to say. The tooltip still offers
+  // "click to start editing", and the #270 yellow tint still calls out un-pushed
+  // work, so the two things worth noticing keep their signal.
   const glyph =
-    kind === 'unlocked' ? (
-      <PencilIcon size={10} />
-    ) : kind === 'editing' ? (
-      <LockIcon size={10} />
+    kind === 'unlocked' ? null : kind === 'editing' ? (
+      <PenGlyph size={11} />
     ) : kind === 'force_edit' ? (
       <EditNoLockGlyph size={12} />
     ) : kind === 'locked_by_other' ? (
@@ -275,7 +281,7 @@ export function SpeleoStatusButton() {
 
   const glyphColor =
     kind === 'unlocked'
-      ? 'text-yellow-400'
+      ? undefined
       : kind === 'editing'
         ? 'text-green-400'
         : kind === 'force_edit'
