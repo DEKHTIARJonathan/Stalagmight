@@ -383,7 +383,7 @@ impl MatchShot {
 
     fn from_shot_data(shot: &ShotData) -> Self {
         Self {
-            avg_azimuth: average_azimuth(shot.azimuth_in, shot.azimuth_out),
+            avg_azimuth: shot.average_azimuth(),
             length: shot.length,
             depth_in: shot.depth_in,
             depth_out: shot.depth_out,
@@ -399,12 +399,6 @@ impl MatchShot {
             depth_out: self.depth_in,
         }
     }
-}
-
-/// Compute average azimuth from two readings, handling 360° wraparound.
-fn average_azimuth(azimuth_in: f64, azimuth_out: f64) -> f64 {
-    let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
-    (azimuth_in + diff / 2.0 + 360.0) % 360.0
 }
 
 /// Compute the angular difference between two azimuths in [0, 180].

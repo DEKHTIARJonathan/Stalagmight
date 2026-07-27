@@ -674,8 +674,17 @@ impl AppState {
                         // populates `station_comments` (TML) correct the day its
                         // wizard gains the toggle, instead of relying on a prose
                         // contract every future importer has to re-derive.
+                        // `checked_sub`, not `saturating_sub`: an index past the
+                        // last station has no mirror, and saturating it would
+                        // park the comment on station 0 - a station it was never
+                        // about. Un-reversed the same index simply fails
+                        // `key_for_ref` below and the comment is dropped, so
+                        // skipping here keeps the two paths honest.
                         let index = if config.reverse {
-                            shot_count.saturating_sub(*station_index)
+                            match shot_count.checked_sub(*station_index) {
+                                Some(mirrored) => mirrored,
+                                None => continue,
+                            }
                         } else {
                             *station_index
                         };

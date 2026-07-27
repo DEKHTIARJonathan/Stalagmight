@@ -46,7 +46,9 @@ impl AppState {
             // section-offset compensation and the collab-baseline invalidation.
             // A section with no shots is a single station and reverses to itself,
             // so capturing it would push two identical full-project snapshots and
-            // mark the project dirty for an operation that changed nothing.
+            // mark the project dirty for an operation that changed nothing. The
+            // resulting `None` never reaches the stack - `execute()` drops an
+            // unundoable entry rather than wedging every older one under it.
             Command::ReverseSection { section_id, .. } => {
                 if project
                     .get_section(*section_id)

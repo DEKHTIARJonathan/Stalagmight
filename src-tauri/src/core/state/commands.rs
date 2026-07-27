@@ -665,7 +665,24 @@ impl AppState {
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 
-            if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            // An entry `undo()` cannot apply must never enter the stack: `undo()`
+            // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
+            // the entry straight BACK - so that pop is unproductive forever and
+            // every older entry underneath it is permanently unreachable. The
+            // stack is persisted, so the wedge survives close/reopen. Reachable
+            // today by reversing a shot-less section (a GPX waypoint section, and
+            // the context menu offers Reverse with no shot-count guard): the
+            // command succeeds as a no-op while `generate_undo_data` returns
+            // `None`. Guarded here rather than per command so any future command
+            // with the same shape is covered. Only a command that changed nothing
+            // reaches here with `None`, so dropping the entry (and, with it, the
+            // redo-stack clear `push_with_data` would have done) loses no history.
+            if matches!(final_undo_data, UndoData::None) {
+                tracing::debug!(
+                    command = %cmd.description(),
+                    "Command produced no undo data; not pushing an unundoable entry"
+                );
+            } else if let Ok(mut undo_stack) = self.undo_stack.lock() {
                 undo_stack.push_with_data(cmd.clone(), final_undo_data);
             }
             // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a

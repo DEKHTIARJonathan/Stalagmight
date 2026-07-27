@@ -53,8 +53,11 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 /// TML importers normalise theirs. It also broke the reverse, whose helpers all
 /// use `rem_euclid`: the two disagreed, so the degenerate-pair guard missed and
 /// the bearing survived un-turned while the rest of the section flipped, moving
-/// the cave by its own span. For in-range readings both operands are already
-/// positive, so this is bit-for-bit what `%` returned.
+/// the cave by its own span. In-range readings are NOT bit-for-bit what `%`
+/// returned: the old wrap was `(x + 360.0) % 360.0` and its addend rounds, where
+/// `x.rem_euclid(360.0)` returns an in-range `x` untouched. About half of the
+/// in-range pairs therefore differ, by at most half an ulp of 720 (~5.7e-14
+/// degrees, ~1e-15 radians - sub-picometre over a kilometre of passage).
 pub(crate) fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
     // Handle wraparound at 360 degrees
     let diff = (azimuth_out - azimuth_in + 540.0).rem_euclid(360.0) - 180.0;

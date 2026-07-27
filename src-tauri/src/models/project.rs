@@ -914,11 +914,16 @@ impl Project {
     }
 
     /// Compute the (dx, dy) horizontal displacement of a shot from its data.
-    /// Uses the same average azimuth calculation as coordinate computation.
+    ///
+    /// Routed through [`ShotData::average_azimuth`] rather than re-deriving the
+    /// mean: this feeds the persisted `section_offsets` compensation that
+    /// insert/prepend/delete apply, so a private copy that drifts from the
+    /// coordinate walk moves the section by twice the shot vector and saves it.
+    /// An inlined `%` copy did exactly that once `average_azimuth_of` moved to
+    /// `rem_euclid` - the two disagreed by 180 degrees for readings more than
+    /// 540 apart, which validation only warns about.
     pub(crate) fn shot_displacement(data: &ShotData) -> (f64, f64) {
-        let diff = (data.azimuth_out - data.azimuth_in + 540.0) % 360.0 - 180.0;
-        let avg_az = (data.azimuth_in + diff / 2.0 + 360.0) % 360.0;
-        let az_rad = avg_az.to_radians();
+        let az_rad = data.average_azimuth().to_radians();
         let horizontal = data.horizontal_length();
         (horizontal * az_rad.sin(), horizontal * az_rad.cos())
     }

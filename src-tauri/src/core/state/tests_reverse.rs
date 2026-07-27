@@ -538,6 +538,116 @@ fn batched_multi_section_reverse_is_atomic_and_undoes_in_one_step() {
     }
 }
 
+/// A shot-less section (GPX imports one per waypoint) reverses to itself, so
+/// `generate_undo_data` has nothing to capture - but the command still SUCCEEDS.
+/// Pushing that `UndoData::None` entry wedges the whole stack: `undo()` pops it,
+/// maps `None` to a failure, and its epilogue pushes it straight back, so every
+/// older entry underneath is unreachable forever (and the stack is persisted, so
+/// it survives close/reopen). The entry must simply not be pushed.
+#[test]
+fn reversing_a_shotless_section_leaves_the_undo_stack_usable() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Waypoints".to_string(),
+        location: None,
+    });
+
+    // An ordinary, undoable edit first - this is what must stay reachable.
+    let created = state.execute(Command::CreateSection {
+        name: Some("Real line".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![shot(0.0, 10.0, 0.0, 2.0)],
+    });
+    assert!(created.success);
+
+    // Then a waypoint-style section with no shots, and a reverse of it.
+    let empty = state.execute(Command::CreateSection {
+        name: Some("Waypoint".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    let empty_id = empty.section_id.unwrap();
+    let reversed = state.execute(Command::ReverseSection {
+        section_id: empty_id,
+        swap_left_right: false,
+    });
+    assert!(reversed.success, "reverse failed: {:?}", reversed.error);
+
+    // The next undo must do real work, not pop-and-repush the no-op forever.
+    let first = state.undo();
+    assert!(
+        first.success,
+        "undo blocked by an unundoable entry: {:?}",
+        first.error
+    );
+    // ... and the section creations underneath it are still reachable.
+    assert!(state.undo().success);
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.sections.is_empty(),
+        "older history was left unreachable: {:?}",
+        project.sections.iter().map(|s| s.id).collect::<Vec<_>>()
+    );
+}
+
+/// The mirror is `shot_count - station_index`, so an index past the last station
+/// has no mirror at all. `saturating_sub` would silently park such a comment on
+/// station 0 - a station it was never about - where the un-reversed import just
+/// fails `key_for_ref` and drops it.
+#[test]
+fn import_reverse_drops_an_out_of_range_station_comment() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Import".to_string(),
+        location: None,
+    });
+
+    let result = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            placement: ImportPlacement::Origin,
+            // Two shots means stations 0..2; station 7 does not exist.
+            station_comments: vec![(7, "nowhere".to_string()), (1, "the bend".to_string())],
+            reverse: true,
+        }],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.first().unwrap();
+    assert_eq!(
+        project.station_comments.len(),
+        1,
+        "the out-of-range comment must be dropped, not relocated: {:?}",
+        project.station_comments.values().collect::<Vec<_>>()
+    );
+    let (key, text) = project.station_comments.iter().next().unwrap();
+    assert_eq!(text, "the bend");
+    assert_eq!(
+        project.resolve_key(key),
+        Some(StationRef::new(section.id, 1)),
+        "the in-range comment must still mirror to station 1"
+    );
+}
+
 #[test]
 fn reverse_of_a_missing_section_fails() {
     let (state, _) = state_with_section();

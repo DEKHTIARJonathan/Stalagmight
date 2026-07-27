@@ -100,24 +100,31 @@ pub fn shot_run_displacement(shots: &[ShotData]) -> (f64, f64) {
 /// so the two can never drift apart.
 ///
 /// Order-independent per shot, so it is safe to apply before or after the vec
-/// is reversed.  Applying it twice is the identity in exact arithmetic; in f64
-/// the `(az + 180) % 360` round trip can land a couple of ulps off when the
-/// shifted value is not representable, which is why undo snapshots instead of
-/// re-running the transform.
+/// is reversed.  Applying it twice is the identity in exact arithmetic *for
+/// readings already in `[0, 360)`*; an out-of-range reading is normalised on the
+/// first application and comes back normalised (`-715` returns as `5`).  Even
+/// for in-range readings f64 is not bit-exact: the `(az + 180) % 360` round trip
+/// can land a couple of ulps off when the shifted value is not representable,
+/// which is why undo snapshots instead of re-running the transform.
 pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
     shots.reverse();
     for shot in shots.iter_mut() {
-        // Normalise first: `reciprocal` and `readings_are_antipodal` both use
-        // `rem_euclid`, but `average_azimuth_of` normalises with Rust's
-        // truncated `%`, which keeps the sign of the dividend. For a pair whose
-        // difference falls outside `(-540, 540]` the two disagree, the
-        // degenerate-pair guard misses, and reciprocate-and-swap leaves the
-        // bearing UNCHANGED while the rest of the section turns around - so the
-        // offset compensation below no longer cancels and the passage jumps by
-        // its own span. Out-of-range readings are reachable: `validation.rs`
-        // only WARNS on an azimuth outside `[0, 360)`, and the DMP parser
-        // (models::dmp) stores `heading_in`/`heading_out` verbatim where the
-        // Compass and TML importers `rem_euclid` theirs.
+        // Normalise first so the transform and `average_azimuth_of` work from
+        // the same canonical readings. All three wrap with `rem_euclid` now, so
+        // they agree on any input's mod-360 class - but the degenerate branch
+        // below swaps its operands VERBATIM, so an out-of-range pair would be
+        // written straight back onto the record and stay out of range for every
+        // later consumer; and the exact `== 180` antipodal test only holds once
+        // the magnitudes are small enough that `azimuth_out - azimuth_in` does
+        // not round. It was load-bearing for the geometry too while
+        // `average_azimuth_of` still wrapped with Rust's truncated `%`: the two
+        // disagreed for a pair whose difference falls outside `(-540, 540]`, the
+        // degenerate-pair guard missed, and reciprocate-and-swap left the bearing
+        // UNCHANGED while the rest of the section turned around. Out-of-range
+        // readings are reachable: `validation.rs` only WARNS on an azimuth
+        // outside `[0, 360)`, and the DMP parser (models::dmp) stores
+        // `heading_in`/`heading_out` verbatim where the Compass and TML importers
+        // `rem_euclid` theirs.
         shot.azimuth_in = shot.azimuth_in.rem_euclid(360.0);
         shot.azimuth_out = shot.azimuth_out.rem_euclid(360.0);
 
@@ -147,6 +154,64 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
         if swap_lr {
             std::mem::swap(&mut shot.left, &mut shot.right);
         }
+    }
+}
+
+/// Stored keys whose mirrored remap must be SKIPPED so the rewrite stays
+/// injective - i.e. so no two keys come out of it equal.
+///
+/// `map_station_refs` rebuilds `station_offsets`/`station_comments` by collecting
+/// transformed keys into a HashMap, so any two keys that leave the write pass
+/// equal silently drop one entry - a station comment or offset lost with no
+/// error.  Two stored keys can name one station: a legacy
+/// `StationAnchor::Index(i)` beside the canonical `AfterShot`, or two shots
+/// sharing a UUID (`ensure_section_shot_uuids` mints, it does not dedupe).
+/// `key_for_ref` only ever emits canonical anchors, so both mirror onto the same
+/// new key.
+///
+/// Freezing only the repeats of a mirrored key is not enough.  The survivor of a
+/// colliding group keeps its OLD key, and that old key can itself be a third
+/// key's mirror target, so the clash just moves - and which member survives is
+/// `HashMap` iteration order, making the drop appear about half the time.  A
+/// three-shot example: `Index(0)` and `SectionStart` both name station 0 and both
+/// mirror to `AfterShot(uuid_2)`, while `AfterShot(uuid_2)` mirrors back to
+/// `SectionStart`; freeze `SectionStart` and it now collides with that third key.
+/// So this walks the FULL image - remapped and left-alone keys alike - and
+/// freezes every member of every clash, repeating until nothing clashes.  It
+/// terminates because `frozen` only grows and the all-frozen mapping is the
+/// identity on a set of distinct keys.
+///
+/// A frozen key keeps naming its pre-reverse station: wrong, but present and
+/// visible, which beats one of them vanishing.  No traced path reaches this today
+/// (load, snapshot restore and the offset redrive all canonicalize `Index`
+/// anchors first), so the ordinary reverse pays one pass that finds nothing.
+fn frozen_remaps(
+    stored: &HashSet<StationKey>,
+    rebuilt: &HashMap<StationKey, StationKey>,
+) -> HashSet<StationKey> {
+    let mut frozen: HashSet<StationKey> = HashSet::new();
+    loop {
+        let mut owners: HashMap<&StationKey, Vec<&StationKey>> =
+            HashMap::with_capacity(stored.len());
+        for key in stored {
+            let image = if frozen.contains(key) {
+                key
+            } else {
+                rebuilt.get(key).unwrap_or(key)
+            };
+            owners.entry(image).or_default().push(key);
+        }
+        let clashing: Vec<StationKey> = owners
+            .into_values()
+            .filter(|keys| keys.len() > 1)
+            .flatten()
+            .filter(|key| !frozen.contains(*key))
+            .cloned()
+            .collect();
+        if clashing.is_empty() {
+            return frozen;
+        }
+        frozen.extend(clashing);
     }
 }
 
@@ -209,6 +274,11 @@ impl Project {
             });
             out
         };
+        // The universe the write pass below has to stay injective over: every
+        // stored key of this section, whether or not it turns out to be
+        // re-keyable.  A key that drops out of `rebuilt` keeps its old value and
+        // can still be collided with, so the collision check needs it too.
+        let stored_keys: HashSet<StationKey> = mirrored.keys().cloned().collect();
 
         let Some(section) = self.get_section(section_id) else {
             return false;
@@ -284,37 +354,19 @@ impl Project {
             })
             .collect();
 
-        // `map_station_refs` rebuilds `station_offsets`/`station_comments` by
-        // collecting transformed keys into a HashMap, so two OLD keys that mirror
-        // onto the SAME new key would silently drop one entry - a station comment
-        // or offset lost with no error. Two stored keys can name one station: a
-        // legacy `StationAnchor::Index(i)` beside the canonical `AfterShot`, or
-        // two shots sharing a UUID (`ensure_section_shot_uuids` mints, it does not
-        // dedupe). `key_for_ref` only ever emits canonical anchors, so the two
-        // collapse. No traced path reaches this today - load, snapshot restore and
-        // the offset redrive all run `ensure_unique_shot_uuids` /
-        // `reanchor_station_refs` first - so rather than pay a project-wide pass on
-        // every reverse, detect the collision and leave the colliding keys alone:
-        // they keep naming their pre-reverse station (wrong, but present and
-        // visible) instead of one of them vanishing.
-        let mut seen: HashSet<&StationKey> = HashSet::with_capacity(rebuilt.len());
-        let colliding: HashSet<StationKey> = rebuilt
-            .iter()
-            .filter(|(_, new)| !seen.insert(new))
-            .map(|(old, _)| old.clone())
-            .collect();
-        // Warn rather than `debug_assert!`: the collision is handled below, so
-        // tripping would turn a recovered case into a dev-only crash.
-        if !colliding.is_empty() {
+        let frozen = frozen_remaps(&stored_keys, &rebuilt);
+        // Warn rather than `debug_assert!`: the collision is handled, so tripping
+        // would turn a recovered case into a dev-only crash.
+        if !frozen.is_empty() {
             tracing::warn!(
                 section_id,
-                count = colliding.len(),
+                count = frozen.len(),
                 "reverse: station refs collided on the mirrored key; left on their \
                  pre-reverse station to avoid dropping one"
             );
         }
         self.map_station_refs(|key| {
-            if colliding.contains(&key) {
+            if frozen.contains(&key) {
                 return key;
             }
             rebuilt.get(&key).cloned().unwrap_or(key)
@@ -839,13 +891,15 @@ mod tests {
         );
     }
 
-    /// `reciprocal` and `readings_are_antipodal` normalise with `rem_euclid`,
-    /// but `average_azimuth_of` uses truncated `%`. Without normalising the
-    /// readings first the two disagree for a far-out-of-range pair, the
-    /// degenerate-pair guard misses, and the bearing survives the reverse
-    /// unturned - so the offset compensation no longer cancels and the passage
-    /// jumps by its own span. Reachable: validation only WARNS on an azimuth
-    /// outside `[0, 360)` and the DMP parser stores headings verbatim.
+    /// A far-out-of-range pair must survive a reverse with the cave still.
+    /// Reachable: validation only WARNS on an azimuth outside `[0, 360)` and the
+    /// DMP parser stores headings verbatim. This pinned a real bug - while
+    /// `average_azimuth_of` wrapped with the truncated `%` and the reverse's own
+    /// helpers with `rem_euclid`, the two disagreed for a pair this far out, the
+    /// degenerate-pair guard missed, and the bearing survived the reverse
+    /// unturned, so the offset compensation no longer cancelled and the passage
+    /// jumped by its own span. Both wrap with `rem_euclid` now; the test stands
+    /// as the guard against either one drifting back.
     #[test]
     fn reverse_keeps_the_cave_still_for_out_of_range_azimuths() {
         let mut data = shot(0.0, 10.0, 0.0, 0.0);
@@ -891,6 +945,81 @@ mod tests {
             2,
             "a colliding remap must not silently drop a comment"
         );
+    }
+
+    /// The three-key counterexample the two-key case above cannot reach.
+    ///
+    /// `Index(0)` and `SectionStart` both name station 0 and both mirror onto
+    /// `AfterShot(uuid_2)` (station 3); that third key mirrors back onto
+    /// `SectionStart`. Freezing only the *repeat* of a mirrored key leaves the
+    /// survivor of the pair on its old key - and if the survivor is
+    /// `SectionStart`, the third key now remaps straight onto it and
+    /// `map_station_refs`' `collect()` drops one comment. Which member survives
+    /// is `HashMap` iteration order, so the drop appeared about half the time;
+    /// looping over fresh maps turns that into a certainty for the old guard
+    /// while staying deterministic for the fixed one.
+    #[test]
+    fn reverse_does_not_drop_a_comment_when_a_frozen_key_is_another_keys_target() {
+        use crate::models::{StationAnchor, StationKey};
+
+        for _ in 0..64 {
+            let (mut project, id) = project_with_shots(vec![
+                shot(0.0, 10.0, 0.0, 0.0),
+                shot(90.0, 10.0, 0.0, 0.0),
+                shot(180.0, 10.0, 0.0, 0.0),
+            ]);
+            let start = project.key_for_ref(StationRef::new(id, 0)).unwrap();
+            let far_end = project.key_for_ref(StationRef::new(id, 3)).unwrap();
+            let legacy = StationKey {
+                section_id: id,
+                anchor: StationAnchor::Index(0),
+            };
+            assert_eq!(
+                project.resolve_key(&legacy),
+                project.resolve_key(&start),
+                "precondition: the legacy key must name station 0 too"
+            );
+            project.station_comments.insert(start, "a".to_string());
+            project.station_comments.insert(legacy, "b".to_string());
+            project.station_comments.insert(far_end, "c".to_string());
+
+            assert!(project.reverse_section(id, false));
+
+            assert_eq!(
+                project.station_comments.len(),
+                3,
+                "a colliding remap must not silently drop a comment"
+            );
+        }
+    }
+
+    /// `Project::shot_displacement` writes the persisted `section_offsets`
+    /// compensation on insert/prepend/delete, so it has to agree with the walk
+    /// that actually places the stations. It used to inline its own `%` copy of
+    /// the mean; once `average_azimuth_of` moved to `rem_euclid` the two
+    /// disagreed by 180 degrees for readings more than 540 apart (here: 120 vs
+    /// 300), and an insert or delete moved the section by twice the shot vector
+    /// and saved it. Out-of-range readings are reachable - validation only warns.
+    #[test]
+    fn shot_displacement_agrees_with_the_coordinate_walk_for_out_of_range_readings() {
+        let mut data = shot(0.0, 10.0, 0.0, 0.0);
+        data.azimuth_in = 600.0;
+        data.azimuth_out = 0.0;
+
+        let (project, id) = project_with_shots(vec![data.clone()]);
+        let coords = world_coords(&project, id);
+        let walked = (coords[1].0 - coords[0].0, coords[1].1 - coords[0].1);
+
+        let (dx, dy) = Project::shot_displacement(&data);
+        assert!(
+            (dx - walked.0).abs() < 1e-9 && (dy - walked.1).abs() < 1e-9,
+            "shot_displacement {:?} disagrees with the coordinate walk {walked:?}",
+            (dx, dy)
+        );
+        // And with the reverse's own run-displacement helper, which the import
+        // toggle and the in-app reverse both use to keep the cave still.
+        let (rx, ry) = shot_run_displacement(&[data]);
+        assert!((dx - rx).abs() < 1e-9 && (dy - ry).abs() < 1e-9);
     }
 
     #[test]
