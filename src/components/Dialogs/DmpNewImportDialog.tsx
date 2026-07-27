@@ -737,8 +737,12 @@ function applyAllOverlapTreatments(
   return existingShotUpdates;
 }
 
-/** Build batch import configs from virtual connections + BFS order. */
-function buildBatchImport(
+/**
+ * Build batch import configs from virtual connections + BFS order.
+ *
+ * Exported for tests only - the dialog is its sole production caller.
+ */
+export function buildBatchImport(
   connections: VirtualConnection[],
   zeroDatumIndex: number | null,
   dmpFile: DmpFile,
@@ -1091,8 +1095,17 @@ function buildBatchImport(
       // #24 / q14: the backend reverses before creating the section, so every
       // placement index must address the post-reverse order - on BOTH sides of a
       // connection (see targetShotCountForMirror for the target side).
+      //
+      // The target side is mirrored ONLY when the placement was derived from a
+      // connection. A directPlacement (segment "From existing", or a manual /
+      // manual_snap drop) targets a live project section, which this batch does
+      // not renumber - while `conn` may still hold an unrelated auto-derived
+      // connection for the same index, whose target shot count would mirror the
+      // user's chosen station onto the wrong physical end (or out of range,
+      // failing the whole batch in merge_stations).
+      const placementConn = directPlacement ? undefined : conn;
       const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length,
-        targetShotCountForMirror(placement, conn?.targetType, conn?.targetImportIndex, sectionEdits));
+        targetShotCountForMirror(placement, placementConn?.targetType, placementConn?.targetImportIndex, sectionEdits));
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,

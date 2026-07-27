@@ -31,6 +31,12 @@ import type { SectionEditState } from './batchImportHelpers';
  * gated on the connection's `targetType` being `importing` - the one case where
  * this batch decides the target's numbering. A connection to a section that was
  * already in the project is never mirrored, whatever the placement looks like.
+ *
+ * CALLER CONTRACT: pass the connection that *produced* `placement`, or nothing.
+ * A placement built some other way - a segment "From existing" drop, or a manual
+ * placement - addresses a live project section this batch never renumbers, and an
+ * unrelated connection that happens to share the section index would mirror the
+ * user's chosen station onto the wrong physical end.
  */
 export function targetShotCountForMirror(
   placement: ImportPlacement,
