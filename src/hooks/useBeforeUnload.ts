@@ -45,6 +45,16 @@ export function useBeforeUnload(
   // Kept in a ref (not a dep) so a re-rendered guard identity never tears down
   // and re-registers the close listener.
   const guardRef = useRef(guard);
+  // Tier 1's answer for the quit attempt currently in flight.
+  //
+  // A tier-2 dialog aborts the close and re-issues it (via `performQuit`) once the
+  // user acts, so a single quit reaches this listener twice. Remembering the answer
+  // is what lets tier 1 run BEFORE that dialog without asking twice - and running
+  // it before is the whole point: the dialog's actions are irreversible (a push and
+  // a lock RELEASE), so nothing that can still cancel the quit may come after them.
+  // Dropped on any un-confirmed close request, so an attempt the user abandoned at
+  // the dialog cannot lend its answer to a later one.
+  const tier1Confirmed = useRef(false);
 
   // Keep ref in sync with prop
   useEffect(() => {
@@ -97,18 +107,19 @@ export function useBeforeUnload(
           // Quit" would re-open the dialog it came from, forever.
           const preConfirmed = consumeQuitConfirmation();
 
-          // Tier 1: the in-memory states with no in-app dialog of their own (an
-          // import wizard mid-flight, a dirty dive plan). Deliberately NOT
-          // skipped by `preConfirmed`: a menu Quit confirms the PROJECT, which
-          // says nothing about the dive plan the same close would drop.
-          // Tier-1 cleanup, DEFERRED. It is destructive by contract ("e.g. delete
-          // placed sections"), so it may only run once the close is actually going
-          // ahead. Running it inside the tier-1 confirmation performed the deletions
-          // for a close that tier 2 below then aborted - the user gets their dialog,
-          // cancels, keeps the app open, and the sections are gone anyway.
-          let deferredCleanup: (() => Promise<void>) | undefined;
+          // A close request that is NOT pre-confirmed starts a fresh quit attempt,
+          // so any tier-1 answer left over from one the user abandoned at a tier-2
+          // dialog must not carry into it.
+          if (!preConfirmed) tier1Confirmed.current = false;
 
-          if (shouldBlockRef.current) {
+          // Tier 1: the in-memory states with no in-app dialog of their own (an
+          // import wizard mid-flight, a dirty dive plan). Deliberately NOT skipped
+          // by `preConfirmed` alone: a quit confirms the PROJECT, which says nothing
+          // about the dive plan the same close would drop. It is skipped only when
+          // THIS attempt already asked it - see `tier1Confirmed`. Since `quitApp`
+          // now routes menu Quit / Ctrl+Q through this same listener, that ask
+          // always happens before the tier-2 dialog acts.
+          if (shouldBlockRef.current && !tier1Confirmed.current) {
             // Prevent multiple dialogs
             if (isShowingDialog.current || !isMounted) return;
             isShowingDialog.current = true;
@@ -127,7 +138,7 @@ export function useBeforeUnload(
               isShowingDialog.current = false;
             }
             if (!proceed) return;
-            deferredCleanup = onConfirm;
+            tier1Confirmed.current = true;
           }
 
           // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
@@ -140,10 +151,15 @@ export function useBeforeUnload(
           }
 
           // Past every guard: the window IS going away, so the tier-1 cleanup is
-          // finally safe to perform.
-          if (deferredCleanup) {
+          // finally safe to perform. It is destructive by contract ("e.g. delete
+          // placed sections"), so it may only run once the close is actually going
+          // ahead - running it inside the tier-1 confirmation performed the deletions
+          // for a close that tier 2 then aborted. Keyed on `shouldBlock` rather than
+          // on "we prompted this pass", so it still runs on the pre-confirmed pass
+          // that skips an already-answered prompt.
+          if (shouldBlockRef.current && onConfirm) {
             try {
-              await deferredCleanup();
+              await onConfirm();
             } catch (e) {
               console.error('Cleanup callback failed:', e);
             }

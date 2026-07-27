@@ -35,26 +35,36 @@ export function resetQuitConfirmationForTests(): void {
 }
 
 /**
- * Perform the actual quit: request a window close.
+ * Ask the window to close. The Rust `on_window_event` handler PREVENTS the close
+ * and re-emits `tauri://close-requested`, which the App-level `useBeforeUnload`
+ * listener turns into the real destroy - so this is a request to run the exit
+ * flow, never a close in itself. Requires the `core:window:allow-close`
+ * capability; a rejection is logged (and runs `onRejected`) so a denied or
+ * regressed capability is visible rather than failing silently.
+ */
+function requestWindowClose(onRejected?: () => void): void {
+  getCurrentWindow()
+    .close()
+    .catch((err) => {
+      onRejected?.();
+      console.error('[quit] window.close() failed:', err);
+    });
+}
+
+/**
+ * Perform the actual quit: request a window close, pre-confirmed.
  *
- * The Rust `on_window_event` handler re-emits `tauri://close-requested`, which
- * the App-level `useBeforeUnload` listener turns into a window destroy. The
- * one-shot flag above tells that listener this quit is already confirmed, so it
- * skips {@link guardQuit} instead of re-prompting. Requires the
- * `core:window:allow-close` capability; a rejection is logged (and un-arms the
- * flag, so the next close request is guarded again) so a denied/regressed
- * capability is visible rather than failing silently.
+ * The one-shot flag above tells the close listener this quit is already confirmed,
+ * so it skips {@link guardQuit} instead of re-prompting. A rejected close un-arms
+ * the flag, so the next close request is guarded again.
  *
  * Call this only AFTER any exit confirmation - it does NOT prompt.
  */
 export function performQuit(): void {
   quitConfirmed = true;
-  getCurrentWindow()
-    .close()
-    .catch((err) => {
-      quitConfirmed = false;
-      console.error('[quit] window.close() failed:', err);
-    });
+  requestWindowClose(() => {
+    quitConfirmed = false;
+  });
 }
 
 /**
@@ -136,12 +146,23 @@ export function guardQuit(): boolean {
 }
 
 /**
- * Quit the application, routing through the exit guards first: unpushed
- * SpeleoDB edits held under our write lock, then unsaved-to-disk changes. The
- * OS window close button goes through the SAME guard (App wires `guardQuit`
- * into `useBeforeUnload`), so X and Quit behave identically.
+ * Quit the application.
+ *
+ * Deliberately runs NO guard here: it asks for a close, un-confirmed, and the
+ * App-level `useBeforeUnload` listener runs the whole exit flow - the native
+ * import / dive-plan confirm first, then {@link guardQuit}. That listener is the
+ * only place both tiers exist, and the ONLY ordering in which every cancellable
+ * question is asked before anything irreversible happens.
+ *
+ * It used to call `guardQuit()` directly and then `performQuit()`, which put the
+ * tiers in the opposite order for menu Quit / Ctrl+Q: `SpeleoQuitDialog` ran and
+ * its "Push, release & quit" pushed AND RELEASED the server lock, and only then
+ * did the re-issued close reach the native "You have unsaved changes to this dive
+ * plan. Discard and close?" prompt. Cancelling there left the user in the app with
+ * the lock irreversibly surrendered and the project silently read-only, with
+ * nothing saying why. The window X never had the bug - it always arrived at the
+ * listener first - so the two paths now share that one order.
  */
 export function quitApp(): void {
-  if (guardQuit()) return;
-  performQuit();
+  requestWindowClose();
 }

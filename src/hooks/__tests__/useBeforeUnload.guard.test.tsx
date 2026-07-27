@@ -142,7 +142,8 @@ describe('useBeforeUnload - the in-app exit guard', () => {
 
   it('still prompts for a dirty dive plan on a confirmed in-app quit', async () => {
     // `preConfirmed` covers the PROJECT decision only; the dive plan is separate
-    // in-memory work the same close would drop.
+    // in-memory work the same close would drop. (Skipped only when THIS attempt
+    // already asked - see the ordering suite below.)
     const guard = vi.fn(() => false);
     render(<Harness shouldBlock guard={guard} />);
     await flush();
@@ -151,6 +152,84 @@ describe('useBeforeUnload - the in-app exit guard', () => {
     await pressWindowX();
 
     expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+});
+
+/**
+ * [#270] Nothing that can still CANCEL the quit may run after something
+ * irreversible.
+ *
+ * A tier-2 dialog aborts the close and re-issues it once the user acts - and
+ * `SpeleoQuitDialog`'s "Push, release & quit" pushes and RELEASES the server lock
+ * before doing so. The tier-1 native prompt used to be asked on that second pass,
+ * after the release: cancelling it left the user in the app with the lock
+ * irreversibly surrendered and the project silently read-only. Tier 1 is asked on
+ * the FIRST pass instead, and its answer carries across the dialog.
+ */
+describe('useBeforeUnload - every cancellable prompt precedes the irreversible act', () => {
+  it('asks tier 1 before the tier-2 dialog, and not again after it', async () => {
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock guard={guard} />);
+    await flush();
+
+    // Pass 1: the quit attempt (menu Quit now arrives here too, un-confirmed).
+    await pressWindowX();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+    expect(guard).toHaveBeenCalledTimes(1);
+    expect(destroyMock).not.toHaveBeenCalled();
+
+    // Pass 2: the dialog has done its irreversible work and re-issued the close.
+    performQuit();
+    await pressWindowX();
+
+    expect(confirmMock).toHaveBeenCalledTimes(1); // asked once, and asked FIRST
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('declining tier 1 aborts before the tier-2 dialog can act at all', async () => {
+    confirmMock.mockResolvedValue(false);
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock guard={guard} />);
+    await flush();
+
+    await pressWindowX();
+
+    // The dialog that would push and release never even opens.
+    expect(guard).not.toHaveBeenCalled();
+    expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  it('re-asks on a later attempt when the first was abandoned at the dialog', async () => {
+    // The user answered tier 1, then cancelled the tier-2 dialog. That answer was
+    // for an attempt that never happened, so a fresh Quit must ask again.
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock guard={guard} />);
+    await flush();
+
+    await pressWindowX();
+    expect(confirmMock).toHaveBeenCalledTimes(1);
+
+    // ...dialog cancelled (no signal reaches us) ... user quits again:
+    await pressWindowX();
+    expect(confirmMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('still runs the tier-1 cleanup on the pass that skips the prompt', async () => {
+    // The cleanup is keyed on `shouldBlock`, not on "we prompted this pass" - it
+    // must run exactly once, when the window actually goes away.
+    const onConfirm = vi.fn(async () => {});
+    const guard = vi.fn(() => true);
+    render(<Harness shouldBlock guard={guard} onConfirm={onConfirm} />);
+    await flush();
+
+    await pressWindowX();
+    expect(onConfirm).not.toHaveBeenCalled();
+
+    performQuit();
+    await pressWindowX();
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
     expect(destroyMock).toHaveBeenCalledTimes(1);
   });
 });

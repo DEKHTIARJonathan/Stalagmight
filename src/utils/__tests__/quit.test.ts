@@ -55,42 +55,65 @@ beforeEach(() => {
   useUIStore.setState({ openDialog: openDialog as never, activeDialog: null, dialogData: {} });
 });
 
-describe('guardQuit', () => {
-  it('lets a clean project quit immediately', () => {
-    expect(guardQuit()).toBe(false);
+/**
+ * [#270] `quitApp` decides NOTHING: it asks for a close, un-confirmed, and the
+ * App-level `useBeforeUnload` listener runs the whole exit flow - the native
+ * import / dive-plan confirm FIRST, then `guardQuit`.
+ *
+ * It used to call `guardQuit()` here and then `performQuit()`, which put the tiers
+ * in the opposite order for menu Quit / Ctrl+Q: `SpeleoQuitDialog` ran and its
+ * "Push, release & quit" released the server lock, and only then did the re-issued
+ * close reach the native prompt - which the user could still cancel, keeping the
+ * app open with the lock irreversibly surrendered. The guards below are therefore
+ * asserted on `guardQuit` directly, which is where they live.
+ */
+describe('quitApp', () => {
+  it('asks for a close and guards nothing itself, whatever the state', () => {
+    // Both guard conditions are live, and quitApp still just requests the close -
+    // the listener asks the native prompt first, THEN opens this dialog.
+    useProjectStore.setState({ isDirty: true });
+    useSpeleoStore.setState({ link: link() });
     quitApp();
     expect(openDialog).not.toHaveBeenCalled();
     expect(closeMock).toHaveBeenCalledTimes(1);
+  });
+
+  it('does not arm the one-shot confirmation - that close must still be guarded', () => {
+    quitApp();
+    expect(consumeQuitConfirmation()).toBe(false);
+  });
+});
+
+describe('guardQuit', () => {
+  it('lets a clean project quit immediately', () => {
+    expect(guardQuit()).toBe(false);
+    expect(openDialog).not.toHaveBeenCalled();
   });
 
   it('quits immediately with no project open at all', () => {
     useProjectStore.setState({ project: null, isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    quitApp();
+    expect(guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
-    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   it('blocks on unsaved-to-disk changes', () => {
     useProjectStore.setState({ isDirty: true });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('unsaved-changes', { pendingQuit: true });
-    expect(closeMock).not.toHaveBeenCalled();
   });
 
   // The regression this file exists for: saved to disk, so the old guard passed.
   it('blocks on unpushed SpeleoDB edits even when the project is saved to disk', () => {
     useSpeleoStore.setState({ link: link() });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-    expect(closeMock).not.toHaveBeenCalled();
   });
 
   it('does NOT block while holding the lock with nothing unpushed', () => {
     useSpeleoStore.setState({ link: link({ hasUnpushedEdits: false }) });
-    quitApp();
+    expect(guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
-    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   // The guard keys off the WORK AT RISK, not the lock: edits the server has never
@@ -101,9 +124,8 @@ describe('guardQuit', () => {
     // push/keep/release - which is exactly why walking away silently is wrong: the
     // edits cannot reach the server until a reconnect.
     useSpeleoStore.setState({ link: link({ forceEditing: true }) });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-    expect(closeMock).not.toHaveBeenCalled();
   });
 
   it('blocks a read-only remote project that still has unpushed edits', () => {
@@ -112,18 +134,16 @@ describe('guardQuit', () => {
     // which also drops to read-only. Requiring editState === 'editing' disarmed
     // the guard in precisely those states.
     useSpeleoStore.setState({ link: link({ editState: 'read-only' }) });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-    expect(closeMock).not.toHaveBeenCalled();
   });
 
   it('does NOT block a read-only remote project with nothing unpushed', () => {
     useSpeleoStore.setState({
       link: link({ editState: 'read-only', hasUnpushedEdits: false }),
     });
-    quitApp();
+    expect(guardQuit()).toBe(false);
     expect(openDialog).not.toHaveBeenCalled();
-    expect(closeMock).toHaveBeenCalledTimes(1);
   });
 
   it('uses the SpeleoDB prompt (not the disk one) when a force-edit session is also disk-dirty', () => {
@@ -132,9 +152,8 @@ describe('guardQuit', () => {
     // would walk straight past the unpushed edits.
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link({ forceEditing: true }) });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-    expect(closeMock).not.toHaveBeenCalled();
   });
 
   // Composition: BOTH dirty. The SpeleoDB prompt runs first because it is the only
@@ -143,10 +162,9 @@ describe('guardQuit', () => {
   it('runs the SpeleoDB prompt first when the project is both disk-dirty and unpushed', () => {
     useProjectStore.setState({ isDirty: true });
     useSpeleoStore.setState({ link: link() });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(openDialog).toHaveBeenCalledTimes(1);
     expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
-    expect(closeMock).not.toHaveBeenCalled();
   });
 });
 
@@ -160,7 +178,7 @@ describe('the one-shot quit confirmation', () => {
 
   it('is NOT armed by a guarded quit that never reached performQuit', () => {
     useProjectStore.setState({ isDirty: true });
-    quitApp();
+    expect(guardQuit()).toBe(true);
     expect(consumeQuitConfirmation()).toBe(false);
   });
 
