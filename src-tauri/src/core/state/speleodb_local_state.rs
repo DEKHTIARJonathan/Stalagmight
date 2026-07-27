@@ -147,7 +147,9 @@ impl AppState {
     /// the caller can tell "asked, nothing here" from "never asked".
     ///
     /// Never fails: no network, no auth, and every per-file error degrades to a
-    /// "no local copy" row.
+    /// "no local copy" row - flagged [`SpeleoLocalProjectState::state_unknown`] when
+    /// the copy is there and could not be read, so a consumer cannot mistake it for
+    /// a clean one.
     pub(crate) fn speleodb_local_project_states(
         &self,
         project_ids: Option<Vec<String>>,
@@ -241,12 +243,10 @@ impl AppState {
         cache_root: Option<&Path>,
         project_ids: Option<Vec<String>>,
     ) -> HashMap<String, SpeleoLocalProjectState> {
-        // The OPEN project's live link, read from the open database. This WINS over
-        // whatever is on disk for that id, for two reasons: the open project need not
-        // be the cache copy at all (an adopted or published `.stalx` lives wherever
-        // the user keeps it), and its dirty bit is stamped into the open database on
-        // every accepted edit - so the live row is at least as fresh as, and often
-        // fresher than, any other copy of that project on this machine.
+        // The OPEN project's live link, read from the open database. It is FOLDED IN
+        // below rather than read from disk, because its dirty bit is stamped into the
+        // open database on every accepted edit - so it is at least as fresh as, and
+        // often fresher than, that project's file on disk.
         let open = self.speleodb_open_link().ok().map(|link| {
             (
                 link.project_id,
@@ -266,26 +266,73 @@ impl AppState {
                 .into_iter()
                 .filter(|id| super::speleodb::validate_project_id(id).is_ok())
                 .map(|id| {
+                    // No cache root means the app dirs did not resolve, so we could
+                    // not even look - which is NOT the same answer as "there is
+                    // nothing here". `default()` gave a row byte-identical to a
+                    // genuinely clean copy, and the held-lock prompt offers its
+                    // irreversible Release on exactly that row: every listed lock got
+                    // Release offered the moment the app dirs failed. Every other
+                    // "could not establish it" path in this file fails to `unknown`;
+                    // so does this one.
                     let state = cache_root
                         .map(|root| local_state_at(&cache_path_in(root, &id)))
-                        .unwrap_or_default();
+                        .unwrap_or_else(unknown_local_state);
                     (id, state)
                 })
                 .collect(),
             None => cache_root.map(scan_cache).unwrap_or_default(),
         };
 
-        // Applied last so the live state overwrites the on-disk row for that id. An
-        // open project that is not in the cache at all (an adopted / published
-        // `.stalx` the user keeps elsewhere) still joins the unfiltered listing; when
-        // ids were requested explicitly it does not, because the caller asked about
-        // a specific set.
-        if let Some((id, state)) = open {
-            if !explicit || out.contains_key(&id) {
-                out.insert(id, state);
+        // The live state is folded in LAST. An open project that is not in the cache
+        // at all (an adopted / published `.stalx` the user keeps elsewhere) still
+        // joins the unfiltered listing; when ids were requested explicitly it does
+        // not, because the caller asked about a specific set.
+        if let Some((id, live)) = open {
+            let cached = out.remove(&id);
+            if !explicit || cached.is_some() {
+                // MERGED, never overwritten. This row answers for the PROJECT, and the
+                // open copy need not be the cache copy: Save-As carries the
+                // `speleo_link` row onto whatever file the user picked, so one machine
+                // can hold two copies of the same project. Letting the live row replace
+                // the cached one published a clean, actionable answer over a cached copy
+                // that was dirty - or that could not be read at all - which is precisely
+                // the claim the replace guard ([`Self::local_copy_state`]) refuses to
+                // make on that input. The two must not silently disagree: this listing
+                // gates the held-lock prompt's irreversible Release, which has no
+                // un-pushed-edits veto of its own.
+                //
+                // So the dirty bits are ORed (either copy's un-pushed work counts, as in
+                // the guard, which must never under-report), and `state_unknown` only
+                // clears when the live link speaks for the very file that could not be
+                // read - the same first-hand-knowledge rule the guard applies.
+                let merged = match cached {
+                    Some(cached) => SpeleoLocalProjectState {
+                        has_local_copy: true,
+                        has_unpushed_edits: live.has_unpushed_edits || cached.has_unpushed_edits,
+                        last_edit_at: live.last_edit_at.or(cached.last_edit_at),
+                        is_open: true,
+                        state_unknown: cached.state_unknown
+                            && !self.open_project_is_the_cached_copy(cache_root, &id),
+                    },
+                    None => live,
+                };
+                out.insert(id, merged);
             }
         }
         out
+    }
+
+    /// Whether the OPEN project is the very file the cache walk read for `id` - the
+    /// listing's half of the first-hand-knowledge rule [`Self::local_copy_state`]
+    /// applies. Only then may the live link answer for a cached copy that could not
+    /// be read; a same-id copy open from elsewhere knows nothing about that file.
+    fn open_project_is_the_cached_copy(&self, cache_root: Option<&Path>, id: &str) -> bool {
+        let Some(root) = cache_root else {
+            return false;
+        };
+        let cached_path = cache_path_in(root, id);
+        self.open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &cached_path))
     }
 }
 
@@ -470,6 +517,86 @@ mod tests {
         assert!(a.is_open, "and is flagged as the open project");
         assert_eq!(a.last_edit_at.as_deref(), Some("2026-07-26T12:00:00Z"));
     }
+
+    #[test]
+    fn a_copy_open_from_elsewhere_does_not_speak_for_the_cached_one_in_the_listing() {
+        // The LISTING's half of the rule the guard already applies: the open copy and
+        // the cache copy can be different files (Save-As carries the `speleo_link`
+        // row forward), so the open one's clean, known row may not be published as
+        // the project's answer. It used to overwrite the cached row outright - with
+        // `state_unknown: false` hardcoded - so an unreadable or dirty cache copy
+        // read back as clean, which is exactly the report the held-lock prompt offers
+        // its irreversible Release on.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        // A's cache copy is present and UNREADABLE; B's is present and DIRTY.
+        let cached_a = cache_path_in(&root, ID_A);
+        std::fs::create_dir_all(cached_a.parent().expect("parent")).expect("mkdir");
+        std::fs::write(&cached_a, b"not a sqlite database at all").expect("write junk");
+        seed_cache(&root, ID_B, true);
+
+        // A CLEAN copy of BOTH projects cannot be open at once, so run the shape
+        // twice - once per project - against a clean copy open from outside the cache.
+        for (id, assertion) in [(ID_A, "unreadable"), (ID_B, "dirty")] {
+            let open_path = temp.path().join(format!("my-copy-{id}.stalx"));
+            let mut db = Database::open(&open_path).expect("open db");
+            db.save_project(&Project::new("Mine".to_owned(), None))
+                .expect("save project");
+            db.save_speleo_link(Some(&SpeleoLink {
+                endpoint: "http://x/".to_owned(),
+                project_id: id.to_owned(),
+                project_name: "Mine".to_owned(),
+                base_commit_sha: Some("abc123".to_owned()),
+                has_unpushed_edits: false,
+                last_edit_at: None,
+                last_verify_at: None,
+            }))
+            .expect("save link");
+            drop(db);
+
+            let state = AppState::new().expect("state");
+            assert!(
+                state.open_project(open_path).success,
+                "open the clean copy from outside the cache"
+            );
+            let row = state
+                .speleodb_local_project_states_in(Some(&root), Some(vec![id.to_owned()]))
+                .remove(id)
+                .expect("the id was asked for explicitly");
+            assert!(
+                row.has_unpushed_edits || row.state_unknown,
+                "a clean copy open elsewhere must not report the {assertion} cache \
+                 copy as clean-and-known: {row:?}"
+            );
+            assert!(row.is_open, "the project is still flagged open: {row:?}");
+        }
+    }
+
+    #[test]
+    fn an_unresolvable_cache_root_reports_unknown_rather_than_clean() {
+        // `cache_root == None` = the app dirs did not resolve, so we could not even
+        // look. That used to yield `SpeleoLocalProjectState::default()`, which is
+        // byte-identical to a genuinely clean copy - and the held-lock prompt offers
+        // its irreversible Release on exactly that row, for every lock in the list.
+        let state = AppState::new().expect("state");
+        let row = state
+            .speleodb_local_project_states_in(None, Some(vec![ID_A.to_owned()]))
+            .remove(ID_A)
+            .expect("an explicitly requested id still gets a row");
+        assert!(
+            row.state_unknown && !row.has_local_copy,
+            "we could not look, so nothing is claimed: {row:?}"
+        );
+        // The unfiltered walk has nothing to walk, which is a different statement -
+        // it lists no projects rather than listing them as clean.
+        assert!(
+            state
+                .speleodb_local_project_states_in(None, None)
+                .is_empty(),
+            "with no cache root there is nothing to enumerate"
+        );
+    }
+
     #[test]
     fn the_listing_fails_open_for_an_unreadable_file_but_the_guard_does_not() {
         // The two consumers need OPPOSITE defaults when a read fails, which is the

@@ -22,9 +22,14 @@
 //! [`AppState::replace_cache_stalx_abandoning`]. Same shape as the lock release
 //! (`speleodb_release_held_lock_best_effort` vs `_abandoning`): the safe verb is
 //! the one you reach for by default, and abandoning is spelled out at the call
-//! site. Exactly ONE caller is entitled to it - `speleodb_take_remote`, whose
-//! whole purpose is discarding local edits behind the frontend's second
-//! destroy-confirmation.
+//! site. Every caller entitled to it arrives from a frontend that has already had
+//! the loss confirmed by name: `speleodb_take_remote` (the divergence prompt's
+//! destroy-confirmed "Take remote"), `speleodb_open_project_discarding_local` (the
+//! same confirmed choice on a refused open), and `speleodb_restore_revision` under
+//! its `discard_local` waiver (a Restore only, never a View - a restore stamps the
+//! copy un-pushed itself, so without the waiver Restore was single-use). Anything
+//! else passes [`LocalEditsPolicy::Protect`], or calls
+//! [`AppState::replace_cache_stalx`], and refuses instead.
 
 use std::collections::HashMap;
 use std::path::Path;
@@ -69,11 +74,12 @@ pub(super) fn restore_display_settings(
 
 /// Whether a re-pull may destroy un-pushed local edits at its destination.
 ///
-/// For the two orchestration verbs that serve BOTH kinds of caller
-/// (`speleodb_fast_forward`, the shared body behind `speleodb_open_project` /
-/// `speleodb_open_project_discarding_local`) - so the intent is named at every
-/// call site instead of riding on a bare `bool`, and so the discarding call sites
-/// stay greppable.
+/// For the orchestration paths that serve BOTH kinds of caller with the same
+/// mechanics - `speleodb_fast_forward`, the shared body behind
+/// `speleodb_open_project` / `speleodb_open_project_discarding_local`, and
+/// `speleodb_restore_revision`'s View-vs-Restore split - so the intent is named at
+/// every call site instead of riding on a bare `bool`, and so a diff that adds a
+/// waiver says `Discard` in it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(super) enum LocalEditsPolicy {
     /// Refuse the replace when the destination holds un-pushed edits. The default
@@ -239,40 +245,46 @@ impl AppState {
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
 mod tests {
-    /// Tripwire: the abandoning replace stays reachable from exactly the sanctioned
-    /// places. Everything that pulls the server copy over the local one funnels
-    /// through this module, and the whole point of splitting the verb in two is
-    /// that opting out of the guard is a deliberate, reviewable act - a future call
-    /// site that quietly picks the discarding path would silently reintroduce the
-    /// data-loss hole this guard closes.
+    use super::*;
+    use crate::models::{Project, SpeleoLink};
+    use crate::persistence::Database;
+    use crate::speleodb::dump::Dump;
+
+    const ID: &str = "11111111-1111-1111-1111-111111111111";
+    /// The `.stalx` entry inside the fixture dump below.
+    const ENTRY: &str = "misc/project.stalx";
+
+    /// Tripwire: the orchestration never names the abandoning replace directly, so
+    /// every waiver of the un-pushed-edits guard is spelled out as a
+    /// [`LocalEditsPolicy`] at its call site and shows up in a diff as the word
+    /// `Discard`. Everything that pulls the server copy over the local one funnels
+    /// through this module, and the whole point of splitting the verb in two is that
+    /// opting out of the guard is a deliberate, reviewable act.
     ///
-    /// The orchestration's source is scanned from HERE rather than from its own
-    /// test module so the needles do not match the test that looks for them.
+    /// The orchestration's source is scanned from HERE rather than from its own test
+    /// module so the needle does not match the test that looks for it.
+    ///
+    /// This test used to ALSO pin the number of `LocalEditsPolicy::Discard` sites at
+    /// a literal count. That was not a safety property - it was an assertion about a
+    /// source string - and it distorted the code it guarded: `speleodb_adopt_ariane`
+    /// rebuilds its destination itself rather than going through
+    /// [`AppState::replace_cache_stalx_with`], so it has no policy to pass, and the
+    /// enum value was constructed there and immediately compared away purely to keep
+    /// the count at four. What holds the line instead is the shape of this module -
+    /// the guard is the DEFAULT (`replace_cache_stalx`), the opt-out is a separate
+    /// `pub(super)` verb no production code outside this file names (the assertion
+    /// this test kept), and the behaviour of both is pinned by the test below.
     #[test]
-    fn only_the_confirmed_discard_paths_waive_the_guard() {
+    fn the_orchestration_never_calls_the_abandoning_replace_directly() {
         let source = include_str!("speleodb.rs");
         // Production code only: the orchestration's own test module drives both
         // verbs on purpose.
         let orchestration = source.split("#[cfg(test)]").next().unwrap_or(source);
-        assert_eq!(
-            orchestration.matches("LocalEditsPolicy::Discard").count(),
-            4,
-            "exactly four call sites may discard un-pushed local edits: \
-             speleodb_take_remote (the divergence prompt's destroy-confirmed \
-             'Take remote'), speleodb_open_project_discarding_local (the same \
-             confirmed choice on a refused open), speleodb_restore_revision \
-             under its `discard_local` waiver (a RESTORE only, never a View, after \
-             the restore confirm's armed discard step - a restore stamps the copy \
-             un-pushed itself, so without it Restore was single-use), and \
-             speleodb_adopt_ariane under the same waiver (reached only by that \
-             confirmed take-remote when the project turns out to still be Ariane, \
-             where re-adopting is the only way to open it at all - refusing there \
-             asks the user the same question twice and answers it with a dead \
-             end). Any other site must pass LocalEditsPolicy::Protect, or call \
-             replace_cache_stalx, so it refuses instead of destroying work that \
-             exists in no git anywhere."
-        );
         assert_eq!(
             orchestration
                 .matches("replace_cache_stalx_abandoning")
@@ -280,6 +292,113 @@ mod tests {
             0,
             "the orchestration reaches the abandoning replace only through the \
              named LocalEditsPolicy, so every waiver is spelled out at its call site"
+        );
+    }
+
+    /// A `.stalx` at `path` linked to [`ID`], carrying the given un-pushed-edits bit.
+    fn seed_linked_stalx(path: &Path, dirty: bool) {
+        let mut db = Database::open(path).expect("open db");
+        db.save_project(&Project::new("Local".to_owned(), None))
+            .expect("save project");
+        db.save_speleo_link(Some(&SpeleoLink {
+            endpoint: "http://x/".to_owned(),
+            project_id: ID.to_owned(),
+            project_name: "Local".to_owned(),
+            base_commit_sha: Some("abc123".to_owned()),
+            has_unpushed_edits: dirty,
+            last_edit_at: dirty.then(|| "2026-07-27T10:00:00Z".to_owned()),
+            last_verify_at: None,
+        }))
+        .expect("save link");
+    }
+
+    /// A one-entry ZIP standing in for a downloaded dump. The body is not a `.stalx`
+    /// - nothing here re-opens it, and the point is only whether it reached `dest`.
+    fn server_dump() -> Vec<u8> {
+        use std::io::Write as _;
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        writer.start_file(ENTRY, opts).expect("start_file");
+        writer.write_all(b"the server copy").expect("write entry");
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn only_a_named_discard_gets_a_replace_past_un_pushed_edits() {
+        // The behaviour the split verb exists for, pinned from all three sides: the
+        // default replace refuses over un-pushed work and leaves the file alone, the
+        // policy-driven form agrees under `Protect`, and `Discard` is the ONLY thing
+        // that gets through. A caller that wants the destruction has to name it.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, true);
+        let before = std::fs::read(&dest).expect("read dest");
+        let state = AppState::new().expect("state");
+        let zip = server_dump();
+
+        let err = state
+            .replace_cache_stalx(&mut Dump::open(&zip).expect("open dump"), ENTRY, &dest, ID)
+            .expect_err("un-pushed edits must refuse the plain replace");
+        assert!(
+            matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
+            "and refuse it with the typed routing signal, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            before,
+            "a refusal must leave the local copy byte-identical"
+        );
+
+        let err = state
+            .replace_cache_stalx_with(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                LocalEditsPolicy::Protect,
+            )
+            .expect_err("Protect is the same refusal");
+        assert!(matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }));
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            before,
+            "still untouched"
+        );
+
+        state
+            .replace_cache_stalx_with(
+                &mut Dump::open(&zip).expect("open dump"),
+                ENTRY,
+                &dest,
+                ID,
+                LocalEditsPolicy::Discard,
+            )
+            .expect("the confirmed-discard waiver replaces the copy");
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            b"the server copy",
+            "and only that waiver actually overwrites it"
+        );
+    }
+
+    #[test]
+    fn a_clean_copy_is_replaced_without_any_waiver() {
+        // The other half: `Protect` is not "always refuse". With nothing un-pushed
+        // there is no work to lose, so an ordinary re-pull goes straight through.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        seed_linked_stalx(&dest, false);
+        let state = AppState::new().expect("state");
+        let zip = server_dump();
+
+        state
+            .replace_cache_stalx(&mut Dump::open(&zip).expect("open dump"), ENTRY, &dest, ID)
+            .expect("a clean local copy needs no waiver");
+        assert_eq!(
+            std::fs::read(&dest).expect("read dest"),
+            b"the server copy",
+            "the server copy landed"
         );
     }
 }
