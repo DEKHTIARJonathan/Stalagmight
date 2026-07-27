@@ -417,6 +417,13 @@ impl TokenStore {
         self.keychain_state
     }
 
+    /// Whether the keychain is currently being skipped. Lets a caller that flips
+    /// the flag around a fallible operation put the previous answer back, instead
+    /// of leaving the live store disagreeing with the persisted preference.
+    pub(crate) fn keychain_declined(&self) -> bool {
+        self.keychain_declined
+    }
+
     /// The tier the active token lives in, or `None` when there is no token.
     pub(crate) fn active_tier(&self) -> Option<TokenTier> {
         self.active_tier
@@ -532,15 +539,32 @@ impl TokenStore {
         let token = self.in_memory.clone()?;
         let tier = self.store(endpoint, email, &token, allow_plaintext);
         // "This session only" has to be true ON DISK, not just in the label the
-        // user is shown: a plaintext copy from an earlier choice would otherwise
-        // sit there and be re-loaded on the next launch, which is the opposite of
-        // what they just asked for. The keychain tier self-heals plaintext inside
-        // `store`; only the memory landing needs sweeping here. The keychain is
-        // deliberately left untouched either way - reading it is what raises the
-        // unlock prompt this whole flow exists to stop.
+        // user is shown: a copy from an earlier choice would otherwise sit there
+        // and be re-loaded on the next launch, which is the opposite of what they
+        // just asked for. The keychain tier self-heals plaintext inside `store`;
+        // only the memory landing needs sweeping here.
+        //
+        // BOTH persistent tiers are swept, not just plaintext. A working login on
+        // an earlier day writes the key to the keychain, and leaving that entry
+        // behind makes "you will be signed out when the app closes" false the
+        // moment the next launch rehydrates through it - the promise then rests
+        // entirely on `keychain_declined` reaching disk, which is best-effort.
+        //
+        // Touching the keychain here does NOT re-open the nag this flow exists to
+        // stop: `restore` is reached only from the two explicit credential verbs
+        // (the post-login storage answer and the Settings button), never from a
+        // background path, and on the broken keyring that raised the question in
+        // the first place the delete fails harmlessly.
         if tier == TokenTier::Memory {
+            let key = account_key(endpoint, email);
+            if let Err(e) = self.keychain.delete(&key) {
+                tracing::debug!(
+                    error = %e,
+                    "no keychain entry swept after a session-only choice (the keychain is unavailable here)"
+                );
+            }
             if let Some(plaintext) = &self.plaintext {
-                if let Err(e) = plaintext.delete(&account_key(endpoint, email)) {
+                if let Err(e) = plaintext.delete(&key) {
                     tracing::warn!(
                         error = %e,
                         "failed to delete the plaintext SpeleoDB token after a session-only choice"
@@ -647,19 +671,37 @@ impl TokenStore {
         // "may still be stored on this machine" about a store that cannot hold one
         // fires on every ordinary logout - a warning the user learns to ignore,
         // which costs them the case where it is real.
-        let keychain_may_hold_it = matches!(self.keychain.load(&key), Ok(Some(_)));
-        if let Err(e) = self.keychain.delete(&key) {
-            if keychain_may_hold_it {
-                tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
-                failure = Some(e);
-            } else {
-                tracing::debug!(
-                    error = %e,
-                    active_tier = ?self.active_tier,
-                    purpose = "defensive sweep of a keychain that holds nothing for this account",
-                    "SpeleoDB keychain delete failed for an account it does not hold"
-                );
+        //
+        // A DECLINED keychain is skipped outright, probe included. `forget` routes
+        // both the user's logout and the background 401 auto-drop through here, so
+        // probing would raise the desktop unlock prompt on a locked keyring from an
+        // auth failure the user never initiated - exactly the nag the decline flag
+        // exists to stop, and the one path that can fire it without them asking for
+        // anything. Nothing is orphaned by skipping: `store` never reaches the
+        // keychain while the flag is set, so this store has put nothing there, and
+        // an entry predating the decline is overwritten by the next successful
+        // login (which clears the flag and re-stores) or swept by "Try again".
+        if !self.keychain_declined {
+            let keychain_may_hold_it = matches!(self.keychain.load(&key), Ok(Some(_)));
+            if let Err(e) = self.keychain.delete(&key) {
+                if keychain_may_hold_it {
+                    tracing::warn!(error = %e, "failed to delete SpeleoDB token from keychain");
+                    failure = Some(e);
+                } else {
+                    tracing::debug!(
+                        error = %e,
+                        active_tier = ?self.active_tier,
+                        purpose = "defensive sweep of a keychain that holds nothing for this account",
+                        "SpeleoDB keychain delete failed for an account it does not hold"
+                    );
+                }
             }
+        } else {
+            tracing::debug!(
+                purpose =
+                    "the user declined the keychain; probing it here is the nag the flag prevents",
+                "skipped the SpeleoDB keychain sweep"
+            );
         }
         if let Some(plaintext) = &self.plaintext {
             if let Err(e) = plaintext.delete(&key) {
@@ -1360,6 +1402,61 @@ mod tests {
         // The keychain supersedes, so the plaintext copy it displaced is gone.
         let probe = PlaintextStore::new(temp.path().to_path_buf());
         assert_eq!(probe.load(&account_key(EP, EMAIL)).unwrap(), None);
+    }
+
+    #[test]
+    fn a_session_only_choice_also_sweeps_the_keychain() {
+        // The plaintext copy is not the only thing that can outlive the promise. A
+        // working login on an earlier day writes the key to the KEYCHAIN, and
+        // leaving that entry behind makes "you will be signed out when the app
+        // closes" false the moment the next launch rehydrates through it - the
+        // promise would rest entirely on a best-effort `keychain_declined` write.
+        //
+        // Reaching the keychain here is not the nag this flow exists to stop:
+        // `restore` runs only from the two explicit credential verbs, never from a
+        // background path.
+        let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+        // Monday: the keychain works, so the key lands there durably.
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Keychain);
+
+        // Tuesday: the keyring is locked at login, and the user answers the storage
+        // question with "this session only".
+        store.set_keychain_declined(true);
+        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+
+        // The next launch: nothing in memory, and the probe re-enabled, so `load`
+        // can only answer from a persisted tier.
+        store.in_memory = None;
+        store.active_tier = None;
+        store.set_keychain_declined(false);
+        assert_eq!(
+            store.load(EP, EMAIL),
+            None,
+            "Monday's keychain entry must not survive a session-only choice and sign the user back in"
+        );
+    }
+
+    #[test]
+    fn a_declined_keychain_is_not_probed_when_the_session_is_cleared() {
+        // `forget` routes BOTH the user's logout and the background 401 auto-drop
+        // through `clear`, so probing here raised the desktop unlock prompt on a
+        // locked keyring from an auth failure the user never initiated - the one
+        // path that can fire the nag without them asking for anything.
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert!(store.clear(EP, EMAIL).is_ok());
+        assert!(
+            !touched.load(Ordering::SeqCst),
+            "a declined keychain must not be probed or deleted on a session drop"
+        );
+        assert_eq!(
+            store.active_tier(),
+            None,
+            "the token still leaves the session"
+        );
     }
 
     #[test]

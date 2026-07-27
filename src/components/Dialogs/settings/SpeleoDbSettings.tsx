@@ -13,7 +13,7 @@ import {
   parseIntRadix10,
 } from './types';
 import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config';
-import type { KeychainReport } from '../../../types/ipc.generated';
+import type { KeychainReport, TokenFallback } from '../../../types/ipc.generated';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
 
@@ -68,6 +68,7 @@ export function SpeleoDbSettings({
   const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
   const retryKeychain = useSpeleoStore((s) => s.retryKeychain);
+  const setTokenStorage = useSpeleoStore((s) => s.setTokenStorage);
 
   const speleo = config.speleodb;
   const [loggingIn, setLoggingIn] = useState(false);
@@ -149,15 +150,40 @@ export function SpeleoDbSettings({
     (session?.loggedIn ?? false) &&
     (session?.keychain === 'declined' || session?.keychain === 'unavailable');
   const [retryingKeychain, setRetryingKeychain] = useState(false);
+  // Credential-storage failures get their OWN slot rather than the store's shared
+  // `authError`. That field belongs to the login form: writing a storage message
+  // into it told a user "your credentials failed" when what actually failed was
+  // moving an already-valid key into the keyring, and clearing it on success wiped
+  // a genuine sign-in error they had not read yet.
+  const [storageError, setStorageError] = useState<string | null>(null);
   const handleRetryKeychain = async () => {
     setRetryingKeychain(true);
     try {
       // The refreshed session is the whole answer - a keychain that is still broken
       // reports `unavailable` again, so the panel just re-renders the truth.
       const ok = await retryKeychain();
-      setAuthError(ok ? null : t('settings.speleodb.credentials.retryFailed'));
+      setStorageError(ok ? null : t('settings.speleodb.credentials.retryFailed'));
     } finally {
       setRetryingKeychain(false);
+    }
+  };
+
+  // The route back out of a storage choice, without signing out and in again. The
+  // login-time prompt is raised only when the keychain fails DURING that login, so
+  // without this a user who once answered "keep it in a file" had no way to undo
+  // it: the preference persists, and every later fallback silently re-writes the
+  // cleartext file. Offered only while a token is actually held in a non-keychain
+  // tier, which is the only state either direction can change.
+  const [movingToken, setMovingToken] = useState(false);
+  const storageTier = session?.storage ?? 'memory';
+  const canChooseStorage = (session?.loggedIn ?? false) && storageTier !== 'keychain';
+  const handleSetStorage = async (mode: Exclude<TokenFallback, 'unknown'>) => {
+    setMovingToken(true);
+    try {
+      const ok = await setTokenStorage(mode);
+      setStorageError(ok ? null : t('settings.speleodb.credentials.moveFailed'));
+    } finally {
+      setMovingToken(false);
     }
   };
 
@@ -338,17 +364,50 @@ export function SpeleoDbSettings({
           <p className="text-xs text-text-secondary">
             {t('settings.speleodb.credentials.keyOnly')}
           </p>
-          {canRetryKeychain && (
-            <Button
-              onClick={() => void handleRetryKeychain()}
-              disabled={retryingKeychain}
-              data-testid="speleodb-credential-retry-keychain"
+          {/* Cleartext on disk is worth saying plainly, every time the panel is
+              open - not only in the one-shot prompt at login that put it there. */}
+          {storageTier === 'plaintext' && (
+            <p
+              className="mt-2 p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
+              data-testid="speleodb-plaintext-warning"
             >
-              {retryingKeychain
-                ? t('settings.speleodb.credentials.retrying')
-                : t('settings.speleodb.credentials.retry')}
-            </Button>
+              {t('settings.speleodb.credentials.plaintextWarning')}
+            </p>
           )}
+          {storageError && (
+            <p
+              className="mt-2 p-2 bg-error-10 border border-error-20 rounded text-xs text-error"
+              data-testid="speleodb-credential-storage-error"
+            >
+              {storageError}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2 pt-1">
+            {canRetryKeychain && (
+              <Button
+                onClick={() => void handleRetryKeychain()}
+                disabled={retryingKeychain || movingToken}
+                data-testid="speleodb-credential-retry-keychain"
+              >
+                {retryingKeychain
+                  ? t('settings.speleodb.credentials.retrying')
+                  : t('settings.speleodb.credentials.retry')}
+              </Button>
+            )}
+            {canChooseStorage && (
+              <Button
+                onClick={() =>
+                  void handleSetStorage(storageTier === 'plaintext' ? 'session_only' : 'plaintext')
+                }
+                disabled={retryingKeychain || movingToken}
+                data-testid="speleodb-credential-set-storage"
+              >
+                {storageTier === 'plaintext'
+                  ? t('settings.speleodb.credentials.useSessionOnly')
+                  : t('settings.speleodb.credentials.usePlaintext')}
+              </Button>
+            )}
+          </div>
         </div>
       </SettingsSection>
 

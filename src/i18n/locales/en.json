@@ -679,7 +679,11 @@
         },
         "retry": "Try again",
         "retrying": "Trying…",
-        "retryFailed": "Could not move your API key into the OS keychain."
+        "retryFailed": "Could not move your API key into the OS keychain.",
+        "plaintextWarning": "Your API key is in a plaintext file on this computer. Anyone who can read your files can read it.",
+        "moveFailed": "Could not change where your API key is kept.",
+        "useSessionOnly": "Keep it in this session only",
+        "usePlaintext": "Keep it in a file on this computer"
       },
       "pollInterval": {
         "label": "Remote refresh interval",
@@ -757,22 +761,22 @@
       "placementSuggestion": {
         "azimuthWeight": {
           "label": "Azimuth weight",
-          "help": "Weight for azimuth score component (0\u20131)",
+          "help": "Weight for azimuth score component (0–1)",
           "aria": "Azimuth weight"
         },
         "lengthWeight": {
           "label": "Length weight",
-          "help": "Weight for length score component (0\u20131)",
+          "help": "Weight for length score component (0–1)",
           "aria": "Length weight"
         },
         "depthInWeight": {
           "label": "Depth in weight",
-          "help": "Weight for depth-in score component (0\u20131)",
+          "help": "Weight for depth-in score component (0–1)",
           "aria": "Depth in weight"
         },
         "depthOutWeight": {
           "label": "Depth out weight",
-          "help": "Weight for depth-out score component (0\u20131)",
+          "help": "Weight for depth-out score component (0–1)",
           "aria": "Depth out weight"
         },
         "azimuthSigma": {
@@ -792,17 +796,17 @@
         },
         "minShotScore": {
           "label": "Min shot score",
-          "help": "Minimum per-shot score to continue matching (0\u20131)",
+          "help": "Minimum per-shot score to continue matching (0–1)",
           "aria": "Minimum shot score"
         },
         "minAggregateScore": {
           "label": "Min aggregate score",
-          "help": "Minimum aggregate score to include a suggestion (0\u20131)",
+          "help": "Minimum aggregate score to include a suggestion (0–1)",
           "aria": "Minimum aggregate score"
         },
         "singleShotPenalty": {
           "label": "Single shot penalty",
-          "help": "Penalty multiplier for single-shot matches (0\u20131)",
+          "help": "Penalty multiplier for single-shot matches (0–1)",
           "aria": "Single shot penalty"
         },
         "maxAzimuthErrorFull": {
@@ -822,7 +826,7 @@
         },
         "maxLengthErrorFraction": {
           "label": "Max length error fraction",
-          "help": "Length error fraction for dynamic cutoff (0\u20131)",
+          "help": "Length error fraction for dynamic cutoff (0–1)",
           "aria": "Max length error fraction"
         },
         "maxLengthErrorFloor": {
@@ -832,17 +836,17 @@
         },
         "maxReferenceShots": {
           "label": "Max reference shots",
-          "help": "Maximum number of reference shots to try from each leaf (1\u201350)",
+          "help": "Maximum number of reference shots to try from each leaf (1–50)",
           "aria": "Max reference shots"
         },
         "maxSuggestions": {
           "label": "Max suggestions",
-          "help": "Maximum number of suggestions to return (1\u2013100)",
+          "help": "Maximum number of suggestions to return (1–100)",
           "aria": "Max suggestions"
         },
         "minPartialRatio": {
           "label": "Min partial ratio",
-          "help": "Minimum partial shot length ratio (0\u20131)",
+          "help": "Minimum partial shot length ratio (0–1)",
           "aria": "Min partial ratio"
         },
         "shortShotThreshold": {
@@ -2933,7 +2937,7 @@
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy, but it could not be uploaded. You are holding the write lock: use Retry on the upload banner, or finish editing from the SpeleoDB button.",
         "pushUnconfirmed": "The revert was uploaded, but an edit landed after it, so the write lock is still held. Finish editing from the SpeleoDB button to upload the rest and release it.",
-    "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Sign in again, then start editing to upload it."
+        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Sign in again, then start editing to upload it."
       }
     },
     "editBar": {

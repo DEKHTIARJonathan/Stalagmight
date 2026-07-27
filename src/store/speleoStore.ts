@@ -692,6 +692,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   closeStorageChoice: () => set({ storageChoiceOpen: false }),
 
+  // Both credential verbs write `config.speleodb.{token_fallback,keychain_declined}`
+  // on the backend, so the frontend's config copy is stale the moment they return.
+  // `update_config` now preserves that pair server-side (the Settings form does not
+  // own it), so a stale snapshot can no longer UNDO the answer - but re-reading the
+  // config still keeps anything rendering off it honest about where the key went.
   setTokenStorage: async (mode) => {
     try {
       const status = await invokeIpc<SpeleoSessionStatus>('speleodb_set_token_storage', { mode });
@@ -699,6 +704,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // fail, and then the honest thing to show is session-only.
       get().setSession(status);
       set({ storageChoiceOpen: false });
+      await useProjectStore.getState().loadConfig();
       return true;
     } catch {
       return false;
@@ -709,6 +715,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     try {
       const status = await invokeIpc<SpeleoSessionStatus>('speleodb_retry_keychain');
       get().setSession(status);
+      await useProjectStore.getState().loadConfig();
       return true;
     } catch {
       return false;

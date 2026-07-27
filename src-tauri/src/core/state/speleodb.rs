@@ -893,13 +893,28 @@ impl AppState {
         // persisted `token_fallback == Plaintext` preference (read under the
         // config lock). Gate 2 (the keychain failed this session) is intrinsic to
         // TokenStore::store, which only reaches plaintext in the keychain-Err
-        // branch. The warned confirmation that flips this preference is #205.
-        let allow_plaintext = self
+        // branch.
+        //
+        // Gate 1 requires a SETTLED preference, not merely a recorded one. Reading
+        // `token_fallback` alone wrote the key to a cleartext file BEFORE
+        // `needs_storage_choice` below had asked the user anything - a login whose
+        // keychain fails would land the token on disk and only then raise the
+        // question, so answering "this session only" (or dismissing with "Decide
+        // later") left a file the user never agreed to. An unsettled login lands in
+        // memory instead, and the answer moves it - which costs nothing, because
+        // the key is still in hand (`TokenStore::restore`).
+        let (previously_declined, prefers_plaintext) = self
             .config
             .lock()
             .ok()
-            .map(|c| c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext)
-            .unwrap_or(false);
+            .map(|c| {
+                (
+                    c.speleodb.keychain_declined,
+                    c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
+                )
+            })
+            .unwrap_or((false, false));
+        let allow_plaintext = previously_declined && prefers_plaintext;
 
         let (tier, keychain_state) = {
             let mut session = self.speleodb_session_lock().map_err(local_dto)?;
@@ -928,9 +943,18 @@ impl AppState {
         };
 
         self.speleodb_persist_email(&email);
-        // Clear the persisted refusal too: the in-session flag above only lives
-        // until the process exits, and the two must not disagree across a restart.
-        self.speleodb_persist_keychain_declined(false);
+        // Clear the persisted refusal ONLY once the keychain has actually taken the
+        // key. The in-session flag above lets this login retry a keychain the user
+        // previously refused, but writing `false` to disk unconditionally REVOKED
+        // that refusal before the retry had proved anything: when the keychain
+        // failed again, the storage prompt's "Decide later" deliberately persists
+        // nothing, so the config was left saying "not declined" and the next launch
+        // rehydrated through the keychain - bringing back the very unlock prompt the
+        // flag was introduced to stop (#259). On a failure the earlier answer stands
+        // until the user replaces it through `speleodb_set_token_storage`.
+        if tier == TokenTier::Keychain {
+            self.speleodb_persist_keychain_declined(false);
+        }
 
         let keychain = KeychainReport::from(keychain_state);
         Ok(SpeleoLoginResult {
@@ -939,12 +963,15 @@ impl AppState {
             keychain_backed: tier == TokenTier::Keychain,
             storage: tier.into(),
             keychain,
-            // Ask ONLY when this login actually hit a broken keychain. A working
-            // keychain needs no question, and a user who already declined has
-            // settled it - re-asking on every login would be the same nag in a new
-            // costume. The refusal was cleared above, so `Declined` cannot appear
-            // here; the check is on the failure itself.
-            needs_storage_choice: keychain == KeychainReport::Unavailable,
+            // Ask ONLY when this login actually hit a broken keychain AND the
+            // question is not already settled. A working keychain needs no
+            // question, and a user who already answered it has settled where the
+            // key goes - re-asking on every login would be the same nag in a new
+            // costume. `previously_declined` is what carries that answer across a
+            // restart; the in-session flag was cleared above to give the keychain
+            // another go, so `Declined` cannot appear in `keychain` here and the
+            // check is on the failure itself.
+            needs_storage_choice: keychain == KeychainReport::Unavailable && !previously_declined,
         })
     }
 

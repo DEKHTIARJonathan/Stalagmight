@@ -93,12 +93,29 @@ impl AppState {
         else {
             return Err(local_dto(SpeleoDbError::NotAuthenticated));
         };
+        // Flip the flag around the restore, and put it BACK if the restore fails.
+        // Leaving the mutation in place on the failure path left the live store
+        // saying "the keychain is fine to use" while `config.speleodb
+        // .keychain_declined` still said the opposite - the disagreement the login
+        // path's "the two must not disagree across a restart" note guards against,
+        // and enough to let a later keychain access in this process raise the
+        // unlock prompt the persisted refusal forbids. Reachable whenever the
+        // session ended underneath the panel (a 401 auto-drop, a logout in another
+        // window) between the identity check above and the restore.
+        let previously_declined = session.token_store.keychain_declined();
         session.token_store.set_keychain_declined(declined);
-        session
+        match session
             .token_store
             .restore(&endpoint, &email, allow_plaintext)
-            .map(|_| ())
-            .ok_or_else(|| local_dto(SpeleoDbError::NotAuthenticated))
+        {
+            Some(_) => Ok(()),
+            None => {
+                session
+                    .token_store
+                    .set_keychain_declined(previously_declined);
+                Err(local_dto(SpeleoDbError::NotAuthenticated))
+            }
+        }
     }
 
     /// Read the `token_fallback` preference under the config lock. Taken BEFORE the
@@ -263,6 +280,34 @@ mod tests {
                 fallback,
                 TokenFallback::Plaintext,
                 "the retry does not undo where the key goes if the keychain fails again"
+            );
+        });
+    }
+
+    #[test]
+    fn a_failed_move_puts_the_live_decline_flag_back() {
+        // The session can end underneath the panel between the identity check and
+        // the restore. Leaving the flag flipped there left the live store saying
+        // "the keychain is fine to use" while the persisted preference still said
+        // the opposite - and that disagreement is enough to let a later keychain
+        // access raise the unlock prompt the refusal forbids.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                session.endpoint = Some("https://sdb.example".to_owned());
+                session.email = Some("u@x".to_owned());
+                // Identity present, but NO token held - `restore` returns None.
+                session.token_store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+                session.token_store.set_keychain_declined(true);
+            }
+
+            assert!(state.speleodb_retry_keychain().is_err(), "no token to move");
+
+            let session = state.speleodb.lock().expect("session");
+            assert!(
+                session.token_store.keychain_declined(),
+                "a failed move must not leave the refusal silently lifted"
             );
         });
     }

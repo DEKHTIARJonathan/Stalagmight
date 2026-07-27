@@ -24,8 +24,23 @@ impl AppState {
         // (see `Config::save_to_path`), so without putting the real value back here
         // first, saving any setting would persist defaults and silently reset a
         // user's hand-tuned knobs.
+        //
+        // The two credential-storage fields are preserved for a different reason:
+        // they ARE serialized, but the Settings form does not own them. Where the
+        // API key is kept is settled by the login-time storage prompt and the
+        // "Try again" button, both of which write `config.toml` through the backend
+        // while the Settings dialog stays mounted over its snapshot of the config
+        // (`SpeleoStorageChoiceDialog` is a top-layer overlay precisely so Settings
+        // is not unmounted). Saving any unrelated setting afterwards posted the
+        // stale pair back and silently undid the answer - re-arming the launch-time
+        // keyring nag, or worse: a successful "Try again" moves the key into the
+        // keychain and deletes the plaintext copy, so restoring a stale
+        // `keychain_declined = true` made the next launch skip the keychain read
+        // and find nothing, signing the user out with no way to explain it.
         if let Ok(existing) = self.config.lock() {
             config.webkit_memory = existing.webkit_memory.clone();
+            config.speleodb.token_fallback = existing.speleodb.token_fallback;
+            config.speleodb.keychain_declined = existing.speleodb.keychain_declined;
         }
         // Check if cache setting changed before saving
         let old_cache_enabled = self
