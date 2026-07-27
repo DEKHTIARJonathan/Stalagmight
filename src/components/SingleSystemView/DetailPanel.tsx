@@ -9,6 +9,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { WarningResolution } from './WarningResolution';
+import { ProjectStatsActions } from './ProjectStatsActions';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
@@ -1395,7 +1396,6 @@ interface ProjectStatsProps {
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const openDialog = useUIStore((s) => s.openDialog);
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -1516,17 +1516,8 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             </div>
           </div>
 
-          {/* Per-project settings: name, validation, and Ariane collaboration
-              (Experimental tab) - all stored in the .stalx. */}
-          <div className="pt-2 border-t border-border">
-            <button
-              onClick={() => openDialog('project-settings')}
-              className="w-full text-center text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
-              data-testid="open-project-settings"
-            >
-              {t('detailPanel.projectSettings.open')}
-            </button>
-          </div>
+          {/* Per-project settings (local .stalx) + the SpeleoDB project actions. */}
+          <ProjectStatsActions />
         </div>
       </Panel>
     </div>

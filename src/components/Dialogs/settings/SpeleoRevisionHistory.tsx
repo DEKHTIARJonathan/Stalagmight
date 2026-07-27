@@ -6,6 +6,7 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
+import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
 import { humanizeSpeleoError, unpushedLocalEdits } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
@@ -27,8 +28,8 @@ function formatWhen(iso: string | null): string {
 }
 
 /**
- * [#218] Read-only revision history for the open remote project, shown in the
- * Project Settings SpeleoDB tab directly below the Lock section. Fetches
+ * [#218] Read-only revision history for the open remote project - the History tab
+ * of the SpeleoDB project dialog. Fetches
  * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
  * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
  *
@@ -67,6 +68,7 @@ export function SpeleoRevisionHistory() {
   const viewBlocked = !iHoldLock && !isForceEditing && hasUnpushedEdits;
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
+  const web = useSpeleoWebLink('revisions');
 
   const [revisions, setRevisions] = useState<SpeleoRevision[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -127,6 +129,20 @@ export function SpeleoRevisionHistory() {
 
   return (
     <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
+      {/* Sits under the section heading rather than in it: SettingsSection takes a
+          plain string title. */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          disabled={web.url === null}
+          title={web.url === null ? t('speleodb.web.unavailable') : undefined}
+          onClick={web.open}
+          className="text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+          data-testid="speleodb-web-revisions"
+        >
+          {t('speleodb.web.openRevisions')}
+        </button>
+      </div>
       <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
         {isForceEditing ? (

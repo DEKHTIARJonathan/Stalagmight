@@ -1,0 +1,150 @@
+import { useCallback, useState } from 'react';
+import { useTranslation } from 'react-i18next';
+import { SettingsSection } from './SettingsSection';
+import { Button } from '../../common/Button';
+import { useUIStore } from '../../../store/uiStore';
+import { useSpeleoStore } from '../../../store/speleoStore';
+import { useProjectStore } from '../../../store/projectStore';
+import { invokeIpc } from '../../../utils/ipc';
+import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { permissionAtLeast } from '../../../utils/speleoPermission';
+import { holdsWriteLock } from '../../../utils/quit';
+
+const inputClass =
+  'w-full px-2 py-1 bg-background border border-border rounded text-sm disabled:opacity-60';
+
+/**
+ * [#215] The Admin tab of the SpeleoDB project dialog: in-app lock release and the
+ * danger-zone project delete.
+ *
+ * The tab itself is NOT gated on ADMIN, only the delete section is: releasing your
+ * own stuck lock is the one in-app recovery a write-tier user has, so hiding the tab
+ * from non-admins would strand them.
+ */
+export function SpeleoAdminTab() {
+  const { t } = useTranslation();
+  const showToast = useUIStore((s) => s.showToast);
+  const closeDialog = useUIStore((s) => s.closeDialog);
+  const link = useSpeleoStore((s) => s.link);
+  const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
+  const syncProjectLink = useSpeleoStore((s) => s.syncProjectLink);
+  const projectName = useProjectStore((s) => s.project?.name ?? '');
+
+  const canManage = permissionAtLeast(link?.permission, 'ADMIN');
+
+  const [releasing, setReleasing] = useState(false);
+  const [confirmName, setConfirmName] = useState('');
+  const [deleting, setDeleting] = useState(false);
+
+  const handleRelease = useCallback(async () => {
+    setReleasing(true);
+    try {
+      await invokeIpc('speleodb_release_current_lock');
+      await refreshLinkStatus();
+      showToast(t('speleodb.lock.released'), 'speleodb-lock', 'success');
+    } catch (e) {
+      showToast(humanizeSpeleoError(e, t('speleodb.lock.releaseFailed')), 'speleodb-lock', 'error');
+    } finally {
+      setReleasing(false);
+    }
+  }, [refreshLinkStatus, showToast, t]);
+
+  const handleDelete = useCallback(async () => {
+    setDeleting(true);
+    try {
+      await invokeIpc('speleodb_delete_project');
+      // The server soft-deleted it and the backend already unlinked locally, so
+      // the still-open project is now a plain LOCAL one - say that, rather than
+      // just dropping the link.
+      //
+      // `clearLink()` would leave `projectLinkKind: 'unknown'`, and
+      // `selectSpeleoReadOnly` reads unresolved-as-read-only (#270). With the
+      // project still open and nothing left to re-resolve it - the status poll
+      // arms on `link !== null`, which delete just falsified - that stranded the
+      // now-local project permanently read-only until close/reopen.
+      syncProjectLink(false);
+      showToast(t('speleodb.delete.deleted'), 'speleodb-delete', 'success');
+      closeDialog();
+    } catch (e) {
+      showToast(humanizeSpeleoError(e, t('speleodb.delete.deleteFailed')), 'speleodb-delete', 'error');
+      setDeleting(false);
+    }
+  }, [syncProjectLink, closeDialog, showToast, t]);
+
+  const holder = link?.lockHolder ?? null;
+  // Shared predicate, and the force-edit exclusion is load-bearing here: a #213
+  // force-editor is editing WITHOUT the lock, so telling them the lock is "held by
+  // you" and offering Release named a lock they do not have and an action the
+  // backend can only refuse. This copy had drifted to the id-only spelling.
+  const iHoldLock = holdsWriteLock(link);
+
+  return (
+    <div data-testid="speleodb-admin-tab">
+      {/* Lock */}
+      <SettingsSection title={t('speleodb.lock.title')}>
+        {/* Show the release UI whenever a lock is held - by someone else (`holder`
+            set) OR by us. After acquiring a lock, `editState` flips to 'editing' but
+            `lockHolder` can stay null (the fast start-editing path does not re-seed
+            it), so gating on `holder` alone would strand the very stuck-lock recovery
+            this section exists for. `iHoldLock` uses the self copy (no holder email). */}
+        {holder || iHoldLock ? (
+          <>
+            <p className="text-sm mb-2" data-testid="speleodb-lock-holder">
+              {iHoldLock
+                ? t('speleodb.lock.heldByYou')
+                : t('speleodb.lock.heldBy', { email: holder })}
+            </p>
+            {iHoldLock && (
+              <p className="text-warning text-xs mb-2" data-testid="speleodb-lock-self-warning">
+                {t('speleodb.lock.selfWarning')}
+              </p>
+            )}
+            <Button
+              variant="secondary"
+              disabled={releasing}
+              onClick={() => void handleRelease()}
+              data-testid="speleodb-lock-release"
+            >
+              {releasing ? t('speleodb.lock.releasing') : t('speleodb.lock.releaseButton')}
+            </Button>
+          </>
+        ) : (
+          <p className="text-text-secondary text-sm" data-testid="speleodb-lock-none">
+            {t('speleodb.lock.none')}
+          </p>
+        )}
+      </SettingsSection>
+
+      {/* Danger zone: delete */}
+      {canManage && (
+        <SettingsSection title={t('speleodb.delete.title')}>
+          <p className="text-text-secondary text-xs mb-2" data-testid="speleodb-delete-warning">
+            {t('speleodb.delete.warning')}
+          </p>
+          <label className="block text-sm mb-1" htmlFor="speleodb-delete-confirm">
+            {t('speleodb.delete.confirmLabel', { name: projectName })}
+          </label>
+          <input
+            id="speleodb-delete-confirm"
+            type="text"
+            value={confirmName}
+            disabled={deleting}
+            onChange={(e) => setConfirmName(e.target.value)}
+            className={inputClass}
+            data-testid="speleodb-delete-confirm-input"
+          />
+          <div className="mt-2">
+            <Button
+              variant="danger"
+              disabled={deleting || confirmName.trim() !== projectName.trim() || projectName === ''}
+              onClick={() => void handleDelete()}
+              data-testid="speleodb-delete-button"
+            >
+              {deleting ? t('speleodb.delete.deleting') : t('speleodb.delete.deleteButton')}
+            </Button>
+          </div>
+        </SettingsSection>
+      )}
+    </div>
+  );
+}

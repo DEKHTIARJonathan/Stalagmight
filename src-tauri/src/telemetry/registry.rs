@@ -252,6 +252,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-no-permission",
     "action.dialog.speleodb-unpushed-local",
     "action.dialog.speleodb-restore",
+    "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -318,6 +319,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.speleodb-unpushed-local",
     "dialog-cancel.speleodb-restore",
+    "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -410,6 +412,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.speleodb-unpushed-local",
     "dwell.dialog.speleodb-restore",
+    "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -552,6 +555,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.speleodb-unpushed-local",
     "active-dwell.dialog.speleodb-restore",
+    "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -908,7 +912,11 @@ mod tests {
         //   + 4 refused-open (unpushed local edits) dialog events:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-unpushed-local = 671.
-        assert_eq!(EVENT_NAMES.len(), 671);
+        //   + 4 SpeleoDB project dialog events (the per-project administration
+        //       promoted out of Project Settings):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-project = 675.
+        assert_eq!(EVENT_NAMES.len(), 675);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

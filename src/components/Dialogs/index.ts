@@ -24,6 +24,7 @@ export { default as DeleteProjectDialog } from './DeleteProjectDialog';
 export { default as SectionAdjustDialog } from './SectionAdjustDialog';
 export { default as SettingsDialog } from './SettingsDialog';
 export { ProjectSettingsDialog } from './ProjectSettingsDialog';
+export { SpeleoDbProjectDialog } from './SpeleoDbProjectDialog';
 export { default as SplitSectionDialog } from './SplitSectionDialog';
 export { default as InsertStationDialog } from './InsertStationDialog';
 export { default as CorruptionRecoveryDialog } from './CorruptionRecoveryDialog';

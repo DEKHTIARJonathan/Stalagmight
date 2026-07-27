@@ -6,7 +6,7 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
-import { SpeleoDbSettingsTab } from './settings/SpeleoDbSettingsTab';
+import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
 import type { SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
@@ -227,7 +227,7 @@ export function ProjectSettingsDialog() {
               )}
               {tab === 'speleodb' && isRemote && (
                 <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
-                  <SpeleoDbSettingsTab />
+                  <ProjectSettingsSpeleoStub />
                 </div>
               )}
             </div>

@@ -2997,8 +2997,31 @@
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },
-    "projectSettings": {
+    "projectDialog": {
       "title": "SpeleoDB project",
+      "open": "SpeleoDB project settings",
+      "notRemote": "This project is not linked to SpeleoDB.",
+      "tabs": {
+        "general": "General",
+        "collaborators": "Collaborators",
+        "history": "History",
+        "admin": "Admin"
+      },
+      "stub": {
+        "note": "This project is managed by SpeleoDB.",
+        "detail": "Its name, collaborators, revision history and deletion live on SpeleoDB, not in this file.",
+        "open": "Open SpeleoDB settings"
+      }
+    },
+    "web": {
+      "openProject": "Open project on the web",
+      "openRevisions": "Open revision history on the web",
+      "openCollaborators": "Open collaborators on the web",
+      "unavailable": "Sign in to SpeleoDB to open this project on the web.",
+      "failed": "Could not open your browser"
+    },
+    "projectSettings": {
+      "title": "Project details",
       "loading": "Loading project details from SpeleoDB…",
       "loadFailed": "Could not load project details",
       "retry": "Retry",
