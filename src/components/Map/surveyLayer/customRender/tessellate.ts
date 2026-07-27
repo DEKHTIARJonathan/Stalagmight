@@ -73,8 +73,9 @@ export interface LineBuffers {
    *  {@link colorFrom}. */
   colorTo: Uint8Array;
   /** Per-vertex reference flag (1 = reference shot, else 0). Mirrors the stock
-   *  shots layer's kind property: the shader fades virtual shots to
-   *  0.5 opacity and collapses them when reference shots are hidden. */
+   *  shots layer's kind property: the shader fades virtual shots
+   *  (SHOT_ALPHA_JUMP 0.5, SHOT_ALPHA_REFERENCE 0.28) and collapses them when
+   *  the matching toggle hides them. */
   reference: Float32Array;
   /** Per-vertex dim flag (1 = dimmed to 0.25, else 0). Mirrors the stock shots
    *  layer's anchored / immovable paint cases (move-segment / move-shot tools):
