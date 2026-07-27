@@ -19,7 +19,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 import { useOpenRemoteProject } from './useOpenRemoteProject';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
+import { useSpeleoStore, selectSpeleoReadOnly, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
@@ -37,6 +37,21 @@ const SUMMARY: SpeleoProjectSummary = {
   latest_commit_sha: 'abc123',
 };
 
+/** A settled link for whatever project is OPEN, for the entry-guard cases below. */
+const openLink = (o: Partial<SpeleoLinkState> = {}): SpeleoLinkState => ({
+  permission: 'READ_AND_WRITE',
+  editState: 'read-only',
+  lockHolder: null,
+  lockedByOther: false,
+  hasUnpushedEdits: false,
+  forceEditing: false,
+  forceEditAllowed: false,
+  remoteState: 'up_to_date',
+  noAccess: false,
+  serverError: null,
+  ...o,
+});
+
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let setLinkOnOpenMock: ReturnType<typeof vi.fn>;
 
@@ -50,6 +65,9 @@ beforeEach(() => {
   useSpeleoStore.setState({
     setLinkOnOpen: setLinkOnOpenMock,
     link: null,
+    // The open remote project's id, which the entry guard reads to tell "the target
+    // IS what is on screen" from a swap. Reset explicitly - the store is shared.
+    remoteProjectId: null,
   });
   useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
 });
@@ -360,6 +378,110 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(outcome).toEqual({ status: 'opened' });
     expect(setLinkOnOpenMock).not.toHaveBeenCalled();
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+  });
+
+  /**
+   * [#270] "Open from SpeleoDB" is a way OUT of the open project - `finishOpen` ends
+   * in `loadProject`, which replaces it backend-side - and it was the only one that
+   * ran no guard whatsoever: not the shared `needsSpeleoHandBackPrompt` the other
+   * five exits share, and not even the disk-dirty check the two file-open exits had
+   * before that. It went straight to the seed and the load, so picking a DIFFERENT
+   * project in the browser discarded unsaved edits with no prompt and walked away
+   * from un-pushed work with the server lock still held.
+   */
+  describe('the entry guard - the open project is never swapped out silently', () => {
+    // The pull SUCCEEDS throughout, so an ungarded open runs all the way to the load
+    // that replaces the open project - i.e. these cases fail on the behavior they are
+    // about, not on a half-mocked call.
+    beforeEach(() => {
+      invokeIpcMock.mockImplementation((cmd: string) =>
+        cmd === 'speleodb_open_project'
+          ? Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false })
+          : Promise.resolve(null),
+      );
+    });
+
+    /** Another remote project is open, its first status poll settled. */
+    const anotherOpen = (link: SpeleoLinkState, isDirty = false) => {
+      useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty });
+      useSpeleoStore.setState({ link, remoteProjectId: 'p9' });
+    };
+
+    /** The refusal message, or '' when the open went ahead. */
+    const refusal = async (): Promise<string> => {
+      const outcome = await hook().openRemote(SUMMARY);
+      return outcome.status === 'error' ? outcome.message : '';
+    };
+
+    it('refuses over work SpeleoDB has never seen, before it fetches anything', async () => {
+      anotherOpen(openLink({ hasUnpushedEdits: true }));
+      const outcome = await hook().openRemote(SUMMARY);
+      expect(outcome.status).toBe('error');
+      // Not a dead token - there is nothing to re-login for.
+      if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+      // Nothing pulled, nothing seeded, nothing loaded: the guard has to run BEFORE
+      // the pull (the seed overwrites the very link it reads) and before the load
+      // (which is what closes the open project backend-side).
+      expect(invokeIpcMock).not.toHaveBeenCalled();
+      expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses while we still hold the write lock', async () => {
+      // Nothing unpushed, but the app keeps running, so nothing else would ever
+      // release it - the second half of `needsSpeleoHandBackPrompt`.
+      anotherOpen(openLink({ editState: 'editing' }));
+      expect(await refusal()).not.toBe('');
+      expect(invokeIpcMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses over unsaved-to-disk changes in a plain local project', async () => {
+      useProjectStore.setState({ project: { file_path: '/cave/local.stalx' } as never, isDirty: true });
+      expect(await refusal()).not.toBe('');
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('names the SpeleoDB side when the project is dirty in both senses', async () => {
+      anotherOpen(openLink({ hasUnpushedEdits: true }), true);
+      const both = await refusal();
+      anotherOpen(openLink({ hasUnpushedEdits: true }));
+      const speleoOnly = await refusal();
+      useProjectStore.setState({ project: { file_path: '/cave/local.stalx' } as never, isDirty: true });
+      useSpeleoStore.setState({ link: null, remoteProjectId: null });
+      const diskOnly = await refusal();
+      // Close resolves both (its prompt carries a "save changes locally" checkbox),
+      // so pointing at it settles a doubly-dirty project in one hop, not two.
+      expect(both).toBe(speleoOnly);
+      expect(both).not.toBe(diskOnly);
+    });
+
+    it('lets a clean open project be swapped out', async () => {
+      anotherOpen(openLink());
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    });
+
+    it('never refuses re-opening the project already on screen', async () => {
+      // Re-opening what is already open leaves nothing behind, so there is nothing to
+      // ask about - and this is the route "take the server copy and discard my local
+      // changes" reaches the hook by, over a cache copy that is un-pushed BY
+      // DEFINITION. Refusing here would close the only door out of it.
+      useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never, isDirty: true });
+      useSpeleoStore.setState({
+        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
+        remoteProjectId: 'p1',
+      });
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    });
+
+    it('does not re-ask on the branches reached THROUGH a guarded open', async () => {
+      // `keepLocalCopy` / `takeRemoteDiscardingLocal` / `adoptRemote` are only
+      // reachable from the prompts an already-guarded `openRemote` raised, so a
+      // second refusal there would block a decision the user has just made. Driven
+      // with the open project as dirty as the cases above.
+      anotherOpen(openLink({ hasUnpushedEdits: true }), true);
+      expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    });
   });
 
   it('adoptRemote adopts, loads, and reports opened', async () => {

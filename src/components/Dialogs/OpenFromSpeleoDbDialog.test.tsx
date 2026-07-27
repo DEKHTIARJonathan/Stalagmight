@@ -4,7 +4,7 @@
  * must offer a confirm dialog (not an error toast); confirming must call
  * speleodb_adopt_ariane and then reload the adopted .stalx.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
@@ -270,5 +270,55 @@ describe('OpenFromSpeleoDbDialog refused open with unpushed local edits (#270)',
     expect(screen.queryByTestId('open-from-speleodb-error')).not.toBeInTheDocument();
     // Nothing was downloaded or opened.
     expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * #270 - this browser is also a way OUT of the open project: the shared flow ends in
+ * `loadProject`, which replaces it backend-side. It ran no guard at all - not the
+ * `needsSpeleoHandBackPrompt` every other exit shares, not even a disk-dirty check -
+ * so opening a different project here discarded unsaved edits with no prompt and
+ * walked away from work SpeleoDB has never seen, lock still held. The hook now
+ * refuses; this is the half the user actually sees.
+ */
+describe('OpenFromSpeleoDbDialog with work at risk in the open project (#270)', () => {
+  afterEach(() => {
+    useProjectStore.setState({ project: null, isDirty: false });
+    useSpeleoStore.setState({ link: null, remoteProjectId: null });
+  });
+
+  it('says so in the browser instead of swapping the project out', async () => {
+    // A DIFFERENT remote project is open, saved to disk but never uploaded.
+    useProjectStore.setState({ project: { file_path: '/cache/p9.stalx' } as never, isDirty: false });
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE',
+        editState: 'read-only',
+        lockHolder: null,
+        lockedByOther: false,
+        hasUnpushedEdits: true,
+        forceEditing: false,
+        forceEditAllowed: false,
+        remoteState: 'unknown',
+        noAccess: false,
+        serverError: null,
+      },
+      remoteProjectId: 'p9',
+    });
+    // The pull would have SUCCEEDED, so an unguarded open runs all the way through.
+    mockRoutes({
+      speleodb_open_project: () =>
+        Promise.resolve({ local_path: '/cache/p1/project.stalx', concurrent_session: false }),
+    });
+    render(<OpenFromSpeleoDbDialog />);
+
+    await userEvent.click(await screen.findByTestId('open-from-speleodb-open-p1'));
+
+    expect(await screen.findByTestId('open-from-speleodb-error')).toBeInTheDocument();
+    // Nothing pulled, nothing loaded - and the browser is still up, so the user can
+    // pick something else or close it and hand the project back.
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_open_project')).toBe(false);
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(closeDialogMock).not.toHaveBeenCalled();
   });
 });

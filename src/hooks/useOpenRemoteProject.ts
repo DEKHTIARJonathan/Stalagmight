@@ -5,6 +5,7 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError, unpushedLocalEdits } from '../utils/speleoError';
+import { needsSpeleoHandBackPrompt } from '../utils/quit';
 import type {
   SpeleoProjectSummary,
   SpeleoOpenResult,
@@ -22,8 +23,13 @@ import type {
  *   the backend refused to overwrite it; the keep-local / take-remote prompt has
  *   already been raised (see `speleodb-unpushed-local`). The caller only clears its
  *   own busy flag - it must NOT surface this as an error.
- * - `error` - the open/adopt call itself failed; `message` is humanized for display
- *   and `reLogin` is set when a dead token means the caller should drop the session.
+ * - `error` - the open/adopt did not go ahead; `message` is ready for display and
+ *   `reLogin` is set when a dead token means the caller should drop the session.
+ *   Nearly always a failed call, but also how the entry guard refuses an open that
+ *   would strand work in the project already on screen (see `handBackRefusal`):
+ *   both hosts already surface this status in their own idiom (the browser's inline
+ *   banner, GlobalView's toast), whereas a status of its own would be silently
+ *   dropped by GlobalView's outcome chain.
  */
 export type OpenRemoteOutcome =
   | { status: 'opened' }
@@ -179,8 +185,68 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     [showToast, setLinkOnOpen, loadProject, onBeforeLoad, t],
   );
 
+  /**
+   * [#270] Would opening `summary` strand work in the project already on screen?
+   * Returns the message to refuse with, or null when the swap is safe.
+   *
+   * "Open from SpeleoDB" sits in the IN-PROJECT hamburger and this flow ends in
+   * `loadProject`, which replaces the open project backend-side - so it is one of
+   * the ways OUT of a project, and the only one that asked nothing at all. Unsaved
+   * in-memory edits were discarded with no prompt, and a managed project was swapped
+   * away with its un-pushed work left behind in the cache and its server lock still
+   * held. Every other way out asks first: close, opening another `.stalx`, New
+   * Project and the held-lock resume prompt on `needsSpeleoHandBackPrompt`, quit on
+   * its unpushed-work half (the backend releases the lock on process exit).
+   *
+   * Checked at the ENTRY point rather than in the shared `finishOpen` tail, where the
+   * sibling `alreadyOpen` test lives: the tail runs AFTER the pull, and its first act
+   * is the optimistic seed that overwrites the very link this reads.
+   * `keepLocalCopy` / `takeRemoteDiscardingLocal` / `adoptRemote` are reached ONLY
+   * through a guarded `openRemote`, so they are covered without re-asking mid-flow a
+   * question that was answered before anything was fetched.
+   *
+   * It REFUSES rather than raising the shared hand-back prompt, the way
+   * `HeldLockResumeDialog`'s Continue-editing row does. `speleodb-close` replays what
+   * raised it (`pendingOpenPath` / `pendingNewProject`) and has no notion of a remote
+   * open, so raising it here would resolve the SpeleoDB side and then drop the user
+   * on the home screen with nothing opened - trading a silent swap for a swallowed
+   * request. Refusing leaves the browser, the open project and the work exactly as
+   * they were, and names an action that is one menu away.
+   *
+   * SpeleoDB before disk-dirty, the order every other exit guard uses: Close resolves
+   * BOTH (its prompt carries a "save changes locally" checkbox), so naming that first
+   * settles a project that is dirty in both senses in one hop rather than two.
+   */
+  const handBackRefusal = useCallback(
+    (summary: SpeleoProjectSummary): string | null => {
+      const { project, isDirty } = useProjectStore.getState();
+      if (!project) return null;
+      const speleo = useSpeleoStore.getState();
+      // Re-opening the project already on screen leaves nothing behind, so it is
+      // never refused - the same exemption `finishOpen` makes once the pull has named
+      // a path, decided here from the id the status poll recorded because that is all
+      // there is to go on BEFORE the pull. It is also how the refused-open prompt is
+      // reached for the OPEN project: the pull is refused over its un-pushed cache
+      // copy, and that prompt's "take the server copy" is the only way out of that
+      // state - refusing here would shut the door this branch exists behind.
+      // `remoteProjectId` is null until the first poll lands, so that window refuses
+      // an open it could have allowed; that direction costs a menu trip, the other
+      // loses work.
+      if (speleo.remoteProjectId === summary.id) return null;
+      if (needsSpeleoHandBackPrompt(speleo.link))
+        return t('speleodb.errors.openBlockedUnpushed', { name: summary.name });
+      if (isDirty) return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
+      return null;
+    },
+    [t],
+  );
+
   const openRemote = useCallback(
     async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+      // Before the pull, the seed and the load: nothing about the open project may be
+      // given up silently (see `handBackRefusal`).
+      const refusal = handBackRefusal(summary);
+      if (refusal) return { status: 'error', message: refusal, reLogin: false };
       let result: SpeleoOpenResult;
       try {
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
@@ -218,7 +284,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       }
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, openDialog, cancelReturnsTo, t],
+    [finishOpen, handBackRefusal, openDialog, cancelReturnsTo, t],
   );
 
   /**

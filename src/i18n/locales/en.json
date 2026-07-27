@@ -2862,6 +2862,8 @@
       "openFailed": "Unable to open the project",
       "listFailed": "Could not load projects",
       "adoptFailed": "Could not adopt the Ariane project",
+      "openBlockedUnpushed": "Hand the open project back to SpeleoDB first - it still has work that has not been uploaded, and opening {{name}} would close it and leave that work only on this computer.",
+      "openBlockedUnsaved": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them.",
       "saveFailedTitle": "Save Failed",
       "saveFailedMessage": "Failed to save project"
     },
