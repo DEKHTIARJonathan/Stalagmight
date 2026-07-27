@@ -42,7 +42,7 @@ the Playwright suite is split into two tiers:
 
 | Tier | What | When it runs | Command |
 |------|------|--------------|---------|
-| **Smoke** | ~50 critical-path specs tagged `@smoke` | pre-push hook + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
+| **Smoke** | ~85 critical-path tests tagged `@smoke` | pre-push hook + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
 | **Nightly / full** | the entire Playwright suite | `nightly-e2e.yml` on a schedule (+ `workflow_dispatch`) | `pnpm test:ui` |
 | **On-demand** | WebdriverIO real-app suite | manual only | `./scripts/wdio.sh` |
 | **On-demand** | Agent harness (MCP + WDIO, real app) - see [Agent Harness](agent-harness.md) | manual only, Node 22 | `pnpm agent:smoke` / `pnpm agent:scenarios` |
@@ -76,8 +76,8 @@ pnpm test:ui:headed
 # Run backend tests
 cargo test --manifest-path src-tauri/Cargo.toml
 
-# Run all tests
-pnpm test:all
+# Run all tests (Vitest then Playwright; CI=1 keeps the Vitest half from watching)
+CI=1 pnpm test:all
 ```
 
 ## Coverage (Optional)
@@ -170,7 +170,7 @@ e2e-playwright/
 ├── settings-shortcuts.spec.ts  # Shortcut configuration tests
 ├── dmp-import.spec.ts     # DMP import dialog tests
 ├── debug.spec.ts          # Debugging helper test
-└── ...                    # 89 spec files total
+└── ...                    # 100+ spec files total
 ```
 
 ### Configuration
@@ -265,9 +265,12 @@ await page.waitForSelector('[data-testid="import-section-dialog"]');
 
 **Closing dialogs:**
 ```typescript
-// Via Cancel button (dialogs don't close on Escape)
+// Via Cancel button
 const dialog = page.locator('[data-testid="new-project-dialog"]');
 await dialog.locator('[data-testid="new-project-cancel-button"]').click();
+
+// Via Escape - DialogWrapper closes the topmost dialog
+await page.keyboard.press('Escape');
 ```
 
 **Interacting with canvas:**
@@ -365,7 +368,9 @@ const config = {
 
 ## WebdriverIO E2E Tests
 
-Located in `e2e/`. These tests run against the full Tauri application.
+Located in `e2e/legacy/`, quarantined and on-demand only (see
+[`e2e/legacy/README.md`](../e2e/legacy/README.md)). These tests run against the
+full Tauri application.
 
 ### Requirements
 
@@ -375,20 +380,27 @@ Located in `e2e/`. These tests run against the full Tauri application.
 
 ### Directory Structure
 
+The top-level `e2e/` tree holds the real-app tiers plus the fixtures they share
+with the Rust tests:
+
 ```
 e2e/
-├── specs/
-│   ├── import-dmp-dialog.spec.ts      # DMP import flow (Selection + Wizard)
-│   ├── import-section-dialog.spec.ts  # ImportDialog tests (section creation)
-│   ├── project-lifecycle.spec.ts
-│   ├── map-tools.spec.ts              # tool-activation keyboard shortcuts
-│   └── map-interactions.spec.ts
-├── fixtures/
+├── agent/                 # LLM-agent harness (MCP + WDIO) - see docs/agent-harness.md
+├── fixtures/              # .dmp/.tml/.tmlu/.stalx test data (Rust tests read these too)
 │   ├── test_v2.dmp
 │   ├── test_v5.dmp
 │   └── test_v5_buggy_EOS.dmp
-└── helpers/
-    └── app.ts
+├── lib/                   # shared plumbing (env, display detection, fractal gen)
+└── legacy/                # the quarantined WebdriverIO suite
+    ├── specs/
+    │   ├── project-lifecycle.spec.ts
+    │   ├── project-persistence.spec.ts
+    │   ├── map-interactions.spec.ts
+    │   ├── multi-section-workflows.spec.ts
+    │   └── ...            # tml import/export, map rendering, depth gradient
+    ├── helpers/
+    │   └── app.ts
+    └── README.md
 ```
 
 ### Dialog Reference
@@ -414,9 +426,13 @@ Stalagmight has two different import flows that serve different purposes:
 |--------|--------|-------|
 | Cancel/Close button | Yes | Recommended for tests |
 | Backdrop click | Yes | Calls onClose |
-| Escape key | No | Not implemented yet (planned in fn-3-m4h) |
+| Escape key | Yes | `DialogWrapper` (`handleKeyDown`) closes the **topmost** dialog; `src/utils/dialogStack.ts` marks the ones underneath `inert` |
 
-**Note**: Escape key handling is not implemented for dialogs. Tests should use the Cancel button for reliable dialog closing.
+**Note**: two Escape edge cases worth knowing when a test looks flaky. Escape is a
+no-op while a dropdown is open (`[data-dropdown-open]`) so the dropdown closes
+first, and on a dirty dialog (`isDirty`) it opens the discard confirmation rather
+than closing outright - a second Escape dismisses that confirmation and leaves the
+dialog open.
 
 ### Opening Dialogs in E2E Tests
 
@@ -1472,19 +1488,29 @@ await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
 
 ## CI Integration
 
-Two GitHub Actions run on every push/PR to `master`:
+Three GitHub Actions run on every push/PR to `master`:
 
-1. **`ci.yml` (`check`)** - `pnpm tsc --noEmit` + `pnpm test` (Vitest unit +
-   component, since #107) + `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`.
-   This is the historical merge gate. (Note: `--features telemetry` is required -
+1. **`ci.yml` (`check`)** - the historical merge gate, and no longer just tests:
+   `cargo fmt --check`, `pnpm tsc --noEmit`, `pnpm typecheck:agent` (the agent
+   harness's only automated gate), the Rust + TS file-size ratchets
+   (`lint:rust-file-size`, `lint:ts-file-size`), the read-only gating tripwire
+   (`lint:readonly-gates`), `pnpm test` (Vitest unit + component, since #107),
+   `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`, and
+   `cargo clippy` at deny level. (Note: `--features telemetry` is required -
    a plain `cargo test` filters out the `registry_covers_all_*` tests, and
-   `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.)
+   `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.) Each ratchet/
+   tripwire runs its own `:test` fixture first, so the rule itself is pinned.
 2. **`e2e-smoke.yml` (`smoke`)** - the fast Playwright `@smoke` subset
-   (`pnpm test:ui:smoke`), Chromium-only against the Vite dev server.
+   (`pnpm test:ui:smoke`), Chromium-only against the Vite dev server, preceded by
+   `pnpm lint:e2e-parallel`.
+3. **`leak-scan.yml`** - `pnpm lint:private-leaks` + `pnpm lint:no-em-dash` over
+   the whole tracked tree. It is the one workflow with **no** `paths-ignore`,
+   because `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where
+   a leak or a Unicode dash lands.
 
 The **full** Playwright suite runs on a schedule via **`nightly-e2e.yml`**
 (`pnpm test:ui`), not on every change. The WebdriverIO suite (`e2e/legacy/`) is
 **not** run by any workflow - it is on-demand only (see
 [`e2e/legacy/README.md`](../e2e/legacy/README.md)).
 
-See "Test Tiers" below for the rationale.
+See "Test Tiers (smoke vs nightly)" above for the rationale.
