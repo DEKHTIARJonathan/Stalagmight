@@ -735,17 +735,19 @@ impl Database {
 
     /// Normalise stored azimuth readings into `[0, 360)` (schema v13 to v14).
     ///
-    /// Returns the sections holding at least one shot whose walked BEARING actually
-    /// changed, so the caller can invalidate what was derived from the old one.
+    /// Nothing derived is invalidated (see "What is deliberately NOT invalidated"), so
+    /// the sections holding a shot whose walked BEARING actually moved are only logged:
+    /// that warning is the sole record that those shots used to render 180 degrees off.
     ///
     /// ## What changed, and why this is not a v11-to-v12-shaped flip
     ///
     /// `Shot::average_azimuth` is the circular mean of the two forward readings. It used
     /// Rust's `%`, which is *truncated* and keeps the sign of the dividend, so for a
     /// reading pair more than 540 degrees apart in the negative direction
-    /// (`azimuth_out - azimuth_in < -540`) the intermediate `diff` stayed outside
-    /// `(-180, 180]` and the mean came back as the ANTIPODE of the true bearing. It now
-    /// wraps with `rem_euclid` and returns the true mean.
+    /// (`azimuth_out - azimuth_in < -540`, bar the exact `-360k` offsets where both wraps
+    /// agree) the intermediate `diff` stayed outside `(-180, 180]` and the mean came back
+    /// as the ANTIPODE of the true bearing. It now wraps with `rem_euclid` and returns the
+    /// true mean.
     ///
     /// Unlike the pitch flip, NO stored value changed meaning: an azimuth is still degrees
     /// clockwise from north, and the old rendering was simply wrong. So this migration must
@@ -777,7 +779,19 @@ impl Database {
     ///   could never fire, so there is no dismissal to clear - and after normalisation it
     ///   starts firing correctly, which is the user-visible signal that these shots were
     ///   touched.
-    pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<Vec<i64>> {
+    /// * **The collab sidecar baseline.** Unlike v11 to v12, no TML convention changed
+    ///   here, and the sibling is not a rendering of the mean: the exporter writes the raw
+    ///   `azimuth_in` (`export::tml`, the `azimuth: shot.azimuth_in` legs), and both
+    ///   `parsers::tml::normalize_tml_shot` and `models::collab::geo_key` apply the same
+    ///   `rem_euclid(360.0)` this migration does. So for every azimuth whose
+    ///   `rem_euclid(360.0)` lands in `[0, 360)`, a migrated project and an untouched
+    ///   sibling agree on every field reconcile compares. Dropping the provenance would
+    ///   cost real data: `compute_collab` bails while `last_export_tml_sha256` is `None`,
+    ///   so the reconcile dialog never opens and the next save overwrites the
+    ///   collaborator's unmerged edits with no prompt. See
+    ///   [`crate::models::Project::invalidate_collab_baseline`] for the runtime policy,
+    ///   which empties the baseline and deliberately keeps the sha for the same reason.
+    pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT id, section_id, azimuth_in, azimuth_out
              FROM shots
@@ -804,8 +818,7 @@ impl Database {
             if !azimuth_in.is_finite() || !azimuth_out.is_finite() {
                 continue;
             }
-            // The exact condition under which the old truncated wrap returned the antipode.
-            if azimuth_out - azimuth_in < -540.0 {
+            if Self::old_wrap_returned_the_antipode(azimuth_in, azimuth_out) {
                 reinterpreted.push(section_id);
             }
             updates.push((
@@ -817,10 +830,10 @@ impl Database {
         drop(stmt);
 
         if updates.is_empty() {
-            return Ok(reinterpreted);
+            return Ok(());
         }
-        // No transaction here on purpose: the caller wraps this call and the invalidation
-        // that follows it in one, so a crash cannot separate them (as v11 to v12 does).
+        // No transaction here on purpose: the caller opens one so these per-row UPDATEs
+        // commit as a batch instead of N autocommits.
         for (id, azimuth_in, azimuth_out) in &updates {
             conn.execute(
                 "UPDATE shots SET azimuth_in = ?2, azimuth_out = ?3 WHERE id = ?1",
@@ -842,7 +855,25 @@ impl Database {
                  to the bearing its readings actually describe"
             );
         }
-        Ok(reinterpreted)
+        Ok(())
+    }
+
+    /// Whether the pre-#24 truncated wrap walked this reading pair 180 degrees off.
+    ///
+    /// `average_azimuth_of` wraps `azimuth_out - azimuth_in + 540.0`. Rust's `%` is
+    /// truncated - it keeps the dividend's sign - so it differs from `rem_euclid` by
+    /// exactly 360 when that expression is negative AND not an exact multiple of 360,
+    /// and that halves into the 180-degree error. The naive
+    /// `azimuth_out - azimuth_in < -540.0` test drops the second clause, so it
+    /// false-positives on every exact `-360k` offset: a pair with
+    /// `azimuth_out - azimuth_in == -900.0` walks to the same bearing under either
+    /// wrap and was never misread.
+    ///
+    /// Only feeds [`Self::migrate_azimuths_to_canonical_range`]'s warning - nothing is
+    /// invalidated on the strength of it.
+    pub(super) fn old_wrap_returned_the_antipode(azimuth_in: f64, azimuth_out: f64) -> bool {
+        let wrap_input = azimuth_out - azimuth_in + 540.0;
+        wrap_input < 0.0 && wrap_input.rem_euclid(360.0) != 0.0
     }
 
     /// Drop the persisted undo/redo stacks. Called by every migration whose
@@ -937,7 +968,23 @@ impl Database {
         Ok(())
     }
 
-    /// Drop the collab sidecar provenance on the v11 to v12 upgrade.
+    /// Drop the collab sidecar provenance. Sole caller: the v11 to v12 upgrade.
+    ///
+    /// This is a last resort, not a routine precaution, and no later migration should
+    /// reach for it without the same justification. It clears
+    /// `last_export_tml_sha256`, and `compute_collab` bails while that is `None`: no
+    /// reconcile dialog can open, so the next save overwrites whatever the
+    /// collaborator has since put in the sibling `.tml`, silently. The runtime policy
+    /// is the safe shape - [`crate::models::Project::invalidate_collab_baseline`]
+    /// empties `shot_baseline` and deliberately KEEPS the sha, which is enough for
+    /// every invalidation whose cause is a local renumbering.
+    ///
+    /// v11 to v12 earns it because the sibling itself becomes unreadable rather than
+    /// merely out of date - re-exporting is the only way back to a comparable file, and
+    /// a phantom-inclination reconcile would do more damage than the lost prompt. That
+    /// is not true of a migration that only rewrites how a value is spelled: v13 to v14
+    /// normalises stored azimuths and deliberately leaves this alone (see
+    /// [`Self::migrate_azimuths_to_canonical_range`]).
     ///
     /// Unlike the stored-shot flip, this is unconditional for a pre-v12 project.
     /// The TML sign convention changed on both sides of the boundary at once
@@ -1102,21 +1149,12 @@ impl Database {
             self.drop_legacy_undo_history()?;
         }
         if current < 14 {
-            // One transaction, for the same reason v11 to v12 uses one: the verdict is
-            // re-derived from the rows themselves, so a normalisation that committed alone
-            // would look already-correct on the next open - the migration would decline, the
-            // invalidation would never run, and v14 would be stamped over a permanently
-            // stale collab baseline.
+            // One transaction only to batch the per-row UPDATEs: the callee issues one
+            // `execute` per affected shot and documents that the caller wraps them.
+            // Nothing else runs here - in particular the collab sidecar is NOT
+            // invalidated, for the reasons on the callee's doc.
             let tx = self.conn.unchecked_transaction()?;
-            let reinterpreted = Self::migrate_azimuths_to_canonical_range(&tx)?;
-            if !reinterpreted.is_empty() {
-                // Gated, unlike the v12 call: the TML convention did not change here, so a
-                // sibling `.tml` is only stale for a project that actually held a shot whose
-                // bearing moved - its exported geometry was the antipode of what this build
-                // now walks, and reconciling against it would report a phantom azimuth edit
-                // on that shot and write the old bearing back.
-                self.invalidate_collab_tml_baseline()?;
-            }
+            Self::migrate_azimuths_to_canonical_range(&tx)?;
             tx.commit()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;

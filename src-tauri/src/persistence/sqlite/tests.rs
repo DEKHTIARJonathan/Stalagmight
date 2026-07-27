@@ -5798,18 +5798,29 @@ fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
     );
 }
 
-/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`.
+/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`, and
+/// leaves the collab sidecar provenance alone while doing it.
 ///
 /// Nothing changed meaning - `Shot::average_azimuth` used Rust's truncated `%`, which
 /// returned the ANTIPODE of the circular mean for a pair more than 540 degrees apart, and
 /// now wraps with `rem_euclid`. Normalising takes the ambiguity out of the FILE so the
-/// same `.stalx` renders identically on either build, and the sibling `.tml` baseline is
-/// dropped for the projects whose bearing actually moved (their export carried the old,
-/// antipodal geometry, so reconciling against it would write that bearing back).
+/// same `.stalx` renders identically on either build.
+///
+/// The sidecar is NOT touched, in either fixture. The exporter writes the raw
+/// `azimuth_in` and both `normalize_tml_shot` and `geo_key` apply the same
+/// `rem_euclid(360.0)`, so for every azimuth whose `rem_euclid(360.0)` lands in
+/// `[0, 360)` a migrated project and an untouched sibling still agree on every field
+/// reconcile compares. Dropping `last_export_tml_sha256` would instead make
+/// `compute_collab` bail, so the reconcile dialog could never open and the next save
+/// would overwrite the collaborator's unmerged edits with no prompt - see
+/// `migrate_v14_leaves_an_untouched_sibling_reconcilable`.
+///
+/// Both fixtures run because this used to be gated on a "reinterpreted" verdict: the
+/// first holds a shot whose walked bearing really did move, the second only readings no
+/// build ever misread. The gate is gone, so the two cases must behave identically.
 #[test]
-fn migrate_v14_normalises_stored_azimuths_and_invalidates_a_reinterpreted_sidecar() {
+fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("legacy_v13_azimuth.stalx");
 
     let out_of_range = |azimuth_in: f64, azimuth_out: f64| ShotData {
         azimuth_in,
@@ -5819,121 +5830,230 @@ fn migrate_v14_normalises_stored_azimuths_and_invalidates_a_reinterpreted_sideca
         depth_out: 0.0,
         ..Default::default()
     };
-    let mut project = Project::new("Legacy".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Wide".to_string()),
-        shots: vec![
-            // 600 and 0 are 600 apart: the truncated wrap walked this 180 degrees off.
-            out_of_range(600.0, 0.0),
-            // Out of range but only 20 apart - normalised, never misread.
-            out_of_range(370.0, 350.0),
-            // Already canonical: must be left exactly alone.
-            out_of_range(12.5, 13.5),
-        ],
-        ..Default::default()
-    });
 
-    {
-        let mut db = Database::open(&path).unwrap();
-        db.save_project(&project).unwrap();
-        db.conn
-            .execute(
-                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
-                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+    for (file, shots, expected) in [
+        (
+            "legacy_v13_azimuth.stalx",
+            vec![
+                // 600 and 0 are 600 apart: the truncated wrap walked this 180 degrees off.
+                out_of_range(600.0, 0.0),
+                // Out of range but only 20 apart - normalised, never misread.
+                out_of_range(370.0, 350.0),
+                // Already canonical: must be left exactly alone.
+                out_of_range(12.5, 13.5),
+            ],
+            vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5)],
+        ),
+        (
+            "legacy_v13_benign.stalx",
+            vec![out_of_range(370.0, 350.0)],
+            vec![(10.0, 350.0)],
+        ),
+    ] {
+        let path = temp.path().join(file);
+        let mut project = Project::new("Legacy".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Wide".to_string()),
+            shots,
+            ..Default::default()
+        });
+
+        {
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&project).unwrap();
+            db.conn
+                .execute(
+                    "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                    [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+                )
+                .unwrap();
+            db.set_user_version(13).unwrap();
+        }
+
+        let db = Database::open_existing(&path).unwrap();
+        assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+        let stored: Vec<(f64, f64)> = db
+            .conn
+            .prepare("SELECT azimuth_in, azimuth_out FROM shots ORDER BY sequence_order")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            stored, expected,
+            "{file}: every reading must land in [0, 360) and an in-range one must be untouched"
+        );
+
+        let state_json: String = db
+            .conn
+            .query_row(
+                "SELECT state_json FROM collab_state WHERE id = 1",
+                [],
+                |r| r.get(0),
             )
             .unwrap();
-        db.set_user_version(13).unwrap();
+        assert!(
+            state_json.contains("last_export_tml_sha256"),
+            "{file}: the sibling .tml is still ours and still comparable, so its \
+             provenance must survive: {state_json}"
+        );
+        assert!(
+            state_json.contains("shot_baseline"),
+            "{file}: the baseline's (section_id, shot_index) keys did not move either, \
+             so reconcile can still place a returned edit: {state_json}"
+        );
+        assert!(
+            state_json.contains(r#""enabled":true"#),
+            "{file}: the migration must not disable collab: {state_json}"
+        );
     }
-
-    let db = Database::open_existing(&path).unwrap();
-    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
-
-    let stored: Vec<(f64, f64)> = db
-        .conn
-        .prepare("SELECT azimuth_in, azimuth_out FROM shots ORDER BY sequence_order")
-        .unwrap()
-        .query_map([], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))
-        .unwrap()
-        .map(|r| r.unwrap())
-        .collect();
-    assert_eq!(
-        stored,
-        vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5)],
-        "every reading must land in [0, 360) and an in-range one must be untouched"
-    );
-
-    // The 600/0 shot's bearing moved, so the sibling .tml is in the old frame.
-    let state_json: String = db
-        .conn
-        .query_row(
-            "SELECT state_json FROM collab_state WHERE id = 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(
-        !state_json.contains("last_export_tml_sha256"),
-        "a project whose bearing moved must re-export before the next reconcile: {state_json}"
-    );
-    assert!(
-        state_json.contains(r#""enabled":true"#),
-        "clearing the baseline must not disable collab: {state_json}"
-    );
 }
 
-/// The sidecar invalidation is GATED, unlike v11 to v12's: the TML convention did not
-/// change here, so a project that merely held an unnormalised reading - one no build ever
-/// misread - keeps its baseline and does not pay a phantom re-export.
+/// The migration must leave a sibling `.tml` the collaborator has since edited
+/// RECONCILABLE. This is what the dropped invalidation actually cost: without the
+/// provenance sha `compute_collab` bails, the reconcile dialog never opens, and the next
+/// save rewrites the sibling over the collaborator's unmerged work with no prompt.
+///
+/// The fixture is the worst case for the old gate - a `(600.0, 0.0)` shot, whose walked
+/// bearing genuinely moved. Even there the sibling stays comparable: the export carried
+/// the raw `600.0`, and `normalize_tml_shot` wraps it with the same `rem_euclid(360.0)`
+/// the migration applied to the stored row, so reconcile sees no azimuth difference at
+/// all - only the length the collaborator really changed.
 #[test]
-fn migrate_v14_keeps_the_sidecar_when_no_bearing_moved() {
+fn migrate_v14_leaves_an_untouched_sibling_reconcilable() {
+    // `open_project` persists the recent-projects list, which lives in the config.
+    let _cfg = crate::test_helpers::isolated_config();
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("legacy_v13_benign.stalx");
+    let path = temp.path().join("collab.stalx");
+    let sibling = temp.path().join("collab.tml");
 
-    let mut project = Project::new("Benign".to_string(), None);
+    let mut project = Project::new("Collab".to_string(), None);
     project.add_section(SectionData {
         name: Some("Wide".to_string()),
         shots: vec![ShotData {
-            azimuth_in: 370.0,
-            azimuth_out: 350.0,
+            azimuth_in: 600.0,
+            azimuth_out: 0.0,
             length: 10.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
             ..Default::default()
         }],
         ..Default::default()
     });
+    // The save path mints these before exporting, so both sides of the round trip have
+    // to agree on them for reconcile's UUID tier to match.
+    project.ensure_shot_uuids();
+    let section_id = project.sections[0].id;
+
+    // The pre-migration build's export, verbatim - this is the file we handed over.
+    let mut collab = crate::models::CollabState::new("collab.tml".to_string());
+    let (baseline, sha, synthetic) =
+        crate::export::tml::export_tml_with_baseline(&project, &sibling).unwrap();
+    collab.last_export_tml_sha256 = Some(sha);
+    collab.shot_baseline = baseline;
+    collab.synthetic_section_names = synthetic;
+    collab.section_name_map = vec![("Wide".to_string(), section_id)];
+    project.collab = Some(collab);
 
     {
         let mut db = Database::open(&path).unwrap();
         db.save_project(&project).unwrap();
-        db.conn
-            .execute(
-                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
-                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
-            )
-            .unwrap();
         db.set_user_version(13).unwrap();
     }
 
-    let db = Database::open_existing(&path).unwrap();
-    let stored: (f64, f64) = db
-        .conn
-        .query_row("SELECT azimuth_in, azimuth_out FROM shots", [], |r| {
-            Ok((r.get(0)?, r.get(1)?))
-        })
-        .unwrap();
-    assert_eq!(stored, (10.0, 350.0), "precondition: it was normalised");
+    // The collaborator opens it in Ariane, retapes one shot and saves. Only the sha
+    // moving is what makes `compute_collab` run the diff rather than short-circuit.
+    let mut returned = project.clone();
+    returned.sections[0].shots[0].length = 11.0;
+    crate::export::tml::export_tml_with_baseline(&returned, &sibling).unwrap();
 
-    let state_json: String = db
-        .conn
-        .query_row(
-            "SELECT state_json FROM collab_state WHERE id = 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(
-        state_json.contains("last_export_tml_sha256"),
-        "no bearing moved, so the sibling .tml is still ours: {state_json}"
+    let state = crate::core::state::AppState::new().unwrap();
+    let opened = state.execute(crate::core::Command::OpenProject { path });
+    assert!(opened.success, "{:?}", opened.error);
+
+    let changes = state.detect_collab_changes().unwrap().expect(
+        "the migration must leave the sibling reconcilable - a dropped baseline makes \
+         compute_collab bail, so the dialog never opens and the next save silently \
+         overwrites the collaborator's edits",
     );
+    assert_eq!(
+        changes.shots_edited.len(),
+        1,
+        "the collaborator's one edit must be surfaced: {changes:#?}"
+    );
+    let fields: Vec<&str> = changes.shots_edited[0]
+        .changes
+        .iter()
+        .map(|c| c.field.as_str())
+        .collect();
+    assert_eq!(
+        fields,
+        vec!["length"],
+        "the migration rewrote 600 -> 240 on our side only; the sibling's raw 600 wraps \
+         to the same bearing, so no azimuth change may be reported: {changes:#?}"
+    );
+}
+
+/// The "this shot was walked 180 degrees off" verdict must not fire on a pair the old
+/// truncated wrap handled correctly.
+///
+/// `average_azimuth_of` wraps `azimuth_out - azimuth_in + 540.0`; truncated `%` and
+/// `rem_euclid` agree whenever that expression is non-negative OR an exact multiple of
+/// 360. The naive `azimuth_out - azimuth_in < -540.0` test drops the second clause, so
+/// every exact `-360k` offset was reported as reinterpreted when nothing moved.
+#[test]
+fn the_antipode_verdict_ignores_exact_360_multiples() {
+    // The pre-#24 wrap, verbatim, as the oracle.
+    let old_mean = |azimuth_in: f64, azimuth_out: f64| {
+        let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
+        (azimuth_in + diff / 2.0 + 360.0) % 360.0
+    };
+
+    for (azimuth_in, azimuth_out, expected, why) in [
+        (
+            900.0,
+            0.0,
+            false,
+            "-900 is an exact -360k offset: both wraps walk it to the same bearing",
+        ),
+        (
+            1260.0,
+            0.0,
+            false,
+            "-1260 likewise - the naive `< -540` test called both of these reinterpreted",
+        ),
+        (
+            600.0,
+            0.0,
+            true,
+            "-600 is the real thing: the old wrap returned the antipode",
+        ),
+        (
+            370.0,
+            350.0,
+            false,
+            "out of range but only 20 apart - never misread",
+        ),
+    ] {
+        // Ground truth: did the walked bearing actually move?
+        let moved = {
+            let delta = (old_mean(azimuth_in, azimuth_out)
+                - crate::models::average_azimuth_of(azimuth_in, azimuth_out))
+            .abs();
+            delta.min(360.0 - delta) > 1e-9
+        };
+        assert_eq!(
+            moved, expected,
+            "fixture is wrong for ({azimuth_in}, {azimuth_out}): {why}"
+        );
+        assert_eq!(
+            Database::old_wrap_returned_the_antipode(azimuth_in, azimuth_out),
+            expected,
+            "({azimuth_in}, {azimuth_out}): {why}"
+        );
+    }
 }
 
 /// Normalising must not move the cave: the walked bearing of a normalised pair is the one
