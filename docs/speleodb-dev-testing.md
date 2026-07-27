@@ -240,6 +240,31 @@ and `live_open1_bare_tml_mime_outcome` against the box - all pass:
   `application/octet-stream` for `.tml` is load-bearing, not defensive (the old "not a
   hard requirement" comment was wrong and has been corrected).
 
+## Self-conflict coverage (#260)
+
+Three `#[ignore]` orchestration tests in `core::state::speleodb`, added while
+tracing the "pushing twice conflicts with yourself" report. The middle one is the
+repro; the other two guard the routes found alongside it.
+
+- `live_orch_push_then_edit_then_done_does_not_self_conflict` - the user's exact
+  sequence (start editing -> edit -> push keeping the lock -> edit -> Done). It
+  passed from the start, which is what **ruled the push path out** and pointed at
+  the passive poll instead. Keep it: it pins that BASE advances to the topological
+  tip at each push and never to the empty-repo sentinel.
+- `live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict` - the
+  actual reproduction. It hands `speleodb_remote_state` the exact link snapshot an
+  in-flight poll is holding (BASE captured before a push, resolved after it) and
+  asserts the verdict is not `Conflict`. It failed with "got Conflict" before the
+  fix. There is no command-level lock, so that interleaving is ordinary, not
+  exotic.
+- `live_orch_release_current_lock_closes_the_edit_gate` - releasing your own write
+  lock from the admin surface must also drop the local edit gate, or the shell
+  stays editable over a lock that no longer exists. Confirmed to fail without the
+  fix; the revert flow (#8) hands a lock back through this path.
+
+The pure half is offline in `speleodb::sync::poll_verdict` (five arms), so CI
+covers the policy without the box.
+
 ## Loop-UI client coverage (#198/#200/#201/#202)
 
 The single-writer loop UI added three client methods that had no live coverage.
