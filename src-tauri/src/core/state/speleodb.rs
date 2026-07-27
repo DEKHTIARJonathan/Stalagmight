@@ -645,11 +645,15 @@ impl AppState {
         // switch / reopen. Drop the record HERE, before the verdict below reads it -
         // the re-derivation at the bottom of this function can reopen the gate from
         // nothing but the holder email, and it must never hand back an authorship
-        // licence this process no longer holds. (The two fast-forward arms re-record
-        // it after their in-place reload, which shuts the gate for a moment while the
-        // lock is still genuinely ours.)
+        // licence this process no longer holds. (Both fast-forward arms restore the
+        // record after their in-place reload, which shuts the gate for a moment while
+        // the lock is still genuinely ours.)
+        //
+        // The clear re-checks the gate for itself rather than acting on the snapshot
+        // above, which a fast-forward finishing underneath this poll makes stale - see
+        // [`Self::speleodb_forget_lock_acquired_if_gate_shut`].
         if !edit_enabled {
-            self.speleodb_note_lock_acquired(None);
+            self.speleodb_forget_lock_acquired_if_gate_shut();
         }
         let has_unpushed_edits = link.has_unpushed_edits;
 
@@ -832,11 +836,13 @@ impl AppState {
     /// they just acquired, right after the edit gate opens (its other arms release
     /// the lock again, and the publish push acquires and releases inside one call
     /// without ever opening an edit session, so neither records anything), and
-    /// re-set by [`Self::speleodb_update`]'s fast-forward arm alongside the gate it
-    /// restores. Cleared by
+    /// and restored by [`Self::speleodb_update`]'s fast-forward arm - but only where
+    /// a record already existed, never conjured from the gate alone (see there).
+    /// Cleared by
     /// every release verb in this file, and - covering the release paths that live
     /// elsewhere, plus close / project switch / logout / take-remote - by the poll in
-    /// [`Self::speleodb_link_status`] the moment it finds the edit gate shut.
+    /// [`Self::speleodb_link_status`], through
+    /// [`Self::speleodb_forget_lock_acquired_if_gate_shut`].
     ///
     /// A poisoned session lock silently declines to record, which costs the shortcut
     /// rather than granting one: the same call also fails `speleodb_active_token`, so
@@ -844,6 +850,35 @@ impl AppState {
     fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.lock_acquired_here = project_id.map(str::to_owned);
+        }
+    }
+
+    /// Forget the acquisition record IF the edit gate is (still) shut. The poll's
+    /// catch-all for the release paths that do not run through a verb in this file:
+    /// close, project switch, logout, take-remote, the 401 auto-drop, the lost-lock
+    /// re-verify.
+    ///
+    /// Re-reads the gate HERE, under the session lock, instead of trusting the
+    /// caller's earlier snapshot - which a fast-forward finishing underneath an
+    /// in-flight poll makes stale. That fast-forward reopens the gate and restores a
+    /// record for a lock we genuinely still hold; acting on the stale snapshot would
+    /// erase it and cost the authorship shortcut on our own lock, re-raising the very
+    /// self-conflict this branch set out to fix. Comparing project ids instead does
+    /// NOT close this: the poll and the fast-forward are on the same project, so the
+    /// ids match and the clear fires anyway.
+    ///
+    /// Sound because every writer opens the gate BEFORE recording (both
+    /// [`Self::speleodb_start_editing`] arms and [`Self::speleodb_update`]'s
+    /// fast-forward arm) and needs this same mutex to record. So either the writer
+    /// released the mutex before we took it - and its gate store is visible across
+    /// that edge, so we see an open gate and decline - or it has not recorded yet, in
+    /// which case its write lands after our clear and stands.
+    fn speleodb_forget_lock_acquired_if_gate_shut(&self) {
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        if !self.edit_enabled() {
+            session.lock_acquired_here = None;
         }
     }
 
@@ -2931,6 +2966,17 @@ impl AppState {
                 // (nothing to strand - FF requires a clean copy) and re-enters
                 // deliberately via Start editing or Force edit.
                 let was_editing = self.edit_enabled() && !self.force_editing();
+                // Captured BEFORE the reload, which shuts the gate and lets a poll
+                // landing in that window clear the record: this is the last point the
+                // pre-reload truth exists. Kept SEPARATE from `was_editing` on
+                // purpose - the gate is a permission ("may I edit?"), the record is
+                // provenance ("did I take this lock?"), and the poll at the bottom of
+                // `speleodb_link_status` can re-derive the gate from nothing but a
+                // matching holder email. Restoring the record from the gate would
+                // therefore mint provenance for a lock this process never took - an
+                // inherited or sibling-session lock - and license it to explain away
+                // another session's commit as our own unrecorded push.
+                let had_lock_record = self.speleodb_lock_acquired_here(&link.project_id);
                 let local_path = self
                     .speleodb_fast_forward(
                         &endpoint,
@@ -2943,10 +2989,16 @@ impl AppState {
                     .map_err(local_dto)?;
                 if was_editing {
                     self.set_edit_enabled(true);
-                    // Re-record the acquisition with the gate: the reload shut it, and
-                    // a status poll landing in that window drops the record (as
-                    // start-editing's FF arm re-records for the same reason).
-                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                    // Restore the record only where there was one to restore: the
+                    // reload shut the gate, and a status poll landing in that window
+                    // drops the record (as start-editing's FF arm re-records for the
+                    // same reason). A session that held no record keeps none - the
+                    // gate is restored either way, so an inherited lock stays as
+                    // editable as it was, just without an authorship claim it never
+                    // earned.
+                    if had_lock_record {
+                        self.speleodb_note_lock_acquired(Some(&link.project_id));
+                    }
                 }
                 Ok(UpdateResult::FastForwarded { local_path })
             }
@@ -5132,6 +5184,109 @@ mod tests {
             !update.contains("let was_editing = self.edit_enabled();"),
             "capturing `edit_enabled` alone launders a lockless force-edit session \
              into an ordinary editable one (#213)"
+        );
+    }
+
+    /// The production region of this file, split out of the test module so the
+    /// source-level tripwires below cannot match their own assertions.
+    fn prod_source() -> &'static str {
+        include_str!("speleodb.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production region precedes the test module")
+    }
+
+    #[test]
+    fn update_restores_the_acquisition_record_only_where_one_existed() {
+        // Sibling of the tripwire above, on the OTHER half of the same restore. The
+        // gate and the record answer different questions - "may I edit?" versus "did I
+        // take this lock?" - and `speleodb_link_status` re-derives the gate from
+        // nothing but a matching lock-holder email. Restoring the record from
+        // `was_editing` therefore MINTED provenance: a session that inherited a lock
+        // (an earlier run, or a second window on the same account) came out of a
+        // fast-forward holding an authorship claim it never earned, and the shortcut
+        // in `speleodb_remote_state` would then explain the other session's commit
+        // away as our own unrecorded push.
+        //
+        // Structural for the same reason as the sibling: reaching this arm needs a
+        // successful fast-forward, whose reload resolves an app cache dir that only
+        // the env-gated live tests initialise.
+        let update = prod_source()
+            .split_once("fn speleodb_update")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_update body precedes the next method");
+        assert!(
+            update.contains("let had_lock_record = self.speleodb_lock_acquired_here("),
+            "the fast-forward must capture the RECORD as well as the gate"
+        );
+        assert!(
+            update.contains("if had_lock_record {"),
+            "and must gate the restore on it, not on `was_editing` alone"
+        );
+        let capture = update
+            .find("let had_lock_record")
+            .expect("capture present (asserted above)");
+        let reload = update
+            .find(".speleodb_fast_forward(")
+            .expect("the fast-forward call is what this arm is named for");
+        assert!(
+            capture < reload,
+            "the capture must precede the reload - the reload shuts the gate, and a \
+             poll landing in that window is exactly what clears the record"
+        );
+    }
+
+    #[test]
+    fn the_poll_clears_the_record_through_the_gate_rechecking_helper() {
+        // The poll's catch-all clear must not act on the `edit_enabled` snapshot taken
+        // at the top of `speleodb_link_status`: a fast-forward finishing underneath an
+        // in-flight poll reopens the gate and restores the record for a lock we still
+        // genuinely hold, and clearing on the stale snapshot erases it - re-raising the
+        // self-conflict this branch exists to fix. Pinned structurally because the
+        // window needs two threads to observe; the helper's own contract is covered
+        // behaviourally below.
+        let status = prod_source()
+            .split_once("fn speleodb_link_status")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_link_status body precedes the next method");
+        assert!(
+            status.contains("self.speleodb_forget_lock_acquired_if_gate_shut();"),
+            "the poll must clear through the helper that re-reads the gate under the \
+             session lock"
+        );
+        assert!(
+            !status.contains("self.speleodb_note_lock_acquired(None);"),
+            "an unconditional clear here erases a record a concurrent fast-forward \
+             just restored"
+        );
+    }
+
+    #[test]
+    fn the_catch_all_clear_defers_to_a_gate_that_reopened_underneath_it() {
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+
+        // This process took the lock and is editing under it - the state a
+        // fast-forward lands back in once its in-place reload finishes.
+        state.set_edit_enabled(true);
+        state.speleodb_note_lock_acquired(Some(REMOTE_ID));
+        state.speleodb_forget_lock_acquired_if_gate_shut();
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "a poll that observed the reload's momentarily-shut gate must find the \
+             gate open again when it reaches the clear, and leave our own record alone"
+        );
+
+        // The other direction: the gate really is shut, so the catch-all still has to
+        // fire - it is what covers close / project switch / logout / take-remote / the
+        // 401 auto-drop / the lost-lock re-verify, none of which run a release verb in
+        // this file.
+        state.set_edit_enabled(false);
+        state.speleodb_forget_lock_acquired_if_gate_shut();
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "a shut gate means the acquisition is over, whoever ended it"
         );
     }
 
