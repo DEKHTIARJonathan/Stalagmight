@@ -7,7 +7,7 @@
 
 use std::collections::HashMap;
 
-use super::AppState;
+use super::{AppState, VirtualShotMode};
 use crate::core::Command;
 use crate::models::{
     Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig, Project, SectionId,
@@ -307,6 +307,7 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
         None,
         Vec::new(),
         Vec::new(),
+        VirtualShotMode::Auto,
     );
     assert!(result.success, "import failed: {:?}", result.error);
 
@@ -371,6 +372,7 @@ fn import_reverse_lands_the_section_in_the_same_place() {
             None,
             Vec::new(),
             Vec::new(),
+            VirtualShotMode::Auto,
         );
         assert!(result.success, "import failed: {:?}", result.error);
         let project = state.get_project_state().unwrap();

@@ -15615,6 +15615,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        reverse: false,
     }];
 
     let result = state.execute_import_sections(
@@ -15668,6 +15669,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         shots,
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        reverse: false,
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
