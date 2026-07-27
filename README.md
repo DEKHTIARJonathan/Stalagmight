@@ -96,6 +96,9 @@ The `docs/` tree is extensive. Good entry points:
 | [TESTING.md](docs/TESTING.md) | Test tiers and patterns (Rust, Playwright, vitest) |
 | [roadmap.md](docs/roadmap.md) | Phases and planned work |
 
+Everything else - subsystems, import formats, testing, platform notes - is
+indexed with a suggested reading order in [docs/README.md](docs/README.md).
+
 ## Contributing
 
 Contributions are welcome - with one important caveat about domain scope (cave

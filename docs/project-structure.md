@@ -64,7 +64,7 @@ stalagmight/
 │   │   │       └── ...
 │   │   └── common/               # Button, Panel, Table
 │   ├── theme/                    # Color theme system
-│   │   └── tokens.ts                 # 9 color theme token definitions
+│   │   └── tokens.ts                 # 10 color theme token definitions
 │   ├── store/                    # Zustand stores
 │   │   ├── projectStore.ts           # Project state
 │   │   ├── uiStore.ts                # UI state (incl. resolvedTheme)
@@ -102,7 +102,7 @@ stalagmight/
 │   ├── TESTING.md                # Testing guide
 │   ├── architecture.md           # System design
 │   ├── project-structure.md      # This file
-│   └── ...                       # full table in AGENTS.md's Documentation section
+│   └── ...                       # every page indexed in docs/README.md
 │
 └── CLAUDE.md                     # Agent instructions (AGENTS.md symlinks to it)
 ```

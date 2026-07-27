@@ -12,34 +12,128 @@ User Action → Zustand Store → Tauri IPC → Rust Command Executor
 
 ## Command Pattern
 
-All persistent operations go through the Rust `Command` enum in `src-tauri/src/core/command.rs`. The `AppState` in `state.rs` executes commands and manages undo/redo.
+All persistent operations go through the Rust `Command` enum in
+`src-tauri/src/core/command.rs`. `AppState` (`src-tauri/src/core/state/app_state.rs`)
+executes them and manages undo/redo; the executor bodies are split one module per command
+family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
+`src-tauri/src/core/state/`.
 
 ## Data Model
 
-- **Project**: Contains sections, station merges, zero datums, section offsets
+- **Project** (`src-tauri/src/models/project.rs`): the whole in-memory document - the
+  sections, plus everything that cross-references them.
+  - `station_merges`, `zero_datums`, `loop_closures` - the cross-section ties. All three
+    are held with position-independent `StationKey` endpoints and re-encoded to the
+    positional wire form only at IPC encode, so inserting or deleting a shot cannot
+    silently rebind them. Closure detection and adjustment: [closures.md](closures.md).
+  - `section_offsets` / `station_offsets` - displacements applied when sections are
+    aligned through merges, or when a station is moved by hand.
+  - `station_comments` - free text keyed by `StationKey`. A station is implicit (the
+    boundary between consecutive shots), so it has no record of its own to hang a
+    comment on.
+  - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
+    file between collaborators instead of following whoever opens it.
+  - `collab` - Ariane collaboration state (sibling `.tml` path, the hash of what we last
+    wrote, the per-shot baseline). `None` when collaboration is off.
+  - `imported_file_hashes` / `imported_section_hashes` - re-import de-duplication.
 - **Section**: Group of shots with metadata (name, surveyor, date, color)
-- **Shot**: Single measurement (azimuth, length, depth, LRUD)
+- **Shot**: Single measurement (azimuth pair, length, depth in/out, pitch, LRUD) plus its
+  `ShotKind` - a permanent leg, a swum jump, or a survey reference. That distinction is
+  what the reachability graph and the gas engine weight on.
 - **Station**: Computed from shots, can be merged or set as zero datum
+
+Two things a project owns are deliberately *not* fields on `Project`. The SpeleoDB link is
+a single `speleo_link` row inside the `.stalx` (`src-tauri/src/models/speleo_link.rs`),
+snapshotted and re-applied verbatim by every save - the save writes a fresh file, so
+without that carry-forward a local save would silently un-remote the project and clear its
+un-pushed-edits bit. Named dive plans live in a sibling `<stem>.plnx` file.
+
+## Subsystems
+
+Each has its own page. What follows is the seam and where the code lives, nothing more.
+
+**Workspace modes.** `uiStore.appMode` (`survey` | `plan` | `export`) switches the whole
+workspace from the `ModeCarousel`; Plan and Export are read-only. Ask whether editing is
+blocked through `useEditingBlocked()` / `isEditingBlockedNow()`
+(`src/hooks/useEditingBlocked.ts`) and nothing else - `pnpm lint:readonly-gates` bans the
+raw composition, because writing it inline as `useA() || useB()` short-circuits the second
+store hook and violates the Rules of Hooks. Note the asymmetry: the map-read-only term has
+no backend backstop - a local project keeps `edit_enabled` true in Rust whatever mode the
+UI is in - so a missed gate is a real bug, not a cosmetic one.
+-> [app-modes.md](app-modes.md)
+
+**Gas and dive planning.** `Project::compute_gas_reach_field`
+(`src-tauri/src/models/project/gas.rs`) seeds a gas-weighted Dijkstra over the same survey
+graph the distance overlay uses, weighting each shot by the gas it costs to swim in, and
+marks every station reachable within the turn budget. It runs on measured coordinates -
+reachability is coordinate-independent, so it never triggers the slow closure-adjusted
+solve. Inputs live in `src/store/gasPlanStore.ts` (runtime only, never persisted); named
+plans persist to the sibling `.plnx` (`src-tauri/src/persistence/plnx.rs`) and store the
+engine's *input tuple*, never the derived field, so a loaded plan cannot show a stale
+overlay. -> [gas-planning.md](gas-planning.md)
+
+**Survey rendering.** Shots, stations, labels, gradients and the measured-path tint are
+drawn by a custom WebGL layer (`src/components/Map/surveyLayer/customRender/`), which is
+the *sole* survey renderer: the stock bulk layers were deleted, so there is no fallback -
+an unrecoverable GL failure removes the dead layer and surfaces an error. Hit-testing does
+not depend on MapLibre either; it runs against the SoA geometry index. What is still stock
+MapLibre in `SurveyLayer.tsx` are the small GeoJSON auxiliaries: loop closures, the
+gas-route highlight, merge ghosts, and the interact hover/selection overlay - the last of
+which holds only the few features the user is currently touching, so its size tracks
+interaction state, not survey size. Global View is custom-only too
+(`src/components/GlobalView/customRender/globalController.ts`).
+-> [map-renderer.md](map-renderer.md)
+
+**SpeleoDB.** `src-tauri/src/speleodb/` holds the client half: HTTP surface, token storage
+(OS keychain with an in-memory fallback), ZIP-dump classification and `.stalx` extraction,
+the base-SHA fence and ancestry recovery. Orchestration against `AppState` lives in
+`core/state/speleodb.rs`, the IPC commands in `commands/speleodb.rs`. The model is a
+single-writer hand-off: a pulled project is read-only until the write lock is acquired, and
+unlike the mode-driven read-only above, that one has a real backend backstop -
+`AppState::guard_mutation` refuses every gated mutation while the lock is missing.
+-> [speleodb-dev-testing.md](speleodb-dev-testing.md)
+
+**Ariane collaboration.** With `Project.collab` enabled, every save also writes the sibling
+`.tml` (`core/state/project_io.rs::write_collab_sibling`) and refreshes the stored hash and
+per-shot baseline. Opening a project whose sibling changed underneath diffs the returned
+file against that baseline to classify added / edited / removed shots
+(`core/reconcile.rs`) and applies the result (`core/state/collab.rs`). Matching a returned
+shot back is tiered - UUID, then the Ariane integer ID, then a quantized geometry
+fingerprint - because `Shot::id` is regenerated from sequence order on every load and so
+cannot carry identity across the trip. -> [collaboration.md](collaboration.md)
+
+**Telemetry.** `src-tauri/src/telemetry/` is always compiled but real only behind the
+`telemetry` Cargo feature; with it off every method is an empty no-op. Anonymous
+session-level counters, off by default and opt-in via config, buffered to disk on a failed
+flush and retried. `registry.rs` owns the event vocabulary and the `registry_covers_all_*`
+tests that fail when a new command / tool / dialog is added without a matching event.
+-> [telemetry.md](telemetry.md)
 
 ## Key Files
 
 | File | Purpose |
 |------|---------|
 | `src-tauri/src/core/command.rs` | Command enum and result types |
-| `src-tauri/src/core/state.rs` | AppState with command execution |
-| `src-tauri/src/persistence/sqlite.rs` | Database schema and operations |
+| `src-tauri/src/core/state/` | `AppState` (`app_state.rs`) plus one module per command family |
+| `src-tauri/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo) |
+| `src-tauri/src/persistence/plnx.rs` | `.plnx` sibling store for named dive plans |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
+| `src-tauri/src/models/project/gas.rs` | Gas-weighted reachability engine (`compute_gas_reach_field`) |
 | `src-tauri/src/models/geo.rs` | GPS-to-local coordinate transformation (WGS84 → ENU) |
+| `src-tauri/src/speleodb/mod.rs` | SpeleoDB client module root (HTTP, auth, dump, sync, TLS policy) |
 | `src-tauri/src/cache/tiles.rs` | Satellite tile cache (SQLite-based) |
 | `src-tauri/src/tile_providers.rs` | Tile provider registry (provider metadata, URL expansion) |
 | `src-tauri/src/commands/cache.rs` | Cache IPC commands (stats, clear, fetch) |
-| `src-tauri/src/commands/survey.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
+| `src-tauri/src/commands/survey_geometry.rs` | Survey geometry IPC command (`get_survey_geometry_for_file`) |
 | `src/store/projectStore.ts` | Frontend state, Tauri IPC calls |
-| `src/store/uiStore.ts` | UI state (selection, tools, panels) |
+| `src/store/uiStore.ts` | UI state (selection, tools, panels, `appMode`) |
+| `src/store/gasPlanStore.ts` | Gas/dive-plan inputs (runtime only, never persisted) |
 | `src/store/globalViewStore.ts` | Global View state (selection, geometry loading) |
+| `src/hooks/useEditingBlocked.ts` | The one sanctioned read-only predicate (map mode + SpeleoDB lock) |
 | `src/components/Map/MapCanvas.tsx` | MapLibre map initialization |
-| `src/components/Map/SurveyLayer.tsx` | Survey rendering on map |
+| `src/components/Map/SurveyLayer.tsx` | Survey layer: custom-renderer wiring, GeoJSON auxiliaries, interaction |
+| `src/components/Map/surveyLayer/customRender/controller.ts` | Custom WebGL survey renderer (buffers, colors, layer lifecycle) |
 | `src/components/GlobalView/GlobalView.tsx` | Global View container component |
 | `src/components/GlobalView/GlobalViewMap.tsx` | MapLibre map for Global View |
 | `src/components/GlobalView/GlobalSurveyLayer.ts` | Multi-system survey geometry rendering |
@@ -51,8 +145,8 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 | `src/hooks/useProject.ts` | Project file operations hook |
 | `src/hooks/useMapTools.ts` | Map tool handlers |
 | `src/hooks/useKeyboardShortcuts.ts` | Global keyboard shortcut handler |
-| `src/hooks/useFpsMonitor.ts` | FPS monitoring for auto-throttle |
-| `src/theme/tokens.ts` | Color theme token definitions (9 themes) |
+| `src/hooks/useFpsMonitor.ts` | FPS monitoring (no consumer today - see below) |
+| `src/theme/tokens.ts` | Color theme token definitions (10 themes) |
 | `src/components/Map/GridOverlay.tsx` | Theme-aware coordinate grid overlay |
 | `src/components/Dialogs/KeyboardShortcutsDialog.tsx` | Keyboard shortcuts overlay (`?` key) |
 | `src/components/Dialogs/settings/AppearanceSettings.tsx` | Theme mode & color theme selection UI |
@@ -61,7 +155,7 @@ All persistent operations go through the Rust `Command` enum in `src-tauri/src/c
 
 ## Color Theme System
 
-Stalagmight supports 9 color themes with independent day (light) and night (dark) palettes:
+Stalagmight supports 10 color themes with independent day (light) and night (dark) palettes:
 
 | Theme | Type | Description |
 |-------|------|-------------|
@@ -74,6 +168,7 @@ Stalagmight supports 9 color themes with independent day (light) and night (dark
 | `catppuccin_latte` | Light | Catppuccin Latte (light) with blue accent |
 | `nord` | Dark | Nord-inspired with cyan accent |
 | `catppuccin_mocha` | Dark | Catppuccin Mocha (dark) with blue accent |
+| `kaleido_eink` | Light | Pure black on pure white for e-ink panels; all CSS transitions and animations are force-disabled under this theme (`src/index.css`) to prevent ghosting |
 
 ### Theme Architecture
 
@@ -116,6 +211,10 @@ The baseline is a high-water mark: a legitimate growth bumps it, and a split low
 (shrinks aren't auto-captured). Metric = code LOC minus comments/blanks and `#[cfg(test)]`
 items.
 
+The frontend has an identical twin - `pnpm lint:ts-file-size`
+(`scripts/check-ts-file-size.mjs`, baseline `ts-file-size-baseline.json`), same 1500/2000
+thresholds, also a `check`-job gate. Both must pass before pushing.
+
 ### Mutex Lock Ordering
 
 **Critical**: Never hold a Mutex lock while calling methods that acquire other locks. Release the first lock before calling methods that may acquire others.
@@ -149,11 +248,19 @@ When stations are merged, section positions are recalculated:
 3. Calculate offsets for connected sections
 4. Store in `Project.section_offsets: HashMap<SectionId, (f64, f64)>`
 
+Offsets are **derived** state that the file merely caches, which is why
+`redrive_offsets_after_load` (`src-tauri/src/models/project/offsets.rs`) re-solves them
+from the merge and datum constraints on every open. A project therefore always opens
+geometrically correct even if an older build persisted drift.
+
 ### Database Operations
 
 - Use `Database::open_existing()` for reading (doesn't create files)
 - Use `Database::open()` for writing (creates if needed)
-- Shot IDs are generated on load: `section_id * 100000 + sequence`
+- Shot IDs are generated on load: `section_id * FEATURE_ID_STRIDE + sequence_order`
+  (`FEATURE_ID_STRIDE` = 100000, `src-tauri/src/models/id_stride.rs`, mirrored in
+  `src/utils/ids.ts`). They are therefore *not* stable identity - use `Shot::uuid` for
+  anything that has to survive a save/load
 
 ### Coordinate Transformation (Zero Datum)
 
@@ -183,8 +290,8 @@ User loads Global View
     │
     ▼
 GlobalView.tsx (container)
-    ├── Fetches ProjectMetadata[] via get_recent_projects
-    ├── Filters to GPS-positioned systems
+    ├── Reads recentProjects (ProjectMetadata[], IPC list_recent_projects)
+    ├── Filters to GPS-positioned systems (gps_center != null)
     └── Renders GlobalViewMap
             │
             ▼
@@ -204,7 +311,8 @@ globalViewStore.ts (Zustand)
             ▼
 GlobalSurveyLayer.ts
     ├── Receives geometry updates via update()
-    ├── Creates GeoJSON sources/layers for shots and stations
+    ├── Hands buffers to GlobalCustomController (custom WebGL; no MapLibre sources)
+    ├── Owns event wiring + tooltip, resolving hits from the geometry hit index
     ├── Applies search filter via setSearchFilter()
     └── Updates selection highlighting via setSelectedSystems()
 ```
@@ -254,14 +362,10 @@ Switching to markers mode cancels pending geometry loads to save resources.
 
 ### FPS Monitoring
 
-The `useFpsMonitor` hook tracks frame rate using `requestAnimationFrame`:
+`src/hooks/useFpsMonitor.ts` tracks frame rate with `requestAnimationFrame` and fires
+`onThrottleNeeded` / `onThrottleRestore` around a threshold pair (default 30 / 45 fps).
 
-```typescript
-const { isThrottled } = useFpsMonitor(
-  onThrottleNeeded,  // Called when FPS drops below threshold
-  onThrottleRestore, // Called when FPS recovers
-  { fpsThreshold: 30, recoveryThreshold: 45, enabled: true }
-);
-```
-
-When throttled, `GlobalSurveyLayer.setTolerance()` increases GeoJSON simplification.
+It currently has **no consumer**. The auto-throttle it was written for increased
+whole-source GeoJSON simplification in Global View; that source no longer exists, so there
+is nothing left to coarsen. Wire it to something real or delete it - do not assume Global
+View is still throttling itself.
