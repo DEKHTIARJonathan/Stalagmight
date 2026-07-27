@@ -8,11 +8,20 @@
 use std::collections::HashMap;
 
 use super::{AppState, VirtualShotMode};
-use crate::core::Command;
+use crate::core::{Command, ReversedSection, UndoData};
 use crate::models::{
-    Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig, Project, SectionId,
-    ShotData, StationRef,
+    Coordinates, DivePlanSnapshot, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    MarkedPoint, Project, SectionId, SectionUpdates, ShotData, StationRef,
 };
+
+/// One expected [`ReversedSection`] entry, so the assertions below read as
+/// "section X, mirrored against N shots" rather than a struct literal each time.
+fn reversed_entry(section_id: SectionId, shot_count: u32) -> ReversedSection {
+    ReversedSection {
+        section_id,
+        shot_count,
+    }
+}
 
 fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
     ShotData {
@@ -1294,19 +1303,25 @@ fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
         ],
     });
     assert!(batch.success, "{:?}", batch.error);
-    assert_eq!(batch.reversed_section_ids, Some(vec![first, second]));
+    assert_eq!(
+        batch.reversed_sections,
+        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)])
+    );
 
     let undone = state.undo();
     assert!(undone.success, "{:?}", undone.error);
     assert_eq!(
-        undone.reversed_section_ids,
-        Some(vec![first, second]),
+        undone.reversed_sections,
+        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)]),
         "undoing a reverse re-reverses the numbering, so it reports the same sections"
     );
 
     let redone = state.redo();
     assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(redone.reversed_section_ids, Some(vec![first, second]));
+    assert_eq!(
+        redone.reversed_sections,
+        Some(vec![reversed_entry(first, 3), reversed_entry(second, 2)])
+    );
 
     // A command that renumbers nothing must leave the field off the wire entirely.
     let moved = state.execute(Command::MoveSection {
@@ -1314,7 +1329,7 @@ fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
         offset: Coordinates::new(1.0, 2.0, 0.0),
     });
     assert!(moved.success, "{:?}", moved.error);
-    assert!(moved.reversed_section_ids.is_none());
+    assert!(moved.reversed_sections.is_none());
 }
 
 /// The history dropdown undoes several entries at once. Each inner step knows what
@@ -1344,19 +1359,27 @@ fn undo_to_and_redo_to_report_every_reverse_in_the_range() {
     let undone = state.undo_to(1);
     assert!(undone.success, "{:?}", undone.error);
     assert_eq!(
-        undone.reversed_section_ids,
-        Some(vec![section]),
+        undone.reversed_sections,
+        Some(vec![reversed_entry(section, 3)]),
         "a reverse inside the undone range must reach the frontend"
     );
 
     let redone = state.redo_to(1);
     assert!(redone.success, "{:?}", redone.error);
-    assert_eq!(redone.reversed_section_ids, Some(vec![section]));
+    assert_eq!(
+        redone.reversed_sections,
+        Some(vec![reversed_entry(section, 3)])
+    );
 }
 
-/// Two reverses of one section undo to the original numbering, so the aggregate
-/// lists it twice and the frontend's once-per-entry mirror nets out. Deduping here
-/// would mirror once and leave every pin on the wrong station.
+/// `undo_to`'s aggregate is an ORDERED PER-STEP LOG, not a parity-reduced set:
+/// two reverses of one section are listed TWICE, each with the shot count in
+/// force at its own step. That is deliberate, and it does NOT contradict the
+/// parity reduction a single `Batch` gets - a batch cannot change the shot count
+/// mid-flight, whereas the steps of an undo range can (a `CreateShot` undone
+/// between two reverses), so only the aggregate has to keep the per-step counts.
+/// The consumer composes the entries: equal counts an even number of times give
+/// the exact identity. Reducing here instead would throw the counts away.
 #[test]
 fn undo_to_repeats_a_section_reversed_twice() {
     let (state, section) = state_with_section();
@@ -1371,5 +1394,259 @@ fn undo_to_repeats_a_section_reversed_twice() {
 
     let undone = state.undo_to(1);
     assert!(undone.success, "{:?}", undone.error);
-    assert_eq!(undone.reversed_section_ids, Some(vec![section, section]));
+    assert_eq!(
+        undone.reversed_sections,
+        Some(vec![reversed_entry(section, 3), reversed_entry(section, 3)])
+    );
+}
+
+/// A `Batch` that reverses ONE section TWICE leaves the numbering exactly as it
+/// found it, so there is nothing to report and - crucially - nothing to fix up.
+///
+/// `settle_reversed_sections` applies its two fix-ups ONCE PER LIST ENTRY against
+/// one FINAL project state, and the `.plnx` re-key is the cyclic shift
+/// `j -> (j - 1) mod (N + 1)`, not an involution. So an unreduced `[A, A]` walks
+/// every saved plan key TWO stations along a numbering that never moved, and the
+/// panel shows no warning because the keys still resolve.
+#[test]
+fn batch_reversing_one_section_twice_reports_nothing_and_leaves_the_plnx_alone() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("cave.stalx")),
+                is_autosave: false,
+            })
+            .success
+    );
+
+    // Every kind of key a plan holds, so a two-station walk cannot hide in a slot
+    // the fixture happens not to use.
+    let mut snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
+    snapshot.origin = Some(StationRef::new(section_id, 0));
+    snapshot.endpoint = Some(StationRef::new(section_id, 3));
+    snapshot.waypoints = vec![StationRef::new(section_id, 2)];
+    snapshot.marked_points = vec![MarkedPoint {
+        station: StationRef::new(section_id, 1),
+        label: Some("photo".to_string()),
+    }];
+    let saved = state
+        .save_dive_plan(None, "Plan".to_string(), snapshot)
+        .unwrap();
+
+    let batch = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            },
+        ],
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert!(
+        batch.reversed_sections.is_none(),
+        "a net no-op reverse renumbered nothing, so the field must be off the wire \
+         entirely: {:?}",
+        batch.reversed_sections
+    );
+
+    let plan = state.load_dive_plan(saved.id).unwrap();
+    assert_eq!(plan.stale_ref_count, 0);
+    assert_eq!(
+        plan.snapshot.origin,
+        Some(StationRef::new(section_id, 0)),
+        "the numbering never moved, so the saved plan must be untouched"
+    );
+    assert_eq!(plan.snapshot.endpoint, Some(StationRef::new(section_id, 3)));
+    assert_eq!(
+        plan.snapshot.waypoints,
+        vec![StationRef::new(section_id, 2)]
+    );
+    assert_eq!(
+        plan.snapshot.marked_points[0].station,
+        StationRef::new(section_id, 1)
+    );
+}
+
+/// Parity is resolved PER SECTION, not per batch: `[A, B, A]` nets to `B` alone.
+/// A's plan keys must sit exactly where they started while B's move once.
+#[test]
+fn batch_a_b_a_reports_only_b() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, first) = state_with_section();
+    let second = state
+        .execute(Command::CreateSection {
+            name: Some("Side".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+        })
+        .section_id
+        .unwrap();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("cave.stalx")),
+                is_autosave: false,
+            })
+            .success
+    );
+
+    let mut snapshot: DivePlanSnapshot = serde_json::from_str("{}").unwrap();
+    snapshot.origin = Some(StationRef::new(first, 0));
+    snapshot.endpoint = Some(StationRef::new(second, 0));
+    snapshot.waypoints = vec![StationRef::new(first, 2)];
+    let saved = state
+        .save_dive_plan(None, "Plan".to_string(), snapshot)
+        .unwrap();
+
+    let reverse_of = |section_id| Command::ReverseSection {
+        section_id,
+        swap_left_right: false,
+    };
+    let batch = state.execute(Command::Batch {
+        commands: vec![reverse_of(first), reverse_of(second), reverse_of(first)],
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert_eq!(
+        batch.reversed_sections,
+        Some(vec![reversed_entry(second, 2)]),
+        "only the section reversed an ODD number of times was renumbered"
+    );
+
+    let plan = state.load_dive_plan(saved.id).unwrap();
+    assert_eq!(plan.stale_ref_count, 0);
+    assert_eq!(
+        plan.snapshot.origin,
+        Some(StationRef::new(first, 0)),
+        "the twice-reversed section's keys must not move"
+    );
+    assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(first, 2)]);
+    assert_eq!(
+        plan.snapshot.endpoint,
+        Some(StationRef::new(second, 2)),
+        "the once-reversed section's station 0 is now its station 2"
+    );
+}
+
+/// The warning re-pin has the same shape as the `.plnx` re-key: it rebuilds its
+/// `(section_id, shot_id) -> mirrored uuid` map from the CURRENT project, so
+/// running it for a section whose numbering never moved pins a position-keyed
+/// ignore onto the shot at the mirrored position - permanently suppressing an
+/// unrelated warning. An unreduced `[A, A]` collapses in the map to exactly one
+/// such spurious application.
+#[test]
+fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("cave.stalx")),
+                is_autosave: false,
+            })
+            .success
+    );
+
+    let first_shot_id = {
+        let guard = state.project.lock().unwrap();
+        guard
+            .as_ref()
+            .unwrap()
+            .get_section(section_id)
+            .unwrap()
+            .shots[0]
+            .id
+    };
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id,
+            shot_id: first_shot_id,
+            warning_code: "TEST_IGNORE".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    let batch = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            },
+        ],
+    });
+    assert!(batch.success, "{:?}", batch.error);
+
+    let rows = state.load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the ignore must survive the batch");
+    assert_eq!(
+        rows[0].shot_uuid, None,
+        "the numbering never moved, so the row must stay position-keyed rather than \
+         being pinned to whatever shot sits at the mirrored position"
+    );
+}
+
+/// `undo_to` bails at the first failing step, but the steps BEFORE it have already
+/// applied and cannot be rolled back. If one of them re-reversed a section, the
+/// frontend's positional refs are now mirrored - so the failure result has to carry
+/// what was applied, or the pins are silently left on the wrong stations.
+#[test]
+fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
+    let (state, section_id) = state_with_section();
+
+    // A poisoned entry UNDERNEATH the reverse: `undo_inner` cannot parse its
+    // `values_json`, so step 2 of the range fails after step 1 already ran.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_with_data(
+            Command::UpdateSectionMetadata {
+                section_id,
+                updates: SectionUpdates::default(),
+            },
+            UndoData::PreviousValues {
+                section_id,
+                shot_id: None,
+                values_json: "not-valid-json".to_string(),
+            },
+        );
+    }
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+
+    let result = state.undo_to(1);
+    assert!(!result.success, "step 2 must fail: {:?}", result.error);
+    assert!(
+        result
+            .error
+            .as_deref()
+            .unwrap_or_default()
+            .contains("step 2 of 2"),
+        "{:?}",
+        result.error
+    );
+    assert_eq!(
+        result.reversed_sections,
+        Some(vec![reversed_entry(section_id, 3)]),
+        "step 1 re-reversed the section and is not rolled back, so the failure must \
+         still report it"
+    );
 }

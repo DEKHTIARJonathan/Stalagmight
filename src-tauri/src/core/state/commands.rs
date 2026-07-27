@@ -1,7 +1,9 @@
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
-use crate::core::{Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, UndoData};
+use crate::core::{
+    Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
+};
 use crate::models::{Project, SectionData, ViolationSeverity};
 #[cfg(test)]
 use crate::models::{SectionId, ShotData, ShotId, ShotUpdates};
@@ -704,7 +706,14 @@ impl AppState {
 
     /// Finish a successful operation that REVERSED some sections' station numbering
     /// (a forward `ReverseSection`, a batch of them, or an undo/redo of either - all
-    /// re-reverse the numbering, and every fix-up here is its own inverse).
+    /// re-reverse the numbering).
+    ///
+    /// Neither fix-up below is its own inverse, so both are driven off the
+    /// PARITY-REDUCED list `Command::reversed_section_ids` returns, and each named
+    /// section is fixed up exactly once. The `.plnx` re-key is the cyclic shift
+    /// `j -> (j - 1) mod (N + 1)` and the warning re-pin rebuilds its map from the
+    /// CURRENT project; what makes undo/redo safe is the intervening re-reverse,
+    /// not any self-inverse property of these calls.
     ///
     /// Two things live outside `Project` and so are out of reach of
     /// `reverse_section`'s own cross-reference rewrite, which walks
@@ -716,11 +725,15 @@ impl AppState {
     /// * `resolved_warnings` rows that are still keyed by position, whose `shot_id`
     ///   the reverse detached from its record.
     ///
-    /// It also reports the sections on the result. A reverse keeps every station's
-    /// world position, so there is nothing in the geometry for a consumer to diff:
-    /// without this signal the frontend had to INFER a reverse from station
-    /// positions, which cannot tell a reversed section from one that was reversed
-    /// and moved in the same action.
+    /// It also reports the sections on the result, each with the shot count now in
+    /// force. A reverse keeps every station's world position, so there is nothing
+    /// in the geometry for a consumer to diff: without this signal the frontend had
+    /// to INFER a reverse from station positions, which cannot tell a reversed
+    /// section from one that was reversed and moved in the same action.
+    ///
+    /// A named section that is gone or has no shots is DROPPED from the report:
+    /// `Project::reverse_section` returns early on a shot-less section, so nothing
+    /// was renumbered and there is no divisor for the frontend's mirror.
     pub(super) fn settle_reversed_sections(
         &self,
         cmd: &Command,
@@ -732,7 +745,31 @@ impl AppState {
         }
         self.remap_dive_plans_for_reversed_sections(&reversed);
         self.pin_position_keyed_warnings_after_reverse(&reversed);
-        result.with_reversed_section_ids(reversed)
+        // One project lock for the whole list; both fix-ups above take (and
+        // release) it themselves, and the mutex is not reentrant.
+        let entries: Vec<ReversedSection> = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return result;
+            };
+            reversed
+                .iter()
+                .filter_map(|section_id| {
+                    let shot_count = project.get_section(*section_id)?.shots.len() as u32;
+                    (shot_count > 0).then_some(ReversedSection {
+                        section_id: *section_id,
+                        shot_count,
+                    })
+                })
+                .collect()
+        };
+        if entries.is_empty() {
+            return result;
+        }
+        result.with_reversed_sections(entries)
     }
 
     // === Shot operations ===

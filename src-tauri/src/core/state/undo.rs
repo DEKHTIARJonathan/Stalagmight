@@ -1,4 +1,4 @@
-use crate::core::{Command, CommandResult, UndoData};
+use crate::core::{Command, CommandResult, ReversedSection, UndoData};
 use crate::models::{SectionId, SectionUpdates, Shot, ShotUpdates};
 
 use super::AppState;
@@ -831,23 +831,35 @@ impl AppState {
 
         // Execute (index + 1) undos to include the target index
         let count = index + 1;
-        // Concatenated in step order, repeats intact: the frontend mirrors its
-        // positional refs once per entry, so undoing two reverses of one section
-        // lists it twice and nets out. Dropping these would leave the gas plan and
-        // the distance origin on the mirrored stations after a multi-step undo.
-        let mut reversed: Vec<u32> = Vec::new();
+        // An ORDERED PER-STEP LOG: concatenated in step order, repeats intact and
+        // deliberately NOT parity-reduced. Each entry carries the shot count in
+        // force at ITS step, which can differ between steps of one range (a
+        // `CreateShot` undone between two reverses of the same section), so the
+        // consumer composes them rather than cancelling repeats. Dropping them
+        // would leave the gas plan and the distance origin on the mirrored
+        // stations after a multi-step undo.
+        let mut reversed: Vec<ReversedSection> = Vec::new();
         for i in 0..count {
             let result = self.undo_inner();
             if !result.success {
-                return CommandResult::failure(format!(
+                // The earlier steps ALREADY flipped their sections and cannot be
+                // rolled back, so the failure has to carry what was applied -
+                // otherwise the frontend's positional refs are left mirrored with
+                // nothing on the wire to say so.
+                let failure = CommandResult::failure(format!(
                     "Undo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                return if reversed.is_empty() {
+                    failure
+                } else {
+                    failure.with_reversed_sections(reversed)
+                };
             }
-            if let Some(ids) = result.reversed_section_ids {
-                reversed.extend(ids);
+            if let Some(entries) = result.reversed_sections {
+                reversed.extend(entries);
             }
         }
 
@@ -858,7 +870,7 @@ impl AppState {
         if reversed.is_empty() {
             CommandResult::success()
         } else {
-            CommandResult::success().with_reversed_section_ids(reversed)
+            CommandResult::success().with_reversed_sections(reversed)
         }
     }
 
@@ -890,20 +902,28 @@ impl AppState {
 
         // Execute (index + 1) redos to include the target index
         let count = index + 1;
-        // Concatenated in step order, repeats intact - see `undo_to`.
-        let mut reversed: Vec<u32> = Vec::new();
+        // An ordered per-step log, repeats intact and not parity-reduced - see
+        // `undo_to`.
+        let mut reversed: Vec<ReversedSection> = Vec::new();
         for i in 0..count {
             let result = self.redo_inner();
             if !result.success {
-                return CommandResult::failure(format!(
+                // Same reasoning as `undo_to`: the steps that already ran are not
+                // rolled back, so the failure carries their entries.
+                let failure = CommandResult::failure(format!(
                     "Redo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                return if reversed.is_empty() {
+                    failure
+                } else {
+                    failure.with_reversed_sections(reversed)
+                };
             }
-            if let Some(ids) = result.reversed_section_ids {
-                reversed.extend(ids);
+            if let Some(entries) = result.reversed_sections {
+                reversed.extend(entries);
             }
         }
 
@@ -914,7 +934,7 @@ impl AppState {
         if reversed.is_empty() {
             CommandResult::success()
         } else {
-            CommandResult::success().with_reversed_section_ids(reversed)
+            CommandResult::success().with_reversed_sections(reversed)
         }
     }
 }

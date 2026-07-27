@@ -221,8 +221,14 @@ impl AppState {
     ///
     /// The mirror: `shots[p].id` is unchanged by the reverse (ids stay with positions),
     /// while the record that HELD that id moved to position `N - 1 - p`. So the row keyed
-    /// by `shots[p].id` belongs to `shots[N - 1 - p]`'s UUID. That makes the map its own
-    /// inverse, which is what lets undo/redo of a reverse re-run the same call.
+    /// by `shots[p].id` belongs to `shots[N - 1 - p]`'s UUID.
+    ///
+    /// The map is rebuilt from the CURRENT project on every call, so it is not "its own
+    /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
+    /// the INTERVENING re-reverse, which is what changes the map. Run it twice against ONE
+    /// project state and the second pass re-pins the row a second time, onto a shot that
+    /// was never reversed onto it. `section_ids` must therefore name each section at most
+    /// once - `Command::reversed_section_ids` parity-reduces its `Batch` arm to guarantee it.
     ///
     /// Best-effort: no database (an unsaved project) means no rows exist to fix.
     pub(super) fn pin_position_keyed_warnings_after_reverse(&self, section_ids: &[SectionId]) {

@@ -183,8 +183,13 @@ fn from_keys(project: &Project, keys: Vec<StationKey>, stale: &mut u32) -> Vec<S
 ///   j'  > 0  ->  j' - 1
 /// ```
 ///
-/// The rule reads the POST-reverse project only, and it is its own inverse - so the same call
-/// fixes up an undo/redo of a reverse, which re-reverses the numbering.
+/// The rule reads the POST-reverse project only. It is NOT an involution: it is the cyclic
+/// shift `j -> (j - 1) mod (N + 1)`, self-inverse only for `N <= 1`. What IS an involution is
+/// the PAIR (reverse, re-key) - which is why the same call fixes up an undo/redo of a reverse
+/// (each pass runs against a freshly re-reversed numbering), and equally why it must never be
+/// replayed twice against ONE project state: two passes over an unchanged numbering walk every
+/// key two stations along. `Command::reversed_section_ids` parity-reduces for exactly that
+/// reason, so the caller can never hand this function the same section twice.
 fn mirror_key_after_reverse(
     project: &Project,
     section_id: crate::models::SectionId,
@@ -437,9 +442,11 @@ impl AppState {
     /// or rolled back over a sidecar, and the user's next explicit plan save rewrites the file
     /// from the live (correct) refs anyway.
     ///
-    /// `section_ids` is applied IN ORDER and may repeat a section (a batch that reverses the
-    /// same section twice); the mirror is an involution, so replaying it per entry lands on the
-    /// right station either way.
+    /// `section_ids` is applied IN ORDER and must name each section AT MOST ONCE. The mirror is
+    /// a cyclic shift, not an involution (see [`mirror_key_after_reverse`]), so a repeated id
+    /// would walk every key of that section two stations along a numbering that never moved.
+    /// The producer, `Command::reversed_section_ids`, parity-reduces its `Batch` arm so a
+    /// repeat cannot reach here; never replay an entry.
     pub(super) fn remap_dive_plans_for_reversed_sections(
         &self,
         section_ids: &[crate::models::SectionId],
@@ -1041,7 +1048,13 @@ mod tests {
             swap_left_right: false,
         });
         assert!(result.success, "{:?}", result.error);
-        assert_eq!(result.reversed_section_ids, Some(vec![sec]));
+        assert_eq!(
+            result.reversed_sections,
+            Some(vec![crate::core::ReversedSection {
+                section_id: sec,
+                shot_count: 3,
+            }])
+        );
 
         let plan = state.load_dive_plan(saved.id).unwrap();
         assert_eq!(plan.stale_ref_count, 0);
@@ -1058,7 +1071,13 @@ mod tests {
 
         let undone = state.undo();
         assert!(undone.success, "{:?}", undone.error);
-        assert_eq!(undone.reversed_section_ids, Some(vec![sec]));
+        assert_eq!(
+            undone.reversed_sections,
+            Some(vec![crate::core::ReversedSection {
+                section_id: sec,
+                shot_count: 3,
+            }])
+        );
         let plan = state.load_dive_plan(saved.id).unwrap();
         assert_eq!(plan.stale_ref_count, 0);
         assert_eq!(plan.snapshot.origin, Some(StationRef::new(sec, 0)));
