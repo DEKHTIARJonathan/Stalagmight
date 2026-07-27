@@ -281,9 +281,32 @@ interface SpeleoStore {
    * True while a hand-off verb (start/update/push/done) is in flight. Shared so
    * every entry point - the status button AND the hamburger submenu - gates on
    * the same lock and can't double-issue (fix 12).
+   *
+   * Consumers only READ it; every production write goes through
+   * {@link beginBusy} / {@link endBusy} rather than setting the boolean, so a
+   * late release cannot clear a flag it no longer owns (see {@link beginBusy}).
    */
   busy: boolean;
-  setBusy: (busy: boolean) => void;
+  /**
+   * [#270] Claim `busy` for ONE verb, returning the token its release must
+   * present.
+   *
+   * `busy` is a single shared boolean but has three writers: the verb's own
+   * `finally`, `clearLink` (project close/switch) and `restoreLink` (a failed
+   * remote open). The latter two reset it out of band, so the verb's `finally`
+   * would later run against a flag some NEWER verb had since raised - and clear
+   * it. That is not cosmetic: `SpeleoQuitDialog` / `SpeleoCloseDialog` refuse to
+   * close while busy (`onClose={busyAny ? () => {} : closeDialog}`) precisely
+   * because dismissing mid-push lets the in-flight `pushReleaseThenQuit` resolve
+   * `released` and call `performQuit()`, whose one-shot flag makes the resulting
+   * close skip `guardQuit` entirely. A stale clear re-opens exactly that door.
+   *
+   * So releases are ownership-checked: whoever claims last owns the flag, and an
+   * older token's release is a no-op.
+   */
+  beginBusy: () => number;
+  /** Release `busy` IF `token` still owns it; a stale token is a no-op. */
+  endBusy: (token: number) => void;
 
   // --- session (Settings #205 / browser #203) ---
   setSession: (s: SpeleoSessionStatus) => void;
@@ -525,6 +548,25 @@ const seededLinks = new WeakSet<SpeleoLinkState>();
 let linkStatusSeq = 0;
 let linkStatusApplied = 0;
 
+/// [#270] Ownership of the shared `busy` flag: the token of the claim that owns it
+/// (0 = nobody). Module-scoped for the same reason `linkStatusSeq` is - it is
+/// bookkeeping about in-flight calls, not UI state any component renders.
+///
+/// `busy` is one boolean shared by every hand-off verb, but `clearLink` (close /
+/// project switch) and `restoreLink` (failed remote open) also clear it out of
+/// band. Ownership makes the verb's own `finally` a no-op once either of those -
+/// or a newer verb - has taken over, instead of clearing a flag that now belongs
+/// to something else. See `SpeleoStore.beginBusy` for why that matters.
+let busySeq = 0;
+let busyOwner = 0;
+
+/// Drop any current claim on `busy`, so a still-running verb's release cannot
+/// clear the flag for whatever comes next. Callers pair this with `busy: false`
+/// in the same `set`.
+const disownBusy = (): void => {
+  busyOwner = 0;
+};
+
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
@@ -546,7 +588,20 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   authError: null,
 
   bumpPoll: () => set((state) => ({ pollNonce: state.pollNonce + 1 })),
-  setBusy: (busy) => set({ busy }),
+
+  beginBusy: () => {
+    busyOwner = ++busySeq;
+    set({ busy: true });
+    return busyOwner;
+  },
+
+  endBusy: (token) => {
+    // A stale release: `clearLink` / `restoreLink` disowned this claim, or a newer
+    // verb took over. Either way the flag is not ours to clear.
+    if (busyOwner !== token) return;
+    disownBusy();
+    set({ busy: false });
+  },
 
   setPendingAuth: (pendingAuth) => set({ pendingAuth }),
   clearPendingAuth: () => set({ pendingAuth: null, authError: null }),
@@ -1009,16 +1064,26 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   // `busy: false` mirrors `clearLink`: the seed's caller is done either way, and a
   // restored link must not inherit a stuck spinner from the attempt that failed.
-  restoreLink: (snapshot) => set({ ...snapshot, busy: false }),
+  // Disowning first is what keeps that from becoming the opposite bug - a verb
+  // still in flight over the restored project would otherwise clear the flag out
+  // from under whatever ran next (see `beginBusy`).
+  restoreLink: (snapshot) => {
+    disownBusy();
+    set({ ...snapshot, busy: false });
+  },
 
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
   // would otherwise leave a freshly-opened project's status button disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
+  // That reasoning covers the verb's `apply*` but NOT its `finally`, which would
+  // clear `busy` for a NEWER verb on a NEWER project - so disown the claim as well
+  // as clearing the flag (#270; see `beginBusy`).
   // Back to `unknown`, not `local`: this runs on close (nothing open), and neither
   // outcome establishes that a local project is open, so it may not re-open the
   // gate. NOT for rolling back a failed remote open - that has a previous project
   // still on screen to put back, so it uses `restoreLink` instead.
-  clearLink: () =>
+  clearLink: () => {
+    disownBusy();
     set({
       link: null,
       linkPath: null,
@@ -1027,7 +1092,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       divergence: null,
       banner: null,
       busy: false,
-    }),
+    });
+  },
 
   applyStartEditing: (r) =>
     set((state) => {
@@ -1229,13 +1295,23 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
  * reminder is never lost.
  *
  * Every entry retries through its own primary button (`Upload & release` /
- * `Upload & keep editing` / `Push & release` / `Push, release & quit`), so none
- * needs a second retry control and none loses the commit message the user typed.
+ * `Upload & keep editing` / `Push & release` / `Push, release & quit` /
+ * `Retry the upload`), so none needs a second retry control and none loses the
+ * commit message the user typed.
+ *
+ * `speleodb-revert` earns its place for a sharper reason than the rest. Its push
+ * happens inside the restore flow (`useRevertRevision` -> `done`), and the dialog
+ * renders through `AlertDialog`'s full-viewport scrim (`fixed inset-0 z-[60]`),
+ * which covers the shell banner completely - so leaving the banner as the only
+ * surface would put the failure, and its Retry, behind glass. Suppressing it here
+ * lets the dialog show the failure inline with its own Retry, and closing the
+ * dialog hands the banner back.
  */
 export const PUSH_FAILURE_DIALOGS: readonly string[] = [
   'speleodb-done',
   'speleodb-close',
   'speleodb-quit',
+  'speleodb-revert',
 ];
 
 /**

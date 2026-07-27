@@ -155,6 +155,32 @@ function parseLoadError(e: unknown): LoadError {
   return { code: 'UNKNOWN', message: String(e) };
 }
 
+/**
+ * What a `loadProject` call resolved to.
+ *
+ * `success: false` used to carry two very different things under one boolean: a
+ * genuine failure (the file is gone, corrupt, unreadable - the previous project
+ * is still on screen and the user has been shown an error), and "SUPERSEDED" -
+ * another load started while this one was in flight, so this call's result was
+ * deliberately dropped and the project on screen is now someone else's.
+ *
+ * Callers that undo something on failure need to tell those apart: a rollback is
+ * correct for the first and actively harmful for the second, where it writes
+ * pre-attempt state over the project the user actually opened (#270). So the
+ * superseded case says so. It is optional because "not superseded" is the only
+ * meaning `success: false` ever had for the callers that just check the boolean,
+ * and every existing call site (and test double) keeps compiling unchanged.
+ */
+export interface LoadProjectOutcome {
+  success: boolean;
+  /**
+   * This call lost its slot to a NEWER load (the `clientOpId` moved under it).
+   * Nothing about the failure describes the project now on screen, so a caller
+   * must not roll anything back on it. Never set together with `success: true`.
+   */
+  superseded?: boolean;
+}
+
 interface ProjectStore {
   // State
   project: Project | null;
@@ -218,7 +244,7 @@ interface ProjectStore {
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string) => Promise<{ success: boolean }>;
+  loadProject: (path: string) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -663,7 +689,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<{ success: boolean }> = (async () => {
+    const promise: Promise<LoadProjectOutcome> = (async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -695,10 +721,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tIpcDone = performance.now();
         recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
 
-        // Check clientOpId hasn't changed (cancelled/new load started)
+        // Check clientOpId hasn't changed (cancelled/new load started). Reported
+        // as SUPERSEDED, not as a plain failure: the caller's rollback (if it has
+        // one) would land on a project this call never opened.
         if (get().loading.clientOpId !== clientOpId) {
           clearProjectActionSource();
-          return { success: false };
+          return { success: false, superseded: true };
         }
 
         // Count the open with its entry-point source now that the load has
@@ -904,25 +932,47 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
         if (error.code === 'ALREADY_OPEN') {
+          // The same staleness guard both neighbouring branches carry (the
+          // success path above, the error path below). Without it this branch
+          // acted for a load that had already lost its slot: it flipped the view
+          // and called `resetLoading()`, which tears down the loading modal of the
+          // NEWER load still running, and then reported success - a boolean
+          // `keepLocalCopy` / `finishOpen` now act on.
+          if (get().loading.clientOpId !== clientOpId) {
+            clearProjectActionSource();
+            return { success: false, superseded: true };
+          }
+          // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
+          // resolved it, mirroring the success path's `syncProjectLink` before the
+          // view paints. `refreshLinkStatus` below refines it, but it is unawaited
+          // and swallows its errors, so with `unknown` left standing a failed
+          // status call renders the project permanently read-only under the
+          // fail-closed gate AND leaves no status button to act from (it arms its
+          // recovery poll on `link !== null`). Seeding remote is the pessimistic
+          // direction - read-only, with a way out on screen - and the status reply
+          // resolves it either way (a non-remote status seeds `local`).
+          if (useSpeleoStore.getState().projectLinkKind === 'unknown') {
+            useSpeleoStore.getState().syncProjectLink(true, path);
+          }
           useUIStore.getState().setView('single');
           get().resetLoading();
           await get().refreshUndoState();
-          // #270: this branch RENDERS a project, so it owes the same duty every
-          // other rendered-project path pays - resolve the SpeleoDB edit gate. The
-          // success path does it synchronously via `syncProjectLink(result.isRemote)`;
-          // here there is no result to read it off, because the backend short-
-          // circuited before re-reading anything. Left unresolved, whatever link the
-          // caller seeded on the way in survives verbatim: the refused-open prompt's
-          // "Keep the local copy" used to seed a pessimistic read-only link over a
-          // project we hold the lock on, and this branch then reported success with
-          // it intact - a read-only survey UI and a disarmed quit guard that healed
-          // only on the next status poll (Survey mode only, 30 s to 24 h).
+          // #270: then re-resolve from the backend, which knows what the short
+          // circuit cannot - the lock holder, the permission, the remote state,
+          // and whether a link seeded on the way in still matches the server. That
+          // mattered because this branch RENDERS a project while returning a
+          // success the callers act on: the refused-open prompt's "Keep the local
+          // copy" used to seed a pessimistic read-only link over a project we hold
+          // the lock on, and this branch preserved it verbatim - a read-only survey
+          // UI and a disarmed quit guard that healed only on the next status poll
+          // (Survey mode only, 30 s to 24 h).
           //
           // Unawaited and best-effort on purpose: `speleodb_link_status` does
           // blocking HTTP for a remote project, and no caller of `loadProject` may
-          // be stalled behind the network. It is a REFINEMENT, not the fix - the
-          // seeding side (`keepLocalCopy`) is now correct on its own, offline
-          // included; this re-resolves any other state the short circuit left behind.
+          // be stalled behind the network. So it is a REFINEMENT, never the fix -
+          // the seeding side (`keepLocalCopy`, and now every route through
+          // `finishOpen`) is correct on its own, offline included, and the
+          // fail-closed fallback above covers the case nothing else resolved.
           void useSpeleoStore.getState().refreshLinkStatus();
           return { success: true };
         }

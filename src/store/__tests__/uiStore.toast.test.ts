@@ -193,6 +193,20 @@ describe('toast stack - same-key de-duplication', () => {
   });
 });
 
+/**
+ * Fake timers that also fake the MONOTONIC clock.
+ *
+ * The de-duplication window is measured with `performance.now()`, not
+ * `Date.now()` (a wall clock can step backwards - see `ToastItem.refreshedAt`),
+ * and vitest's default fake-timer set does NOT include `performance`. Left out,
+ * `advanceTimersByTime` would move the wall clock while the monotonic one stood
+ * still, and every repeat below would collapse as if it were a burst.
+ */
+const useMonotonicClock = () =>
+  vi.useFakeTimers({
+    toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'Date', 'performance'],
+  });
+
 describe('toast stack - the de-duplication WINDOW', () => {
   /**
    * Found by using the app: the user toggled the edit lock repeatedly and only
@@ -201,7 +215,7 @@ describe('toast stack - the de-duplication WINDOW', () => {
    * the previous one of its kind. Those are four distinct things the user did.
    */
   it('stacks a repeat that arrives after the window instead of stealing the old one', () => {
-    vi.useFakeTimers();
+    useMonotonicClock();
     try {
       const { showToast } = useUIStore.getState();
       showToast('Editing', 'speleodb-editing', 'success');
@@ -215,7 +229,7 @@ describe('toast stack - the de-duplication WINDOW', () => {
   });
 
   it('reproduces the lock/unlock/lock/unlock sequence as four toasts', () => {
-    vi.useFakeTimers();
+    useMonotonicClock();
     try {
       const { showToast } = useUIStore.getState();
       for (let i = 0; i < 2; i += 1) {
@@ -233,7 +247,7 @@ describe('toast stack - the de-duplication WINDOW', () => {
   });
 
   it('still collapses a genuine burst inside the window', () => {
-    vi.useFakeTimers();
+    useMonotonicClock();
     try {
       const { showToast } = useUIStore.getState();
       showToast('Stations are hidden', 'stations-hidden', 'warning');
@@ -248,8 +262,32 @@ describe('toast stack - the de-duplication WINDOW', () => {
     }
   });
 
+  /**
+   * The window used to be measured on the WALL clock, which can step backwards
+   * (an NTP correction, a user fixing the system time). A negative age passes
+   * `< TOAST_DEDUP_WINDOW_MS` exactly as happily as a fresh one, so every repeat
+   * of a key collapsed into the toast already on screen for as long as the skew
+   * lasted - however far apart the events really were.
+   */
+  it('is unaffected by a wall clock that steps BACKWARDS', () => {
+    useMonotonicClock();
+    try {
+      const { showToast } = useUIStore.getState();
+      showToast('Editing', 'speleodb-editing', 'success');
+      vi.advanceTimersByTime(TOAST_DEDUP_WINDOW_MS + 1);
+      // Wall clock jumps an hour into the past; the monotonic clock does not
+      // (sinon keeps `performance` on its own timeline across setSystemTime).
+      vi.setSystemTime(Date.now() - 60 * 60 * 1000);
+      showToast('Editing', 'speleodb-editing', 'success');
+
+      expect(live()).toHaveLength(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps a sustained burst collapsed, because each refresh restarts the window', () => {
-    vi.useFakeTimers();
+    useMonotonicClock();
     try {
       const { showToast } = useUIStore.getState();
       for (let i = 0; i < 20; i += 1) {

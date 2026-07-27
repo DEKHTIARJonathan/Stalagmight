@@ -250,8 +250,18 @@ export interface ToastItem {
   /** De-duplication key. At most one non-leaving toast per key is on screen. */
   key: string;
   kind: ToastKind;
-  /** Wall-clock time of the last push/refresh (diagnostics + ordering aid). */
-  timestamp: number;
+  /**
+   * When this toast was last pushed/refreshed, on the MONOTONIC clock
+   * (`performance.now()`), which is the only thing the de-duplication window
+   * below is measured against.
+   *
+   * Not wall-clock, which it used to be: `Date.now()` can step backwards (an NTP
+   * correction, a manual clock change), and a negative age passes `< WINDOW_MS`
+   * just as happily as a fresh one - so every repeat of a key would collapse into
+   * the toast already on screen for as long as the skew lasted, however far apart
+   * the events really were.
+   */
+  refreshedAt: number;
   /**
    * Bumped every time the same key refreshes this toast. ToastStack keys its
    * dwell/fade clock on (id, revision), so a refresh restarts the timer without
@@ -570,7 +580,16 @@ interface UIStore {
   dismissToast: (id: number) => void;
   /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
   removeToast: (id: number) => void;
-  /** Drop every toast immediately (programmatic reset - no exit animation). */
+  /**
+   * Drop every toast immediately - no exit animation, no eviction bookkeeping.
+   *
+   * A TEST-HARNESS reset, and deliberately nothing else: no production code path
+   * calls it, and none should. The app dismisses toasts one at a time (the stack
+   * owns the dwell/fade clock and calls `removeToast`), so a bulk wipe would take
+   * a toast off screen mid-animation with its ToastStack timer still running.
+   * It stays because the toast tests - including `ToastStack.test.tsx`'s teardown
+   * - reset the stack through it between cases.
+   */
   clearToast: () => void;
 
   // Snap state
@@ -1758,15 +1777,19 @@ export const useUIStore = create<UIStore>((set) => ({
     // each deserves its own line. A repeat inside a second is a burst - a
     // double-click, or a loop firing the same warning - where collapsing is both
     // wanted and imperceptible, since the two would overlap anyway.
+    // `performance.now()`, not `Date.now()`: a wall clock that steps backwards
+    // makes the age negative, which passes this test and collapses unrelated
+    // repeats for as long as the skew lasts (see `ToastItem.refreshedAt`).
+    const now = performance.now();
     const existing = prev.find(
-      (t) => t.key === key && !t.leaving && Date.now() - t.timestamp < TOAST_DEDUP_WINDOW_MS,
+      (t) => t.key === key && !t.leaving && now - t.refreshedAt < TOAST_DEDUP_WINDOW_MS,
     );
     if (existing) {
       const refreshed: ToastItem = {
         ...existing,
         message,
         kind,
-        timestamp: Date.now(),
+        refreshedAt: now,
         revision: existing.revision + 1,
       };
       // Move to the newest slot (end of the array = nearest the bottom edge).
@@ -1779,7 +1802,7 @@ export const useUIStore = create<UIStore>((set) => ({
       message,
       key,
       kind,
-      timestamp: Date.now(),
+      refreshedAt: now,
       revision: 0,
       leaving: false,
     };

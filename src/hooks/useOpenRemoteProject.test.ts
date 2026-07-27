@@ -305,6 +305,63 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
+  /**
+   * [#270] A superseded load is NOT a failure to roll back from.
+   *
+   * `loadProject` answers `success: false` for two different things, and only one
+   * of them leaves the user where they were. When a newer open superseded this
+   * one, the pre-attempt snapshot describes a project that is no longer on
+   * screen - restoring it wrote `projectLinkKind: 'unknown'` (read-only under the
+   * fail-closed gate) over the LOCAL project the user had just opened, with the
+   * repair left to the unawaited, error-swallowing status refresh. Reachable:
+   * GlobalView guards its remote rows with `remoteBusyRef`, but the recents-list
+   * open and Publish-to-SpeleoDB have no such guard.
+   */
+  it('does NOT roll the link back when the load was superseded by a newer open', async () => {
+    // What the newer open left behind: a local project, fully editable.
+    const settled = () =>
+      useSpeleoStore.setState({ link: null, projectLinkKind: 'local', linkPath: null });
+    useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen, projectLinkKind: 'unknown' });
+    loadProjectMock.mockImplementation(async () => {
+      settled();
+      useProjectStore.setState({ project: { file_path: '/other/local.stalx' } as never });
+      return { success: false, superseded: true };
+    });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'load_failed' });
+    // The project the user actually has open is untouched - and still editable.
+    expect(useSpeleoStore.getState().projectLinkKind).toBe('local');
+    expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
+  });
+
+  /**
+   * [#270] `keepLocalCopy` skipped the seed for the already-open project; the two
+   * other routes into the same tail did not. "Open from SpeleoDB" is in the
+   * IN-PROJECT menu, so `openRemote` re-opening the current project is an ordinary
+   * mis-step - and for a CLEAN open project the backend does not refuse it, so it
+   * sails past the refusal prompt straight into the seed, which writes
+   * `read-only` / nothing-unpushed / no-force-edit over a lock we hold.
+   */
+  it('openRemote seeds NOTHING when the pull names the already-open project', async () => {
+    useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'opened' });
+    expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+  });
+
   it('adoptRemote adopts, loads, and reports opened', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_adopt_ariane')
@@ -326,6 +383,58 @@ describe('useOpenRemoteProject (#218)', () => {
       // un-pushed-edits guard stays armed for it.
       discardLocal: false,
     });
+  });
+
+  /**
+   * [#270] An adopt is not a plain pull: the backend stamps the adopted `.stalx`
+   * `has_unpushed_edits: true` (it has just converted an Ariane .tml into a
+   * project the server has never been given). The shared seed defaults to the
+   * pull's answer - nothing outstanding - which is the exact flag `guardQuit` and
+   * `useProject`'s close guard read, so BOTH exit guards stayed disarmed over work
+   * that exists only locally. The only repair was the unawaited, error-swallowing
+   * status refresh: never, offline.
+   */
+  it('adoptRemote seeds the dirty bit TRUE - the adopted copy is unpushed by construction', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: true,
+          concurrent_session: false,
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
+      permission: 'READ_AND_WRITE',
+      forPath: '/cache/p1.stalx',
+      hasUnpushedEdits: true,
+    });
+  });
+
+  // End to end through the REAL seed, since the point is the state the exit guards
+  // are left reading (mirrors the keepLocalCopy case above).
+  it('arms the quit guard after adoptRemote (real store seed)', async () => {
+    useSpeleoStore.setState({ setLinkOnOpen: realSetLinkOnOpen });
+    useUIStore.setState({ openDialog: vi.fn() as never, activeDialog: null, dialogData: {} });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: false,
+          concurrent_session: false,
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
+    useProjectStore.setState({ project: { name: 'Cave A' } as never, isDirty: false });
+    expect(guardQuit()).toBe(true);
+    expect(useUIStore.getState().openDialog).toHaveBeenCalledWith('speleodb-quit');
   });
 
   /**

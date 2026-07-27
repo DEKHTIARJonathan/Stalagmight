@@ -85,26 +85,37 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         successToast?: { message: string; key: string };
         /**
          * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
-         * pull (nothing local the server has not seen); "keep the local copy" is
-         * the opposite by construction, and seeding it clean disarmed the quit
-         * guard for the one project we have proof is dirty.
+         * pull (nothing local the server has not seen); "keep the local copy" and
+         * an adopt are the opposite by construction, and seeding them clean
+         * disarmed the quit guard for a project we have proof is dirty.
          */
         hasUnpushedEdits?: boolean;
-        /**
-         * [#270] Do not touch the link AT ALL - the file being "opened" is the one
-         * already on screen, whose live link is the authoritative state (lock held,
-         * permission, dirty bit, all resolved). The optimistic seed is for a project
-         * arriving from the server; applied to the open one it OVERWRITES resolved
-         * truth with a pessimistic guess, and `loadProject` then short-circuits on
-         * ALREADY_OPEN so nothing re-resolves it synchronously.
-         */
-        skipSeed?: boolean;
       } = {},
     ): Promise<OpenRemoteOutcome> => {
-      const { successToast, hasUnpushedEdits, skipSeed } = opts;
+      const { successToast, hasUnpushedEdits } = opts;
       // #270: what to put back if the load fails. Captured BEFORE the seed, so the
-      // rollback below is a true undo rather than a clear-and-hope.
+      // rollback below is a true undo rather than a clear-and-hope. `priorPath` is
+      // the project the snapshot describes, so the rollback can tell "the load
+      // failed and we are still here" from "the ground moved" (see below).
       const priorLink = useSpeleoStore.getState().snapshotLink();
+      const priorPath = useProjectStore.getState().project?.file_path ?? null;
+      /**
+       * [#270] The file being "opened" is the one already on screen, so do not
+       * touch the link AT ALL: its live link is the authoritative state (lock
+       * held, permission, dirty bit, all resolved). The optimistic seed is for a
+       * project arriving from the server; applied to the open one it OVERWRITES
+       * resolved truth with a pessimistic guess (`read-only`, nothing unpushed, no
+       * force-edit), and `loadProject` then short-circuits on ALREADY_OPEN so
+       * nothing re-resolves it synchronously - a read-only survey UI and disarmed
+       * exit guards for a project we hold the lock on, until some later status
+       * poll (30 s to a user-configurable 24 h) happens to correct it.
+       *
+       * Decided HERE rather than at a call site because all three routes into this
+       * tail can name the open project: "Open from SpeleoDB" sits in the
+       * IN-PROJECT menu, so `openRemote` re-opening the current project is an
+       * ordinary mis-step, and the adopt it can route to lands on the same path.
+       */
+      const alreadyOpen = priorPath === result.local_path;
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
       if (result.concurrent_session) {
@@ -113,7 +124,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // `forPath` is the exact string handed to `loadProject` below, so the
       // `syncProjectLink` inside that load recognises this seed as belonging to
       // the project being opened rather than to whatever was open before.
-      if (!skipSeed) {
+      if (!alreadyOpen) {
         setLinkOnOpen({
           permission,
           forPath: result.local_path,
@@ -126,7 +137,23 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // Nothing to roll back when we never seeded: the link on screen is still
         // the open project's own, resolved state, and clearing it would be the very
         // downgrade this branch exists to undo.
-        if (skipSeed) return { status: 'load_failed' };
+        if (alreadyOpen) return { status: 'load_failed' };
+        // #270: the snapshot describes a project that is no longer the one on
+        // screen, so putting it back would overwrite the link of whatever the user
+        // actually opened. `loadProject` reports `success: false` for two different
+        // things, and only one of them is "the load failed and we are still where
+        // we were": a SUPERSEDED load lost its slot to a newer open, which commits
+        // its own project and link. (The path check covers the other way to move
+        // the ground - a close landing mid-flight, which does not bump the load
+        // id.) Restoring here put the pre-attempt snapshot - `projectLinkKind:
+        // 'unknown'`, read-only under the fail-closed gate - over a freshly-opened
+        // LOCAL project. GlobalView guards its remote rows with `remoteBusyRef`,
+        // but `handleOpenFromList` and `handlePublishToSpeleoDb` do not, so a
+        // second open during a slow pull is reachable.
+        const groundMoved =
+          loaded.superseded === true ||
+          (useProjectStore.getState().project?.file_path ?? null) !== priorPath;
+        if (groundMoved) return { status: 'load_failed' };
         // #270: the failed load left the PREVIOUS project on screen and still open
         // backend-side, so put its link state back exactly as it was.
         //
@@ -202,32 +229,24 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * SAME tail every successful pull uses (`finishOpen` -> loadProject, with the
    * link seed + rollback), so the two branches can never drift apart.
    *
-   * Two things the shared tail must be told, because this branch is NOT a pull:
+   * One thing the shared tail must be told, because this branch is NOT a pull:
+   * the copy is DIRTY, and we know it. This branch is reachable only because the
+   * backend refused the open over edits the server has never seen. The tail's
+   * default seed says `hasUnpushedEdits: false`, and that value is exactly what
+   * `guardQuit` and the status button's warning read - so seeding it clean
+   * disarmed the quit guard for the one project proven to have work at risk,
+   * until some later status poll (30 s to a user-configurable 24 h) happened to
+   * correct it.
    *
-   * 1. The copy is DIRTY, and we know it: this branch is reachable only because
-   *    the backend refused the open over edits the server has never seen. The
-   *    tail's default seed says `hasUnpushedEdits: false`, and that value is
-   *    exactly what `guardQuit` and the status button's warning read - so seeding
-   *    it clean disarmed the quit guard for the one project proven to have work
-   *    at risk, until some later status poll (30 s to a user-configurable 24 h)
-   *    happened to correct it.
-   * 2. If the refusal names the project ALREADY OPEN, seed nothing. "Open from
-   *    SpeleoDB" sits in the in-project menu, so re-opening the current project is
-   *    an ordinary mis-step; the refusal fires, the user keeps local, and the seed
-   *    would replace a fully-resolved link (lock held, permission, remote state)
-   *    with a pessimistic guess. `loadProject` then short-circuits on ALREADY_OPEN,
-   *    so nothing re-resolves it synchronously and the survey UI drops to read-only
-   *    for a project we hold the lock on. Skipping the seed is correct even when
-   *    the network is down, which a status-refresh repair would not be.
+   * The other half - seeding NOTHING when the refusal names the already-open
+   * project - is the tail's own job now, since every route into it can name the
+   * open project (see `finishOpen`'s `alreadyOpen`).
    */
   const keepLocalCopy = useCallback(
-    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> => {
-      const alreadyOpen = useProjectStore.getState().project?.file_path === localPath;
-      return finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
+    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> =>
+      finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
         hasUnpushedEdits: true,
-        skipSeed: alreadyOpen,
-      });
-    },
+      }),
     [finishOpen],
   );
 
@@ -292,6 +311,16 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // Post-adoption notice: Stalagmight now owns edits. When the server type could
       // not be flipped (no write access), say so - the user can still edit locally.
       return finishOpen(result, summary.permission, {
+        // [#270] An adopt is NOT a plain pull: the backend stamps the adopted
+        // `.stalx` `has_unpushed_edits: true` (it converted an Ariane .tml into a
+        // project the server has never been given), so the shared seed's
+        // pull-shaped default would claim "nothing outstanding" for a copy the
+        // backend has just declared dirty. `guardQuit` and `useProject`'s close
+        // guard both read exactly this flag, so both stayed disarmed over work
+        // that exists only locally - and the only repair was the unawaited,
+        // error-swallowing status refresh, i.e. never, offline. Same reasoning as
+        // `keepLocalCopy` one function up.
+        hasUnpushedEdits: true,
         successToast: {
           message: result.type_flipped
             ? t('speleodb.adopt.doneToast')

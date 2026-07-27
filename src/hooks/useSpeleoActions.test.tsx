@@ -38,7 +38,6 @@ beforeEach(() => {
   });
   useSpeleoStore.setState({
     busy: false,
-    setBusy: vi.fn(),
     applyDone: vi.fn(),
     applyPush: vi.fn(),
     bumpPoll: vi.fn(),
@@ -354,6 +353,112 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
   });
+
+  /**
+   * [#270] Both fast-forward arms ignored `loadProject`'s answer and carried on.
+   * `takeRemote` has read it since it was written, for the reason that applies
+   * here too: `loadProject` reports `success: false` when a NEWER load superseded
+   * it, so the swapped tree is not what is on screen.
+   *
+   * `startEditing`'s own contract makes this load-bearing - `true` means "we hold
+   * the lock", and `HeldLockResumeDialog` hands the shell over on it (discarding
+   * every remaining lock), while `useRevertRevision` goes straight on to restore
+   * + push. `refreshProjectState` has no staleness guard at all and overwrites
+   * project/stations/surveyData wholesale, so it must not run either.
+   */
+  it('startEditing (→ fast_forwarded) refuses when the reload did not land', async () => {
+    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    expect(refreshProjectState).not.toHaveBeenCalled();
+    expect(refreshLinkStatus).not.toHaveBeenCalled();
+  });
+
+  it('update (→ fast_forwarded) stops when the reload did not land', async () => {
+    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.update();
+    });
+
+    expect(refreshProjectState).not.toHaveBeenCalled();
+    expect(refreshLinkStatus).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * [#270] `busy` is ONE shared boolean, and `clearLink` (project close/switch) and
+ * `restoreLink` (a rolled-back remote open) both reset it out of band. A verb
+ * whose call was still in flight then cleared the flag for a NEWER verb on a
+ * NEWER project. That is a data-safety seam, not cosmetics: `SpeleoQuitDialog` /
+ * `SpeleoCloseDialog` refuse to close while busy because dismissing mid-push lets
+ * the in-flight release resolve and call `performQuit()`, whose one-shot flag
+ * makes the resulting close skip `guardQuit` entirely.
+ */
+describe('useSpeleoActions - the shared busy flag is ownership-checked (#270)', () => {
+  it("a stale verb finishing does not clear a newer verb's busy flag", async () => {
+    useSpeleoStore.setState({ applyPush: vi.fn(), applyStartEditing: vi.fn() });
+    // Both calls hang until we settle them by hand, so the two verbs genuinely
+    // overlap the way they do when a close lands mid-push.
+    let settlePush: (r: { kind: string }) => void = () => {};
+    let settleStart: (r: { kind: string }) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_push') return new Promise((res) => { settlePush = res; });
+      return new Promise((res) => { settleStart = res; });
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let pushDone: Promise<unknown> = Promise.resolve();
+    let startDone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      pushDone = result.current.push('m');
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // The project closes under it (close/switch resets the link AND the flag) ...
+    act(() => {
+      useSpeleoStore.getState().clearLink();
+    });
+    expect(useSpeleoStore.getState().busy).toBe(false);
+
+    // ... and a verb for the NEXT project claims the flag.
+    await act(async () => {
+      startDone = result.current.startEditing();
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // Now the abandoned push lands. Its `finally` must NOT clear a flag it no
+    // longer owns - doing so re-opened the mid-push dismiss route above.
+    await act(async () => {
+      settlePush({ kind: 'pushed' });
+      await pushDone;
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // The owner's own release still works.
+    await act(async () => {
+      settleStart({ kind: 'editing' });
+      await startDone;
+    });
+    expect(useSpeleoStore.getState().busy).toBe(false);
+  });
 });
 
 // #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
@@ -396,6 +501,40 @@ describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', 
     // The close/quit dialogs only leave on `released`, so they correctly stay open.
     expect(resolved).toEqual({ kind: 'not_editing' });
     expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * [#270] Every attempt clears the durable failure banner on its way in, because
+   * a fresh attempt supersedes the old error. `not_editing` neither lands nor
+   * throws, so nothing re-raised it and the only surviving trace was a 3 s toast -
+   * and inside `SpeleoDoneDialog` (which stays open on any kind but `released`)
+   * the inline notice went blank too, leaving the same button with no error text.
+   * The way in is exactly the documented one: a 401 auto-drop closes the edit gate
+   * and the banner's own Retry re-issues the verb from there.
+   */
+  it.each([
+    ['push', 'push' as const],
+    ['done', 'done' as const],
+  ])('%s (→ not_editing) keeps a durable surface, with the message it was given', async (verb, origin) => {
+    useSpeleoStore.setState({
+      banner: { kind: 'push_failed', message: 'the old error', origin, pushMessage: 'my notes' },
+    });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      if (verb === 'push') await result.current.push('my notes');
+      else await result.current.done('my notes');
+    });
+
+    expect(useSpeleoStore.getState().banner).toEqual({
+      kind: 'push_failed',
+      // Re-raised with what actually happened, not the stale line from before.
+      message: expect.stringContaining('Nothing was uploaded'),
+      origin,
+      // Retry replays the commit message the user typed.
+      pushMessage: 'my notes',
+    });
   });
 });
 

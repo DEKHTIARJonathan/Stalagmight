@@ -82,6 +82,52 @@ describe('loadProject ALREADY_OPEN re-resolves the SpeleoDB gate (#270)', () => 
     expect(refreshLinkStatusMock).toHaveBeenCalled();
   });
 
+  /**
+   * The branch had no staleness guard, while BOTH its neighbours (the success
+   * path and the generic error path) check the same `clientOpId`. So a load that
+   * had already lost its slot still flipped the view and called `resetLoading()`,
+   * tearing down the loading modal of the NEWER load still running - and then
+   * reported success, which `keepLocalCopy` / `finishOpen` now act on.
+   */
+  it('reports SUPERSEDED, and touches nothing, when a newer load took over', async () => {
+    // The newer load: bump the id while this one is between its IPC and the
+    // branch. `startLoading` is what the real one calls; here the reject fires
+    // first, so move the id from inside the failing IPC.
+    loadBinaryMock.mockImplementation(async () => {
+      useProjectStore.setState((s) => ({ loading: { ...s.loading, clientOpId: s.loading.clientOpId + 99 } }));
+      throw { code: 'ALREADY_OPEN', message: 'project already open' };
+    });
+    useUIStore.setState({ view: 'global' });
+
+    const result = await useProjectStore.getState().loadProject('/cache/p1.stalx');
+
+    expect(result).toEqual({ success: false, superseded: true });
+    // The newer load owns the view and the loading modal now.
+    expect(useUIStore.getState().view).toBe('global');
+    expect(refreshLinkStatusMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Cheap hardening, not a proven production route: this branch resolved the gate
+   * ONLY through the unawaited, error-swallowing `refreshLinkStatus`, unlike every
+   * other rendered-project path. Left at `unknown` - read-only under the
+   * fail-closed gate - a failed status call renders the project permanently
+   * read-only with no status button to act from (it arms its recovery poll on
+   * `link !== null`). Seeding pessimistically gives the user a way out on screen;
+   * the status reply then resolves it either way.
+   */
+  it('fails CLOSED, with a status button to recover through, when nothing resolved the gate', async () => {
+    useSpeleoStore.setState({ link: null, linkPath: null, projectLinkKind: 'unknown' });
+    refreshLinkStatusMock.mockImplementation(() => new Promise<void>(() => {}));
+
+    await useProjectStore.getState().loadProject('/cache/p1.stalx');
+
+    expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
+    expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    // `SpeleoStatusButton` arms its recovery poll on `link !== null`.
+    expect(useSpeleoStore.getState().link).not.toBeNull();
+  });
+
   it('does not silently downgrade a lock we hold while the status call is pending', async () => {
     // The refinement must not itself be a regression: nothing in this branch may
     // touch the live link, so the survey UI stays editable and the quit guard stays

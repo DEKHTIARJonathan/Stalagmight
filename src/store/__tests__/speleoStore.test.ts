@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useSpeleoStore } from '../speleoStore';
+import { useSpeleoStore, PUSH_FAILURE_DIALOGS } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -584,6 +584,45 @@ describe('speleoStore', () => {
     });
   });
 
+  /**
+   * [#270] `busy` is one shared boolean with three writers - the verb's own
+   * release, `clearLink` (close/switch) and `restoreLink` (a rolled-back remote
+   * open) - so releases are ownership-checked. See `beginBusy` for why a stale
+   * clear is a data-safety problem and not just a stuck spinner.
+   */
+  describe('busy ownership', () => {
+    it('raises and clears the flag for the claim that owns it', () => {
+      const token = useSpeleoStore.getState().beginBusy();
+      expect(useSpeleoStore.getState().busy).toBe(true);
+      useSpeleoStore.getState().endBusy(token);
+      expect(useSpeleoStore.getState().busy).toBe(false);
+    });
+
+    it('ignores a release from a claim that has been superseded', () => {
+      const stale = useSpeleoStore.getState().beginBusy();
+      const current = useSpeleoStore.getState().beginBusy();
+      useSpeleoStore.getState().endBusy(stale);
+      expect(useSpeleoStore.getState().busy).toBe(true);
+      useSpeleoStore.getState().endBusy(current);
+      expect(useSpeleoStore.getState().busy).toBe(false);
+    });
+
+    it.each([
+      ['clearLink', () => useSpeleoStore.getState().clearLink()],
+      ['restoreLink', () => useSpeleoStore.getState().restoreLink(useSpeleoStore.getState().snapshotLink())],
+    ])('%s disowns the in-flight claim, so its late release is a no-op', (_name, reset) => {
+      const abandoned = useSpeleoStore.getState().beginBusy();
+      reset();
+      expect(useSpeleoStore.getState().busy).toBe(false);
+
+      // A NEWER verb (on a newer project) claims the flag ...
+      useSpeleoStore.getState().beginBusy();
+      // ... and the abandoned one finally lands. It must not clear this.
+      useSpeleoStore.getState().endBusy(abandoned);
+      expect(useSpeleoStore.getState().busy).toBe(true);
+    });
+  });
+
   describe('notifyReverifyDivergence (#202)', () => {
     it('drops an active edit to read-only + conflict and raises the divergence prompt', () => {
       // Mid-edit (lock held), then the lazy 20-min re-verify finds a lost lock /
@@ -915,5 +954,18 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().syncProjectLink(true, '/a.stalx');
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
+  });
+
+  // #270: the revert dialog raises the push-failure banner (via `done`) and stays
+  // open pointing the user at it - but it renders through AlertDialog's
+  // full-viewport scrim, so the banner behind it is covered and unclickable. It
+  // belongs on the suppress list with the other dialogs that own a failure.
+  describe('PUSH_FAILURE_DIALOGS', () => {
+    it.each(['speleodb-done', 'speleodb-close', 'speleodb-quit', 'speleodb-revert'])(
+      'covers %s',
+      (id) => {
+        expect(PUSH_FAILURE_DIALOGS).toContain(id);
+      },
+    );
   });
 });
