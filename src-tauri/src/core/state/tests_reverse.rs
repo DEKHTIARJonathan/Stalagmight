@@ -41,6 +41,27 @@ fn assert_coords_close(a: Coordinates, b: Coordinates) {
     );
 }
 
+/// `shot`, plus per-shot LRUD and pitch that are distinct from each other and
+/// from every other shot's.
+///
+/// Every field here is one a reverse must either move, mirror or negate, and all
+/// of them default to `None` - so a fixture built on `shot()` alone makes any
+/// assertion about them vacuously true (that is exactly how the import path's
+/// "left/right is never swapped" claim went unguarded). Neither LRUD nor pitch
+/// feeds the coordinate walk (`horizontal_length` is derived from `length` and
+/// the depth delta), so populating them cannot perturb the geometry assertions.
+fn shot_with_lrud(azimuth: f64, length: f64, depth_in: f64, depth_out: f64, n: f64) -> ShotData {
+    ShotData {
+        left: Some(n),
+        right: Some(n + 0.5),
+        up: Some(n + 1.0),
+        down: Some(n + 1.5),
+        pitch_in: Some(n + 2.0),
+        pitch_out: Some(-(n + 3.0)),
+        ..shot(azimuth, length, depth_in, depth_out)
+    }
+}
+
 /// A project with one three-shot section that turns a corner and changes depth,
 /// so a botched reverse shows up as a moved station rather than a coincidence.
 fn state_with_section() -> (AppState, SectionId) {
@@ -56,9 +77,9 @@ fn state_with_section() -> (AppState, SectionId) {
         color: "#4ecdc4".to_string(),
         direction: None,
         shots: vec![
-            shot(0.0, 10.0, 0.0, 2.0),
-            shot(90.0, 5.0, 2.0, 2.0),
-            shot(210.0, 7.5, 2.0, 1.0),
+            shot_with_lrud(0.0, 10.0, 0.0, 2.0, 1.0),
+            shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
+            shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
         ],
     });
     let section_id = created.section_id.unwrap();
@@ -152,6 +173,13 @@ fn undo_restores_the_original_section_exactly() {
         assert_eq!(a.depth_out, b.depth_out);
         assert_eq!(a.left, b.left);
         assert_eq!(a.right, b.right);
+        // The fields `swap_left_right: true` and the pitch negation actually
+        // touch - without these the test's "exactly" only covered id/uuid/
+        // azimuth/depth.
+        assert_eq!(a.up, b.up);
+        assert_eq!(a.down, b.down);
+        assert_eq!(a.pitch_in, b.pitch_in);
+        assert_eq!(a.pitch_out, b.pitch_out);
     }
     for (sr, coord) in coords_before {
         assert_coords_close(coord, abs_coord_map(&restored_project)[&sr]);
@@ -221,6 +249,12 @@ fn reverse_twice_is_the_identity() {
         assert_eq!(a.azimuth_out, b.azimuth_out);
         assert_eq!(a.depth_in, b.depth_in);
         assert_eq!(a.depth_out, b.depth_out);
+        // `swap_left_right: true` twice must land back on the recorded values,
+        // and the pitch double-negation must cancel.
+        assert_eq!(a.left, b.left);
+        assert_eq!(a.right, b.right);
+        assert_eq!(a.pitch_in, b.pitch_in);
+        assert_eq!(a.pitch_out, b.pitch_out);
     }
 }
 
@@ -275,7 +309,8 @@ fn reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place() {
 }
 
 /// q14: the import toggle reverses BEFORE the section is created, so the
-/// wizard's placement and station-comment indices address the final order.
+/// wizard's placement indices address the final order. `station_comments`
+/// indices are given in the FILE's order and mirrored backend-side.
 #[test]
 fn import_reverse_applies_before_placement_and_comments_resolve() {
     let state = AppState::new().unwrap();
@@ -295,12 +330,13 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
             direction: None,
             quality: 1.0,
             shots: vec![
-                shot(0.0, 10.0, 0.0, 2.0),
-                shot(90.0, 5.0, 2.0, 2.0),
-                shot(210.0, 7.5, 2.0, 1.0),
+                shot_with_lrud(0.0, 10.0, 0.0, 2.0, 1.0),
+                shot_with_lrud(90.0, 5.0, 2.0, 2.0, 10.0),
+                shot_with_lrud(210.0, 7.5, 2.0, 1.0, 20.0),
             ],
             placement: ImportPlacement::Origin,
-            station_comments: vec![(0, "post-reverse station 0".to_string())],
+            // Station 0 of the FILE - the backend mirrors it to station 3.
+            station_comments: vec![(0, "file station 0".to_string())],
             reverse: true,
         }],
         Vec::new(),
@@ -321,18 +357,24 @@ fn import_reverse_applies_before_placement_and_comments_resolve() {
     assert!((section.shots[2].average_azimuth() - 180.0).abs() < 1e-9);
 
     // Left/right are untouched on the import path - there is no dialog to ask.
-    assert!(section
-        .shots
-        .iter()
-        .all(|s| s.left.is_none() && s.right.is_none()));
+    // The file's last shot (left 20.0) is now first, and its LRUD travelled with
+    // it UNSWAPPED. Asserting the values rather than `is_none()`: with a fixture
+    // that leaves LRUD at its `None` default this assertion holds no matter what
+    // the import does, and flipping `reverse_shots(.., false)` to `true` failed
+    // no test at all.
+    assert_eq!(section.shots[0].left, Some(20.0));
+    assert_eq!(section.shots[0].right, Some(20.5));
+    assert_eq!(section.shots[2].left, Some(1.0));
+    assert_eq!(section.shots[2].right, Some(1.5));
 
-    // The comment landed on station 0 of the reversed section.
+    // The comment was given against the file's station 0, so it must land on the
+    // physical station that is now numbered 3.
     assert_eq!(project.station_comments.len(), 1);
     let (key, text) = project.station_comments.iter().next().unwrap();
-    assert_eq!(text, "post-reverse station 0");
+    assert_eq!(text, "file station 0");
     assert_eq!(
         project.resolve_key(key),
-        Some(StationRef::new(section.id, 0))
+        Some(StationRef::new(section.id, 3))
     );
 }
 

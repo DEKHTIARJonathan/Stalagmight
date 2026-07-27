@@ -44,7 +44,7 @@
 //!   its mirrored station so every relationship stays where the surveyor put
 //!   it.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use crate::models::{SectionId, Shot, ShotData, StationKey, StationRef};
 
@@ -107,6 +107,20 @@ pub fn shot_run_displacement(shots: &[ShotData]) -> (f64, f64) {
 pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
     shots.reverse();
     for shot in shots.iter_mut() {
+        // Normalise first: `reciprocal` and `readings_are_antipodal` both use
+        // `rem_euclid`, but `average_azimuth_of` normalises with Rust's
+        // truncated `%`, which keeps the sign of the dividend. For a pair whose
+        // difference falls outside `(-540, 540]` the two disagree, the
+        // degenerate-pair guard misses, and reciprocate-and-swap leaves the
+        // bearing UNCHANGED while the rest of the section turns around - so the
+        // offset compensation below no longer cancels and the passage jumps by
+        // its own span. Out-of-range readings are reachable: `validation.rs`
+        // only WARNS on an azimuth outside `[0, 360)`, and the DMP parser
+        // (models::dmp) stores `heading_in`/`heading_out` verbatim where the
+        // Compass and TML importers `rem_euclid` theirs.
+        shot.azimuth_in = shot.azimuth_in.rem_euclid(360.0);
+        shot.azimuth_out = shot.azimuth_out.rem_euclid(360.0);
+
         if readings_are_antipodal(shot.azimuth_in, shot.azimuth_out) {
             // Degenerate pair: the two readings disagree by a full 180 degrees,
             // so the circular mean is undefined and reciprocate-and-swap is the
@@ -237,7 +251,16 @@ impl Project {
         // ---- Keep the section where it was ----------------------------------
         // Station 0 is now the far end, so the anchor moves by the displacement
         // the section used to span.
-        if dx != 0.0 || dy != 0.0 {
+        //
+        // Finiteness first: `NaN != 0.0` is TRUE, so a bare `!= 0.0` would admit
+        // a non-finite displacement straight into `section_offsets`, which has no
+        // other finite guard - `save_project` rewrites a non-finite offset to 0.0,
+        // teleporting the section to the origin (the exact opposite of what this
+        // compensation is for). A finite `length` near 1e200 is enough:
+        // `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)`
+        // is NaN, while `ShotData::all_finite` still passes. `move_segment` and
+        // `move_station` reject non-finite offsets for the same reason.
+        if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
             self.adjust_section_offset(section_id, dx, dy);
         }
 
@@ -260,7 +283,42 @@ impl Project {
                 next.map(|n| (old, n))
             })
             .collect();
-        self.map_station_refs(|key| rebuilt.get(&key).cloned().unwrap_or(key));
+
+        // `map_station_refs` rebuilds `station_offsets`/`station_comments` by
+        // collecting transformed keys into a HashMap, so two OLD keys that mirror
+        // onto the SAME new key would silently drop one entry - a station comment
+        // or offset lost with no error. Two stored keys can name one station: a
+        // legacy `StationAnchor::Index(i)` beside the canonical `AfterShot`, or
+        // two shots sharing a UUID (`ensure_section_shot_uuids` mints, it does not
+        // dedupe). `key_for_ref` only ever emits canonical anchors, so the two
+        // collapse. No traced path reaches this today - load, snapshot restore and
+        // the offset redrive all run `ensure_unique_shot_uuids` /
+        // `reanchor_station_refs` first - so rather than pay a project-wide pass on
+        // every reverse, detect the collision and leave the colliding keys alone:
+        // they keep naming their pre-reverse station (wrong, but present and
+        // visible) instead of one of them vanishing.
+        let mut seen: HashSet<&StationKey> = HashSet::with_capacity(rebuilt.len());
+        let colliding: HashSet<StationKey> = rebuilt
+            .iter()
+            .filter(|(_, new)| !seen.insert(new))
+            .map(|(old, _)| old.clone())
+            .collect();
+        // Warn rather than `debug_assert!`: the collision is handled below, so
+        // tripping would turn a recovered case into a dev-only crash.
+        if !colliding.is_empty() {
+            tracing::warn!(
+                section_id,
+                count = colliding.len(),
+                "reverse: station refs collided on the mirrored key; left on their \
+                 pre-reverse station to avoid dropping one"
+            );
+        }
+        self.map_station_refs(|key| {
+            if colliding.contains(&key) {
+                return key;
+            }
+            rebuilt.get(&key).cloned().unwrap_or(key)
+        });
 
         // Reconcile matches a returned shot to its baseline entry by UUID but
         // applies the edit to `shots[entry.shot_index]`, and the reverse just
@@ -746,10 +804,93 @@ mod tests {
             "a reverse must drop the index-keyed baseline"
         );
         assert_eq!(
-            collab.last_export_tml_sha256, None,
-            "the sha must go too, or the next open sees the sibling as unchanged"
+            collab.last_export_tml_sha256.as_deref(),
+            Some("deadbeef"),
+            "the sha is provenance, not baseline: clearing it would stop \
+             `compute_collab` ever noticing the sibling changed, and would disarm \
+             the leftover-sibling warning"
         );
         assert!(collab.enabled, "collab itself stays on");
+    }
+
+    /// `section_offsets` has no finite guard of its own, and `save_project`
+    /// rewrites a non-finite offset to 0.0 - so admitting one here teleports the
+    /// section to the origin on the next save, the exact opposite of what the
+    /// compensation exists for. A finite `length` is enough to produce it:
+    /// `horizontal_length_from_slope` squares it to `inf`, and `inf * sin(0)` is
+    /// NaN, while `ShotData::all_finite` still passes.
+    #[test]
+    fn reverse_refuses_to_write_a_non_finite_offset() {
+        let (mut project, id) = project_with_shots(vec![shot(0.0, 1e200, 0.0, 0.0)]);
+        assert!(
+            shot_run_displacement(&[shot(0.0, 1e200, 0.0, 0.0)])
+                .0
+                .is_nan(),
+            "precondition: this fixture must actually overflow to a non-finite \
+             displacement, or the test proves nothing"
+        );
+
+        assert!(project.reverse_section(id, false));
+
+        let (ox, oy) = project.section_offset(id);
+        assert!(
+            ox.is_finite() && oy.is_finite(),
+            "reverse wrote a non-finite section offset: ({ox}, {oy})"
+        );
+    }
+
+    /// `reciprocal` and `readings_are_antipodal` normalise with `rem_euclid`,
+    /// but `average_azimuth_of` uses truncated `%`. Without normalising the
+    /// readings first the two disagree for a far-out-of-range pair, the
+    /// degenerate-pair guard misses, and the bearing survives the reverse
+    /// unturned - so the offset compensation no longer cancels and the passage
+    /// jumps by its own span. Reachable: validation only WARNS on an azimuth
+    /// outside `[0, 360)` and the DMP parser stores headings verbatim.
+    #[test]
+    fn reverse_keeps_the_cave_still_for_out_of_range_azimuths() {
+        let mut data = shot(0.0, 10.0, 0.0, 0.0);
+        data.azimuth_in = 5.0;
+        data.azimuth_out = -715.0;
+        let (mut project, id) = project_with_shots(vec![data]);
+
+        let world_before = world_coords(&project, id);
+        assert!(project.reverse_section(id, false));
+
+        let mut reversed = world_coords(&project, id);
+        reversed.reverse();
+        assert_coords_close(&world_before, &reversed);
+    }
+
+    /// Two stored keys can name one station (a legacy `Index` anchor beside the
+    /// canonical one). Both mirror to the same new key, and `map_station_refs`
+    /// rebuilds the comment map by collecting - so remapping both would silently
+    /// drop one. Leaving them put is wrong-but-visible; losing one is not.
+    #[test]
+    fn reverse_does_not_drop_a_comment_when_two_keys_name_one_station() {
+        use crate::models::{StationAnchor, StationKey};
+
+        let (mut project, id) =
+            project_with_shots(vec![shot(0.0, 10.0, 0.0, 0.0), shot(90.0, 10.0, 0.0, 0.0)]);
+        let canonical = project.key_for_ref(StationRef::new(id, 0)).unwrap();
+        let legacy = StationKey {
+            section_id: id,
+            anchor: StationAnchor::Index(0),
+        };
+        assert_ne!(canonical, legacy, "precondition: two distinct keys");
+        assert_eq!(
+            project.resolve_key(&canonical),
+            project.resolve_key(&legacy)
+        );
+        project.station_comments.insert(canonical, "a".to_string());
+        project.station_comments.insert(legacy, "b".to_string());
+
+        assert!(project.reverse_section(id, false));
+
+        assert_eq!(
+            project.station_comments.len(),
+            2,
+            "a colliding remap must not silently drop a comment"
+        );
     }
 
     #[test]

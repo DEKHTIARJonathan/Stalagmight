@@ -44,8 +44,14 @@ impl AppState {
             // `reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`)
             // and spares redo from having to reproduce the anchor mirroring, the
             // section-offset compensation and the collab-baseline invalidation.
+            // A section with no shots is a single station and reverses to itself,
+            // so capturing it would push two identical full-project snapshots and
+            // mark the project dirty for an operation that changed nothing.
             Command::ReverseSection { section_id, .. } => {
-                if project.get_section(*section_id).is_some() {
+                if project
+                    .get_section(*section_id)
+                    .is_some_and(|s| !s.shots.is_empty())
+                {
                     match serde_json::to_string(project) {
                         Ok(before) => UndoData::ProjectSnapshotPair {
                             before,

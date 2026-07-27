@@ -156,10 +156,17 @@ pub struct ImportSectionConfig {
     /// last station becomes station 0.
     ///
     /// A one-shot transform, not persisted state: the backend reverses the
-    /// shots *before* creating the section, so `placement` and
-    /// `station_comments` indices resolve against the final (reversed) order.
-    /// Every importer wizard must therefore build those indices against the
-    /// reversed shots when this is set.
+    /// shots *before* creating the section.
+    ///
+    /// Index conventions, which differ by field:
+    /// * `station_comments` indices are given in the FILE's original order - the
+    ///   backend mirrors them itself (`execute_import_sections`), so an importer
+    ///   never has to think about it.
+    /// * `placement` indices must already address the final (reversed) order.
+    ///   Placement is a graph of cross-section references the wizard resolves
+    ///   while the user is looking at the original numbering, so only the caller
+    ///   knows which side of a connection this batch renumbers; see
+    ///   `src/utils/reversePlacement.ts`.
     ///
     /// Left/right passage dimensions are NOT swapped on the import path - the
     /// wizard has no dialog moment to ask, and mirroring LRUD without asking

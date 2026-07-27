@@ -643,7 +643,9 @@ impl AppState {
             // the before/after snapshot pair pushed at the end, so this needs no
             // command of its own.
             if let Some((dx, dy)) = reverse_offset {
-                if dx != 0.0 || dy != 0.0 {
+                // Finiteness first - `NaN != 0.0` is true, and `section_offsets`
+                // has no other finite guard (see `Project::reverse_section`).
+                if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
                     let mut proj_guard = match self.project.lock() {
                         Ok(g) => g,
                         Err(poisoned) => poisoned.into_inner(),
@@ -661,8 +663,23 @@ impl AppState {
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(project) = proj_guard.as_mut() {
+                    let shot_count = config.shots.len() as u32;
                     for (station_index, comment) in &config.station_comments {
-                        let station_ref = StationRef::new(section_id, *station_index);
+                        // Mirror here rather than trusting the caller to have done
+                        // it. `reverse` renumbers station `i` to `shot_count - i`,
+                        // and these indices were collected against the file's
+                        // original order - the same rewrite the wizard applies to
+                        // `placement` (src/utils/reversePlacement.ts). Doing it
+                        // backend-side keeps the one importer that actually
+                        // populates `station_comments` (TML) correct the day its
+                        // wizard gains the toggle, instead of relying on a prose
+                        // contract every future importer has to re-derive.
+                        let index = if config.reverse {
+                            shot_count.saturating_sub(*station_index)
+                        } else {
+                            *station_index
+                        };
+                        let station_ref = StationRef::new(section_id, index);
                         if let Some(key) = project.key_for_ref(station_ref) {
                             project.station_comments.insert(key, comment.clone());
                         }

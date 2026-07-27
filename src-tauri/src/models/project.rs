@@ -854,26 +854,33 @@ impl Project {
         }
     }
 
-    /// Drop the collaboration baseline captured at the last sibling-`.tml`
-    /// export, so `reconcile::diff` returns an empty change set until the next
-    /// save re-exports and re-seeds it.
+    /// Drop the per-shot collaboration baseline captured at the last
+    /// sibling-`.tml` export, so `reconcile::diff` returns an empty change set
+    /// until the next save re-exports and re-seeds it.
     ///
     /// Call this from any operation that invalidates the baseline's
     /// `(section_id, shot_index)` identity key wholesale. Reconcile matches a
     /// returned shot to a baseline entry by UUID, but then applies the edit to
     /// `project.sections[..].shots[entry.shot_index]` - so once local indices have
     /// moved under the baseline, a collaborator's edit would land on a *different*
-    /// shot. Clearing is the fail-safe: the reconcile is deferred, not misapplied.
-    /// Mirrors the v12 migration's `invalidate_collab_tml_baseline`.
+    /// shot. Emptying the baseline is the fail-safe: `reconcile::diff` short-
+    /// circuits on it, so the reconcile is skipped rather than misapplied.
+    ///
+    /// Deliberately keeps `last_export_tml_sha256`. That field is *provenance* -
+    /// proof the sibling `.tml` came from us - and three things read it that have
+    /// nothing to do with the baseline: `compute_collab` bails outright when it is
+    /// `None` (so clearing it would stop us ever noticing the sibling changed,
+    /// permanently, if the next export failed), and `collab_sibling_when_disabled`
+    /// uses it to decide whether to warn about a leftover `.tml`. Clearing it buys
+    /// nothing the empty baseline does not already give.
     pub(crate) fn invalidate_collab_baseline(&mut self) {
         if let Some(collab) = self.collab.as_mut() {
-            if collab.shot_baseline.is_empty() && collab.last_export_tml_sha256.is_none() {
+            if collab.shot_baseline.is_empty() {
                 return;
             }
             collab.shot_baseline.clear();
-            collab.last_export_tml_sha256 = None;
             tracing::info!(
-                "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
+                "Cleared collab shot baseline; the .tml will be re-exported before the next reconcile"
             );
         }
     }

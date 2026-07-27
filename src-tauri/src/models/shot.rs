@@ -41,13 +41,24 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 /// one alone.
 ///
 /// The mean of two readings exactly 180 degrees apart is undefined (both
-/// perpendiculars are equidistant); the `+540 % 360 - 180` normalisation
+/// perpendiculars are equidistant); the `+540, wrap, -180` normalisation
 /// resolves that tie to `azimuth_in - 90`. Reversing a section has to cope with
 /// that arbitrary choice - see [`crate::models::reverse_shots`].
+///
+/// Wraps with `rem_euclid`, not `%`. Rust's `%` is *truncated* - it keeps the
+/// sign of the dividend - so for a reading far outside `[0, 360)` it leaves
+/// `diff` outside `(-180, 180]` and returns the ANTIPODE of the true circular
+/// mean. That is not academic: `validation.rs` only warns on an out-of-range
+/// azimuth, and the DMP parser stores headings verbatim where the Compass and
+/// TML importers normalise theirs. It also broke the reverse, whose helpers all
+/// use `rem_euclid`: the two disagreed, so the degenerate-pair guard missed and
+/// the bearing survived un-turned while the rest of the section flipped, moving
+/// the cave by its own span. For in-range readings both operands are already
+/// positive, so this is bit-for-bit what `%` returned.
 pub(crate) fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
     // Handle wraparound at 360 degrees
-    let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
-    (azimuth_in + diff / 2.0 + 360.0) % 360.0
+    let diff = (azimuth_out - azimuth_in + 540.0).rem_euclid(360.0) - 180.0;
+    (azimuth_in + diff / 2.0).rem_euclid(360.0)
 }
 
 /// Convert horizontal + vertical components into slope length.
