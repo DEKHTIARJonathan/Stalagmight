@@ -174,6 +174,54 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
+      // `section_offsets` reaches the mock in TWO shapes, so nothing may index it
+      // directly. `create_project_full` / `import_sections` / `execute_gpx_import`
+      // build the JS `Record<sectionId, [dx, dy]>`, while the binary envelope
+      // (`load_project_full_binary`, mirroring `core/load_binary.rs`) and anything
+      // injected through `__E2E_MOCKS__.setCurrentProject` carry the backend's
+      // `Array<[sectionId, [dx, dy]]>` pairs. `offsets["1"] = [dx, dy]` on the
+      // array form sets ELEMENT 1 - silently clobbering a neighbouring section's
+      // pair with a bare coordinate - so every read/write goes through these.
+      const sectionOffsetPairs = (offsets: unknown): Array<[number, [number, number]]> => {
+        if (Array.isArray(offsets)) {
+          return (offsets as Array<[number, [number, number]]>).map(
+            ([k, v]) => [Number(k), v] as [number, [number, number]],
+          );
+        }
+        return Object.entries((offsets ?? {}) as Record<string, [number, number]>).map(
+          ([k, v]) => [Number(k), v] as [number, [number, number]],
+        );
+      };
+      const readSectionOffset = (offsets: unknown, sectionId: number): [number, number] => {
+        if (Array.isArray(offsets)) {
+          const entry = (offsets as Array<[number, [number, number]]>).find(
+            ([k]) => Number(k) === sectionId,
+          );
+          return entry?.[1] ?? [0, 0];
+        }
+        return (
+          (offsets as Record<string, [number, number] | undefined> | null | undefined)?.[
+            String(sectionId)
+          ] ?? [0, 0]
+        );
+      };
+      const writeSectionOffset = (
+        offsets: unknown,
+        sectionId: number,
+        value: [number, number],
+      ): void => {
+        if (Array.isArray(offsets)) {
+          const pairs = offsets as Array<[number, [number, number]]>;
+          const at = pairs.findIndex(([k]) => Number(k) === sectionId);
+          if (at >= 0) pairs[at] = [sectionId, value];
+          else pairs.push([sectionId, value]);
+          return;
+        }
+        if (offsets && typeof offsets === 'object') {
+          (offsets as Record<string, [number, number]>)[String(sectionId)] = value;
+        }
+      };
+
       // Cache mock state - tracks cache operations for verification
       // Use explicit types so providers can be empty and keys can be deleted
       interface MockProviderStats {
@@ -1034,8 +1082,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_merges: jsonResult.project.station_merges ?? [],
                 zero_datums: jsonResult.project.zero_datums ?? [],
                 loop_closures: jsonResult.project.loop_closures ?? [],
-                section_offsets: Object.entries(jsonResult.project.section_offsets ?? {})
-                  .map(([k, v]) => [Number(k), v]),
+                section_offsets: sectionOffsetPairs(jsonResult.project.section_offsets),
+                // The mock has no `station_offsets` state: no mocked command ever
+                // writes one, so there is nothing for a reverse to mirror either
+                // (the backend's `for_each_station_ref` does mirror them). Give
+                // one a home here and `reverse_section` must mirror it too.
                 station_offsets: [],
                 station_comments_map: [],
                 imported_file_hashes: [],
@@ -3769,17 +3820,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               return { success: false, error: `Section ${sectionId} not found` };
             }
             const shotCount = section.shots.length;
-            // Mirror the backend transform (#24): reverse the order, reciprocate
-            // the azimuths (they are two FORWARD readings, so swapping alone is a
-            // no-op), swap depths, swap and negate pitch, optionally swap L/R.
-            // Ids stay attached to positions; everything else travels.
+            // Mirror the backend transform (#24, models/project/reverse.rs):
+            // reverse the order, normalise both readings to [0, 360), reciprocate
+            // AND swap the azimuths (they are two FORWARD readings, so swapping
+            // alone is a no-op), swap depths, swap and negate pitch, optionally
+            // swap L/R. Ids stay attached to positions; everything else travels.
             const ids = section.shots.map((sh) => sh.id);
-            const recip = (a: number) => ((a + 180) % 360 + 360) % 360;
+            const num = (v: unknown) => (typeof v === 'number' ? v : 0);
+            // Every wrap here is `rem_euclid`, matching `reverse.rs::reciprocal`
+            // and `models::shot::average_azimuth_of`. A bare `%` truncates toward
+            // zero and returns the ANTIPODE once the operand goes below -360 -
+            // exactly the bug #24 fixed in `average_azimuth_of`, and reachable
+            // because validation only WARNS on an out-of-range azimuth.
+            const mod360 = (a: number) => ((a % 360) + 360) % 360;
+            const recip = (a: number) => mod360(a + 180);
             const reversed = [...section.shots].reverse().map((sh) => {
               const next: Record<string, unknown> = { ...sh };
-              const azIn = sh.azimuth_in as number;
-              const azOut = sh.azimuth_out as number;
-              if (((azOut - azIn) % 360 + 360) % 360 === 180) {
+              // Normalise BEFORE the degenerate test, like `reverse_shots`: that
+              // branch swaps its operands verbatim, so an out-of-range reading
+              // would otherwise be written straight back onto the record and stay
+              // out of range for every later consumer.
+              const azIn = mod360(num(sh.azimuth_in));
+              const azOut = mod360(num(sh.azimuth_out));
+              if (mod360(azOut - azIn) === 180) {
                 // Readings exactly opposite: the circular mean is undefined and
                 // reciprocating maps the pair to itself, so the backend swaps
                 // them instead to turn the bearing around.
@@ -3808,15 +3871,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // Station 0 is now the far end, so the section anchor gains the
             // displacement the section used to span or the whole passage
             // teleports. Measured on the PRE-reverse order, like the backend.
-            const num = (v: unknown) => (typeof v === 'number' ? v : 0);
             let dx = 0;
             let dy = 0;
             for (const sh of section.shots) {
               const azIn = num(sh.azimuth_in);
               const azOut = num(sh.azimuth_out);
-              // Circular mean of two FORWARD readings (models::average_azimuth_of).
-              const diff = ((azOut - azIn + 540) % 360) - 180;
-              const meanRad = (((azIn + diff / 2 + 360) % 360) * Math.PI) / 180;
+              // Circular mean of two FORWARD readings (models::average_azimuth_of),
+              // wrapped with rem_euclid for the reason above - the truncated form
+              // returns the antipode for a pair more than 540 apart, which would
+              // send the offset compensation the wrong way and move the cave.
+              const diff = mod360(azOut - azIn + 540) - 180;
+              const meanRad = (mod360(azIn + diff / 2) * Math.PI) / 180;
               const dz = num(sh.depth_out) - num(sh.depth_in);
               const lenSq = num(sh.length) ** 2 - dz ** 2;
               const horizontal = lenSq <= 0 ? 0 : Math.sqrt(lenSq);
@@ -3825,13 +3890,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             section.shots = reversed;
 
-            if (dx !== 0 || dy !== 0) {
-              const offsets = currentProject!.section_offsets as Record<
-                string,
-                [number, number] | undefined
-              >;
-              const [ox, oy] = offsets[String(sectionId)] ?? [0, 0];
-              offsets[String(sectionId)] = [ox + dx, oy + dy];
+            // Finiteness first, like `reverse_section`: `NaN !== 0` is TRUE, so a
+            // bare `!== 0` admits a non-finite displacement into `section_offsets`,
+            // which has no other finite guard - and `save_project` rewrites a
+            // non-finite offset to 0.0, teleporting the section to the origin. See
+            // the backend's `reverse_refuses_to_write_a_non_finite_offset`.
+            if (Number.isFinite(dx) && Number.isFinite(dy) && (dx !== 0 || dy !== 0)) {
+              const offsets = currentProject!.section_offsets;
+              const [ox, oy] = readSectionOffset(offsets, sectionId);
+              writeSectionOffset(offsets, sectionId, [ox + dx, oy + dy]);
             }
 
             // Station i became station shotCount - i, so every external ref into
