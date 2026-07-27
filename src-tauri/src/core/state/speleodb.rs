@@ -388,6 +388,8 @@ impl SpeleoDbSession {
         resolved_endpoint: Option<String>,
         config_email: Option<String>,
         keychain_declined: bool,
+        keychain_disabled: bool,
+        keychain_has_token: bool,
     ) {
         if self.rehydrate_attempted || self.endpoint.is_some() {
             return;
@@ -397,6 +399,15 @@ impl SpeleoDbSession {
         // nag fix: startup rehydration is what re-raised the desktop unlock prompt on
         // every single launch for someone who had already dismissed it once.
         self.token_store.set_keychain_declined(keychain_declined);
+        self.token_store.set_keychain_disabled(keychain_disabled);
+        // Do not OPEN the keyring to find out whether it has anything for us. On
+        // Linux that read is the desktop unlock prompt, so a signed-out launch was
+        // raising one purely to discover there was nothing to find. What the
+        // keychain holds is recorded when we put it there, so the answer is already
+        // on disk. A stale `true` costs one prompt and self-corrects on the miss.
+        if !keychain_has_token {
+            self.token_store.set_keychain_declined(true);
+        }
 
         let (Some(endpoint), Some(email)) = (resolved_endpoint, config_email) else {
             // No persisted account → stay logged-out (no keychain probe).
@@ -542,13 +553,27 @@ impl AppState {
         }
 
         let resolved_endpoint = self.speleodb_resolve_endpoint(None);
-        let (config_email, keychain_declined) =
-            self.config.lock().ok().map_or((None, false), |c| {
-                (c.speleodb.email.clone(), c.speleodb.keychain_declined)
+        let (config_email, keychain_declined, keychain_disabled, keychain_has_token) = self
+            .config
+            .lock()
+            .ok()
+            .map_or((None, false, false, false), |c| {
+                (
+                    c.speleodb.email.clone(),
+                    c.speleodb.keychain_declined,
+                    c.speleodb.keychain_disabled,
+                    c.speleodb.keychain_has_token,
+                )
             });
 
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session.rehydrate(resolved_endpoint, config_email, keychain_declined);
+            session.rehydrate(
+                resolved_endpoint,
+                config_email,
+                keychain_declined,
+                keychain_disabled,
+                keychain_has_token,
+            );
         }
     }
 
@@ -817,6 +842,9 @@ impl AppState {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
+        // The keychain entry went with it (or was never ours to begin with), so the
+        // next launch must not open the keyring looking for one.
+        self.speleodb_persist_keychain_has_token(false);
     }
 
     /// Disambiguate a resource/write **403** (D-B4 + the live-verified DRF 401→403
@@ -919,17 +947,21 @@ impl AppState {
         // later") left a file the user never agreed to. An unsettled login lands in
         // memory instead, and the answer moves it - which costs nothing, because
         // the key is still in hand (`TokenStore::restore`).
-        let (previously_declined, prefers_plaintext) = self
+        let (previously_declined, keychain_disabled, prefers_plaintext) = self
             .config
             .lock()
             .ok()
             .map(|c| {
                 (
                     c.speleodb.keychain_declined,
+                    c.speleodb.keychain_disabled,
                     c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
                 )
             })
-            .unwrap_or((false, false));
+            .unwrap_or((false, false, false));
+        // A standing "never use the keychain" outranks the per-login question: it is
+        // not asked, not retried, and signing in does not clear it.
+        let previously_declined = previously_declined || keychain_disabled;
         let allow_plaintext = previously_declined && prefers_plaintext;
 
         let (tier, keychain_state) = {
@@ -946,7 +978,8 @@ impl AppState {
             // Signing in is the one moment the user has opted back into being
             // asked, so a previous refusal is cleared here and the keychain gets
             // another go. Everywhere else the refusal is honoured silently.
-            session.token_store.set_keychain_declined(false);
+            session.token_store.set_keychain_disabled(keychain_disabled);
+            session.token_store.set_keychain_declined(keychain_disabled);
             let tier = session
                 .token_store
                 .store(&endpoint, &email, &token, allow_plaintext);
@@ -971,6 +1004,9 @@ impl AppState {
         if tier == TokenTier::Keychain {
             self.speleodb_persist_keychain_declined(false);
         }
+        // Record where the key actually landed, so the next launch can decide
+        // whether the keyring is worth opening without opening it.
+        self.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
 
         let keychain = KeychainReport::from(keychain_state);
         Ok(SpeleoLoginResult {
@@ -5067,7 +5103,13 @@ mod tests {
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), false);
+        session.rehydrate(
+            Some(endpoint.to_owned()),
+            Some(email.to_owned()),
+            false,
+            false,
+            true,
+        );
 
         let status = session.status();
         assert!(status.logged_in, "a stored keychain token survives restart");
@@ -5098,7 +5140,13 @@ mod tests {
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), true);
+        session.rehydrate(
+            Some(endpoint.to_owned()),
+            Some(email.to_owned()),
+            true,
+            false,
+            true,
+        );
 
         let status = session.status();
         assert!(
@@ -5113,18 +5161,56 @@ mod tests {
     }
 
     #[test]
+    fn startup_does_not_open_the_keyring_when_we_recorded_no_token_in_it() {
+        // The launch-time nag in its remaining form: we used to READ the keychain to
+        // find out whether it had anything for us, and on Linux that read IS the
+        // desktop unlock prompt - so a launch after a sign-out raised one purely to
+        // discover there was nothing to find. What the keychain holds is recorded
+        // when we put it there, so the question is answered from disk.
+        let endpoint = "https://x/";
+        let email = "u@x";
+        // A keychain that DOES hold a usable token: if startup probed it, the
+        // session would come back signed in, so staying signed out is the proof
+        // that it was never opened.
+        let keychain = InMemoryStore::new();
+        keychain
+            .store(&crate::speleodb::auth::account_key(endpoint, email), "tok")
+            .expect("seed keychain");
+
+        let mut session = fresh_session_with_stores(Box::new(keychain), None);
+        session.rehydrate(
+            Some(endpoint.to_owned()),
+            Some(email.to_owned()),
+            false, // not declined
+            false, // not disabled
+            false, // ...but we have no record of a token being in there
+        );
+
+        assert!(
+            !session.status().logged_in,
+            "startup must not open the keyring to answer a question already on disk"
+        );
+    }
+
+    #[test]
     fn rehydration_noop_without_config_account() {
         // No persisted account → stays logged-out, and the keychain is NOT probed
         // (no endpoint/email to key it). rehydrate_attempted is still latched so
         // it won't retry every call.
         let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(None, None, false);
+        session.rehydrate(None, None, false, false, true);
         assert!(!session.status().logged_in);
         assert!(session.rehydrate_attempted);
 
         // A blank endpoint/email also yields a logged-out no-op.
         let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(Some("   ".to_owned()), Some(String::new()), false);
+        session.rehydrate(
+            Some("   ".to_owned()),
+            Some(String::new()),
+            false,
+            false,
+            true,
+        );
         assert!(!session.status().logged_in);
     }
 
@@ -5145,7 +5231,7 @@ mod tests {
             Box::new(SharedStore(std::sync::Arc::clone(&keychain))),
             None,
         );
-        session.rehydrate(None, None, false); // marks attempted, finds nothing
+        session.rehydrate(None, None, false, false, true); // marks attempted, finds nothing
         assert!(session.rehydrate_attempted);
         assert!(!session.status().logged_in);
 
@@ -5162,7 +5248,13 @@ mod tests {
         // before any seed/probe, so the session stays logged-out and never adopts
         // endpoint/email despite the now-present token. This is the idempotency
         // invariant: `rehydrate_attempted` gates the keychain probe to once.
-        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), false);
+        session.rehydrate(
+            Some(endpoint.to_owned()),
+            Some(email.to_owned()),
+            false,
+            false,
+            true,
+        );
         assert!(
             !session.status().logged_in,
             "the latch must block the re-probe even with a now-seeded keychain"
@@ -5178,6 +5270,8 @@ mod tests {
             Some("https://other/".to_owned()),
             Some("z@z".to_owned()),
             false,
+            false,
+            true,
         );
         assert_eq!(live.endpoint.as_deref(), Some("https://x/"));
     }

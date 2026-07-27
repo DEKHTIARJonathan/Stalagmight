@@ -108,7 +108,12 @@ impl AppState {
             .token_store
             .restore(&endpoint, &email, allow_plaintext)
         {
-            Some(_) => Ok(()),
+            Some(tier) => {
+                let landed_in_keychain = tier == crate::speleodb::auth::TokenTier::Keychain;
+                drop(session);
+                self.speleodb_persist_keychain_has_token(landed_in_keychain);
+                Ok(())
+            }
             None => {
                 session
                     .token_store

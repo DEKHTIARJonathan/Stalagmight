@@ -50,6 +50,32 @@ impl AppState {
     /// failed write means the next launch asks again, which is annoying but never
     /// unsafe. A poisoned config mutex is recovered rather than treated as "cannot
     /// write", mirroring the email path.
+    /// Record whether the OS keychain now holds a token for the persisted account.
+    ///
+    /// This is what lets startup skip the keyring entirely: the next launch reads
+    /// this instead of opening the keychain to find out, which on Linux is the
+    /// unlock prompt itself. Written wherever the answer changes - a store that
+    /// landed (or failed to land) on the keychain tier, and every path that clears
+    /// the token. Best-effort like its siblings: a lost write costs at most one
+    /// prompt, or one sign-in.
+    pub(super) fn speleodb_persist_keychain_has_token(&self, has_token: bool) {
+        let mut config = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if config.speleodb.keychain_has_token == has_token {
+            return;
+        }
+        config.speleodb.keychain_has_token = has_token;
+        if let Err(e) = config.save() {
+            tracing::warn!(
+                error = %e,
+                has_token,
+                "failed to persist whether the OS keychain holds a SpeleoDB token"
+            );
+        }
+    }
+
     pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
         let mut config = self
             .config
@@ -121,6 +147,10 @@ impl AppState {
             .map_err(local_dto)?
             .forget_reporting();
         let seed_cleared = self.speleodb_write_config_email(None);
+        // Whether the sweep reported a failure or not, this session no longer has a
+        // keychain entry it can claim. Recording `false` is the safe direction: a
+        // surviving entry costs a sign-in, never a silent re-authentication.
+        self.speleodb_persist_keychain_has_token(false);
         logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
     }
 

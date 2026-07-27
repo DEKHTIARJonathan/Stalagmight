@@ -639,7 +639,13 @@
         "aria": "Allow insecure HTTP endpoints",
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
-      "allowForceEdit": {
+      "disableKeychain": {
+      "label": "Never use the OS keychain",
+      "help": "Stops Stalagmight touching the system keyring entirely. Turn this on if your keyring is locked or unavailable and you do not want to be asked about it again.",
+      "aria": "Never use the OS keychain",
+      "warning": "Your API key will not be stored in the OS keychain. It will be kept wherever the credential-storage setting above says - which may mean signing in again each time Stalagmight starts."
+    },
+    "allowForceEdit": {
         "label": "Allow editing without the write lock",
         "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
         "aria": "Allow editing SpeleoDB projects without the write lock",

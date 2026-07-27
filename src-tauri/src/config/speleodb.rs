@@ -62,6 +62,28 @@ pub struct SpeleoDbConfig {
     /// question.
     #[serde(default)]
     pub keychain_declined: bool,
+    /// The user turned the OS keychain OFF for good, from Settings.
+    ///
+    /// Stronger than `keychain_declined`, which answers one login's failure and is
+    /// cleared the next time they sign in. This is a standing instruction: while it
+    /// is set nothing goes near the keyring on any path, including a fresh login,
+    /// and the API key lives wherever `token_fallback` says. It exists because a
+    /// headless or locked-keyring box has no working keychain to offer, and being
+    /// asked about it on every sign-in is the same nag in a different costume.
+    #[serde(default)]
+    pub keychain_disabled: bool,
+    /// Whether we believe the OS keychain currently holds a token for `email`.
+    ///
+    /// Recorded when a store succeeds and cleared when the entry is deleted (or a
+    /// store lands on another tier), so startup can decide whether the keychain is
+    /// worth opening WITHOUT opening it. That question used to be answered by
+    /// reading the keyring, which on Linux is itself the desktop unlock prompt -
+    /// so every launch of a signed-out app raised one to discover there was
+    /// nothing to find. A stale `true` costs one prompt and self-corrects on the
+    /// miss; a stale `false` means a rehydratable session is not restored until
+    /// the user signs in again, which is the safe direction.
+    #[serde(default)]
+    pub keychain_has_token: bool,
     /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
     /// Off by default. Relaxes ONLY the public-http scheme block in
     /// `speleodb::tls::enforce` (Track A #187) - NEVER TLS cert verification
@@ -99,6 +121,8 @@ impl Default for SpeleoDbConfig {
             email: None,
             token_fallback: TokenFallback::default(),
             keychain_declined: false,
+            keychain_disabled: false,
+            keychain_has_token: false,
             insecure_http: false,
             allow_force_edit: false,
             poll_interval_seconds: default_poll_interval_seconds(),

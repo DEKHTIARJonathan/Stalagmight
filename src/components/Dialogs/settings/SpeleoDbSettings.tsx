@@ -200,6 +200,9 @@ export function SpeleoDbSettings({
   const handleAllowForceEditToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, allow_force_edit: v },
   }));
+  const handleDisableKeychainToggle = createToggleHandler(onChange, (v) => ({
+    speleodb: { ...speleo, keychain_disabled: v },
+  }));
   const handlePollIntervalChange = createNumericHandler(
     onChange,
     (n) => ({ speleodb: { ...speleo, poll_interval_seconds: n } }),
@@ -512,6 +515,40 @@ export function SpeleoDbSettings({
         {speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS && (
           <div className="mb-2 text-xs text-error" data-testid="speleodb-poll-interval-error">
             {t('settings.speleodb.pollInterval.tooLow', { min: MIN_POLL_INTERVAL_SECONDS })}
+          </div>
+        )}
+
+        {/* Last, and deliberately a standing instruction rather than an answer to
+            one login's failure: on a headless or permanently-locked box there is no
+            working keyring to offer, and being asked about it on every sign-in is
+            the same nag in a different costume. While this is on nothing goes near
+            the keyring on any path - not a store, not a startup read, not a status
+            probe - and the API key lives wherever the storage choice above says. */}
+        <SettingRow
+          label={t('settings.speleodb.disableKeychain.label')}
+          helpText={t('settings.speleodb.disableKeychain.help')}
+          isChanged={isFieldChanged(changedFields, 'speleodb.keychain_disabled')}
+          onReset={() =>
+            onChange({
+              speleodb: { ...speleo, keychain_disabled: defaultConfig.speleodb.keychain_disabled },
+            })
+          }
+          isDefault={speleo.keychain_disabled === defaultConfig.speleodb.keychain_disabled}
+          data-testid="setting-speleodb-disable-keychain"
+        >
+          <Toggle
+            checked={speleo.keychain_disabled}
+            onChange={handleDisableKeychainToggle}
+            aria-label={t('settings.speleodb.disableKeychain.aria')}
+            data-testid="toggle-speleodb-disable-keychain"
+          />
+        </SettingRow>
+        {speleo.keychain_disabled && (
+          <div
+            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
+            data-testid="speleodb-disable-keychain-warning"
+          >
+            {t('settings.speleodb.disableKeychain.warning')}
           </div>
         )}
       </SettingsSection>

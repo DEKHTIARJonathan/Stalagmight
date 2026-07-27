@@ -41,6 +41,17 @@ impl AppState {
             config.webkit_memory = existing.webkit_memory.clone();
             config.speleodb.token_fallback = existing.speleodb.token_fallback;
             config.speleodb.keychain_declined = existing.speleodb.keychain_declined;
+            // Backend-owned for the same reason: it records what the keychain
+            // actually holds, which only the credential paths know. `keychain_disabled`
+            // is deliberately NOT in this list - that one IS a Settings toggle.
+            config.speleodb.keychain_has_token = existing.speleodb.keychain_has_token;
+        }
+        // The keyring switch has to bite NOW, not at the next launch: a user turning
+        // it on has just been asked one unlock prompt too many, and the live session
+        // would otherwise keep reaching for the keychain until they restart.
+        let keychain_disabled = config.speleodb.keychain_disabled;
+        if let Ok(mut session) = self.speleodb.lock() {
+            session.token_store.set_keychain_disabled(keychain_disabled);
         }
         // Check if cache setting changed before saving
         let old_cache_enabled = self

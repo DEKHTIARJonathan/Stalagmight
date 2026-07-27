@@ -352,6 +352,10 @@ pub(crate) struct TokenStore {
     /// [`Self::clear`] still sweeps every tier regardless - a refusal must never
     /// strand a token somewhere we then refuse to look.
     keychain_declined: bool,
+    /// The user turned the keychain off for good (`config.speleodb
+    /// .keychain_disabled`). Same effect as `keychain_declined` on every path,
+    /// but it is not cleared by signing in - that is the point of it.
+    keychain_disabled: bool,
     /// What keychain access we have already made taught us. See [`KeychainState`].
     keychain_state: KeychainState,
 }
@@ -391,6 +395,7 @@ impl TokenStore {
             plaintext: plaintext_root
                 .map(|r| Box::new(PlaintextStore::new(r)) as Box<dyn SecretStore>),
             keychain_declined: false,
+            keychain_disabled: false,
             keychain_state: KeychainState::NotAttempted,
         }
     }
@@ -401,7 +406,24 @@ impl TokenStore {
     /// where `false` is passed to re-enable the keychain.
     pub(crate) fn set_keychain_declined(&mut self, declined: bool) {
         self.keychain_declined = declined;
-        self.keychain_state = if declined {
+        self.refresh_keychain_state();
+    }
+
+    /// Apply the standing "never use the keychain" instruction from Settings.
+    pub(crate) fn set_keychain_disabled(&mut self, disabled: bool) {
+        self.keychain_disabled = disabled;
+        self.refresh_keychain_state();
+    }
+
+    /// Whether the keychain is off, for whatever reason. THE gate: every path that
+    /// would otherwise touch the keyring asks this, because on Linux the touch is
+    /// itself the desktop unlock prompt.
+    fn keychain_off(&self) -> bool {
+        self.keychain_declined || self.keychain_disabled
+    }
+
+    fn refresh_keychain_state(&mut self) {
+        self.keychain_state = if self.keychain_off() {
             KeychainState::Declined
         } else {
             // Re-enabling makes what we previously learned stale: an "Unavailable"
@@ -460,7 +482,7 @@ impl TokenStore {
         // Declined: go straight to the non-keychain tiers. Deliberately NOT
         // recorded as a keychain failure - the keychain may be perfectly healthy;
         // we simply are not asking.
-        if self.keychain_declined {
+        if self.keychain_off() {
             return self.store_without_keychain(&key, token, allow_plaintext);
         }
 
@@ -597,7 +619,7 @@ impl TokenStore {
         // Declined: skip the keychain entirely. THIS is the launch-time nag fix -
         // rehydration on startup is what re-raised the desktop unlock prompt on
         // every single launch for a user who had already dismissed it once.
-        if !self.keychain_declined {
+        if !self.keychain_off() {
             // Keychain-first (precedence): a hit supersedes and self-heals plaintext.
             match self.keychain.load(&key) {
                 Ok(Some(token)) => {
@@ -681,7 +703,7 @@ impl TokenStore {
         // keychain while the flag is set, so this store has put nothing there, and
         // an entry predating the decline is overwritten by the next successful
         // login (which clears the flag and re-stores) or swept by "Try again".
-        if !self.keychain_declined {
+        if !self.keychain_off() {
             let keychain_may_hold_it = matches!(self.keychain.load(&key), Ok(Some(_)));
             if let Err(e) = self.keychain.delete(&key) {
                 if keychain_may_hold_it {
@@ -727,6 +749,7 @@ impl TokenStore {
             keychain: Box::new(InMemoryStore::new()),
             plaintext: None,
             keychain_declined: false,
+            keychain_disabled: false,
             keychain_state: KeychainState::NotAttempted,
         }
     }
@@ -758,6 +781,7 @@ impl TokenStore {
             keychain,
             plaintext,
             keychain_declined: false,
+            keychain_disabled: false,
             keychain_state: KeychainState::NotAttempted,
         }
     }
