@@ -8937,6 +8937,41 @@ fn lsq_update_shot_horizontal_only_zero_displacement() {
     );
 }
 
+/// The solver writes a recomputed bearing straight onto both legs, so its wrap is
+/// the last thing standing between an `atan2` result and a stored reading.
+///
+/// A displacement a hair WEST of north gives a tiny negative angle, and a bare
+/// `rem_euclid` maps that to exactly `360.0` - out of range, and `INVALID_AZIMUTH`
+/// is error severity, so the user cannot even dismiss the warning the adjustment
+/// just created for them.
+#[test]
+fn recomputed_azimuth_from_a_hair_west_of_north_stays_in_range() {
+    assert_eq!(
+        (-1e-16_f64).atan2(1.0).to_degrees().rem_euclid(360.0),
+        360.0,
+        "precondition: the bare rem_euclid wrap escapes [0, 360) for this displacement"
+    );
+
+    let mut s = Shot::new(
+        1,
+        ShotData {
+            azimuth_in: 0.0,
+            azimuth_out: 0.0,
+            length: 1.0,
+            ..Default::default()
+        },
+    );
+    Project::update_shot_horizontal_only(&mut s, -1e-16, 1.0);
+
+    assert!(
+        (0.0..360.0).contains(&s.azimuth_in) && (0.0..360.0).contains(&s.azimuth_out),
+        "solver wrote an out-of-range reading: ({}, {})",
+        s.azimuth_in,
+        s.azimuth_out
+    );
+    assert_eq!(s.azimuth_in, 0.0);
+}
+
 #[test]
 fn lsq_long_chain_per_shot_changes_are_small() {
     // Regression test: for a long chain with a small closure error, the

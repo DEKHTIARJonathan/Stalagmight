@@ -5808,9 +5808,11 @@ fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
 ///
 /// The sidecar is NOT touched, in either fixture. The exporter writes the raw
 /// `azimuth_in` and both `normalize_tml_shot` and `geo_key` apply the same
-/// `rem_euclid(360.0)`, so for every azimuth whose `rem_euclid(360.0)` lands in
-/// `[0, 360)` a migrated project and an untouched sibling still agree on every field
-/// reconcile compares. Dropping `last_export_tml_sha256` would instead make
+/// `rem_euclid(360.0)` the migration wraps with, and the migration writes through
+/// `normalize_azimuth`, so every migrated reading lands in `[0, 360)` and `rem_euclid`
+/// returns it untouched on the reconcile side. A migrated project and an untouched
+/// sibling therefore agree on every field reconcile compares - unconditionally, which
+/// the fourth shot below pins. Dropping `last_export_tml_sha256` would instead make
 /// `compute_collab` bail, so the reconcile dialog could never open and the next save
 /// would overwrite the collaborator's unmerged edits with no prompt - see
 /// `migrate_v14_leaves_an_untouched_sibling_reconcilable`.
@@ -5841,8 +5843,15 @@ fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
                 out_of_range(370.0, 350.0),
                 // Already canonical: must be left exactly alone.
                 out_of_range(12.5, 13.5),
+                // A hair WEST of north. `rem_euclid` alone maps both of these to
+                // exactly 360.0, so the migration would write the very
+                // `INVALID_AZIMUTH` its "rows go inert" justification promises it
+                // clears - and `geo_key` wraps 360.0 back to 0.0, so the migrated
+                // project and an untouched sibling would disagree on that shot.
+                // `normalize_azimuth` clamps the escape.
+                out_of_range(-1e-14, -2.8e-14),
             ],
-            vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5)],
+            vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5), (0.0, 0.0)],
         ),
         (
             "legacy_v13_benign.stalx",

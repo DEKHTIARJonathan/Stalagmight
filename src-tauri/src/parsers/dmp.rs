@@ -645,17 +645,6 @@ pub fn parse_dmp(path: &Path) -> Result<DmpFile> {
 // Conversions to internal types
 // ============================================================================
 
-/// Wrap a raw DMP heading into `[0, 360)`, leaving a non-finite reading alone (it has no
-/// canonical form and `rem_euclid` would turn it into NaN; `ShotData::all_finite` and the
-/// integrity banner are what surface it).
-fn normalise_heading(heading: f64) -> f64 {
-    if heading.is_finite() {
-        heading.rem_euclid(360.0)
-    } else {
-        heading
-    }
-}
-
 impl DmpShot {
     /// Convert to our internal `ShotData` format.
     ///
@@ -665,16 +654,20 @@ impl DmpShot {
     ///
     /// Headings ARE normalised into `[0, 360)` here, matching what the Compass and TML
     /// importers already do. A DMP heading is a raw `i16 * 0.1`, so the file format admits
-    /// `-3276.8..3276.7`, and `Validator::validate_shot` only WARNS about a reading outside
-    /// the range - so an out-of-range pair used to reach the model and persist. Two such
+    /// `-3276.8..3276.7`, and `Validator::validate_shot` only REPORTS a reading outside the
+    /// range (as `INVALID_AZIMUTH` - error severity, so not even ignorable, but still not a
+    /// gate) - so an out-of-range pair used to reach the model and persist. Two such
     /// readings more than 540 degrees apart hit the truncated-`%` wrap that
     /// `average_azimuth_of` fixed (schema v14 normalises the ones already stored); keeping
     /// the class out of the model at the seam means an import can never recreate it.
     /// `DmpShot` itself still holds the verbatim value, so the raw-data view is unaffected.
+    ///
+    /// `normalize_azimuth` leaves a non-finite reading alone: it has no canonical form, and
+    /// `ShotData::all_finite` plus the integrity banner are what surface those.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
-            azimuth_in: normalise_heading(self.heading_in),
-            azimuth_out: normalise_heading(self.heading_out),
+            azimuth_in: crate::models::normalize_azimuth(self.heading_in),
+            azimuth_out: crate::models::normalize_azimuth(self.heading_out),
             length: self.length,
             depth_in: self.depth_in,
             depth_out: self.depth_out,

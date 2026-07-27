@@ -5,11 +5,27 @@
  * exact value the backend would compute and the warning recomputes away.
  */
 
-/** Normalize an azimuth (degrees) into the [0, 360) range. */
+/**
+ * Normalize an azimuth (degrees) into the [0, 360) range.
+ *
+ * Mirrors `normalize_azimuth` in `src-tauri/src/models/angle.rs`, including the
+ * two escapes a bare `x % 360` + `if (< 0) += 360` misses:
+ *
+ * - The `+= 360` ROUNDS for a tiny negative input, so it can return exactly
+ *   `360`, which is out of range and trips a non-ignorable `INVALID_AZIMUTH`.
+ *   `averageAzimuth(0.1, 359.9)` reached it - every fore/back pair whose
+ *   circular mean is exactly north does.
+ * - `-0 % 360` is `-0`, which is not `< 0`, so it survived the guard. `+ 0`
+ *   folds it to `+0` so nothing serialises as `-0`.
+ *
+ * A non-finite value has no canonical form and passes through untouched.
+ */
 export function normalizeAzimuth(value: number): number {
+  if (!Number.isFinite(value)) return value;
   let normalized = value % 360;
   if (normalized < 0) normalized += 360;
-  return normalized;
+  if (normalized >= 360) normalized = 0;
+  return normalized + 0;
 }
 
 /**

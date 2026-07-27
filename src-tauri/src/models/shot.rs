@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::{SectionId, FEATURE_ID_STRIDE};
+use super::{normalize_azimuth, SectionId, FEATURE_ID_STRIDE};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
@@ -58,10 +58,18 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
 /// `x.rem_euclid(360.0)` returns an in-range `x` untouched. About half of the
 /// in-range pairs therefore differ, by at most half an ulp of 720 (~5.7e-14
 /// degrees, ~1e-15 radians - sub-picometre over a kilometre of passage).
+///
+/// Both wraps go through [`normalize_azimuth`], not a bare `rem_euclid`, because
+/// `rem_euclid` alone can return exactly `360.0` - and this function is the
+/// ordinary way to get there. Every fore/back pair whose circular mean is
+/// exactly north does it, 360 of them on a plain 0.1-degree grid starting at
+/// `(0.1, 359.9)`. The `horizontal <= 1e-9` fallbacks in `closure.rs` and
+/// `command_move.rs` then write that value verbatim onto both legs, where
+/// `>= 360.0` is a non-ignorable `INVALID_AZIMUTH`.
 pub(crate) fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
     // Handle wraparound at 360 degrees
-    let diff = (azimuth_out - azimuth_in + 540.0).rem_euclid(360.0) - 180.0;
-    (azimuth_in + diff / 2.0).rem_euclid(360.0)
+    let diff = normalize_azimuth(azimuth_out - azimuth_in + 540.0) - 180.0;
+    normalize_azimuth(azimuth_in + diff / 2.0)
 }
 
 /// Convert horizontal + vertical components into slope length.
@@ -1136,6 +1144,59 @@ mod tests {
         assert!((average_azimuth_of(240.0, 0.0) - average_azimuth_of(600.0, 0.0)).abs() < 1e-9);
         // In-range pairs are untouched by the change beyond float noise.
         assert!((average_azimuth_of(350.0, 10.0) - 0.0).abs() < 1e-9);
+    }
+
+    /// The reachable half of the `rem_euclid` escape, and the reason
+    /// `average_azimuth_of` wraps through `normalize_azimuth`.
+    ///
+    /// `(0.1, 359.9)` is an ordinary fore/back pair. Its circular mean is exactly
+    /// north, and a bare `rem_euclid` returns `360.0` for it - out of range, and a
+    /// non-ignorable `INVALID_AZIMUTH` once the `horizontal <= 1e-9` fallbacks in
+    /// `closure.rs` / `command_move.rs` copy it onto both legs. There are 360 such
+    /// pairs on a plain 0.1-degree grid, not one crafted ulp.
+    #[test]
+    fn average_of_ordinary_fore_back_readings_is_never_360() {
+        let naive = |azimuth_in: f64, azimuth_out: f64| {
+            let diff = (azimuth_out - azimuth_in + 540.0).rem_euclid(360.0) - 180.0;
+            (azimuth_in + diff / 2.0).rem_euclid(360.0)
+        };
+        assert_eq!(
+            naive(0.1, 359.9),
+            360.0,
+            "precondition: the bare rem_euclid wrap returns exactly 360.0 here"
+        );
+
+        let mean = average_azimuth_of(0.1, 359.9);
+        assert!(
+            (0.0..360.0).contains(&mean),
+            "average_azimuth_of(0.1, 359.9) = {mean} escaped [0, 360)"
+        );
+        assert_eq!(mean, 0.0);
+
+        // Sweep the whole 0.1-degree grid: no in-range pair may escape the range.
+        // The grid is built by PARSING each decimal, which is what a typed reading
+        // or a stored one actually is - `i as f64 * 0.1` accumulates a different
+        // rounding and hits only 203 of the 360 cases.
+        let grid: Vec<f64> = (0..3600)
+            .map(|i| format!("{}.{}", i / 10, i % 10).parse().unwrap())
+            .collect();
+        let mut naive_escapes = 0_u32;
+        for &azimuth_in in &grid {
+            for &azimuth_out in &grid {
+                let mean = average_azimuth_of(azimuth_in, azimuth_out);
+                assert!(
+                    (0.0..360.0).contains(&mean),
+                    "average_azimuth_of({azimuth_in}, {azimuth_out}) = {mean}"
+                );
+                if naive(azimuth_in, azimuth_out) >= 360.0 {
+                    naive_escapes += 1;
+                }
+            }
+        }
+        assert_eq!(
+            naive_escapes, 360,
+            "precondition: the bare rem_euclid wrap escapes [0, 360) for 360 grid pairs"
+        );
     }
 
     #[test]

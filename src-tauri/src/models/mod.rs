@@ -1,3 +1,4 @@
+pub mod angle;
 pub mod collab;
 pub mod dive_plan;
 pub mod geo;
@@ -10,6 +11,7 @@ pub mod speleo_link;
 pub mod station;
 pub mod warning;
 
+pub use angle::*;
 pub use collab::*;
 pub use dive_plan::*;
 pub use geo::*;

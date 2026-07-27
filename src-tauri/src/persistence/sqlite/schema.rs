@@ -773,7 +773,11 @@ impl Database {
     ///   unnormalised READING, which the next open of a v14 file no longer re-examines but
     ///   which is still rendered correctly. Losing the history would cost more than it buys.
     /// * **Warning dismissals.** `INVALID_AZIMUTH` simply stops firing once the reading is
-    ///   in range, so its rows go inert rather than suppressing something live.
+    ///   in range, so its rows go inert rather than suppressing something live. That holds
+    ///   for every row because the wrap is [`crate::models::normalize_azimuth`], whose
+    ///   output is `[0, 360)` by construction; a bare `rem_euclid` would have left the
+    ///   claim false for a sub-ulp negative reading, which it maps to exactly `360.0` -
+    ///   still `INVALID_AZIMUTH`, minted by the migration itself.
     ///   `AZIMUTH_DEVIATION` measures `(azimuth_out - azimuth_in).abs()` folded about 180:
     ///   for an out-of-range pair that fold produced a NEGATIVE "difference" and the warning
     ///   could never fire, so there is no dismissal to clear - and after normalisation it
@@ -783,10 +787,15 @@ impl Database {
     ///   here, and the sibling is not a rendering of the mean: the exporter writes the raw
     ///   `azimuth_in` (`export::tml`, the `azimuth: shot.azimuth_in` legs), and both
     ///   `parsers::tml::normalize_tml_shot` and `models::collab::geo_key` apply the same
-    ///   `rem_euclid(360.0)` this migration does. So for every azimuth whose
-    ///   `rem_euclid(360.0)` lands in `[0, 360)`, a migrated project and an untouched
-    ///   sibling agree on every field reconcile compares. Dropping the provenance would
-    ///   cost real data: `compute_collab` bails while `last_export_tml_sha256` is `None`,
+    ///   `rem_euclid(360.0)` this migration wraps with. That agreement is now
+    ///   unconditional: the migration writes through
+    ///   [`crate::models::normalize_azimuth`], so every migrated reading is in
+    ///   `[0, 360)` and `rem_euclid` returns it untouched on the reconcile side. (Before
+    ///   that clamp there was a boundary hole - a reading in `[-2.84e-14, 0)` migrated to
+    ///   exactly `360.0`, which `geo_key` then wrapped to `0.0`, so the two disagreed.)
+    ///   So a migrated project and an untouched sibling agree on every field reconcile
+    ///   compares. Dropping the provenance would cost real data instead:
+    ///   `compute_collab` bails while `last_export_tml_sha256` is `None`,
     ///   so the reconcile dialog never opens and the next save overwrites the
     ///   collaborator's unmerged edits with no prompt. See
     ///   [`crate::models::Project::invalidate_collab_baseline`] for the runtime policy,
@@ -813,8 +822,9 @@ impl Database {
         for row in rows {
             let (id, section_id, azimuth_in, azimuth_out) = row?;
             // A non-finite reading (SQLite rejects NaN into a NOT NULL REAL, but stores
-            // infinities) has no canonical form - `rem_euclid` would write NaN. Leave it
-            // for `ShotData::all_finite` and the integrity banner to surface.
+            // infinities) has no canonical form; `normalize_azimuth` passes it through, so
+            // without this guard the row would take a no-op UPDATE and still inflate the
+            // count. Leave it for `ShotData::all_finite` and the integrity banner.
             if !azimuth_in.is_finite() || !azimuth_out.is_finite() {
                 continue;
             }
@@ -823,8 +833,8 @@ impl Database {
             }
             updates.push((
                 id,
-                azimuth_in.rem_euclid(360.0),
-                azimuth_out.rem_euclid(360.0),
+                crate::models::normalize_azimuth(azimuth_in),
+                crate::models::normalize_azimuth(azimuth_out),
             ));
         }
         drop(stmt);

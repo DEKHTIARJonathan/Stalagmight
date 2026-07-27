@@ -46,13 +46,13 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{SectionId, Shot, ShotData, StationKey, StationRef};
+use crate::models::{normalize_azimuth, SectionId, Shot, ShotData, StationKey, StationRef};
 
 use super::Project;
 
 /// Reciprocal of a forward azimuth, normalised to `[0, 360)`.
 fn reciprocal(azimuth: f64) -> f64 {
-    (azimuth + 180.0).rem_euclid(360.0)
+    normalize_azimuth(azimuth + 180.0)
 }
 
 /// True when reciprocating and swapping a shot's two readings would give the
@@ -71,7 +71,7 @@ fn reciprocal(azimuth: f64) -> f64 {
 /// through `to_bits` so this reads as "bit-exact by intent" rather than a
 /// sloppy float `==`.
 fn readings_are_antipodal(azimuth_in: f64, azimuth_out: f64) -> bool {
-    (azimuth_out - azimuth_in).rem_euclid(360.0).to_bits() == 180.0_f64.to_bits()
+    normalize_azimuth(azimuth_out - azimuth_in).to_bits() == 180.0_f64.to_bits()
 }
 
 /// Total local displacement of a run of shots: the local coordinate of the last
@@ -110,23 +110,32 @@ pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
     shots.reverse();
     for shot in shots.iter_mut() {
         // Normalise first so the transform and `average_azimuth_of` work from
-        // the same canonical readings. All three wrap with `rem_euclid` now, so
-        // they agree on any input's mod-360 class - but the degenerate branch
-        // below swaps its operands VERBATIM, so an out-of-range pair would be
-        // written straight back onto the record and stay out of range for every
-        // later consumer; and the exact `== 180` antipodal test only holds once
-        // the magnitudes are small enough that `azimuth_out - azimuth_in` does
-        // not round. It was load-bearing for the geometry too while
+        // the same canonical readings. All three wrap through `normalize_azimuth`
+        // now, so they agree on any input's mod-360 class - but the degenerate
+        // branch below swaps its operands VERBATIM, so whatever this line leaves
+        // on the record is what a degenerate pair keeps, for every later
+        // consumer; and the exact `== 180` antipodal test only holds once the
+        // magnitudes are small enough that `azimuth_out - azimuth_in` does not
+        // round. That verbatim swap is exactly why a bare `rem_euclid` was not
+        // enough here: it can return `360.0` (see `normalize_azimuth`), so the
+        // pre-normalisation could itself hand the swap an OUT-OF-RANGE value and
+        // violate the invariant it exists to establish - `(-1e-14, 180.0)` came
+        // back as `(180.0, 360.0)`, a non-ignorable `INVALID_AZIMUTH` minted by
+        // the very step meant to prevent one.
+        //
+        // The pre-normalisation was load-bearing for the geometry too while
         // `average_azimuth_of` still wrapped with Rust's truncated `%`: the two
         // disagreed for a pair whose difference falls outside `(-540, 540]`, the
         // degenerate-pair guard missed, and reciprocate-and-swap left the bearing
         // UNCHANGED while the rest of the section turned around. Out-of-range
-        // readings are reachable: `validation.rs` only WARNS on an azimuth
-        // outside `[0, 360)`, and the DMP parser (models::dmp) stores
-        // `heading_in`/`heading_out` verbatim where the Compass and TML importers
-        // `rem_euclid` theirs.
-        shot.azimuth_in = shot.azimuth_in.rem_euclid(360.0);
-        shot.azimuth_out = shot.azimuth_out.rem_euclid(360.0);
+        // readings are reachable: `validation.rs` flags an azimuth outside
+        // `[0, 360)` as `INVALID_AZIMUTH`, which is `WarningSeverity::Error` and
+        // so cannot be ignored - but it is a report, not a gate, and nothing
+        // rejects the value. The DMP parser (models::dmp) also stored
+        // `heading_in`/`heading_out` verbatim in older builds, where the Compass
+        // and TML importers normalised theirs.
+        shot.azimuth_in = normalize_azimuth(shot.azimuth_in);
+        shot.azimuth_out = normalize_azimuth(shot.azimuth_out);
 
         if readings_are_antipodal(shot.azimuth_in, shot.azimuth_out) {
             // Degenerate pair: the two readings disagree by a full 180 degrees,
@@ -700,6 +709,36 @@ mod tests {
         let s = &project.get_section(id).unwrap().shots[0];
         assert_eq!(s.azimuth_in, 30.0);
         assert_eq!(s.azimuth_out, 210.0);
+    }
+
+    /// The degenerate branch swaps its operands VERBATIM, so whatever the
+    /// pre-normalisation above leaves on the record is what the pair keeps.  A
+    /// bare `rem_euclid` maps a tiny negative reading to exactly `360.0`, so the
+    /// step meant to establish "both readings are in `[0, 360)`" used to hand the
+    /// swap an out-of-range value and mint a non-ignorable `INVALID_AZIMUTH`
+    /// itself: `(-1e-14, 180.0)` came back `(180.0, 360.0)`.
+    #[test]
+    fn reverse_of_a_degenerate_pair_with_a_tiny_negative_reading_stays_in_range() {
+        assert_eq!(
+            (-1e-14_f64).rem_euclid(360.0),
+            360.0,
+            "precondition: the bare rem_euclid wrap escapes [0, 360) here"
+        );
+
+        let mut data = shot(0.0, 10.0, 0.0, 0.0);
+        data.azimuth_in = -1e-14;
+        data.azimuth_out = 180.0;
+        let mut shots = [data];
+        reverse_shots(&mut shots, false);
+
+        let (azimuth_in, azimuth_out) = (shots[0].azimuth_in, shots[0].azimuth_out);
+        assert!(
+            (0.0..360.0).contains(&azimuth_in) && (0.0..360.0).contains(&azimuth_out),
+            "reverse left a reading out of range: ({azimuth_in}, {azimuth_out})"
+        );
+        // The pair IS degenerate once normalised (0 and 180), so it is swapped.
+        assert_eq!(azimuth_in, 180.0);
+        assert_eq!(azimuth_out, 0.0);
     }
 
     /// A near-antipodal pair is NOT degenerate - its mean is well defined, so it

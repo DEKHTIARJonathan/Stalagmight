@@ -23,7 +23,9 @@ use quick_xml::Writer;
 use sha2::{Digest, Sha256};
 
 use crate::core::comment_split;
-use crate::models::{geo_key, Project, Section, SectionId, Shot, ShotBaselineEntry, StationRef};
+use crate::models::{
+    geo_key, normalize_azimuth, Project, Section, SectionId, Shot, ShotBaselineEntry, StationRef,
+};
 
 // ============================================================================
 // Element-name map (long vs. short)
@@ -1648,10 +1650,6 @@ fn station_depth(section: &Section, station_index: usize) -> f64 {
     } else {
         section.shots[station_index].depth_in
     }
-}
-
-fn normalize_azimuth(azimuth: f64) -> f64 {
-    azimuth.rem_euclid(360.0)
 }
 
 /// Compute azimuth for the generated pre-zero-datum reverse segment.

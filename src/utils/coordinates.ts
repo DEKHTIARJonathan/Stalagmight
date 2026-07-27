@@ -1,6 +1,7 @@
 import type { Coordinates, GpsCoordinates } from '../types/project';
 import type { GpsOrigin } from '../types/config';
 import { formatFixed } from '../i18n/format';
+import { normalizeAzimuth } from './azimuth';
 
 // Earth radius in meters for coordinate conversions
 const EARTH_RADIUS = 6371000;
@@ -277,16 +278,16 @@ export function getBoundsFromStationCoords(stationCoords: Float64Array): {
 }
 
 /**
- * Calculate azimuth from point A to point B (degrees, 0-360)
+ * Calculate azimuth from point A to point B (degrees, [0, 360))
+ *
+ * Wrapped through `normalizeAzimuth` rather than a local `if (angle < 0) angle
+ * += 360`: for a hair-west-of-north displacement that addend rounds to exactly
+ * `360`, which is out of range and trips a non-ignorable `INVALID_AZIMUTH`.
  */
 export function calculateAzimuth(from: Coordinates, to: Coordinates): number {
   const dx = to.x - from.x;
   const dy = to.y - from.y;
-  let angle = Math.atan2(dx, dy) * (180 / Math.PI);
-  if (angle < 0) {
-    angle += 360;
-  }
-  return angle;
+  return normalizeAzimuth(Math.atan2(dx, dy) * (180 / Math.PI));
 }
 
 /**

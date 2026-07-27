@@ -2,6 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { getErrorMessage } from '../../utils/ipc';
+import { normalizeAzimuth } from '../../utils/azimuth';
 import { trackDialogComplete } from '../../utils/telemetry';
 import { Button } from '../common/Button';
 import { EntityBlob } from '../common/EntityBlob';
@@ -29,13 +30,6 @@ export default function DrawShotDialog() {
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-
-  // Normalize azimuth to 0-360 range
-  const normalizeAzimuth = (value: number): number => {
-    let normalized = value % 360;
-    if (normalized < 0) normalized += 360;
-    return normalized;
-  };
 
   const initialAzimuthIn = useMemo(() => {
     if (!sourceGeometry) return '';
