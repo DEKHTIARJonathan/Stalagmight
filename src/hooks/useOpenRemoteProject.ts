@@ -222,19 +222,26 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       const { project, isDirty } = useProjectStore.getState();
       if (!project) return null;
       const speleo = useSpeleoStore.getState();
-      // Re-opening the project already on screen leaves nothing behind, so it is
-      // never refused - the same exemption `finishOpen` makes once the pull has named
-      // a path, decided here from the id the status poll recorded because that is all
-      // there is to go on BEFORE the pull. It is also how the refused-open prompt is
-      // reached for the OPEN project: the pull is refused over its un-pushed cache
-      // copy, and that prompt's "take the server copy" is the only way out of that
-      // state - refusing here would shut the door this branch exists behind.
-      // `remoteProjectId` is null until the first poll lands, so that window refuses
-      // an open it could have allowed; that direction costs a menu trip, the other
-      // loses work.
-      if (speleo.remoteProjectId === summary.id) return null;
-      if (needsSpeleoHandBackPrompt(speleo.link))
+      // Re-opening the project already on screen is exempt from the HAND-BACK check
+      // only, not from the whole guard. Nothing is handed back to a project we are
+      // re-opening, and that exemption is load-bearing: it is how the refused-open
+      // prompt is reached for the OPEN project, whose pull is refused over its
+      // un-pushed cache copy and whose only way out is that prompt's "take the server
+      // copy". Refusing on un-pushed work here would shut the door this branch exists
+      // behind. Decided from the id the status poll recorded, because that is all
+      // there is to go on BEFORE the pull; `remoteProjectId` is null until the first
+      // poll lands, so that window refuses an open it could have allowed - a menu
+      // trip, against losing work the other way.
+      const reopeningOpenProject = speleo.remoteProjectId === summary.id;
+      if (!reopeningOpenProject && needsSpeleoHandBackPrompt(speleo.link))
         return t('speleodb.errors.openBlockedUnpushed', { name: summary.name });
+      // Disk-dirty is NOT exempt, even re-opening. `speleodb_open_project` replaces
+      // the cache `.stalx`, and `replace_cache_stalx_abandoning` closes the live
+      // backend project without saving before the rename - so unsaved in-memory
+      // survey is dropped. The persisted dirty bit normally makes the backend refuse
+      // first, but `mark_remote_dirty` logs and swallows a failure to write it, and a
+      // frontend-only edit can leave `isDirty` as the only evidence there is anything
+      // to lose. Exempting the re-open from this too was the wrong half to widen.
       if (isDirty) return t('speleodb.errors.openBlockedUnsaved', { name: summary.name });
       return null;
     },

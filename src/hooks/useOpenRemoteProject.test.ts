@@ -460,17 +460,36 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
     });
 
-    it('never refuses re-opening the project already on screen', async () => {
-      // Re-opening what is already open leaves nothing behind, so there is nothing to
-      // ask about - and this is the route "take the server copy and discard my local
-      // changes" reaches the hook by, over a cache copy that is un-pushed BY
-      // DEFINITION. Refusing here would close the only door out of it.
-      useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never, isDirty: true });
+    it('re-opening the project already on screen is exempt from the hand-back check', async () => {
+      // Nothing is handed back to a project we are re-opening, and this is the route
+      // "take the server copy and discard my local changes" reaches the hook by, over
+      // a cache copy that is un-pushed BY DEFINITION. Refusing on un-pushed work here
+      // would close the only door out of that state.
+      useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never, isDirty: false });
       useSpeleoStore.setState({
         link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
         remoteProjectId: 'p1',
       });
       expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+    });
+
+    it('still refuses re-opening the open project over unsaved-to-disk edits', async () => {
+      // The exemption above covers the HAND-BACK question only. `speleodb_open_project`
+      // replaces the cache `.stalx`, and `replace_cache_stalx_abandoning` closes the
+      // live backend project without saving before the rename - so unsaved in-memory
+      // survey is dropped. The persisted dirty bit usually makes the backend refuse
+      // first, but writing it is best-effort (`mark_remote_dirty` swallows a failure)
+      // and a frontend-only edit can leave `isDirty` as the only evidence.
+      useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never, isDirty: true });
+      useSpeleoStore.setState({ link: openLink(), remoteProjectId: 'p1' });
+
+      const outcome = await hook().openRemote(SUMMARY);
+
+      expect(outcome.status).toBe('error');
+      expect(await refusal()).toMatch(/sav/i);
+      // Refused BEFORE the pull, so the cache file it would have replaced is untouched.
+      expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_open_project', expect.anything());
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     it('does not re-ask on the branches reached THROUGH a guarded open', async () => {
