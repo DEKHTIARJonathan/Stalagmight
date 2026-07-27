@@ -297,6 +297,108 @@ pub(crate) fn export_image_impl(
     }
 }
 
+/// The plan inputs a dive-profile export needs - byte-identical to `compute_gas_reach_field`'s.
+///
+/// The field is recomputed here rather than accepted from the frontend. The exported file is a
+/// document the diver may act on months later, so it has to be what the engine says *now*, not a
+/// snapshot the UI happened to be holding: a client-supplied field could be stale (every plan edit
+/// nulls it), or simply not match the plan on screen.
+#[derive(serde::Deserialize)]
+pub struct DiveProfileRequest {
+    pub origin: Option<crate::models::StationRef>,
+    pub endpoint: Option<crate::models::StationRef>,
+    pub waypoints: Vec<crate::models::StationRef>,
+    pub diver: crate::models::Diver,
+    pub cylinders: Vec<crate::models::Cylinder>,
+    pub gas_config: crate::config::GasConfig,
+    pub stage_drop_overrides: Vec<Option<crate::models::StationRef>>,
+}
+
+/// Recompute the reach field for `request` and render its profile in `format`.
+fn render_profile(
+    app_handle: &AppHandle,
+    request: DiveProfileRequest,
+    format: &str,
+) -> Result<(String, String), String> {
+    let format = crate::export::ProfileFormat::from_wire(format).map_err(|e| e.to_string())?;
+    let state = app_handle.state::<AppState>();
+    let project = state
+        .get_project_state()
+        .ok_or_else(|| "No project open".to_string())?;
+    let mut gas_config = request.gas_config;
+    gas_config.normalize();
+    let field = state
+        .inner()
+        .gas_reach_field(
+            request.origin.as_ref(),
+            request.endpoint.as_ref(),
+            &request.waypoints,
+            &request.diver,
+            &request.cylinders,
+            &gas_config,
+            &request.stage_drop_overrides,
+        )
+        .ok_or_else(|| "No project open".to_string())?;
+    let rendered =
+        crate::export::render(&field, format, &project.name).map_err(|e| e.to_string())?;
+    Ok((rendered, project.name))
+}
+
+/// Write the planned dive profile to `path` (#299).
+///
+/// `format` is `"subsurface-xml"` or `"text"`. Reuses the same no-project and never-clobber-the-open-
+/// `.stalx` guards the other exports run under.
+#[tauri::command]
+pub async fn export_dive_profile(
+    app_handle: AppHandle,
+    path: PathBuf,
+    format: String,
+    request: DiveProfileRequest,
+) -> Result<(), String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let state = app_handle.state::<AppState>();
+        if let Some(project) = state.get_project_state() {
+            if let Some(open_path) = project.file_path.as_deref() {
+                if is_open_project_file(&path, open_path) {
+                    tracing::warn!(
+                        path = ?path,
+                        open_project = ?open_path,
+                        format = %format,
+                        "Refused to export a dive profile over the open project file"
+                    );
+                    return Err("Cannot export over the open project file".to_string());
+                }
+            }
+        }
+        let (rendered, _) = render_profile(&app_handle, request, &format)?;
+        tracing::info!(
+            path = ?path,
+            purpose = "export the planned dive profile",
+            format = %format,
+            "Exporting dive profile"
+        );
+        std::fs::write(&path, rendered).map_err(|e| {
+            tracing::error!(path = ?path, reason = %e, "Dive profile export failed");
+            e.to_string()
+        })
+    })
+    .await
+    .map_err(|e| format!("Dive profile export task panicked: {e}"))?
+}
+
+/// Render the planned dive profile as text WITHOUT writing it, for the clipboard (#299).
+#[tauri::command]
+pub async fn render_dive_profile_text(
+    app_handle: AppHandle,
+    request: DiveProfileRequest,
+) -> Result<String, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        render_profile(&app_handle, request, "text").map(|(rendered, _)| rendered)
+    })
+    .await
+    .map_err(|e| format!("Dive profile render task panicked: {e}"))?
+}
+
 /// Generate the SVG markup that `export_image` would write, without
 /// touching the filesystem. Used by the export dialog so the preview is
 /// pixel-for-pixel identical to what export will produce.

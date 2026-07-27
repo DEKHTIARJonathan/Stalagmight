@@ -442,6 +442,63 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
   });
 
+  test('Profile exports carry the plan inputs, not a client-held field (#299)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+    await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible({ timeout: 3000 });
+
+    // Copy renders server-side and lands on the clipboard. Granting permission explicitly: the
+    // component treats navigator.clipboard as best-effort, so without this the button would still
+    // "succeed" and the assertion would be on nothing.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const copy = page.locator('[data-testid="plan-profile-copy"]');
+    await expect(copy).toBeEnabled();
+    await copy.click();
+    await expect(copy).toContainText('Copied');
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboard).toContain('NOT a decompression schedule');
+
+    // The XML export sends the plan INPUTS - the backend recomputes the reach field from them
+    // rather than trusting whatever the UI is holding, so a request missing them would silently
+    // export a route the diver has already changed. The mock's save dialog returns a path.
+    await page.locator('[data-testid="plan-profile-export-xml"]').click();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              ((window as unknown as Record<string, unknown>)
+                .__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[] | undefined)?.length ?? 0,
+          ),
+        { timeout: 5000 },
+      )
+      .toBe(1);
+    const sent = await page.evaluate(
+      () =>
+        (
+          (window as unknown as Record<string, unknown>).__MOCK_DIVE_PROFILE_EXPORTS__ as Array<{
+            path: string;
+            format: string;
+            request: Record<string, unknown>;
+          }>
+        )[0],
+    );
+    expect(sent.format).toBe('subsurface-xml');
+    expect(sent.path.endsWith('.xml')).toBe(true);
+    // The whole input tuple, not just the endpoints.
+    expect(Object.keys(sent.request).sort()).toEqual([
+      'cylinders',
+      'diver',
+      'endpoint',
+      'gas_config',
+      'origin',
+      'stage_drop_overrides',
+      'waypoints',
+    ]);
+    expect(Array.isArray(sent.request.cylinders)).toBe(true);
+  });
+
   test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
     await enterMode(page, 'plan');
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');

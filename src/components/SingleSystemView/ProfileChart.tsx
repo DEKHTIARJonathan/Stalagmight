@@ -6,6 +6,8 @@ import { useUIStore } from '../../store/uiStore';
 import { getThemeColor } from '../../utils/themeColors';
 import { formatGasLength } from '../../utils/formatGas';
 import { formatFixed } from '../../i18n/format';
+import { saveDialog, exportSaveFilters, ensureExtension } from '../../utils/fileDialogs';
+import { exportDiveProfile, renderDiveProfileText } from '../../utils/divePlanApi';
 import {
   buildRouteProfile,
   projectProfile,
@@ -67,7 +69,7 @@ export function ProfileChart() {
 
   return (
     <div className="h-full flex flex-col" data-testid="plan-profile">
-      <ProfileHeader axis={axis} onAxis={setAxis} />
+      <ProfileHeader axis={axis} onAxis={setAxis} exportable={geo !== null} />
       <div ref={containerRef} className="flex-1 min-h-0 px-2 pb-2" data-testid="plan-profile-plot">
         {geo ? (
           <ProfilePlot geo={geo} units={units} size={size} clipId={clipId} />
@@ -86,13 +88,22 @@ export function ProfileChart() {
   );
 }
 
-function ProfileHeader({ axis, onAxis }: { axis: ProfileAxis; onAxis: (a: ProfileAxis) => void }) {
+function ProfileHeader({
+  axis,
+  onAxis,
+  exportable,
+}: {
+  axis: ProfileAxis;
+  onAxis: (a: ProfileAxis) => void;
+  exportable: boolean;
+}) {
   const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-2 px-2 py-1 shrink-0">
       <span className="text-xs opacity-70" title={t('planTables.profile.subtitle')}>
         {t('planTables.profile.title')}
       </span>
+      <ProfileExportControls enabled={exportable} />
       <div
         className="flex rounded overflow-hidden border border-border"
         role="group"
@@ -111,6 +122,84 @@ function ProfileHeader({ axis, onAxis }: { axis: ProfileAxis; onAxis: (a: Profil
           </button>
         ))}
       </div>
+    </div>
+  );
+}
+
+/**
+ * Export the plan straight from the tab it is drawn in, rather than through the project Export
+ * panel: a dive profile is not project data, and it only exists while a plan is live.
+ *
+ * Both actions send the plan INPUTS and let the backend recompute - see `DiveProfileRequest`. Copy
+ * is best-effort on the clipboard write (`navigator.clipboard` is unavailable in some contexts),
+ * matching how the debug-log copy handles it.
+ */
+function ProfileExportControls({ enabled }: { enabled: boolean }) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const request = useGasPlanStore(
+    useShallow((s) => ({
+      origin: s.origin,
+      endpoint: s.endpoint,
+      waypoints: s.waypoints,
+      diver: s.diver,
+      cylinders: s.cylinders,
+      gas_config: s.gasConfig,
+      stage_drop_overrides: s.stageDropOverrides,
+    }))
+  );
+
+  const run = async (fn: () => Promise<void>) => {
+    setBusy(true);
+    try {
+      await fn();
+    } catch (e) {
+      console.error('Dive profile export failed:', e);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const onExport = () =>
+    run(async () => {
+      const path = await saveDialog({
+        filters: exportSaveFilters(t('planTables.profile.export.xmlFilter'), 'xml'),
+      });
+      if (!path) return;
+      await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', request);
+    });
+
+  const onCopy = () =>
+    run(async () => {
+      const text = await renderDiveProfileText(request);
+      await navigator.clipboard?.writeText(text);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    });
+
+  return (
+    <div className="flex gap-1">
+      <button
+        type="button"
+        onClick={onCopy}
+        disabled={!enabled || busy}
+        data-testid="plan-profile-copy"
+        title={t('planTables.profile.export.copyHint')}
+        className="px-2 py-0.5 text-xs border border-border rounded disabled:opacity-40"
+      >
+        {copied ? t('planTables.profile.export.copied') : t('planTables.profile.export.copy')}
+      </button>
+      <button
+        type="button"
+        onClick={onExport}
+        disabled={!enabled || busy}
+        data-testid="plan-profile-export-xml"
+        title={t('planTables.profile.export.xmlHint')}
+        className="px-2 py-0.5 text-xs border border-border rounded disabled:opacity-40"
+      >
+        {t('planTables.profile.export.xml')}
+      </button>
     </div>
   );
 }

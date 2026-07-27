@@ -3432,6 +3432,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
 
+          // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
+          // reached the backend - the real command recomputes the reach field from them rather
+          // than trusting a client-held one, so sending them is the contract under test.
+          case 'export_dive_profile': {
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[]) ?? [];
+            calls.push({ path: args?.path, format: args?.format, request: args?.request });
+            win.__MOCK_DIVE_PROFILE_EXPORTS__ = calls;
+            return undefined;
+          }
+
+          case 'render_dive_profile_text':
+            return [
+              'Mock Cave - planned dive profile',
+              'Planned penetration profile from Stalagmight. NOT a decompression schedule.',
+              '',
+              '   Dist(m)   Depth(m)   Runtime      Gas(L)  Leg',
+              '       0.0        0.0      0:00           0  in',
+            ].join('\n');
+
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the
             // mock returns a tiny but valid SVG so the preview component can
