@@ -1,6 +1,7 @@
 import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
+import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
@@ -38,9 +39,11 @@ export interface RevertRevisionArgs {
    * themselves, with a discard as the loudest way out. The push path classifies
    * that same commit as ours and finishes cleanly, so the retry has to stay on it.
    *
-   * Skips the pre-flight un-pushed-edits guard by construction: the restore is
-   * what SET that bit, so the guard would refuse the retry over the revert's own
-   * tree.
+   * Skips BOTH pre-flight guards by construction. The restore is what SET the
+   * un-pushed bit, so that guard would refuse the retry over the revert's own
+   * tree; and the restore left the working copy saved (`useRestoreRevision`
+   * clears `isDirty` behind it), with this modal dialog the only thing on screen
+   * since, so there is no unsaved edit for the other guard to find.
    */
   resumeAtPush?: boolean;
   /** Progress callback, so a three-round-trip operation is legible while it runs. */
@@ -65,6 +68,10 @@ type PublishArgs = Pick<RevertRevisionArgs, 'message' | 'shortSha'> & {
 export type RevertOutcome =
   | { kind: 'reverted' }
   | { kind: 'needs_discard'; lockHeld: boolean }
+  /** The open project holds edits that are not on DISK. Nothing was taken and
+      nothing was changed - see the pre-flight for why this is its own answer and
+      not a `needs_discard`. */
+  | { kind: 'unsaved_local' }
   | { kind: 'diverged' }
   | { kind: 'locked_by'; email: string | null }
   | { kind: 'lock_failed' }
@@ -140,10 +147,31 @@ export function useRevertRevision() {
       onStep,
     }: RevertRevisionArgs): Promise<RevertOutcome> => {
       // The restore already landed and the lock is still ours, so the upload is the
-      // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of the
-      // pre-flight below: the restore is what set the bit that guard tests, so
-      // running it here would refuse the retry over the revert's own tree.
+      // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of both
+      // pre-flights below: the restore is what set the bit the un-pushed guard
+      // tests, so running it here would refuse the retry over the revert's own tree.
       if (resumeAtPush) return publish({ message, shortSha, onStep });
+
+      // Un-SAVED is a different loss from un-PUSHED, and this flow resolves neither:
+      // the restore closes and reopens the project at the checked-out tree, so an edit
+      // that exists only in memory is gone, and `useRestoreRevision` then force-clears
+      // `isDirty` - leaving nothing behind that says it ever existed. The persisted
+      // SpeleoDB bit read below normally covers this, but only normally:
+      // `mark_remote_dirty` logs and swallows a failure to write `has_unpushed_edits`,
+      // and once the lock is lost or released the link can look clean while `isDirty`
+      // is the ONLY evidence there is anything to lose. Same guard the other
+      // project-replacement entry points already carry (`handBackRefusal` in
+      // `useOpenRemoteProject`, `guardQuit`, `useProject`'s close guard).
+      //
+      // FIRST, and NOT waived by `discardLocal` - the opposite order to
+      // `handBackRefusal`, deliberately. There, naming SpeleoDB first settles both
+      // senses in one hop because the hand-back it sends you to carries a "save
+      // changes locally" checkbox. Here the un-pushed refusal leads to this dialog's
+      // OWN armed discard, which saves nothing: reaching it while dirty on disk would
+      // destroy the in-memory work too, under a confirmation whose copy only ever
+      // mentions SpeleoDB. Save first and those edits simply become part of the
+      // un-pushed set that copy then describes accurately.
+      if (useProjectStore.getState().isDirty) return { kind: 'unsaved_local' };
 
       // Pre-flight, deliberately BEFORE any IPC: a copy with un-pushed edits will be
       // refused by the restore anyway, so taking the lock first would block another

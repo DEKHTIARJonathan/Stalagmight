@@ -353,6 +353,83 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     expect(closeDialogMock).toHaveBeenCalled();
   });
 
+  it('hands the CONFIRMED discard over to the upload-only retry when the push fails', async () => {
+    // The discard route and the retry route are mutually exclusive in the render, and
+    // the discard one is tested first - so leaving `needsDiscard` set for the life of
+    // the dialog made the retry unreachable for exactly the users who needed it most.
+    // What they got instead was the still-ARMED discard confirm: ONE press to re-run
+    // the whole composite, which re-restores over anything edited since and, on the
+    // attempt whose upload really landed, puts them through the acquire's reconcile -
+    // no authorship recovery there, so their own revert reads as a divergence, the
+    // lock is released, and they are asked to resolve a conflict with themselves.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: rejects({ message: 'offline' }),
+    });
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-offer-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-confirm-btn'));
+
+    expect(await screen.findByTestId('speleodb-revert-retry-upload-btn')).toBeInTheDocument();
+    // The destructive question was asked AND answered; that consent is spent.
+    expect(screen.queryByTestId('speleodb-revert-discard-confirm-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revert-discard-offer-btn')).not.toBeInTheDocument();
+
+    // And the retry really is the upload alone - no second acquire, no second restore
+    // under the discard policy.
+    invokeIpcMock.mockClear();
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    await userEvent.click(screen.getByTestId('speleodb-revert-retry-upload-btn'));
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+
+  it('does the same when the confirmed discard ends in an unconfirmed push', async () => {
+    // The arm that MOST needs the upload-only retry: the commit may already be on the
+    // server, and the composite is the one route that cannot tell it is ours.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+    });
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-offer-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-confirm-btn'));
+
+    expect(await screen.findByTestId('speleodb-revert-retry-upload-btn')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revert-discard-confirm-btn')).not.toBeInTheDocument();
+  });
+
+  it('disarms the discard when the confirmed run loses the session mid-flight', async () => {
+    // `not_editing` has no lock to retry with, so there is no retry control - but the
+    // restore still landed, and an armed destructive button is the wrong thing to
+    // leave a signed-out user pointing at. The plain Revert comes back instead.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'not_editing' }),
+    });
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-offer-btn'));
+    await userEvent.click(await screen.findByTestId('speleodb-revert-discard-confirm-btn'));
+
+    await screen.findByTestId('speleodb-revert-error');
+    expect(screen.queryByTestId('speleodb-revert-discard-confirm-btn')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revert-confirm-btn')).toBeInTheDocument();
+  });
+
   it('a second Enter on the focused control after the refusal does NOT discard', async () => {
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
@@ -370,5 +447,50 @@ describe('SpeleoRevertDialog - the armed discard', () => {
     expect(
       restoreCalls().some((c) => (c[1] as { discardLocal?: boolean }).discardLocal === true),
     ).toBe(false);
+  });
+});
+
+/**
+ * Un-SAVED is not un-PUSHED. A revert closes and reopens the project at the checked-out
+ * tree, so an edit that only exists in memory is gone and `useRestoreRevision` then
+ * clears `isDirty` behind it - nothing is left that says it was ever there.
+ */
+describe('SpeleoRevertDialog - unsaved local edits', () => {
+  beforeEach(() => {
+    useProjectStore.setState({ isDirty: true });
+  });
+
+  it('refuses the revert instead of replacing work that is only in memory', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+
+    const error = await screen.findByTestId('speleodb-revert-error');
+    expect(error.textContent).toMatch(/saved to disk/i);
+    // Refused before any IPC: no lock taken, no tree replaced, dialog still open.
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+    expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('does NOT offer the discard route for it - that waiver saves nothing', async () => {
+    // "Replace my changes & revert" waives the SpeleoDB guard and writes nothing to
+    // disk, so routing an unsaved edit through it would destroy work the user could
+    // still keep with one keystroke, under copy that only mentions SpeleoDB.
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+    ipc({});
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+
+    await screen.findByTestId('speleodb-revert-error');
+    expect(screen.queryByTestId('speleodb-revert-discard-offer-btn')).not.toBeInTheDocument();
+    // The plain Revert stays the primary: nothing was taken, so saving and pressing it
+    // again is the whole way forward.
+    expect(screen.getByTestId('speleodb-revert-confirm-btn')).toBeInTheDocument();
   });
 });

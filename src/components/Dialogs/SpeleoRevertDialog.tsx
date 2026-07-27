@@ -109,6 +109,22 @@ export default function SpeleoRevertDialog() {
       onStep: setStep,
     });
     setStep(null);
+    // The restore LANDED, so the destructive question has been asked AND answered:
+    // disarm the discard route before reporting where we got to. `needsDiscard` used
+    // to stay true for the rest of the dialog's life, and the render below tests it
+    // FIRST - so every outcome past the restore was shown the discard control, and
+    // the upload-only retry the push arms below could never appear. Worse, the
+    // control on offer was the still-ARMED confirm: one press re-ran the whole
+    // composite under the discard policy, re-restoring over anything edited since
+    // and, on the attempt whose upload actually landed, re-entering the acquire's
+    // reconcile - which cannot recognise our own commit, so it releases the lock and
+    // prompts about a conflict with ourselves. Consent to replace un-pushed work is
+    // spent once it has been acted on; a second destructive press has to be asked
+    // for again from the top.
+    const restoreLanded = () => {
+      setNeedsDiscard(false);
+      setDiscardArmed(false);
+    };
     switch (outcome.kind) {
       case 'reverted':
         dismiss();
@@ -120,6 +136,16 @@ export default function SpeleoRevertDialog() {
       case 'needs_discard':
         setNeedsDiscard(true);
         setLockHeld(outcome.lockHeld);
+        setBusy(false);
+        return;
+      case 'unsaved_local':
+        // Refused, NOT offered as a discard: un-saved is not un-pushed. The armed
+        // discard waives the SpeleoDB guard and saves nothing, so routing here would
+        // destroy work the user still has a one-keystroke way to keep, under copy
+        // ("changes that are not on SpeleoDB") that does not describe it. Nothing was
+        // taken and nothing was changed, so the plain Revert stays the primary: save,
+        // come back, press it again.
+        setError(t('speleodb.revert.errors.unsavedLocal'));
         setBusy(false);
         return;
       case 'locked_by':
@@ -150,6 +176,7 @@ export default function SpeleoRevertDialog() {
         // exactly that, but it is behind this dialog's own full-viewport scrim -
         // dimmed and unclickable - so this dialog has to carry the retry itself.
         // `SpeleoPushFailureNotice` below reports WHY the upload failed.
+        restoreLanded();
         setRetryUpload(true);
         setError(t('speleodb.revert.errors.pushFailed', { sha: shortSha }));
         setBusy(false);
@@ -158,7 +185,10 @@ export default function SpeleoRevertDialog() {
         // Same dead end, different footing: the session was dropped mid-flight, so
         // there is no held lock and the banner's Retry cannot work. Saying "you are
         // holding the write lock" here - as pushFailed does - would send the user
-        // at a button that fails.
+        // at a button that fails. The restore still landed, so the discard route is
+        // spent here too - and leaving it armed would offer a re-run of the whole
+        // composite as the way out of a dropped session, which cannot even acquire.
+        restoreLanded();
         setError(t('speleodb.revert.errors.notEditing', { sha: shortSha }));
         setBusy(false);
         return;
@@ -172,6 +202,7 @@ export default function SpeleoRevertDialog() {
         // answer here: it would replace a tree that is already correct, and take the
         // one route - the acquire's reconcile - with no way to recognise our own
         // landed commit.
+        restoreLanded();
         setRetryUpload(true);
         setError(t('speleodb.revert.errors.pushUnconfirmed'));
         setBusy(false);

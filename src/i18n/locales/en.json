@@ -2929,7 +2929,7 @@
       "title": "Revert to revision {{sha}}",
       "body": "This takes the write lock on \"{{name}}\", replaces the working copy with revision {{sha}}, uploads it as a new revision, and releases the write lock again.",
       "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
-      "unsavedWarning": "You have unsaved changes that will be discarded.",
+      "unsavedWarning": "You have changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, so it cannot keep them.",
       "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
       "messageLabel": "Commit message",
       "commitMessage": "Revert to revision {{sha}}",
@@ -2947,6 +2947,7 @@
       "errors": {
         "locked": "Could not take the write lock: {{email}} is editing this project. Nothing was changed.",
         "lockFailed": "Could not take the write lock on SpeleoDB, so nothing was changed.",
+        "unsavedLocal": "Nothing was changed: this project has changes that are not saved to disk. Save or discard them first - a revert replaces the working copy, and unsaved changes are nowhere else.",
         "restorePrefix": "Could not load revision {{sha}}",
         "restoreFailed": "The write lock was released and nothing was changed.",
         "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",

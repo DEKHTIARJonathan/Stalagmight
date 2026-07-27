@@ -151,6 +151,47 @@ describe('useRevertRevision - refusing before it takes anything', () => {
     expect(issued()).toEqual([]);
   });
 
+  it('refuses over edits that are only in memory, WITHOUT acquiring the lock', async () => {
+    // The restore closes and reopens the project at the checked-out tree, so an
+    // unsaved edit is gone - and `useRestoreRevision` clears `isDirty` behind it, so
+    // nothing is left that says it existed. The persisted SpeleoDB bit usually covers
+    // this, but `mark_remote_dirty` logs and swallows a failure to write it, and once
+    // the lock is lost the link can read clean with `isDirty` the only evidence left.
+    useProjectStore.setState({ isDirty: true });
+    ipc({});
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'unsaved_local' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('checks disk-dirty BEFORE the un-pushed bit', async () => {
+    // A project dirty in both senses must not be sent to the armed discard first: that
+    // waiver saves nothing, so confirming it would destroy the in-memory work too,
+    // under copy ("changes that are not on SpeleoDB") that never mentions it. Saving
+    // first folds those edits into the un-pushed set that copy then describes.
+    useProjectStore.setState({ isDirty: true });
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+    ipc({});
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'unsaved_local' });
+  });
+
+  it('is NOT waived by the armed discard press', async () => {
+    // `discardLocal` answers the un-pushed question only. Nothing in that confirmation
+    // asked about work that has never reached the disk.
+    useProjectStore.setState({ isDirty: true });
+    ipc({});
+
+    const outcome = await run({ discardLocal: true });
+
+    expect(outcome).toEqual({ kind: 'unsaved_local' });
+    expect(issued()).toEqual([]);
+  });
+
   it('reports the holder when someone else has the lock', async () => {
     ipc({ speleodb_start_editing: ok({ kind: 'locked_by', email: 'other@x' }) });
 
@@ -341,6 +382,20 @@ describe('useRevertRevision - resuming at the push', () => {
     expect(issued()).not.toContain('speleodb_restore_revision');
     // And with the SAME message: a resume publishes the revert the user confirmed.
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+  });
+
+  it('runs past the unsaved-edits guard too, however the dirty flag reads', async () => {
+    // The resume must not be refusable on either pre-flight. The restore leaves the
+    // working copy saved, so this should not arise - but a stale flag stranding the
+    // user mid-revert, holding a lock with a retry they cannot press, is the one
+    // failure this control exists to prevent.
+    useProjectStore.setState({ isDirty: true });
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    const outcome = await run({ resumeAtPush: true });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual(['speleodb_done']);
   });
 
   it('runs past the pre-flight guard the restore itself tripped', async () => {
