@@ -1,17 +1,19 @@
 # Stalagmight - Cave Survey Processing Application
 
-## Specification Document v1.0
+The living reference for the application: its data model, its user interface, and
+the workflows they serve. Read this to find out what the app is and how it
+behaves.
 
-**Last Updated**: 2026-01-22
-**Status**: Implementation Phase B - DMP Import Refactoring
-**Target Version**: 1.0 (Beta Release)
+Where the code is the source of truth - the command and undo enums, the SQLite
+schema, config keys, dependency versions - this document points at the file
+rather than restating it, because a copy here rots silently.
 
 ---
 
 ## Table of Contents
 
 1. [Overview](#1-overview)
-2. [v1.0 Requirements Summary](#2-v10-requirements-summary)
+2. [Requirements Summary](#2-requirements-summary)
 3. [Glossary](#3-glossary)
 4. [Data Model](#4-data-model)
 5. [Architecture](#5-architecture)
@@ -28,7 +30,7 @@
 16. [Logging](#16-logging)
 17. [File Formats](#17-file-formats)
 18. [Technical Stack](#18-technical-stack)
-19. [Future Versions](#19-future-versions)
+19. [Beyond the Current Scope](#19-beyond-the-current-scope)
 - [Appendix A: Keyboard Shortcuts](#appendix-a-keyboard-shortcuts)
 - [Appendix B: Validation Rules](#appendix-b-validation-rules)
 - [Appendix C: Color Palette](#appendix-c-color-palette)
@@ -55,34 +57,35 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 4. **AI-friendly**: Documentation and code structure optimized for AI-assisted development and support.
 5. **Config-driven**: All defaults, thresholds, and display options in editable config file.
 
-### 1.4 Scope - Version 1.0
+### 1.4 Scope
 
-**In Scope:**
-- DMP file import from mNemo devices
-- Manual data entry via spreadsheet interface
-- 2D plan view map with satellite imagery
+**Shipped:**
+- Import: DMP (mNemo devices), Walls, Compass, Ariane `.tml`, GPX - see `src-tauri/src/parsers/`
+- Manual data entry via a spreadsheet interface
+- 2D plan-view map with satellite imagery
 - Section management (create, edit, delete, merge)
-- Reference shots for temporary survey connections
-- Loop closure detection and error distribution
+- Jumps and reference shots for virtual survey connections
+- Loop closure detection, plus the non-destructive closure-adjusted display view ([closures.md](closures.md))
 - Multi-project workspace (Global View)
-- Export: PNG, SVG, PDF (map images), CSV, JSON (data)
-- SQLite project storage
-- Undo/redo with persistence
+- Export: PNG, SVG, PDF (map images), CSV, JSON, Ariane `.tml` (data)
+- Dive and gas planning as the Plan workspace mode, persisted to a `.plnx` sidecar
+- Ariane collaboration mode ([collaboration.md](collaboration.md))
+- SpeleoDB integration - remote project hand-off; still under active development
+- SQLite project storage, undo/redo with persistence
+- Android tablets and touch input ([touch-support.md](touch-support.md))
 
-**Out of Scope (Future Versions):**
-- SpeleoDB integration (V2 high priority)
+**Not built:**
 - 3D visualization
-- Profile views
-- Mobile/web versions
+- Web version
 - Direct mNemo device communication
-- Ariane .ari file import (v3)
-- Advanced statistics beyond basic metrics
-- Loop closure error distribution (v2)
-- Touch/tablet support
+- LRUD passage-wall rendering on the map
+
+In-flight work lives in the GitHub issue tracker rather than a list here -
+currently the profile view (#299) and slate-photo OCR import (#274).
 
 ---
 
-## 2. v1.0 Requirements Summary
+## 2. Requirements Summary
 
 ### 2.1 Target Audience
 - **Beta testers only** - Not general public release
@@ -99,10 +102,13 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 | Map rendering | 30 FPS minimum |
 
 ### 2.3 Platform Support
-All platforms equal priority:
+Desktop platforms have equal priority:
 - Linux (primary development)
 - Windows
 - macOS
+
+Android tablets are also supported; touch input runs alongside the unchanged
+mouse/keyboard controls ([touch-support.md](touch-support.md)).
 
 ### 2.4 Accessibility
 - **WCAG 2.1 AA compliance**
@@ -135,15 +141,18 @@ All formats required:
 
 ### 2.8 Testing Requirements
 - **80% code coverage** target
-- Playwright E2E tests (mocked IPC)
-- WebdriverIO E2E tests (full app)
-- Rust unit tests for backend
-- Both Playwright and WebdriverIO required for all features
+- Rust unit and integration tests for the backend
+- vitest for TypeScript unit and component tests
+- Playwright E2E against mocked IPC: a fast `@smoke` tier on every push, the full suite nightly
+- The WebdriverIO suite drives the real Tauri app but is quarantined under `e2e/legacy/` and runs on demand only
+
+See [TESTING.md](TESTING.md) for the tiers and their commands.
 
 ### 2.9 Settings
-- **Global settings only** (no per-project overrides)
-- Changes apply immediately (no Save/Apply buttons)
-- Three-level reset: per-setting, per-tab, full reset
+- Global settings in the Settings dialog, plus a per-project subset (project name,
+  validation thresholds, collaboration, SpeleoDB) stored in the `.stalx`
+- Changes are staged and applied on Save, not live (section 10.4)
+- Reset to defaults per category
 
 ### 2.10 Updates & Telemetry
 - No auto-update mechanism
@@ -152,7 +161,7 @@ All formats required:
 
 ### 2.11 Recovery
 - Auto-save only (no crash recovery dialog)
-- Debounced auto-save (2-second delay)
+- Debounced auto-save on a frontend timer, `general.auto_save_interval_seconds` (default 30) - see [saving.md](saving.md)
 - SQLite integrity checks on project open
 
 ---
@@ -296,8 +305,8 @@ These are derived from shot data, not stored:
 │  │                                                          │   │
 │  │  ┌──────────────┐  ┌────────────────┐  ┌─────────────┐ │   │
 │  │  │ UI Components │  │  Map Component  │  │   Dialogs   │ │   │
-│  │  │ (Panels,      │  │  (MapLibre GL   │  │  (Import,   │ │   │
-│  │  │  Toolbar)     │  │   + deck.gl)    │  │   Export)   │ │   │
+│  │  │ (Panels,      │  │  (MapLibre GL + │  │  (Import,   │ │   │
+│  │  │  Toolbar)     │  │   WebGL layer)  │  │   Export)   │ │   │
 │  │  └──────────────┘  └────────────────┘  └─────────────┘ │   │
 │  │           │                │                  │         │   │
 │  │           └────────────────┼──────────────────┘         │   │
@@ -330,7 +339,7 @@ These are derived from shot data, not stored:
 │  │  │  3. Generate undo data                              │ │   │
 │  │  │  4. Push to undo stack                              │ │   │
 │  │  │  5. Log command                                     │ │   │
-│  │  │  6. Persist to SQLite                               │ │   │
+│  │  │  6. Invalidate caches                               │ │   │
 │  │  │  7. Return result                                   │ │   │
 │  │  └─────────────────────────────────────────────────────┘ │   │
 │  │                            │                              │   │
@@ -358,6 +367,10 @@ These are derived from shot data, not stored:
 │                                                                  │
 └──────────────────────────────────────────────────────────────────┘
 ```
+
+Survey geometry is drawn by a custom WebGL layer inside MapLibre
+(`src/components/Map/surveyLayer/customRender/`), the sole survey renderer since
+#297 - there is no stock-layer fallback.
 
 ### 5.2 State Management
 
@@ -387,9 +400,24 @@ User Action → Command Dispatcher → Tauri IPC → Rust Executor
 
 ## 6. User Interface
 
-### 6.1 Application Views
+### 6.1 Workspace Modes
 
-#### 6.1.1 Global View
+An open project is worked in one of three top-level workspace modes, chosen from
+the `ModeCarousel` in the middle of the toolbar (`uiStore.appMode`): **Survey**,
+**Plan**, **Export**. Survey is the editable workspace. Plan and Export force the
+read-only closure-adjusted map, so the left Sections dock and every
+geometry-mutating tool are Survey-only; selection, inspection and measurement stay
+available in all three.
+
+Plan is dive and gas planning: the gas reach field over the survey, route and
+turnaround points, and the plan tables, persisted to a `.plnx` sidecar beside the
+project file. Export is the WYSIWYG map export: the right dock hosts the export
+controls and the map area previews what will be written. Both swap the dock
+contents in `SingleSystemView`; the map itself is the same map.
+
+### 6.2 Application Views
+
+#### 6.2.1 Global View
 
 Shows all cave systems the user has loaded, with survey geometry rendering for GPS-positioned projects.
 
@@ -455,7 +483,7 @@ Shows all cave systems the user has loaded, with survey geometry rendering for G
 - "(reduced detail)" indicator shown when throttled
 - Hysteresis: recovers at 45 FPS to prevent oscillation
 
-#### 6.1.2 Single System View
+#### 6.2.2 Single System View
 
 Primary view for survey work.
 
@@ -486,7 +514,7 @@ Primary view for survey work.
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-### 6.2 Panel Behavior
+### 6.3 Panel Behavior
 
 | Panel | Default State | Behavior |
 |-------|---------------|----------|
@@ -494,7 +522,7 @@ Primary view for survey work.
 | Detail Panel | Open, 300px | Resizable, collapsible |
 | Data Table | Collapsed | Resizable (height), collapsible |
 
-#### 6.2.1 Detail Panel Hyperlinks
+#### 6.3.1 Detail Panel Hyperlinks
 
 The Detail Panel provides interactive hyperlinks that enable quick navigation between related survey elements (shots, stations, sections).
 
@@ -583,7 +611,7 @@ Station at `station_index` has:
 - Previous shot: `section.shots[station_index - 1]` (hidden when `station_index === 0`)
 - Next shot: `section.shots[station_index]` (hidden when `station_index >= section.shots.length`)
 
-#### 6.2.2 Detail Panel Center Button
+#### 6.3.2 Detail Panel Center Button
 
 Each detail view (Shot, Station, Section) includes a center button in the panel header that pans and zooms the map to the selected element.
 
@@ -604,7 +632,7 @@ Each detail view (Shot, Station, Section) includes a center button in the panel 
 - Shot: "Center map on shot 2:3"
 - Section: "Center map on section 2: Main Line"
 
-#### 6.2.3 ARIA Live Announcements
+#### 6.3.3 ARIA Live Announcements
 
 Selection changes are announced to screen readers via an ARIA live region.
 
@@ -629,7 +657,7 @@ Data Table shot selection:
 ```
 Example: "Shot 2:3 selected"
 
-### 6.3 Undo/Redo History Dropdown
+### 6.4 Undo/Redo History Dropdown
 
 The Undo and Redo toolbar buttons feature dropdown menus showing recent actions with timestamps and diff previews.
 
@@ -734,20 +762,33 @@ When an action is performed while the dropdown is open:
 - Ctrl+Z/Y/Shift+Z keyboard shortcuts are intercepted by the dropdown (capture phase) to prevent the global handler from causing a double-undo/redo
 - Keyboard shortcuts are NOT intercepted when focus is in a text input, textarea, select, or contentEditable element (native text editing undo/redo is preserved)
 
-### 6.4 Tools
+### 6.5 Tools
+
+The tool set is the `ToolType` union in `src/store/uiStore.ts`; per-tool click and
+drag handling lives in `src/hooks/useMapTools.ts`. Shortcuts below are the
+defaults from `src-tauri/src/config/defaults.rs` and are all rebindable.
 
 | Tool | Shortcut | Click Station | Click Shot | Click Empty | Drag |
 |------|----------|---------------|------------|-------------|------|
 | **Select** | S | Open detail panel | Open shot details | Deselect | Box select |
 | **Pan** | P | Pan | Pan | Pan | Pan map |
 | **Zoom** | Z | Zoom in | Zoom in | Zoom in | Zoom area |
-| **Draw** | D | Start shot from here | - | - | - |
-| **Delete** | X | Delete station (confirm) | Delete shot (confirm) | - | - |
 | **Merge** | M | Select for merge | - | - | - |
 | **Measure** | R | Start measurement | - | Start measurement | - |
 | **Move Station** | T | - | - | - | Drag unanchored station |
+| **Move Shot** | G | - | - | - | Drag one shot: both endpoints plus any co-located stations |
+| **Move Segment** | V | - | - | Deselect | Drag the whole connected branch (sections joined by merges and aligned closures) |
+| **Comment** | C | Open the comment editor on the station | Open the comment editor on the shot | Close the editor | - |
+| **Move Comment** | Shift+C | Pick up the comment; second click moves it (swap dialog if the target already has one) | Same, for shot comments | Cancel | - |
 
-### 6.5 Map Features
+There is no Draw or Delete tool. Shots are added from the map context menu
+(**Add Shot Before/After**, offered at the ends of a section) or from the data
+table's row menu (**Insert Station...**, which splits a shot in two); deletion is
+select plus Delete/Backspace, or the context menu.
+
+The three move tools are documented in detail in [move-tools.md](move-tools.md).
+
+### 6.6 Map Features
 
 #### Display Toggles (Right-click or menu)
 - Stations (dots)
@@ -769,7 +810,7 @@ When an action is performed while the dropdown is open:
 - Context menu: Right click
 - Snap to station: Automatic when within threshold (configurable)
 
-### 6.6 Visual Indicators
+### 6.7 Visual Indicators
 
 | Element | Appearance |
 |---------|------------|
@@ -782,7 +823,7 @@ When an action is performed while the dropdown is open:
 | Marked as resolved | Light red highlight |
 | Loop closure line | Dashed line with error percentage |
 
-### 6.7 Dialogs
+### 6.8 Dialogs
 
 #### DMP Import - Connection Wizard (DmpNewImportDialog)
 
@@ -1196,116 +1237,17 @@ The zero datum establishes the coordinate system origin and enables GPS-accurate
 
 ### 8.1 Command Pattern
 
-All persistent operations go through the Command Executor:
+Every persistent operation is a variant of the `Command` enum, executed through
+`AppState::execute`: acquire the command lock, run the read-only edit gate,
+capture undo data, apply the command, finalize the undo entry, push it, log.
+Persistence to SQLite happens on save, not per command.
 
-```rust
-pub enum Command {
-    // Section commands
-    CreateSection {
-        name: Option<String>,
-        surveyor: Option<String>,
-        date: Option<NaiveDate>,
-        color: Color,
-        shots: Vec<ShotData>,
-        placement: Placement,
-    },
-    DeleteSection {
-        section_id: SectionId,
-    },
-    UpdateSectionMetadata {
-        section_id: SectionId,
-        name: Option<String>,
-        surveyor: Option<String>,
-        date: Option<NaiveDate>,
-        color: Option<Color>,
-    },
-
-    // Shot commands
-    CreateShot {
-        section_id: SectionId,
-        shot: ShotData,
-        after_shot_id: Option<ShotId>,
-    },
-    UpdateShot {
-        section_id: SectionId,
-        shot_id: ShotId,
-        updates: ShotUpdates,
-    },
-    DeleteShot {
-        section_id: SectionId,
-        shot_id: ShotId,
-    },
-    SetShotReference {
-        section_id: SectionId,
-        shot_id: ShotId,
-        kind: ShotKind,
-    },
-
-    // Station commands
-    MergeStations {
-        station_a: StationRef,
-        station_b: StationRef,
-    },
-    UnmergeStations {
-        station_ref: StationRef,
-    },
-    CreateLoopClosure {
-        station_a: StationRef,
-        station_b: StationRef,
-        closure_strategy: ClosureStrategy,
-    },
-    /// Set a station as the zero datum (coordinate system origin).
-    ///
-    /// # Parameters
-    /// - `station_ref`: The station to designate as zero datum (section_id:station_index)
-    /// - `coordinates`: GPS coordinates (WGS84 latitude, longitude, depth_reference)
-    ///
-    /// # Behavior
-    /// - Station becomes the origin (0,0) of the local coordinate system
-    /// - All other station coordinates are recalculated relative to this point
-    /// - GPS coordinates are converted to local ENU (East-North-Up) meters
-    /// - Section offsets are updated to maintain visual positions
-    /// - A golden star icon marks the zero datum on the map
-    /// - Triggers map fit-to-bounds to show the survey in its new position
-    ///
-    /// # Undo Behavior
-    /// Undo restores:
-    /// - Previous GPS coordinates (if station had a datum before)
-    /// - Previous section offsets
-    /// - Previous coordinate system origin
-    /// If the station had no prior datum, undo removes it entirely.
-    SetZeroDatum {
-        station_ref: StationRef,
-        coordinates: GpsCoordinates,
-    },
-    /// Remove the zero datum designation from a station.
-    ///
-    /// # Parameters
-    /// - `station_ref`: The station to remove zero datum from
-    ///
-    /// # Behavior
-    /// - Station loses its GPS coordinates
-    /// - If this was the only zero datum, coordinate system reverts to (0,0) origin
-    /// - Section offsets may be recalculated
-    ///
-    /// # Undo Behavior
-    /// Undo restores the GPS coordinates that were removed.
-    RemoveZeroDatum {
-        station_ref: StationRef,
-    },
-
-    // Project commands
-    MergeProjects {
-        project_paths: Vec<PathBuf>,
-        new_name: String,
-    },
-
-    // Batch commands
-    Batch {
-        commands: Vec<Command>,
-    },
-}
-```
+The variants cover project lifecycle (create/open/save/close/merge), sections,
+shots, station merges, loop closures, zero datums, station comments, the move
+operations, and a `Batch` wrapper that applies a list atomically. The
+authoritative list - every variant with its fields - is
+`src-tauri/src/core/command.rs`; it grows with the feature set, so it is
+deliberately not mirrored here.
 
 ### 8.2 UndoEntry Structure
 
@@ -1330,78 +1272,15 @@ pub struct UndoEntry {
 
 ### 8.3 UndoData Variants
 
-```rust
-pub enum UndoData {
-    /// Simple inverse command
-    InverseCommand(Command),
+Undo data is captured in two phases - before execution for "previous" state, after
+execution for anything that exists only once IDs are assigned - and stored as an
+`UndoData` variant: an inverse command, previous field values, an entity snapshot,
+a merge / closure / datum / move record, or a whole-project snapshot pair for
+batches.
 
-    /// Previous values for updates (JSON serialized)
-    PreviousValues {
-        section_id: SectionId,
-        shot_id: Option<ShotId>,
-        values_json: String,
-    },
-
-    /// Full section snapshot for deleted sections
-    SectionSnapshot {
-        section_id: SectionId,
-        section_data: SectionData,
-    },
-
-    /// Shot snapshot for deleted shots
-    ShotSnapshot {
-        section_id: SectionId,
-        shot_id: ShotId,
-        shot_data: ShotData,
-        position: usize,
-    },
-
-    /// Merge info for unmerging stations (undo of MergeStations)
-    MergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        removed_closures: Vec<LoopClosure>,
-    },
-
-    /// Unmerge info for re-merging stations (undo of UnmergeStations)
-    UnmergeInfo {
-        station_a: StationRef,
-        station_b: StationRef,
-        /// Closures removed during unmerge (for restoring on undo)
-        removed_closures: Vec<LoopClosure>,
-    },
-
-    /// Loop closure info for undoing CreateLoopClosure
-    ClosureInfo {
-        /// The full loop closure data to remove on undo
-        closure: LoopClosure,
-    },
-
-    /// Zero datum info for restoring previous GPS and section offsets
-    ZeroDatumInfo {
-        station_ref: StationRef,
-        previous_gps: Option<GpsCoordinates>,
-        /// Previous section offsets for affected sections
-        /// - None value means the key didn't exist (should be removed on undo)
-        /// - Some value means the offset should be restored to that value
-        #[serde(default)]
-        previous_offsets: HashMap<SectionId, Option<(f64, f64)>>,
-    },
-
-    /// Full project snapshot for batch operations
-    ProjectSnapshot(String),
-
-    /// Before and after snapshots for operations with dynamic IDs
-    ProjectSnapshotPair {
-        before: String,
-        after: String,
-    },
-
-    /// No undo data
-    None,
-}
-```
+`src-tauri/src/core/undo.rs` defines the variants.
+[undo-redo.md](undo-redo.md) is the reference for which command uses which
+variant and what undo and redo each does with it.
 
 ### 8.4 Stack Exposure Commands
 
@@ -1443,46 +1322,12 @@ interface UndoHistoryItem {
 
 ### 8.5 Command Execution
 
-```rust
-impl CommandExecutor {
-    pub fn execute(&mut self, cmd: Command) -> Result<CommandResult> {
-        // 1. Validate
-        self.validate(&cmd)?;
-
-        // 2. Execute
-        let (state_update, undo_data) = self.apply(&cmd)?;
-
-        // 3. Push to undo stack (timestamp added automatically)
-        self.undo_stack.push_with_data(cmd.clone(), undo_data.clone());
-        self.redo_stack.clear();
-
-        // 4. Log
-        info!(command = ?cmd, "Command executed");
-        debug!(undo_data = ?undo_data, "Undo data generated");
-
-        // 5. Persist
-        self.persist()?;
-
-        Ok(CommandResult { success: true, state_update, undo_data, warnings: vec![] })
-    }
-
-    pub fn undo(&mut self) -> Result<CommandResult> {
-        let entry = self.undo_stack.pop().ok_or(Error::NothingToUndo)?;
-        let result = self.apply_undo(&entry.undo_data)?;
-        self.redo_stack.push(entry);
-        info!("Undo performed");
-        Ok(result)
-    }
-
-    pub fn redo(&mut self) -> Result<CommandResult> {
-        let entry = self.redo_stack.pop().ok_or(Error::NothingToRedo)?;
-        let result = self.apply(&entry.command)?;
-        self.undo_stack.push(entry);
-        info!("Redo performed");
-        Ok(result)
-    }
-}
-```
+`AppState::execute` (`src-tauri/src/core/state/commands.rs`) is the generic entry
+point; a handful of commands with heavier bookkeeping have their own `execute_*`
+methods alongside it, and `undo()`/`redo()`/`undo_to()`/`redo_to()` live in
+`src-tauri/src/core/state/undo.rs`. Lock ordering
+(`command_lock` -> `undo_stack` -> `project`), the two-phase undo capture and the
+batch rollback rules are documented in [undo-redo.md](undo-redo.md).
 
 ### 8.6 Transient Operations
 
@@ -1500,148 +1345,30 @@ Managed entirely in Zustand store on frontend.
 
 ## 9. Configuration
 
-### 9.1 Config File Format
+All settings live in a single TOML file. Ground truth for the keys is the `Config`
+struct in `src-tauri/src/config/types.rs`, with the shipped values in
+`src-tauri/src/config/defaults.rs`; [configuration.md](configuration.md) is the
+maintained reference for what each block does.
 
-TOML format at `~/.config/stalagmight/config.toml` (Linux/Mac) or `%APPDATA%\stalagmight\config.toml` (Windows).
+### 9.1 File Location
 
-```toml
-[general]
-auto_save = true
-auto_save_interval_seconds = 30
-recent_projects_max = 20
+| Platform | Path |
+|----------|------|
+| Linux | `~/.config/com.stalagmight.desktop/config.toml` |
+| macOS | `~/Library/Application Support/com.stalagmight.desktop/config.toml` |
+| Windows | `%APPDATA%\com.stalagmight.desktop\config.toml` |
 
-[units]
-length = "meters"  # "meters" | "feet"
-depth = "meters"   # "meters" | "feet"
-angle = "degrees"  # "degrees" | "gradians"
-decimal_precision = 1
+The directory is resolved through Tauri's path API (`src-tauri/src/app_dirs.rs`)
+rather than the `directories` crate, which returns nothing on Android.
 
-[display]
-default_background = "#1a1a2e"
-grid_color = "#333366"
-station_size = 6
-line_thickness = 2
-font_size = 12
-font_color = "#f5f5f5"
+### 9.2 Loading
 
-[display.depth_gradient]
-enabled = false
-shallow_color = "#00bfff"
-deep_color = "#ff4444"
-shallow_depth = 0.0
-deep_depth = 50.0
-
-[section_colors]
-# Color palette for auto-assigning section colors
-# Cycles through these, avoiding recent colors
-palette = [
-    "#4ecdc4",  # Teal
-    "#ff6b6b",  # Coral
-    "#95e1d3",  # Mint
-    "#f38181",  # Salmon
-    "#aa96da",  # Lavender
-    "#fcbad3",  # Pink
-    "#a8d8ea",  # Sky blue
-    "#ffcb77",  # Peach
-]
-
-[map]
-satellite_provider = "esri"  # only "esri" supported currently
-satellite_enabled = false
-# GPS origin for satellite tile alignment (default: Florida Keys)
-satellite_gps_origin = { latitude = 24.55, longitude = -81.78 }
-snap_threshold_pixels = 10
-zoom_default = 15
-zoom_min = 1
-zoom_max = 22
-
-[map.controls]
-pan_speed = 1.0
-zoom_speed = 1.0
-invert_scroll = false
-
-[validation]
-warn_shot_length_min = 0.3
-warn_shot_length_max = 50.0
-warn_depth_change_per_shot_max = 10.0
-warn_azimuth_deviation_max = 30.0  # Between in and out readings
-
-[export]
-default_image_format = "png"
-default_dpi = 300
-default_include_satellite = true
-default_include_grid = false
-default_include_labels = true
-
-[logging]
-level = "info"  # "error" | "warn" | "info" | "debug" | "trace"
-max_directory_size_mb = 128
-
-[shortcuts]
-select = "S"
-pan = "P"
-zoom = "Z"
-merge = "M"
-measure = "R"
-move_station = "T"
-undo = "Ctrl+Z"
-redo = "Ctrl+Y"
-save = "Ctrl+S"
-```
-
-### 9.2 Config Loading Priority
-
-1. Built-in defaults (compiled into binary)
-2. System config file (if exists)
-3. User config file (if exists)
-
-Later sources override earlier ones.
-
-### 9.3 New Configuration Fields (v1.0)
-
-```toml
-[general]
-auto_save_delay_ms = 2000  # Debounce delay for auto-save
-
-[appearance]
-theme = "auto"                      # "dark", "light", or "auto" (follows OS preference)
-day_color_theme = "light"           # Color palette for light/day mode
-night_color_theme = "dark"          # Color palette for dark/night mode
-# Available color themes:
-#   dark, light, cave, dracula, one_dark,
-#   solarized_light, catppuccin_latte, nord, catppuccin_mocha
-
-[display]
-font_family = "system"  # "system" | "monospace" | "sans-serif" | "serif"
-
-[import]
-overlap_mode = "skip"  # How to handle overlapping shots: "skip", "replace", "append"
-
-[placement_suggestion]
-azimuth_sigma = 5.0                 # Sigma for azimuth error (degrees)
-length_sigma = 0.3                  # Sigma for length error (meters)
-depth_sigma = 0.3                   # Sigma for depth error (meters)
-azimuth_weight = 1.0                # Weight for azimuth score component
-length_weight = 1.0                 # Weight for length score component
-depth_in_weight = 1.0               # Weight for depth_in score component
-depth_out_weight = 1.0              # Weight for depth_out score component
-min_shot_score = 0.1                # Minimum per-shot score to continue matching
-min_aggregate_score = 0.3           # Minimum aggregate score to include a suggestion
-max_reference_shots = 5             # Maximum reference shots to try from each leaf
-
-[validation]
-closure_error_threshold = 5.0  # Percentage threshold for warnings
-
-[cache]
-tile_cache_enabled = true
-tile_cache_max_mb = 500  # Maximum tile cache size
-tile_ttl_days = 30  # Days before cached tiles are considered stale
-
-[accessibility]
-announce_tool_changes = true
-announce_selections = true
-announce_save_status = true
-```
+`Config::load` reads that file if it exists and otherwise uses the compiled-in
+defaults. There is no system-wide layer to merge: a file that is present is parsed
+whole, then put through legacy-key migration and normalization. Missing, unknown
+and removed keys are all tolerated - every config struct is `#[serde(default)]` -
+so an old config file still loads and simply picks up the current defaults for
+anything it does not name.
 
 ---
 
@@ -1664,19 +1391,21 @@ Modal dialog with sidebar navigation, accessible via the Settings button in the 
 
 ### 10.2 Categories
 
-The sidebar displays 10 settings categories, with a visual separator before the Advanced category:
+The sidebar displays 12 settings categories, with a visual separator before the Advanced category:
 
 | Category | Contents |
 |----------|----------|
 | General | Auto-save toggle/interval, recent projects limit, undo history/persist limits, shortcut feedback preference |
 | Appearance | Theme mode (dark/light/auto), day and night color theme selection with preview cards, 9 color themes |
 | Units | Length/depth/angle units, decimal precision |
+| Gas planning | Swim speed, jump RMV multiplier, whether reference legs count toward gas |
 | Display | Background/grid/font colors, grid spacing, font size, depth gradient settings, section color palette |
 | Map | Satellite provider/toggle/GPS origin, zoom settings, pan/zoom controls, station/shot appearance, snap settings, animation settings |
 | Validation | Shot length min/max warnings, depth change warnings, azimuth deviation warnings, in/out difference thresholds |
 | Export | Default image format (PNG/SVG/PDF), default DPI, default layer includes (satellite, grid, labels) |
 | Shortcuts | Searchable shortcut editor with categories (Tools, Edit, View, Panels), primary/secondary binding slots, conflict detection, reserved shortcuts display |
 | Cache | Tile cache statistics, clear cache button, cache enable toggle, max size, TTL days |
+| SpeleoDB | Account sign-in, API endpoint, token fallback, insecure-HTTP and force-edit toggles, lock poll interval |
 | Advanced | Debug settings (hitboxes, hit detection logging), logging level/max size, placement suggestion heuristic constants, panel dimensions, reload config from disk |
 
 ### 10.3 Navigation
@@ -1828,10 +1557,10 @@ All `:focus-visible` outlines use `var(--cc-focus-ring)` and `var(--cc-focus-rin
 | F2 | Enter edit mode |
 
 #### Tool Shortcuts
-All shortcuts configurable and disableable:
-- S: Select, P: Pan, Z: Zoom, D: Draw
-- X: Delete, M: Merge, R: Measure
-- T: Move Station
+All shortcuts are configurable and can be cleared:
+- S: Select, P: Pan, Z: Zoom, M: Merge, R: Measure
+- T: Move Station, G: Move Shot, V: Move Segment
+- C: Comment, Shift+C: Move Comment
 
 #### Skip Links
 - "Skip to main content"
@@ -1986,9 +1715,9 @@ const virtualizer = useVirtualizer({
 
 ### 13.4 Auto-Save Debouncing
 
-- 2-second debounce after last change (configurable)
-- Cancel pending save on new change
-- "Save Now" (Ctrl+S) always available
+- Debounce after the last change: `general.auto_save_interval_seconds`, default 30
+- Repeated changes reset the timer; a manual Ctrl+S cancels it
+- Frontend-only (`src/hooks/useAutoSave.ts`) - the backend has no per-command save. See [saving.md](saving.md)
 
 ### 13.5 Tile Caching
 
@@ -2113,15 +1842,16 @@ fn backup_before_repair(path: &Path) -> Result<PathBuf> {
 
 | Type | Framework | Purpose |
 |------|-----------|---------|
-| Rust unit tests | cargo test | Backend logic |
+| Rust unit + integration tests | cargo test | Backend logic |
+| Unit / component tests | vitest | Frontend logic and components |
 | Playwright E2E | Playwright | Frontend with mocked IPC |
-| WebdriverIO E2E | WebdriverIO | Full app integration |
+| WebdriverIO E2E | WebdriverIO | Full app integration; quarantined under `e2e/legacy/`, on demand |
 
 ### 15.3 Test Requirements per Feature
 
 Every feature requires:
 - 3-10 specific test cases
-- Both Playwright AND WebdriverIO tests
+- Playwright coverage, tagged `@smoke` when it belongs in the per-push tier
 - Rust tests for backend logic
 
 ### 15.4 Test Data Identifiers
@@ -2175,7 +1905,7 @@ Structured JSON for machine parsing:
 ```json
 {"ts":"2024-01-12T14:32:15.123Z","level":"INFO","target":"stalagmight::commands","msg":"Command executed","command":"CreateSection","section_name":"Main Line","shots":24}
 {"ts":"2024-01-12T14:32:15.125Z","level":"DEBUG","target":"stalagmight::commands","msg":"Undo data generated","type":"InverseCommand","inverse":"DeleteSection"}
-{"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"stalagmight::persistence","msg":"Project saved","path":"/home/user/caves/sistema.cave","size_kb":245}
+{"ts":"2024-01-12T14:32:15.130Z","level":"INFO","target":"stalagmight::persistence","msg":"Project saved","path":"/home/user/caves/sistema.stalx","size_kb":245}
 ```
 
 ### 16.4 Instrumentation Requirements
@@ -2220,106 +1950,32 @@ pub fn create_section(state: &mut State, cmd: CreateSectionCommand) -> Result<Se
 
 ## 17. File Formats
 
-### 17.1 Project File (.cave)
+### 17.1 Project File (`.stalx`)
 
-SQLite database with the following schema:
+A project is a single SQLite database carrying the `.stalx` extension. Saving
+writes a fresh `<name>.stalx.tmp` and atomically renames it over the target, so an
+interrupted save never leaves a half-written project - see [saving.md](saving.md).
 
-```sql
--- Project metadata
-CREATE TABLE project (
-    id INTEGER PRIMARY KEY,
-    name TEXT NOT NULL,
-    location TEXT,
-    created_at TEXT NOT NULL,
-    modified_at TEXT NOT NULL,
-    schema_version INTEGER NOT NULL
-);
+The schema is versioned (`SCHEMA_VERSION` in
+`src-tauri/src/persistence/sqlite.rs`) and migrated forward when an older file is
+opened. Alongside the survey tables (project, sections, shots, station merges,
+zero datums, loop closures, section and station offsets) it holds per-project and
+display settings, the persisted undo and redo stacks, resolved warnings, import
+hashes, station comments, the SpeleoDB link row, and the Ariane collaboration
+baseline in `collab_state`. Two markers are worth knowing before touching
+migration code:
 
--- Sections
-CREATE TABLE sections (
-    id INTEGER PRIMARY KEY,
-    name TEXT,
-    surveyor TEXT,
-    date TEXT,
-    color TEXT NOT NULL,
-    created_at TEXT NOT NULL
-);
+- `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
+  undo/redo stacks dropped on open, because pre-v7 `ShotUpdates` JSON cannot
+  distinguish "field untouched" from "clear this field".
+- v12 normalises stored pitch to the +down convention
+  (`migrate_pitch_to_down_convention`); see [inclination.md](inclination.md).
 
--- Shots
-CREATE TABLE shots (
-    id INTEGER PRIMARY KEY,
-    section_id INTEGER NOT NULL REFERENCES sections(id),
-    sequence_order INTEGER NOT NULL,
-    azimuth_in REAL NOT NULL,
-    azimuth_out REAL NOT NULL,
-    length REAL NOT NULL,
-    depth_in REAL NOT NULL,
-    depth_out REAL NOT NULL,
-    pitch_in REAL,
-    pitch_out REAL,
-    left_distance REAL,
-    right_distance REAL,
-    up_distance REAL,
-    down_distance REAL,
-    comment TEXT,
-    kind INTEGER NOT NULL DEFAULT 0,  -- 0 Normal, 1 Jump, 2 Reference (#27)
-    marker_index INTEGER,
-    temperature REAL,
-    UNIQUE(section_id, sequence_order)
-);
+The dive plan lives beside the project in its own `.plnx` SQLite sidecar
+(`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.
 
--- Station merges
-CREATE TABLE station_merges (
-    id INTEGER PRIMARY KEY,
-    station_a_section INTEGER NOT NULL,
-    station_a_index INTEGER NOT NULL,
-    station_b_section INTEGER NOT NULL,
-    station_b_index INTEGER NOT NULL,
-    merged_at TEXT NOT NULL
-);
-
--- Zero datums
-CREATE TABLE zero_datums (
-    id INTEGER PRIMARY KEY,
-    section_id INTEGER NOT NULL,
-    station_index INTEGER NOT NULL,
-    latitude REAL NOT NULL,
-    longitude REAL NOT NULL,
-    depth_reference REAL NOT NULL,
-    UNIQUE(section_id, station_index)
-);
-
--- Loop closures (Task 32)
-CREATE TABLE loop_closures (
-    id INTEGER PRIMARY KEY,
-    merge_id INTEGER NOT NULL REFERENCES station_merges(id),
-    loop_path_json TEXT NOT NULL,  -- JSON array of section IDs in loop
-    total_length REAL NOT NULL,    -- Total path length in meters
-    error_distance REAL NOT NULL,  -- Closure error in meters
-    error_percent REAL NOT NULL,   -- Closure error as percentage
-    strategy TEXT NOT NULL,        -- 'keep_raw' or 'mark_for_distribution'
-    created_at TEXT NOT NULL
-);
-
--- Undo/redo stack (persisted)
-CREATE TABLE undo_stack (
-    id INTEGER PRIMARY KEY,
-    sequence INTEGER NOT NULL,
-    command_json TEXT NOT NULL,
-    undo_data_json TEXT NOT NULL,
-    executed_at TEXT NOT NULL
-);
-
--- Display settings (per-project)
-CREATE TABLE display_settings (
-    key TEXT PRIMARY KEY,
-    value TEXT NOT NULL
-);
-
--- Indexes
-CREATE INDEX idx_shots_section ON shots(section_id);
-CREATE INDEX idx_undo_sequence ON undo_stack(sequence);
-```
+Table definitions are authoritative in `src-tauri/src/persistence/sqlite/` and are
+not reproduced here.
 
 ### 17.2 DMP File Import
 
@@ -2469,234 +2125,42 @@ section_id,section_name,shot_id,length,azimuth_in,azimuth_out,depth_in,depth_out
 | **Backend** | Rust (stable) |
 | **Frontend** | React 18+ with TypeScript (strict mode) |
 | **State** | Zustand |
-| **Map Rendering** | MapLibre GL JS |
+| **Map Rendering** | MapLibre GL JS 5.x, with a custom WebGL layer for survey geometry |
 | **Virtualization** | TanStack Virtual (data tables) |
 | **i18n** | react-i18next |
 | **Database** | SQLite (via rusqlite) |
 | **Logging** | tracing + tracing-subscriber |
 | **Build** | pnpm + Vite + Tauri CLI |
-| **Testing** | Rust: cargo test, Playwright, WebdriverIO |
+| **Testing** | cargo test, vitest, Playwright; WebdriverIO for the legacy full-app suite |
 
-### 18.2 Dependencies
+### 18.2 Dependencies and Build Configuration
 
-**Rust (Cargo.toml):**
-```toml
-[dependencies]
-tauri = { version = "2", features = ["shell-open"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-rusqlite = { version = "0.31", features = ["bundled"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
-tracing-appender = "0.2"
-chrono = { version = "0.4", features = ["serde"] }
-thiserror = "1"
-anyhow = "1"
-toml = "0.8"
-directories = "5"
-```
+Exact versions drift with every upgrade, so they are not restated here:
+`package.json` for the frontend, `src-tauri/Cargo.toml` for the backend. The pnpm
+and node versions are pinned by `packageManager` in `package.json` and by
+`.nvmrc`, so every machine and CI run the same toolchain.
 
-**TypeScript (package.json):**
-```json
-{
-  "dependencies": {
-    "react": "^18",
-    "react-dom": "^18",
-    "@tauri-apps/api": "^2",
-    "zustand": "^4",
-    "maplibre-gl": "^4",
-    "@tanstack/react-virtual": "^3",
-    "i18next": "^23",
-    "react-i18next": "^14",
-    "i18next-browser-languagedetector": "^7"
-  },
-  "devDependencies": {
-    "typescript": "^5",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
-    "vite": "^5",
-    "@vitejs/plugin-react": "^4",
-    "@playwright/test": "^1",
-    "wdio": "^8",
-    "@tauri-apps/cli": "^2"
-  }
-}
-```
+TypeScript runs in strict mode with `noUncheckedIndexedAccess` and
+`exactOptionalPropertyTypes` on top of it; `tsconfig.json` is the source of truth
+and `pnpm tsc --noEmit` is a CI gate.
 
-### 18.3 TypeScript Configuration
+### 18.3 Project Structure
 
-**tsconfig.json (strict mode required):**
-```json
-{
-  "compilerOptions": {
-    "target": "ES2020",
-    "lib": ["ES2020", "DOM", "DOM.Iterable"],
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "allowImportingTsExtensions": true,
-    "resolveJsonModule": true,
-    "isolatedModules": true,
-    "noEmit": true,
-    "jsx": "react-jsx",
-
-    "strict": true,
-    "strictNullChecks": true,
-    "strictFunctionTypes": true,
-    "strictBindCallApply": true,
-    "strictPropertyInitialization": true,
-    "noImplicitAny": true,
-    "noImplicitThis": true,
-    "noImplicitReturns": true,
-    "noFallthroughCasesInSwitch": true,
-    "noUncheckedIndexedAccess": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
-    "exactOptionalPropertyTypes": true,
-
-    "skipLibCheck": true
-  },
-  "include": ["src"]
-}
-```
-
-### 18.4 Project Structure
-
-```
-stalagmight/
-├── src-tauri/                    # Rust backend
-│   ├── Cargo.toml
-│   ├── tauri.conf.json
-│   └── src/
-│       ├── main.rs               # Tauri entry point
-│       ├── lib.rs                # Library root
-│       ├── commands/             # Tauri command handlers
-│       │   ├── mod.rs
-│       │   ├── project.rs
-│       │   ├── section.rs
-│       │   └── shot.rs
-│       ├── core/                 # Business logic
-│       │   ├── mod.rs
-│       │   ├── command.rs        # Command enum and executor
-│       │   ├── state.rs          # State manager
-│       │   ├── undo.rs           # Undo/redo stack
-│       │   └── validation.rs     # Data validation
-│       ├── models/               # Data structures
-│       │   ├── mod.rs
-│       │   ├── project.rs
-│       │   ├── section.rs
-│       │   ├── shot.rs
-│       │   └── station.rs
-│       ├── parsers/              # File format parsers
-│       │   ├── mod.rs
-│       │   └── dmp.rs            # mNemo DMP parser
-│       ├── persistence/          # Database operations
-│       │   ├── mod.rs
-│       │   └── sqlite.rs
-│       ├── export/               # Export generators
-│       │   ├── mod.rs
-│       │   ├── image.rs
-│       │   ├── csv.rs
-│       │   └── json.rs
-│       ├── config/               # Configuration
-│       │   ├── mod.rs
-│       │   └── defaults.rs
-│       └── logging/              # Logging setup
-│           └── mod.rs
-│
-├── src/                          # TypeScript frontend
-│   ├── main.tsx                  # React entry point
-│   ├── App.tsx                   # Root component
-│   ├── components/               # React components
-│   │   ├── GlobalView/
-│   │   │   ├── GlobalView.tsx
-│   │   │   └── SystemCard.tsx
-│   │   ├── SingleSystemView/
-│   │   │   ├── SingleSystemView.tsx
-│   │   │   ├── Toolbar.tsx
-│   │   │   ├── SectionsPanel.tsx
-│   │   │   ├── DetailPanel.tsx
-│   │   │   └── DataTable.tsx
-│   │   ├── Map/
-│   │   │   ├── MapCanvas.tsx
-│   │   │   ├── SurveyLayer.tsx
-│   │   │   └── controls/
-│   │   ├── Dialogs/
-│   │   │   ├── ImportDialog.tsx
-│   │   │   ├── MergeDialog.tsx
-│   │   │   ├── ClosureDialog.tsx
-│   │   │   └── ExportDialog.tsx
-│   │   └── common/
-│   │       ├── Button.tsx
-│   │       ├── Panel.tsx
-│   │       └── Table.tsx
-│   ├── store/                    # Zustand stores
-│   │   ├── projectStore.ts
-│   │   ├── uiStore.ts
-│   │   └── configStore.ts
-│   ├── commands/                 # Command dispatcher
-│   │   ├── dispatcher.ts
-│   │   └── types.ts
-│   ├── hooks/                    # Custom React hooks
-│   │   ├── useProject.ts
-│   │   ├── useMap.ts
-│   │   └── useKeyboardShortcuts.ts
-│   ├── utils/                    # Utility functions
-│   │   ├── coordinates.ts
-│   │   └── colors.ts
-│   └── types/                    # TypeScript types
-│       ├── project.ts
-│       ├── commands.ts
-│       └── api.ts
-│
-├── e2e/                          # WebdriverIO E2E tests (full Tauri app)
-│   ├── specs/                    # Test specifications
-│   ├── fixtures/                 # Test data (DMP files)
-│   └── helpers/                  # Test utilities
-│
-├── e2e-playwright/               # Playwright E2E tests (mocked IPC)
-│   ├── mocks/                    # Tauri IPC mocks
-│   └── fixtures/                 # Test data
-│
-├── docs/                         # Documentation
-│   ├── SPEC.md                   # This document
-│   ├── TESTING.md                # Testing guide
-│   ├── architecture.md           # System design
-│   └── ...                       # Other docs
-│
-├── package.json
-├── pnpm-lock.yaml
-├── vite.config.ts
-├── tsconfig.json
-├── CLAUDE.md                     # Agent instructions
-└── README.md
-```
+See [project-structure.md](project-structure.md) for the directory tree.
 
 ---
 
-## 19. Future Versions
+## 19. Beyond the Current Scope
 
-### 19.1 Version 2.0 (High Priority)
+There are no versioned roadmap buckets. Queued and in-flight work lives in the
+GitHub issue tracker - currently the Plan-mode profile view (#299), slate-photo
+OCR import (#274), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
+historical record of the v1.0 phases, all of which shipped.
 
-- **SpeleoDB Integration**: Push/pull survey data, authentication
-- **Loop Closure Algorithms**: Least squares adjustment, more distribution options
-- **Profile Views**: Side elevation visualization
-- **Advanced Statistics**: Survey efficiency, quality scores, progress over time
-
-### 19.2 Version 2.x (Medium Priority)
-
-- **Ariane .ari Import**: Migration path for existing users
-- **Additional Export Formats**: Survex, Therion, KML/KMZ
-- **3D Visualization**: Basic 3D cave model
-- **LRUD Passage Walls**: Render passage cross-sections on 2D map
-
-### 19.3 Version 3.0+ (Future)
-
-- **Web Version**: Same frontend, different backend
-- **Mobile Version**: Flutter or React Native
-- **Direct mNemo Communication**: USB/Bluetooth device connection
-- **OCR for Dive Slates**: Photo import with text recognition
-- **Collaborative Editing**: Real-time multi-user (via SpeleoDB)
-- **Floating/Dockable Panels**: Customizable UI layout
+Regularly asked about, and not currently being worked on: 3D visualization, a web
+version, direct mNemo device communication, LRUD passage-wall rendering,
+real-time collaborative editing (the Ariane and SpeleoDB flows are file hand-off,
+not live co-editing), and floating/dockable panels.
 
 ---
 
@@ -2707,11 +2171,13 @@ stalagmight/
 | Select Tool | S |
 | Pan Tool | P |
 | Zoom Tool | Z |
-| Draw Tool | D |
-| Delete Tool | X |
 | Merge Tool | M |
 | Measure Tool | R |
 | Move Station Tool | T |
+| Move Shot Tool | G |
+| Move Segment Tool | V |
+| Comment Tool | C |
+| Move Comment Tool | Shift+C |
 | Undo | Ctrl+Z |
 | Redo | Ctrl+Y / Ctrl+Shift+Z |
 | Save | Ctrl+S |
@@ -2723,7 +2189,7 @@ stalagmight/
 | Zoom In | + / = |
 | Zoom Out | - |
 | Fit to View | F |
-| Toggle Depth Gradient | G |
+| Toggle Depth Gradient | Shift+D |
 | Toggle Grid | Shift+G |
 | Toggle Satellite | B |
 | Toggle Station Labels | L |
@@ -2825,7 +2291,3 @@ Reference Shot: 28% opacity of the section color (#27)
 Selection Highlight: #4ecdc4
 Loop Closure Line: #ffcb77 (dashed)
 ```
-
----
-
-*End of Specification Document*
