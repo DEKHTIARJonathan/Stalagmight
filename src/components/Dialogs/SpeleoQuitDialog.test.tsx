@@ -25,7 +25,13 @@ vi.mock('../../utils/ipc', () => ({
 }));
 
 const performQuitMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/quit', () => ({ performQuit: performQuitMock }));
+// `holdsWriteLock` is the real predicate, not a stub: this dialog adapts its whole
+// action set to it, so a mocked-away version would let the cases below pass against
+// a lock state the component never actually derived.
+vi.mock('../../utils/quit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../../utils/quit')>()),
+  performQuit: performQuitMock,
+}));
 
 import SpeleoQuitDialog from './SpeleoQuitDialog';
 import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';

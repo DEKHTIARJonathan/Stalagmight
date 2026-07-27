@@ -103,6 +103,10 @@ describe('OpenFromSpeleoDbDialog adopt flow (#214)', () => {
         projectId: 'p1',
         projectName: 'Ariane Cave',
         latestCommitSha: 'abc123',
+        // The ordinary open -> adopt route confirms no discard, so the backend's
+        // un-pushed-edits guard stays armed. Only the refused-open prompt's
+        // "take the server copy" branch waives it, having asked first.
+        discardLocal: false,
       });
     });
     await waitFor(() =>
