@@ -430,12 +430,12 @@ fn prop_uuid_survives_local_insert(seed: u64) {
 /// sequence - a reverse marks the project dirty and the next save re-exports
 /// the sibling .tml, refreshing the baseline before a collaborator sees it.
 ///
-/// KNOWN GAP: `compute_collab` diffs whenever the on-disk sibling differs from
-/// our last export, so reversing and *not* saving before a collaborator edits
-/// that sibling does diff against a pre-reverse baseline. That is the generic
-/// unsaved-local-edit case rather than anything specific to reverse, but a
-/// reverse invalidates every shot's `(section_id, shot_index)` slot at once
-/// instead of a few, so it is the worst instance of it. Not covered here.
+/// The *other* ordering - reverse, then a collaborator edits the sibling before
+/// we save - is covered too, further down: a reverse permutes every shot index
+/// in the section at once, and reconcile applies a matched edit to the baseline
+/// entry's `shot_index`, so a surviving baseline would land the collaborator's
+/// edit on the mirrored shot. `reverse_section` drops the baseline for exactly
+/// that reason; this pins that it does.
 fn prop_reverse_roundtrips_through_collab(seed: u64) {
     let dir = TempDir::new().unwrap();
     let mut p = gen_project(&mut Rng::new(seed), Kind::Plain);
@@ -451,6 +451,21 @@ fn prop_reverse_roundtrips_through_collab(seed: u64) {
     assert!(
         p.reverse_section(section_id, false),
         "seed={seed}: reverse failed"
+    );
+
+    // The unsaved-reverse window: the baseline still describes the pre-reverse
+    // numbering, so it must be gone rather than diffed against.
+    assert!(
+        p.collab
+            .as_ref()
+            .is_some_and(|c| c.shot_baseline.is_empty()),
+        "seed={seed}: reverse must drop the index-keyed baseline - a collaborator \
+         edit arriving before the next save would be applied to the mirrored shot"
+    );
+    assert!(
+        diff(&p, &returned(&p, dir.path())).is_empty(),
+        "seed={seed}: with the baseline dropped, reconcile must report nothing \
+         until the next save re-seeds it"
     );
 
     let after: HashSet<String> = p.sections[0]

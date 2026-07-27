@@ -44,7 +44,9 @@
 //!   its mirrored station so every relationship stays where the surveyor put
 //!   it.
 
-use crate::models::{SectionId, Shot, ShotData, StationRef};
+use std::collections::HashMap;
+
+use crate::models::{SectionId, Shot, ShotData, StationKey, StationRef};
 
 use super::Project;
 
@@ -98,7 +100,10 @@ pub fn shot_run_displacement(shots: &[ShotData]) -> (f64, f64) {
 /// so the two can never drift apart.
 ///
 /// Order-independent per shot, so it is safe to apply before or after the vec
-/// is reversed - and applying it twice is the identity.
+/// is reversed.  Applying it twice is the identity in exact arithmetic; in f64
+/// the `(az + 180) % 360` round trip can land a couple of ulps off when the
+/// shifted value is not representable, which is why undo snapshots instead of
+/// re-running the transform.
 pub fn reverse_shots(shots: &mut [ShotData], swap_lr: bool) {
     shots.reverse();
     for shot in shots.iter_mut() {
@@ -141,9 +146,12 @@ impl Project {
     /// Returns `false` if the section does not exist.  A section with no shots
     /// is a single station and reverses to itself.
     ///
-    /// Involutive: `reverse_section(id, s)` twice restores the original section
-    /// exactly (`reciprocal` is exact for the 180-degree turn, and every other
-    /// step is a swap or a negation).
+    /// Involutive up to floating point: every step is a swap, a negation or the
+    /// 180-degree turn, so `reverse_section(id, s)` twice restores the original
+    /// section - but `(az + 180) % 360` is only *bit*-exact when both the shifted
+    /// value and the wrap are representable (e.g. `17.5 -> 197.5 -> 17.5`; `0.1`
+    /// comes back a couple of ulps out).  Undo therefore snapshots rather than
+    /// re-running the transform - see `AppState::generate_undo_data`.
     pub fn reverse_section(&mut self, section_id: SectionId, swap_lr: bool) -> bool {
         let Some(section) = self.get_section(section_id) else {
             return false;
@@ -159,23 +167,31 @@ impl Project {
         // write pass below would silently keep the pre-reverse key - parking a
         // merge, datum or comment on the wrong physical end.  Mint the missing
         // ones up front instead; load already does this, so this is belt-and-
-        // braces for any path that didn't.
-        self.ensure_shot_uuids();
+        // braces for any path that didn't.  Section-scoped: only this section's
+        // anchors are rebuilt below, and a multi-section reverse runs one
+        // `ReverseSection` per section.
+        self.ensure_section_shot_uuids(section_id);
 
         // ---- Read pass, before anything moves -------------------------------
         // Station `i` of this section becomes station `shot_count - i`.  Resolve
         // every stored key now, while the old order is still in place; the write
         // pass below rebuilds them from the mirrored indices.
-        let mirrored: Vec<Option<u32>> = {
-            let mut out = Vec::new();
+        //
+        // Keyed by the stored key rather than by traversal position: the read pass
+        // walks `for_each_station_ref` and the write pass walks `map_station_refs`,
+        // and the two rebuild the offset/comment HashMaps from independent
+        // iterations, so pairing them by index would depend on `keys()` and
+        // `into_iter()` agreeing on order.  A key visited twice (two merges can
+        // share a station) mirrors to the same index either way.
+        let mirrored: HashMap<StationKey, u32> = {
+            let mut out: HashMap<StationKey, u32> = HashMap::new();
             self.for_each_station_ref(|_label, key| {
-                let mirror = if key.section_id == section_id {
-                    self.resolve_key(&key)
-                        .map(|sr| shot_count as u32 - sr.station_index)
-                } else {
-                    None
-                };
-                out.push(mirror);
+                if key.section_id != section_id || out.contains_key(&key) {
+                    return;
+                }
+                if let Some(sr) = self.resolve_key(&key) {
+                    out.insert(key, shot_count as u32 - sr.station_index);
+                }
             });
             out
         };
@@ -211,6 +227,13 @@ impl Project {
             .map(|((d, uuid), id)| Shot::with_uuid(id, d, uuid))
             .collect();
 
+        // Every shot in this section moved, so every cached `(section_id, uuid) ->
+        // index` entry for it is stale.  A stale entry is only a slow path (
+        // `resolve_key` re-checks and rescans), but the reverse invalidated all of
+        // them at once - re-index the one section rather than leave every later
+        // merge/closure/datum/comment lookup on the O(shots) fallback.
+        self.reindex_section_shot_uuids(section_id);
+
         // ---- Keep the section where it was ----------------------------------
         // Station 0 is now the far end, so the anchor moves by the displacement
         // the section used to span.
@@ -219,37 +242,34 @@ impl Project {
         }
 
         // ---- Write pass: mirror the external refs ---------------------------
-        let mut i = 0;
-        let mut rebuilt = Vec::with_capacity(mirrored.len());
-        for mirror in &mirrored {
-            let next =
-                mirror.and_then(|index| self.key_for_ref(StationRef::new(section_id, index)));
-            // `ensure_shot_uuids` above guarantees every `AfterShot` anchor can
-            // be built, so a ref we mirrored must be re-keyable.  If that ever
-            // stops holding, the `unwrap_or(key)` below keeps the pre-reverse
-            // key - which now names the OPPOSITE physical station - so trip
-            // loudly in dev rather than silently misplacing the relationship.
-            debug_assert!(
-                mirror.is_none() || next.is_some(),
-                "reverse_section: station ref in section {section_id} mirrored to \
-                 {mirror:?} but could not be re-keyed - it would silently stay on \
-                 its pre-reverse station"
-            );
-            rebuilt.push(next);
-        }
-        self.map_station_refs(|key| {
-            let next = rebuilt.get(i).cloned().flatten();
-            i += 1;
-            next.unwrap_or(key)
-        });
-        debug_assert_eq!(
-            i,
-            mirrored.len(),
-            "reverse_section: map_station_refs visited a different number of refs \
-             than for_each_station_ref produced - station-ref traversal order \
-             diverged between the read and write passes"
-        );
+        let rebuilt: HashMap<StationKey, StationKey> = mirrored
+            .into_iter()
+            .filter_map(|(old, index)| {
+                let next = self.key_for_ref(StationRef::new(section_id, index));
+                // `ensure_section_shot_uuids` above guarantees every `AfterShot`
+                // anchor can be built, so a ref we mirrored must be re-keyable.
+                // If that ever stops holding, the key is left untouched below -
+                // and it now names the OPPOSITE physical station - so trip loudly
+                // in dev rather than silently misplacing the relationship.
+                debug_assert!(
+                    next.is_some(),
+                    "reverse_section: station ref in section {section_id} mirrored \
+                     to station {index} but could not be re-keyed - it would \
+                     silently stay on its pre-reverse station"
+                );
+                next.map(|n| (old, n))
+            })
+            .collect();
+        self.map_station_refs(|key| rebuilt.get(&key).cloned().unwrap_or(key));
 
+        // Reconcile matches a returned shot to its baseline entry by UUID but
+        // applies the edit to `shots[entry.shot_index]`, and the reverse just
+        // permuted every index in this section.  Until the next save re-exports
+        // the sibling `.tml`, a collaborator's edit would land on the mirrored
+        // shot - drop the baseline so the reconcile is deferred, not misapplied.
+        self.invalidate_collab_baseline();
+
+        self.touch();
         true
     }
 }
@@ -293,19 +313,20 @@ mod tests {
     }
 
     /// World coordinates of every station in `section_id`, in station order.
+    ///
+    /// Deliberately routed through the production walk rather than a local copy
+    /// of `offset + sum(horizontal * sin/cos(average_azimuth))`: these tests exist
+    /// to catch the reverse and the coordinate pipeline disagreeing, and a private
+    /// re-implementation would keep passing if both drifted the same way.
     fn world_coords(project: &Project, section_id: SectionId) -> Vec<(f64, f64)> {
-        let (ox, oy) = project.section_offset(section_id);
-        let section = project.get_section(section_id).unwrap();
-        let mut out = vec![(ox, oy)];
-        let (mut x, mut y) = (ox, oy);
-        for shot in &section.shots {
-            let azimuth_rad = shot.average_azimuth().to_radians();
-            let horizontal = shot.horizontal_length();
-            x += horizontal * azimuth_rad.sin();
-            y += horizontal * azimuth_rad.cos();
-            out.push((x, y));
-        }
-        out
+        let station_count = project.get_section(section_id).unwrap().shots.len() + 1;
+        (0..station_count)
+            .map(|i| {
+                project
+                    .compute_station_raw_xy(StationRef::new(section_id, i as u32))
+                    .unwrap()
+            })
+            .collect()
     }
 
     fn assert_coords_close(a: &[(f64, f64)], b: &[(f64, f64)]) {
@@ -336,6 +357,12 @@ mod tests {
         assert_coords_close(&before, &reversed);
     }
 
+    /// Bit-exact round trip, which holds only because every azimuth here survives
+    /// `(az + 180) % 360` exactly (17.5 -> 197.5 -> 17.5, 359 -> 179 -> 359,
+    /// 210.25 -> 30.25 -> 210.25). That is the common case, not a guarantee - see
+    /// [`reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`] for
+    /// the general one, and `AppState::generate_undo_data` for why undo snapshots
+    /// instead of re-running the transform.
     #[test]
     fn reverse_is_an_involution() {
         let (mut project, id) = project_with_shots(vec![
@@ -362,6 +389,31 @@ mod tests {
             assert_eq!(a.left, b.left);
             assert_eq!(a.right, b.right);
         }
+    }
+
+    /// The involution is exact in real arithmetic but not in f64: `0.1 + 180`
+    /// rounds, and the `% 360` wrap on the way back cannot undo that, so the
+    /// azimuth returns 2e-14 off. Pinned because the codebase relies on it in two
+    /// places - undo snapshots the project instead of re-running the reverse, and
+    /// nothing may promote "involutive" to "bit-exact".
+    #[test]
+    fn reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp() {
+        let (mut project, id) = project_with_shots(vec![shot(0.1, 10.0, 0.0, 0.0)]);
+
+        assert!(project.reverse_section(id, false));
+        assert!(project.reverse_section(id, false));
+
+        let azimuth = project.get_section(id).unwrap().shots[0].azimuth_in;
+        assert!(
+            (azimuth - 0.1).abs() < 1e-9,
+            "round trip drifted more than a rounding error: {azimuth}"
+        );
+        assert_ne!(
+            azimuth, 0.1,
+            "if this is now bit-exact the reciprocal changed - revisit the doc \
+             comments that say the round trip is only exact for representable \
+             shifts, and undo_capture's reason for snapshotting"
+        );
     }
 
     #[test]
@@ -587,6 +639,113 @@ mod tests {
         };
         assert_eq!(at(2), Some("at the entrance"));
         assert_eq!(at(0), None);
+    }
+
+    /// Every other mutating `Project` method stamps `modified_at`; without it a
+    /// reverse saves a project that still reports the previous session's edit time,
+    /// so the recent-projects list and any "changed since?" check read it as
+    /// untouched.
+    #[test]
+    fn reverse_marks_the_project_modified() {
+        let (mut project, id) = project_with_shots(vec![shot(0.0, 10.0, 0.0, 0.0)]);
+        let before = project.modified_at;
+
+        assert!(project.reverse_section(id, false));
+
+        assert!(
+            project.modified_at > before,
+            "reverse must touch the project: {before} -> {}",
+            project.modified_at
+        );
+    }
+
+    /// A missing section and an empty section both leave the project alone, so
+    /// neither may stamp `modified_at` - an empty section reverses to itself.
+    #[test]
+    fn reverse_of_a_noop_does_not_mark_the_project_modified() {
+        let (mut project, id) = project_with_shots(vec![]);
+        let before = project.modified_at;
+
+        assert!(project.reverse_section(id, false));
+        assert!(!project.reverse_section(9999, false));
+
+        assert_eq!(project.modified_at, before);
+    }
+
+    /// The reverse permutes every shot index in the section, so every cached
+    /// `(section_id, uuid) -> index` entry is wrong afterwards. Stale entries are
+    /// only a slow path (`resolve_key` rescans), so this asserts the cache itself
+    /// rather than a behaviour change.
+    #[test]
+    fn reverse_refreshes_the_sections_shot_uuid_index() {
+        let (mut project, id) = project_with_shots(vec![
+            shot(0.0, 1.0, 0.0, 0.0),
+            shot(0.0, 2.0, 0.0, 0.0),
+            shot(0.0, 3.0, 0.0, 0.0),
+        ]);
+        project.rebuild_shot_uuid_index();
+        let first_uuid = project.get_section(id).unwrap().shots[0].uuid.clone().unwrap();
+
+        assert!(project.reverse_section(id, false));
+
+        // The record that was at index 0 is now last.
+        assert_eq!(
+            project.shot_uuid_index.get(&(id, first_uuid.clone())),
+            Some(&2),
+            "the uuid index must follow the record to its mirrored position"
+        );
+        // And the cache still agrees with the cold scan for every shot.
+        for (i, shot) in project.get_section(id).unwrap().shots.iter().enumerate() {
+            let uuid = shot.uuid.clone().unwrap();
+            assert_eq!(project.shot_uuid_index.get(&(id, uuid)), Some(&(i as u32)));
+        }
+    }
+
+    /// The collab baseline's identity key is `(section_id, shot_index)`; a reverse
+    /// invalidates every one of this section's slots at once. Reconcile matches by
+    /// UUID but *applies* by that index, so a collaborator's edit arriving before
+    /// the next save would overwrite the mirrored shot. Dropping the baseline
+    /// defers the reconcile until the next export re-seeds it.
+    #[test]
+    fn reverse_invalidates_a_stale_collab_baseline() {
+        use crate::models::{CollabState, ShotBaselineEntry};
+
+        let (mut project, id) = project_with_shots(vec![
+            shot(0.0, 1.0, 0.0, 0.0),
+            shot(90.0, 2.0, 0.0, 0.0),
+        ]);
+        let uuid = project.get_section(id).unwrap().shots[0].uuid.clone().unwrap();
+        project.collab = Some(CollabState {
+            enabled: true,
+            sibling_tml_relative: "sibling.tml".to_string(),
+            last_export_tml_sha256: Some("deadbeef".to_string()),
+            shot_baseline: vec![ShotBaselineEntry {
+                section_id: id,
+                shot_index: 0,
+                ariane_id: 1,
+                uuid,
+                geo_key: String::new(),
+                section_name: String::new(),
+                station_comment: None,
+            }],
+            section_name_map: Vec::new(),
+            synthetic_section_names: Vec::new(),
+            last_reconcile_at: None,
+            write_tml_on_autosave: true,
+        });
+
+        assert!(project.reverse_section(id, false));
+
+        let collab = project.collab.as_ref().unwrap();
+        assert!(
+            collab.shot_baseline.is_empty(),
+            "a reverse must drop the index-keyed baseline"
+        );
+        assert_eq!(
+            collab.last_export_tml_sha256, None,
+            "the sha must go too, or the next open sees the sibling as unchanged"
+        );
+        assert!(collab.enabled, "collab itself stays on");
     }
 
     #[test]

@@ -40,8 +40,10 @@ impl AppState {
             // For ReverseSection, capture full project snapshot (before/after pair).
             // Re-running the reverse would be a valid inverse in exact arithmetic,
             // but the snapshot keeps undo bit-exact (the f64 `(az + 180) % 360`
-            // round trip is not guaranteed to be) and spares redo from having to
-            // reproduce the anchor mirroring and section-offset compensation.
+            // round trip is not - pinned by
+            // `reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`)
+            // and spares redo from having to reproduce the anchor mirroring, the
+            // section-offset compensation and the collab-baseline invalidation.
             Command::ReverseSection { section_id, .. } => {
                 if project.get_section(*section_id).is_some() {
                     match serde_json::to_string(project) {
