@@ -193,3 +193,64 @@ describe('GasPlanPanel scooter (DPV) readout (#317)', () => {
     expect(screen.getByTestId('gas-readout-scooter-turn-warning')).toBeInTheDocument();
   });
 });
+
+/**
+ * #317: a DPV rig has NO in-panel control, so Settings is its only source. The panel's
+ * seed-once `hydrated` gate (#244, which exists so a mode-switch remount cannot clobber working
+ * inputs or a loaded plan) therefore swallowed it entirely: configure a scooter after opening
+ * Plan mode even once and the rig never appeared, with nothing on screen to explain why.
+ *
+ * The fix mirrors a rig EDITED IN SETTINGS during the session into the working config, keyed on
+ * the persisted value changing rather than differing - which is what keeps a loaded plan's own
+ * rig from being silently overwritten by a personal default it was never planned on.
+ */
+describe('GasPlanPanel DPV rig sync (#317)', () => {
+  it('picks up a rig configured in Settings after the panel has already hydrated', () => {
+    // `hydrated: true` from beforeEach is the whole point: this is the state the bug lived in.
+    const { rerender } = render(<GasPlanPanel />);
+    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+
+    // The diver opens Settings > Gas and configures their scooters.
+    const next = structuredClone(defaultConfig) as Config;
+    next.gas.dpv = RIG;
+    useProjectStore.setState({ config: next });
+    rerender(<GasPlanPanel />);
+
+    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(RIG);
+  });
+
+  it('deep-clones the rig so editing the working copy cannot mutate the persisted config', () => {
+    const { rerender } = render(<GasPlanPanel />);
+    const next = structuredClone(defaultConfig) as Config;
+    next.gas.dpv = structuredClone(RIG);
+    useProjectStore.setState({ config: next });
+    rerender(<GasPlanPanel />);
+
+    const working = useGasPlanStore.getState().gasConfig.dpv;
+    expect(working).not.toBe(next.gas.dpv);
+    expect(working?.primary).not.toBe(next.gas.dpv?.primary);
+  });
+
+  it('leaves a loaded plan’s own rig alone when Settings did not change', () => {
+    // THE adversarial case, and the reason this syncs on CHANGE rather than on difference. A plan
+    // carries its own rig in its snapshot; a dive planned on a different scooter must not be
+    // re-rigged just because the diver's personal default disagrees. A naive "if working !==
+    // persisted, copy persisted" would fail here, so this is what separates the two designs.
+    const planRig: DpvRig = {
+      primary: { speed_m_per_min: 40, burn_minutes: 30, label: 'plan primary' },
+      backup: { speed_m_per_min: 35, burn_minutes: 30, label: 'plan backup' },
+      range_reserve_fraction: 0.1,
+    };
+    const settingsConfig = structuredClone(defaultConfig) as Config;
+    settingsConfig.gas.dpv = RIG;
+    useProjectStore.setState({ config: settingsConfig });
+    useGasPlanStore.setState({
+      gasConfig: { ...structuredClone(defaultConfig.gas), dpv: planRig },
+    });
+
+    const { rerender } = render(<GasPlanPanel />);
+    rerender(<GasPlanPanel />);
+
+    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(planRig);
+  });
+});

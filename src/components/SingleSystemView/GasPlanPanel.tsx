@@ -19,7 +19,7 @@ import {
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import { DivePlanBar } from './DivePlanBar';
-import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
+import type { DpvRig, GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = [
   'all_thirds',
@@ -141,6 +141,38 @@ export function GasPlanPanel() {
     });
     useGasPlanStore.getState().markHydrated();
   }, [setGasConfig]);
+
+  // Mirror a DPV rig EDITED IN SETTINGS during this session into the working config (#317).
+  //
+  // The `hydrated` gate above deliberately seeds once, because the panel remounts on every mode
+  // switch and re-seeding would clobber working inputs and a loaded plan (#244). The rig is the
+  // first gas setting with NO in-panel control at all, so Settings is its only source - which made
+  // the seed-once rule swallow it: configure a scooter after having opened Plan mode even once and
+  // the rig would never appear, with nothing on screen to explain why.
+  //
+  // Keyed on the persisted value CHANGING, not on it differing from the working one. That
+  // distinction is what keeps #244 intact: a loaded plan carries its own rig in its snapshot, and a
+  // plan planned on a different scooter must not be silently re-rigged just because the diver's
+  // personal default says otherwise. Only an actual edit in Settings - an intent - moves it.
+  //
+  // Scoped to `dpv` on purpose. Every other gas setting is editable in the panel, so mirroring
+  // those would fight the user's own edits; the general "Settings changes are invisible mid-session"
+  // wart is left alone rather than half-fixed here.
+  const persistedDpv = useProjectStore((s) => s.config?.gas?.dpv ?? null);
+  const lastPersistedDpvRef = useRef<DpvRig | null | undefined>(undefined);
+  useEffect(() => {
+    const previous = lastPersistedDpvRef.current;
+    lastPersistedDpvRef.current = persistedDpv;
+    // First observation is the seed, not an edit - the hydrate effect above already applied it.
+    if (previous === undefined) return;
+    if (JSON.stringify(previous) === JSON.stringify(persistedDpv)) return;
+    // Deep-clone for the same reason the seed does: the working config must never share nested
+    // references with the live persisted config.
+    setGasConfig({
+      ...useGasPlanStore.getState().gasConfig,
+      dpv: persistedDpv ? structuredClone(persistedDpv) : null,
+    });
+  }, [persistedDpv, setGasConfig]);
 
   // Swim-speed disk-persist debounce (#241): the in-memory working config updates
   // immediately on every keystroke, but the disk write is trailing-debounced so a fast

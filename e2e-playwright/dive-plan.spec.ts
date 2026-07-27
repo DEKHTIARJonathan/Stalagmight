@@ -28,6 +28,7 @@ const sectionSeeds: SectionSeed[] = [
 
 type PlanMetaLite = { id: number; name: string };
 type StationRefLite = { section_id: number; station_index: number };
+type PlanSegmentLite = { speed_m_per_min: number; on_scooter: boolean };
 
 type E2EWindow = {
   __E2E_TEST__?: {
@@ -38,12 +39,14 @@ type E2EWindow = {
         loadedPlanId: number | null;
         waypoints: StationRefLite[];
         markedPoints: { station: StationRefLite; label: string | null }[];
+        segments: PlanSegmentLite[];
         setDiver: (d: { rmv_l_per_min: number; label: string | null }) => void;
         addWaypoint: (ref: StationRefLite) => void;
         removeWaypoint: (index: number) => void;
         addMarkedPoint: (ref: StationRefLite) => void;
         removeMarkedPoint: (index: number) => void;
         setMarkedPointLabel: (index: number, label: string) => void;
+        setSegments: (segments: PlanSegmentLite[]) => void;
       };
     };
   };
@@ -221,6 +224,48 @@ test.describe('Dive-plan persistence (#244)', () => {
     ]);
     expect(restored.markedPoints).toEqual([
       { station: { section_id: 1, station_index: 3 }, label: 'photo here' },
+    ]);
+  });
+
+  test('segments (per-span pace/propulsion) survive a save/load round trip (#317)', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      // A way point splits the default single segment into two; edit both away from their
+      // defaults so a round trip that silently dropped the edits (or fell back to fresh
+      // defaults) would be caught.
+      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.setSegments([
+        { speed_m_per_min: 22, on_scooter: true },
+        { speed_m_per_min: 8, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'With segments');
+
+    // Load a second, bare plan so the inputs genuinely change, then come back to the first: a
+    // round trip that never left the store would pass even if nothing were persisted.
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.removeWaypoint(0);
+    });
+    await saveAs(page, 'Bare');
+
+    const plans = await savedPlans(page);
+    const withSegments = plans.find((p) => p.name === 'With segments');
+    expect(withSegments).toBeDefined();
+    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(withSegments!.id));
+    await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(withSegments!.id);
+
+    const restored = await page.evaluate(
+      () => (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().segments,
+    );
+    expect(restored).toEqual([
+      { speed_m_per_min: 22, on_scooter: true },
+      { speed_m_per_min: 8, on_scooter: false },
     ]);
   });
 
