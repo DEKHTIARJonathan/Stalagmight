@@ -335,6 +335,57 @@ describe('speleoStore', () => {
       await useSpeleoStore.getState().refreshLinkStatus();
       expect(useSpeleoStore.getState().link?.hasUnpushedEdits).toBe(true);
     });
+
+    it('keeps the FRESHER of two overlapping refreshes instead of dropping it', async () => {
+      // `seedFromStatus` allocates a new link object every time, so a plain
+      // identity guard treated a rival poll's seed as a local mutation - and the
+      // reply it discarded was the LATER one, holding newer truth.
+      //
+      // The path that matters: `handleRelease` releases the lock and awaits its own
+      // refresh. A periodic poll landing in that window reseeded `link`, the
+      // release's own reply was thrown away, and the toolbar kept the green pen
+      // over a lock that no longer existed - until the next poll, up to 24h out.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+
+      const pending: Array<(s: SpeleoLinkStatus) => void> = [];
+      invokeIpcMock.mockImplementation(
+        () => new Promise<SpeleoLinkStatus>((resolve) => pending.push(resolve)),
+      );
+
+      const poll = useSpeleoStore.getState().refreshLinkStatus();
+      const afterRelease = useSpeleoStore.getState().refreshLinkStatus();
+      expect(pending).toHaveLength(2);
+
+      // The periodic poll answers first, still describing the held lock.
+      pending[0]!(status({ edit_enabled: true }));
+      await poll;
+      // Then the release's own refresh answers: the lock is gone.
+      pending[1]!(status({ edit_enabled: false }));
+      await afterRelease;
+
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    });
+
+    it('lets an older reply lose to a newer one that already landed', async () => {
+      // Issue order, not arrival order. Without it the release-then-poll ordering
+      // is fixed but the poll-then-release one regresses.
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+
+      const pending: Array<(s: SpeleoLinkStatus) => void> = [];
+      invokeIpcMock.mockImplementation(
+        () => new Promise<SpeleoLinkStatus>((resolve) => pending.push(resolve)),
+      );
+
+      const older = useSpeleoStore.getState().refreshLinkStatus();
+      const newer = useSpeleoStore.getState().refreshLinkStatus();
+
+      pending[1]!(status({ edit_enabled: false }));
+      await newer;
+      pending[0]!(status({ edit_enabled: true }));
+      await older;
+
+      expect(useSpeleoStore.getState().link?.editState).toBe('read-only');
+    });
   });
 
   describe('setLinkOnOpen', () => {

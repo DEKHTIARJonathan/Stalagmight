@@ -221,6 +221,18 @@ export function SpeleoStatusButton() {
                 : 'unlocked';
 
   const handleClick = () => {
+    // While the right-click menu is open the button is a TOGGLE, not the verb.
+    // `useDismissableLayer` treats a mousedown on the trigger as "inside" and does
+    // not dismiss - right for AppMenu, whose trigger toggles, but here the verb
+    // behind this button is the destructive hand-off (start editing, release, or
+    // the push & release dialog). Without this, a user who right-clicked to look at
+    // the menu and then left-clicked to dismiss it acquired or released the
+    // SpeleoDB write lock they never asked for, and the stale menu stayed open over
+    // the changed state.
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
     switch (kind) {
       case 'unlocked':
         void startEditing();

@@ -507,6 +507,24 @@ export function unhandledHandoffKind(kind: never): Record<string, never> {
   return {};
 }
 
+/// Link objects produced by `seedFromStatus`, so `refreshLinkStatus` can tell a
+/// rival poll's seed apart from a LOCAL mutation of link truth.
+///
+/// The staleness guard has to drop a reply whose link changed under it - a push
+/// landing inside the poll's two round trips clears the dirty bit, and a reply
+/// carrying the pre-push snapshot would resurrect it. But `seedFromStatus`
+/// allocates a fresh object every time, so a plain identity check also fired when
+/// the change came from another poll: two overlapping refreshes invalidated each
+/// other, and the LATER one - the one holding newer truth - was the one thrown
+/// away. A `WeakSet` keeps that distinction without a counter every future link
+/// mutator would have to remember to bump, and without retaining dead objects.
+const seededLinks = new WeakSet<SpeleoLinkState>();
+
+/// Issue order for `refreshLinkStatus`, so that when replies do overlap the newest
+/// one wins instead of whichever happened to land last.
+let linkStatusSeq = 0;
+let linkStatusApplied = 0;
+
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
   link: null,
@@ -655,11 +673,25 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // The no-op arms that return `{}` (markDirty when already dirty, applyPush's
     // not_editing) keep the same object, and a reply is genuinely still valid
     // there.
+    //
+    // A seed by ANOTHER refresh is explicitly not such a mutation (`seededLinks`).
+    // Counting it as one is what made overlapping refreshes cancel each other:
+    // `handleRelease` awaits its own `refreshLinkStatus` after releasing the lock,
+    // and a periodic poll landing in that window reseeded `link`, so the release's
+    // reply - the one that knew the lock was gone - was discarded. The toolbar kept
+    // the green pen and the shell stayed editable over a lock that no longer
+    // existed, until the next poll, which can be up to 24 hours out.
+    const seq = ++linkStatusSeq;
     const requestedLink = get().link;
     try {
       const status = await invokeIpc<SpeleoLinkStatus>('speleodb_link_status');
       if ((useProjectStore.getState().project?.file_path ?? null) !== requestedPath) return;
-      if (get().link !== requestedLink) return;
+      const current = get().link;
+      if (current !== requestedLink && !(current && seededLinks.has(current))) return;
+      // Issue order, not arrival order: an older reply must never overwrite a
+      // newer one that already landed.
+      if (seq < linkStatusApplied) return;
+      linkStatusApplied = seq;
       get().seedFromStatus(status);
     } catch {
       // Best-effort - leave the prior link state (the backend gate is the
@@ -897,33 +929,39 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       } else if (prior?.kind === 'rendering_disabled') {
         banner = null;
       }
+      const seeded: SpeleoLinkState = {
+        editState,
+        // The network fields degrade to null/unknown offline - keep the
+        // last-known permission rather than blanking the gate on a transient miss.
+        permission: s.permission ?? state.link?.permission ?? null,
+        lockHolder: s.lock_holder,
+        // Read-only + a resolved holder ⟹ someone else holds it (the backend
+        // gives us the gate when the lock is ours). Derived PURELY from this
+        // poll's (editState, lockHolder), with NO "preserve prior" carry: once the
+        // other holder releases (a later poll resolves no holder) the button stops
+        // reading "locked by other" instead of sticking orange until a poll both
+        // reaches the server AND happens to resolve a holder (fix 7). A transient
+        // offline poll may briefly drop it to read-only; the next poll re-resolves,
+        // and the backend gate stays the real enforcement.
+        lockedByOther: editState !== 'editing' && !!s.lock_holder,
+        hasUnpushedEdits: s.has_unpushed_edits,
+        // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
+        // and reported every poll; a reconnect that acquires the lock clears it there.
+        forceEditing: s.force_editing,
+        forceEditAllowed: s.allow_force_edit,
+        remoteState: s.remote_state,
+        noAccess: s.access_denied,
+        serverError: s.server_error,
+      };
+      // Register the object this seed produced. `refreshLinkStatus` drops a reply
+      // whose link changed under it, and without this marker a seed by ANOTHER
+      // refresh looked identical to a local mutation - so two overlapping polls
+      // made each other's replies unusable and the fresher one was thrown away.
+      seededLinks.add(seeded);
       return {
         banner,
         projectLinkKind: 'remote' as const,
-        link: {
-          editState,
-          // The network fields degrade to null/unknown offline - keep the
-          // last-known permission rather than blanking the gate on a transient miss.
-          permission: s.permission ?? state.link?.permission ?? null,
-          lockHolder: s.lock_holder,
-          // Read-only + a resolved holder ⟹ someone else holds it (the backend
-          // gives us the gate when the lock is ours). Derived PURELY from this
-          // poll's (editState, lockHolder), with NO "preserve prior" carry: once the
-          // other holder releases (a later poll resolves no holder) the button stops
-          // reading "locked by other" instead of sticking orange until a poll both
-          // reaches the server AND happens to resolve a holder (fix 7). A transient
-          // offline poll may briefly drop it to read-only; the next poll re-resolves,
-          // and the backend gate stays the real enforcement.
-          lockedByOther: editState !== 'editing' && !!s.lock_holder,
-          hasUnpushedEdits: s.has_unpushed_edits,
-          // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
-          // and reported every poll; a reconnect that acquires the lock clears it there.
-          forceEditing: s.force_editing,
-          forceEditAllowed: s.allow_force_edit,
-          remoteState: s.remote_state,
-          noAccess: s.access_denied,
-          serverError: s.server_error,
-        },
+        link: seeded,
         // #218: the open remote project's id, for the in-project revision-history entry.
         remoteProjectId: s.project_id,
       };

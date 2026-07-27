@@ -32,18 +32,29 @@ import { SlidersIcon, PencilIcon, LockIcon } from '../common/icons';
 export function useSpeleoMenuItems(): AppMenuItem[] {
   const { t } = useTranslation();
   const openDialog = useUIStore((s) => s.openDialog);
-  const link = useSpeleoStore((s) => s.link);
+  // Select the four PRIMITIVES this hook reads, not the link object: the status
+  // poll hands out a fresh object on every tick (`seedFromStatus` allocates), so
+  // memoizing on the object meant the memo never held - all seven rows and their
+  // `SpeleoBadgedIcon` SVG trees were rebuilt on every poll, in both consumers
+  // (the hamburger and the status button's right-click menu), for a menu that is
+  // usually closed. `useSpeleoProjectMetadata` already does exactly this, for
+  // exactly this reason.
+  const isRemote = useSpeleoStore((s) => s.link !== null);
+  const editState = useSpeleoStore((s) => s.link?.editState ?? null);
+  const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
+  const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
+  const forceEditAllowed = useSpeleoStore((s) => s.link?.forceEditAllowed ?? false);
   const { busy, startEditing, update, done } = useSpeleoActions();
   // No page argument: the plain project page is the one a "take me to this project"
   // row should land on.
   const web = useSpeleoWebLink();
 
   return useMemo<AppMenuItem[]>(() => {
-    if (!link) return [];
+    if (!isRemote) return [];
     const sz = 18;
 
     return [
-      link.editState === 'editing' && link.forceEditing
+      editState === 'editing' && forceEditing
         ? {
             // #213: a force-editor holds no lock, so the top action is
             // Reconnect (acquire + reconcile), NOT Unlock. Done/push are
@@ -56,7 +67,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
               void startEditing();
             },
           }
-        : link.editState === 'editing'
+        : editState === 'editing'
         ? {
             id: 'speleodb-menu-unlock',
             label: t('speleodb.menu.unlock'),
@@ -64,7 +75,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
             disabled: busy,
             onClick: () => {
               // Release; the push&release dialog when there are local edits.
-              if (link.hasUnpushedEdits) openDialog('speleodb-done');
+              if (hasUnpushedEdits) openDialog('speleodb-done');
               else void done(null);
             },
           }
@@ -82,7 +93,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         label: t('speleodb.menu.push'),
         icon: <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />,
         // Push-without-unlock only makes sense while editing with edits.
-        disabled: busy || link.editState !== 'editing' || !link.hasUnpushedEdits,
+        disabled: busy || editState !== 'editing' || !hasUnpushedEdits,
         // Collect a commit message via the done dialog in push mode (like
         // push & release, but the lock is retained - fix 8).
         onClick: () => openDialog('speleodb-done', { mode: 'push' }),
@@ -99,7 +110,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       // #213: optimistic force-edit - edit WITHOUT the lock, behind the
       // `allow_force_edit` opt-in (hidden otherwise) and a big-red confirm.
       // Only offered while read-only; a force-editor uses Reconnect above.
-      ...(link.forceEditAllowed && link.editState !== 'editing'
+      ...(forceEditAllowed && editState !== 'editing'
         ? [
             {
               id: 'speleodb-menu-edit-without-lock',
@@ -141,5 +152,19 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         onClick: () => openDialog('speleodb-project'),
       },
     ];
-  }, [t, openDialog, link, busy, startEditing, update, done, web.url, web.open]);
+  }, [
+    t,
+    openDialog,
+    isRemote,
+    editState,
+    forceEditing,
+    hasUnpushedEdits,
+    forceEditAllowed,
+    busy,
+    startEditing,
+    update,
+    done,
+    web.url,
+    web.open,
+  ]);
 }
