@@ -225,6 +225,33 @@ describe('ProfileChart (#299)', () => {
     expect(call?.[2].endpoint).toEqual(moved);
   });
 
+  it('labels every marker rule, so a vertical line is not a riddle', () => {
+    // Unlabelled, a stage drop and a way point are the same anonymous vertical line - which defeats
+    // the point of distinguishing them.
+    seed(
+      fakeField({
+        stage_drop_route_indices: [1],
+        stage_drop_over_reserve: [false],
+        waypoint_route_indices: [1],
+      })
+    );
+    render(<ProfileChart />);
+    expect(screen.getByTestId('plan-profile-label-stage-drop-0').textContent).toBe('Stage 1');
+    expect(screen.getByTestId('plan-profile-label-waypoint-0').textContent).toBe('WP 1');
+    expect(screen.getByTestId('plan-profile-label-turn').textContent).toBe('Turn');
+  });
+
+  it('stops the turnaround rule at the profile, not at the plot floor', () => {
+    // The turn is not always the deepest point; a full-height rule then hangs below the depth curve
+    // and reads as a drawing error. The fixture's turn IS the deepest point, so assert against the
+    // marker dot rather than a constant - they must terminate together.
+    seed(fakeField());
+    render(<ProfileChart />);
+    const lineY2 = Number(screen.getByTestId('plan-profile-turn-line').getAttribute('y2'));
+    const dotY = Number(screen.getByTestId('plan-profile-marker-turn').getAttribute('cy'));
+    expect(lineY2).toBeCloseTo(dotY, 5);
+  });
+
   it('recovers when the field flips back to null mid-session', () => {
     // The blink is not a one-off at mount: it reopens on every single plan edit.
     const { rerender } = render(<ProfileChart />);

@@ -1,5 +1,6 @@
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useUIStore } from '../../store/uiStore';
@@ -105,14 +106,13 @@ function ProfileHeader({
   const { t } = useTranslation();
   return (
     <div className="flex items-center justify-between gap-2 px-2 py-1 shrink-0">
-      <span className="text-xs opacity-70" title={t('planTables.profile.subtitle')}>
-        {t('planTables.profile.title')}
-      </span>
-      <ProfileExportControls enabled={exportable} />
+      {/* Axis toggle sits where the title used to: the chart is already under a tab labelled
+          "Profile", so a heading repeating that only cost vertical space in a 100px-min panel. */}
       <div
         className="flex rounded overflow-hidden border border-border"
         role="group"
         aria-label={t('planTables.profile.axisLabel')}
+        title={t('planTables.profile.subtitle')}
       >
         {(['distance', 'time'] as const).map((a) => (
           <button
@@ -127,6 +127,7 @@ function ProfileHeader({
           </button>
         ))}
       </div>
+      <ProfileExportControls enabled={exportable} />
     </div>
   );
 }
@@ -344,12 +345,14 @@ function ProfilePlot({
         data-testid="plan-profile-line"
       />
 
-      {/* The turnaround: everything right of this line is the way home. */}
+      {/* The turnaround: everything right of this line is the way home. Stops AT the profile rather
+          than at the plot floor - a full-height rule hangs below the depth curve wherever the turn
+          is not also the deepest point, which reads as a drawing error. */}
       <line
         x1={p.x(geo.turnX)}
         y1={p.plotTop}
         x2={p.x(geo.turnX)}
-        y2={p.plotBottom}
+        y2={p.y(turnDepth)}
         stroke={accent}
         strokeWidth="1"
         strokeDasharray="3 3"
@@ -359,7 +362,15 @@ function ProfilePlot({
       {geo.markers
         .filter((m) => m.kind !== 'turn')
         .map((m) => (
-          <Marker key={`${m.kind}-${m.ordinal}`} marker={m} p={p} accent={accent} error={error} />
+          <Marker
+            key={`${m.kind}-${m.ordinal}`}
+            marker={m}
+            p={p}
+            accent={accent}
+            error={error}
+            label={markerLabel(m, t)}
+            showLabel={labelled}
+          />
         ))}
       <circle
         cx={p.x(geo.turnX)}
@@ -368,6 +379,18 @@ function ProfilePlot({
         fill={accent}
         data-testid="plan-profile-marker-turn"
       />
+      {labelled && turn && (
+        <text
+          x={p.x(geo.turnX)}
+          y={p.plotTop - 4}
+          textAnchor="middle"
+          fontSize="9"
+          fill={accent}
+          data-testid="plan-profile-label-turn"
+        >
+          {t('planTables.profile.marker.turn')}
+        </text>
+      )}
 
       {labelled &&
         xTicks.map((tick) => (
@@ -386,16 +409,36 @@ function ProfilePlot({
   );
 }
 
+/**
+ * Short label for a marker's rule. An unlabelled vertical line is a riddle - the diver cannot tell
+ * a stage drop from a way point, which is the whole reason for drawing them separately. Numbered
+ * from 1 because the readout beside it already says "Stage 1 drop".
+ */
+function markerLabel(marker: ProfileMarker, t: TFunction): string {
+  switch (marker.kind) {
+    case 'stage-drop':
+      return t('planTables.profile.marker.stage', { n: marker.ordinal + 1 });
+    case 'waypoint':
+      return t('planTables.profile.marker.waypoint', { n: marker.ordinal + 1 });
+    default:
+      return t('planTables.profile.marker.turn');
+  }
+}
+
 function Marker({
   marker,
   p,
   accent,
   error,
+  label,
+  showLabel,
 }: {
   marker: ProfileMarker;
   p: ReturnType<typeof projectProfile>;
   accent: string;
   error: string;
+  label: string;
+  showLabel: boolean;
 }) {
   const color = marker.overReserve ? error : accent;
   const x = p.x(marker.x);
@@ -418,6 +461,18 @@ function Marker({
         <rect x={x - 3} y={p.y(marker.depth_m) - 3} width="6" height="6" fill={color} />
       ) : (
         <circle cx={x} cy={p.y(marker.depth_m)} r="3" fill={color} />
+      )}
+      {showLabel && (
+        <text
+          x={x}
+          y={p.plotTop - 4}
+          textAnchor="middle"
+          fontSize="9"
+          fill={color}
+          data-testid={`plan-profile-label-${marker.kind}-${marker.ordinal}`}
+        >
+          {label}
+        </text>
       )}
     </g>
   );

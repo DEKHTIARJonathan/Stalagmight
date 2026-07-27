@@ -2322,7 +2322,6 @@
       "profile": "Profile"
     },
     "profile": {
-      "title": "Anticipated dive profile",
       "subtitle": "Depth against distance or runtime, out to the turn and back. No decompression is modelled.",
       "noRoute": "No route to plot. Set an origin, and an endpoint the plan can actually reach.",
       "axisLabel": "Profile x axis",
@@ -2333,10 +2332,15 @@
       "units": {
         "minutes": "min"
       },
+      "marker": {
+        "turn": "Turn",
+        "stage": "Stage {{n}}",
+        "waypoint": "WP {{n}}"
+      },
       "export": {
-        "copy": "Copy",
+        "copy": "Export text",
         "copied": "Copied",
-        "copyHint": "Copy the profile as plain text, for a slate or another planner.",
+        "copyHint": "Copy the profile to the clipboard as plain text, for a slate or another planner.",
         "xml": "Export XML",
         "xmlHint": "Write a Subsurface-importable XML profile. Not a decompression schedule.",
         "xmlFilter": "Subsurface XML",
