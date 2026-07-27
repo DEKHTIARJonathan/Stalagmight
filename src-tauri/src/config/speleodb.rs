@@ -57,19 +57,30 @@ pub struct SpeleoDbConfig {
     /// locked keyring turns every one of those into a desktop unlock prompt, so a
     /// user who dismissed it once was being asked again on every single launch.
     /// The refusal is persisted rather than session-scoped precisely so a restart
-    /// does not re-ask; it is cleared only when the user explicitly signs in to
-    /// SpeleoDB again, which is the one moment they have opted back into the
-    /// question.
+    /// does not re-ask. It is cleared only by an access that PROVED the keychain
+    /// took the key - a fresh sign-in or the Settings "Try again", each gated on
+    /// the token actually landing on the keychain tier. Clearing it on an attempt
+    /// that fell back to another tier revoked an answer nothing had disproved, and
+    /// the next launch re-raised the prompt (#259).
     #[serde(default)]
     pub keychain_declined: bool,
     /// The user turned the OS keychain OFF for good, from Settings.
     ///
     /// Stronger than `keychain_declined`, which answers one login's failure and is
-    /// cleared the next time they sign in. This is a standing instruction: while it
-    /// is set nothing goes near the keyring on any path, including a fresh login,
-    /// and the API key lives wherever `token_fallback` says. It exists because a
-    /// headless or locked-keyring box has no working keychain to offer, and being
-    /// asked about it on every sign-in is the same nag in a different costume.
+    /// lifted the next time the keychain proves itself. This is a standing
+    /// instruction: nothing is STORED to or READ from the keyring on any path,
+    /// including a fresh login, and the API key lives wherever `token_fallback`
+    /// says. It exists because a headless or locked-keyring box has no working
+    /// keychain to offer, and being asked about it on every sign-in is the same nag
+    /// in a different costume.
+    ///
+    /// DELETES are the deliberate exception, and the only thing keeping the switch
+    /// honest. Turning it on evicts whatever an earlier successful login left in
+    /// the keyring, and logout still sweeps it - nothing else ever would, because
+    /// the instruction is re-applied on every subsequent login (so a store never
+    /// overwrites the entry) and "Try again" clears only the other flag. Skipping
+    /// those left a working bearer token in the OS keychain of a user who had just
+    /// turned the OS keychain off, with logout reporting a clean sign-out over it.
     #[serde(default)]
     pub keychain_disabled: bool,
     /// Whether we believe the OS keychain currently holds a token for `email`.

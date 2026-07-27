@@ -11,15 +11,21 @@
 //! the keychain fails the key is in memory, so honouring the answer costs no
 //! re-login and no re-typed password.
 //!
-//! Neither verb PROBES the keychain. `speleodb_set_token_storage` deliberately
-//! never touches it (the decline flag is set first), and `speleodb_retry_keychain`
-//! touches it only because the user pressed "Try again" - an explicit request to
-//! find out, which is the one context where a desktop unlock prompt is an answer
-//! rather than a nag.
+//! Neither verb PROBES the keychain, but neither leaves it strictly alone either.
+//! `speleodb_set_token_storage` sets the decline flag first, so the store/load
+//! path never reaches the keyring - yet a SESSION-ONLY answer still issues one
+//! direct DELETE ([`crate::speleodb::auth::TokenStore::restore`] sweeps both
+//! persistent tiers when the token lands in memory), because "gone when the app
+//! closes" has to be true on disk and an entry from an earlier working login would
+//! otherwise sign the user straight back in. `speleodb_retry_keychain` reaches it
+//! for the obvious reason: the user pressed "Try again". Both are explicit
+//! user-initiated moments - the one context where a desktop unlock prompt is an
+//! answer rather than a nag - and neither runs from a background path.
 
 use super::speleodb::local_dto;
 use super::AppState;
 use crate::config::TokenFallback;
+use crate::speleodb::auth::TokenTier;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoSessionStatus};
 
 impl AppState {
@@ -29,9 +35,11 @@ impl AppState {
     /// survives a restart).
     ///
     /// Also sets `keychain_declined`, because a choice made here is only meaningful
-    /// if we then stop asking: while it is set nothing goes near the keychain -
-    /// not a store, not a startup read, not a status probe - which is what stops
-    /// the dismissed unlock prompt returning on every launch.
+    /// if we then stop asking: while it is set nothing is stored to or read from
+    /// the keychain - not a login write, not a startup read, not a status probe -
+    /// which is what stops the dismissed unlock prompt returning on every launch.
+    /// (The one exception is the session-only sweep described in the module doc,
+    /// which DELETES rather than asks.)
     ///
     /// Returns the refreshed status so the frontend renders where the key actually
     /// landed rather than where it asked for it to go: the plaintext write can
@@ -54,10 +62,14 @@ impl AppState {
         self.speleodb_session_status()
     }
 
-    /// Give the OS keychain another go (the Settings "Try again" affordance):
-    /// clear the persisted refusal and re-store the held token, which now reaches
+    /// Give the OS keychain another go (the Settings "Try again" affordance): lift
+    /// the refusal on the live store and re-store the held token, which now reaches
     /// the keychain again. A user whose keyring was locked when they signed in,
     /// and who has since unlocked it, gets a durable key without signing out.
+    ///
+    /// The PERSISTED refusal is lifted only if the keychain actually takes the key
+    /// - see the gate below. The live one is lifted either way, which is what makes
+    /// a second press meaningful.
     ///
     /// The refreshed status is the whole answer: if the keychain is still broken
     /// the re-store falls back exactly as login does and the report says
@@ -66,13 +78,33 @@ impl AppState {
         // The plaintext preference is unchanged by a retry - it only decides where
         // the token lands if the keychain refuses AGAIN.
         let allow_plaintext = self.speleodb_plaintext_allowed();
-        self.speleodb_move_token(false, allow_plaintext)?;
-        self.speleodb_persist_keychain_declined(false);
+        let tier = self.speleodb_move_token(false, allow_plaintext)?;
+        // Revoke the persisted refusal ONLY once the keychain has actually taken the
+        // key - the same gate the login path is held to, for the same reason (#259).
+        // `speleodb_move_token` reports `Ok` for ANY landing tier, so writing `false`
+        // unconditionally revoked the refusal on a retry that had just fallen back to
+        // plaintext or memory: the keyring was still broken, nothing had proved
+        // otherwise, and the next launch rehydrated through it and re-raised the
+        // unlock prompt the flag exists to stop.
+        //
+        // The live store's flag stays cleared either way, exactly as it does after a
+        // failed login attempt: that is what lets this session report `unavailable`
+        // (a broken keyring) rather than `declined`, which is the honest answer to a
+        // button the user just pressed - and it is what keeps a further press from
+        // being a no-op.
+        if tier == TokenTier::Keychain {
+            self.speleodb_persist_keychain_declined(false);
+        }
         self.speleodb_session_status()
     }
 
-    /// The shared half of both verbs: apply `declined` to the live token store and
-    /// re-persist the held token under it.
+    /// The shared half of both verbs: apply `declined` to the live token store,
+    /// re-persist the held token under it, and report WHICH TIER it landed on.
+    ///
+    /// The tier is the return value rather than a discarded detail because `Ok`
+    /// alone says almost nothing: the fallback chain means a still-broken keychain
+    /// resolves to plaintext or memory and still reports success. A caller deciding
+    /// whether the keychain has proved itself has to ask the tier.
     ///
     /// Refuses when no token is held. That is not pedantry - the two callers are a
     /// post-login prompt and a Settings button, and both can be reached after the
@@ -83,7 +115,7 @@ impl AppState {
         &self,
         declined: bool,
         allow_plaintext: bool,
-    ) -> Result<(), SpeleoErrorDto> {
+    ) -> Result<TokenTier, SpeleoErrorDto> {
         // A cold session that has only ever been rehydrated lazily still holds its
         // token behind this call, so run it before reading the session's identity.
         self.speleodb_ensure_rehydrated();
@@ -109,10 +141,9 @@ impl AppState {
             .restore(&endpoint, &email, allow_plaintext)
         {
             Some(tier) => {
-                let landed_in_keychain = tier == crate::speleodb::auth::TokenTier::Keychain;
                 drop(session);
-                self.speleodb_persist_keychain_has_token(landed_in_keychain);
-                Ok(())
+                self.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
+                Ok(tier)
             }
             None => {
                 session
@@ -169,8 +200,29 @@ impl AppState {
 mod tests {
     use super::AppState;
     use crate::config::TokenFallback;
-    use crate::speleodb::auth::{InMemoryStore, PlaintextStore, SecretStore, TokenStore};
+    use crate::speleodb::auth::{
+        InMemoryStore, PlaintextStore, SecretStore, SecretStoreError, TokenStore,
+    };
     use crate::speleodb::{KeychainReport, TokenStorage};
+
+    /// A keychain that refuses every op - the locked / headless keyring that makes
+    /// "Try again" a button worth having, and worth pressing twice.
+    struct FailingSecretStore;
+
+    impl SecretStore for FailingSecretStore {
+        fn kind(&self) -> &'static str {
+            "failing"
+        }
+        fn store(&self, _: &str, _: &str) -> Result<(), SecretStoreError> {
+            Err(SecretStoreError::for_test("no secret service"))
+        }
+        fn load(&self, _: &str) -> Result<Option<String>, SecretStoreError> {
+            Err(SecretStoreError::for_test("no secret service"))
+        }
+        fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
+            Err(SecretStoreError::for_test("no secret service"))
+        }
+    }
 
     /// A state whose session already holds a token, over a WORKING fake keychain
     /// and a plaintext tier in `plaintext_root`. The working keychain is the point:
@@ -180,14 +232,22 @@ mod tests {
     /// short-circuits `speleodb_ensure_rehydrated`, so the fixture never reaches
     /// the config/keychain read.
     fn holding(plaintext_root: Option<std::path::PathBuf>) -> AppState {
+        holding_over(Box::new(InMemoryStore::new()), plaintext_root)
+    }
+
+    /// [`holding`] with the keychain backend chosen by the caller, so a test can
+    /// ask what happens when the retry does NOT reach the keyring.
+    fn holding_over(
+        keychain: Box<dyn SecretStore>,
+        plaintext_root: Option<std::path::PathBuf>,
+    ) -> AppState {
         let state = AppState::new().expect("state");
         let plaintext =
             plaintext_root.map(|r| Box::new(PlaintextStore::new(r)) as Box<dyn SecretStore>);
         let mut session = state.speleodb.lock().expect("session");
         session.endpoint = Some("https://sdb.example".to_owned());
         session.email = Some("u@x".to_owned());
-        session.token_store =
-            TokenStore::from_stores_holding("tok-1", Box::new(InMemoryStore::new()), plaintext);
+        session.token_store = TokenStore::from_stores_holding("tok-1", keychain, plaintext);
         drop(session);
         state
     }
@@ -285,6 +345,42 @@ mod tests {
                 fallback,
                 TokenFallback::Plaintext,
                 "the retry does not undo where the key goes if the keychain fails again"
+            );
+        });
+    }
+
+    #[test]
+    fn a_retry_that_never_reached_the_keychain_keeps_the_refusal() {
+        // The retry falls back exactly as login does, so `speleodb_move_token`
+        // reports `Ok` even when the keyring is still broken and the key just went
+        // back into the plaintext file. Revoking the persisted refusal on that
+        // outcome undid an answer nothing had disproved, and the next launch
+        // rehydrated through the keychain and re-raised the unlock prompt the flag
+        // exists to stop - the same hazard the login path is gated against (#259).
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let state = holding_over(Box::new(FailingSecretStore), Some(dir.path().to_path_buf()));
+            state
+                .speleodb_set_token_storage(TokenFallback::Plaintext)
+                .expect("declined first");
+            assert_eq!(persisted(&state), (TokenFallback::Plaintext, true));
+
+            let status = state.speleodb_retry_keychain().expect("retried");
+
+            assert_eq!(
+                status.storage,
+                Some(TokenStorage::Plaintext),
+                "the keyring is still broken, so the key went back to the file"
+            );
+            assert_eq!(
+                status.keychain,
+                KeychainReport::Unavailable,
+                "and the panel says why, rather than claiming the user declined"
+            );
+            let (_, declined) = persisted(&state);
+            assert!(
+                declined,
+                "a retry that never reached the keychain must not revoke the refusal"
             );
         });
     }

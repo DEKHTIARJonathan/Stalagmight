@@ -42,14 +42,6 @@ impl AppState {
         let _ = self.speleodb_write_config_email(Some(email.to_owned()));
     }
 
-    /// Persist whether the user has declined the OS keychain (items 11/12).
-    ///
-    /// This has to survive a restart to do its job at all: the whole complaint is
-    /// that dismissing the desktop unlock prompt once did not stop it coming back
-    /// on the next launch. Best-effort in the same sense as the email above - a
-    /// failed write means the next launch asks again, which is annoying but never
-    /// unsafe. A poisoned config mutex is recovered rather than treated as "cannot
-    /// write", mirroring the email path.
     /// Record whether the OS keychain now holds a token for the persisted account.
     ///
     /// This is what lets startup skip the keyring entirely: the next launch reads
@@ -76,6 +68,20 @@ impl AppState {
         }
     }
 
+    /// Persist whether the user has declined the OS keychain after it failed at
+    /// login.
+    ///
+    /// This has to survive a restart to do its job at all: the whole complaint is
+    /// that dismissing the desktop unlock prompt once did not stop it coming back
+    /// on the next launch. Best-effort in the same sense as the email and
+    /// keychain-has-token writers - a failed write means the next launch asks
+    /// again, which is annoying but never unsafe. A poisoned config mutex is
+    /// recovered rather than treated as "cannot write", mirroring the email path.
+    ///
+    /// Only ever written `false` by a path that has PROVED the keychain took the
+    /// key (login gates it on `TokenTier::Keychain`; so does the Settings "Try
+    /// again"). Revoking the refusal on a retry that fell back to another tier
+    /// brought the launch-time unlock prompt straight back (#259).
     pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
         let mut config = self
             .config
@@ -142,9 +148,19 @@ impl AppState {
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
         // ordering is load-bearing: an early return on the credential failure would
         // leave the seed behind, which is the half that makes the credential findable.
+        //
+        // A POISONED session mutex is RECOVERED rather than turned into an early
+        // return. The command's contract is that the session is always dropped (the
+        // frontend clears its own session in a `finally` on that promise), and
+        // returning here honoured neither half: the user stayed logged in backend-side
+        // while the UI said otherwise. `forget_reporting` is a drop-everything
+        // operation, so a half-written session is exactly what it wants to clear -
+        // the same reasoning as the config mutex above and the save pipeline's
+        // project lock.
         let cleared = self
-            .speleodb_session_lock()
-            .map_err(local_dto)?
+            .speleodb
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget_reporting();
         let seed_cleared = self.speleodb_write_config_email(None);
         // Whether the sweep reported a failure or not, this session no longer has a

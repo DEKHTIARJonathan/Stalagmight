@@ -349,12 +349,17 @@ pub(crate) struct TokenStore {
     /// The user declined the keychain (persisted as `config.speleodb.keychain_declined`).
     /// While set, NEITHER [`Self::store`] NOR [`Self::load`] goes near it, which is
     /// what stops a dismissed unlock prompt coming back on every launch.
-    /// [`Self::clear`] still sweeps every tier regardless - a refusal must never
-    /// strand a token somewhere we then refuse to look.
+    /// [`Self::clear`] skips it too, and this is the ONLY flag that earns that
+    /// skip: the refusal answers one login, and anything the keychain may still
+    /// hold is overwritten by the next successful login or swept by "Try again".
+    /// See [`Self::clear_may_sweep_keychain`].
     keychain_declined: bool,
     /// The user turned the keychain off for good (`config.speleodb
-    /// .keychain_disabled`). Same effect as `keychain_declined` on every path,
-    /// but it is not cleared by signing in - that is the point of it.
+    /// .keychain_disabled`). Same effect as `keychain_declined` on [`Self::store`]
+    /// and [`Self::load`], but it is not cleared by signing in - that is the point
+    /// of it, and it is also why [`Self::clear`] treats the two differently: with
+    /// nothing left to overwrite or re-sweep the entry, skipping it would strand a
+    /// live bearer token in the keychain for good.
     keychain_disabled: bool,
     /// What keychain access we have already made taught us. See [`KeychainState`].
     keychain_state: KeychainState,
@@ -405,12 +410,23 @@ impl TokenStore {
     /// login is the one moment they have opted back into being asked, so that is
     /// where `false` is passed to re-enable the keychain.
     pub(crate) fn set_keychain_declined(&mut self, declined: bool) {
+        if self.keychain_declined == declined {
+            return; // see `refresh_keychain_state`: re-asserting is not a change
+        }
         self.keychain_declined = declined;
         self.refresh_keychain_state();
     }
 
     /// Apply the standing "never use the keychain" instruction from Settings.
+    ///
+    /// Turning it ON only makes the live session look away; the entry an earlier
+    /// login already wrote has to be removed separately, by
+    /// [`Self::evict_from_keychain`] BEFORE this is called (afterwards the gate
+    /// would block it). `core::state::config::update_config` owns that sequence.
     pub(crate) fn set_keychain_disabled(&mut self, disabled: bool) {
+        if self.keychain_disabled == disabled {
+            return; // see `refresh_keychain_state`: re-asserting is not a change
+        }
         self.keychain_disabled = disabled;
         self.refresh_keychain_state();
     }
@@ -422,6 +438,37 @@ impl TokenStore {
         self.keychain_declined || self.keychain_disabled
     }
 
+    /// Whether [`Self::clear`] may reach the keyring. NOT the negation of
+    /// [`Self::keychain_off`], because the two flags behind that gate differ in the
+    /// one way that matters to a sweep: whether anything ELSE will ever remove what
+    /// the keychain is holding.
+    ///
+    /// `keychain_declined` answers a single login, and something always comes along
+    /// afterwards - the next successful sign-in re-stores over the entry, "Try
+    /// again" sweeps it - so skipping the sweep strands nothing, and it spares the
+    /// background 401 auto-drop re-raising the unlock prompt the refusal exists to
+    /// stop. `keychain_disabled` has no such rescuer: Settings re-applies it on
+    /// every login, so [`Self::store`] never reaches the keychain to overwrite the
+    /// entry, and "Try again" clears only the OTHER flag. Skipping there left a
+    /// working credential in the OS keychain while logout reported success - the
+    /// one outcome [`Self::clear`]'s reporting exists to prevent.
+    ///
+    /// So a disabled keychain is swept even when it is also declined (login sets
+    /// both from the same value). The cost is a delete on a keyring the user asked
+    /// us to leave alone, which on a merely LOCKED keyring can prompt once; by then
+    /// `evict_from_keychain` has normally already emptied it, so this is the safety
+    /// net for the run where that eviction failed.
+    fn clear_may_sweep_keychain(&self) -> bool {
+        self.keychain_disabled || !self.keychain_declined
+    }
+
+    /// Reset what we have LEARNED about the keychain after a flag actually changed.
+    ///
+    /// Only ever called from a real change (both setters return early otherwise).
+    /// Re-running it on an unchanged flag threw away a hard-won `Unavailable` /
+    /// `Available`: saving ANY unrelated setting re-applies `keychain_disabled`,
+    /// which reset the credential line to "not attempted" and took the Settings
+    /// "Try again" button with it until the user signed in again.
     fn refresh_keychain_state(&mut self) {
         self.keychain_state = if self.keychain_off() {
             KeychainState::Declined
@@ -572,11 +619,20 @@ impl TokenStore {
         // moment the next launch rehydrates through it - the promise then rests
         // entirely on `keychain_declined` reaching disk, which is best-effort.
         //
-        // Touching the keychain here does NOT re-open the nag this flow exists to
-        // stop: `restore` is reached only from the two explicit credential verbs
-        // (the post-login storage answer and the Settings button), never from a
-        // background path, and on the broken keyring that raised the question in
-        // the first place the delete fails harmlessly.
+        // This delete deliberately bypasses `keychain_off` - gating it on the flag
+        // would disable it exactly when it is needed, since the session-only answer
+        // is given by setting that flag. It is not the nag the flow exists to stop:
+        // `restore` is reached only from the two explicit credential verbs (the
+        // post-login storage answer and the Settings button), never from a
+        // background path, so the user is inside the interaction that asks for it.
+        //
+        // It is not free either, and the honest version is worth writing down: on a
+        // keyring that is absent (no secret service at all) the delete fails without
+        // side effects, but on one that is merely LOCKED it can raise the unlock
+        // prompt once more, right after the user asked us not to use the keychain.
+        // We take that over the alternative, which is telling them the key will be
+        // gone when the app closes while an entry that signs them straight back in
+        // survives on disk.
         if tier == TokenTier::Memory {
             let key = account_key(endpoint, email);
             if let Err(e) = self.keychain.delete(&key) {
@@ -655,6 +711,36 @@ impl TokenStore {
         None
     }
 
+    /// Remove this account's keychain entry, **ignoring the off-gates**, for the one
+    /// caller that has to: Settings turning the keyring off.
+    ///
+    /// Flipping `keychain_disabled` only makes the live session look away, and an
+    /// entry a previous successful login wrote does not go away on its own - nothing
+    /// else ever removes it, because the disable is re-applied on every subsequent
+    /// login so [`Self::store`] never overwrites it. Leaving it there is a working
+    /// bearer token sitting in the OS keychain of a user who just said "do not use
+    /// the OS keychain".
+    ///
+    /// Call this BEFORE [`Self::set_keychain_disabled`] - afterwards the gate blocks
+    /// it - and follow it with [`Self::restore`] so the token this session still
+    /// holds lands somewhere the new gates allow and `active_tier` stops claiming a
+    /// keychain that no longer holds anything.
+    ///
+    /// The delete is a real keychain access, so its outcome is recorded; the
+    /// disable that follows overwrites that with `Declined`, which is the honest
+    /// answer from then on. Reports the failure so the caller can leave
+    /// `keychain_has_token` set rather than record a removal that did not happen.
+    pub(crate) fn evict_from_keychain(
+        &mut self,
+        endpoint: &str,
+        email: &str,
+    ) -> Result<(), SecretStoreError> {
+        let key = account_key(endpoint, email);
+        let result = self.keychain.delete(&key);
+        self.note_keychain(result.is_ok());
+        result
+    }
+
     /// Forget the token from **every** tier (keychain + plaintext + memory),
     /// **reporting** a persistent-tier delete failure to the caller.
     ///
@@ -703,7 +789,10 @@ impl TokenStore {
         // keychain while the flag is set, so this store has put nothing there, and
         // an entry predating the decline is overwritten by the next successful
         // login (which clears the flag and re-stores) or swept by "Try again".
-        if !self.keychain_off() {
+        //
+        // A DISABLED keychain is NOT skipped, because none of that last sentence is
+        // true of it - see `clear_may_sweep_keychain`.
+        if self.clear_may_sweep_keychain() {
             let keychain_may_hold_it = matches!(self.keychain.load(&key), Ok(Some(_)));
             if let Err(e) = self.keychain.delete(&key) {
                 if keychain_may_hold_it {
@@ -1462,10 +1551,16 @@ mod tests {
 
     #[test]
     fn a_declined_keychain_is_not_probed_when_the_session_is_cleared() {
+        // The DECLINED half only - see
+        // `a_disabled_keychain_is_still_swept_when_the_session_is_cleared` for the
+        // other flag, which deliberately does the opposite.
+        //
         // `forget` routes BOTH the user's logout and the background 401 auto-drop
         // through `clear`, so probing here raised the desktop unlock prompt on a
         // locked keyring from an auth failure the user never initiated - the one
-        // path that can fire the nag without them asking for anything.
+        // path that can fire the nag without them asking for anything. A refusal is
+        // also the case where skipping strands nothing: the next successful login
+        // re-stores over whatever is there, and "Try again" sweeps it.
         let (keychain, touched) = spy_pair();
         let mut store = TokenStore::from_stores(keychain, None);
         store.in_memory = Some("tok".to_owned());
@@ -1481,6 +1576,184 @@ mod tests {
             None,
             "the token still leaves the session"
         );
+    }
+
+    // ---- the standing "never use the keyring" instruction (Settings) ----
+
+    #[test]
+    fn a_disabled_keychain_is_never_touched_by_store_or_load() {
+        // The `keychain_declined` sibling of this test pins the per-login refusal;
+        // the standing Settings instruction has to hold on exactly the same paths,
+        // and for the same reason - on Linux the access IS the unlock prompt.
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        store.set_keychain_disabled(true);
+
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert!(
+            !touched.load(Ordering::SeqCst),
+            "store must not touch a disabled keychain"
+        );
+
+        let (keychain2, touched2) = spy_pair();
+        let mut cold = TokenStore::from_stores(keychain2, None);
+        cold.set_keychain_disabled(true);
+        assert_eq!(cold.load(EP, EMAIL), None);
+        assert!(
+            !touched2.load(Ordering::SeqCst),
+            "rehydration must not touch a disabled keychain"
+        );
+    }
+
+    #[test]
+    fn a_disabled_keychain_does_not_stop_the_plaintext_choice() {
+        // Turning the keyring off is not turning persistence off: `token_fallback`
+        // still decides where the key lands, and `restore` must honour it without
+        // going near the keychain.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(
+            keychain,
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_disabled(true);
+
+        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+        assert!(!touched.load(Ordering::SeqCst), "still no keychain access");
+        let probe = PlaintextStore::new(temp.path().to_path_buf());
+        assert_eq!(
+            probe.load(&account_key(EP, EMAIL)).unwrap(),
+            Some("tok".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_disabled_keychain_is_still_swept_when_the_session_is_cleared() {
+        // The deliberate divergence from the declined case. Nothing else ever
+        // removes what a disabled keychain is holding: Settings re-applies the flag
+        // on every login so `store` cannot overwrite the entry, and "Try again"
+        // clears only `keychain_declined`. Both flags are set here because that is
+        // what a login under the standing instruction leaves behind
+        // (`speleodb.rs`: `set_keychain_disabled(kd); set_keychain_declined(kd);`) -
+        // the disable has to win, or the skip comes straight back.
+        let key = account_key(EP, EMAIL);
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        store
+            .keychain
+            .store(&key, "left-over-from-an-earlier-login")
+            .unwrap();
+        touched.store(false, Ordering::SeqCst);
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_disabled(true);
+        store.set_keychain_declined(true);
+
+        store.clear(EP, EMAIL).expect("the sweep succeeds here");
+        assert!(
+            touched.load(Ordering::SeqCst),
+            "a disabled keychain must still be swept - nothing else will"
+        );
+        // Re-enable the probe and confirm the entry really went.
+        store.set_keychain_disabled(false);
+        store.set_keychain_declined(false);
+        assert_eq!(
+            store.load(EP, EMAIL),
+            None,
+            "the entry the disable would otherwise have stranded is gone"
+        );
+    }
+
+    #[test]
+    fn logout_after_disabling_the_keychain_reports_the_surviving_credential() {
+        // The security half of the same change. Skipping the sweep left `failure`
+        // at `None`, so `speleodb_logout` returned Ok and the UI reported a clean
+        // logout while a working bearer token stayed in the OS keychain - the exact
+        // outcome `clear`'s reporting exists to prevent. The token is long-lived
+        // (the auth endpoint is get-or-create and non-rotating) and logout does not
+        // revoke it server-side, so "reported" is the only protection there is.
+        let key = account_key(EP, EMAIL);
+        let mut store = TokenStore::from_stores(
+            Box::new(DeleteFailsStore::holding(&key, "live-token")),
+            None,
+        );
+        store.in_memory = Some("live-token".to_owned());
+        store.set_keychain_disabled(true);
+        store.set_keychain_declined(true);
+
+        assert!(
+            store.clear(EP, EMAIL).is_err(),
+            "a credential the disabled keychain refused to give up must be reported"
+        );
+        assert!(
+            store.in_memory.is_none(),
+            "the session still ends - the Err is a warning, not a refusal"
+        );
+    }
+
+    #[test]
+    fn evicting_removes_the_entry_a_disabled_keychain_would_otherwise_keep() {
+        // What `update_config` runs the moment the Settings toggle goes on. The flag
+        // alone only makes the live session look away, so the eviction has to happen
+        // BEFORE it is applied - afterwards the gate blocks it.
+        let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Keychain);
+
+        store.evict_from_keychain(EP, EMAIL).expect("evicted");
+        store.set_keychain_disabled(true);
+        // The token is still in hand, so it re-lands at a tier the new gates allow.
+        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+        assert!(
+            !store.keychain_backed(),
+            "the report must not keep claiming a keychain we just emptied"
+        );
+
+        // Next launch, with the keyring turned back on: nothing to find.
+        store.in_memory = None;
+        store.active_tier = None;
+        store.set_keychain_disabled(false);
+        assert_eq!(
+            store.load(EP, EMAIL),
+            None,
+            "turning the keyring off must not leave a live credential behind in it"
+        );
+    }
+
+    #[test]
+    fn evicting_reports_a_keychain_that_would_not_give_the_entry_up() {
+        // The caller leaves `keychain_has_token` set on this path, so a later
+        // re-enable still knows the keyring is worth looking in.
+        let key = account_key(EP, EMAIL);
+        let mut store =
+            TokenStore::from_stores(Box::new(DeleteFailsStore::holding(&key, "tok")), None);
+        assert!(store.evict_from_keychain(EP, EMAIL).is_err());
+    }
+
+    #[test]
+    fn re_applying_an_unchanged_flag_keeps_what_we_learned() {
+        // Saving ANY unrelated setting re-applies `keychain_disabled` to the live
+        // session. Re-running `refresh_keychain_state` on that no-op reset the
+        // credential line to "not attempted" and took the Settings "Try again"
+        // button with it (it is offered only for `declined` / `unavailable`), until
+        // the user signed in again.
+        let mut store = TokenStore::from_stores(Box::new(FailingSecretStore), None);
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert_eq!(store.keychain_state(), KeychainState::Unavailable);
+
+        store.set_keychain_disabled(false); // already false: nothing changed
+        assert_eq!(
+            store.keychain_state(),
+            KeychainState::Unavailable,
+            "an unrelated settings save must not forget that the keychain is broken"
+        );
+        store.set_keychain_declined(false);
+        assert_eq!(store.keychain_state(), KeychainState::Unavailable);
+
+        // A real change still refreshes: re-enabling makes an old verdict stale.
+        store.set_keychain_declined(true);
+        assert_eq!(store.keychain_state(), KeychainState::Declined);
+        store.set_keychain_declined(false);
+        assert_eq!(store.keychain_state(), KeychainState::NotAttempted);
     }
 
     #[test]
