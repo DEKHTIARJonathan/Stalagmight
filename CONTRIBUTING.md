@@ -98,10 +98,15 @@ Run the same checks CI runs. All of these must pass:
 
 ```bash
 pnpm tsc --noEmit                                                  # TypeScript
+pnpm typecheck:agent                                               # agent-harness typecheck (a CI gate)
 CI=true pnpm test                                                 # vitest unit + component (CI=true runs once, not watch)
 pnpm test:ui                                                       # Playwright (needs a display)
-pnpm lint:rust-file-size                                           # file-size ratchet (a CI gate)
+pnpm lint:e2e-parallel                                             # Playwright parallel-safety (a CI gate)
+pnpm lint:rust-file-size                                           # Rust file-size ratchet (a CI gate)
+pnpm lint:ts-file-size                                             # TS file-size ratchet (a CI gate)
+pnpm lint:readonly-gates                                           # read-only gating tripwire (a CI gate)
 pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
+pnpm lint:no-em-dash                                               # ASCII hyphens only, no Unicode dashes (a CI gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
 TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lints
@@ -111,7 +116,8 @@ TELEMETRY_ENDPOINT=http://localhost/dummy \
 
 (The dummy `TELEMETRY_ENDPOINT` just satisfies `build.rs` under the `telemetry`
 feature - it sends nothing.) On Windows, run the Rust tests via
-`./scripts/test.ps1`.
+`./scripts/test.ps1`. The Pre-Push Checklist in [`AGENTS.md`](AGENTS.md) is the
+canonical copy of this list - if the two drift, that one is authoritative.
 
 Notes:
 

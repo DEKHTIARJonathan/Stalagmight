@@ -64,7 +64,10 @@ All must pass before pushing:
 
 ```bash
 pnpm tsc --noEmit
+pnpm typecheck:agent                                      # agent-harness typecheck (CI check-job gate)
+pnpm exec vitest run                                      # vitest unit + component (CI check-job gate; plain "pnpm test" watches and never exits locally)
 pnpm test:ui
+pnpm lint:e2e-parallel                                    # Playwright parallel-safety (CI smoke-job gate)
 pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
 pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)

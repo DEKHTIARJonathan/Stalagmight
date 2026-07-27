@@ -24,16 +24,18 @@ this is meant as an optional informational addition to, but not a
 replacement for, cave survey training.
 
 > **Status:** pre-1.0, under active development. The data model, import/export
-> pipelines, map editing, and loop-closure adjustment are stable and in daily
-> use; some workflows (dive/gas planning, jumps-vs-references) are still landing.
-> See [the roadmap](docs/roadmap.md) and the issue tracker for what's in flight.
+> pipelines, map editing, loop-closure adjustment, and the dive/gas planning
+> mode are all implemented and in daily use. What is still in flight lives in
+> the [issue tracker](https://github.com/Stalagmight/Stalagmight/issues);
+> [the roadmap](docs/roadmap.md) records how v1.0 was scoped.
 
 ---
 
 ## What it does
 
-- **Import** - Ariane `.dmp` (raw survey, versions 2-5) and `.tml`, Compass
-  `.mak`/`.dat` projects, and Walls (experimental).
+- **Import** - mNemo `.dmp` (raw survey, versions 2-5), Ariane `.tml`/`.tmlu`,
+  Compass `.mak`/`.dat` projects, Walls (experimental), and GPX (waypoints,
+  tracks, routes).
 - **Export** - map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
 - **Map** - survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
@@ -41,6 +43,8 @@ replacement for, cave survey training.
 - **Edit** - move stations / segments / shots, merge stations, adjust sections,
   edit comments and LRUD, bulk-delete shots - all with hybrid undo/redo.
 - **Loop closure** - least-squares loop adjustment to distribute survey error.
+- **Plan** - a dive/gas planning mode: gas-weighted reachability over the survey
+  graph, with turnaround and stage-drop points along the chosen route.
 - **Collaboration** - an Ariane-compatible collab mode (sibling `.tml`,
   save-both, reconcile/diff). See [docs/collaboration.md](docs/collaboration.md).
 - **Safe by default** - atomic saves, auto-save, dirty-state guards, and a
