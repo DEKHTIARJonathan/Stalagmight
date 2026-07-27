@@ -1450,13 +1450,8 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
         .collect();
 }
 
-/// Convert TML shots to `ShotData` for import.
-///
-/// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
-/// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
-/// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
-/// Depths are stored as absolute values - no rebasing is applied.
 /// Resolve a TML shot's entry depth, handling the `-1.0` "same as previous" sentinel.
+///
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
 /// shot in a section), `start_depth` the parent station's cumulative depth.
 pub(crate) fn resolve_tml_depth_in(
@@ -1553,6 +1548,12 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     }
 }
 
+/// Convert TML shots to `ShotData` for import.
+///
+/// Depth handling: Ariane `DP` is absolute station depth (depth gauge reading).
+/// For each shot, `depth_in` = DPI if available, otherwise previous shot's DP
+/// (or `start_depth` for the first shot). `depth_out` = this shot's DP.
+/// Depths are stored as absolute values - no rebasing is applied.
 fn convert_shots_to_shot_data(
     shots: &[TmlShot],
     start_depth: f64,
@@ -1562,8 +1563,10 @@ fn convert_shots_to_shot_data(
         return Vec::new();
     }
 
-    // Filter out CLOSURE shots - they are loop-closure markers with zero length,
-    // not real survey measurements. Their topology is captured in TmlClosure.
+    // Filter out CLOSURE shots - they are loop-closure markers, not real survey
+    // measurements, whatever tape reading they carry (our own exporter gives them
+    // the vertical gap between the two nodes they tie, so `Length` is only zero on
+    // a loop that closes perfectly). Their topology is captured in TmlClosure.
     // Also filter out excluded shots unless explicitly included.
     let real_shots: Vec<&TmlShot> = shots
         .iter()

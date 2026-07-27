@@ -419,8 +419,6 @@ fn write_shot<W: std::io::Write>(
     Ok(())
 }
 
-/// Format an f64 without unnecessary trailing zeros but preserving at least one
-/// decimal place (Ariane convention).
 /// Ariane's `DepthIn` sentinel: "this shot starts where the previous one ended".
 const DEPTH_IN_SENTINEL: f64 = -1.0;
 
@@ -432,16 +430,27 @@ const DEPTH_IN_SENTINEL: f64 = -1.0;
 /// written value distinguishable while staying a micrometre from the truth - far
 /// under any survey's resolution, and the only lossless alternative would be to
 /// change the file format.
+///
+/// The collision has to be judged on the value AS WRITTEN, not on the f64 we hold:
+/// `format_f64` emits six decimals, so -0.9999996 and -1.0000004 both land in the
+/// file as "-1.0" and come back as the sentinel through our own parser. Comparing
+/// the raw f64s let exactly those values through the guard that exists to stop
+/// them.
 fn emitted_depth_in(shot: &ExportShot) -> f64 {
     if shot.depth_in_same_as_prev {
         return DEPTH_IN_SENTINEL;
     }
-    if (shot.depth_in - DEPTH_IN_SENTINEL).abs() < f64::EPSILON {
+    // `round_as_written` lands on a multiple of 1e-6, so the nearest value that is
+    // NOT the sentinel is a full micrometre away - an epsilon compare here is an
+    // exact-equality test on the written value, without tripping `float_cmp`.
+    if (round_as_written(shot.depth_in) - DEPTH_IN_SENTINEL).abs() < f64::EPSILON {
         return DEPTH_IN_SENTINEL - 1e-6;
     }
     shot.depth_in
 }
 
+/// Format an f64 without unnecessary trailing zeros but preserving at least one
+/// decimal place (Ariane convention).
 fn format_f64(v: f64) -> String {
     if v == 0.0 {
         return "0.0".to_string();
@@ -1272,18 +1281,39 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
             .unwrap_or_else(|| "0x4ecdc4ff".to_string());
 
         // The depths of the two Ariane NODES the closure ties together. A closure
-        // carrying `depth: 0.0` is not merely cosmetic: Ariane consumers read the
-        // chain as geometry, so a connector sitting at depth 0 hanging off a
-        // station 13 m down is a shot with a 13 m vertical drop and no length -
-        // impossible, and enough to abort the whole file's conversion. (SpeleoDB's
-        // `openspeleo_lib` walks CLOSURE shots during coordinate propagation even
-        // though it excludes them from the emitted features, so this is reached.)
+        // carrying `depth: 0.0` is not merely cosmetic: a reader takes the chain as
+        // geometry, so a connector sitting at depth 0 hanging off a station 13 m
+        // down is a shot with a 13 m vertical drop and no length - impossible.
+        // SpeleoDB's `openspeleo_lib` is not the reader that would trip over it
+        // (0.0.15 drops CLOSURE shots from both `build_shot_graph` and
+        // `build_shots_map`, so they never reach the `length_2d` bound check); this
+        // is for Ariane itself and for anything that does walk them.
         //
         // Read from the emitted nodes, NOT from the endpoint's own section table:
         // `station_to_ariane` maps a merged child station to the PARENT's node, so
         // at a junction the child section's station depth is not the depth the
         // consumer will use as this connector's origin. Taking it from the node is
         // what makes `length` cover the gap the consumer actually measures.
+        //
+        // Two consequences of that are deliberately left alone:
+        //
+        // - The connector goes out with `Azimut` 0 and `Inclination` 0 while
+        //   carrying a real length, which reads as a horizontal run due north. It
+        //   still cannot displace anything. A reader that projects a shot into plan
+        //   view uses the depths when it has them - horizontal =
+        //   sqrt(length^2 - drop^2), which is zero here because the length IS the
+        //   drop (to within the micrometre the as-written sweep may add to the
+        //   tape) - and only falls back to `Inclination` when `Depth` is missing,
+        //   which we never emit. The closure's own node is a leaf besides: its id
+        //   is minted after every `from_id` in the file has been assigned, so
+        //   nothing hangs off it and no position propagates through it.
+        //
+        // - `node_depth` is snapshotted BEFORE the geometry repair, so a connector
+        //   onto a node the repair later re-hangs names a depth that node no longer
+        //   has. The repair re-hangs the connector too if that breaks its own
+        //   bound, so the file stays readable either way; what stays stale is the
+        //   depth of that leaf, the one value here nobody reads. Refreshing it
+        //   would mean rebuilding the closures after the repair - for a phantom.
         let depth_a = node_depth.get(&from_id).copied().unwrap_or(0.0);
         let depth_b = node_depth.get(&to_id).copied().unwrap_or(0.0);
         // The two endpoints are the same physical point surveyed twice, so the
@@ -1343,9 +1373,10 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
     (all_shots, baseline)
 }
 
-/// Decimal places `format_f64` writes. The invariant has to hold on the values as
-/// they land in the FILE, not on the f64s we happen to hold, so the final sweep
-/// compares numbers rounded exactly the way they will be written.
+/// Decimal places `format_f64` writes. Every check that has to agree with what a
+/// reader will see - the final geometry sweep, and the `DepthIn` sentinel guard -
+/// has to hold on the values as they land in the FILE, not on the f64s we happen
+/// to hold, so it compares numbers rounded exactly the way they will be written.
 const ARIANE_WRITTEN_DECIMALS: f64 = 1e6;
 
 fn round_as_written(v: f64) -> f64 {
@@ -1376,9 +1407,29 @@ fn round_as_written(v: f64) -> f64 {
 /// violated the bound - exporting the shot at the wrong depth, and in the wrong
 /// vertical direction.
 ///
+/// Moving one shot moves the rest of its branch with it. Every shot after the
+/// re-hung one is contiguous in the model and therefore flagged
+/// same-as-previous, which puts the `-1.0` sentinel in the file - "I start where
+/// my parent ended" - so a consumer reads its origin off the parent's MOVED
+/// depth. Leaving such a shot at the depth the model gave it makes the file
+/// claim a vertical change that was never surveyed, in whichever direction the
+/// arithmetic happens to land: a 4.79 m re-hang turned a measured 0.5 m descent
+/// into a 4.29 m ascent. So wherever the sentinel is written the exported depth
+/// is re-derived as `parent.Depth + own measured change` - a no-op for the
+/// ordinary contiguous shot, whose parent ends exactly where it starts, and a
+/// rigid carry of the offset down the rest of the branch. A shot carrying an
+/// explicit `DepthIn` states its own origin, so it is only repaired if it breaks
+/// the bound.
+///
+/// The branch's FIRST shot is the same story with no cascade behind it: it is
+/// flagged against its own section, so the file hangs it off a station it was
+/// never measured from. Where the tape is long enough for the bound to hold, that
+/// used to pass every check while stating a vertical change nobody surveyed.
+///
 /// Only a shot whose own drop already exceeds its own length is clamped further,
-/// and that is broken data either way. Shots that already satisfy the bound -
-/// every continuous chain, which is nearly all of them - are left untouched.
+/// and that is broken data either way. Shots that already satisfy the bound and
+/// hang off a parent that did not move - every continuous chain, which is nearly
+/// all of them - are left untouched.
 ///
 /// Also sweeps non-finite values, which reach the same comparison and fail it (any
 /// comparison against NaN is false), and would otherwise be written into the file.
@@ -1437,7 +1488,14 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
     // Parent-before-child, so a child is measured against its parent's ALREADY
     // repaired depth and one junction cannot cascade into its whole branch.
     let mut visited = vec![false; shots.len()];
+    // Split so the log distinguishes the shots Ariane's chain could not have held
+    // at all (their exported drop was longer than their tape) from the ones merely
+    // put where the file already says they are. The second is not a consequence of
+    // the first: a branch's first shot is flagged same-as-previous against its OWN
+    // section, so it writes the sentinel and needs moving onto its parent even when
+    // nothing upstream was repaired.
     let mut repaired = 0usize;
+    let mut carried = 0usize;
     while let Some(i) = queue.pop_front() {
         if visited[i] {
             continue;
@@ -1451,7 +1509,22 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
             }
             queue.push_back(k);
             let shot = &mut shots[k];
-            if (shot.depth - parent_depth).abs() <= shot.length {
+            let breaks_the_bound = (shot.depth - parent_depth).abs() > shot.length;
+            // How far the parent's exported depth sits from where this shot was
+            // measured to start, counted only when the file says the two meet -
+            // which is precisely when a consumer takes this shot's origin from the
+            // parent instead of from `DepthIn`. Non-zero for a branch's first shot
+            // (flagged against its own section, not against the station it hangs
+            // off) and for everything below a shot the repair has moved. The
+            // tolerance matches the one the same-as-previous flag was computed
+            // with, so a contiguous shot whose depths agree to within it is left
+            // exactly as it is.
+            let inherited_offset = if shot.depth_in_same_as_prev {
+                parent_depth - shot.depth_in
+            } else {
+                0.0
+            };
+            if !breaks_the_bound && inherited_offset.abs() < 1e-9 {
                 continue;
             }
             // The measured vertical change, taken from the true `depth_in` - the
@@ -1467,7 +1540,11 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
             // the chain.
             shot.depth_in = parent_depth;
             shot.depth_in_same_as_prev = true;
-            repaired += 1;
+            if breaks_the_bound {
+                repaired += 1;
+            } else {
+                carried += 1;
+            }
         }
     }
     if repaired > 0 {
@@ -1477,6 +1554,14 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
              (a junction depth discontinuity Ariane's chain cannot express)"
         );
     }
+    if carried > 0 {
+        tracing::warn!(
+            shots = carried,
+            "Ariane export: re-hung shots onto the parent depth their DepthIn \
+             sentinel already claims for them; each keeps its measured vertical \
+             change, so only absolute depths move"
+        );
+    }
 
     // Final sweep on the values AS WRITTEN. Everything above works in f64 while the
     // file carries six decimals, and the two rounding errors (Depth, Length) are
@@ -1484,11 +1569,27 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
     // does by construction, can still cross it once written. Lengthening the tape
     // by under a micrometre is the smallest possible lie and keeps the file
     // readable; shortening the drop instead would move a station.
+    //
+    // Only for shots the walk above actually reached, because only there is the
+    // correction bounded by rounding. An unvisited shot hangs off a `from_id`
+    // cycle (tolerated above rather than rewritten twice) and its gap to that
+    // parent is the full, unrepaired one - overwriting `Length` with it would
+    // replace a measured tape reading with a fabricated one, silently, and buy
+    // nothing: a consumer reaches shots by walking down from an anchor, exactly as
+    // this pass does, so a shot we could not reach is one it will drop as an
+    // orphan or a cycle member long before it checks the shot's geometry
+    // (`openspeleo_lib` 0.0.15 `find_valid_shot_ids`). Warn instead - the survey
+    // stays intact and the pathological topology is on the record.
+    let mut unreachable = 0usize;
     for i in 0..shots.len() {
         let Some(&parent) = index_by_id.get(&shots[i].from_id) else {
             continue;
         };
         if shots[i].from_id == -1 {
+            continue;
+        }
+        if !visited[i] {
+            unreachable += 1;
             continue;
         }
         let parent_depth = round_as_written(shots[parent].depth);
@@ -1498,6 +1599,14 @@ fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
         if delta > length {
             shots[i].length = delta;
         }
+    }
+    if unreachable > 0 {
+        tracing::warn!(
+            shots = unreachable,
+            "Ariane export: shots unreachable from any root (a `from_id` cycle) were \
+             left with their measured geometry; a consumer walking down from the \
+             anchor will drop them"
+        );
     }
 }
 
@@ -2542,6 +2651,21 @@ mod tests {
                 (shot.depth - emitted_in).abs(),
                 shot.length,
             );
+            // And the change a consumer READS has to be the change the shot
+            // RECORDS - same size, same direction. The two bounds above are both
+            // satisfied by a shot that has been moved without its file-visible
+            // origin moving with it, which is how a re-hung branch once exported a
+            // measured descent as a several-metre ascent and still passed here.
+            // `depth_in` is the truth throughout: the repair keeps it in step with
+            // whatever it writes as the origin.
+            let read_change = shot.depth - emitted_in;
+            let recorded_change = shot.depth - shot.depth_in;
+            assert!(
+                (read_change - recorded_change).abs() < 1e-6,
+                "shot id={} is read as a {read_change} m vertical change but records \
+                 {recorded_change} m",
+                shot.id,
+            );
             assert!(
                 shot.depth.is_finite() && shot.length.is_finite() && shot.azimuth.is_finite(),
                 "shot id={} carries a non-finite value",
@@ -2802,6 +2926,168 @@ mod tests {
             "the shot descends {measured_descent} m; exported as {exported_descent} m"
         );
         assert_ariane_chain_is_representable(&shots);
+    }
+
+    /// A shot carrying only the fields the geometry pass reads, so a chain of
+    /// them stays legible. Everything else is filler.
+    fn geometry_shot(
+        id: i64,
+        from_id: i64,
+        depth_in: f64,
+        depth: f64,
+        length: f64,
+        depth_in_same_as_prev: bool,
+    ) -> ExportShot {
+        ExportShot {
+            id,
+            from_id,
+            shot_type: if from_id == -1 { "START" } else { "REAL" },
+            section: "S".to_string(),
+            azimuth: 0.0,
+            length,
+            depth,
+            depth_in,
+            depth_in_same_as_prev,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: "0xff0000ff".to_string(),
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            locked: false,
+        }
+    }
+
+    #[test]
+    fn a_re_hang_moves_the_rest_of_the_branch_with_it() {
+        // Only the branch's FIRST shot breaks the bound, so a repair that stopped
+        // there looked complete. The shot after it is contiguous in the model and
+        // therefore writes the DepthIn sentinel - "I start where my parent ended" -
+        // which now resolves to the moved depth. Left where the model put it, its
+        // measured 0.5 m descent was read as a 4.29 m ascent: right magnitude for
+        // nothing, wrong direction, and still inside its 5 m tape so every bound
+        // held.
+        let mut shots = vec![
+            geometry_shot(1, -1, 17.0, 17.0, 0.0, false),
+            geometry_shot(2, 1, 12.21, 12.5, 1.07, true),
+            geometry_shot(3, 2, 12.5, 13.0, 5.0, true),
+        ];
+
+        enforce_ariane_geometry_invariants(&mut shots);
+
+        assert!(
+            (shots[1].depth - 17.29).abs() < 1e-9,
+            "the re-hung shot keeps its 0.29 m descent from the parent, got {}",
+            shots[1].depth
+        );
+        let second = shots[2].depth - shots[1].depth;
+        assert!(
+            (second - 0.5).abs() < 1e-9,
+            "and the shot below it still descends 0.5 m, got {second}"
+        );
+        assert_ariane_chain_is_representable(&shots);
+    }
+
+    #[test]
+    fn a_branch_that_writes_the_sentinel_is_hung_off_its_parent_even_within_the_bound() {
+        // The same defect without any re-hang upstream. A branch's first shot is
+        // always flagged same-as-previous (it is contiguous with its own section's
+        // station), so it writes the sentinel and a consumer reads its origin as
+        // the parent's depth - even though it was measured from a junction 4.79 m
+        // away. With a long enough tape the bound holds and nothing looks wrong,
+        // while the file states a 4.5 m ascent for a surveyed 0.29 m descent.
+        let mut shots = vec![
+            geometry_shot(1, -1, 17.0, 17.0, 0.0, false),
+            geometry_shot(2, 1, 12.21, 12.5, 10.0, true),
+        ];
+
+        enforce_ariane_geometry_invariants(&mut shots);
+
+        let exported = shots[1].depth - shots[0].depth;
+        assert!(
+            (exported - 0.29).abs() < 1e-9,
+            "the branch descends 0.29 m from its parent; exported as {exported} m"
+        );
+        assert_ariane_chain_is_representable(&shots);
+    }
+
+    #[test]
+    fn a_shot_exactly_on_the_bound_is_left_alone_and_one_past_it_is_clamped() {
+        // `|Depth - parent.Depth| == Length` is a legal, perfectly vertical shot,
+        // not a violation - moving it would invent a horizontal component. One
+        // ten-thousandth over is broken data whichever way it is read, so the
+        // repair clamps it back onto the tape rather than exporting an impossible
+        // shot.
+        let mut shots = vec![
+            geometry_shot(1, -1, 0.0, 10.0, 0.0, false),
+            geometry_shot(2, 1, 10.0, 13.0, 3.0, true),
+            geometry_shot(3, 2, 13.0, 16.0001, 3.0, true),
+        ];
+
+        enforce_ariane_geometry_invariants(&mut shots);
+
+        assert!(
+            (shots[1].depth - 13.0).abs() < 1e-9,
+            "the exact-bound shot is untouched, got {}",
+            shots[1].depth
+        );
+        assert!(
+            (shots[2].depth - 16.0).abs() < 1e-9,
+            "the over-bound shot is clamped to its own length, got {}",
+            shots[2].depth
+        );
+        assert_ariane_chain_is_representable(&shots);
+    }
+
+    #[test]
+    fn a_from_id_cycle_keeps_its_measured_lengths() {
+        // A cycle is unreachable from the root, so the walk never repairs it - and
+        // the as-written sweep must not "fix" it either: the gap to its parent is
+        // the full unrepaired one, and writing that into Length would swap a
+        // measured tape reading for a fabricated one. A consumer reaches shots the
+        // same way we do, from the anchor down, so it drops these before it ever
+        // looks at their geometry.
+        let mut shots = vec![
+            geometry_shot(1, -1, 0.0, 0.0, 0.0, false),
+            geometry_shot(2, 3, 0.0, 40.0, 1.0, false),
+            geometry_shot(3, 2, 40.0, 0.0, 1.0, false),
+        ];
+
+        enforce_ariane_geometry_invariants(&mut shots);
+
+        assert!(
+            (shots[1].length - 1.0).abs() < f64::EPSILON
+                && (shots[2].length - 1.0).abs() < f64::EPSILON,
+            "the cycle's tape readings survive, got {} and {}",
+            shots[1].length,
+            shots[2].length
+        );
+    }
+
+    #[test]
+    fn a_depth_in_that_would_be_written_as_the_sentinel_is_nudged_off_it() {
+        // The guard has to judge the value AS WRITTEN. `format_f64` rounds to six
+        // decimals, so a station a hair under a metre above the datum lands in the
+        // file as "-1.0" and comes back through our own parser as "starts where
+        // the previous shot ended" - relocating it to wherever that was.
+        for depth_in in [-1.0, -0.999_999_6, -1.000_000_4] {
+            let shot = geometry_shot(2, 1, depth_in, depth_in, 1.0, false);
+            let written = format_f64(emitted_depth_in(&shot));
+            assert_ne!(
+                written, "-1.0",
+                "depth_in {depth_in} must not be written as the sentinel"
+            );
+            assert!(
+                (emitted_depth_in(&shot) - depth_in).abs() < 1e-5,
+                "and the nudge stays inside a rounding error of the truth, got {written}"
+            );
+        }
     }
 
     #[test]
