@@ -2369,8 +2369,14 @@ mod tests {
                 body.contains("dump_agent()"),
                 "{name} must build its agent via dump_agent()"
             );
+            // Blank out the legitimate calls first, then look for ANY `agent()` left
+            // over. Matching on a leading-space needle instead let two spellings
+            // through: a qualified `client::agent()`, and a rustfmt wrap that puts
+            // `agent()` at the start of an indented continuation line - both of which
+            // reinstate the 30 s budget while the test stays green.
+            let remaining = body.replace("dump_agent()", "");
             assert!(
-                !body.contains(" agent()"),
+                !remaining.contains("agent()"),
                 "{name} must NOT fall back to the shared 30 s agent()"
             );
             assert!(

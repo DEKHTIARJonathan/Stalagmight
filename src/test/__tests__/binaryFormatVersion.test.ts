@@ -68,6 +68,70 @@ function parseMockVersion(source: string): number {
   return Number(match[1]);
 }
 
+/**
+ * Field names of a Rust struct / TS interface / JS object literal, given the source
+ * and the line that opens the block. All three parsers slice from that opener to the
+ * matching close and read one level of keys - nested blocks are skipped by brace
+ * depth, so `project_header`'s own fields never leak into the top-level set.
+ */
+function fieldsInBlock(
+  source: string,
+  opener: RegExp,
+  keyPattern: RegExp,
+  what: string,
+): string[] {
+  const open = opener.exec(source);
+  if (!open) {
+    throw new Error(
+      `Could not find ${what}. If it was renamed or restructured, update this tripwire to match.`,
+    );
+  }
+  const body = source.slice(open.index + open[0].length);
+  const fields: string[] = [];
+  let depth = 0;
+  for (const line of body.split('\n')) {
+    // Read keys only at the block's own level; a nested struct/object/array
+    // contributes nothing but its brace deltas.
+    if (depth === 0) {
+      const key = keyPattern.exec(line);
+      if (key?.[1]) fields.push(key[1]);
+    }
+    for (const ch of line) {
+      if (ch === '{' || ch === '[') depth += 1;
+      else if (ch === '}' || ch === ']') depth -= 1;
+    }
+    if (depth < 0) return fields; // hit the block's closing brace
+  }
+  throw new Error(`${what} does not terminate - update this tripwire to match.`);
+}
+
+function parseRustEnvelopeFields(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /pub struct LoadProjectFullBinaryResult \{\n/,
+    /^\s*pub ([a-z_][a-z0-9_]*):/,
+    '`pub struct LoadProjectFullBinaryResult {` in load_binary.rs',
+  );
+}
+
+function parseTsEnvelopeFields(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /export interface BinaryEnvelope \{\n/,
+    /^\s*([a-z_][a-z0-9_]*)\??:/,
+    '`export interface BinaryEnvelope {` in loadProjectBinary.ts',
+  );
+}
+
+function parseMockEnvelopeKeys(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /const envelope = \{\n/,
+    /^\s*([a-z_][a-z0-9_]*):/,
+    '`const envelope = {` in e2e-playwright/mocks/tauri-ipc.ts',
+  );
+}
+
 describe('binary wire-format version contract', () => {
   it('the Rust encoder and the TS decoder agree on the envelope version', () => {
     const rustVersion = parseRustVersion(fs.readFileSync(RUST_PATH, 'utf8'));
@@ -94,5 +158,43 @@ describe('binary wire-format version contract', () => {
       `The Playwright mock encodes binary envelope v${mockVersion} but Rust encodes ` +
         `v${rustVersion}. Update the \`version:\` in e2e-playwright/mocks/tauri-ipc.ts.`,
     ).toBe(rustVersion);
+  });
+
+  it('the TS decoder and the Playwright mock carry every envelope field Rust sends', () => {
+    // The version check above pins the NUMBER, not the FIELD SET, and that gap has
+    // already cost us once: `is_remote` was added to the envelope at v3, the mock
+    // never grew it, and because the decoder reads it unvalidated every mocked load
+    // resolved `isRemote: undefined`. Once `selectSpeleoReadOnly` was inverted to
+    // fail closed (#270) that silently opened the SpeleoDB read-only gate across the
+    // entire Playwright suite, with the version tripwire green throughout. A field
+    // added to the Rust envelope is exactly as breaking as a layout change, so it
+    // gets the same treatment.
+    const rustFields = parseRustEnvelopeFields(fs.readFileSync(RUST_PATH, 'utf8'));
+    const tsFields = parseTsEnvelopeFields(fs.readFileSync(TS_PATH, 'utf8'));
+    const mockKeys = parseMockEnvelopeKeys(fs.readFileSync(MOCK_PATH, 'utf8'));
+
+    // Sanity-anchor the parses before trusting the set comparisons: an empty or
+    // truncated slice would make every `toContain` below vacuously easy to satisfy
+    // in the one direction that matters.
+    expect(rustFields.length).toBeGreaterThan(10);
+    expect(tsFields.length).toBeGreaterThan(10);
+    expect(mockKeys.length).toBeGreaterThan(10);
+
+    const missingFromTs = rustFields.filter((f) => !tsFields.includes(f));
+    expect(
+      missingFromTs,
+      `The Rust envelope (LoadProjectFullBinaryResult in load_binary.rs) carries field(s) ` +
+        `[${missingFromTs.join(', ')}] that \`BinaryEnvelope\` in src/utils/loadProjectBinary.ts ` +
+        'does not declare, so the decoder drops them silently. Add them to BinaryEnvelope.',
+    ).toEqual([]);
+
+    const missingFromMock = rustFields.filter((f) => !mockKeys.includes(f));
+    expect(
+      missingFromMock,
+      `The Rust envelope carries field(s) [${missingFromMock.join(', ')}] that the Playwright ` +
+        'mock envelope in e2e-playwright/mocks/tauri-ipc.ts does not set, so every mocked ' +
+        'project load resolves them as `undefined` - which reads as a broken feature rather ' +
+        'than a stale fixture. Add them to the mock envelope literal.',
+    ).toEqual([]);
   });
 });

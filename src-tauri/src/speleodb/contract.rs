@@ -541,6 +541,18 @@ mod tests {
             .expect("the action match is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    };\n").expect("the match terminates")];
+        // Anchor the slice before trusting the absence check below. `!contains` passes
+        // vacuously on an empty or short body, so a `cargo fmt` reflow that moves the
+        // `\n    };\n` terminator would turn this test green while guarding nothing -
+        // the one failure mode a source-level tripwire must not have. These two arms
+        // are the routing signals the wildcard used to swallow, so requiring them
+        // proves we sliced the right match.
+        for arm in ["AdoptAriane", "WouldDiscardLocalEdits"] {
+            assert!(
+                body.contains(arm),
+                "sliced the wrong region: the action match must contain the `{arm}` arm"
+            );
+        }
         assert!(
             !body.contains("_ =>"),
             "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \

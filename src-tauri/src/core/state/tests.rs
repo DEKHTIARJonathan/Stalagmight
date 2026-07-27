@@ -5458,16 +5458,23 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
-    let state = AppState::new().unwrap();
-    {
-        let mut recent = state.recent_projects.lock().unwrap();
-        *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
-    }
+    // Isolated because `remove_from_recent_projects` persists the trimmed list and
+    // reports a save failure as `success: false`, WITHOUT taking the config lock.
+    // `command_tests.rs` points the process-global `XDG_CONFIG_HOME` at a chmod-555
+    // dir to force a save failure, holding only the config lock - so without this
+    // guard the two overlap and this assert trips at random under a parallel run.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        {
+            let mut recent = state.recent_projects.lock().unwrap();
+            *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
+        }
 
-    let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
-    assert!(result.success);
-    let recent = state.recent_projects.lock().unwrap();
-    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        assert!(result.success);
+        let recent = state.recent_projects.lock().unwrap();
+        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+    });
 }
 
 #[test]
@@ -5476,17 +5483,21 @@ fn test_remove_recent_project_absent_is_idempotent_success() {
     // recent" means "ensure it's absent". Returning a failure used to strand a zombie
     // "missing" row that the frontend (whose config copy lagged the trimmed backend
     // list) could never clear, because it only refreshes on success.
-    let state = AppState::new().unwrap();
-    {
-        let mut recent = state.recent_projects.lock().unwrap();
-        *recent = vec![PathBuf::from("/b.stalx")];
-    }
+    // Isolated for the same reason as the sibling above: this asserts on `success`,
+    // which a concurrently-forced config-save failure would flip.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        {
+            let mut recent = state.recent_projects.lock().unwrap();
+            *recent = vec![PathBuf::from("/b.stalx")];
+        }
 
-    let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
-    assert!(result.success, "removing an absent recent must succeed");
-    // The list is left untouched (nothing to remove).
-    let recent = state.recent_projects.lock().unwrap();
-    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
+        assert!(result.success, "removing an absent recent must succeed");
+        // The list is left untouched (nothing to remove).
+        let recent = state.recent_projects.lock().unwrap();
+        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+    });
 }
 
 #[test]

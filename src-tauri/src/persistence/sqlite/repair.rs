@@ -455,6 +455,10 @@ impl Database {
     clippy::expect_used,
     reason = "unit test fixtures fail loudly on setup errors"
 )]
+#[expect(
+    clippy::print_stderr,
+    reason = "a permission-dependent test announces why it skipped, or the skip is invisible"
+)]
 mod tests {
     use super::{Database, Path};
 
@@ -509,6 +513,91 @@ mod tests {
                 .expect("read display settings")
                 .is_empty(),
             "the local-only tables are still stripped after the compaction"
+        );
+    }
+
+    #[test]
+    fn a_leftover_staging_file_does_not_wedge_every_later_push() {
+        // `VACUUM INTO` refuses to overwrite an existing target, so a staging copy
+        // left behind by a killed run would make every subsequent sanitize fail -
+        // and since that failure is fatal to the push, the user could never complete
+        // one again without knowing to delete a file they have never heard of. The
+        // code removes the leftover first; nothing pinned that it does.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let snapshot = dir.path().join("snap.stalx");
+        let mut db = Database::open(&snapshot).expect("open snapshot");
+        db.save_project(&crate::models::Project::new("Snap".to_owned(), None))
+            .expect("save project");
+        drop(db);
+
+        // Exactly what a killed run leaves: a stale file at the staging path. Its
+        // contents are irrelevant - VACUUM INTO objects to its mere existence.
+        let stale = Database::vacuum_temp_path(&snapshot);
+        std::fs::write(&stale, b"leftover from a killed push").expect("plant a leftover");
+
+        Database::sanitize_push_snapshot(&snapshot).expect("sanitize past the leftover");
+
+        assert!(
+            !stale.exists(),
+            "the leftover must be consumed, not left to wedge the next push too"
+        );
+        Database::open_for_metadata(&snapshot).expect("sanitized snapshot still reopens");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_failed_compaction_is_fatal_and_leaves_the_snapshot_intact() {
+        // The compaction failure the fatal path exists for is "no room for a second
+        // copy beside the snapshot". Out-of-space is impractical to stage, but an
+        // unwritable staging directory reaches the same `VACUUM INTO` error arm. Two
+        // things must hold: the push is REFUSED (silently uploading an uncompacted
+        // snapshot would ship the freed pages this whole function exists to reclaim),
+        // and the caller's snapshot is left byte-intact so a retry has something to
+        // retry with.
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let staging = dir.path().join("staging");
+        std::fs::create_dir(&staging).expect("staging dir");
+        let snapshot = staging.join("snap.stalx");
+        let mut db = Database::open(&snapshot).expect("open snapshot");
+        db.save_project(&crate::models::Project::new("Snap".to_owned(), None))
+            .expect("save project");
+        drop(db);
+        let before = std::fs::read(&snapshot).expect("read snapshot bytes");
+
+        // Read+execute only: the existing snapshot stays readable, but no NEW file
+        // (the `VACUUM INTO` target) can be created beside it.
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o555))
+            .expect("make the staging dir unwritable");
+        // ...unless we are root, for whom the mode bits are advisory. Probe the
+        // property this test actually depends on rather than the uid behind it -
+        // `unsafe_code` is denied crate-wide, so `geteuid` is not available here.
+        if std::fs::File::create(staging.join(".root-probe")).is_ok() {
+            let _ = std::fs::remove_file(staging.join(".root-probe"));
+            std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+                .expect("restore permissions so tempdir can clean up");
+            eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+            return;
+        }
+        let result = Database::sanitize_push_snapshot(&snapshot);
+        std::fs::set_permissions(&staging, std::fs::Permissions::from_mode(0o755))
+            .expect("restore permissions so tempdir can clean up");
+
+        let err = result.expect_err("an uncompactable snapshot must refuse the push");
+        let chain = format!("{err:#}");
+        assert!(
+            chain.contains("refusing to upload it"),
+            "the error must say the push was refused, got: {chain}"
+        );
+        assert_eq!(
+            std::fs::read(&snapshot).expect("snapshot still readable"),
+            before,
+            "a refused sanitize must leave the caller's snapshot byte-identical"
+        );
+        assert!(
+            !Database::vacuum_temp_path(&snapshot).exists(),
+            "a failed compaction must not leave a staging file behind"
         );
     }
 
