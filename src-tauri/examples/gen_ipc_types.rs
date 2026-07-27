@@ -48,8 +48,8 @@ use stalagmight_lib::models::{
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
     ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, Project,
-    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
+    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
     ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire,
     StationPair, StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
     ZeroDatumWire,
@@ -134,6 +134,7 @@ fn main() {
     export::<DivePlanMeta>(&out_dir);
     export::<DivePlan>(&out_dir);
     export::<RouteLeg>(&out_dir);
+    export::<RouteProfilePoint>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -376,6 +377,7 @@ fn main() {
         "DivePlanMeta",
         "DivePlan",
         "RouteLeg",
+        "RouteProfilePoint",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",

@@ -3337,3 +3337,312 @@ fn gas_reach_field_the_way_point_itself_is_not_a_turn_candidate() {
         "the way point is offered as a turn candidate on top of itself"
     );
 }
+
+// ---- #299: the anticipated dive profile ----------------------------------------------
+
+/// The outbound half of the profile, in route order.
+fn outbound(field: &GasReachField) -> Vec<&super::RouteProfilePoint> {
+    field.route_profile.iter().filter(|p| p.outbound).collect()
+}
+
+/// The return half, in the order the diver swims it (turnaround first, origin last).
+fn inbound(field: &GasReachField) -> Vec<&super::RouteProfilePoint> {
+    field.route_profile.iter().filter(|p| !p.outbound).collect()
+}
+
+fn plain_field(project: &Project, origin: StationRef, cfg: &GasConfig) -> GasReachField {
+    let diver = Diver::new(20.0, None).unwrap();
+    project.compute_gas_reach_field(Some(&origin), None, &diver, &[unlimited_backgas()], cfg)
+}
+
+#[test]
+fn route_profile_outbound_reports_the_same_numbers_the_readout_does() {
+    // The whole point of building the profile inside the compute: it can only ever re-present
+    // figures the field has already committed to. If these ever disagree, the chart and the Plan
+    // readout are telling the diver two different stories about the same dive.
+    let (project, origin) = linear_descent_project();
+    let field = plain_field(&project, origin, &GasConfig::default());
+
+    let out = outbound(&field);
+    assert_eq!(out.len(), route_stations(&field).len());
+    assert_eq!(
+        out.iter().map(|p| p.station_ref).collect::<Vec<_>>(),
+        route_stations(&field)
+    );
+    // Distance: the last outbound point IS the one-way swum penetration.
+    assert!((out.last().unwrap().distance_m - field.route_line_length_m).abs() < 1e-9);
+    assert!(out[0].distance_m.abs() < 1e-9);
+    // Depth: the deepest profile point is the reported max depth.
+    let deepest = out
+        .iter()
+        .map(|p| p.depth_m)
+        .fold(f64::NEG_INFINITY, f64::max);
+    assert!((deepest - field.route_max_depth_m.unwrap()).abs() < 1e-9);
+    // Gas: the turnaround's cumulative gas is the gas-to-reach the overlay paints there.
+    let turn = field.final_turn_ref.unwrap();
+    assert!((out.last().unwrap().gas_l - field_gas(&field, turn)).abs() < 1e-6);
+    // Monotonic in every accumulating axis.
+    for w in out.windows(2) {
+        assert!(w[1].distance_m >= w[0].distance_m);
+        assert!(w[1].elapsed_min >= w[0].elapsed_min);
+        assert!(w[1].gas_l >= w[0].gas_l);
+        assert_eq!(w[1].route_index, w[0].route_index + 1);
+    }
+}
+
+#[test]
+fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
+    // Time is not a second, independently-derived axis - it is distance over the same in-leg speed
+    // the engine divided by to get the gas beside it. Pinning `d / in_speed` exactly is what stops
+    // the two axes drifting apart when the config changes.
+    let (project, origin) = linear_descent_project();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(8.0),
+        ..GasConfig::default()
+    };
+    let field = plain_field(&project, origin, &cfg);
+
+    for p in outbound(&field) {
+        assert!(
+            (p.elapsed_min - p.distance_m / 8.0).abs() < 1e-9,
+            "outbound runtime is not distance / survey speed at {p:?}"
+        );
+    }
+}
+
+#[test]
+fn route_profile_return_leg_mirrors_distance_but_is_faster_and_cheaper() {
+    // The finding this whole field exists to express: a round trip is a mirror in DISTANCE only.
+    // The engine prices the way in at the survey speed and survey RMV; the way out is swum at the
+    // (never slower) exit speed on the diver's base RMV, so the identical metres cost less time and
+    // less gas going home.
+    let (project, origin) = linear_descent_project();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(5.0),
+        survey_rmv_multiplier: 1.4,
+        ..GasConfig::default()
+    };
+    let field = plain_field(&project, origin, &cfg);
+
+    let out = outbound(&field);
+    let back = inbound(&field);
+    // The turnaround is swum once, the origin twice: 2n - 1 points, n - 1 of them inbound.
+    assert_eq!(back.len(), out.len() - 1);
+    assert_eq!(field.route_profile.len(), out.len() * 2 - 1);
+
+    let total = out.last().unwrap().distance_m;
+    for (k, p) in back.iter().enumerate() {
+        let twin = out[out.len() - 2 - k];
+        assert_eq!(p.station_ref, twin.station_ref);
+        assert_eq!(p.route_index, twin.route_index);
+        assert!(!p.outbound);
+        // Distance mirrors exactly about the turnaround.
+        assert!((p.distance_m - (2.0 * total - twin.distance_m)).abs() < 1e-9);
+        assert!((p.depth_m - twin.depth_m).abs() < 1e-9);
+    }
+    // Home is the far end of a 2L axis, and the whole return took less time than the way in.
+    let home = back.last().unwrap();
+    assert!((home.distance_m - 2.0 * total).abs() < 1e-9);
+    let out_min = out.last().unwrap().elapsed_min;
+    let back_min = home.elapsed_min - out_min;
+    assert!(
+        back_min < out_min - 1e-9,
+        "exit at 20 m/min must beat the 5 m/min survey-in: {back_min} vs {out_min}"
+    );
+    assert!((back_min - total / 20.0).abs() < 1e-9);
+    // Same for gas: identical depths, but a cheaper rate over a shorter time.
+    let out_gas = out.last().unwrap().gas_l;
+    assert!(home.gas_l - out_gas < out_gas - 1e-9);
+    // And the round trip legitimately finishes ABOVE the one-way penetration budget - the reserve
+    // fraction is what pays for the exit, so a UI must not compare the return against it.
+    assert!(out_gas <= field.budget_litres);
+}
+
+#[test]
+fn route_profile_symmetric_speeds_make_the_return_a_time_mirror_too() {
+    // No survey speed set = symmetric (`in_speed` falls back to the swim speed), and with the
+    // default 1.0 survey multiplier the RMVs match as well - so here, and only here, the return
+    // really is a mirror in all three axes. Guards the fallback branch of `in_speed`.
+    let (project, origin) = linear_descent_project();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 12.0,
+        survey_speed_m_per_min: None,
+        ..GasConfig::default()
+    };
+    let field = plain_field(&project, origin, &cfg);
+
+    let out = outbound(&field);
+    let back = inbound(&field);
+    let turn_min = out.last().unwrap().elapsed_min;
+    let turn_gas = out.last().unwrap().gas_l;
+    for (k, p) in back.iter().enumerate() {
+        let twin = out[out.len() - 2 - k];
+        assert!((p.elapsed_min - (2.0 * turn_min - twin.elapsed_min)).abs() < 1e-9);
+        assert!((p.gas_l - (2.0 * turn_gas - twin.gas_l)).abs() < 1e-6);
+    }
+}
+
+#[test]
+fn route_profile_stage_drop_indices_agree_with_the_refs_and_the_distances() {
+    // The drop markers on the chart are drawn at these indices, so they have to resolve to exactly
+    // the station and distance the existing per-stage readouts report.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let bg = Cylinder::new(
+        25.0,
+        232.0,
+        80.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let stage = Cylinder::new(
+        10.0,
+        207.0,
+        90.0,
+        TankMaterial::Aluminium,
+        CylRole::Stage,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        default_reserve: ReservePreset::OneStage,
+        ..GasConfig::default()
+    };
+    let field = project.compute_gas_reach_field(Some(&origin), None, &diver, &[bg, stage], &cfg);
+
+    assert!(!field.stage_drop_refs.is_empty());
+    assert_eq!(
+        field.stage_drop_route_indices.len(),
+        field.stage_drop_refs.len()
+    );
+    let out = outbound(&field);
+    for (i, &idx) in field.stage_drop_route_indices.iter().enumerate() {
+        let point = out
+            .iter()
+            .find(|p| p.route_index == idx)
+            .expect("a stage drop indexed a station that is not on the profile");
+        assert_eq!(point.station_ref, field.stage_drop_refs[i]);
+        assert!((point.distance_m - field.stage_drop_distances_m[i]).abs() < 1e-9);
+    }
+}
+
+#[test]
+fn route_profile_indexes_each_pass_of_a_route_that_doubles_back() {
+    // The reason the profile is keyed on a route INDEX and not a station ref: a way-point route
+    // revisits stations, so a ref alone cannot say which pass a marker belongs on. The way-point
+    // index must land on the pass the diver actually tags it.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+
+    let out = outbound(&field);
+    // The detour doubles back, so at least one station appears on the outbound leg twice - the case
+    // `stage_drop_refs` / a ref-keyed marker cannot express.
+    let repeated = out.iter().any(|p| {
+        out.iter()
+            .filter(|q| q.station_ref == p.station_ref)
+            .count()
+            > 1
+    });
+    assert!(repeated, "the branching detour should revisit a station");
+    // Indices stay unique and strictly increasing even where the refs repeat.
+    for w in out.windows(2) {
+        assert_eq!(w[1].route_index, w[0].route_index + 1);
+    }
+    assert_eq!(field.waypoint_route_indices.len(), 1);
+    let idx = field.waypoint_route_indices[0].unwrap();
+    let at = out.iter().find(|p| p.route_index == idx).unwrap();
+    assert_eq!(at.station_ref, side_tip);
+    // ...and it is the FIRST time the route reaches it, not the pass back through.
+    assert_eq!(
+        out.iter().position(|p| p.station_ref == side_tip),
+        Some(idx as usize)
+    );
+    // The way point's profile gas is the cumulative gas the readout reports for it.
+    assert!((at.gas_l - field.waypoint_gas_litres[0].unwrap()).abs() < 1e-6);
+}
+
+#[test]
+fn route_profile_charges_a_zero_distance_tie_no_distance_time_or_gas() {
+    // A merge / loop-closure tie holds one physical point as two graph nodes. The route lists both,
+    // but the gap between them was never swum: counting it would inflate the axis and, worse, bill
+    // the diver for gas on the way home that they never breathe. `branching_project`'s entrance is
+    // a merged pair, so its route starts across exactly such a tie.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[side_tip],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+
+    let out = outbound(&field);
+    let ties: Vec<_> = out
+        .windows(2)
+        .filter(|w| !is_swim_leg(&w[0].station_ref, &w[1].station_ref))
+        .collect();
+    assert!(
+        !ties.is_empty(),
+        "the merged entrance should produce a tie leg"
+    );
+    for w in &ties {
+        assert!((w[1].distance_m - w[0].distance_m).abs() < 1e-9);
+        assert!((w[1].elapsed_min - w[0].elapsed_min).abs() < 1e-9);
+    }
+    // Same on the way home - the tie must not cost exit gas either. Counted, not just asserted
+    // inside an `if`: a version of this loop that never enters its tie branch would pass while
+    // proving nothing about the return-leg pricing, which is the code path under test.
+    let back = inbound(&field);
+    let mut back_ties = 0;
+    for w in back.windows(2) {
+        if !is_swim_leg(&w[0].station_ref, &w[1].station_ref) {
+            back_ties += 1;
+            assert!((w[1].gas_l - w[0].gas_l).abs() < 1e-9);
+            assert!((w[1].elapsed_min - w[0].elapsed_min).abs() < 1e-9);
+        }
+    }
+    assert_eq!(
+        back_ties,
+        ties.len(),
+        "the return leg must re-swim exactly the ties the way in did"
+    );
+}
+
+#[test]
+fn route_profile_is_empty_when_no_route_exists() {
+    // A stalled way-point chain makes the whole field unreachable, so there is nothing to plot -
+    // and an empty series is what the panel must be handed rather than a one-point stub.
+    let (project, origin) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let orphan = StationRef::new(origin.section_id + 999, 0);
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[orphan],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+
+    assert!(field.final_turn_ref.is_none());
+    assert!(field.route_profile.is_empty());
+    assert!(field.stage_drop_route_indices.is_empty());
+    assert_eq!(field.waypoint_route_indices, vec![None]);
+}

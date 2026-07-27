@@ -37,6 +37,7 @@ export * from './ipc/DivePlanSnapshot';
 export * from './ipc/DivePlanMeta';
 export * from './ipc/DivePlan';
 export * from './ipc/RouteLeg';
+export * from './ipc/RouteProfilePoint';
 export * from './ipc/RulerEndpoint';
 export * from './ipc/PathShot';
 export * from './ipc/AlongLineResult';

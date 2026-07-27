@@ -20,7 +20,10 @@ use crate::config::{GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{Coordinates, ShotKind, StationKey, StationRef};
 
 use super::Project;
-pub use model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, TankMaterial, Team};
+pub use model::{
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, RouteProfilePoint, TankMaterial,
+    Team,
+};
 use physics::{deliverable_gas, edge_gas};
 
 impl Project {
@@ -386,7 +389,8 @@ impl Project {
             drop_indices.len(),
             "a stage drop fell off the route - refs would misalign with the gauges"
         );
-        let route = self.route_legs(&route_refs);
+        let leg_kinds = self.route_leg_kinds(&route_refs);
+        let route = route_legs(&route_refs, &leg_kinds);
 
         // Physical route metrics from the route's measured coordinates: the one-way swum line length
         // (a 3-D slope distance summed over real shot legs only - see `is_swim_leg`), the deepest
@@ -423,6 +427,34 @@ impl Project {
             .iter()
             .map(|&j| cum_route_distance.get(j).copied().unwrap_or(0.0))
             .collect();
+        // The same drop indices the distances above are read at, published so a profile marker can
+        // be drawn on the right PASS of a route that doubles back (#299). `stage_drop_refs` names
+        // only the station, which is ambiguous there.
+        let stage_drop_route_indices: Vec<u32> = drop_indices
+            .iter()
+            .map(|&j| u32::try_from(j).unwrap_or(u32::MAX))
+            .collect();
+        let waypoint_route_indices: Vec<Option<u32>> = walk
+            .waypoint_chain_idx
+            .iter()
+            .map(|idx| idx.map(|j| u32::try_from(j).unwrap_or(u32::MAX)))
+            .collect();
+        // The anticipated dive profile (#299). Built last, from the route vectors above, so it is a
+        // pure re-presentation of numbers the compute has already committed to - except the return
+        // leg, which is priced here at the exit-leg rates the reach field never uses.
+        let route_profile = build_route_profile(
+            &route_refs,
+            &route_pts,
+            &leg_kinds,
+            &cum_route_distance,
+            &route_gas,
+            in_speed,
+            &ExitLegRates {
+                speed_m_per_min: gas_config.swim_speed_m_per_min,
+                rmv_l_per_min: diver.rmv_l_per_min,
+                jump_multiplier: gas_config.jump_rmv_multiplier,
+            },
+        );
 
         // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
@@ -463,31 +495,54 @@ impl Project {
             route_max_depth_m,
             route_avg_depth_m,
             waypoint_gas_litres: walk.waypoint_gas,
+            route_profile,
+            stage_drop_route_indices,
+            waypoint_route_indices,
         }
     }
 
-    /// Build the route-highlight legs from the ordered route stations, flagging each leg whose
-    /// connecting shot is a reference/jump (a normally-hidden swum shortcut) so the UI can dash it.
-    /// A cross-section tie (a merge / loop closure - coincident points) is not a jump.
-    fn route_legs(&self, route_refs: &[StationRef]) -> Vec<RouteLeg> {
+    /// The connecting shot's kind for each ordered route leg; `None` for a cross-section tie (a
+    /// merge / loop closure - coincident points, never swum) or a leg whose shot cannot be found.
+    ///
+    /// One scan, shared by two consumers that need different slices of it: the route highlight
+    /// dashes only `Jump` legs, while the return-leg gas pricing charges the jump RMV bump to every
+    /// *virtual* leg, exactly as the in-leg graph does (a `Reference` only reaches the route at all
+    /// when `include_reference_legs` put it back). Deriving one from the other would silently
+    /// mis-price an opted-in reference leg.
+    fn route_leg_kinds(&self, route_refs: &[StationRef]) -> Vec<Option<ShotKind>> {
         route_refs
             .windows(2)
             .map(|w| {
                 let (from, to) = (w[0], w[1]);
-                let is_jump = is_swim_leg(&from, &to)
-                    && self
-                        .sections
-                        .iter()
-                        .find(|s| s.id == from.section_id)
-                        .and_then(|s| {
-                            s.shots
-                                .get(from.station_index.min(to.station_index) as usize)
-                        })
-                        .is_some_and(|shot| shot.kind == ShotKind::Jump);
-                RouteLeg { from, to, is_jump }
+                if !is_swim_leg(&from, &to) {
+                    return None;
+                }
+                self.sections
+                    .iter()
+                    .find(|s| s.id == from.section_id)
+                    .and_then(|s| {
+                        s.shots
+                            .get(from.station_index.min(to.station_index) as usize)
+                    })
+                    .map(|shot| shot.kind)
             })
             .collect()
     }
+}
+
+/// Build the route-highlight legs from the ordered route stations, flagging each leg whose
+/// connecting shot is a reference/jump (a normally-hidden swum shortcut) so the UI can dash it.
+/// A cross-section tie (a merge / loop closure - coincident points) is not a jump.
+fn route_legs(route_refs: &[StationRef], leg_kinds: &[Option<ShotKind>]) -> Vec<RouteLeg> {
+    route_refs
+        .windows(2)
+        .enumerate()
+        .map(|(i, w)| RouteLeg {
+            from: w[0],
+            to: w[1],
+            is_jump: leg_kinds.get(i).copied().flatten() == Some(ShotKind::Jump),
+        })
+        .collect()
 }
 
 /// Reconstruct the shortest path from a predecessor tree's root to `target`, root first. `pred` is
@@ -538,6 +593,10 @@ struct WaypointWalk {
     chain_gas: Vec<f64>,
     /// Cumulative gas at each way point, in order; `None` from the first one that stalls.
     waypoint_gas: Vec<Option<f64>>,
+    /// Where each way point sits in `chain`, in order; `None` from the first one that stalls. The
+    /// chain is the route's own prefix, so these double as route indices - which is what a profile
+    /// marker needs, since a route that doubles back visits a station more than once.
+    waypoint_chain_idx: Vec<Option<usize>>,
 }
 
 /// Walk the ordered way points: one Dijkstra per leg, each seeded at the previous way point, with
@@ -560,6 +619,7 @@ fn waypoint_walk(
             chain: Vec::new(),
             chain_gas: Vec::new(),
             waypoint_gas: vec![None; waypoints.len()],
+            waypoint_chain_idx: vec![None; waypoints.len()],
         };
     }
     let mut leg = Project::dijkstra_with_preds(adj, roots);
@@ -567,6 +627,7 @@ fn waypoint_walk(
     let mut chain: Vec<usize> = Vec::new();
     let mut chain_gas: Vec<f64> = Vec::new();
     let mut waypoint_gas: Vec<Option<f64>> = Vec::with_capacity(waypoints.len());
+    let mut waypoint_chain_idx: Vec<Option<usize>> = Vec::with_capacity(waypoints.len());
     let mut stalled = false;
     for w in waypoints {
         let reached = (!stalled)
@@ -576,6 +637,7 @@ fn waypoint_walk(
         let Some(w) = reached else {
             stalled = true;
             waypoint_gas.push(None);
+            waypoint_chain_idx.push(None);
             continue;
         };
         // Commit this leg's path. Its first node is the previous leg's way point, which already
@@ -587,6 +649,8 @@ fn waypoint_walk(
         }
         cum += leg.0.get(w).copied().unwrap_or(0.0);
         waypoint_gas.push(Some(cum));
+        // The loop above just pushed this way point's own node last, so the chain now ends on it.
+        waypoint_chain_idx.push(chain.len().checked_sub(1));
         leg = Project::dijkstra_with_preds(adj, &[w]);
     }
     let (dist, pred) = leg;
@@ -619,6 +683,7 @@ fn waypoint_walk(
         chain,
         chain_gas,
         waypoint_gas,
+        waypoint_chain_idx,
     }
 }
 
@@ -1087,6 +1152,97 @@ fn route_metrics(pts: &[Coordinates], swim: &[bool]) -> (f64, Option<f64>, Optio
         first.z
     };
     (length, Some(max_depth), Some(avg_depth))
+}
+
+/// What the diver breathes and how fast they move on the way **out** - the leg the reach field
+/// never prices. `GasConfig::normalize` guarantees `speed_m_per_min` is finite, positive and no
+/// slower than the survey speed, and `jump_multiplier` is >= 1.0.
+struct ExitLegRates {
+    speed_m_per_min: f64,
+    rmv_l_per_min: f64,
+    jump_multiplier: f64,
+}
+
+/// Build the round-trip dive profile (#299): depth, swum distance, runtime and cumulative gas at
+/// every route station, out to the turnaround and back.
+///
+/// Every OUTBOUND number is read straight off vectors this compute already produced, so the profile
+/// cannot disagree with `route_line_length_m`, `stage_drop_distances_m` or the overlay's gas.
+/// Runtime is `cumulative distance / in_speed`: a station's coordinates are built from the same shot
+/// lengths the graph weighs, so that is the very runtime the gas beside it was priced with, and the
+/// chart's two axes cannot drift apart.
+///
+/// The RETURN leg is derived here and nowhere else. The reach field only ever prices the way IN
+/// (`in_rmv` / `in_speed` in the caller), because the reserve fraction is what pays for the exit -
+/// so this is the single place that knows the exit-leg rates. Distance mirrors exactly; time and gas
+/// do not, since the exit is swum faster and at the diver's base RMV.
+///
+/// The turnaround is emitted once, the origin twice (departure and return), giving `2n - 1` points.
+fn build_route_profile(
+    refs: &[StationRef],
+    pts: &[Coordinates],
+    leg_kinds: &[Option<ShotKind>],
+    cum_distance: &[f64],
+    route_gas: &[f64],
+    in_speed: f64,
+    exit: &ExitLegRates,
+) -> Vec<RouteProfilePoint> {
+    if refs.is_empty() {
+        return Vec::new();
+    }
+    let outbound: Vec<RouteProfilePoint> = refs
+        .iter()
+        .enumerate()
+        .map(|(i, &station_ref)| {
+            let distance_m = cum_distance.get(i).copied().unwrap_or(0.0);
+            RouteProfilePoint {
+                route_index: u32::try_from(i).unwrap_or(u32::MAX),
+                station_ref,
+                distance_m,
+                depth_m: pts.get(i).map_or(0.0, |c| c.z),
+                gas_l: route_gas.get(i).copied().unwrap_or(0.0),
+                elapsed_min: distance_m / in_speed,
+                outbound: true,
+            }
+        })
+        .collect();
+
+    let total_m = outbound.last().map_or(0.0, |p| p.distance_m);
+    let mut gas_l = outbound.last().map_or(0.0, |p| p.gas_l);
+    let mut elapsed_min = outbound.last().map_or(0.0, |p| p.elapsed_min);
+
+    // Leg `i` joins outbound points `i` and `i+1`, so stepping back from `i+1` to `i` re-swims it.
+    let mut profile = outbound.clone();
+    for i in (0..outbound.len().saturating_sub(1)).rev() {
+        let (from, to) = (&outbound[i + 1], &outbound[i]);
+        let seg_m = from.distance_m - to.distance_m;
+        // A tie is the same physical point twice: no distance, so no time and no gas. Skipping it
+        // here is what keeps the return a distance-exact mirror of the way in.
+        if seg_m > 0.0 {
+            let virtual_leg = leg_kinds
+                .get(i)
+                .copied()
+                .flatten()
+                .is_some_and(ShotKind::is_virtual);
+            let rmv = if virtual_leg {
+                exit.rmv_l_per_min * exit.jump_multiplier
+            } else {
+                exit.rmv_l_per_min
+            };
+            elapsed_min += seg_m / exit.speed_m_per_min;
+            gas_l += edge_gas(rmv, exit.speed_m_per_min, seg_m, from.depth_m, to.depth_m);
+        }
+        profile.push(RouteProfilePoint {
+            route_index: to.route_index,
+            station_ref: to.station_ref,
+            distance_m: total_m + (total_m - to.distance_m),
+            depth_m: to.depth_m,
+            gas_l,
+            elapsed_min,
+            outbound: false,
+        });
+    }
+    profile
 }
 
 /// Number of `Stage` cylinders a preset requires in the rig. The pushy presets are valid

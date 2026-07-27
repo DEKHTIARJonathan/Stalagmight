@@ -194,6 +194,42 @@ pub struct RouteLeg {
     pub is_jump: bool,
 }
 
+/// One point on the anticipated dive profile (#299): a route station priced at the moment the diver
+/// is standing on it. The series runs origin→turnaround (`outbound`), then the return leg back to
+/// the origin, so it describes the whole round trip the budget is sized for.
+///
+/// The two directions are **not** symmetric, and that is the point of shipping both. Distance
+/// mirrors exactly - the diver swims the same line back - but the engine prices the way IN at the
+/// survey speed and survey RMV (`gas.rs`'s `in_speed` / `in_rmv`, the basis of every gas number in
+/// this struct) and the way OUT at `swim_speed_m_per_min` with the diver's base RMV, which
+/// `GasConfig::normalize` guarantees is the faster of the two. So the return leg is shorter in time
+/// and cheaper in gas than the identical distance was on the way in.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
+pub struct RouteProfilePoint {
+    /// Position along the route's station sequence, 0 = origin. A way-point route can revisit a
+    /// station, so this - not `station_ref` - says which pass this point is on; it is the same index
+    /// space as `stage_drop_route_indices` / `waypoint_route_indices`. Counts back down on the
+    /// return leg, so every index except the turnaround's appears twice - the diver stands on the
+    /// turnaround once, and finishes back on the origin.
+    pub route_index: u32,
+    pub station_ref: StationRef,
+    /// Cumulative swum distance (metres) from the origin, zero-distance merge/closure ties excluded -
+    /// the same swum basis as `route_line_length_m` and `stage_drop_distances_m`. Runs 0 → L
+    /// outbound and L → 2L back, so it is monotonic across the whole series.
+    pub distance_m: f64,
+    /// Depth (metres, positive = below surface) from the measured coordinates.
+    pub depth_m: f64,
+    /// Cumulative gas (litres) consumed on arrival here. ⚠ Compare only the OUTBOUND values against
+    /// `budget_litres`: that budget is the one-way penetration allowance (the reserve fraction is
+    /// what pays for the return), so the round trip legitimately finishes above it.
+    pub gas_l: f64,
+    /// Cumulative elapsed time (minutes) on arrival here. Not a deco schedule - no ascent, no stops,
+    /// no decompression is modelled anywhere in this app.
+    pub elapsed_min: f64,
+    /// `false` for the mirrored return leg.
+    pub outbound: bool,
+}
+
 /// The `route` / `stage_drop_refs` / `final_turn_ref` describe the **planned route** to the route
 /// target (the user-selected endpoint, else the farthest in-budget point): the ordered legs from
 /// the origin to the target (for the route highlight), the station where each stage's IN gas runs
@@ -272,4 +308,17 @@ pub struct GasReachField {
     /// `budget_litres` to tell the diver the detour alone exceeds their gas. Empty when the plan has
     /// no way points.
     pub waypoint_gas_litres: Vec<Option<f64>>,
+    /// The anticipated dive profile (#299): depth / distance / runtime / gas at every route station,
+    /// origin→turnaround and back. Empty when nothing is reachable. See [`RouteProfilePoint`] for
+    /// why the return leg is not a mirror in time or gas.
+    pub route_profile: Vec<RouteProfilePoint>,
+    /// Route index of each stage drop, aligned 1:1 with `stage_drop_refs` / `stage_drop_bars` /
+    /// `stage_drop_distances_m`, in `route_profile`'s outbound `route_index` space.
+    /// `stage_drop_refs` alone cannot place a drop on a route that doubles back over a station - the
+    /// ref names the station, not the pass - so the index is what a profile marker must be drawn at.
+    pub stage_drop_route_indices: Vec<u32>,
+    /// Route index of each way point, aligned 1:1 with the `waypoints` input, in the same index space
+    /// as `stage_drop_route_indices`. `None` from the first way point that stalls, matching
+    /// `waypoint_gas_litres`.
+    pub waypoint_route_indices: Vec<Option<u32>>,
 }
