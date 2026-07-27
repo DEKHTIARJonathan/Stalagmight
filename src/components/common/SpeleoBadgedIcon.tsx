@@ -44,6 +44,34 @@ export function SpeleoBadgedIcon({
 }
 
 /**
+ * Filled "open on the web" glyph: a window with an arrow breaking out of it.
+ *
+ * Deliberately tighter than `ExternalLinkIcon`, which is drawn for a 20-unit menu
+ * slot: at badge scale its thin open box and separate arrow bars collapse into
+ * mush. This compresses the frame, knocks its interior out in the panel colour
+ * rather than outlining it, and haloes the arrow the way `EditNoLockGlyph` haloes
+ * its "!", so the two shapes stay legible at 9px.
+ */
+export function ExternalLinkGlyph({ size = 9 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* Window, as a solid block with its interior knocked out. */}
+      <path d="M1 6h9v9H1z" />
+      <path d="M2.6 7.6h5.8v5.8H2.6z" style={{ fill: 'var(--cc-panel)' }} />
+      {/* Arrow breaking out top-right, haloed so it reads clear of the frame. */}
+      <g
+        style={{ stroke: 'var(--cc-panel)' }}
+        strokeWidth={1.4}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+      >
+        <path d="M9 1h6v6h-2V4.4L8.4 9 7 7.6 11.6 3H9z" />
+      </g>
+    </svg>
+  );
+}
+
+/**
  * Filled pen glyph: we hold the SpeleoDB write lock and may edit.
  *
  * Deliberately a DIAGONAL body, because the family's other two writing glyphs -
@@ -137,7 +165,7 @@ export function ExclamationGlyph({ size = 11 }: { size?: number }) {
 }
 
 /**
- * "Edit without lock" glyph (#213): a pencil + exclamation in a single
+ * "Edit without the write lock" glyph (#213): a pencil + exclamation in a single
  * badge-sized box (so it takes no more space than the other badges), entirely in
  * `currentColor`. The exclamation carries a panel-coloured border (painted under
  * its fill) so it reads as separate from the pencil.

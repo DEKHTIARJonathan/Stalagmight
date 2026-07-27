@@ -19,10 +19,15 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { useSpeleoWebLink } from '../../hooks/useSpeleoWebLink';
-import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
-import { MENU_ICON_COLORS } from '../common/menuColors';
+import {
+  SpeleoBadgedIcon,
+  PushGlyph,
+  RefreshGlyph,
+  EditNoLockGlyph,
+  ExternalLinkGlyph,
+} from '../common/SpeleoBadgedIcon';
 import type { AppMenuItem } from '../common/AppMenu';
-import { SlidersIcon, PencilIcon, LockIcon, ExternalLinkIcon } from '../common/icons';
+import { SlidersIcon, PencilIcon, LockIcon } from '../common/icons';
 
 export function useSpeleoMenuItems(): AppMenuItem[] {
   const { t } = useTranslation();
@@ -111,8 +116,17 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       {
         id: 'speleodb-menu-open-web',
         label: t('speleodb.web.openProject'),
-        icon: <ExternalLinkIcon size={sz} />,
-        iconColor: MENU_ICON_COLORS.open,
+        // The SpeleoDB mark with the open-on-the-web glyph badged onto it, like
+        // every other row here. A bare external-link icon read as a generic link
+        // rather than "this project, over there", and it was the only row in the
+        // submenu not carrying the mark.
+        icon: (
+          <SpeleoBadgedIcon
+            badge={<ExternalLinkGlyph size={9} />}
+            badgeColor="text-blue-400"
+            size={sz}
+          />
+        ),
         // Signed out (or no remote id yet) there is no URL to resolve, and a row
         // that silently does nothing is worse than a greyed one.
         disabled: web.url === null,
