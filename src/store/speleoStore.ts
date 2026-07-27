@@ -168,6 +168,21 @@ export interface PendingLogin {
 
 export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
 
+/**
+ * [#270] The link state an optimistic open seed replaces - everything
+ * `setLinkOnOpen` writes, so restoring one is a complete undo of a seed. Captured
+ * by {@link SpeleoStore.snapshotLink} and put back by
+ * {@link SpeleoStore.restoreLink}.
+ */
+export interface SpeleoLinkSnapshot {
+  link: SpeleoLinkState | null;
+  projectLinkKind: ProjectLinkKind;
+  linkPath: string | null;
+  remoteProjectId: string | null;
+  divergence: DivergenceOrigin | null;
+  banner: SpeleoBanner | null;
+}
+
 interface SpeleoStore {
   /** Backend session, or `null` before the first `setSession`/`refreshSession`. */
   session: SpeleoSession | null;
@@ -346,6 +361,30 @@ interface SpeleoStore {
     hasUnpushedEdits?: boolean;
   }) => void;
   clearLink: () => void;
+  /**
+   * [#270] Capture exactly the fields an optimistic open seed overwrites, so a
+   * failed load can put back what was on screen instead of clearing to `unknown`.
+   * See {@link SpeleoStore.restoreLink}.
+   */
+  snapshotLink: () => SpeleoLinkSnapshot;
+  /**
+   * [#270] Undo an optimistic seed by restoring a {@link SpeleoLinkSnapshot}.
+   *
+   * The rollback for a remote open whose `loadProject` failed used `clearLink`,
+   * which resets `projectLinkKind` to `'unknown'` - read-only under the fail-closed
+   * gate. The PREVIOUS project is still on screen and still open backend-side, so
+   * that silently made a project the user was editing uneditable. The only repair
+   * was an unawaited `refreshLinkStatus()` whose failures are swallowed by design,
+   * in exactly the conditions that had just broken a load (offline, disk trouble),
+   * and `SpeleoStatusButton`'s recovery poll is gated on `link !== null`, which
+   * `clearLink` had just falsified - so nothing healed it for the rest of the
+   * session, with no badge or message saying why.
+   *
+   * Restoring the snapshot needs no network and cannot fail: the state goes back to
+   * precisely what it was before the attempt. `refreshLinkStatus` still runs after
+   * it, but as an opportunistic re-resolve rather than the only way back.
+   */
+  restoreLink: (snapshot: SpeleoLinkSnapshot) => void;
   applyStartEditing: (r: StartEditingResult) => void;
   applyUpdate: (r: UpdateResult) => void;
   applyDone: (r: DoneResult) => void;
@@ -819,14 +858,22 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       banner: null,
     }),
 
+  snapshotLink: () => {
+    const { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner } = get();
+    return { link, projectLinkKind, linkPath, remoteProjectId, divergence, banner };
+  },
+
+  // `busy: false` mirrors `clearLink`: the seed's caller is done either way, and a
+  // restored link must not inherit a stuck spinner from the attempt that failed.
+  restoreLink: (snapshot) => set({ ...snapshot, busy: false }),
+
   // Reset `busy` too: a hand-off verb in flight when the project closes/switches
   // would otherwise leave a freshly-opened project's status button disabled until
   // that verb's `finally` runs (its `apply*` no-op safely, guarded on `link`). (N2)
-  // Back to `unknown`, not `local`: this runs on close (nothing open) and to roll
-  // back a remote open whose `loadProject` failed - and neither outcome
-  // establishes that a local project is open, so neither may re-open the gate.
-  // The rollback caller re-resolves it (see `useOpenRemoteProject`), since there
-  // the PREVIOUS project is still displayed and must not stay read-only.
+  // Back to `unknown`, not `local`: this runs on close (nothing open), and neither
+  // outcome establishes that a local project is open, so it may not re-open the
+  // gate. NOT for rolling back a failed remote open - that has a previous project
+  // still on screen to put back, so it uses `restoreLink` instead.
   clearLink: () =>
     set({
       link: null,
@@ -843,10 +890,27 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (!state.link) return {};
       switch (r.kind) {
         case 'editing':
-        case 'fast_forwarded':
+        case 'fast_forwarded': {
           // We now hold the lock: not locked-by-other, no remote-ahead/conflict,
           // no stale banner, and force-edit clears (Reconnect succeeded - #213).
           // (fast_forwarded also reloads + re-seeds.)
+          //
+          // EXCEPT a push failure (#260/#270). Read-only is exactly how a project
+          // lands in that state - a 401 auto-drop runs `clearSession()`, which
+          // KEEPS the unpushed edits - and from there the failure banner's only
+          // control is "Start editing to retry", which calls this. Clearing the
+          // slot therefore destroyed the very surface that sent the user here, the
+          // moment it succeeded: the Retry control and their typed commit message
+          // went with it, leaving them holding the lock with the edits still only
+          // on this computer and nothing on screen saying so - the durable surface
+          // #260 exists to provide. So the failure survives the gate opening, and
+          // the Retry it carries is now usable.
+          //
+          // A fast-forward is different and still clears: it can only run over a
+          // copy with nothing unpushed (`LocalEditsPolicy::Protect` refuses
+          // otherwise) and it has just replaced the working copy with the server's,
+          // so an older failure no longer describes anything on this machine.
+          const keepFailure = r.kind === 'editing' && state.banner?.kind === 'push_failed';
           return {
             link: {
               ...state.link,
@@ -857,8 +921,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               serverError: null,
             },
             divergence: null,
-            banner: null,
+            banner: keepFailure ? state.banner : null,
           };
+        }
         case 'divergence_needed':
           return { divergence: 'start' };
         case 'locked_by':

@@ -1187,11 +1187,16 @@ impl AppState {
     /// Adoption replaces the open `AppState` project (the FE runs its usual
     /// unsaved-changes guard first, exactly as for any open); the webview then
     /// reloads `local_path`, which opens read-only-remote (`is_remote`, #191).
+    ///
+    /// `discard_local == true` waives the un-pushed-edits guard below, for the ONE
+    /// caller that arrives having already had that loss confirmed - see the command
+    /// wrapper.
     pub(crate) fn speleodb_adopt_ariane(
         &self,
         project_id: String,
         project_name: String,
         latest_commit_sha: Option<String>,
+        discard_local: bool,
     ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -1233,8 +1238,21 @@ impl AppState {
         // (an adopted project is stamped dirty, and the server type flip is
         // best-effort - a failed flip leaves the project still offering Adopt), and
         // it would otherwise delete the adopted copy's un-pushed edits.
-        self.guard_local_edits(&project_id, &dest)
-            .map_err(local_dto)?;
+        //
+        // Waived only for the caller that has already had exactly this loss
+        // confirmed: "take the server copy and discard my local changes" on a
+        // refused open, which lands here when the project is still Ariane. Refusing
+        // that user again asks the same question twice and answers it with a dead
+        // end, since re-adopting IS the only way to open the project at all.
+        let policy = if discard_local {
+            LocalEditsPolicy::Discard
+        } else {
+            LocalEditsPolicy::Protect
+        };
+        if policy == LocalEditsPolicy::Protect {
+            self.guard_local_edits(&project_id, &dest)
+                .map_err(local_dto)?;
+        }
         let tml_scratch = dest.with_file_name("adopt-source.tml");
         dump.extract_entry_to(&tml_entry, &tml_scratch)
             .map_err(local_dto)?;
@@ -3725,27 +3743,47 @@ mod tests {
     }
 
     #[test]
-    fn guard_refuses_from_the_live_open_link_when_the_file_on_disk_looks_clean() {
-        // The case an on-disk-only check gets wrong, and the one where the user is
-        // most likely to be actively working: the project is OPEN with un-pushed
-        // edits in memory while some other copy of it on disk is still clean.
+    fn the_live_open_link_vetoes_its_own_file_and_only_its_own_file() {
+        // The live in-memory link is consulted because it can be fresher than a file
+        // on disk - but it may only speak for the file it IS.
+        //
+        // UPDATED: this used to assert the opposite half, that a dirty OPEN copy
+        // vetoes a replace of a DIFFERENT, clean copy of the same project. It cannot
+        // legitimately: replacing `cached` destroys nothing that lives in `open_path`,
+        // and the shape is reachable in normal use (Save-As carries the `speleo_link`
+        // row forward, so a user can keep their own copy of P open while re-opening P
+        // from the browser). The refusal it produced named the CACHE path and the
+        // OTHER file's edit time - describing work living in a file it did not name -
+        // and its "take the server copy and discard my local changes" route would have
+        // destroyed the clean cache copy while leaving the dirty edits untouched. It
+        // also blocked every pull, fast-forward and revision-restore on P for as long
+        // as that unrelated copy stayed dirty.
         let temp = TempDir::new().expect("temp dir");
-        // The cached copy is CLEAN on disk...
+        // A clean copy in the cache...
         let cached = temp.path().join("cached.stalx");
         seed_linked_stalx(&cached, GUARD_ID, false);
-        // ...while the OPEN copy of the same project carries the un-pushed edits.
+        // ...and the OPEN copy of the same project, elsewhere, carrying un-pushed work.
         let open_path = temp.path().join("open.stalx");
         seed_linked_stalx(&open_path, GUARD_ID, true);
 
         let state = AppState::new().expect("state");
-        assert!(state.open_project(open_path).success, "open the dirty copy");
+        assert!(
+            state.open_project(open_path.clone()).success,
+            "open the dirty copy"
+        );
 
         let err = state
-            .guard_local_edits(GUARD_ID, &cached)
-            .expect_err("the live in-memory link must veto the replace");
+            .guard_local_edits(GUARD_ID, &open_path)
+            .expect_err("the open copy's own un-pushed edits must veto a replace of it");
         assert!(
             matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. }),
             "expected the un-pushed-edits refusal, got {err:?}"
+        );
+
+        assert!(
+            state.guard_local_edits(GUARD_ID, &cached).is_ok(),
+            "but a different, clean copy of the same project holds no work to lose, \
+             so replacing IT must not be refused on another file's behalf"
         );
     }
 

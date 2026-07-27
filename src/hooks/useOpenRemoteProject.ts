@@ -27,7 +27,18 @@ import type {
  */
 export type OpenRemoteOutcome =
   | { status: 'opened' }
-  | { status: 'adopt' }
+  | {
+      status: 'adopt';
+      /**
+       * [#270] The user has ALREADY confirmed discarding the local copy - this
+       * adopt was reached through "take the server copy and discard my local
+       * changes", not through a plain open. The adopt must carry that waiver or
+       * its own un-pushed-edits guard refuses a question the user just answered,
+       * with nothing behind it (re-adopting is the only way to open an Ariane
+       * project at all). Absent on the ordinary open->adopt route.
+       */
+      discardLocal?: boolean;
+    }
   | { status: 'load_failed' }
   | { status: 'unpushed_local' }
   | { status: 'error'; message: string; reLogin: boolean };
@@ -61,7 +72,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
   const setLinkOnOpen = useSpeleoStore((s) => s.setLinkOnOpen);
-  const clearLink = useSpeleoStore((s) => s.clearLink);
 
   // Shared tail: a pull (open or adopt) produced a local .stalx - seed the link
   // optimistically from the summary permission, then load. Roll the seed back if the
@@ -92,6 +102,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       } = {},
     ): Promise<OpenRemoteOutcome> => {
       const { successToast, hasUnpushedEdits, skipSeed } = opts;
+      // #270: what to put back if the load fails. Captured BEFORE the seed, so the
+      // rollback below is a true undo rather than a clear-and-hope.
+      const priorLink = useSpeleoStore.getState().snapshotLink();
       // #193 b8: a lock held by THIS account at open time = a second same-account
       // session; warn (keyed so repeat opens don't stack duplicate toasts).
       if (result.concurrent_session) {
@@ -114,20 +127,29 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // the open project's own, resolved state, and clearing it would be the very
         // downgrade this branch exists to undo.
         if (skipSeed) return { status: 'load_failed' };
-        clearLink();
-        // #270: the failed load left the PREVIOUS project on screen, and
-        // `clearLink` just dropped the gate back to "unresolved" (= read-only).
-        // Re-resolve it from the backend, which still has that project open, so
-        // a local project the user was editing does not stay read-only because an
-        // unrelated remote open failed. Unawaited: the caller's error path must
-        // not wait on it, and read-only is the safe state until it lands.
+        // #270: the failed load left the PREVIOUS project on screen and still open
+        // backend-side, so put its link state back exactly as it was.
+        //
+        // This used to be `clearLink()`, which sets `projectLinkKind: 'unknown'` -
+        // read-only under the fail-closed gate - leaving the repair entirely to the
+        // unawaited `refreshLinkStatus` below. That call swallows its errors by
+        // design, and the conditions that break a load (offline, a bad disk) are the
+        // same ones that break a status call; `SpeleoStatusButton`'s recovery poll
+        // is gated on `link !== null`, which `clearLink` had just falsified. So a
+        // local project the user was editing could go read-only for the rest of the
+        // session because an unrelated remote open failed, with nothing on screen
+        // explaining it. The restore needs no network and cannot fail.
+        useSpeleoStore.getState().restoreLink(priorLink);
+        // Still worth re-resolving from the backend - the snapshot is as fresh as
+        // the moment before the attempt, not as fresh as now. Opportunistic, not
+        // load-bearing: unawaited, and the restore above already stands on its own.
         void useSpeleoStore.getState().refreshLinkStatus();
         return { status: 'load_failed' };
       }
       if (successToast) showToast(successToast.message, successToast.key);
       return { status: 'opened' };
     },
-    [showToast, setLinkOnOpen, loadProject, clearLink, onBeforeLoad, t],
+    [showToast, setLinkOnOpen, loadProject, onBeforeLoad, t],
   );
 
   const openRemote = useCallback(
@@ -224,6 +246,17 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           latestCommitSha: summary.latest_commit_sha ?? null,
         });
       } catch (e) {
+        // #214/#270: the same Ariane route `openRemote` has. It is not hypothetical
+        // here - an adopt stamps the cache copy un-pushed and the server `type` flip
+        // is best-effort, so an adopt without write access leaves a project that is
+        // BOTH dirty locally and still classified Ariane. That is exactly the
+        // project this branch is reached for. Dropping the route sent the user who
+        // had just confirmed discarding their local copy to a flat "this project is
+        // an Ariane project" error with nothing opened and nowhere to go. The
+        // classify happens before any replace, so nothing has been destroyed yet -
+        // but the confirmation carries forward, so the adopt it leads to does not
+        // re-ask.
+        if (speleoErrorAction(e) === 'Adopt') return { status: 'adopt', discardLocal: true };
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
@@ -236,13 +269,18 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   );
 
   const adoptRemote = useCallback(
-    async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+    async (
+      summary: SpeleoProjectSummary,
+      opts: { discardLocal?: boolean } = {},
+    ): Promise<OpenRemoteOutcome> => {
       let result: SpeleoAdoptResult;
       try {
         result = await invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
+          // Only ever true on the take-remote route, where the loss is confirmed.
+          discardLocal: opts.discardLocal === true,
         });
       } catch (e) {
         return {

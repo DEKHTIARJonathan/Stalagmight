@@ -129,15 +129,27 @@ pub async fn speleodb_open_project_discarding_local(
 /// ariane→other. The frontend calls this (after a user confirm) when
 /// `speleodb_open_project` reported `SpeleoDbAction::Adopt`, then reloads
 /// `local_path` through the normal `open_project` flow (read-only-remote).
+///
+/// `discard_local` waives the un-pushed-edits guard, and the FE may pass `true`
+/// ONLY on the path where the user has already confirmed that loss: the "take the
+/// server copy and discard my local changes" branch of the refused-open prompt,
+/// which lands back here when the project turns out to still be Ariane. That
+/// happens for real - an adopt stamps the cache copy un-pushed, and the server
+/// `type` flip is best-effort, so an adopt without write access leaves a project
+/// that is both dirty locally AND still classified Ariane. Without the waiver the
+/// user confirmed a discard, was handed the adopt confirm, and then hit a guard
+/// refusal they had already answered.
 #[tauri::command]
 pub async fn speleodb_adopt_ariane(
     app: AppHandle,
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    discard_local: Option<bool>,
 ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+    let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha)
+        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha, discard_local)
     })
     .await
 }

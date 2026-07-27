@@ -269,4 +269,39 @@ describe('SpeleoBanner retry needs an open edit gate (#270)', () => {
       screen.queryByTestId('speleo-banner-start-editing-to-retry'),
     ).not.toBeInTheDocument();
   });
+
+  it('survives the start-editing it asks for, so Retry is actually reachable', async () => {
+    // The test above seeds the post-gate state by hand; this one gets there the ONLY
+    // way a user can - by pressing the banner's own Start-editing button. That path
+    // used to destroy the banner: `applyStartEditing`'s success arm cleared the whole
+    // slot, so the surface vanished the instant it succeeded, taking the Retry control
+    // and the typed commit message with it and leaving the user holding the lock with
+    // the edits still unpushed and nothing on screen saying so.
+    seedReadOnlyFailure();
+    invokeIpcMock.mockResolvedValue({ kind: 'editing' });
+    render(<SpeleoBanner />);
+
+    await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('speleo-banner-retry-push')).toBeInTheDocument(),
+    );
+    const banner = useSpeleoStore.getState().banner;
+    expect(banner?.kind).toBe('push_failed');
+    // The commit message the retry replays came through intact.
+    expect(banner).toMatchObject({ origin: 'push', pushMessage: 'm' });
+  });
+
+  it('but a fast-forward does clear it - the working copy is the server`s now', async () => {
+    // A fast-forward can only run over a copy with nothing unpushed (the backend's
+    // `LocalEditsPolicy::Protect` refuses otherwise) and it replaces the working copy
+    // with the server's, so an older failure no longer describes anything here.
+    seedReadOnlyFailure();
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/tmp/p.stalx' });
+    render(<SpeleoBanner />);
+
+    await userEvent.click(screen.getByTestId('speleo-banner-start-editing-to-retry'));
+
+    await waitFor(() => expect(useSpeleoStore.getState().banner).toBeNull());
+  });
 });

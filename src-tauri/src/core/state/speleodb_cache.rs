@@ -257,15 +257,19 @@ mod tests {
         let orchestration = source.split("#[cfg(test)]").next().unwrap_or(source);
         assert_eq!(
             orchestration.matches("LocalEditsPolicy::Discard").count(),
-            3,
-            "exactly three call sites may discard un-pushed local edits: \
+            4,
+            "exactly four call sites may discard un-pushed local edits: \
              speleodb_take_remote (the divergence prompt's destroy-confirmed \
              'Take remote'), speleodb_open_project_discarding_local (the same \
-             confirmed choice on a refused open), and speleodb_restore_revision \
+             confirmed choice on a refused open), speleodb_restore_revision \
              under its `discard_local` waiver (a RESTORE only, never a View, after \
              the restore confirm's armed discard step - a restore stamps the copy \
-             un-pushed itself, so without it Restore was single-use). Any other \
-             site must pass LocalEditsPolicy::Protect, or call \
+             un-pushed itself, so without it Restore was single-use), and \
+             speleodb_adopt_ariane under the same waiver (reached only by that \
+             confirmed take-remote when the project turns out to still be Ariane, \
+             where re-adopting is the only way to open it at all - refusing there \
+             asks the user the same question twice and answers it with a dead \
+             end). Any other site must pass LocalEditsPolicy::Protect, or call \
              replace_cache_stalx, so it refuses instead of destroying work that \
              exists in no git anywhere."
         );

@@ -19,7 +19,7 @@ vi.mock('@tauri-apps/api/window', () => ({
 
 import { useOpenRemoteProject } from './useOpenRemoteProject';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import { useSpeleoStore, selectSpeleoReadOnly } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 import { guardQuit } from '../utils/quit';
 import type { SpeleoProjectSummary } from '../types/ipc.generated';
@@ -39,19 +39,16 @@ const SUMMARY: SpeleoProjectSummary = {
 
 let loadProjectMock: ReturnType<typeof vi.fn>;
 let setLinkOnOpenMock: ReturnType<typeof vi.fn>;
-let clearLinkMock: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
   invokeIpcMock.mockReset();
   loadProjectMock = vi.fn(async () => ({ success: true }));
   setLinkOnOpenMock = vi.fn();
-  clearLinkMock = vi.fn();
   // `keepLocalCopy` compares the refused path against the LIVE open project, so the
   // "nothing open" baseline has to be explicit.
   useProjectStore.setState({ loadProject: loadProjectMock, project: null, isDirty: false });
   useSpeleoStore.setState({
     setLinkOnOpen: setLinkOnOpenMock,
-    clearLink: clearLinkMock,
     link: null,
   });
   useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
@@ -90,7 +87,26 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
-  it('rolls the link back when the pulled project fails to load', async () => {
+  /**
+   * [#270] A failed load must leave the user exactly where they were - the PREVIOUS
+   * project is still on screen and still open backend-side.
+   *
+   * The rollback used `clearLink`, which sets `projectLinkKind: 'unknown'` - read-only
+   * under the fail-closed gate - and left the repair to an unawaited
+   * `refreshLinkStatus` that swallows its errors, in the very conditions that break a
+   * load. So a LOCAL project the user was editing could go read-only for the rest of
+   * the session because an unrelated remote open failed. Driven through the REAL seed
+   * and rollback, since the assertion is about the state the user is left in.
+   */
+  it('restores the previous link when the pulled project fails to load', async () => {
+    useSpeleoStore.setState({
+      setLinkOnOpen: realSetLinkOnOpen,
+      link: null,
+      projectLinkKind: 'local',
+      linkPath: null,
+    });
+    expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
+
     loadProjectMock.mockResolvedValue({ success: false });
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
@@ -99,7 +115,11 @@ describe('useOpenRemoteProject (#218)', () => {
     });
     const outcome = await hook().openRemote(SUMMARY);
     expect(outcome).toEqual({ status: 'load_failed' });
-    expect(clearLinkMock).toHaveBeenCalled();
+
+    // Back to 'local', NOT 'unknown' - and still editable, with no network involved.
+    expect(useSpeleoStore.getState().projectLinkKind).toBe('local');
+    expect(useSpeleoStore.getState().link).toBeNull();
+    expect(selectSpeleoReadOnly(useSpeleoStore.getState())).toBe(false);
   });
 
   it('reports an open error and flags a re-login on a dead token', async () => {
@@ -193,14 +213,28 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
-  it('does not clear the live link when the already-open keep-local load fails', async () => {
+  it('does not touch the live link when the already-open keep-local load fails', async () => {
     // There was no seed to roll back, and the link on screen is the open project's
-    // own resolved state - clearing it is the very downgrade the rollback undoes.
+    // own resolved state - downgrading it is the very thing the rollback undoes.
+    const live = {
+      permission: 'READ_AND_WRITE' as const,
+      editState: 'editing' as const,
+      lockHolder: null,
+      lockedByOther: false,
+      hasUnpushedEdits: true,
+      forceEditing: false,
+      forceEditAllowed: false,
+      remoteState: 'up_to_date' as const,
+      noAccess: false,
+      serverError: null,
+    };
     useProjectStore.setState({ project: { file_path: '/cache/p1.stalx' } as never });
+    useSpeleoStore.setState({ link: live, projectLinkKind: 'remote', linkPath: '/cache/p1.stalx' });
     loadProjectMock.mockResolvedValue({ success: false });
     const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
     expect(outcome).toEqual({ status: 'load_failed' });
-    expect(clearLinkMock).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().link).toEqual(live);
+    expect(useSpeleoStore.getState().projectLinkKind).toBe('remote');
   });
 
   it('passes the refusal prompt a route back to the host dialog when given one', async () => {
@@ -284,6 +318,54 @@ describe('useOpenRemoteProject (#218)', () => {
     const outcome = await hook().adoptRemote(SUMMARY);
     expect(outcome).toEqual({ status: 'opened' });
     const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_adopt_ariane');
-    expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', latestCommitSha: 'abc123' });
+    expect(call?.[1]).toEqual({
+      projectId: 'p1',
+      projectName: 'Cave A',
+      latestCommitSha: 'abc123',
+      // The ordinary open->adopt route has confirmed no discard, so the backend's
+      // un-pushed-edits guard stays armed for it.
+      discardLocal: false,
+    });
+  });
+
+  /**
+   * [#214/#270] The take-remote branch had to grow the Ariane route `openRemote`
+   * already had, and to carry the discard the user just confirmed into the adopt.
+   *
+   * Both halves are needed and neither is hypothetical: an adopt stamps the cache
+   * copy un-pushed and the server `type` flip is best-effort, so an adopt without
+   * write access leaves a project that is BOTH dirty locally (raising the refused-
+   * open prompt) and still classified Ariane (so taking the server copy lands on
+   * AdoptAriane). Without the route the user hit a flat "this project is an Ariane
+   * project" error with nothing opened; with the route but no waiver, the adopt's
+   * own guard then refused the discard they had already confirmed.
+   */
+  describe('takeRemoteDiscardingLocal on a still-Ariane project', () => {
+    const arianeRefusal = () => {
+      invokeIpcMock.mockImplementation((cmd: string) => {
+        if (cmd === 'speleodb_open_project_discarding_local')
+          return Promise.reject({ message: 'ariane', action: 'Adopt' });
+        if (cmd === 'speleodb_adopt_ariane')
+          return Promise.resolve({
+            local_path: '/cache/p1.stalx',
+            type_flipped: false,
+            concurrent_session: false,
+          });
+        return Promise.resolve(null);
+      });
+    };
+
+    it('routes to adoption instead of dead-ending on the raw error', async () => {
+      arianeRefusal();
+      const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+      expect(outcome).toEqual({ status: 'adopt', discardLocal: true });
+    });
+
+    it('and that adoption waives the guard the user already answered', async () => {
+      arianeRefusal();
+      await hook().adoptRemote(SUMMARY, { discardLocal: true });
+      const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'speleodb_adopt_ariane');
+      expect(call?.[1]).toMatchObject({ discardLocal: true });
+    });
   });
 });
