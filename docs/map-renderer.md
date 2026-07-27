@@ -28,8 +28,10 @@ upload, draw).
 
 The Global View is a **parallel implementation**, not a reuse: its own
 tessellator, shaders, and hit index live under
-`src/components/GlobalView/customRender/`, sharing only the small pure helpers
-(`colorPack.ts`, the `SHOT_ALPHA_*` constants). A fix in one is not a fix in the other.
+`src/components/GlobalView/customRender/`, sharing the small pure helpers -
+`colorPack.ts`, the `SHOT_ALPHA_*` constants, and the anchor-matrix math in
+`mercator.ts`. A fix in the tessellator, shaders, or hit index of one is not a
+fix in the other.
 
 Still ordinary MapLibre, on small GeoJSON sources built in
 `SurveyLayer.initializeSources`: loop closures, the gas route highlight, merge
@@ -92,7 +94,8 @@ re-upload it, never touching positions or colors:
 Show/hide toggles for shots, stations, reference legs, and jumps are shader
 uniforms - a flag flip plus `triggerRepaint`, no rebuild at all. Tessellation
 itself (`tessellate.ts`) is deliberately simpler than MapLibre's: each shot is an
-independent quad with round caps computed in the vertex shader, no miter joins,
+independent quad, extended past its endpoints in the vertex shader so the
+fragment shader's capsule SDF can round the caps, no miter joins,
 and the station discs cover the junctions. The extrusion and edge-feather math is
 adapted from MapLibre's `line.{vertex,fragment}.glsl`; the `shaders.ts` header
 records what was reused and what was dropped.
@@ -127,8 +130,9 @@ The label pass is an independent sibling - its own controller, its own GL layer,
 its own failure - and the only part of this renderer with a texture.
 `glyphAtlas.ts` rasterizes glyphs on demand with TinySDF into a shelf-packed R8
 atlas from an Open Sans TTF bundled under `src/assets/fonts/`; that is what
-removed the remote glyph endpoint, and there is no `glyphs:` URL in the style
-anymore. `labelLayout.ts` shapes each string left-to-right into per-glyph quads
+made the remote glyph endpoint unused (no `symbol` layers remain - the vestigial
+`glyphs:` key is still declared in `MapCanvas.tsx`'s style but nothing fetches
+from it). `labelLayout.ts` shapes each string left-to-right into per-glyph quads
 whose offsets are in **em**, so one shaping pass is correct at every zoom.
 `labelDecimation.ts` and `labelReveal.ts` are the interesting pair: instead of a
 per-frame modulus test, every label gets one baked `a_reveal_zoom` - the minimum

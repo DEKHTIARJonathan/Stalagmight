@@ -30,8 +30,9 @@ speed_in          = survey_speed_m_per_min, else swim_speed_m_per_min
 
 (`gas/physics.rs` - pure, golden-tested.) A station is reachable when its
 gas-to-reach is finite and `<= budget_litres`; the turn frontier is every
-reachable station bordering one that is not. The frontier is a topology question,
-so the weights play no part in it.
+reachable station bordering one that is not. Given the reach mask, frontier
+membership is pure adjacency - the bordering test ignores edge weights, so even
+a non-swimmable reference tie counts as a border.
 
 Two things the model deliberately does not do. **The exit is never simulated** -
 only the in-leg is accumulated, and the gas to get home is held back by the
@@ -248,9 +249,9 @@ Storage is a sibling SQLite file beside the `.stalx` (`persistence/plnx.rs`),
 independent of the project database: in-place ACID writes with `synchronous=FULL`,
 which suits an incrementally maintained row store (the `.stalx` rewrites
 wholesale, so it uses tmp-then-rename - see [saving.md](saving.md)). The file is
-stamped once with the project's `created_at`, and ownership is probed *without*
-opening the store, so a `.plnx` belonging to another project is never read,
-written or schema-initialized. A project never saved has nowhere to anchor a
+stamped once with the project's `created_at`, and ownership is probed before the
+store is opened for use, so a `.plnx` belonging to another project is never
+written or schema-initialized - the probe reads only the identity row. A project never saved has nowhere to anchor a
 sidecar, so plan persistence is refused until its first real save.
 
 On disk, station references are stable `StationKey` anchors (`AfterShot(uuid)`),

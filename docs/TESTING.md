@@ -1353,7 +1353,7 @@ await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValu
 
 Theme tests are in `e2e-playwright/theme.spec.ts`. They verify:
 
-- Theme switching between all 9 color themes (dark, light, cave, dracula, one_dark, solarized_light, catppuccin_latte, nord, catppuccin_mocha)
+- Theme switching between all 10 color themes (dark, light, cave, dracula, one_dark, solarized_light, catppuccin_latte, nord, catppuccin_mocha, kaleido_eink - which also force-disables CSS transitions for e-ink)
 - Day/night palette independence
 - Auto mode follows OS `prefers-color-scheme`
 - CSS custom properties (`--cc-*`) are applied correctly

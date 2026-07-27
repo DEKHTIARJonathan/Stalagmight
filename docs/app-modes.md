@@ -2,15 +2,16 @@
 
 An open project is in exactly one of three workspace modes - `survey`, `plan`,
 `export` - held in `uiStore.appMode` and switched by the `ModeCarousel`.
-[SPEC.md 6.1](SPEC.md) describes what each one is for; this page is the contract
+[SPEC.md 6.1](SPEC.md#61-workspace-modes) describes what each one is for; this page is the contract
 the code has to keep, because getting it wrong is silent: a mutation leaks into
 a read-only workspace and nothing complains until a user edits a project they
 were only planning a dive on.
 
 ## What each mode swaps
 
-Every row is a render-time `appMode` branch in `SingleSystemView.tsx` or
-`Toolbar.tsx`. The map itself is the same map in all three.
+Every row is a render-time `appMode` branch in `SingleSystemView.tsx`,
+`Toolbar.tsx`, or (for the Display menu's own contents) `DisplayMenu.tsx`. The
+map itself is the same map in all three.
 
 | | Survey | Plan | Export |
 |---|---|---|---|
@@ -70,8 +71,9 @@ gate, self-tested by `pnpm lint:readonly-gates:test`) scans tracked non-test
   against an exact per-file allowlist. Exact in both directions: a count that
   drops below baseline usually means a gate was deleted rather than migrated.
   The allowlisted sites are display and coordinate-selection logic, the
-  definition of `isMapReadOnly` itself, and the geometry-mode radio control -
-  each carries a written reason in the script.
+  definition of `isMapReadOnly` itself, the geometry-mode radio control, and an
+  import-blocked error-message selector - each carries a written reason in the
+  script.
 - **Direct references to `isMapReadOnly` or `selectSpeleoReadOnly`** outside the
   two store modules that define them and the helper that composes them. Three
   more files are exempt with a written reason.

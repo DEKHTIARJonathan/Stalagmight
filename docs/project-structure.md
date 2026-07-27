@@ -62,7 +62,7 @@ stalagmight/
 │   │   │       ├── ThemePreviewCard.tsx     # Mini app mockup preview cards
 │   │   │       ├── AdvancedSettings.tsx     # Placement suggestion constants
 │   │   │       └── ...
-│   │   └── common/               # Button, Panel, Table
+│   │   └── common/               # Button, Panel, Select, SpreadsheetGrid
 │   ├── theme/                    # Color theme system
 │   │   └── tokens.ts                 # 10 color theme token definitions
 │   ├── store/                    # Zustand stores

@@ -72,8 +72,8 @@ export interface LineBuffers {
   /** Per-vertex to-endpoint RGBA8, replicated across all 4 verts. See
    *  {@link colorFrom}. */
   colorTo: Uint8Array;
-  /** Per-vertex reference flag (1 = reference shot, else 0). Mirrors the stock
-   *  shots layer's kind property: the shader fades virtual shots
+  /** Per-vertex `ShotKind` discriminant (0 = normal, 1 = jump, 2 = reference;
+   *  the shader decodes with two thresholds). Fades virtual shots
    *  (SHOT_ALPHA_JUMP 0.5, SHOT_ALPHA_REFERENCE 0.28) and collapses them when
    *  the matching toggle hides them. */
   reference: Float32Array;

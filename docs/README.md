@@ -72,7 +72,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Node 22. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |
 | [linting.md](linting.md) | The `cargo fmt` + clippy CI gates, the anti-AI-slop lint policy, the per-test-module `#[expect]` idiom, deferred lints. |
-| [performance.md](performance.md) | Algorithmic choices and their costs (closure solver, import path), how to profile, and the optimization history. |
+| [performance.md](performance.md) | Algorithmic choices and their costs (closure solver, frozen-shot detection, geometry reconcile), how to profile. The frontend/MapLibre section predates the custom renderer - see [map-renderer.md](map-renderer.md). |
 
 ## Platform and ops
 

@@ -50,7 +50,7 @@ un-pushed-edits bit. Named dive plans live in a sibling `<stem>.plnx` file.
 
 ## Subsystems
 
-Each has its own page. What follows is the seam and where the code lives, nothing more.
+Most have their own page. What follows is the seam and where the code lives, nothing more.
 
 **Workspace modes.** `uiStore.appMode` (`survey` | `plan` | `export`) switches the whole
 workspace from the `ModeCarousel`; Plan and Export are read-only. Ask whether editing is
@@ -91,7 +91,8 @@ the base-SHA fence and ancestry recovery. Orchestration against `AppState` lives
 single-writer hand-off: a pulled project is read-only until the write lock is acquired, and
 unlike the mode-driven read-only above, that one has a real backend backstop -
 `AppState::guard_mutation` refuses every gated mutation while the lock is missing.
--> [speleodb-dev-testing.md](speleodb-dev-testing.md)
+No subsystem page yet; the closest thing is the test-setup + verified-API-contract
+guide -> [speleodb-dev-testing.md](speleodb-dev-testing.md)
 
 **Ariane collaboration.** With `Project.collab` enabled, every save also writes the sibling
 `.tml` (`core/state/project_io.rs::write_collab_sibling`) and refreshes the stored hash and
@@ -115,7 +116,7 @@ tests that fail when a new command / tool / dialog is added without a matching e
 |------|---------|
 | `src-tauri/src/core/command.rs` | Command enum and result types |
 | `src-tauri/src/core/state/` | `AppState` (`app_state.rs`) plus one module per command family |
-| `src-tauri/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo) |
+| `src-tauri/src/persistence/sqlite.rs` | `Database` struct + `SCHEMA_VERSION` and its migration history; the impl is split across `persistence/sqlite/` (open, read, write, schema, integrity, undo, repair, settings, warnings) |
 | `src-tauri/src/persistence/plnx.rs` | `.plnx` sibling store for named dive plans |
 | `src-tauri/src/parsers/dmp.rs` | mNemo DMP file parser |
 | `src-tauri/src/models/project.rs` | Project model with merge/offset logic |
