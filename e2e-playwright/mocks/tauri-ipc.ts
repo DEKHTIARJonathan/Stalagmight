@@ -2425,13 +2425,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const commands = (Array.isArray(args?.commands) ? args?.commands : []) as Array<
               Record<string, unknown>
             >;
-            // The real execute_batch is all-or-nothing: it snapshots first and
-            // restores on any sub-command failure. Mirror that, or the mock
-            // would report an error while leaving a half-applied project -
-            // exactly the state the batching exists to prevent.
-            const sectionsBefore = currentProject
-              ? JSON.parse(JSON.stringify(currentProject.sections))
+            // The real execute_batch is all-or-nothing: it snapshots the WHOLE
+            // project (`capture_project_snapshot`) and restores on any
+            // sub-command failure. Snapshot the whole thing here too - a
+            // sections-only snapshot would leave `section_offsets`, the station
+            // refs and the comment map half-mirrored after a failed multi-section
+            // reverse (#24), i.e. exactly the half-applied state the batching
+            // exists to prevent, in the mock that is supposed to pin it.
+            const projectBefore = currentProject
+              ? (JSON.parse(JSON.stringify(currentProject)) as typeof currentProject)
               : null;
+            const commentsBefore = { ...mockStationComments };
             for (const command of commands) {
               let result: { success?: boolean; error?: string } | undefined;
               if (command?.type === 'update_shot') {
@@ -2449,9 +2453,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }) as { success?: boolean; error?: string } | undefined;
               }
               if (result && result.success === false) {
-                if (currentProject && sectionsBefore) {
-                  currentProject.sections = sectionsBefore;
+                if (currentProject && projectBefore) {
+                  Object.assign(currentProject, projectBefore);
                 }
+                for (const key of Object.keys(mockStationComments)) {
+                  delete mockStationComments[key];
+                }
+                Object.assign(mockStationComments, commentsBefore);
                 return result;
               }
             }

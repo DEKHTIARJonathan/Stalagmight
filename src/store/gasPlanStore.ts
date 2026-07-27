@@ -113,6 +113,22 @@ interface GasPlanState {
   removeMarkedPoint: (index: number) => void;
   /** #298: set (or clear, with an empty string) marked point `index`'s label. */
   setMarkedPointLabel: (index: number, label: string) => void;
+  /**
+   * #24: re-point every plan pin after a section reverse renumbered its stations.
+   *
+   * Every pin here is a positional `StationRef`, so a reverse leaves it in range
+   * while it starts naming the opposite physical station - the plan would
+   * silently re-price a different route. The caller supplies the already-mirrored
+   * pins (see `utils/reverseAftermath`); this only installs them, and blanks the
+   * cached field the way every other route-input setter does.
+   */
+  applyReversedPins: (pins: {
+    origin: StationRef | null;
+    endpoint: StationRef | null;
+    waypoints: StationRef[];
+    markedPoints: MarkedPoint[];
+    stageDropOverrides: (StationRef | null)[];
+  }) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -182,6 +198,11 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // setDistanceGradientOrigin).
   // These inputs reshuffle the drops (a different rig / route / budget), so any pinned drop
   // overrides no longer line up, clear them alongside the stale field.
+  // The pins moved because the SURVEY was renumbered, not because the diver
+  // changed an input, so the drop overrides are kept (mirrored by the caller)
+  // rather than cleared - the route is the same physical route.
+  applyReversedPins: (pins) => set({ ...pins, reachField: null }),
+
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
   // Way points are a ROUTE input: every edit re-bases the whole field, so they clear the cached

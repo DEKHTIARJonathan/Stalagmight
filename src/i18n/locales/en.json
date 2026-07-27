@@ -2083,13 +2083,13 @@
     },
     "help": {
       "quality": "Higher values apply more closure adjustment to this section.",
-        "reverse": "Numbers the section from the other end; the cave does not move. Left/right measurements are kept as recorded."
+      "reverse": "Numbers the section from the other end; the cave does not move. Left/right measurements are kept as recorded."
     },
     "labels": {
       "color": "Color",
       "directionShort": "Dir",
       "quality": "Closure Adj. Weight",
-        "reverse": "Reverse numbering",
+      "reverse": "Reverse numbering",
       "surveyor": "Surveyor"
     },
     "placeholders": {

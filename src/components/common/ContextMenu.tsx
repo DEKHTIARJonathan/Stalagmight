@@ -210,9 +210,15 @@ export default function ContextMenu() {
    * so it is always obvious how many sections are about to change.
    */
   const reverseItems = (sectionId: SectionId): ContextMenuItem[] => {
-    const selectedSectionIds = multiSelection
-      .filter((s) => s.type === 'section' && s.sectionId !== undefined)
-      .map((s) => s.sectionId as SectionId);
+    // Deduped: a repeated id would reverse that section twice in the batch (the
+    // second is a silent no-op) and inflate the count the menu label promises.
+    const selectedSectionIds = [
+      ...new Set(
+        multiSelection
+          .filter((s) => s.type === 'section' && s.sectionId !== undefined)
+          .map((s) => s.sectionId as SectionId)
+      ),
+    ];
     const items: ContextMenuItem[] = [
       {
         label: 'Reverse Section',

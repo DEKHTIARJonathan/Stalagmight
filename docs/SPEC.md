@@ -1002,7 +1002,10 @@ Confirms reversing a section end-to-end, so the far end becomes station 0.
 
 **Semantics.** Reverse is a one-shot action, not persisted state. Geometry is
 invariant - every station keeps its world coordinate, and `reverse(reverse(s))`
-is the identity. Per shot:
+is the identity in exact arithmetic. In f64 it is only *bit*-exact when the
+`+180` shift is representable (`17.5` round-trips exactly; `0.1` comes back a
+couple of ulps out), which is why undo snapshots the project rather than
+re-running the transform. Per shot:
 
 | field | operation |
 |-------|-----------|
@@ -1025,7 +1028,19 @@ Beyond the shots, `section_offsets` gains the section's old total displacement
 (station 0 is now the far end), and every external station ref in the section -
 merges, loop closures, zero datums, station offsets and comments - is remapped
 to its mirrored station so each relationship stays on its original physical
-station.
+station. That list is the complete set of `StationKey`-bearing collections on
+`Project` (`for_each_station_ref`), but it is *not* everything in the app that
+names a station: the gas plan's pins (origin, endpoint, way points, marked
+points, stage-drop overrides) and the UI's selection are positional
+`StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
+side so the plan stays on the physical stations the diver picked; selection and
+merge staging are cleared. Pins inside a *saved* `.plnx` are not rewritten -
+reloading a plan saved before a reverse carries pre-reverse pins, the same
+staleness a plan already has after any survey edit.
+
+The section's `direction` (In/Out) is metadata and is deliberately **not**
+flipped - it records how the survey was swum, which a renumbering does not
+change. Nothing in the geometry pipeline reads it.
 
 Frozen shots do not block a reverse: the physical line is preserved exactly, so
 the frozen invariant still holds. Undo is a before/after project snapshot pair.
@@ -1040,8 +1055,13 @@ either every selected section reverses or none does, and a single Undo restores
 them all.
 
 **On import.** `ImportSectionConfig.reverse` applies the same transform before
-the section is created, so placement and station-comment indices address the
-final order. Left/right is never swapped on the import path (no dialog to ask).
+the section is created. `placement` indices must already address the final
+(reversed) order - only the wizard knows which side of a cross-section
+connection this batch renumbers (`src/utils/reversePlacement.ts`) - while
+`station_comments` indices are given in the file's original order and mirrored
+backend-side. Left/right is never swapped on the import path (no dialog to ask).
+The toggle is offered by the DMP wizard only; the TML, Compass, Walls and GPX
+importers build their configs with `reverse: false`.
 
 Ticking the toggle changes numbering only, never where the passage lands: the
 section anchor gains the same displacement the in-app reverse applies, because

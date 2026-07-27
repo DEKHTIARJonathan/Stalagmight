@@ -1,8 +1,10 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
+import { mirrorPlanPins, planPinsAffected } from '../../utils/reverseAftermath';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -56,6 +58,25 @@ export default function ReverseSectionDialog() {
         setIsSubmitting(false);
         return;
       }
+      // The backend mirrors everything it owns; these are the frontend's own
+      // POSITIONAL refs, which a reverse leaves in-range but pointing at the
+      // opposite physical station. See utils/reverseAftermath.
+      const shotCounts = new Map(
+        sections.map((s) => [s.id, s.shots.length] as const)
+      );
+      const plan = useGasPlanStore.getState();
+      if (planPinsAffected(plan, shotCounts)) {
+        // Mirrored, not cleared: the diver picked these stations, and the point
+        // of a reverse is that the physical cave did not move.
+        plan.applyReversedPins(mirrorPlanPins(plan, shotCounts));
+      }
+      // Selection and merge staging are cleared instead - there is no
+      // "same place" for a highlight, and a half-staged merge that silently
+      // retargets the far end is worse than one the user has to restart.
+      const ui = useUIStore.getState();
+      ui.clearSelection();
+      ui.clearMergeStations();
+
       trackDialogComplete('reverse-section');
       closeDialog();
     } catch (e) {

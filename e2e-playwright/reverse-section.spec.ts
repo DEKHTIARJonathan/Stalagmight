@@ -304,6 +304,43 @@ test.describe('Reverse Section', () => {
     expect(offsetRestored[1]).toBeCloseTo(offsetBefore[1], 9);
   });
 
+  test('shift-clicking sections panel rows reaches the multi-section entry', async ({ page }) => {
+    // The multi entry is gated on `multiSelection` holding >1 section, and the
+    // sections panel is the ONLY affordance that can produce that - every other
+    // addToSelection call site emits a station or a shot. Driven through real
+    // clicks rather than page.evaluate, so it proves the entry is reachable.
+    const ids = await setup(page, 2);
+
+    await page.getByTestId(`section-row-${ids[0]}`).click();
+    await page.getByTestId(`section-row-${ids[1]}`).click({ modifiers: ['Shift'] });
+
+    await openContextMenu(page, { type: 'section', sectionId: ids[0] });
+    await expect(page.getByRole('button', { name: 'Reverse 2 Sections' })).toBeVisible();
+  });
+
+  test('moves the gas plan pins with the sections they sit on', async ({ page }) => {
+    // Plan pins are positional StationRefs the backend cannot reach, so a reverse
+    // leaves them in range while they name the opposite physical station - the
+    // plan would silently re-price a different route.
+    const [sectionId] = await setup(page);
+
+    await page.evaluate((id) => {
+      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      gas.setOrigin({ section_id: id, station_index: 0 });
+      gas.setEndpoint({ section_id: id, station_index: 1 });
+    }, sectionId);
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    const pins = await page.evaluate(() => {
+      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      return { origin: gas.origin, endpoint: gas.endpoint };
+    });
+    // 3 shots -> 4 stations: 0 mirrors to 3, 1 mirrors to 2.
+    expect(pins.origin).toEqual({ section_id: sectionId, station_index: 3 });
+    expect(pins.endpoint).toEqual({ section_id: sectionId, station_index: 2 });
+  });
+
   test('Edit Section dialog disables Reverse only while dirty', async ({ page }) => {
     const [sectionId] = await setup(page);
 

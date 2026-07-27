@@ -91,7 +91,9 @@ export function mirrorPlacementForReverse(
         };
         break;
       case 'origin':
-        // Station 0 of a reversed section is still the section's own origin.
+        // No index to mirror - `origin` carries none. The section does still
+        // move: the backend adds the section's own displacement to its anchor
+        // (see `execute_import_sections`), because station 0 is now the far end.
         break;
     }
   }
