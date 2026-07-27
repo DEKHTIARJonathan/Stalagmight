@@ -2952,7 +2952,7 @@
         "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
         "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
-        "pushUnconfirmed": "The revert was uploaded, but an edit landed after it, so the write lock is still held. Close this dialog, then finish editing from the SpeleoDB button in the toolbar to upload the rest and release it.",
+        "pushUnconfirmed": "The upload could not be confirmed, so the revert may or may not have reached SpeleoDB. Your working copy and the write lock are both kept, so retry it below - a revert that did land is recognised as yours rather than uploaded a second time.",
         "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
       }
     },
