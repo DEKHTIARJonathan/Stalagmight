@@ -188,29 +188,66 @@ describe('projectProfile', () => {
     expect(p.areaPath).toContain('L390.00,10.00 L40.00,10.00 Z');
   });
 
-  it('never emits NaN for a degenerate route', () => {
-    // An entirely flat plan has a zero span on both axes. Dividing by it would put every coordinate
-    // at NaN, which renders as a silently blank chart rather than an error - so the spans floor.
-    //
-    // Two points, not one: a one-point series is refused upstream now. This is the shape that
-    // survives - a route whose only leg is a zero-distance merge/closure tie, which the engine
-    // deliberately charges no distance, time or gas for, so every value collapses to 0.
+  it('never emits NaN for a route with no depth span', () => {
+    // A dead-flat cave has a zero DEPTH span. Dividing by it would put every y at NaN, which renders
+    // as a silently blank chart rather than an error - so the span floors at 1 and the line is drawn
+    // along the top. This is the degenerate shape that still reaches `projectProfile`: the zero
+    // DISTANCE ones are refused by `buildRouteProfile` before they get here.
     const flat = buildRouteProfile(
       field({
         route_profile: [
           point({ route_index: 0, distance_m: 0, depth_m: 0, elapsed_min: 0 }),
-          point({ route_index: 1, distance_m: 0, depth_m: 0, elapsed_min: 0 }),
+          point({ route_index: 1, distance_m: 100, depth_m: 0, elapsed_min: 10 }),
+          point({ route_index: 0, distance_m: 200, depth_m: 0, elapsed_min: 20, outbound: false }),
         ],
-        route_line_length_m: 0,
+        route_max_depth_m: 0,
       }),
       'distance'
     );
     if (!flat) throw new Error('geometry');
+    expect(flat.depthMax).toBe(0);
     const p = projectProfile(flat, box);
     expect(Number.isFinite(p.x(0))).toBe(true);
     expect(Number.isFinite(p.y(0))).toBe(true);
     expect(p.linePath).not.toContain('NaN');
     expect(p.areaPath).not.toContain('NaN');
+  });
+
+  it('never emits NaN when handed a zero-extent geometry directly', () => {
+    // `projectProfile` is exported and must stay total on its own terms - `buildRouteProfile` is not
+    // the only thing that could ever construct a geometry, and a NaN path fails silently.
+    const zero = {
+      points: [],
+      xs: [],
+      markers: [],
+      turnX: 0,
+      turnDistanceM: 0,
+      xMax: 0,
+      depthMax: 0,
+      axis: 'distance' as const,
+    };
+    const p = projectProfile(zero, box);
+    expect(Number.isFinite(p.x(0))).toBe(true);
+    expect(Number.isFinite(p.y(0))).toBe(true);
+    expect(p.areaPath).not.toContain('NaN');
+  });
+
+  it('refuses a route that spans no swum distance at all', () => {
+    // A route joined only by merge / loop-closure ties has points but no metres - the engine charges
+    // a tie nothing, deliberately. Still a dive of zero distance over zero duration, so the chart
+    // must not draw it and the export buttons must not light up.
+    const tied = buildRouteProfile(
+      field({
+        route_profile: [
+          point({ route_index: 0, distance_m: 0, depth_m: 5, elapsed_min: 0 }),
+          point({ route_index: 1, distance_m: 0, depth_m: 5, elapsed_min: 0 }),
+          point({ route_index: 0, distance_m: 0, depth_m: 5, elapsed_min: 0, outbound: false }),
+        ],
+        route_line_length_m: 0,
+      }),
+      'distance'
+    );
+    expect(tied).toBeNull();
   });
 
   it('clamps a station above the datum into the plot instead of painting over the header', () => {

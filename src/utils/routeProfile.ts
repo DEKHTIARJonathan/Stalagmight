@@ -68,11 +68,16 @@ export function buildRouteProfile(
   field: GasReachField | null | undefined,
   axis: ProfileAxis
 ): ProfileGeometry | null {
-  // `< 2`, not `=== 0`: a one-point series is a dive of zero distance over zero duration. The engine
-  // already refuses to publish one, so this is belt-and-braces - but this is also the check that
-  // decides whether the export buttons light up, and offering to write a file describing a dive that
-  // never happened is the failure this guards.
+  // Not `=== 0`. Two shapes are a dive of zero distance over zero duration: a one-point series (a
+  // turnaround with no leg), and a series joined only by merge/closure ties, which has points but
+  // spans no swum metres. The engine refuses both, so this is belt-and-braces - but it is also the
+  // check that decides whether the export buttons light up, and offering to write a file for a dive
+  // that never happened is the failure being guarded. Keyed on DISTANCE, not the selected axis, so
+  // the answer does not change when the diver flips to the time axis.
   if (!field || field.route_profile.length < 2) {
+    return null;
+  }
+  if (!field.route_profile.some((p) => p.distance_m > 0)) {
     return null;
   }
   const points = field.route_profile;

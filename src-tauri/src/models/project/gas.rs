@@ -451,14 +451,22 @@ impl Project {
         // a turn naming a station the diver cannot afford to reach, for a plan the engine has just
         // declared unflyable.
         //
-        // ⚠ A target is necessary but NOT sufficient: the route must also have a leg. When only the
-        // origin is in budget - delete or disable every cylinder and `budget_litres` is 0, which
-        // `can_end_at` satisfies at the origin for free, since reaching it costs nothing - `deepest`
-        // resolves to the origin itself and the route is one station long. `path_to` always returns
-        // at least the target, so nothing below would have caught it. One point is not a dive: it
-        // renders as zero distance over zero duration, and the exporter would write a syntactically
-        // valid Subsurface file describing a dive that never happened.
-        let route_profile = if route_target.is_some() && route_refs.len() >= 2 {
+        // ⚠ A target is necessary but NOT sufficient: the dive must actually go somewhere. Two ways
+        // it might not, and the test is a positive SWUM DISTANCE because it is the only one that
+        // catches both:
+        // - **One station.** When only the origin is in budget - disable every cylinder and
+        //   `budget_litres` is 0, which `can_end_at` satisfies at the origin for free, since
+        //   reaching it costs nothing - `deepest` resolves to the origin itself. `path_to` always
+        //   returns at least the target, so nothing below would have caught it.
+        // - **Two stations, no metres.** A merge / loop-closure tie holds one physical point as two
+        //   graph nodes, so an endpoint on the origin's own twin gives a route of two stations that
+        //   spans nothing: `route_swim` is false for the tie, so `cum_route_distance` stays 0. A
+        //   station count passes this; swum distance does not.
+        //
+        // Either one renders as zero distance over zero duration, and the exporter would write a
+        // syntactically valid Subsurface file describing a dive that never happened.
+        let swum_route_m = cum_route_distance.last().copied().unwrap_or(0.0);
+        let route_profile = if route_target.is_some() && swum_route_m > 0.0 {
             build_route_profile(
                 &route_refs,
                 &route_pts,

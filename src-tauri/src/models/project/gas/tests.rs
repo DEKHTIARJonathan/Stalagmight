@@ -3448,6 +3448,38 @@ fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
 }
 
 #[test]
+fn route_profile_is_empty_when_the_whole_route_is_a_zero_distance_tie() {
+    // Two stations is not the same as a dive. A merge / loop-closure tie holds one physical point as
+    // two graph nodes, so an endpoint set on the origin's OWN TWIN gives a route of two stations
+    // that spans no swum distance whatsoever: a three-point round trip at zero metres, zero minutes
+    // and zero gas, which the chart would draw and the export would write as a real dive.
+    //
+    // This is why the gate is a positive swum distance rather than a station count - counting
+    // stations passes here, and `branching_project`'s entrance is exactly such a merged pair.
+    let (project, entrance, side_tip, _trunk_tip) = branching_project();
+    let twin = StationRef::new(side_tip.section_id, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&twin),
+        &[],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+
+    // The state really is reached: a target, two stations, and not one swum metre between them.
+    assert_eq!(field.final_turn_ref, Some(twin));
+    assert!(field.route_line_length_m.abs() < 1e-9);
+    assert!(
+        field.route_profile.is_empty(),
+        "a zero-distance route published {} profile point(s)",
+        field.route_profile.len()
+    );
+}
+
+#[test]
 fn route_profile_is_empty_when_the_route_has_no_leg_to_swim() {
     // A turnaround is necessary but not sufficient. With nothing to breathe the budget is zero,
     // which the ORIGIN satisfies for free (reaching it costs nothing), so the engine picks the

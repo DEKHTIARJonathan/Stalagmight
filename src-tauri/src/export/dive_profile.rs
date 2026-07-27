@@ -167,12 +167,18 @@ pub fn render_dive_profile(
     format: ProfileFormat,
     ctx: &ProfileContext<'_>,
 ) -> Result<String> {
-    // A profile needs a turnaround AND a leg to swim to it. The engine already refuses to publish
-    // either degenerate case (see `GasReachField::route_profile`), so in-app this is unreachable -
-    // but this is the boundary a compromised renderer or a stale field arrives at, and a one-sample
-    // "dive" of zero duration is exactly the artefact the module header says must not exist. The
-    // length test covers both states, so it is the only one worth making.
-    if field.route_profile.len() < 2 {
+    // A profile needs a turnaround AND somewhere to swim to it. The engine already refuses to
+    // publish either degenerate case (see `GasReachField::route_profile`), so in-app this is
+    // unreachable - but this is the boundary a compromised renderer or a stale field arrives at, and
+    // a zero-duration "dive" is exactly the artefact the module header says must not exist.
+    //
+    // Both tests are needed: a one-point series has no leg, and a multi-point series joined only by
+    // merge/closure ties has legs but spans no metres.
+    let swum_m = field
+        .route_profile
+        .iter()
+        .fold(0.0_f64, |acc, p| acc.max(p.distance_m));
+    if field.route_profile.len() < 2 || swum_m <= 0.0 {
         return Err(anyhow::anyhow!(
             "This plan has no route to export - set an origin and a reachable endpoint first."
         ));
@@ -304,24 +310,46 @@ fn length(metres: f64, units: GasUnits) -> f64 {
     }
 }
 
+/// Cubic feet per litre - the same factor `formatGas.ts`'s `formatVolume` uses on screen.
+const CUFT_PER_LITRE: f64 = 0.035_314_7;
+
+/// Gas volume in the diver's unit.
+///
+/// An imperial plan shows gas in **cubic feet** in the panel (`formatVolume`), so a litres-only
+/// slate would disagree with the screen by a factor of ~28 for the one number a diver is most likely
+/// to sanity-check against their gauges.
+fn volume(litres: f64, units: GasUnits) -> f64 {
+    match units {
+        GasUnits::Metric => litres,
+        GasUnits::Imperial => litres * CUFT_PER_LITRE,
+    }
+}
+
 /// Fixed-width table for a slate or a notes app.
 ///
-/// Rendered in the diver's own length unit and labelled with it on every column header plus a
-/// spelt-out line above the table. A slate that says 30 where the app said 98 is a unit-confusion
-/// accident waiting to happen, and so is an unlabelled number - both halves matter. Gas stays litres
-/// and runtime stays minutes: those are the units the engine prices in and the app shows in both
-/// systems, so there is nothing to convert.
+/// Rendered in the diver's own units and labelled with them on every column header plus a spelt-out
+/// line above the table. A slate that says 30 where the app said 98 is a unit-confusion accident
+/// waiting to happen, and so is an unlabelled number - both halves matter.
+///
+/// That means LENGTH **and** GAS: an imperial plan shows cubic feet in the panel (`formatVolume`),
+/// so a litres-only slate would disagree with the screen by ~28x on the number a diver is most
+/// likely to check against their gauges. Only runtime is genuinely unit-free - minutes in both
+/// systems - so it alone passes through untouched.
 fn render_plain_text(
     field: &GasReachField,
     project_name: &str,
     units: GasUnits,
     turn_ctx: TurnContext,
 ) -> String {
-    let (unit, unit_long) = match units {
-        GasUnits::Metric => ("m", "metres"),
-        GasUnits::Imperial => ("ft", "feet"),
+    let (unit, unit_long, gas_unit, gas_unit_long) = match units {
+        GasUnits::Metric => ("m", "metres", "L", "litres"),
+        GasUnits::Imperial => ("ft", "feet", "cuft", "cubic feet"),
     };
     let len = |metres: f64| length(metres, units);
+    let vol = |litres: f64| volume(litres, units);
+    // Litres are whole numbers; cubic feet are one to two orders smaller, so the same `{:.0}` would
+    // round a 600 L turn volume to "21" and a small stage to "0".
+    let gas_dp = usize::from(units == GasUnits::Imperial);
     let points = &field.route_profile;
     let mut out = String::new();
     let _ = writeln!(out, "{project_name} - planned dive profile");
@@ -333,7 +361,7 @@ fn render_plain_text(
     }
     let _ = write!(
         out,
-        "\n\nDistance/depth in {unit_long}, runtime in minutes, gas in litres.\n"
+        "\n\nDistance/depth in {unit_long}, runtime in minutes, gas in {gas_unit_long}.\n"
     );
 
     // Turn / drop callouts, keyed on route index so a route that doubles back marks the right pass.
@@ -364,11 +392,12 @@ fn render_plain_text(
     }
     if let Some(turn) = turn {
         notes.push(format!(
-            "Turn: {:.0} {unit} in, {:.1} {unit} deep, {} runtime, {:.0} L used",
+            "Turn: {:.0} {unit} in, {:.1} {unit} deep, {} runtime, {:.*} {gas_unit} used",
             len(turn.distance_m),
             len(turn.depth_m),
             mmss(turn.elapsed_min),
-            turn.gas_l
+            gas_dp,
+            vol(turn.gas_l)
         ));
     }
     if !notes.is_empty() {
@@ -389,7 +418,7 @@ fn render_plain_text(
         format!("Dist({unit})"),
         format!("Depth({unit})"),
         "Runtime",
-        "Gas(L)"
+        format!("Gas({gas_unit})")
     );
     for p in points {
         let leg = if Some(p.route_index) == turn_index && p.outbound {
@@ -401,11 +430,12 @@ fn render_plain_text(
         };
         let _ = writeln!(
             out,
-            "{:10.1} {:10.1} {:>10} {:11.0}  {leg}",
+            "{:10.1} {:10.1} {:>10} {:11.*}  {leg}",
             len(p.distance_m),
             len(p.depth_m),
             mmss(p.elapsed_min),
-            p.gas_l
+            gas_dp,
+            vol(p.gas_l)
         );
     }
     out
@@ -612,7 +642,7 @@ mod tests {
     }
 
     #[test]
-    fn the_text_slate_is_rendered_in_the_divers_own_length_unit() {
+    fn the_text_slate_is_rendered_in_the_divers_own_units() {
         // An imperial diver copying a metric slate is a unit-confusion accident, and the renderer
         // has the units toggle available - it just was not passing it through.
         let imperial = ProfileContext {
@@ -622,16 +652,20 @@ mod tests {
         };
         let text = render_dive_profile(&field(), ProfileFormat::PlainText, &imperial).unwrap();
         assert!(text.contains("Distance/depth in feet"));
+        assert!(text.contains("gas in cubic feet"));
         assert!(text.contains("Dist(ft)"));
         assert!(text.contains("Depth(ft)"));
         // 200 m = 656.2 ft, 24 m = 78.7 ft. Hand-computed, not recomputed with the same expression.
         assert!(text.contains("Turn: 656 ft in, 78.7 ft deep"), "{text}");
         assert!(!text.contains(" m in,"));
-        // Gas and runtime are unit-agnostic and must NOT be converted.
-        assert!(text.contains("600 L used"));
+        // GAS converts too: the panel shows cuft for an imperial plan, so litres here would disagree
+        // with the screen by ~28x. 600 L x 0.0353147 = 21.2 cuft.
+        assert!(text.contains("21.2 cuft used"), "{text}");
+        assert!(!text.contains(" L used"));
+        // Runtime is the one genuinely unit-free column.
         assert!(text.contains("40:00 runtime"));
 
-        // Header columns still line up once the unit is two characters wide.
+        // Header columns still line up once the units are two and four characters wide.
         let header = text
             .lines()
             .find(|l| l.contains("Dist(ft)"))
@@ -639,7 +673,26 @@ mod tests {
         assert_eq!(header.find("Dist(ft)"), Some(2));
         assert_eq!(header.find("Depth(ft)"), Some(12));
         assert_eq!(header.find("Runtime"), Some(25));
-        assert_eq!(header.find("Gas(L)"), Some(38));
+        assert_eq!(header.find("Gas(cuft)"), Some(35));
+        // Metric keeps whole litres; cubic feet would round a 600 L turn to "21" and a stage to "0".
+        let metric = render_dive_profile(&field(), ProfileFormat::PlainText, &ctx("Cave")).unwrap();
+        assert!(metric.contains("600 L used"));
+        assert!(metric.contains("gas in litres"));
+    }
+
+    #[test]
+    fn a_route_that_spans_no_swum_distance_is_refused() {
+        // Legs are not enough - a route joined only by merge / loop-closure ties has plenty of
+        // points and spans no metres, so it is still a dive of zero distance over zero duration.
+        let mut f = field();
+        for p in &mut f.route_profile {
+            p.distance_m = 0.0;
+            p.elapsed_min = 0.0;
+        }
+        for format in [ProfileFormat::SubsurfaceXml, ProfileFormat::PlainText] {
+            let err = render_dive_profile(&f, format, &ctx("Cave")).unwrap_err();
+            assert!(err.to_string().contains("no route to export"), "{format:?}");
+        }
     }
 
     #[test]
