@@ -1,0 +1,273 @@
+/**
+ * The revert composition (lock -> restore -> push & release). It has no backend verb
+ * of its own, so the invariants that matter are all about WHAT IT LEAVES BEHIND when
+ * a middle step fails: never take a lock we already know will be refused, hand a lock
+ * back only while the copy is clean, and never auto-release over un-pushed work.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+  getErrorMessage: (e: unknown, f?: string) =>
+    (e as { message?: string })?.message ?? f ?? 'error',
+}));
+
+import { useRevertRevision, type RevertOutcome, type RevertRevisionArgs } from '../useRevertRevision';
+import { useSpeleoStore, type SpeleoLinkState } from '../../store/speleoStore';
+import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
+
+const LINK: SpeleoLinkState = {
+  permission: 'READ_AND_WRITE',
+  editState: 'read-only',
+  lockHolder: null,
+  lockedByOther: false,
+  hasUnpushedEdits: false,
+  forceEditing: false,
+  forceEditAllowed: false,
+  remoteState: 'up_to_date',
+  noAccess: false,
+  serverError: null,
+};
+
+const ARGS: RevertRevisionArgs = {
+  projectId: 'p1',
+  projectName: 'Cave A',
+  hexsha: 'abcdef0123',
+  shortSha: 'abcdef01',
+  message: 'undo the bad survey',
+};
+
+const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+
+const UNPUSHED_REFUSAL = {
+  message: 'local edits never pushed',
+  action: 'UnpushedLocalEdits',
+  unpushed_local: {
+    project_id: 'p1',
+    local_path: '/cache/p1.stalx',
+    last_edit_at: '2026-07-26T09:00:00Z',
+  },
+};
+
+/** Route each command to a canned outcome; anything unlisted resolves to null. */
+function ipc(routes: Record<string, () => unknown>): void {
+  invokeIpcMock.mockImplementation(async (command: string) => routes[command]?.() ?? null);
+}
+const ok = (value: unknown) => () => value;
+const rejects = (error: unknown) => () => {
+  throw error;
+};
+
+/** The speleodb_* commands actually issued, in order. */
+const issued = () =>
+  invokeIpcMock.mock.calls.map((c) => c[0] as string).filter((c) => c.startsWith('speleodb_'));
+
+const argsOf = (command: string) =>
+  invokeIpcMock.mock.calls.find((c) => c[0] === command)?.[1] as Record<string, unknown> | undefined;
+
+const run = async (over: Partial<RevertRevisionArgs> = {}): Promise<RevertOutcome> => {
+  const { result } = renderHook(() => useRevertRevision());
+  let outcome: RevertOutcome | undefined;
+  await act(async () => {
+    outcome = await result.current({ ...ARGS, ...over });
+  });
+  return outcome as RevertOutcome;
+};
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  useSpeleoStore.setState({
+    link: { ...LINK },
+    remoteProjectId: 'p1',
+    divergence: null,
+    banner: null,
+    busy: false,
+    refreshLinkStatus: vi.fn(async () => {}),
+  });
+  useProjectStore.setState({
+    refreshProjectState: vi.fn(async () => {}),
+    checkProjectIntegrity: vi.fn(async () => []),
+    saveProject: vi.fn(async () => ({ success: true }) as never),
+    isDirty: false,
+  });
+  useUIStore.setState({ showToast: vi.fn(), setView: vi.fn(), clearSelection: vi.fn() });
+});
+
+describe('useRevertRevision - the happy path', () => {
+  it('locks, restores, then pushes & releases - in that order, with those arguments', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual([
+      'speleodb_start_editing',
+      'speleodb_restore_revision',
+      'speleodb_done',
+    ]);
+    expect(argsOf('speleodb_restore_revision')).toEqual({
+      projectId: 'p1',
+      projectName: 'Cave A',
+      hexsha: 'abcdef0123',
+      restore: true,
+      // The first attempt never waives the un-pushed-edits guard.
+      discardLocal: false,
+    });
+    expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
+  });
+
+  it('reports each step as it starts', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    const steps: string[] = [];
+
+    await run({ onStep: (s) => steps.push(s) });
+
+    expect(steps).toEqual(['locking', 'restoring', 'pushing']);
+  });
+});
+
+describe('useRevertRevision - refusing before it takes anything', () => {
+  it('needs a discard for an un-pushed copy WITHOUT acquiring the lock', async () => {
+    // The whole point of the pre-flight: the restore would be refused anyway, so
+    // acquiring first would block another user for the length of a call we already
+    // know fails.
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+    ipc({});
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: false });
+    expect(issued()).toEqual([]);
+  });
+
+  it('reports the holder when someone else has the lock', async () => {
+    ipc({ speleodb_start_editing: ok({ kind: 'locked_by', email: 'other@x' }) });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'locked_by', email: 'other@x' });
+    expect(issued()).toEqual(['speleodb_start_editing']);
+  });
+
+  it('reports a divergence and unwinds nothing (the backend released its own lock)', async () => {
+    ipc({ speleodb_start_editing: ok({ kind: 'divergence_needed' }) });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'diverged' });
+    expect(issued()).toEqual(['speleodb_start_editing']);
+  });
+
+  it('reports a plain lock failure when nothing else explains it', async () => {
+    ipc({ speleodb_start_editing: rejects({ message: 'offline' }) });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'lock_failed' });
+  });
+});
+
+describe('useRevertRevision - unwinding a failed restore', () => {
+  it('hands the lock straight back when the copy is clean, then offers the discard', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(UNPUSHED_REFUSAL),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: false });
+    // done(null): the dirty bit is clear, so this releases without uploading anything.
+    expect(argsOf('speleodb_done')).toEqual({ message: null });
+  });
+
+  it('releases and reports the failure for an ordinary restore error', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects({ message: 'offline' }),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toMatchObject({ kind: 'restore_failed', lockHeld: false });
+    expect(issued()).toContain('speleodb_done');
+  });
+
+  it('KEEPS the lock when the copy is dirty - releasing would strand un-pushed work', async () => {
+    // The armed-discard retry waives the pre-flight, so the flow reaches the backend
+    // with un-pushed edits still present and fails there for its own reason. Releasing
+    // now would leave that work on this computer with nothing protecting it, and a
+    // done(message) would publish edits nobody asked to publish.
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects({ message: 'offline' }),
+    });
+
+    const outcome = await run({ discardLocal: true });
+
+    expect(outcome).toMatchObject({ kind: 'restore_failed', lockHeld: true });
+    expect(issued()).not.toContain('speleodb_done');
+  });
+});
+
+describe('useRevertRevision - a restore that landed but a push that did not', () => {
+  it('reports push_failed and does NOT try to release', async () => {
+    // Auto-releasing here would leave the reverted tree as un-pushed edits with no
+    // lock over them - the exact state the #260 banner's Retry exists to resolve.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: rejects({ message: 'offline' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'push_failed' });
+    expect(issued().filter((c) => c === 'speleodb_done')).toHaveLength(1);
+  });
+
+  it('separates a dropped session from a failed push, because the advice differs', async () => {
+    // `not_editing` means the edit gate went away mid-flight (a 401 auto-drop is the
+    // usual way in): nothing uploaded, nothing released, and NO lock held. It reaches
+    // the same dead end as push_failed, but that outcome's copy tells the user they
+    // are holding the write lock and can Retry from the banner - which here would
+    // send them at a button that cannot work.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'not_editing' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'not_editing' });
+    // Still no release attempt: there is nothing to release.
+    expect(issued().filter((c) => c === 'speleodb_done')).toHaveLength(1);
+  });
+
+  it('reports push_unconfirmed rather than claiming the lock came back', async () => {
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'push_unconfirmed' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'push_unconfirmed' });
+  });
+});

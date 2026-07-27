@@ -252,6 +252,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-no-permission",
     "action.dialog.speleodb-unpushed-local",
     "action.dialog.speleodb-restore",
+    "action.dialog.speleodb-revert",
     "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
@@ -319,6 +320,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.speleodb-unpushed-local",
     "dialog-cancel.speleodb-restore",
+    "dialog-cancel.speleodb-revert",
     "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
@@ -412,6 +414,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.speleodb-unpushed-local",
     "dwell.dialog.speleodb-restore",
+    "dwell.dialog.speleodb-revert",
     "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
@@ -555,6 +558,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.speleodb-unpushed-local",
     "active-dwell.dialog.speleodb-restore",
+    "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
@@ -916,7 +920,11 @@ mod tests {
         //       promoted out of Project Settings):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-project = 675.
-        assert_eq!(EVENT_NAMES.len(), 675);
+        //   + 4 revert-a-revision dialog events (the read-only route that takes the
+        //       lock, uploads the chosen revision and releases it again):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-revert = 679.
+        assert_eq!(EVENT_NAMES.len(), 679);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

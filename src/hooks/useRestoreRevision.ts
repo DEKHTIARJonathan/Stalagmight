@@ -26,6 +26,13 @@ export interface RestoreRevisionArgs {
    * read-only peek must stay non-destructive.
    */
   discardLocal?: boolean;
+  /**
+   * Suppress the final toast. Set by the revert flow (`useRevertRevision`), where
+   * this restore is a MIDDLE step: "Restored to revision X. Push to make it the
+   * latest." misdirects when the same flow is about to push and release for you.
+   * Everything else about the call is unchanged.
+   */
+  quiet?: boolean;
 }
 
 /**
@@ -51,6 +58,7 @@ export function useRestoreRevision() {
       shortSha,
       restore,
       discardLocal = false,
+      quiet = false,
     }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
@@ -78,15 +86,17 @@ export function useRestoreRevision() {
       // tree instead of the pre-swap one (fire-and-forget, identity-guarded).
       void useProjectStore.getState().checkProjectIntegrity();
       await refreshLinkStatus();
-      showToast(
-        restore
-          ? t('speleodb.restore.doneToast', { sha: shortSha })
-          : t('speleodb.restore.viewToast', { sha: shortSha }),
-        'speleodb-restore',
-        // A completed restore rewrote the tree; "now viewing revision X" is just
-        // a statement of where you are.
-        restore ? 'success' : 'info',
-      );
+      if (!quiet) {
+        showToast(
+          restore
+            ? t('speleodb.restore.doneToast', { sha: shortSha })
+            : t('speleodb.restore.viewToast', { sha: shortSha }),
+          'speleodb-restore',
+          // A completed restore rewrote the tree; "now viewing revision X" is just
+          // a statement of where you are.
+          restore ? 'success' : 'info',
+        );
+      }
     },
     [t, showToast, setView, clearSelection, refreshProjectState, refreshLinkStatus],
   );

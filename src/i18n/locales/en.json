@@ -2856,10 +2856,10 @@
       "view": "View",
       "viewing": "Viewing…",
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
-      "lockToRestore": "The project is read-only, so these buttons View a revision (the SpeleoDB Update returns you to the latest). Lock the project for editing to Restore a revision as a change you can push.",
+      "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases the lock again.",
       "forceEditActive": "You are force-editing without the lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
-      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - lock the project for editing and upload your changes first, or Restore a revision instead (that route asks before replacing them)."
+      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - lock the project for editing and upload your changes first, or use Revert (that route asks before replacing them)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -2874,6 +2874,37 @@
       "doneToast": "Restored to revision {{sha}}. Push to make it the latest.",
       "viewToast": "Viewing revision {{sha}}. Use Update to return to the latest.",
       "failed": "Could not restore the revision"
+    },
+    "revert": {
+      "action": "Revert",
+      "title": "Revert to revision {{sha}}",
+      "body": "This takes the write lock on \"{{name}}\", replaces the working copy with revision {{sha}}, uploads it as a new revision, and releases the write lock again.",
+      "consequence": "Your project history is not rewritten - the revert lands as a new revision on top of the current one. When it finishes the project is read-only again, exactly as it is now.",
+      "unsavedWarning": "You have unsaved changes that will be discarded.",
+      "unpushedWarning": "This copy has changes that are not on SpeleoDB. A revert replaces them, and they are not on the server, so this cannot be undone.",
+      "messageLabel": "Commit message",
+      "commitMessage": "Revert to revision {{sha}}",
+      "confirmButton": "Revert",
+      "reverting": "Reverting…",
+      "discardOffer": "Replace my changes & revert",
+      "discardConfirm": "Yes, replace my changes & revert",
+      "steps": {
+        "locking": "Taking the write lock…",
+        "restoring": "Replacing the working copy with revision {{sha}}…",
+        "pushing": "Uploading the revert and releasing the write lock…"
+      },
+      "done": "Reverted to revision {{sha}} and released the write lock.",
+      "errors": {
+        "locked": "Could not take the write lock: {{email}} is editing this project. Nothing was changed.",
+        "lockFailed": "Could not take the write lock on SpeleoDB, so nothing was changed.",
+        "restorePrefix": "Could not load revision {{sha}}",
+        "restoreFailed": "The write lock was released and nothing was changed.",
+        "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",
+        "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
+        "pushFailed": "Revision {{sha}} is in your working copy, but it could not be uploaded. You are holding the write lock: use Retry on the upload banner, or finish editing from the SpeleoDB button.",
+        "pushUnconfirmed": "The revert was uploaded, but an edit landed after it, so the write lock is still held. Finish editing from the SpeleoDB button to upload the rest and release it.",
+    "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Sign in again, then start editing to upload it."
+      }
     },
     "editBar": {
       "someone": "someone else",

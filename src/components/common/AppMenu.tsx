@@ -86,11 +86,15 @@ interface Pos {
 const VIEWPORT_MARGIN = 8;
 const TRIGGER_GAP = 2;
 
-function focusableIds(items: AppMenuItem[]): string[] {
+/** Rows a roving-focus arrow key may land on: separators and disabled rows are
+ *  skipped. Exported because SpeleoStatusMenu renders the same `AppMenuItem[]`
+ *  through the same keyboard model. */
+export function focusableIds(items: AppMenuItem[]): string[] {
   return items.filter((i) => !i.separator && !i.disabled).map((i) => i.id);
 }
 
-function stepId(ids: string[], current: string | null, dir: 1 | -1): string | null {
+/** Move the roving focus one step, clamping at the ends (shared with SpeleoStatusMenu). */
+export function stepId(ids: string[], current: string | null, dir: 1 | -1): string | null {
   if (ids.length === 0) return null;
   if (current === null) return dir === 1 ? (ids[0] ?? null) : (ids[ids.length - 1] ?? null);
   const idx = ids.indexOf(current);

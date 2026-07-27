@@ -166,7 +166,70 @@ describe('SpeleoRevisionHistory (#218)', () => {
     expect(screen.getByTestId('speleodb-revision-merge-aaaaaaaa1111')).toBeInTheDocument();
   });
 
-  it('offers NEITHER View nor Restore while force-editing (no lock), with a hint', async () => {
+  it('offers Revert alongside View for a read-only project with write permission', async () => {
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
+    // Never on the current HEAD - reverting to where you already are is a no-op.
+    expect(screen.queryByTestId('speleodb-revision-revert-aaaaaaaa1111')).not.toBeInTheDocument();
+  });
+
+  it('opens the revert confirm with the chosen revision and a way back', async () => {
+    seed('read-only');
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+
+    await userEvent.click(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222'));
+    expect(openDialogMock).toHaveBeenCalledWith(
+      'speleodb-revert',
+      expect.objectContaining({
+        projectId: 'p1',
+        hexsha: 'bbbbbbbb2222',
+        returnTo: 'speleodb-project',
+      }),
+    );
+  });
+
+  it('hides Revert for a known view-only permission', async () => {
+    // A revert takes the write lock and uploads, so a WEB_VIEWER/READ_ONLY grant can
+    // only be refused by the server - don't offer it.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, editState: 'read-only', permission: 'READ_ONLY' },
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
+  });
+
+  it('offers Revert for an UNKNOWN (null) permission', async () => {
+    // Offline, so the grant is not known - treat it as potentially editable and let
+    // the backend gate decide, the same way the status button does.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, editState: 'read-only', permission: null },
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
+  });
+
+  it('offers Revert - and NOT View - when un-pushed edits block the read-only peek', async () => {
+    // That state used to show no buttons at all. Revert is the route out of it: it
+    // takes the lock for the user, with the armed discard as the explicit consent.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, editState: 'read-only', hasUnpushedEdits: true },
+    });
+    render(<SpeleoRevisionHistory />);
+    await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
+    expect(screen.getByTestId('speleodb-revisions-unpushed-hint')).toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revision-view-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.getByTestId('speleodb-revision-revert-bbbbbbbb2222')).toBeEnabled();
+  });
+
+  it('offers NEITHER View nor Restore nor Revert while force-editing (no lock), with a hint', async () => {
     // A force-editor holds unsaved, lock-less edits; swapping the tree would clobber
     // them, so the backend refuses both and the UI offers no action.
     useSpeleoStore.setState({
@@ -177,6 +240,7 @@ describe('SpeleoRevisionHistory (#218)', () => {
     await waitFor(() => expect(screen.getByTestId('speleodb-revisions-list')).toBeInTheDocument());
     expect(screen.queryByTestId('speleodb-revision-restore-bbbbbbbb2222')).not.toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-revision-view-bbbbbbbb2222')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revision-revert-bbbbbbbb2222')).not.toBeInTheDocument();
     expect(screen.getByTestId('speleodb-revisions-forceedit-hint')).toBeInTheDocument();
     expect(screen.queryByTestId('speleodb-revisions-lock-hint')).not.toBeInTheDocument();
   });

@@ -1,9 +1,11 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoMenuItems } from './useSpeleoMenuItems';
+import { SpeleoStatusMenu } from './SpeleoStatusMenu';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
 import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
@@ -52,6 +54,10 @@ type ButtonKind =
  * yellow "!" when those edits are not even protected by a held lock - which is what
  * makes the "unlocked" state stop being dirty-blind.
  *
+ * A RIGHT-click opens the hamburger's SpeleoDB submenu against the button instead
+ * (`SpeleoStatusMenu`), so every hand-off verb is reachable from the indicator that
+ * reports the state, not only the one the left click happens to be wired to.
+ *
  * It also owns the remote-state poll (configurable interval, clamped 30s..24h)
  * while a remote project is open.
  */
@@ -70,6 +76,13 @@ export function SpeleoStatusButton() {
   // and crash the whole SingleSystemView on mount. Fall back to the 60s default.
   const pollInterval = useProjectStore((s) => s.config?.speleodb?.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
+  // The right-click menu's rows - the same array the hamburger's SpeleoDB submenu
+  // renders. Held in LOCAL state rather than the `activeDialog` slot: the store-driven
+  // ContextMenu is hard-wired to survey-entity targets, and routing through
+  // `activeDialog` would evict the very dialogs these rows open.
+  const speleoItems = useSpeleoMenuItems();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const isRemote = link !== null;
 
@@ -343,25 +356,43 @@ export function SpeleoStatusButton() {
                   : t('speleodb.button.conflict');
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={busy}
-      title={`${title}${unpushedSuffix}`}
-      aria-label={`${title}${unpushedSuffix}`}
-      data-testid="speleodb-status-button"
-      data-kind={kind}
-      data-unpushed={unpushed ? 'true' : 'false'}
-      className={`flex items-center justify-center h-8 rounded ml-1 transition-colors disabled:opacity-50 ${
-        unpushedUnlocked ? 'px-1' : 'w-8'
-      } ${bgClass}`}
-    >
-      {/* The state badge sits on the ICON - a small disc + glyph anchored to the
-          logo's corner (like the DisplayMenu shot/station symbols), not floating
-          on the button. The MARK itself turns yellow while there are un-pushed
-          local edits (#270). */}
-      <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} tint={tint} />
-      {unpushedBadge}
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={handleClick}
+        // Known limitation: `onContextMenu` never fires on a DISABLED button, so
+        // right-click is inert while `busy` and in the logged-out branch above.
+        // Both are states in which every row of the menu would be disabled anyway,
+        // so there is nothing to reach.
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuOpen(true);
+        }}
+        disabled={busy}
+        title={`${title}${unpushedSuffix}`}
+        aria-label={`${title}${unpushedSuffix}`}
+        data-testid="speleodb-status-button"
+        data-kind={kind}
+        data-unpushed={unpushed ? 'true' : 'false'}
+        className={`flex items-center justify-center h-8 rounded ml-1 transition-colors disabled:opacity-50 ${
+          unpushedUnlocked ? 'px-1' : 'w-8'
+        } ${bgClass}`}
+      >
+        {/* The state badge sits on the ICON - a small disc + glyph anchored to the
+            logo's corner (like the DisplayMenu shot/station symbols), not floating
+            on the button. The MARK itself turns yellow while there are un-pushed
+            local edits (#270). */}
+        <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} tint={tint} />
+        {unpushedBadge}
+      </button>
+      {menuOpen && (
+        <SpeleoStatusMenu
+          items={speleoItems}
+          triggerRef={buttonRef}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+    </>
   );
 }
