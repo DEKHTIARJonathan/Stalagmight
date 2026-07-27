@@ -1024,6 +1024,24 @@ reciprocating maps the pair to itself, so such a shot is **swapped** instead.
 That keeps both recorded values and flips the arbitrary tie-break the mean is
 resolved with, which is what turns the bearing around.
 
+**Azimuths are stored in `[0, 360)`.** The circular mean wraps with `rem_euclid`,
+not Rust's `%`: `%` is *truncated*, so for a reading pair more than 540 degrees
+apart it left the intermediate difference outside `(-180, 180]` and returned the
+**antipode** of the true bearing. Nothing about a stored value changed meaning -
+an azimuth is still degrees clockwise from north and the old rendering was simply
+wrong - so, unlike the v11 to v12 pitch flip, the fix must not rewrite readings to
+preserve the old geometry. Instead the ambiguity is taken out of the file:
+schema **v14** normalises every stored reading into `[0, 360)`, and
+`DmpShot::to_shot_data` now does the same at import (Compass and TML already did),
+so no build can reach the truncation case again. Normalising is a no-op for
+geometry - `600` and `240` are the same reading - so the same `.stalx` renders
+identically either side of the fix. Affected data is narrow and already flagged:
+both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
+that could be misread always has an out-of-range reading, which
+`Validator::validate_shot` reports as `INVALID_AZIMUTH`. The v14 migration drops
+the collab `.tml` baseline only for a project that actually held such a shot,
+whose export carried the antipodal bearing.
+
 Beyond the shots, `section_offsets` gains the section's old total displacement
 (station 0 is now the far end), and every external station ref in the section -
 merges, loop closures, zero datums, station offsets and comments - is remapped
@@ -1034,9 +1052,40 @@ names a station: the gas plan's pins (origin, endpoint, way points, marked
 points, stage-drop overrides) and the UI's selection are positional
 `StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
 side so the plan stays on the physical stations the diver picked; selection and
-merge staging are cleared. Pins inside a *saved* `.plnx` are not rewritten -
-reloading a plan saved before a reverse carries pre-reverse pins, the same
-staleness a plan already has after any survey edit.
+merge staging are cleared.
+
+Pins inside a *saved* `.plnx` **are** rewritten, because that staleness is not
+like any other survey edit's. A plan persists its pins as `StationKey` anchors,
+and after a reverse an `AfterShot(uuid)` anchor still *resolves* - to the station
+next door, since the anchoring shot travelled with its record. Nothing counts as
+stale, so `stale_ref_count` stays 0 and the panel shows no warning while the
+route, and with it the gas plan, has quietly been re-priced against a different
+pair of stations. Every other edit leaves an unresolvable ref that fails loudly.
+So the command layer re-points the sidecar's keys off the post-reverse project
+(a key resolving to station `j` moves to `j - 1`; `SectionStart` moves to `N`),
+which is its own inverse and therefore runs unchanged on an undo or redo. It is
+best-effort: a missing, foreign or unwritable `.plnx` is logged and skipped
+rather than failing the survey edit.
+
+Two other stores outside `Project` are settled the same way. Position-keyed
+(`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because
+the reverse keeps shot *ids* on positions - so the save-time carry-over would
+otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
+the ignore onto the mirrored shot. And an undo/redo snapshot restore keeps the
+collab export provenance (`last_export_tml_sha256`) from the *live* project
+rather than the snapshot, dropping `shot_baseline` when the restored layout no
+longer matches it: undo does not un-write the sibling `.tml`, so rewinding that
+provenance would report a phantom collaborator edit and apply it at a pre-reverse
+`shot_index`.
+
+`CommandResult.reversed_section_ids` names the sections a command renumbered -
+on the forward reverse, on a batch of them, and on an undo or redo of either
+(undoing a reverse re-reverses the numbering). A reverse keeps every station's
+world position, so there is nothing in the geometry for a consumer to diff; the
+field exists so the frontend mirrors its positional refs exactly instead of
+inferring a reverse from moved stations, an inference that cannot tell a
+reversed section from one that was reversed *and* moved in the same action. It
+is omitted from the payload entirely when nothing was renumbered.
 
 The section's `direction` (In/Out) is metadata and is deliberately **not**
 flipped - it records how the survey was swum, which a renumbering does not
