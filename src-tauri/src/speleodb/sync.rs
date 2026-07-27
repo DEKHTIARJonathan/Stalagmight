@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::models::RevisionCommit;
+use super::models::{RemoteState, RevisionCommit};
 
 /// Verdict of the base-SHA fence: our recorded BASE commit compared against the
 /// server's current tip, given whether we hold un-pushed local edits.
@@ -402,6 +402,78 @@ pub(crate) fn plan_push(
     }
 }
 
+/// The passive status-button verdict: how the open project stands against the
+/// server tip, for the poll that drives the toolbar mark. Pure over an
+/// already-fetched tip + history so every branch is unit-tested offline.
+///
+/// This is deliberately the SAME reasoning the write path uses, not a cheaper
+/// approximation. A bare [`fence`] is not a verdict: a dirty copy whose tip has
+/// moved fences to `Diverged` even when the only commit in the gap is **our own
+/// just-landed push**, which [`plan_push`] recovers from via `AdoptThenUpload`.
+/// Two ways into that state:
+///
+/// - a status poll that read the link row BEFORE a push and resolved the tip
+///   AFTER it (nothing holds a command-level lock, so a push lands inside that
+///   window), and
+/// - the #193 ambiguous-push case, where a lost confirmation leaves BASE behind.
+///
+/// Reporting `Conflict` there advertises a conflict against the user's own
+/// commit and routes their next click to the divergence dialog - a self-conflict
+/// nobody else was involved in. Classifying the gap by authorship keeps the
+/// passive button honest about what Done would actually do on click.
+///
+/// `FailClosed` stays separate from [`reconcile_verdict`]'s handling: a recorded
+/// BASE with no server tip is a transient empty response, and nothing local is at
+/// risk, so it degrades to `Unknown` rather than shouting `Conflict`.
+#[must_use]
+pub(crate) fn poll_verdict(
+    base: Option<&str>,
+    tip: Option<&str>,
+    dirty: bool,
+    commits: &[RevisionCommit],
+    my_email: &str,
+    last_edit_at: Option<&str>,
+) -> RemoteState {
+    match fence(base, tip, dirty) {
+        FenceOutcome::UpToDate => RemoteState::UpToDate,
+        // Only advertise a clean pull when BASE genuinely descends to the tip. A
+        // FastForward whose BASE is NOT an ancestor is a server-side history
+        // rewrite that Update's stricter reconcile calls Diverged - paint it the
+        // same here, so the button never offers a pull that would immediately fail
+        // closed to the divergence prompt on click.
+        FenceOutcome::FastForward => {
+            if base_is_ancestor_of_tip(base, tip.unwrap_or_default(), commits) {
+                RemoteState::RemoteAhead
+            } else {
+                RemoteState::Conflict
+            }
+        }
+        FenceOutcome::Diverged => match classify_ancestry(
+            base,
+            tip,
+            commits,
+            my_email,
+            last_edit_at,
+            // Push-start is not persisted, so the freshness fold stays
+            // conservative; only the authorship half of the answer is used here.
+            None,
+        ) {
+            // Every commit between BASE and the tip is ours - our push landed.
+            // Nothing remote to reconcile, so the button keeps showing the
+            // ordinary editing state and Done still works.
+            AncestryOutcome::Landed { .. } => RemoteState::UpToDate,
+            // A stranger's commit, or history we cannot reason about safely (a
+            // merge, a commit missing from the fetched range). `NotLanded` means
+            // base == tip, which the fence already routed to UpToDate, so it is
+            // unreachable here.
+            AncestryOutcome::Diverged
+            | AncestryOutcome::NotLanded
+            | AncestryOutcome::FailClosed => RemoteState::Conflict,
+        },
+        FenceOutcome::FailClosed => RemoteState::Unknown,
+    }
+}
+
 /// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
 /// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
 /// "this session's push"; a second session under the same account editing the same
@@ -419,8 +491,8 @@ pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_emai
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice,
-        edits_captured_by_push, fence, plan_push, reconcile_verdict, tip_of, AncestryOutcome,
-        FenceOutcome, PushPlan, ReconcileVerdict, RevisionCommit,
+        edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, tip_of,
+        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -891,6 +963,72 @@ mod tests {
         assert_eq!(
             plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2)),
             PushPlan::Diverged
+        );
+    }
+
+    // ---- poll_verdict: the passive status-button verdict ----
+
+    #[test]
+    fn poll_verdict_reports_our_own_landed_push_as_up_to_date_not_a_conflict() {
+        // The self-conflict. A status poll read the link row before a push and
+        // resolved the tip after it, so it fences a BASE one commit behind - and
+        // that commit is OUR OWN. A bare fence calls this Diverged; reporting it as
+        // a conflict paints the button red against the user's own work and sends
+        // their next click to the divergence dialog.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, Some(T1)),
+            RemoteState::UpToDate
+        );
+    }
+
+    #[test]
+    fn poll_verdict_still_reports_a_strangers_commit_as_a_conflict() {
+        // The recovery above must not swallow a real divergence: someone else's
+        // commit sits between BASE and the tip.
+        let commits = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, Some(T1)),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_reports_a_conflict_when_we_cannot_identify_our_own_commits() {
+        // No session email -> `classify_ancestry` can match nothing as ours, so it
+        // fails closed. The passive button says the same thing Done would.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, "", Some(T1)),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_maps_the_clean_and_anomalous_arms_unchanged() {
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        // base == tip: nothing to reconcile.
+        assert_eq!(
+            poll_verdict(Some("c1"), Some("c1"), true, &commits, ME, Some(T1)),
+            RemoteState::UpToDate
+        );
+        // Clean copy, tip genuinely descends from BASE: a real pull is available.
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), false, &commits, ME, None),
+            RemoteState::RemoteAhead
+        );
+        // Clean copy but BASE is NOT an ancestor (a server-side history rewrite):
+        // never advertise a pull the Update verb would immediately fail closed on.
+        let forked = vec![commit("x1", &["x0"], ME), commit("x0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("x1"), false, &forked, ME, None),
+            RemoteState::Conflict
+        );
+        // A recorded BASE with no server tip is a transient empty response, not a
+        // conflict - nothing local is at risk of being clobbered.
+        assert_eq!(
+            poll_verdict(Some("c0"), None, true, &[], ME, Some(T1)),
+            RemoteState::Unknown
         );
     }
 

@@ -32,7 +32,7 @@ use crate::speleodb::client;
 use crate::speleodb::contract::{dto_for_error, map_status, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
 use crate::speleodb::models::{SpeleoProjectSummary, SpeleoRevision};
-use crate::speleodb::sync::{self, FenceOutcome, PushPlan, ReconcileVerdict};
+use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
     DoneResult, PushResult, RemoteState, SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto,
@@ -706,18 +706,10 @@ impl AppState {
     /// an error, and it is NOT routed through `handle_auth` (a transient 401 here
     /// must not auto-drop the session, mirroring [`Self::speleodb_lock_holder`]).
     ///
-    /// This drives off [`sync::fence`] but keeps the `FailClosed` anomaly separate
-    /// (a recorded BASE with no server tip - a transient empty response - degrades to
-    /// `Unknown`, NOT `Conflict`, since nothing local is at risk), unlike
-    /// [`sync::reconcile_verdict`] which folds `FailClosed` into `Diverged`. On a
-    /// `FastForward` it runs the SAME ancestry check the verdict does
-    /// ([`sync::base_is_ancestor_of_tip`]): a BASE that genuinely descends to the tip
-    /// is a clean pull (`RemoteAhead`); a non-ancestor fork (a server-side history
-    /// rewrite) is a `Conflict`, so the passive button never advertises a "pull" that
-    /// the Update verb's stricter reconcile would immediately fail closed on (fix 9).
-    /// `FastForward` only occurs when we hold no un-pushed edits (fence maps a dirty
-    /// moved tip straight to `Diverged`), so a `Conflict` here is the no-local-edits
-    /// fork case, agreeing with what Update/Start do when the user actually acts.
+    /// The policy itself lives in [`sync::poll_verdict`] so every branch is
+    /// unit-tested offline and the passive button provably agrees with what the
+    /// write path ([`sync::plan_push`]) would do on click; this wrapper is just the
+    /// I/O around it.
     fn speleodb_remote_state(
         &self,
         endpoint: &str,
@@ -728,37 +720,14 @@ impl AppState {
         match head_with_empty_retry(link.base_commit_sha.as_deref(), || {
             self.speleodb_server_head(endpoint, token, insecure_http, &link.project_id)
         }) {
-            Ok((tip, commits)) => match sync::fence(
+            Ok((tip, commits)) => sync::poll_verdict(
                 link.base_commit_sha.as_deref(),
                 tip.as_deref(),
                 link.has_unpushed_edits,
-            ) {
-                FenceOutcome::UpToDate => RemoteState::UpToDate,
-                // Only advertise a clean pull when BASE genuinely descends to the tip.
-                // A FastForward whose BASE is NOT an ancestor of the tip is a
-                // server-side history rewrite (a fork) that the Update verb's
-                // reconcile classifies as Diverged - paint it as a Conflict here too,
-                // so the button doesn't offer a blue "pull" that would immediately
-                // fail closed to the divergence prompt on click (fix 9). The ancestry
-                // check reuses the same helper reconcile_verdict does, so the passive
-                // button and the Update verb agree.
-                FenceOutcome::FastForward => {
-                    if sync::base_is_ancestor_of_tip(
-                        link.base_commit_sha.as_deref(),
-                        tip.as_deref().unwrap_or_default(),
-                        &commits,
-                    ) {
-                        RemoteState::RemoteAhead
-                    } else {
-                        RemoteState::Conflict
-                    }
-                }
-                FenceOutcome::Diverged => RemoteState::Conflict,
-                // Anomaly (BASE but no tip): not a conflict - nothing local is at
-                // risk of being clobbered. Degrade to Unknown; a later poll or the
-                // Update verb re-fences.
-                FenceOutcome::FailClosed => RemoteState::Unknown,
-            },
+                &commits,
+                &self.speleodb_my_email().unwrap_or_default(),
+                link.last_edit_at.as_deref(),
+            ),
             Err(_) => RemoteState::Unknown,
         }
     }
@@ -3057,7 +3026,7 @@ mod tests {
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
-    use crate::speleodb::{DoneResult, PushResult, SpeleoDbError, TransportCause};
+    use crate::speleodb::{DoneResult, PushResult, RemoteState, SpeleoDbError, TransportCause};
     use tempfile::TempDir;
 
     #[test]
@@ -5441,6 +5410,27 @@ mod tests {
         state.set_edit_enabled(false);
     }
 
+    /// A real survey edit (a new section with one shot), which both changes the
+    /// pushed content and sets the dirty bit through the normal mutation path.
+    fn orch_edit(state: &AppState, name: &str, length: f64) {
+        assert!(
+            state
+                .execute(Command::CreateSection {
+                    name: Some(name.to_owned()),
+                    surveyor: None,
+                    date: None,
+                    color: "#abcdef".to_owned(),
+                    direction: None,
+                    shots: vec![ShotData {
+                        length,
+                        ..Default::default()
+                    }],
+                })
+                .success,
+            "edit succeeds while editing"
+        );
+    }
+
     #[test]
     #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
     fn live_orch_start_editing_edit_done_advances_base() {
@@ -5523,6 +5513,174 @@ mod tests {
         assert_ne!(
             after.base_commit_sha, base_before,
             "BASE advanced to the new commit after a 200 push"
+        );
+    }
+
+    /// Push, edit again, then Done - WITHOUT releasing the lock in between.
+    ///
+    /// The user-reported self-conflict: a second push against your own first one
+    /// raises the divergence ("merge conflict") prompt. Nobody else touched the
+    /// project, so every step here must stay on the happy path. This test pins the
+    /// BACKEND half of that, which is also what discriminates the candidate causes:
+    /// if it goes red, the fault is in the push/fence machinery; if it stays green,
+    /// the fault is in the frontend (a status poll that captured the pre-push link
+    /// row landing after the push and repainting the button `Conflict`).
+    ///
+    /// The mid-flight `speleodb_link_status` assertion is the important one: it is
+    /// exactly what the status button polls, and `speleodb_remote_state` fences BASE
+    /// against the tip with NO ancestry recovery, unlike the push path's `plan_push`.
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_push_then_edit_then_done_does_not_self_conflict() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-push-twice", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-push-twice");
+        let base_at_open = orch_link(&state).base_commit_sha;
+
+        assert!(
+            matches!(
+                state.speleodb_start_editing().expect("start_editing"),
+                StartEditingResult::Editing
+            ),
+            "clean reconcile should enable editing"
+        );
+
+        // --- first edit, then Push WITHOUT releasing (the hamburger's "Push (keep
+        // the lock)") -------------------------------------------------------------
+        orch_edit(&state, "orch-edit-1", 5.0);
+        let pushed = state.speleodb_push_only(None).expect("first push");
+        assert!(
+            matches!(pushed, PushResult::Pushed),
+            "the first push should land cleanly, got {pushed:?}"
+        );
+        assert!(
+            state.edit_enabled(),
+            "push-without-release keeps the edit session open"
+        );
+        let after_push = orch_link(&state);
+        assert!(
+            !after_push.has_unpushed_edits,
+            "a confirmed push clears the dirty bit"
+        );
+        assert_ne!(
+            after_push.base_commit_sha, base_at_open,
+            "BASE must advance to the commit the push created - leaving it behind (or \
+             wiping it to None) is what makes the NEXT push read as a divergence"
+        );
+        assert!(
+            after_push.base_commit_sha.is_some(),
+            "BASE must never be wiped to the empty-repo sentinel by a successful push"
+        );
+
+        // The BASE we now hold must be the server's real tip, resolved from the
+        // parent-id topology rather than the unreliable `latest_commit` field.
+        let (tip_after_push, _) = state
+            .speleodb_server_head(&url, &token, false, &id)
+            .expect("server head after the first push");
+        assert_eq!(
+            after_push.base_commit_sha, tip_after_push,
+            "BASE after a push must equal the topological server tip"
+        );
+
+        // --- second edit: the state the user is in when they press the button -----
+        orch_edit(&state, "orch-edit-2", 7.0);
+        assert!(
+            orch_link(&state).has_unpushed_edits,
+            "the second edit marks the project dirty again"
+        );
+
+        // What the status button polls. `Conflict` here is what flips the button red
+        // and routes the click to the divergence dialog instead of push & release.
+        let status = state.speleodb_link_status().expect("link status");
+        assert!(
+            !matches!(status.remote_state, RemoteState::Conflict),
+            "our own just-pushed commit must not read as a conflict, got {:?}",
+            status.remote_state
+        );
+
+        // --- Done: push & release, the step the user reported as conflicting ------
+        let done = state.speleodb_done(None).expect("done");
+        assert!(
+            matches!(done, DoneResult::Released),
+            "pushing again over our OWN previous push must release cleanly, not raise \
+             a divergence - got {done:?}"
+        );
+        assert!(!state.edit_enabled(), "read-only again after Done");
+        let after_done = orch_link(&state);
+        assert!(
+            !after_done.has_unpushed_edits,
+            "dirty cleared after the second confirmed push"
+        );
+        assert_ne!(
+            after_done.base_commit_sha, after_push.base_commit_sha,
+            "BASE advanced again for the second commit"
+        );
+    }
+
+    /// The self-conflict, reproduced deterministically at the layer it actually
+    /// happens in: a status poll that read the link row BEFORE a push and resolves
+    /// the server tip AFTER it.
+    ///
+    /// `speleodb_link_status` loads the link, releases the DB lock, and only then
+    /// makes its two network round trips; `run_blocking` holds no command-level
+    /// lock, so a push can land in that window. The poll then fences a BASE that is
+    /// behind the tip by exactly one commit - OUR OWN - and `speleodb_remote_state`
+    /// applies a bare `sync::fence` with none of the ancestry recovery `plan_push`
+    /// has, so it answers `Conflict`. That verdict paints the status button red and
+    /// routes the next click to the divergence dialog.
+    ///
+    /// Passing `link_before_push` here is not a contrivance: it is byte-for-byte the
+    /// snapshot the in-flight poll is holding.
+    #[test]
+    #[ignore = "hits the live SpeleoDB box; needs DEV_SPELEODB_* (run with --ignored --test-threads=1)"]
+    fn live_orch_stale_poll_snapshot_does_not_report_our_own_push_as_conflict() {
+        let Some((url, email, password)) = orch_env() else {
+            return;
+        };
+        let token = client::login(&url, false, &email, &password).expect("login");
+        let id = orch_seed(&url, &token, "orch-stale-poll", ORCH_SEED);
+        let _cleanup = OrchCleanup {
+            url: url.clone(),
+            token: token.clone(),
+            id: id.clone(),
+        };
+
+        let state = orch_state(&url, &email, &token);
+        orch_open(&state, &id, "orch-stale-poll");
+        assert!(matches!(
+            state.speleodb_start_editing().expect("start_editing"),
+            StartEditingResult::Editing
+        ));
+        orch_edit(&state, "orch-stale-edit", 5.0);
+
+        // What a poll issued a moment before the push is holding: BASE at the
+        // pre-push commit, dirty still set.
+        let link_before_push = orch_link(&state);
+        assert!(link_before_push.has_unpushed_edits);
+
+        // The push lands while that poll is still waiting on the network.
+        assert!(matches!(
+            state.speleodb_push_only(None).expect("push"),
+            PushResult::Pushed
+        ));
+
+        // Now the poll's revisions GET returns - resolving a tip that has moved on
+        // by our own commit. Nobody else has touched this project.
+        let verdict = state.speleodb_remote_state(&url, &token, false, &link_before_push);
+        assert!(
+            !matches!(verdict, RemoteState::Conflict),
+            "a tip that moved ahead of a stale BASE by OUR OWN commit must not read as \
+             a conflict - this is the self-conflict the user reported, got {verdict:?}"
         );
     }
 
