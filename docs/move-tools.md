@@ -7,8 +7,8 @@ Developer reference for the three move tools: **Move Station**, **Move Shot**, a
 | Tool | Shortcut | Scope | What moves |
 |------|----------|-------|------------|
 | Move Station | T | Single station | Station + co-located stations (merged/aligned-closure) |
-| Move Shot | Y | One shot | Both endpoints + all co-located stations |
-| Move Segment | U | Entire branch | All sections connected via merges/aligned-closures |
+| Move Shot | G | One shot | Both endpoints + all co-located stations |
+| Move Segment | V | Entire branch | All sections connected via merges/aligned-closures |
 
 All three share the same drag preview engine and Ctrl+drag panning. They differ in scope and hover behavior.
 
