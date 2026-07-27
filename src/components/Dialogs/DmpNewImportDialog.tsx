@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
+import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { DistanceField, Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
@@ -19,7 +19,7 @@ import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../../
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
-import { editableShotToShotData } from '../../utils/shotConversion';
+import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
   computeOverlapIds,
@@ -138,27 +138,9 @@ export interface SavedManualPlacingState {
 function buildEffectiveDmpSection(raw: DmpSection, edits: SectionEditState | undefined): DmpSection {
   if (!edits) return raw;
   return {
-    ...raw,
+    ...editableShotsToDmpSection(raw, edits.shots),
     name: edits.name,
     direction: edits.direction,
-    shots: edits.shots
-      .filter(s => !s.isDeleted)
-      .map(s => ({
-        shot_type: 'Standard' as const,
-        heading_in: s.azimuth_in,
-        heading_out: s.azimuth_out,
-        length: s.length,
-        depth_in: s.depth_in,
-        depth_out: s.depth_out,
-        pitch_in: s.pitch_in ?? 0,
-        pitch_out: s.pitch_out ?? 0,
-        left: s.left ?? 0,
-        right: s.right ?? 0,
-        up: s.up ?? 0,
-        down: s.down ?? 0,
-        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
-        ...(s.comment != null ? { comment: s.comment } : {}),
-      })),
   };
 }
 
@@ -2609,30 +2591,10 @@ export default function DmpNewImportDialog({
     if (!section) return null;
     if (!editState) return section;
 
-    const syntheticShots: DmpShot[] = editState.shots
-      .filter((s) => !s.isDeleted)
-      .map((s) => ({
-        shot_type: 'Standard' as const,
-        heading_in: s.azimuth_in,
-        heading_out: s.azimuth_out,
-        length: s.length,
-        depth_in: s.depth_in,
-        depth_out: s.depth_out,
-        pitch_in: s.pitch_in ?? 0,
-        pitch_out: s.pitch_out ?? 0,
-        left: s.left ?? 0,
-        right: s.right ?? 0,
-        up: s.up ?? 0,
-        down: s.down ?? 0,
-        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
-        ...(s.comment != null ? { comment: s.comment } : {}),
-      }));
-
     return {
-      ...section,
+      ...editableShotsToDmpSection(section, editState.shots),
       name: editState.name,
       direction: editState.direction,
-      shots: syntheticShots,
     };
   }, [currentSuggestion, dmpFile.sections, editState]);
 

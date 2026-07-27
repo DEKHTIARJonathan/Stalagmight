@@ -12,7 +12,7 @@ import type { ImportPlacement, ImportSectionConfig } from '../types/commands';
 import type { ShotData } from '../types/project';
 import type { ZeroDatumConfigResult } from '../components/Dialogs/ZeroDatumConfigDialog';
 import type { VirtualConnection } from './segmentContext';
-import { adjustStationForDeletedShots, type SectionEditState } from './batchImportHelpers';
+import type { SectionEditState } from './batchImportHelpers';
 import { editableShotToShotData } from './shotConversion';
 import { mirrorPlacementForReverse, targetShotCountForMirror } from './reversePlacement';
 
@@ -50,13 +50,24 @@ export function finalizePlacementForReverse(
 /**
  * Build the backend config for the zero-datum anchor section.
  *
- * The GPS station is picked off the section preview, which draws the file's
- * ORIGINAL shots, so the index is pre-deletion; the shots actually sent are
- * post-deletion. `adjustStationForDeletedShots` bridges the two, and only then
- * can the reverse mirror (`shotCount - index`) land on the station the user
- * clicked - mirroring the raw index would be off by the number of deleted shots
- * ahead of it, and for a pick near the end could go negative (`station_index`
- * is `u32`, so serde would reject the whole import).
+ * `stationIndex` already addresses the POST-EDIT station order: the dropdown is
+ * built from the surviving shot count, the preview is drawn from the same
+ * surviving shots (`editableShotsToDmpSection`), and every shot-table edit
+ * re-anchors the committed pick onto its physical station. So there is nothing
+ * left to translate here - it is the index into the `shots` sent below.
+ *
+ * It is NOT the `EditableShot.id` space `adjustStationForDeletedShots` maps
+ * from: those ids are positions in the `isImportableDmpShot`-filtered file
+ * order, which already omits non-Standard and length-1 shots. Running that
+ * adjustment over a post-edit pick shrank it a second time and moved the GPS
+ * anchor one shot down the passage for every deletion, silently - `set_zero_datum`
+ * only rejects an out-of-range index.
+ *
+ * The clamp is the one remaining translation, and it guards the reverse mirror
+ * (`shotCount - index`) rather than the pick: a stale index past the last
+ * surviving station would mirror NEGATIVE, and `station_index` is `u32` on the
+ * Rust side, so serde would reject the whole import with an opaque error
+ * instead of a placement-level complaint.
  */
 export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): ImportSectionConfig {
   const { sectionIndex, stationIndex, gps, metadata, shots } = config;
@@ -66,7 +77,7 @@ export function buildZeroDatumSectionConfig(config: ZeroDatumConfigResult): Impo
   const placement: ImportPlacement = {
     type: 'zero_datum',
     coordinates: gps,
-    station_index: adjustStationForDeletedShots(shots, stationIndex),
+    station_index: Math.max(0, Math.min(backendShots.length, stationIndex)),
   };
 
   return {

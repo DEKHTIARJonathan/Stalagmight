@@ -1,12 +1,18 @@
 /**
  * Zero-datum config building and the reverse rewrite it applies (#24).
  *
- * The regression these tests pin: the GPS station index is picked off the
- * section preview, which draws the file's ORIGINAL shots, while the shots
- * actually sent are post-deletion. Mirroring the raw index for a reversed
- * section landed the anchor on the wrong physical station, and for a pick near
- * the end produced a NEGATIVE index that serde rejects (`station_index` is
- * `u32`), failing the whole import with an opaque error.
+ * `stationIndex` arrives already addressing the POST-EDIT station order - the
+ * dialog re-anchors the committed pick on every shot-table edit, and both the
+ * dropdown and the preview are built from the surviving shots. So the only
+ * translation left here is the reverse mirror, plus a clamp that keeps a stale
+ * pick from mirroring NEGATIVE: `station_index` is `u32` on the Rust side, so
+ * serde would reject the whole import with an opaque error.
+ *
+ * The regression these tests pin: this function used to run the pick through
+ * `adjustStationForDeletedShots`, whose domain is the `EditableShot.id` space
+ * (positions in the `isImportableDmpShot`-filtered file order), NOT the
+ * post-edit order. That shrank an already-post-edit index a second time and
+ * moved the GPS anchor one shot per deletion.
  */
 import { describe, it, expect } from 'vitest';
 import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../importSectionConfig';
@@ -18,7 +24,11 @@ import type { VirtualConnection } from '../segmentContext';
 
 const GPS = { latitude: 20.2, longitude: -87.4, depth_reference: 0 };
 
-/** `id` is the shot's 0-based index in the file - what a station index addresses. */
+/**
+ * `id` is the shot's 0-based position in the `isImportableDmpShot`-filtered file
+ * order. Deliberately NOT what a station index addresses - the ids are set here
+ * only so the fixture looks like a real one; nothing under test reads them.
+ */
 function shot(id: number, isDeleted = false): EditableShot {
   return {
     id,
@@ -80,33 +90,50 @@ describe('buildZeroDatumSectionConfig', () => {
     expect(config.station_comments).toEqual([]);
   });
 
-  it('adjusts the picked station for deleted shots when not reversed', () => {
-    // Station 5 of the original order, with the leading shot deleted, is
-    // station 4 of the 9 shots actually sent.
-    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(5, false, [0])))).toBe(4);
+  it('sends an in-range pick verbatim, deletions or not', () => {
+    // Station 5 of the 9 shots being sent IS station 5. The dialog already
+    // re-anchored the pick when the row was deleted; adjusting again here
+    // dragged the anchor to station 4, one shot down the passage.
+    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(5, false, [0])))).toBe(5);
   });
 
-  it('mirrors the ADJUSTED index when a leading shot was deleted', () => {
-    // 9 shots survive, the pick sits at adjusted station 4, so the reversed
-    // section numbers it 9 - 4 = 5. Mirroring the raw index gave 9 - 5 = 4,
-    // one station off the one the user clicked.
-    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(5, true, [0])))).toBe(5);
+  it('mirrors the pick against the shots actually sent', () => {
+    // 9 shots survive and the pick is station 5 of those, so the reversed
+    // section numbers it 9 - 5 = 4. Adjusting first mirrored 9 - 4 = 5 - one
+    // station off the one the user chose, in the opposite direction.
+    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(5, true, [0])))).toBe(4);
   });
 
   it('never emits a negative index when a trailing shot was deleted', () => {
-    // The last station of the original 10-shot order, with the last shot
-    // deleted: adjusted to 9 of 9, mirrored to 0. Mirroring the raw index gave
-    // 9 - 10 = -1, which serde rejects for a u32 - killing the whole import.
+    // A pick at station 10 that only 9 shots survive under: clamped to 9, then
+    // mirrored to 0. Mirroring unclamped gave 9 - 10 = -1, which serde rejects
+    // for a u32 - killing the whole import with an opaque error.
     expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(10, true, [9])))).toBe(0);
   });
 
   it('keeps a pick past the surviving shots inside the section', () => {
-    // A pick the shot editor then deleted out from under: adjusting first caps
-    // it at the last surviving station, so the mirror stays in range (the raw
-    // index would have mirrored to 1 - 9 = -8).
+    // A pick the shot editor then deleted out from under: the clamp caps it at
+    // the last surviving station, so the mirror stays in range (unclamped it
+    // would have mirrored to 1 - 9 = -8).
     const config = buildZeroDatumSectionConfig(zeroDatum(9, true, [1, 2, 3, 4, 5, 6, 7, 8, 9]));
     expect(config.shots).toHaveLength(1);
     expect(stationIndexOf(config)).toBe(0);
+  });
+
+  it('clamps a stale pick to the last real station, in both directions', () => {
+    // 9 shots, so stations 0..9; a pick of 10 addresses nothing.
+    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(10, false, [], 9)))).toBe(9);
+    expect(stationIndexOf(buildZeroDatumSectionConfig(zeroDatum(10, true, [], 9)))).toBe(0);
+  });
+
+  it('never emits a negative index for any reversed pick', () => {
+    for (let pick = 0; pick <= 14; pick++) {
+      for (const deleted of [[], [0], [9], [1, 2, 3, 4, 5, 6, 7, 8, 9]]) {
+        const config = buildZeroDatumSectionConfig(zeroDatum(pick, true, deleted));
+        expect(stationIndexOf(config)).toBeGreaterThanOrEqual(0);
+        expect(stationIndexOf(config)).toBeLessThanOrEqual(config.shots.length);
+      }
+    }
   });
 
   it('leaves an unreversed pick at the far end alone', () => {
