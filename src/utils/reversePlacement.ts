@@ -51,9 +51,22 @@ export function targetShotCountForMirror(
   return edits.shots.filter((s) => !s.isDeleted).length;
 }
 
-/** Mirror one station index within a section of `shotCount` shots (N+1 stations). */
+/**
+ * Mirror one station index within a section of `shotCount` shots (N+1 stations).
+ *
+ * Clamped to the section's real station range `0..shotCount`. An index the
+ * mirror would take out of range is already wrong - it addresses a station the
+ * section does not have - but the two failure modes are not equal: a NEGATIVE
+ * index cannot even be sent, because `station_index` is `u32` on the Rust side,
+ * so serde rejects the whole batch with an opaque deserialization error instead
+ * of the placement-level "index out of range" the un-reversed path reports.
+ * Clamping keeps a bad index describable by the backend that validates it.
+ * (The backend's station-comment mirror uses `checked_sub` and DROPS an
+ * out-of-range comment instead - it can, a comment is optional. A placement is
+ * not, so here the index is clamped rather than discarded.)
+ */
 export function mirrorStationIndex(stationIndex: number, shotCount: number): number {
-  return shotCount - stationIndex;
+  return Math.max(0, Math.min(shotCount, shotCount - stationIndex));
 }
 
 /**

@@ -15,7 +15,7 @@ import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
-import { mirrorPlacementForReverse, targetShotCountForMirror } from '../../utils/reversePlacement';
+import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
@@ -1094,17 +1094,9 @@ export function buildBatchImport(
 
       // #24 / q14: the backend reverses before creating the section, so every
       // placement index must address the post-reverse order - on BOTH sides of a
-      // connection (see targetShotCountForMirror for the target side).
-      //
-      // The target side is mirrored ONLY when the placement was derived from a
-      // connection. A directPlacement (segment "From existing", or a manual /
-      // manual_snap drop) targets a live project section, which this batch does
-      // not renumber - while `conn` may still hold an unrelated auto-derived
-      // connection for the same index, whose target shot count would mirror the
-      // user's chosen station onto the wrong physical end (or out of range,
-      // failing the whole batch in merge_stations).
-      const targetShots = directPlacement ? null : targetShotCountForMirror(placement, conn?.targetType, conn?.targetImportIndex, sectionEdits);
-      const finalPlacement = mirrorPlacementForReverse(placement, reverseValue, backendShots.length, targetShots);
+      // connection. A directPlacement was not derived from `conn`, so it passes
+      // no connection at all (see finalizePlacementForReverse).
+      const finalPlacement = finalizePlacementForReverse(placement, reverseValue, backendShots.length, directPlacement ? null : conn, sectionEdits);
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,
@@ -2278,36 +2270,8 @@ export default function DmpNewImportDialog({
       // 1. Import zero datum section if provided (this is the anchor)
       if (zeroDatumConfig) {
         setIsImporting(true);
-        const { sectionIndex, stationIndex, gps, metadata, shots } = zeroDatumConfig;
-
-        const backendShots: ShotData[] = shots
-          .filter((s) => !s.isDeleted)
-          .map(editableShotToShotData);
-
-        const placement: ImportPlacement = {
-          type: 'zero_datum',
-          coordinates: gps,
-          station_index: stationIndex,
-        };
-
-        const config: BackendImportSectionConfig = {
-          section_index: sectionIndex,
-          name: metadata.name,
-          surveyor: metadata.surveyor,
-          date: metadata.date,
-          color: metadata.color,
-          direction: metadata.direction,
-          quality: metadata.quality,
-          shots: backendShots,
-          placement: mirrorPlacementForReverse(
-            placement,
-            metadata.reverse ?? false,
-            backendShots.length,
-            null
-          ),
-          station_comments: [],
-          reverse: metadata.reverse ?? false,
-        };
+        const { sectionIndex } = zeroDatumConfig;
+        const config: BackendImportSectionConfig = buildZeroDatumSectionConfig(zeroDatumConfig);
 
         // 'AllReferences', not Auto (#27): the DMP parser only ever emits
         // Normal shots, so every virtual shot reaching this import is one the

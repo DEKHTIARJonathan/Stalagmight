@@ -20,6 +20,14 @@ describe('mirrorStationIndex', () => {
       expect(mirrorStationIndex(mirrorStationIndex(i, 5), 5)).toBe(i);
     }
   });
+
+  it('clamps an out-of-range index into the section instead of going negative', () => {
+    // `station_index` is a u32 on the Rust side, so a negative index is not a
+    // rejected placement - serde fails to deserialize the whole batch.
+    expect(mirrorStationIndex(4, 3)).toBe(0);
+    expect(mirrorStationIndex(300, 3)).toBe(0);
+    expect(mirrorStationIndex(-1, 3)).toBe(3);
+  });
 });
 
 describe('mirrorPlacementForReverse', () => {
@@ -93,6 +101,18 @@ describe('mirrorPlacementForReverse', () => {
       type: 'from_existing',
       existing_station: { section_id: 42, station_index: 4 },
     });
+  });
+
+  it('never mirrors an out-of-range index below zero', () => {
+    const p: ImportPlacement = { type: 'zero_datum', coordinates: gps, station_index: 7 };
+    expect(mirrorPlacementForReverse(p, true, 4, null)).toEqual({ ...p, station_index: 0 });
+
+    const m: ImportPlacement = {
+      type: 'manual_snap',
+      align_station_index: 9,
+      snapped_to_station: { section_id: 1, station_index: 0 },
+    };
+    expect(mirrorPlacementForReverse(m, true, 4, null)).toEqual({ ...m, align_station_index: 0 });
   });
 
   it('leaves origin alone', () => {
