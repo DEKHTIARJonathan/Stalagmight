@@ -32,6 +32,8 @@ import {
   EntityReferenceUnmarkSymbol,
   EntityAddSymbol,
   EntityUnlinkSymbol,
+  EntityMoveSymbol,
+  EntityReverseSymbol,
   ToolGlyph,
 } from './toolIcons';
 
@@ -673,7 +675,7 @@ export default function ContextMenu() {
       case 'Edit Section':
         return <EntityEditSymbol entity="section" size={18} />;
       case 'Reverse Section':
-        return <ToolGlyph tool="move_segment" size={18} />;
+        return <EntityReverseSymbol entity="section" size={18} />;
       case 'Insert Station...':
         return <EntityAddSymbol entity="station" size={18} />;
       case 'Merge With...':
@@ -704,14 +706,14 @@ export default function ContextMenu() {
       case 'Delete Shot':
         return <EntityDeleteSymbol entity="shot" size={18} />;
       case 'Adjust Position...':
-        return <ToolGlyph tool="move_segment" size={18} />;
+        return <EntityMoveSymbol entity="section" size={18} />;
       case 'Zoom to Section':
         return <ToolGlyph tool="zoom" size={16} />;
       default:
         // "Reverse N Sections" carries the count in its label, so it can't be a
         // literal case.
         if (label.startsWith('Reverse ')) {
-          return <ToolGlyph tool="move_segment" size={18} />;
+          return <EntityReverseSymbol entity="section" size={18} />;
         }
         // Fallback for any unmapped label (every other current menu label is
         // handled by an explicit case above).
