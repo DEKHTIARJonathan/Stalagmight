@@ -545,11 +545,9 @@ fn fuzz_anchors_survive_interleaved_edits() {
 // --------------------------------------------------------------------------
 
 fn corpus_dir() -> std::path::PathBuf {
-    if let Ok(d) = std::env::var("COLLAB_CORPUS_DIR") {
-        return std::path::PathBuf::from(d);
-    }
-    let home = std::env::var("HOME").unwrap_or_default();
-    std::path::PathBuf::from(home).join("src/cave/data/collab_test_data")
+    // Maintainer-held private corpus (see docs/collab-stress-testing.md); point
+    // COLLAB_CORPUS_DIR at a local copy. Unset -> empty path -> the tests skip.
+    std::path::PathBuf::from(std::env::var("COLLAB_CORPUS_DIR").unwrap_or_default())
 }
 
 fn files_with_ext(dir: &Path, ext: &str) -> Vec<std::path::PathBuf> {

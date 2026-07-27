@@ -19,7 +19,7 @@ const isMacOS = process.platform === 'darwin';
 
 /** Name of the built debug binary for this platform. */
 export const binaryName = isWindows ? 'stalagmight.exe' : 'stalagmight';
-/** Cargo target dir (matches tauri.conf.json's ~/.cargo_build default). */
+/** Cargo target dir (the ~/.cargo_build default scripts/wdio.sh + mac-build.sh export). */
 export const cargoTargetDir =
   process.env.CARGO_TARGET_DIR || path.join(os.homedir(), '.cargo_build');
 /** Absolute path to the built debug binary. */

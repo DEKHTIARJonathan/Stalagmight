@@ -184,7 +184,8 @@ has no markers, so every Comment line routes to the station.
   `e2e-playwright/globalview-metadata-panel.spec.ts` (recent-projects toggle:
   reflects state, shows the companion name, invokes `set_collab_enabled_for_path`)
   under mocked IPC.
-- Manual end-to-end test data lives at `~/src/cave/data/collab_test_data`
-  (7 `.tml` versions of one project + source `.dmp` files in `./dmps`).
+- Manual end-to-end testing uses a private, maintainer-held dataset (not in the
+  repo): a real resurvey `.stalx`, 7 progressive `.tml` versions of one project,
+  and the source `.dmp` files.
 - [collab-stress-testing.md](collab-stress-testing.md) - invariants, a scenario
   matrix, adversarial inputs, and a fuzz/soak harness sketch.

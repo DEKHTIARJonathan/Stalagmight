@@ -1459,8 +1459,9 @@ fn real_qr_project_tree() {
     let wpj = match std::env::var_os("WALLS_WPJ") {
         Some(p) => PathBuf::from(p),
         None => {
-            let home = std::env::var("HOME").unwrap_or_default();
-            PathBuf::from(home).join("src/cave/data/qr/Quintana Roo.wpj")
+            // Maintainer-held private survey tree; point WALLS_WPJ at a local copy.
+            eprintln!("skip: WALLS_WPJ not set");
+            return;
         }
     };
     if !wpj.exists() {
