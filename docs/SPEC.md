@@ -1011,7 +1011,7 @@ is the identity. Per shot:
 | `depth_in` / `depth_out` | swapped |
 | `pitch_in` / `pitch_out` | swapped **and negated** |
 | `left` / `right` | swapped only when the user opts in |
-| `up`, `down`, `length`, `marker_index`, `comment`, `is_reference` | unchanged |
+| `up`, `down`, `length`, `marker_index`, `comment`, `kind` | unchanged |
 
 `azimuth_in`/`azimuth_out` are two **forward** readings and geometry uses their
 circular mean, so swapping them alone is a no-op - the reciprocal is what

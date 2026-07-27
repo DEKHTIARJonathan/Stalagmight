@@ -3760,6 +3760,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (!section) {
               return { success: false, error: `Section ${sectionId} not found` };
             }
+            const shotCount = section.shots.length;
             // Mirror the backend transform (#24): reverse the order, reciprocate
             // the azimuths (they are two FORWARD readings, so swapping alone is a
             // no-op), swap depths, swap and negate pitch, optionally swap L/R.
@@ -3795,7 +3796,79 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             reversed.forEach((sh, i) => {
               sh.id = ids[i];
             });
+
+            // Station 0 is now the far end, so the section anchor gains the
+            // displacement the section used to span or the whole passage
+            // teleports. Measured on the PRE-reverse order, like the backend.
+            const num = (v: unknown) => (typeof v === 'number' ? v : 0);
+            let dx = 0;
+            let dy = 0;
+            for (const sh of section.shots) {
+              const azIn = num(sh.azimuth_in);
+              const azOut = num(sh.azimuth_out);
+              // Circular mean of two FORWARD readings (models::average_azimuth_of).
+              const diff = ((azOut - azIn + 540) % 360) - 180;
+              const meanRad = (((azIn + diff / 2 + 360) % 360) * Math.PI) / 180;
+              const dz = num(sh.depth_out) - num(sh.depth_in);
+              const lenSq = num(sh.length) ** 2 - dz ** 2;
+              const horizontal = lenSq <= 0 ? 0 : Math.sqrt(lenSq);
+              dx += horizontal * Math.sin(meanRad);
+              dy += horizontal * Math.cos(meanRad);
+            }
             section.shots = reversed;
+
+            if (dx !== 0 || dy !== 0) {
+              const offsets = currentProject!.section_offsets as Record<
+                string,
+                [number, number] | undefined
+              >;
+              const [ox, oy] = offsets[String(sectionId)] ?? [0, 0];
+              offsets[String(sectionId)] = [ox + dx, oy + dy];
+            }
+
+            // Station i became station shotCount - i, so every external ref into
+            // this section moves with it - otherwise a merge, closure or datum
+            // silently ends up on the opposite physical end. The mock stores
+            // refs positionally (the backend's anchor keys survive the reverse
+            // on their own), so mirror the index here.
+            const mirror = (ref: { section_id: number; station_index: number } | undefined) => {
+              if (ref && ref.section_id === sectionId) {
+                ref.station_index = shotCount - ref.station_index;
+              }
+            };
+            for (const m of (currentProject!.station_merges ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>) {
+              mirror(m.station_a);
+              mirror(m.station_b);
+            }
+            for (const c of (currentProject!.loop_closures ?? []) as Array<{
+              station_a: { section_id: number; station_index: number };
+              station_b: { section_id: number; station_index: number };
+            }>) {
+              mirror(c.station_a);
+              mirror(c.station_b);
+            }
+            for (const zd of (currentProject!.zero_datums ?? []) as Array<{
+              station_ref: { section_id: number; station_index: number };
+            }>) {
+              mirror(zd.station_ref);
+            }
+            // Comments are keyed "sectionId:stationIndex"; rebuild the section's
+            // keys in one pass so a mirror can't collide with a key it just wrote.
+            const movedComments: Array<[string, string]> = [];
+            for (const key of Object.keys(mockStationComments)) {
+              const [sid, stationIndex] = key.split(':');
+              if (Number(sid) !== sectionId) continue;
+              const text = mockStationComments[key]!;
+              delete mockStationComments[key];
+              movedComments.push([`${sectionId}:${shotCount - Number(stationIndex)}`, text]);
+            }
+            for (const [key, text] of movedComments) {
+              mockStationComments[key] = text;
+            }
+
             return { success: true, section_id: sectionId };
           }
 

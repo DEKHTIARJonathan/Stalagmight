@@ -91,6 +91,45 @@ async function readShots(page: Page, sectionId: number): Promise<ShotSnapshot[]>
   }, sectionId);
 }
 
+/** The section's map anchor, which a reverse must move to keep the cave still. */
+async function readSectionOffset(page: Page, sectionId: number): Promise<[number, number]> {
+  return page.evaluate((id) => {
+    const state = (window as any).__E2E_TEST__.projectStore.getState();
+    const offsets = state.project?.section_offsets ?? {};
+    const entry = Array.isArray(offsets)
+      ? (offsets as Array<[number, [number, number]]>).find(([k]) => Number(k) === id)?.[1]
+      : (offsets as Record<string, [number, number]>)[String(id)];
+    return (entry ?? [0, 0]) as [number, number];
+  }, sectionId);
+}
+
+async function readComment(
+  page: Page,
+  sectionId: number,
+  stationIndex: number
+): Promise<string | undefined> {
+  return page.evaluate(
+    ({ id, index }) => {
+      const state = (window as any).__E2E_TEST__.projectStore.getState();
+      return (state.stations ?? []).find(
+        (s: any) =>
+          s.station_ref.section_id === id && s.station_ref.station_index === index
+      )?.comment as string | undefined;
+    },
+    { id: sectionId, index: stationIndex }
+  );
+}
+
+async function reverseFromSectionMenu(page: Page, sectionId: number): Promise<void> {
+  await openContextMenu(page, { type: 'section', sectionId });
+  await page.getByRole('button', { name: 'Reverse Section' }).click();
+  const dialog = page.getByTestId('reverse-section-dialog');
+  await expect(dialog).toBeVisible();
+  await page.getByTestId('reverse-confirm').click();
+  await expect(dialog).not.toBeVisible({ timeout: 5000 });
+  await waitForNoDialogs(page);
+}
+
 test.describe('Reverse Section', () => {
   test('is offered from the sections panel, map station and map shot menus', async ({ page }) => {
     const [sectionId] = await setup(page);
@@ -226,6 +265,43 @@ test.describe('Reverse Section', () => {
     );
     expect(batches).toHaveLength(1);
     expect(batches![0]).toHaveLength(2);
+  });
+
+  test('moves the anchor and the station comment with the section', async ({ page }) => {
+    // The dialog promises "the cave does not move ... comments stay on the
+    // station they were set on". Both live outside the shot vec, so a reverse
+    // that only reciprocated the shots would pass every test above.
+    const [sectionId] = await setup(page);
+
+    await page.evaluate(
+      (id) =>
+        (window as any).__E2E_TEST__.projectStore
+          .getState()
+          .updateStationComment({ section_id: id, station_index: 0 }, 'at the entrance'),
+      sectionId
+    );
+    await expect
+      .poll(() => readComment(page, sectionId, 0))
+      .toBe('at the entrance');
+
+    const offsetBefore = await readSectionOffset(page, sectionId);
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    // Station 0 is now the far end, so the anchor gained the section's span.
+    const offsetAfter = await readSectionOffset(page, sectionId);
+    expect(offsetAfter).not.toEqual(offsetBefore);
+
+    // The comment travelled to the same physical station, now numbered 3.
+    await expect.poll(() => readComment(page, sectionId, 3)).toBe('at the entrance');
+    expect(await readComment(page, sectionId, 0)).toBeUndefined();
+
+    // And reversing back restores both - the transform is its own inverse.
+    await reverseFromSectionMenu(page, sectionId);
+    await expect.poll(() => readComment(page, sectionId, 0)).toBe('at the entrance');
+    const offsetRestored = await readSectionOffset(page, sectionId);
+    expect(offsetRestored[0]).toBeCloseTo(offsetBefore[0], 9);
+    expect(offsetRestored[1]).toBeCloseTo(offsetBefore[1], 9);
   });
 
   test('Edit Section dialog disables Reverse only while dirty', async ({ page }) => {
