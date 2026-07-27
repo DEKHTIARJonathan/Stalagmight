@@ -10,6 +10,7 @@
 
 mod model;
 mod physics;
+mod scooter;
 
 #[cfg(test)]
 mod tests;
@@ -21,10 +22,11 @@ use crate::models::{Coordinates, ShotKind, StationKey, StationRef};
 
 use super::Project;
 pub use model::{
-    CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, RouteProfilePoint, TankMaterial,
-    Team,
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
+    TankMaterial, Team,
 };
-use physics::{deliverable_gas, edge_gas};
+use physics::{deliverable_gas, edge_gas, edge_gas_basis};
+use scooter::{resolve_segments, scooter_drop_index, scooter_range_limit};
 
 impl Project {
     /// Single-diver open-circuit reachability field (PRD §4/§5.1, the Phase-1 headline).
@@ -59,6 +61,7 @@ impl Project {
         self.compute_gas_reach_field_with_overrides(
             origin,
             endpoint,
+            &[],
             &[],
             diver,
             cylinders,
@@ -99,11 +102,23 @@ impl Project {
     /// plain single-Dijkstra one. ⚠ It is NOT byte-identical to the pre-#298 engine even so: the
     /// out-of-budget-endpoint rule changed for every plan, with or without way points (see
     /// [`route_target`]).
+    ///
+    /// `segments` (#317) gives each route span its own speed and says whether it is flown on a
+    /// scooter, one entry per span (`waypoints.len() + 1` of them; a short or over-long list is
+    /// reconciled by [`resolve_segments`]). An EMPTY list prices every span at the config speed with
+    /// no scooter, which is exactly the pre-#317 field - the feature is inert until a segment is
+    /// edited.
+    ///
+    /// A DPV rig on the config adds a SECOND constraint on top of the gas budget: the scootered
+    /// line to a station must be within [`DpvRig::usable_range_m`]. It never touches the gas half.
+    /// The exit mirrors the entry span for span - you collect the units where you parked them - so
+    /// `gas_out == gas_in` and the fraction reserves stay correct as they are.
     pub(crate) fn compute_gas_reach_field_with_overrides(
         &self,
         origin: Option<&StationRef>,
         endpoint: Option<&StationRef>,
         waypoints: &[StationRef],
+        segments: &[PlanSegment],
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
@@ -147,6 +162,19 @@ impl Project {
             .survey_speed_m_per_min
             .unwrap_or(gas_config.swim_speed_m_per_min);
 
+        // Per-segment pace and propulsion (#317). `in_speed` is the default, so an empty segment
+        // list reproduces the single-speed field exactly - the whole feature is inert until a
+        // segment is edited. The RMV bump stays uniform: arguably a scootered span is not a
+        // surveying span, but leaving the multiplier on can only ever RAISE gas, and lowering it
+        // would extend reach on a change nobody asked for (§6).
+        let plan_segments = resolve_segments(
+            segments,
+            waypoints.len(),
+            in_speed,
+            gas_config.dpv.is_some(),
+        );
+        let scooter_limit = scooter_range_limit(gas_config.dpv.as_ref());
+
         let coords_ref = &coords;
         // Defensive: a non-positive / non-finite in-speed OR in-rmv (e.g. an un-normalized
         // 0 survey_rmv_multiplier) would zero every edge cost and make the whole cave falsely
@@ -165,6 +193,20 @@ impl Project {
             || !in_speed.is_finite()
             || in_rmv <= 0.0
             || !in_rmv.is_finite();
+        // TWO aligned graphs, built once and reused for every segment.
+        //
+        // `adj` holds the speed- and RMV-INDEPENDENT gas basis `ata(avg_depth) x length x mult`
+        // (see `edge_gas_basis`), so pricing a span is `basis x (rmv / speed)` - one scalar per
+        // segment, applied inside Dijkstra. Rebuilding the graph per segment would be the obvious
+        // alternative and costs a full O(E) walk per way point for no gain.
+        //
+        // `lens` holds the same edges' plain lengths and rides along the chosen path to give the
+        // scootered distance and the runtime. It comes from the SAME builder, so it is aligned
+        // edge-for-edge with `adj` by construction - which is what `dijkstra_scaled_with_riders`
+        // requires, and why it indexes by position rather than by node pair.
+        //
+        // ⚠ `adj` is NOT a gas field any more; its weights are a basis. Anything reading it as
+        // litres (the turn frontier reads only its edge SET, which is unchanged) must scale first.
         let adj = if degenerate {
             vec![Vec::new(); n]
         } else {
@@ -192,18 +234,22 @@ impl Project {
                 // the multiplier. Charging it base RMV instead made an opted-in
                 // route cost LESS gas than the same route did before the split,
                 // which overstates the reachable frontier: the unsafe direction.
-                let edge_rmv = if shot.kind.is_virtual() {
-                    in_rmv * gas_config.jump_rmv_multiplier
+                let mult = if shot.kind.is_virtual() {
+                    gas_config.jump_rmv_multiplier
                 } else {
-                    in_rmv
+                    1.0
                 };
-                edge_gas(
-                    edge_rmv,
-                    in_speed,
-                    shot.length.max(0.0),
-                    coords_ref[fi].z,
-                    coords_ref[ti].z,
-                )
+                edge_gas_basis(shot.length.max(0.0), coords_ref[fi].z, coords_ref[ti].z) * mult
+            })
+        };
+        // Plain leg lengths, aligned with `adj`. An unswimmable leg keeps its real length here -
+        // its `adj` weight is INFINITE so it is never relaxed, and the rider is only ever read on
+        // an edge Dijkstra actually took.
+        let lens = if degenerate {
+            vec![Vec::new(); n]
+        } else {
+            self.build_survey_graph_weighted(n, &station_index, |shot, _fi, _ti| {
+                shot.length.max(0.0)
             })
         };
 
@@ -222,7 +268,15 @@ impl Project {
                     .and_then(|sr| station_index.get(&sr).copied())
             })
             .collect();
-        let walk = waypoint_walk(&adj, &roots, &resolved_waypoints, degenerate);
+        let walk = waypoint_walk(
+            &adj,
+            &lens,
+            &roots,
+            &resolved_waypoints,
+            &plan_segments,
+            in_rmv,
+            degenerate,
+        );
 
         // The strategy actually applied (a stage-short staged request falls back to All-thirds; Free
         // and All-thirds never fall back). Drives the drops AND the gauges so they agree.
@@ -283,7 +337,7 @@ impl Project {
         // Using the BASE route keeps the ordering acyclic - the final route depends on the budget,
         // which depends on these very overrides - and the two coincide whenever the delta is 0.
         let default_thresholds = cumulative(plans.iter().map(|p| p.safe_in_litres));
-        let base_view = budget_view(&walk, endpoint_idx, base_budget);
+        let base_view = budget_view(&walk, endpoint_idx, base_budget, scooter_limit);
         let default_drop_nodes = default_drop_stations(&base_view, &default_thresholds);
 
         let (thresholds, stage_drop_bars, stage_drop_over_reserve, budget_delta) =
@@ -312,7 +366,7 @@ impl Project {
         // something is reachable). Per-stage drop points are placed on that route only where a
         // threshold exists (none for All-thirds / a fell-back staged rig / a Free rig with no stage
         // usable).
-        let view = budget_view(&walk, endpoint_idx, budget_litres);
+        let view = budget_view(&walk, endpoint_idx, budget_litres, scooter_limit);
         let BudgetView {
             reachable,
             can_end_at,
@@ -322,6 +376,7 @@ impl Project {
             target_toward_endpoint: turn_toward_endpoint,
             route: route_nodes,
             route_gas,
+            scooter_bound: turn_on_scooter_range,
         } = view;
 
         // Turn frontier: stations the diver could END at that border one they could not (out of
@@ -484,6 +539,35 @@ impl Project {
             Vec::new()
         };
 
+        // Scooter readouts (#317), read off the walk's riders AT THE ROUTE TARGET rather than
+        // re-derived from the route's coordinates - the two would diverge the moment a route
+        // doubled back over a station.
+        //
+        // ⚠ Reading `scoot_in`/`time_in` here is right for every target, INCLUDING one that sits on
+        // the committed chain, and the reason is worth spelling out because the gas twin of this
+        // line is not interchangeable. `route_gas` has to mix `chain_gas` and `gas_in` because it
+        // reports a value per route node. These report only the TOTAL at the end of the route, and
+        // `scoot_in[t] = cum_scoot + last_leg_scoot[t]` is exactly that total in all three cases:
+        // the target is the final way point (last-leg cost 0, so the total is the chain's), an
+        // earlier chain station (the route really does fly back to it, and the last-leg cost is
+        // that return), or off-chain (chain plus tail). So no `chain_scoot` vector is needed.
+        let scooter_distance_m = route_target.map_or(0.0, |t| {
+            walk.scoot_in
+                .get(t)
+                .copied()
+                .filter(|s| s.is_finite())
+                .unwrap_or(0.0)
+        });
+        let route_runtime_min = route_target
+            .and_then(|t| walk.time_in.get(t).copied())
+            .filter(|t| t.is_finite());
+        // The park point is the boundary after the last scootered segment, so it is a way point by
+        // construction. Resolving it through the ORIGINAL `waypoints` (not the graph) keeps it a
+        // station the diver named.
+        let scooter_drop_ref =
+            scooter_drop_index(&plan_segments).and_then(|k| waypoints.get(k).copied());
+        let scooter_range_limit_m = gas_config.dpv.as_ref().map(|rig| rig.usable_range_m());
+
         // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
         // conservative cap + effective strategy. Free averages the diver's per-tank turn directly.
         let margin = gas_config.reserve_profile.all_thirds_safety_margin_bar;
@@ -526,6 +610,11 @@ impl Project {
             route_profile,
             stage_drop_route_indices,
             waypoint_route_indices,
+            scooter_distance_m,
+            scooter_range_limit_m,
+            scooter_drop_ref,
+            route_runtime_min,
+            turn_on_scooter_range,
         }
     }
 
@@ -611,6 +700,19 @@ struct WaypointWalk {
     /// revisited station is passed cheaply the first time and expensively the second, and the route's
     /// own cumulative gas has to keep the higher number or the stage drops slide.
     reach_gas: Vec<f64>,
+    /// Scootered line (metres) to every station after the whole chain, accumulated along the SAME
+    /// gas-optimal path as `gas_in` - the destination price, the analogue of `gas_in`. Capped
+    /// against the rig's usable range to decide whether the dive can END here.
+    scoot_in: Vec<f64>,
+    /// The overlay's scootered distance: `scoot_in` lowered to the pass-through value on chain
+    /// stations and settled across zero-cost ties, exactly as `reach_gas` is to `gas_in`. Keeping
+    /// the two apart matters for the same reason it does for gas - pricing a swum-through station
+    /// as an out-and-back detour would make the diver's own route read as out of range.
+    reach_scoot: Vec<f64>,
+    /// Runtime (minutes) to every station after the whole chain, at each segment's own speed. Read
+    /// only at the route target, where it is the one-way runtime of the planned route; on a chain
+    /// station it carries the same after-chain meaning as `gas_in` and is NOT a pass-through time.
+    time_in: Vec<f64>,
     /// Predecessor tree of the LAST leg - rooted at the final way point, or at the origin roots when
     /// there are none. Walk it back from the route target to finish the route.
     pred: Vec<usize>,
@@ -634,8 +736,11 @@ struct WaypointWalk {
 /// mandated point would over-state reach (the unsafe direction, §6).
 fn waypoint_walk(
     adj: &[Vec<(usize, f64)>],
+    lens: &[Vec<(usize, f64)>],
     roots: &[usize],
     waypoints: &[Option<usize>],
+    segments: &[PlanSegment],
+    in_rmv: f64,
     degenerate: bool,
 ) -> WaypointWalk {
     let n = adj.len();
@@ -643,6 +748,9 @@ fn waypoint_walk(
         return WaypointWalk {
             gas_in: vec![f64::INFINITY; n],
             reach_gas: vec![f64::INFINITY; n],
+            scoot_in: vec![f64::INFINITY; n],
+            reach_scoot: vec![f64::INFINITY; n],
+            time_in: vec![f64::INFINITY; n],
             pred: vec![usize::MAX; n],
             chain: Vec::new(),
             chain_gas: Vec::new(),
@@ -650,14 +758,31 @@ fn waypoint_walk(
             waypoint_chain_idx: vec![None; waypoints.len()],
         };
     }
-    let mut leg = Project::dijkstra_with_preds(adj, roots);
+    // Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per leg with a
+    // finite positive speed, but fall back defensively rather than dividing by a missing entry.
+    let leg_scales = |k: usize| {
+        let seg = segments.get(k).copied().unwrap_or(PlanSegment {
+            speed_m_per_min: f64::INFINITY,
+            on_scooter: false,
+        });
+        let speed = seg.speed_m_per_min;
+        // [scootered metres, minutes] per metre of line on this segment.
+        let riders = [f64::from(u8::from(seg.on_scooter)), 1.0 / speed];
+        (in_rmv / speed, riders)
+    };
+
+    let (mut cost_scale, mut rider_scales) = leg_scales(0);
+    let mut leg = Project::dijkstra_scaled_with_riders(adj, lens, roots, cost_scale, rider_scales);
     let mut cum = 0.0_f64;
+    let mut cum_scoot = 0.0_f64;
+    let mut cum_time = 0.0_f64;
     let mut chain: Vec<usize> = Vec::new();
     let mut chain_gas: Vec<f64> = Vec::new();
+    let mut chain_scoot: Vec<f64> = Vec::new();
     let mut waypoint_gas: Vec<Option<f64>> = Vec::with_capacity(waypoints.len());
     let mut waypoint_chain_idx: Vec<Option<usize>> = Vec::with_capacity(waypoints.len());
     let mut stalled = false;
-    for w in waypoints {
+    for (k, w) in waypoints.iter().enumerate() {
         let reached = (!stalled)
             .then_some(*w)
             .flatten()
@@ -671,42 +796,70 @@ fn waypoint_walk(
         // Commit this leg's path. Its first node is the previous leg's way point, which already
         // closes the chain, so skip it rather than emitting a zero-length duplicate.
         let skip = usize::from(!chain.is_empty());
-        for &node in path_to(&leg.1, w).iter().skip(skip) {
+        for &node in path_to(&leg.2, w).iter().skip(skip) {
             chain.push(node);
             chain_gas.push(cum + leg.0.get(node).copied().unwrap_or(0.0));
+            chain_scoot.push(cum_scoot + leg.1[0].get(node).copied().unwrap_or(0.0));
         }
         cum += leg.0.get(w).copied().unwrap_or(0.0);
+        cum_scoot += leg.1[0].get(w).copied().unwrap_or(0.0);
+        cum_time += leg.1[1].get(w).copied().unwrap_or(0.0);
         waypoint_gas.push(Some(cum));
         // The loop above just pushed this way point's own node last, so the chain now ends on it.
         waypoint_chain_idx.push(chain.len().checked_sub(1));
-        leg = Project::dijkstra_with_preds(adj, &[w]);
+        (cost_scale, rider_scales) = leg_scales(k + 1);
+        leg = Project::dijkstra_scaled_with_riders(adj, lens, &[w], cost_scale, rider_scales);
     }
-    let (dist, pred) = leg;
+    let (dist, riders, pred) = leg;
+    let [leg_scoot, leg_time] = riders;
     let gas_in: Vec<f64> = if stalled {
         vec![f64::INFINITY; n]
     } else {
         dist.iter().map(|d| cum + *d).collect()
     };
+    // The riders offset by the committed chain exactly as `gas_in` does. A stalled chain leaves
+    // everything infinite so nothing reads as in range on a route that cannot be flown.
+    let (scoot_in, time_in): (Vec<f64>, Vec<f64>) = if stalled {
+        (vec![f64::INFINITY; n], vec![f64::INFINITY; n])
+    } else {
+        (
+            leg_scoot.iter().map(|s| cum_scoot + *s).collect(),
+            leg_time.iter().map(|t| cum_time + *t).collect(),
+        )
+    };
     // No way points means no chain, hence nothing to lower - the overlay reads the plain
     // single-Dijkstra field untouched (what
     // `gas_reach_field_no_waypoints_is_identical_to_the_plain_field` pins).
     let mut reach_gas = gas_in.clone();
+    let mut reach_scoot = scoot_in.clone();
     if !stalled && !chain.is_empty() {
         // A station the plan SWIMS THROUGH is reached at the moment it is passed, not after the
         // whole chain. Lowering these is the SAFE direction; it only ever reports less gas for a
         // station the route provably visits. Everything off the chain keeps the conservative
         // after-chain cost, so an off-route station can never look cheaper than picking it would be.
+        //
+        // The scootered distance gets exactly the same treatment, for exactly the same reason: a
+        // station passed 300 m into a scootered leg has cost 300 m of range, not the range of
+        // flying back out to it after the last way point.
         for (pos, &node) in chain.iter().enumerate() {
             let passed = chain_gas[pos];
             if passed < reach_gas[node] {
                 reach_gas[node] = passed;
             }
+            let passed_scoot = chain_scoot[pos];
+            if passed_scoot < reach_scoot[node] {
+                reach_scoot[node] = passed_scoot;
+            }
         }
         relax_zero_cost(adj, &mut reach_gas);
+        relax_zero_cost(adj, &mut reach_scoot);
     }
     WaypointWalk {
         gas_in,
         reach_gas,
+        scoot_in,
+        reach_scoot,
+        time_in,
         pred,
         chain,
         chain_gas,
@@ -715,10 +868,12 @@ fn waypoint_walk(
     }
 }
 
-/// Settle gas-to-reach across zero-cost edges. Station merges and loop closures join nodes that are
-/// the SAME physical point, so they must report the same gas - otherwise lowering one chain node
-/// leaves its co-located twin on the old (higher) number, which reads as an unreachable station
-/// sitting exactly on top of a reachable one and puts a spurious dot on the frontier.
+/// Settle a per-node cost across zero-cost edges - gas-to-reach, and equally the scootered distance
+/// (#317), since both are per-node quantities that must agree between co-located nodes. Station
+/// merges and loop closures join nodes that are the SAME physical point, so they must report the
+/// same value - otherwise lowering one chain node leaves its co-located twin on the old (higher)
+/// number, which reads as an unreachable station sitting exactly on top of a reachable one and puts
+/// a spurious dot on the frontier.
 ///
 /// A zero-weight edge therefore only ever joins coincident points: a tie, or the degenerate case of
 /// a zero-length shot with no depth change (nothing floors shot length project-wide, so that edge
@@ -752,6 +907,9 @@ struct BudgetView {
     target_toward_endpoint: bool,
     route: Vec<usize>,
     route_gas: Vec<f64>,
+    /// Whether the scooter range, not gas, is what limits the dive - see the derivation in
+    /// [`budget_view`]. Surfaced as `GasReachField::turn_on_scooter_range`.
+    scooter_bound: bool,
 }
 
 /// Apply a budget to the walked field. Computed twice per field - once on the base budget to locate
@@ -800,12 +958,27 @@ fn route_target(
         None => (deepest, false),
     }
 }
-fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64) -> BudgetView {
+fn budget_view(
+    walk: &WaypointWalk,
+    endpoint: Option<usize>,
+    budget_litres: f64,
+    scooter_limit: f64,
+) -> BudgetView {
+    // Reach is the INTERSECTION of two independent constraints: the gas budget and the scooter
+    // rig's usable range (#317). Both masks are built here, and here only, because everything
+    // downstream - the overlay, the turn frontier, the route target, the stage-drop basis - reads
+    // one of these two vectors. ANDing at the source is what makes them agree by construction
+    // rather than by four separate remembered edits.
+    //
+    // `scooter_limit` is infinite with no rig, so this collapses to the pre-#317 predicate.
+    let in_range = |scoot: f64| scoot <= scooter_limit;
+
     // What the OVERLAY shows: can the diver be at this station, within budget, on this dive.
     let reachable: Vec<bool> = walk
         .reach_gas
         .iter()
-        .map(|&g| g.is_finite() && g <= budget_litres)
+        .zip(&walk.reach_scoot)
+        .map(|(&g, &s)| g.is_finite() && g <= budget_litres && in_range(s))
         .collect();
     // Whether a station can be the route's DESTINATION, which is a different (never cheaper)
     // question: ending there costs the after-chain price, not the pass-through price. Only the
@@ -814,8 +987,18 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
     let can_end_at: Vec<bool> = walk
         .gas_in
         .iter()
-        .map(|&g| g.is_finite() && g <= budget_litres)
+        .zip(&walk.scoot_in)
+        .map(|(&g, &s)| g.is_finite() && g <= budget_litres && in_range(s))
         .collect();
+    // Is the SCOOTER what is stopping the dive? True when some station the diver has the gas to end
+    // at is out of scooter range. Computed here because the UI cannot recover it afterwards: the
+    // route already stops at whichever cap bound first, so comparing the route's scootered distance
+    // against the limit reads as "equal" in precisely the case being asked about.
+    let scooter_bound = walk
+        .gas_in
+        .iter()
+        .zip(&walk.scoot_in)
+        .any(|(&g, &s)| g.is_finite() && g <= budget_litres && !in_range(s));
 
     // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
     let mut max_reachable_gas = 0.0_f64;
@@ -869,6 +1052,7 @@ fn budget_view(walk: &WaypointWalk, endpoint: Option<usize>, budget_litres: f64)
         target_toward_endpoint,
         route,
         route_gas,
+        scooter_bound,
     }
 }
 

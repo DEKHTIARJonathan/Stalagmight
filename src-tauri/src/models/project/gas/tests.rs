@@ -6,8 +6,8 @@
 
 use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
 use super::physics::{
-    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, gas_rate,
-    sac_to_rmv,
+    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, edge_gas_basis,
+    gas_rate, sac_to_rmv,
 };
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
 use crate::config::{GasConfig, ReservePreset, ReserveProfile};
@@ -41,6 +41,39 @@ fn edge_gas_hand_computed() {
     // rmv 20, swim 10 m/min, 100 m leg, depth 10→30 (avg 20 m = 3 ATA):
     // rate = 60 L/min, time = 10 min ⇒ 600 L.
     assert!((edge_gas(20.0, 10.0, 100.0, 10.0, 30.0) - 600.0).abs() < 1e-6);
+}
+
+#[test]
+fn edge_gas_basis_hand_computed() {
+    // Same leg as above without the rmv/speed half: 3 ATA × 100 m ⇒ 300.
+    assert!((edge_gas_basis(100.0, 10.0, 30.0) - 300.0).abs() < 1e-6);
+}
+
+#[test]
+fn edge_gas_matches_basis_times_scalar() {
+    // The engine never calls `edge_gas`; it prices every edge as `basis × (rmv / speed)` so one
+    // graph build serves every plan segment (#317). That refactor is only sound while the two
+    // agree, and nothing else would catch them drifting - `edge_gas` has no production caller
+    // left to fail. Swept across depths (incl. above-surface clamping), lengths, rates and the
+    // scooter-vs-swim speed range.
+    for &(len, zf, zt) in &[
+        (100.0, 10.0, 30.0),
+        (7.5, 0.0, 0.0),
+        (250.0, 45.0, 5.0),
+        (0.0, 12.0, 12.0),
+        (60.0, -3.0, 8.0),
+    ] {
+        for &rmv in &[12.0, 20.0, 31.7] {
+            for &speed in &[6.0, 10.0, 55.0, 82.5] {
+                let direct = edge_gas(rmv, speed, len, zf, zt);
+                let factored = edge_gas_basis(len, zf, zt) * rmv / speed;
+                assert!(
+                    (direct - factored).abs() < 1e-9,
+                    "edge_gas({rmv},{speed},{len},{zf},{zt}) = {direct} but basis form = {factored}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1071,6 +1104,7 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1097,6 +1131,7 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1145,6 +1180,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1174,6 +1210,7 @@ fn gas_reach_field_override_none_and_overlong_fall_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1209,6 +1246,7 @@ fn gas_reach_field_override_ignored_for_all_thirds_no_drops() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg],
@@ -1265,6 +1303,7 @@ fn gas_reach_field_override_recomputes_free_strategy_drop() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1324,6 +1363,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage0, stage1],
         &cfg,
@@ -1360,6 +1400,7 @@ fn gas_reach_field_override_to_default_station_is_a_no_op() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1387,6 +1428,7 @@ fn gas_reach_field_override_unresolvable_ref_falls_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1439,6 +1481,7 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage0, stage1],
@@ -2517,6 +2560,7 @@ fn gas_reach_field_no_waypoints_is_identical_to_the_plain_field() {
         Some(&entrance),
         Some(&trunk_tip),
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -2564,6 +2608,7 @@ fn gas_reach_field_waypoint_forces_the_detour_and_rebases_the_field() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &cfg,
@@ -2606,6 +2651,7 @@ fn gas_reach_field_waypoints_are_visited_in_the_given_order() {
             Some(&entrance),
             Some(&trunk_tip),
             waypoints,
+            &[],
             &diver,
             &[unlimited_backgas()],
             &cfg,
@@ -2654,6 +2700,7 @@ fn gas_reach_field_disconnected_waypoint_stalls_the_whole_plan() {
         Some(&entrance),
         None,
         &[marooned, side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -2681,6 +2728,7 @@ fn gas_reach_field_unresolvable_waypoint_stalls_rather_than_being_skipped() {
         Some(&entrance),
         Some(&trunk_tip),
         &[ghost],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -2713,6 +2761,7 @@ fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[tiny],
         &GasConfig::default(),
@@ -2771,6 +2820,7 @@ fn gas_reach_field_default_drop_on_a_revisited_station_reports_the_right_pass_di
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -2856,6 +2906,7 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &rig,
         &cfg,
@@ -2865,6 +2916,7 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &rig,
         &cfg,
@@ -2983,6 +3035,7 @@ fn gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch() {
         Some(&entrance),
         Some(&north_tip),
         &[east_mid],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &cfg,
@@ -3076,6 +3129,7 @@ fn gas_reach_field_waypoint_does_not_put_a_turn_candidate_inside_the_endpoint() 
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3137,6 +3191,7 @@ fn gas_reach_field_waypoint_does_not_offer_a_transit_station_as_a_turn_candidate
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3196,6 +3251,7 @@ fn gas_reach_field_a_merge_twin_of_a_route_station_is_not_a_turn_candidate() {
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3260,6 +3316,7 @@ fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default()
         project.compute_gas_reach_field_with_overrides(
             Some(&entrance),
             Some(&north_tip),
+            &[],
             &[],
             &diver,
             &rig,
@@ -3335,6 +3392,7 @@ fn gas_reach_field_the_way_point_itself_is_not_a_turn_candidate() {
         Some(&entrance),
         None,
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3462,6 +3520,7 @@ fn route_profile_is_empty_when_the_whole_route_is_a_zero_distance_tie() {
     let field = project.compute_gas_reach_field_with_overrides(
         Some(&entrance),
         Some(&twin),
+        &[],
         &[],
         &diver,
         &[unlimited_backgas()],
@@ -3637,6 +3696,7 @@ fn route_profile_indexes_each_pass_of_a_route_that_doubles_back() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3682,6 +3742,7 @@ fn route_profile_charges_a_zero_distance_tie_no_distance_time_or_gas() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3734,6 +3795,7 @@ fn route_profile_is_empty_when_no_route_exists() {
         Some(&origin),
         None,
         &[orphan],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3769,6 +3831,7 @@ fn route_profile_is_empty_when_the_chain_has_no_affordable_turnaround() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[tiny],
         &GasConfig::default(),

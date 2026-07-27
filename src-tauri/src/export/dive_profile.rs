@@ -491,6 +491,11 @@ mod tests {
             route_max_depth_m: Some(24.0),
             route_avg_depth_m: Some(12.0),
             waypoint_gas_litres: Vec::new(),
+            scooter_distance_m: 0.0,
+            scooter_range_limit_m: None,
+            scooter_drop_ref: None,
+            route_runtime_min: None,
+            turn_on_scooter_range: false,
             route_profile: vec![
                 point(0, 0.0, 0.0, 0.0, true),
                 point(1, 100.0, 12.0, 20.0, true),

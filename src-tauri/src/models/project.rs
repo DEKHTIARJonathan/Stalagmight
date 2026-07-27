@@ -44,8 +44,8 @@ mod stats;
 
 pub use classify::ClassifyScope;
 pub use gas::{
-    CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, RouteProfilePoint, TankMaterial,
-    Team,
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,
+    TankMaterial, Team,
 };
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use reverse::{reverse_shots, shot_run_displacement};

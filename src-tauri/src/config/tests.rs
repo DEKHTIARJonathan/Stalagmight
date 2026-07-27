@@ -106,10 +106,10 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
         survey_rmv_multiplier: f64::NAN,    // invalid -> default 1.0
         stressed_rmv_multiplier: 0.0,       // invalid -> default 1.5
         jump_rmv_multiplier: 0.5,           // below 1.0 (would cut gas) -> default 1.5
-        dpv: Some(DpvProfile {
-            speed_m_per_min: -5.0,
-            burn_minutes: None,
-            range_m: None,
+        dpv: Some(DpvRig {
+            primary: dpv_unit(-5.0, 90.0),
+            backup: dpv_unit(50.0, 60.0),
+            range_reserve_fraction: 0.2,
         }),
         ..GasConfig::default()
     };
@@ -119,7 +119,68 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
     assert_eq!(config.survey_rmv_multiplier, 1.0);
     assert_eq!(config.stressed_rmv_multiplier, 1.5);
     assert_eq!(config.jump_rmv_multiplier, 1.5); // clamped up to the default: a jump is never less work
-    assert_eq!(config.dpv, None); // bad DPV speed drops the profile
+    assert_eq!(config.dpv, None); // bad DPV speed drops the whole rig
+}
+
+fn dpv_unit(speed: f64, burn: f64) -> DpvUnit {
+    DpvUnit {
+        speed_m_per_min: speed,
+        burn_minutes: burn,
+        label: None,
+    }
+}
+
+#[test]
+fn test_gas_config_normalize_drops_the_whole_rig_when_either_unit_is_invalid() {
+    // Repairing one unit is not an option: the cap is `min(range)` over the pair, so inventing a
+    // backup would silently SET the penetration limit from a number nobody entered. Dropping the
+    // rig removes the cap instead - which is safe only because `resolve_segments` then also forces
+    // every span off the scooter, so nothing is flown on a unit that does not exist.
+    for (primary, backup) in [
+        (dpv_unit(55.0, 0.0), dpv_unit(50.0, 60.0)), // zero burn
+        (dpv_unit(55.0, 90.0), dpv_unit(f64::NAN, 60.0)), // NaN speed
+        (dpv_unit(55.0, 90.0), dpv_unit(50.0, -1.0)), // negative burn
+        (dpv_unit(f64::INFINITY, 90.0), dpv_unit(50.0, 60.0)),
+    ] {
+        let mut config = GasConfig {
+            dpv: Some(DpvRig {
+                primary,
+                backup,
+                range_reserve_fraction: 0.2,
+            }),
+            ..GasConfig::default()
+        };
+        config.normalize();
+        assert_eq!(config.dpv, None);
+    }
+}
+
+#[test]
+fn test_gas_config_normalize_guards_the_dpv_range_reserve() {
+    let rig = |fraction| GasConfig {
+        dpv: Some(DpvRig {
+            primary: dpv_unit(55.0, 90.0),
+            backup: dpv_unit(50.0, 60.0),
+            range_reserve_fraction: fraction,
+        }),
+        ..GasConfig::default()
+    };
+    // A NEGATIVE reserve would credit MORE range than the units carry (over-stating reach, the
+    // unsafe direction), so it resets to the default rather than being clamped to 0.
+    for bad in [-0.1, f64::NAN] {
+        let mut config = rig(bad);
+        config.normalize();
+        assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.2);
+    }
+    // At/above 1.0 the cap would be zero and every scootered station would read unreachable with
+    // no explanation. That is useless rather than dangerous, so it caps instead of resetting.
+    let mut config = rig(2.0);
+    config.normalize();
+    assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.9);
+    // A legitimate value is left alone.
+    let mut config = rig(0.35);
+    config.normalize();
+    assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.35);
 }
 
 #[test]

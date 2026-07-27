@@ -3,7 +3,7 @@ use tauri::Manager;
 use crate::config::GasConfig;
 use crate::core::state::dive_plan::MAX_WAYPOINTS;
 use crate::core::AppState;
-use crate::models::{Cylinder, Diver, GasReachField, StationRef};
+use crate::models::{Cylinder, Diver, GasReachField, PlanSegment, StationRef};
 
 /// Validate a plan's inputs before they reach the engine, and normalize its config.
 ///
@@ -81,6 +81,10 @@ pub async fn compute_gas_reach_field(
     // The frontend always sends it (empty when the plan has none). Each is re-resolved by the
     // engine; an entry that no longer resolves stalls the plan rather than being skipped.
     waypoints: Vec<StationRef>,
+    // Per-span speed + propulsion (#317), one entry per route span (`waypoints.len() + 1`). The
+    // frontend always sends it; an empty or mis-sized list is reconciled by the engine to the
+    // config speed with no scooter, which is the pre-#317 field exactly.
+    segments: Vec<PlanSegment>,
     diver: Diver,
     cylinders: Vec<Cylinder>,
     gas_config: GasConfig,
@@ -101,6 +105,7 @@ pub async fn compute_gas_reach_field(
             origin.as_ref(),
             endpoint.as_ref(),
             &waypoints,
+            &segments,
             &diver,
             &cylinders,
             &gas_config,

@@ -48,12 +48,20 @@ const MAX_ALL_THIRDS_SAFETY_MARGIN_BAR: f64 = 200.0;
 /// holds back more than ~100 bar of a stage.
 const MAX_STAGE_RESERVE_BAR: f64 = 100.0;
 
+/// Upper bound on the DPV range reserve. Held just below 1.0 so the cap can never be driven to
+/// exactly zero, which would report every scootered station unreachable with no explanation.
+const MAX_DPV_RANGE_RESERVE_FRACTION: f64 = 0.9;
+
 fn default_recalc_hold_stage2_bar() -> f64 {
     100.0
 }
 
 fn default_recalc_hold_stage1_bar() -> f64 {
     70.0
+}
+
+fn default_dpv_range_reserve_fraction() -> f64 {
+    0.2
 }
 
 /// Display units for gas: metric (bar / litres) or imperial (psi / cuft).
@@ -115,13 +123,58 @@ impl Default for ReserveProfile {
     }
 }
 
-/// DPV (scooter) profile - speed plus range / burn-time for the dead-scooter contingency.
-/// Phase 4; same RMV as swimming (no reduced-RMV credit, PRD §10).
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Default, TS)]
-pub struct DpvProfile {
+/// One DPV (scooter). Same RMV as swimming - scootering gets no reduced-RMV credit (PRD §10),
+/// which is the conservative direction.
+///
+/// The planning quantity is neither the speed nor the burn time on its own but their product,
+/// the **line the unit can actually cover** (see [`DpvUnit::range_m`]). A slower backup needs
+/// more minutes to fly the same passage home, so comparing raw burn times would silently favour
+/// the wrong unit.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct DpvUnit {
+    /// Cruising speed (m/min). The speed a segment flown on this scooter is priced at.
     pub speed_m_per_min: f64,
-    pub burn_minutes: Option<f64>,
-    pub range_m: Option<f64>,
+    /// Burn time at cruising speed (minutes).
+    pub burn_minutes: f64,
+    pub label: Option<String>,
+}
+
+impl DpvUnit {
+    /// Line this unit can cover on a full charge: `burn x cruising speed` (metres).
+    pub fn range_m(&self) -> f64 {
+        self.speed_m_per_min * self.burn_minutes
+    }
+}
+
+/// A DPV rig: the primary plus the mandatory backup (#317).
+///
+/// **A scootered dive without a backup is not modelled at all.** That single decision removes the
+/// whole dead-scooter contingency from the gas math: you fly in on the primary and out on the
+/// backup, so the exit mirrors the entry segment for segment and `gas_out == gas_in` exactly. The
+/// existing fraction reserves (thirds, Half-Minus, Free) therefore stay correct and untouched, and
+/// the scooter only ever adds a SECOND, non-gas constraint - see [`DpvRig::usable_range_m`].
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
+pub struct DpvRig {
+    pub primary: DpvUnit,
+    pub backup: DpvUnit,
+    /// Fraction of the weaker unit's range held back (0.0..1.0). Proportional rather than a flat
+    /// subtraction because what it guards against scales with distance: an ageing battery delivers
+    /// a percentage less, and flow costs a percentage of your speed.
+    #[serde(default = "default_dpv_range_reserve_fraction")]
+    pub range_reserve_fraction: f64,
+}
+
+impl DpvRig {
+    /// Scootered penetration allowance (metres, one-way).
+    ///
+    /// `min(primary.range, backup.range) x (1 - reserve)`. The minimum because either unit failing
+    /// must still leave a working one able to cover the scootered line; **not halved**, because the
+    /// primary only ever flies in and the backup only ever flies out, so each is asked for one
+    /// direction and halving on top would reserve for a double failure.
+    pub fn usable_range_m(&self) -> f64 {
+        let weaker = self.primary.range_m().min(self.backup.range_m());
+        (weaker * (1.0 - self.range_reserve_fraction)).max(0.0)
+    }
 }
 
 /// Gas & route-planning defaults (issue #38). Persisted *personal defaults* a plan is
@@ -183,9 +236,10 @@ pub struct GasConfig {
     /// = precise `fill × volume × Z` for the few who want it (PRD §5.3).
     #[serde(default = "default_true")]
     pub conservative_tank_gas: bool,
-    /// Optional DPV profile (Phase 4). `None` = no scooter.
+    /// Optional DPV rig (#317). `None` = no scooter, and the engine behaves exactly as it did
+    /// before scooters existed: the range cap is infinite and never binds.
     #[serde(default)]
-    pub dpv: Option<DpvProfile>,
+    pub dpv: Option<DpvRig>,
 }
 
 impl Default for GasConfig {
@@ -265,21 +319,38 @@ impl GasConfig {
         if !p.recalc_hold_stage1_bar.is_finite() || p.recalc_hold_stage1_bar < 0.0 {
             p.recalc_hold_stage1_bar = default_recalc_hold_stage1_bar();
         }
-        if let Some(dpv) = self.dpv {
-            if !dpv.speed_m_per_min.is_finite() || dpv.speed_m_per_min <= 0.0 {
-                self.dpv = None;
-            }
+        // DPV rig (#317). A unit whose speed or burn is 0 / NaN / negative has no meaningful range,
+        // and the engine would divide the speed into `edge_gas` (→ +Inf or NaN gas and a poisoned
+        // field), so drop the WHOLE rig rather than repairing one unit: an invented backup would
+        // silently set the penetration cap, and inventing a limit is worse than having none.
+        // Without a rig the cap is infinite and only the gas budget binds - the pre-scooter
+        // behaviour, which is safe because nothing is then flown on a scooter either.
+        if self
+            .dpv
+            .as_ref()
+            .is_some_and(|rig| !dpv_unit_is_valid(&rig.primary) || !dpv_unit_is_valid(&rig.backup))
+        {
+            self.dpv = None;
         }
-        // Drop a NaN / non-positive burn-time or range too (the Phase-4 dead-scooter path
-        // would otherwise divide by them). Runs after the speed clamp above, so `dpv` is
-        // only still Some when its speed is already valid.
-        if let Some(dpv) = self.dpv.as_mut() {
-            if dpv.burn_minutes.is_some_and(|b| !b.is_finite() || b <= 0.0) {
-                dpv.burn_minutes = None;
-            }
-            if dpv.range_m.is_some_and(|r| !r.is_finite() || r <= 0.0) {
-                dpv.range_m = None;
+        if let Some(rig) = self.dpv.as_mut() {
+            // A NEGATIVE reserve fraction would CREDIT more range than the units have - over-stating
+            // reach, the unsafe direction (§6) - so reset it to the default. At/above 1.0 it would
+            // zero the cap and make every scootered station unreachable; that is merely useless
+            // rather than dangerous, so clamp it just below instead of resetting.
+            if !rig.range_reserve_fraction.is_finite() || rig.range_reserve_fraction < 0.0 {
+                rig.range_reserve_fraction = default_dpv_range_reserve_fraction();
+            } else if rig.range_reserve_fraction > MAX_DPV_RANGE_RESERVE_FRACTION {
+                rig.range_reserve_fraction = MAX_DPV_RANGE_RESERVE_FRACTION;
             }
         }
     }
+}
+
+/// A DPV unit is usable only if both its speed and its burn time are finite and positive - the
+/// range is their product, so a zero in either makes the unit cover no line at all.
+fn dpv_unit_is_valid(unit: &DpvUnit) -> bool {
+    unit.speed_m_per_min.is_finite()
+        && unit.speed_m_per_min > 0.0
+        && unit.burn_minutes.is_finite()
+        && unit.burn_minutes > 0.0
 }

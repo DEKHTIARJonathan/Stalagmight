@@ -6,7 +6,7 @@ use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
 use crate::export::{ExportImageOptions, ProfileFormat};
-use crate::models::{Cylinder, Diver, Project, StationRef};
+use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
 /// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
@@ -330,6 +330,10 @@ pub struct DiveProfileRequest {
     pub origin: Option<StationRef>,
     pub endpoint: Option<StationRef>,
     pub waypoints: Vec<StationRef>,
+    /// Per-span speed + propulsion (#317). Carried so the exported profile is priced at the same
+    /// speeds the plan on screen is - a profile rendered at the config swim speed for a scootered
+    /// dive would understate runtime and overstate gas, in a document the diver acts on later.
+    pub segments: Vec<PlanSegment>,
     pub diver: Diver,
     pub cylinders: Vec<Cylinder>,
     pub gas_config: GasConfig,
@@ -365,6 +369,7 @@ fn render_profile_for(
         request.origin.as_ref(),
         request.endpoint.as_ref(),
         &request.waypoints,
+        &request.segments,
         &diver,
         &cylinders,
         &gas_config,
@@ -589,6 +594,7 @@ mod tests {
             origin: None,
             endpoint: None,
             waypoints,
+            segments: Vec::new(),
             diver: Diver {
                 rmv_l_per_min: 20.0,
                 label: None,
@@ -632,6 +638,7 @@ mod tests {
                     origin: None,
                     endpoint: None,
                     waypoints: Vec::new(),
+                    segments: Vec::new(),
                     diver: Diver {
                         rmv_l_per_min: 20.0,
                         label: None,
