@@ -221,6 +221,17 @@ pub struct GasReachField {
     pub stage_drop_refs: Vec<StationRef>,
     /// The final turn - the route target station; `None` when nothing is reachable.
     pub final_turn_ref: Option<StationRef>,
+    /// Whether `final_turn_ref` lies on the way to the endpoint the diver chose.
+    ///
+    /// True when the endpoint is itself the target, and when the gas ran out partway along the
+    /// route to it (the plan turns early on that same passage). FALSE for the deepest-in-budget
+    /// fallback, which is an arg-max over the whole cave and so can sit in a completely unrelated
+    /// lead - reached when no endpoint is set at all, or when one is set but unusable (its station
+    /// was deleted under a loaded plan, or it is in another graph component).
+    ///
+    /// The UI needs the distinction because those read identically otherwise: both report a turn
+    /// station that is not the endpoint, but only one of them is honestly "on the way there".
+    pub turn_toward_endpoint: bool,
     /// Back-gas turn pressure gauge (bar); `None` when the rig has no back gas.
     pub backgas_turn_bar: Option<f64>,
     /// Per-stage Half-Minus drop pressure gauge (bar), one per counted stage; empty for All-thirds.
@@ -254,4 +265,11 @@ pub struct GasReachField {
     /// Distance-weighted average depth along the route (metres, positive = below surface); `None`
     /// when no route.
     pub route_avg_depth_m: Option<f64>,
+    /// Cumulative gas-to-reach (litres) at each ordered way point (#298), aligned 1:1 with the
+    /// `waypoints` input. `None` from the first way point that no longer resolves to a station or
+    /// that the graph cannot reach: the mandated route can't be flown, so every station also reads
+    /// unreachable and the UI shows the route only as far as the chain got. Compare an entry against
+    /// `budget_litres` to tell the diver the detour alone exceeds their gas. Empty when the plan has
+    /// no way points.
+    pub waypoint_gas_litres: Vec<Option<f64>>,
 }

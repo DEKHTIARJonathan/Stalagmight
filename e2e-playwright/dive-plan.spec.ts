@@ -27,6 +27,7 @@ const sectionSeeds: SectionSeed[] = [
 ];
 
 type PlanMetaLite = { id: number; name: string };
+type StationRefLite = { section_id: number; station_index: number };
 
 type E2EWindow = {
   __E2E_TEST__?: {
@@ -35,7 +36,14 @@ type E2EWindow = {
       getState: () => {
         diver: { rmv_l_per_min: number };
         loadedPlanId: number | null;
+        waypoints: StationRefLite[];
+        markedPoints: { station: StationRefLite; label: string | null }[];
         setDiver: (d: { rmv_l_per_min: number; label: string | null }) => void;
+        addWaypoint: (ref: StationRefLite) => void;
+        removeWaypoint: (index: number) => void;
+        addMarkedPoint: (ref: StationRefLite) => void;
+        removeMarkedPoint: (index: number) => void;
+        setMarkedPointLabel: (index: number, label: string) => void;
       };
     };
   };
@@ -171,6 +179,49 @@ test.describe('Dive-plan persistence (#244)', () => {
       .poll(() => loadedPlanId(page), { timeout: 3000 })
       .toBe(planA!.id);
     expect(await diverRmv(page)).toBe(15); // A's snapshot restored
+  });
+
+  test('way points and marked points survive a save/load round trip (#298)', async ({ page }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.addWaypoint({ section_id: 1, station_index: 4 });
+      gas.addMarkedPoint({ section_id: 1, station_index: 3 });
+      gas.setMarkedPointLabel(0, 'photo here');
+    });
+    await saveAs(page, 'With route points');
+
+    // Load a second, bare plan so the inputs genuinely change, then come back to the first: a
+    // round trip that never left the store would pass even if nothing were persisted.
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.removeWaypoint(0);
+      gas.removeWaypoint(0);
+      gas.removeMarkedPoint(0);
+    });
+    await saveAs(page, 'Bare');
+
+    const plans = await savedPlans(page);
+    const withPoints = plans.find((p) => p.name === 'With route points');
+    expect(withPoints).toBeDefined();
+    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(withPoints!.id));
+    await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(withPoints!.id);
+
+    const restored = await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      return { waypoints: gas.waypoints, markedPoints: gas.markedPoints };
+    });
+    // Order is part of the plan, so it must come back in order.
+    expect(restored.waypoints).toEqual([
+      { section_id: 1, station_index: 2 },
+      { section_id: 1, station_index: 4 },
+    ]);
+    expect(restored.markedPoints).toEqual([
+      { station: { section_id: 1, station_index: 3 }, label: 'photo here' },
+    ]);
   });
 
   test('editing after load shows the unsaved badge; Save clears it @smoke', async ({ page }) => {

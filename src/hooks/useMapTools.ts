@@ -403,11 +403,13 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
           if (showDistanceGradient && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
             setDistanceGradientOrigin(ref);
           }
-          // Gas planning (#38): a plain select-click re-roots the reachable overlay
-          // to the clicked station, mirroring the distance gradient (additive -
-          // selection still happens). Mutually exclusive with the distance overlay.
+          // Gas planning (#298): a plain select-click sets the route ENDPOINT - the point you are
+          // planning to reach - not the origin. Picking a destination is the frequent action;
+          // the origin is usually the entrance, and is still one click away via the ★ datum star
+          // or "Set as start point" in the right-click menu. Additive: selection still happens.
+          // Mutually exclusive with the distance overlay, which keeps re-rooting on click.
           if (showGasPlan && !mouseEvent.shiftKey && !mouseEvent.ctrlKey && !mouseEvent.metaKey) {
-            useGasPlanStore.getState().setOrigin(ref);
+            useGasPlanStore.getState().setEndpoint(ref);
           }
           break;
         }
@@ -589,9 +591,10 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
             const shotIndex = section?.shots.findIndex((s) => s.id === shotId) ?? -1;
             if (shotIndex !== -1) {
               const ref = { section_id: sectionId, station_index: shotIndex };
-              // Mutually exclusive overlays - re-root whichever is active.
+              // Mutually exclusive overlays: the distance gradient re-roots, Plan sets the route
+              // endpoint (#298) - same split as the station click above.
               if (showDistanceGradient) setDistanceGradientOrigin(ref);
-              if (showGasPlan) useGasPlanStore.getState().setOrigin(ref);
+              if (showGasPlan) useGasPlanStore.getState().setEndpoint(ref);
             }
           }
           break;
@@ -885,7 +888,13 @@ export function useMapTools(options: MapToolsOptions = {}): SurveyLayerCallbacks
         const reachField = useGasPlanStore.getState().reachField;
         const clickM = mapCoordsToMeters(event.lngLat.lng, event.lngLat.lat, options.gpsOrigin ?? null);
         const reachable = reachField ? reachableStationKeySet(reachField) : null;
-        const best = nearestReachableStationRef(clickM, activeStations, reachable);
+        // Prefer a reachable station, but fall back to the nearest station of ANY kind when none
+        // is in reach - otherwise the menu simply would not open, and with way points able to
+        // make the whole map unreachable (#298) the user would be locked out of the very menu
+        // items ("Set as start point", removing a way point) that fix it.
+        const best =
+          nearestReachableStationRef(clickM, activeStations, reachable) ??
+          nearestReachableStationRef(clickM, activeStations, null);
         if (best) {
           setSource('map');
           setSelection({ type: 'station', stationRef: best });

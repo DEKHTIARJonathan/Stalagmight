@@ -2,6 +2,7 @@
 import type { Cylinder } from "./Cylinder";
 import type { Diver } from "./Diver";
 import type { GasConfig } from "./GasConfig";
+import type { MarkedPoint } from "./MarkedPoint";
 import type { StationRef } from "./StationRef";
 
-export interface DivePlanSnapshot { origin: StationRef | null, endpoint: StationRef | null, diver: Diver, cylinders: Array<Cylinder>, gas_config: GasConfig, stage_drop_overrides: Array<StationRef | null>, }
+export interface DivePlanSnapshot { origin: StationRef | null, endpoint: StationRef | null, waypoints: Array<StationRef>, diver: Diver, cylinders: Array<Cylinder>, gas_config: GasConfig, stage_drop_overrides: Array<StationRef | null>, marked_points: Array<MarkedPoint>, }

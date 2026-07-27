@@ -219,11 +219,18 @@ export default function SingleSystemView() {
   // edge when the side is minimized and the Data panel is open, else sit between
   // the closed bars. (isOpen, not isPinnedOpen, or a floating side panel overlaps
   // the Data panel and hides its tab.)
-  const dataOverlayLeft = sectionsReveal.isOpen
-    ? sectionsPanelWidth
-    : dataReveal.isOpen
+  // Outside Survey the Sections Dock is not rendered at all (see the appMode gate below), so there
+  // is neither a panel nor a closed bar on the left to stop at - the bottom panel must reach the
+  // window edge. `sectionsReveal.isOpen` still reports the PERSISTED survey-mode state, which is
+  // exactly why Plan's cylinders bar used to sit indented by a panel that was not there (#298).
+  const dataOverlayLeft =
+    appMode !== 'survey'
       ? 0
-      : BAR;
+      : sectionsReveal.isOpen
+        ? sectionsPanelWidth
+        : dataReveal.isOpen
+          ? 0
+          : BAR;
   const dataOverlayRight = detailReveal.isOpen
     ? detailPanelWidth
     : dataReveal.isOpen

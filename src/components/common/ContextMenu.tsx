@@ -1,4 +1,6 @@
 import { useEffect, useRef, type ReactNode } from 'react';
+import { useTranslation } from 'react-i18next';
+import type { TFunction } from 'i18next';
 import { useUIStore } from '../../store/uiStore';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { useShallow } from 'zustand/react/shallow';
@@ -11,7 +13,14 @@ import { canSplitShot } from '../../utils/shotSplit';
 import { setSource, trackContextMenuAction, trackDialogComplete } from '../../utils/telemetry';
 import { syntacticLevelAtLeast } from '../../theme/syntacticPalette';
 import { MenuRow, MenuSeparator } from './MenuRow';
-import { ArrowUpRightIcon } from './icons';
+import {
+  ArrowUpRightIcon,
+  BookmarkIcon,
+  FlagIcon,
+  StageDropIcon,
+  TargetIcon,
+  WaypointIcon,
+} from './icons';
 import { SHOT_KIND_CYCLE, SHOT_KIND_MENU_LABEL } from '../../utils/shotKind';
 import {
   EntityDeleteSymbol,
@@ -36,6 +45,64 @@ interface ContextMenuItem {
   separator?: boolean;
 }
 
+/**
+ * The Plan workspace's route-picking menu (#298) for a station.
+ *
+ * `stageDropCount` is how many stage drops the current rig actually has (0 for All-thirds and any
+ * rig that fell back to it). With exactly one there is no ambiguity, so a single "Set as stage
+ * drop" is offered; with more, one FLAT entry per stage names the slot explicitly - the shared
+ * menu has no submenu support, and an unlabelled "set as stage drop" would leave you guessing
+ * which of two markers you just moved.
+ *
+ * ⚠ The stage-drop entries appear ONLY when the right-clicked station is on the planned route
+ * (`onRoute`). A stage drop is a position ALONG the route, and every other writer enforces that:
+ * the drag snaps to the nearest route station and the arrow-key nudge is clamped to the route's
+ * index range. Writing an off-route station would put the diver's ▼ somewhere they did not click
+ * (the engine re-places it at the first route station past the new threshold) AND move the
+ * penetration budget using that station's shortest-path gas, which is not gas along the route the
+ * plan actually flies - i.e. the unsafe direction. Hiding the entry is the honest option: the
+ * action has no meaning off the route.
+ */
+function buildPlanMenuItems(
+  ref: StationRef,
+  stageDropCount: number,
+  onRoute: boolean,
+  closeDialog: () => void,
+  t: TFunction
+): ContextMenuItem[] {
+  const gas = () => useGasPlanStore.getState();
+  const pick = (label: string, icon: ReactNode, run: () => void): ContextMenuItem => ({
+    label,
+    icon,
+    action: () => {
+      run();
+      closeDialog();
+    },
+  });
+
+  const slots = onRoute ? stageDropCount : 0;
+  const stageDrops: ContextMenuItem[] =
+    slots === 1
+      ? [
+          pick(t('gasPanel.menu.setStageDrop'), <StageDropIcon size={16} />, () =>
+            gas().setStageDropOverride(0, ref)
+          ),
+        ]
+      : Array.from({ length: slots }, (_unused, i) =>
+          pick(t('gasPanel.menu.setStageNDrop', { n: i + 1 }), <StageDropIcon size={16} />, () =>
+            gas().setStageDropOverride(i, ref)
+          )
+        );
+
+  return [
+    pick(t('gasPanel.menu.setStart'), <FlagIcon size={16} />, () => gas().setOrigin(ref)),
+    pick(t('gasPanel.menu.setWaypoint'), <WaypointIcon size={16} />, () => gas().addWaypoint(ref)),
+    pick(t('gasPanel.menu.setEndpoint'), <TargetIcon size={16} />, () => gas().setEndpoint(ref)),
+    ...stageDrops,
+    pick(t('gasPanel.menu.setMarked'), <BookmarkIcon size={16} />, () => gas().addMarkedPoint(ref)),
+  ];
+}
+
 export default function ContextMenu() {
   const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
@@ -48,6 +115,41 @@ export default function ContextMenu() {
     appMode: s.appMode,
     syntacticLevel: s.syntacticLevel,
   })));
+  const { t } = useTranslation();
+  // How many stage drops the CURRENT rig produces (#298) - the backend's own count, so the menu
+  // can never offer a slot the engine would ignore (All-thirds and a stage-short rig report none).
+  //
+  // ⚠ Read ONCE, when the menu mounts, and never re-read. Two reasons, both real:
+  // (a) every gas-input setter nulls `reachField` for the length of the refetch - and a plain
+  //     left-click in Plan now sets the endpoint - so the very common click-then-right-click
+  //     gesture would otherwise open a menu with the stage rows silently missing;
+  // (b) as a live subscription the count can change WHILE the menu is open, inserting rows under
+  //     the pointer and shifting the whole menu (its `top` is derived from `items.length`).
+  // The last known count is the honest answer for the menu's lifetime: it is what the map is
+  // currently drawing. `useRef` + lazy init keeps it stable across the re-renders the layer's
+  // other subscriptions cause.
+  // The count is `stage_drop_bars`, the engine's override INDEX space (one entry per counted stage,
+  // always), not `stage_drop_refs` (emptied when nothing is reachable) - so the menu's slot numbers
+  // always match the slots `setStageDropOverride` writes and the rows the panel renders.
+  const planMenuRouteRef = useRef<{ slots: number; route: Set<string> } | null>(null);
+  if (planMenuRouteRef.current === null) {
+    // Read the LAST KNOWN field, not the live one. `reachField` is null for the length of every
+    // refetch, and in Plan a plain left-click is itself an input (it sets the endpoint) - so the
+    // click-then-right-click gesture opens this menu inside that window, where the live field would
+    // report zero stage slots and an empty route, hiding the stage-drop entries and marking every
+    // station off-route. `lastReachField` is the plan the map is still drawing.
+    const gas = useGasPlanStore.getState();
+    const field = gas.reachField ?? gas.lastReachField;
+    const route = new Set<string>();
+    for (const leg of field?.route ?? []) {
+      route.add(`${leg.from.section_id}:${leg.from.station_index}`);
+      route.add(`${leg.to.section_id}:${leg.to.station_index}`);
+    }
+    planMenuRouteRef.current = { slots: field?.stage_drop_bars.length ?? 0, route };
+  }
+  const stageDropCount = planMenuRouteRef.current.slots;
+  const planRouteHasStation = (r: StationRef): boolean =>
+    planMenuRouteRef.current?.route.has(`${r.section_id}:${r.station_index}`) ?? false;
   // A remote SpeleoDB project without the lock is read-only (T2a) - treat it like
   // closure-adjusted for the right-click edit items.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -577,27 +679,21 @@ export default function ContextMenu() {
   };
 
   // Plan / Export are READ-ONLY: the survey mutation menu must not appear at all (not merely
-  // disabled). In Plan, a right-click offers the turnaround pick (Set as endpoint) - the origin is
-  // set by single-click / the datum star, so "Set as origin" was dropped here, leaving room for
-  // future recalc affordances. Export, or a non-station target in Plan, gets no menu. Survey keeps
-  // the full menu, with the closure-adjusted (read-only) view disabling mutations as before.
+  // disabled). In Plan a right-click is the route-picking menu (#298) - start, way point, stage
+  // drop, marked point, endpoint. These act on PLAN data (the .plnx sidecar), never on the survey,
+  // so they are deliberately not gated by the survey read-only predicates: a closure-adjusted view
+  // or a SpeleoDB lock must not stop you planning a dive. Export, or a non-station target in Plan,
+  // gets no menu. Survey keeps the full menu, with the closure-adjusted (read-only) view disabling
+  // mutations as before.
+  //
+  // Labels are i18n keys and each item carries its own `icon`, NOT `iconForLabel` - that helper
+  // matches on English label strings and would silently fall back to the generic arrow under any
+  // other locale.
   let items: ContextMenuItem[];
   if (appMode !== 'survey') {
     items =
       appMode === 'plan' && target?.type === 'station'
-        ? (() => {
-            const ref = target.ref;
-            return [
-              {
-                label: 'Set as endpoint',
-                action: () => {
-                  useGasPlanStore.getState().setEndpoint(ref);
-                  closeDialog();
-                },
-                icon: iconForLabel('Set as endpoint'),
-              },
-            ];
-          })()
+        ? buildPlanMenuItems(target.ref, stageDropCount, planRouteHasStation(target.ref), closeDialog, t)
         : [];
   } else {
     // Survey view: closure-adjusted geometry is read-only - disable mutations (all except

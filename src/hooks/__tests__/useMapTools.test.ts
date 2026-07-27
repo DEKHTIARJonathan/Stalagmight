@@ -56,4 +56,17 @@ describe('nearestReachableStationRef', () => {
     expect(nearestReachableStationRef({ x: 0, y: 0 }, [], null)).toBeNull();
     expect(nearestReachableStationRef({ x: 0, y: 0 }, stations, new Set())).toBeNull();
   });
+
+  it('an empty reachable set still yields a station once the caller retries unfiltered (#298)', () => {
+    // The caller (handleContextMenu) pairs these two calls: prefer a reachable station, but fall
+    // back to any station when NOTHING is reachable. Without the fallback no menu opens at all,
+    // and with way points able to make the whole map unreachable that would lock the user out of
+    // the very entries ("Set as start point", removing a way point) that recover the plan.
+    const nothingReachable = new Set<string>();
+    expect(nearestReachableStationRef({ x: 29, y: 0 }, stations, nothingReachable)).toBeNull();
+    expect(nearestReachableStationRef({ x: 29, y: 0 }, stations, null)).toEqual({
+      section_id: 1,
+      station_index: 3,
+    });
+  });
 });

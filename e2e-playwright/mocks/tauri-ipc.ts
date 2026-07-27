@@ -1337,6 +1337,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               calls.push({
                 stageDropOverrides: args?.stageDropOverrides ?? [],
                 endpoint: args?.endpoint ?? null,
+                origin: args?.origin ?? null,
+                // #298: the ordered way points, so an e2e can assert the pick reached the engine
+                // and in what order.
+                waypoints: args?.waypoints ?? [],
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
@@ -1421,6 +1425,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 ? stations[deepestIdx].station_ref
                 : null;
             const final_turn_ref = targetRef;
+            // Mirrors the engine's own flag: true when the endpoint IS the target, false for the
+            // deepest-in-budget fallback (no endpoint set, or one that cannot be used). The mock has
+            // no partial walk toward an out-of-reach endpoint, so those two cases are all it can
+            // distinguish - enough to keep the panel's two messages apart.
+            const turn_toward_endpoint = endpointReachable && endpoint != null;
             // Drop stages: staged presets drop their first `dropCount` enabled stages; Free drops
             // every enabled stage with a positive usable (no cap). Each gets a ref, clamped to the
             // turnaround when the route is shorter - mirroring the engine so refs/bars/distances align.
@@ -1575,6 +1584,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               }
               return 0;
             });
+            // Cumulative gas at each way point (#298). Like the drop math above this is a
+            // shape-correct stand-in, not the engine's multi-leg walk: it reports each way point's
+            // own gas-to-reach (null when the station is not in the field at all, which is what
+            // the panel's "unreachable" warning keys off) rather than accumulating the legs. The
+            // real accumulation is unit-tested in Rust; the e2e asserts UI wiring only.
+            const waypointArgs = (args?.waypoints ?? []) as Array<{
+              section_id: number;
+              station_index: number;
+            }>;
+            const waypoint_gas_litres = waypointArgs.map((w) => {
+              const idx = stations.findIndex(
+                (s) =>
+                  s.station_ref.section_id === w.section_id &&
+                  s.station_ref.station_index === w.station_index,
+              );
+              return idx >= 0 ? gas_to_reach[idx] : null;
+            });
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1585,6 +1611,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route,
               stage_drop_refs,
               final_turn_ref,
+              turn_toward_endpoint,
               backgas_turn_bar,
               stage_drop_bars,
               stage_drop_over_reserve,
@@ -1593,6 +1620,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route_line_length_m,
               route_max_depth_m,
               route_avg_depth_m,
+              waypoint_gas_litres,
             };
           }
 

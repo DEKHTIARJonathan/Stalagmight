@@ -25,15 +25,32 @@ fn default_diver() -> Diver {
     }
 }
 
-/// The persisted gas-plan inputs: the argument set of `compute_gas_reach_field`.
-/// Every field is serde-default tolerant so a plan written by an older or newer
-/// build still loads. No `PartialEq` (GasConfig has none); tests compare via JSON.
+/// An arbitrary spot the diver marked on the plan (#298) - a photo stop, a lead to
+/// look at, a restriction to rig. Purely an annotation: it is saved with the plan
+/// but never reaches the gas engine, so marking a station cannot change the route
+/// or the budget. The label is optional (a bare pin is a valid mark) and capped on
+/// the write path; see `MAX_MARKED_LABEL_CHARS`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct MarkedPoint {
+    pub station: StationRef,
+    #[serde(default)]
+    pub label: Option<String>,
+}
+
+/// The persisted gas-plan inputs: the argument set of `compute_gas_reach_field`,
+/// plus the plan-only marked points. Every field is serde-default tolerant so a plan
+/// written by an older or newer build still loads - which is why adding `waypoints`
+/// and `marked_points` needed no schema-version bump. No `PartialEq` (GasConfig has
+/// none); tests compare via JSON.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DivePlanSnapshot {
     #[serde(default)]
     pub origin: Option<StationRef>,
     #[serde(default)]
     pub endpoint: Option<StationRef>,
+    /// Ordered intermediate points the dive must visit between origin and endpoint (#298).
+    #[serde(default)]
+    pub waypoints: Vec<StationRef>,
     #[serde(default = "default_diver")]
     pub diver: Diver,
     #[serde(default)]
@@ -42,6 +59,9 @@ pub struct DivePlanSnapshot {
     pub gas_config: GasConfig,
     #[serde(default)]
     pub stage_drop_overrides: Vec<Option<StationRef>>,
+    /// Map annotations saved with this plan (#298); never an input to the gas engine.
+    #[serde(default)]
+    pub marked_points: Vec<MarkedPoint>,
 }
 
 /// A dive plan's dropdown row: identity + name + timestamps (RFC3339). Carries no
@@ -83,7 +103,12 @@ mod tests {
             "diver": { "rmv_l_per_min": 18.0, "label": "lead" },
             "cylinders": [],
             "gas_config": serde_json::to_value(GasConfig::default()).unwrap(),
-            "stage_drop_overrides": [null, { "section_id": 1, "station_index": 3 }]
+            "stage_drop_overrides": [null, { "section_id": 1, "station_index": 3 }],
+            "waypoints": [{ "section_id": 1, "station_index": 2 }],
+            "marked_points": [
+                { "station": { "section_id": 2, "station_index": 1 }, "label": "photo" },
+                { "station": { "section_id": 2, "station_index": 4 } }
+            ]
         })
         .to_string()
     }
@@ -97,10 +122,17 @@ mod tests {
         assert_eq!(snap.stage_drop_overrides.len(), 2);
         assert!(snap.stage_drop_overrides[0].is_none());
         assert_eq!(snap.stage_drop_overrides[1].unwrap().station_index, 3);
+        assert_eq!(snap.waypoints, vec![StationRef::new(1, 2)]);
+        assert_eq!(snap.marked_points.len(), 2);
+        assert_eq!(snap.marked_points[0].label.as_deref(), Some("photo"));
+        // A bare pin carries no label - the field defaults rather than failing the parse.
+        assert!(snap.marked_points[1].label.is_none());
         // Re-serialize and reload: the round trip is lossless for the known fields.
         let again: DivePlanSnapshot =
             serde_json::from_str(&serde_json::to_string(&snap).unwrap()).unwrap();
         assert_eq!(again.endpoint.unwrap().station_index, 5);
+        assert_eq!(again.waypoints, snap.waypoints);
+        assert_eq!(again.marked_points, snap.marked_points);
     }
 
     #[test]
@@ -127,5 +159,9 @@ mod tests {
         assert!(snap.cylinders.is_empty());
         assert!(snap.stage_drop_overrides.is_empty());
         assert_eq!(snap.diver.rmv_l_per_min, 20.0);
+        // A plan written before #298 has neither list; both default to empty rather than
+        // failing the parse, which is why the schema version did not need a bump.
+        assert!(snap.waypoints.is_empty());
+        assert!(snap.marked_points.is_empty());
     }
 }

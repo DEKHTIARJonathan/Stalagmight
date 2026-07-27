@@ -8,9 +8,19 @@ import type {
   DivePlanSnapshot,
   GasConfig,
   GasReachField,
+  MarkedPoint,
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
+
+/**
+ * Mirror the Rust caps (`core/state/dive_plan.rs`), the same way `GasPlanPanel` mirrors
+ * `MAX_MARKED_LABEL_CHARS`. The backend enforces these on save (reject), on load (truncate) and on
+ * the compute command (reject); mirroring them at the point of creation is what keeps a diver from
+ * building a plan the app will later refuse to store.
+ */
+const MAX_WAYPOINTS = 64;
+const MAX_MARKED_POINTS = 500;
 
 /**
  * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only - never
@@ -40,12 +50,34 @@ interface GasPlanState {
   origin: StationRef | null;
   /** Chosen route endpoint (the lead being planned); `null` = the deepest in-budget point. */
   endpoint: StationRef | null;
+  /** #298: ordered intermediate points the dive must visit, in order, between origin and
+   *  endpoint. The engine re-bases the whole reach field through them, so adding one costs
+   *  real gas rather than only re-drawing the route line. */
+  waypoints: StationRef[];
+  /** #298: arbitrary map annotations saved with the plan (a photo stop, a lead, a restriction).
+   *  Never sent to the gas engine - marking a station cannot change the route or the budget. */
+  markedPoints: MarkedPoint[];
   diver: Diver;
   cylinders: Cylinder[];
   /** Working gas config; seeded from `Config.gas`, edited in-mode (units/speeds/reserve). */
   gasConfig: GasConfig;
   /** Latest reachability field from the backend (null until fetched / after any input change). */
   reachField: GasReachField | null;
+  /**
+   * The last NON-null field, kept across the refetch window that `reachField` nulls.
+   *
+   * Every input setter blanks `reachField` so stale colours are not painted under new inputs, and
+   * in Plan a plain left-click is an input (it sets the endpoint). So the ordinary
+   * click-then-right-click gesture opens the context menu while `reachField` is null, and a menu
+   * built from the live field would silently drop its stage-drop entries and treat every station
+   * as off-route. This is what the menu reads instead: the plan the map is still drawing.
+   *
+   * Only ever consumed for MENU SHAPE, never for a number the diver acts on. A route point picked
+   * off a route that has since moved is safe by construction - the engine keeps a stage drop only
+   * when the pinned station is on (or extends) the route it recomputes, and otherwise falls back to
+   * the strategy default.
+   */
+  lastReachField: GasReachField | null;
   /** Per-stage drop overrides (#246), aligned by drop index with the field's `stage_drop_refs`:
    *  the route station the diver dragged each ▼ marker to (`null` = strategy default). Cleared
    *  whenever the rig / config / origin / endpoint changes (which reshuffles the drops), exactly
@@ -68,6 +100,19 @@ interface GasPlanState {
 
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
+  /** #298: append a way point to the end of the visit order. */
+  addWaypoint: (ref: StationRef) => void;
+  /** #298: drop way point `index`; a stray index is a no-op. */
+  removeWaypoint: (index: number) => void;
+  /** #298: swap way point `index` with its neighbour (`-1` earlier, `+1` later). Out-of-range
+   *  moves are a no-op, so the panel's arrows need no bounds logic of their own. */
+  moveWaypoint: (index: number, delta: number) => void;
+  /** #298: drop a marked point on `ref`. */
+  addMarkedPoint: (ref: StationRef) => void;
+  /** #298: remove marked point `index`. */
+  removeMarkedPoint: (index: number) => void;
+  /** #298: set (or clear, with an empty string) marked point `index`'s label. */
+  setMarkedPointLabel: (index: number, label: string) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -98,10 +143,13 @@ const initialState = (): Pick<
   GasPlanState,
   | 'origin'
   | 'endpoint'
+  | 'waypoints'
+  | 'markedPoints'
   | 'diver'
   | 'cylinders'
   | 'gasConfig'
   | 'reachField'
+  | 'lastReachField'
   | 'stageDropOverrides'
   | 'loadedPlanId'
   | 'loadedPlanBaseline'
@@ -110,12 +158,15 @@ const initialState = (): Pick<
 > => ({
   origin: null,
   endpoint: null,
+  waypoints: [],
+  markedPoints: [],
   diver: DEFAULT_DIVER,
   cylinders: defaultCylinders(),
   // Deep-clone so editing the working config (incl. nested reserve_profile / dpv) never
   // mutates the shared compiled default through an aliased object reference.
   gasConfig: structuredClone(defaultConfig.gas),
   reachField: null,
+  lastReachField: null,
   stageDropOverrides: [],
   loadedPlanId: null,
   loadedPlanBaseline: null,
@@ -133,10 +184,80 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // overrides no longer line up, clear them alongside the stale field.
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
+  // Way points are a ROUTE input: every edit re-bases the whole field, so they clear the cached
+  // field and the pinned drops exactly like setEndpoint. Marked points are pure annotation and
+  // deliberately do NOT - clearing the field there would flash the overlay off for nothing.
+  // Capped, and a repeat of a station already on the list is a no-op. Both mirror the backend:
+  // `save_dive_plan` REFUSES an over-long list, so without the cap here the diver could build a plan
+  // in the UI - paying an extra Dijkstra per way point on every keystroke - and only discover the
+  // wall at save time, on a message that names neither the limit nor which entry to drop. The
+  // label field is already capped for exactly this reason. A duplicate is separately meaningless:
+  // it burns a slot, adds a second identical panel row, and makes the panel's per-way-point gas
+  // read the LATER cumulative while the overlay paints the earlier pass.
+  addWaypoint: (ref) =>
+    set((s) => {
+      const dup = s.waypoints.some(
+        (w) => w.section_id === ref.section_id && w.station_index === ref.station_index,
+      );
+      if (dup || s.waypoints.length >= MAX_WAYPOINTS) return {};
+      return { waypoints: [...s.waypoints, ref], reachField: null, stageDropOverrides: [] };
+    }),
+  removeWaypoint: (index) =>
+    set((s) =>
+      index < 0 || index >= s.waypoints.length
+        ? {}
+        : {
+            waypoints: s.waypoints.filter((_w, i) => i !== index),
+            reachField: null,
+            stageDropOverrides: [],
+          },
+    ),
+  moveWaypoint: (index, delta) =>
+    set((s) => {
+      const to = index + delta;
+      if (index < 0 || index >= s.waypoints.length || to < 0 || to >= s.waypoints.length) {
+        return {};
+      }
+      const next = s.waypoints.slice();
+      const moved = next[index]!;
+      next[index] = next[to]!;
+      next[to] = moved;
+      return { waypoints: next, reachField: null, stageDropOverrides: [] };
+    }),
+  addMarkedPoint: (ref) =>
+    set((s) =>
+      s.markedPoints.length >= MAX_MARKED_POINTS
+        ? {}
+        : { markedPoints: [...s.markedPoints, { station: ref, label: null }] },
+    ),
+  removeMarkedPoint: (index) =>
+    set((s) =>
+      index < 0 || index >= s.markedPoints.length
+        ? {}
+        : { markedPoints: s.markedPoints.filter((_m, i) => i !== index) },
+    ),
+  setMarkedPointLabel: (index, label) =>
+    set((s) => {
+      if (index < 0 || index >= s.markedPoints.length) return {};
+      const next = s.markedPoints.slice();
+      // Store the RAW value. Trimming here would fight the controlled input this feeds: the panel
+      // renders `value={m.label ?? ''}`, so typing a space produces "photo ", the setter would store
+      // "photo", and React would restore the shorter value into the DOM - eating the space on every
+      // keystroke and making a multi-word label untypable by hand. (`fill()` in an e2e dispatches
+      // one event with the whole string, so it never sees this.) Normalising a keystroke against a
+      // controlled value is the same trap as the signed-decimal fields.
+      //
+      // The trim happens once, at the boundary that needs it: `divePlanSnapshotOf` before the save.
+      next[index] = { ...next[index]!, label: label === '' ? null : label };
+      return { markedPoints: next };
+    }),
   setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),
   setCylinders: (cylinders) => set({ cylinders, reachField: null, stageDropOverrides: [] }),
   setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
-  setReachField: (reachField) => set({ reachField }),
+  // `lastReachField` only ever moves forward to a real field - it is never nulled here, so it
+  // survives the refetch window. `reset()` clears both, so it cannot leak across a project switch.
+  setReachField: (reachField) =>
+    set(reachField ? { reachField, lastReachField: reachField } : { reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
   markHydrated: () => set({ hydrated: true }),
   setStageDropOverride: (index, ref) => {
@@ -155,6 +276,8 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     set({
       origin: snapshot.origin,
       endpoint: snapshot.endpoint,
+      waypoints: snapshot.waypoints,
+      markedPoints: snapshot.marked_points,
       diver: snapshot.diver,
       cylinders: snapshot.cylinders,
       gasConfig: snapshot.gas_config,

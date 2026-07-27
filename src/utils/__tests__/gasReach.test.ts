@@ -38,6 +38,7 @@ describe('buildGasReachFeatureState', () => {
     route: [],
     stage_drop_refs: [],
     final_turn_ref: null,
+  turn_toward_endpoint: false,
     backgas_turn_bar: null,
     stage_drop_bars: [],
     stage_drop_over_reserve: [],
@@ -46,6 +47,7 @@ describe('buildGasReachFeatureState', () => {
     route_line_length_m: 0,
     route_max_depth_m: null,
     route_avg_depth_m: null,
+    waypoint_gas_litres: [],
   };
 
   it('maps each reachable station to its litres-to-reach, keyed by encodeFeatureId', () => {

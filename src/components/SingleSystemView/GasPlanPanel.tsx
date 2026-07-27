@@ -38,6 +38,11 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
   free: 0,
 };
 
+/** Mirrors the Rust `MAX_MARKED_LABEL_CHARS` (core/state/dive_plan.rs). Capping the input here
+ *  means a label typed in the panel can never be the reason a whole plan fails to save; the
+ *  backend guard remains, for a hand-edited `.plnx`. */
+const MAX_MARKED_LABEL_CHARS = 120;
+
 // Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
 // Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
 // write always merges against current state rather than a stale snapshot. Module-scope
@@ -64,6 +69,9 @@ export function GasPlanPanel() {
   const { t } = useTranslation();
   const {
     origin,
+    endpoint,
+    waypoints,
+    markedPoints,
     diver,
     cylinders,
     gasConfig,
@@ -71,6 +79,11 @@ export function GasPlanPanel() {
     stageDropOverrides,
     pushyAck,
     setOrigin,
+    setEndpoint,
+    removeWaypoint,
+    moveWaypoint,
+    removeMarkedPoint,
+    setMarkedPointLabel,
     setDiver,
     setGasConfig,
     setPushyAck,
@@ -78,6 +91,9 @@ export function GasPlanPanel() {
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
+      endpoint: s.endpoint,
+      waypoints: s.waypoints,
+      markedPoints: s.markedPoints,
       diver: s.diver,
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
@@ -85,6 +101,11 @@ export function GasPlanPanel() {
       stageDropOverrides: s.stageDropOverrides,
       pushyAck: s.pushyAck,
       setOrigin: s.setOrigin,
+      setEndpoint: s.setEndpoint,
+      removeWaypoint: s.removeWaypoint,
+      moveWaypoint: s.moveWaypoint,
+      removeMarkedPoint: s.removeMarkedPoint,
+      setMarkedPointLabel: s.setMarkedPointLabel,
       setDiver: s.setDiver,
       setGasConfig: s.setGasConfig,
       setPushyAck: s.setPushyAck,
@@ -149,6 +170,45 @@ export function GasPlanPanel() {
     ? formatStationId(origin.section_id, origin.station_index)
     : t('gasPanel.origin.entrance');
 
+  // Way-point readouts, all from the engine (#298) - the panel never re-derives a
+  // budget-dependent number, or it drifts from the overlay the way #233's gauges did.
+  // `waypoint_gas_litres[i]` is the cumulative gas at way point i, or null from the first one the
+  // walk could not reach.
+  //
+  // ⚠ These are only meaningful once a field has ARRIVED. Every gas-input setter nulls
+  // `reachField` for the duration of the refetch, and an absent entry reads `undefined == null`,
+  // so keying "unreachable" off the value alone would flash every row red on each RMV keystroke,
+  // reorder or endpoint pick. Gate on the field's presence first (same shape as the route readout
+  // further down), and treat a not-yet-computed way point as "pending", not as bad news.
+  const waypointGas = reachField?.waypoint_gas_litres ?? [];
+  const gasKnown = reachField != null;
+  const stalledIdx = gasKnown ? waypointGas.findIndex((g) => g == null) : -1;
+  // Only report a stall for a way point that actually exists in the CURRENT list: the field can
+  // lag a keystroke behind the store, and warning about a way point the user just removed reads
+  // as a bug.
+  const stalledWaypoint = stalledIdx >= 0 && stalledIdx < waypoints.length ? stalledIdx : null;
+  // Over budget = the detour alone costs more gas than the diver has. Distinct from a stall
+  // (which is "cannot be reached at all") and gets its own, actionable message.
+  const waypointsOverBudget =
+    reachField != null && waypointGas.some((g) => g != null && g > reachField.budget_litres);
+
+  // The engine turned short of the chosen endpoint (it is out of budget, so the plan runs as far
+  // toward it as the gas allows). The station it actually turns at, or null when the endpoint IS
+  // the turnaround. `final_turn_ref` is the engine's own answer - never re-derived here.
+  const turn = reachField?.final_turn_ref ?? null;
+  // Whether the engine's turn station is genuinely on the way to the pick, or the deepest-anywhere
+  // fallback (endpoint deleted under a loaded plan, or in another component). The two look the same
+  // from here - both are "a turn station that is not the endpoint" - so the engine reports which.
+  // Saying "on the way there" about an unrelated passage is the exact failure the walk-toward-the-
+  // endpoint rule exists to prevent.
+  const turnTowardEndpoint = reachField?.turn_toward_endpoint === true;
+  const endpointOutOfReach =
+    endpoint != null &&
+    turn != null &&
+    (turn.section_id !== endpoint.section_id || turn.station_index !== endpoint.station_index)
+      ? turn
+      : null;
+
   // Count only ENABLED stages: the engine filters disabled tanks before counting stages
   // (gas.rs `active`), so a disabled stage must not keep a staged strategy selectable here or the
   // panel would show a staged plan + its reserve control while the engine has fallen back to
@@ -170,7 +230,16 @@ export function GasPlanPanel() {
   // Per-stage drops (pressure + swum distance from origin), aligned 1:1; one readout row each - any
   // number of stages (Free is uncapped). When drops exist the diver switches to back gas after
   // dropping the stages, so the back-gas gauge reads "switch pressure", not "turn pressure".
-  const stageDrops = reachField
+  //
+  // ⚠ Gate on a real turnaround, the same way `hasRoute` below does. `stage_drop_bars` comes out of
+  // the strategy and the cylinders, so it is populated whenever the rig has stages - even when the
+  // engine found no target at all and emptied `stage_drop_refs`/`stage_drop_distances_m`. Since
+  // #298 that state is reachable in ordinary use (a way point that is disconnected, deleted
+  // mid-edit, or out of budget stalls the whole plan). Rendering "Stage 1 drop: 119 bar" for a dive
+  // that cannot be flown is worse than the turnaround case these rows sit next to: it names a
+  // pressure at which to leave a tank behind, and the map is drawing no ▼ to go with it.
+  const stageDropsKnown = reachField != null && reachField.final_turn_ref != null;
+  const stageDrops = stageDropsKnown && reachField
     ? reachField.stage_drop_bars.map((bar, i) => ({
         bar,
         distance: reachField.stage_drop_distances_m[i] ?? null,
@@ -189,7 +258,11 @@ export function GasPlanPanel() {
   // (origin == turnaround when only the origin is in budget) doesn't render a meaningless
   // "Distance to turnaround: 0 m". The distance is the one-way swum line length to the turnaround;
   // depths are the route's deepest point + the distance-weighted average depth.
-  const hasRoute = (reachField?.route.length ?? 0) > 0;
+  // ⚠ Also require a turnaround. Since #298 a route can be drawn with NO target: when the
+  // way-point chain itself is unflyable the engine still returns the committed chain so the diver
+  // can see where the plan broke, but there is no turnaround, so labelling that partial line
+  // "Distance to turnaround" would report a confident number for a dive that cannot be made.
+  const hasRoute = (reachField?.route.length ?? 0) > 0 && reachField?.final_turn_ref != null;
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
 
@@ -260,6 +333,180 @@ export function GasPlanPanel() {
             </button>
           </div>
           <p className="text-xs opacity-60">{t('gasPanel.origin.hint')}</p>
+        </section>
+
+        {/* Route: the endpoint plus the ordered way points (#298). The way-point rows are the only
+            place the visit order can be CHANGED - the map pins can add and remove, but ordering is
+            a list operation, and order is what the engine actually routes on. */}
+        <section className="space-y-1" data-testid="gas-route-section">
+          <SectionLabel>{t('gasPanel.route.label')}</SectionLabel>
+          <div className="flex items-center justify-between gap-2">
+            <span className="text-xs opacity-70">{t('gasPanel.route.endpointLabel')}</span>
+            <div className="flex items-center gap-2">
+              <span data-testid="gas-endpoint-readout" className="font-mono text-xs">
+                {endpoint
+                  ? formatStationId(endpoint.section_id, endpoint.station_index)
+                  : t('gasPanel.route.endpointAuto')}
+              </span>
+              <button
+                type="button"
+                className="text-xs px-2 py-0.5 rounded border border-border hover:bg-border disabled:opacity-40"
+                onClick={() => setEndpoint(null)}
+                disabled={endpoint === null}
+                data-testid="gas-clear-endpoint"
+              >
+                {t('gasPanel.route.clearEndpoint')}
+              </button>
+            </div>
+          </div>
+          {/* The pick is never silently rewritten - it stays yours, and clearing whatever put it out
+              of budget restores the full reach. But the turnaround marker has moved, so say why
+              rather than leaving the diver to wonder where their endpoint went. */}
+          {endpointOutOfReach && (
+            <p className="text-xs opacity-70" data-testid="gas-endpoint-out-of-reach">
+              {t(
+                turnTowardEndpoint
+                  ? 'gasPanel.route.endpointOutOfReach'
+                  : 'gasPanel.route.endpointUnusable',
+                {
+                  id: formatStationId(
+                    endpointOutOfReach.section_id,
+                    endpointOutOfReach.station_index
+                  ),
+                }
+              )}
+            </p>
+          )}
+
+          <div className="pt-1">
+            <span className="text-xs opacity-70">{t('gasPanel.route.waypointsLabel')}</span>
+            {waypoints.length === 0 ? (
+              <p className="text-xs opacity-60" data-testid="gas-waypoints-empty">
+                {t('gasPanel.route.waypointsEmpty')}
+              </p>
+            ) : (
+              <ol className="space-y-0.5 mt-0.5" data-testid="gas-waypoint-list">
+                {waypoints.map((w, i) => (
+                  <li
+                    key={`${w.section_id}:${w.station_index}:${i}`}
+                    className="flex items-center gap-2 text-xs"
+                    data-testid="gas-waypoint-row"
+                  >
+                    <span className="opacity-60 w-4 text-right">{i + 1}.</span>
+                    <span className="font-mono flex-1">
+                      {formatStationId(w.section_id, w.station_index)}
+                    </span>
+                    {/* Cumulative gas at this way point, straight from the engine - the panel must
+                        never re-derive a budget-dependent number (#233 lesson). `null` means the
+                        chain stalled here or before it. */}
+                    <span
+                      className={gasKnown && waypointGas[i] == null ? 'text-error' : 'opacity-70'}
+                      data-testid="gas-waypoint-gas"
+                    >
+                      {!gasKnown || waypointGas.length <= i
+                        ? t('gasPanel.route.pending')
+                        : waypointGas[i] == null
+                          ? t('gasPanel.route.unreachable')
+                          : formatVolume(waypointGas[i]!, units)}
+                    </span>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border disabled:opacity-30"
+                      onClick={() => moveWaypoint(i, -1)}
+                      disabled={i === 0}
+                      aria-label={t('gasPanel.route.moveUp')}
+                      title={t('gasPanel.route.moveUp')}
+                      data-testid="gas-waypoint-up"
+                    >
+                      &uarr;
+                    </button>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border disabled:opacity-30"
+                      onClick={() => moveWaypoint(i, 1)}
+                      disabled={i === waypoints.length - 1}
+                      aria-label={t('gasPanel.route.moveDown')}
+                      title={t('gasPanel.route.moveDown')}
+                      data-testid="gas-waypoint-down"
+                    >
+                      &darr;
+                    </button>
+                    <button
+                      type="button"
+                      className="px-1 rounded border border-border hover:bg-border"
+                      onClick={() => removeWaypoint(i)}
+                      aria-label={t('gasPanel.route.remove')}
+                      title={t('gasPanel.route.remove')}
+                      data-testid="gas-waypoint-remove"
+                    >
+                      &times;
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {waypoints.length > 0 && (
+              <p className="text-xs opacity-60 mt-0.5">{t('gasPanel.route.waypointsHint')}</p>
+            )}
+            {stalledWaypoint !== null && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnUnreachable', { n: stalledWaypoint + 1 })}
+              </p>
+            )}
+            {stalledWaypoint === null && waypointsOverBudget && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnOverBudget')}
+              </p>
+            )}
+          </div>
+        </section>
+
+        {/* Marked points (#298): annotation only, never a gas input. */}
+        <section className="space-y-1" data-testid="gas-marked-section">
+          <SectionLabel>{t('gasPanel.marked.label')}</SectionLabel>
+          {markedPoints.length === 0 ? (
+            <p className="text-xs opacity-60" data-testid="gas-marked-empty">
+              {t('gasPanel.marked.empty')}
+            </p>
+          ) : (
+            <ul className="space-y-0.5" data-testid="gas-marked-list">
+              {markedPoints.map((m, i) => (
+                <li
+                  key={`${m.station.section_id}:${m.station.station_index}:${i}`}
+                  className="flex items-center gap-2 text-xs"
+                  data-testid="gas-marked-row"
+                >
+                  <span className="font-mono">
+                    {formatStationId(m.station.section_id, m.station.station_index)}
+                  </span>
+                  <input
+                    type="text"
+                    value={m.label ?? ''}
+                    onChange={(e) => setMarkedPointLabel(i, e.target.value)}
+                    placeholder={t('gasPanel.marked.labelPlaceholder')}
+                    // Mirrors the backend's MAX_MARKED_LABEL_CHARS, so a label typed here can
+                    // never be long enough for the save to reject the whole plan.
+                    maxLength={MAX_MARKED_LABEL_CHARS}
+                    className="flex-1 min-w-0 bg-transparent border border-border rounded px-1 py-0.5"
+                    data-testid="gas-marked-label-input"
+                  />
+                  <button
+                    type="button"
+                    className="px-1 rounded border border-border hover:bg-border"
+                    onClick={() => removeMarkedPoint(i)}
+                    aria-label={t('gasPanel.marked.remove')}
+                    title={t('gasPanel.marked.remove')}
+                    data-testid="gas-marked-remove"
+                  >
+                    &times;
+                  </button>
+                </li>
+              ))}
+            </ul>
+          )}
+          {markedPoints.length > 0 && (
+            <p className="text-xs opacity-60">{t('gasPanel.marked.hint')}</p>
+          )}
         </section>
 
         {/* Diver RMV */}
