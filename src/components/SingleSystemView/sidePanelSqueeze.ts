@@ -155,6 +155,29 @@ function attempt(
  * zero-layout test environment) and is passed through untouched, so nothing
  * collapses on the strength of a degenerate measurement.
  */
+/**
+ * May a resize drag's `requested` size be written to the store / persisted?
+ *
+ * The other half of the display-only rule above, and the one it is easy to miss:
+ * the squeeze must not be routed OUT of the store, but a drag can route it back
+ * IN. A Dock renders at `display`, so `useResizeHandle` measures the SQUEEZED
+ * panel - and any size above the clamp is unreachable, because the squeeze
+ * re-applies on the same frame and the edge does not move. Writing it anyway
+ * replaced the user's own `user` width with a number the drag only appeared to
+ * reach: a panel squeezed from 400px to its 200px minimum, dragged wider, looked
+ * inert and then came back at the dragged width instead of 400 once the viewport
+ * grew again - a silent, unattributable loss of their layout.
+ *
+ * Shrinking stays reachable while squeezed (a smaller panel is always
+ * affordable), so only the direction the screen cannot honour is refused, and the
+ * drag does exactly what it visibly appears to do either way.
+ */
+export function acceptsResize(display: number, user: number, requested: number): boolean {
+  // Not squeezed: the rendering IS the user's own size, so every request is real.
+  if (display >= user) return true;
+  return requested <= display;
+}
+
 export function computeSidePanelLayout(opts: SidePanelSqueezeOpts): SidePanelSqueeze {
   const { viewportWidth, sections, detail } = opts;
 

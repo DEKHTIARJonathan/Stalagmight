@@ -26,7 +26,7 @@ import {
   MAP_MIN_WIDTH,
   MAP_MIN_HEIGHT,
 } from './layoutConstants';
-import { useSidePanelSqueeze, useDataPanelSqueeze } from './sidePanelSqueeze';
+import { useSidePanelSqueeze, useDataPanelSqueeze, acceptsResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
@@ -228,25 +228,71 @@ export default function SingleSystemView() {
   const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
   const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
 
+  // #260: a drag on a SQUEEZED panel is measured against the squeezed rendering,
+  // so a size above the clamp is unreachable and must not be persisted - see
+  // `acceptsResize`, which states the rule next to the display-only one it is the
+  // other half of.
+  //
+  // Read through a ref rather than deps: these props feed useResizeHandle, which
+  // re-binds its listeners whenever their identity changes, and the display size
+  // moves ~60x/s during an unsqueezed drag.
+  const squeezeRef = useRef({
+    sections: { display: 0, user: 0 },
+    detail: { display: 0, user: 0 },
+    data: { display: 0, user: 0 },
+  });
+  squeezeRef.current = {
+    sections: { display: sectionsDisplayWidth, user: sectionsPanelWidth },
+    detail: { display: detailDisplayWidth, user: detailPanelWidth },
+    data: { display: dataDisplayHeight, user: dataTableHeight },
+  };
+  /** Is `size` a size this drag could actually have produced on screen? */
+  const reachable = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
+    const { display, user } = squeezeRef.current[axis];
+    return acceptsResize(display, user, size);
+  }, []);
+
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
   // through a drag (these props feed useResizeHandle, which re-binds listeners
   // when they change). Inline arrows would be re-created every render - including
   // the ~60×/s store-width updates during the drag itself.
+  const applySectionsWidth = useCallback(
+    (size: number) => {
+      if (reachable('sections', size)) setSectionsPanelWidth(size);
+    },
+    [reachable, setSectionsPanelWidth],
+  );
+  const applyDetailWidth = useCallback(
+    (size: number) => {
+      if (reachable('detail', size)) setDetailPanelWidth(size);
+    },
+    [reachable, setDetailPanelWidth],
+  );
+  const applyDataHeight = useCallback(
+    (size: number) => {
+      if (reachable('data', size)) setDataTableHeight(size);
+    },
+    [reachable, setDataTableHeight],
+  );
   const handleSectionsResizeEnd = useCallback(
-    (size: number) => savePanelSizes('sections', size),
-    [savePanelSizes],
+    (size: number) => {
+      if (reachable('sections', size)) savePanelSizes('sections', size);
+    },
+    [reachable, savePanelSizes],
   );
   const handleDetailResizeEnd = useCallback(
-    (size: number) => savePanelSizes('detail', size),
-    [savePanelSizes],
+    (size: number) => {
+      if (reachable('detail', size)) savePanelSizes('detail', size);
+    },
+    [reachable, savePanelSizes],
   );
   // Don't persist the temporary focus-mode height (#50): exit restores the prior
   // height only in memory, so a focus-time drag must not leak to config.
   const handleDataResizeEnd = useCallback(
     (size: number) => {
-      if (focusedSectionId === null) savePanelSizes('data-table', size);
+      if (focusedSectionId === null && reachable('data', size)) savePanelSizes('data-table', size);
     },
-    [savePanelSizes, focusedSectionId],
+    [reachable, savePanelSizes, focusedSectionId],
   );
 
   // Programmatic Details reveal (jump-to-warning from the data table). The store
@@ -640,7 +686,7 @@ export default function SingleSystemView() {
           size={sectionsDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.sections.min}
           maxSize={PANEL_SIZE_BOUNDS.sections.max}
-          onResize={setSectionsPanelWidth}
+          onResize={applySectionsWidth}
           onResizeEnd={handleSectionsResizeEnd}
           label={panelLabels.name.sections}
           openArrow={CHEVRON_RIGHT}
@@ -693,7 +739,7 @@ export default function SingleSystemView() {
             size={dataDisplayHeight}
             minSize={PANEL_SIZE_BOUNDS['data-table'].min}
             maxSize={PANEL_SIZE_BOUNDS['data-table'].max}
-            onResize={setDataTableHeight}
+            onResize={applyDataHeight}
             onResizeEnd={handleDataResizeEnd}
             label={panelLabels.name.data}
             openArrow={CHEVRON_UP}
@@ -725,7 +771,7 @@ export default function SingleSystemView() {
           size={detailDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.detail.min}
           maxSize={PANEL_SIZE_BOUNDS.detail.max}
-          onResize={setDetailPanelWidth}
+          onResize={applyDetailWidth}
           onResizeEnd={handleDetailResizeEnd}
           label={panelLabels.name.detail}
           openArrow={CHEVRON_LEFT}

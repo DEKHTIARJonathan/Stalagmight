@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-import { useSidePanelSqueeze } from '../sidePanelSqueeze';
+import { useSidePanelSqueeze, acceptsResize } from '../sidePanelSqueeze';
 import { MAP_MIN_WIDTH, PANEL_SIZE_BOUNDS } from '../layoutConstants';
 import { BAR } from '../Dock';
 import { useUIStore } from '../../../store/uiStore';
@@ -103,5 +103,43 @@ describe('useSidePanelSqueeze - the squeeze never reaches the persisted store', 
       detail: { width: USER_DETAIL, collapsed: false },
     });
     expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The same rule from the other direction, and the way it was actually broken:
+ * the squeeze was kept out of the store, but a resize DRAG routed it back in.
+ *
+ * A Dock renders at the squeezed width, so `useResizeHandle` measures the
+ * squeezed panel. Widening it produced sizes above the clamp that the squeeze
+ * re-applied on the same frame - the edge never moved - and `onResize` /
+ * `onResizeEnd` wrote them anyway. A panel squeezed from 400px to its 200px
+ * minimum therefore looked inert to drag, and then came back at the dragged width
+ * instead of 400 once the user returned to 100% zoom: a silent, unattributable
+ * loss of their layout.
+ */
+describe('acceptsResize - a squeezed drag cannot raise the persisted size', () => {
+  const USER = 400;
+  const SQUEEZED = 200;
+
+  it('accepts anything while the panel renders at the user\'s own size', () => {
+    expect(acceptsResize(USER, USER, 500)).toBe(true);
+    expect(acceptsResize(USER, USER, 250)).toBe(true);
+  });
+
+  it('refuses a size the squeezed rendering could never have reached', () => {
+    // The whole widening direction: the first pixel of drag already exceeds the
+    // clamp, so every one of these is a width the edge did not move to.
+    expect(acceptsResize(SQUEEZED, USER, SQUEEZED + 1)).toBe(false);
+    expect(acceptsResize(SQUEEZED, USER, 300)).toBe(false);
+    expect(acceptsResize(SQUEEZED, USER, USER + 100)).toBe(false);
+  });
+
+  it('still accepts a shrink, which IS reachable while squeezed', () => {
+    // A smaller panel is always affordable, so dragging one narrower is a real
+    // request and must persist - refusing it would make a squeezed panel
+    // un-resizable in both directions rather than one.
+    expect(acceptsResize(SQUEEZED, USER, SQUEEZED)).toBe(true);
+    expect(acceptsResize(SQUEEZED, USER, 150)).toBe(true);
   });
 });
