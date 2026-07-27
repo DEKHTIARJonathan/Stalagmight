@@ -1253,15 +1253,37 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
             .map(|s| color_to_ariane(&s.color))
             .unwrap_or_else(|| "0x4ecdc4ff".to_string());
 
+        // The depths of the two stations the closure ties together. A closure
+        // carrying `depth: 0.0` is not merely cosmetic: Ariane consumers read the
+        // chain as geometry, so a connector sitting at depth 0 hanging off a
+        // station 13 m down is a shot with a 13 m vertical drop and no length -
+        // impossible, and enough to abort the whole file's conversion. (SpeleoDB's
+        // `openspeleo_lib` walks CLOSURE shots during coordinate propagation even
+        // though it excludes them from the emitted features, so this is reached.)
+        let station_depth_of = |r: &StationRef| {
+            project
+                .sections
+                .iter()
+                .find(|s| s.id == r.section_id)
+                .map_or(0.0, |s| station_depth(s, r.station_index as usize))
+        };
+        let depth_a = station_depth_of(&a_ref);
+        let depth_b = station_depth_of(&b_ref);
+        // The two endpoints are the same physical point surveyed twice, so the
+        // connector's length IS the vertical part of the closure error. Emitting
+        // exactly that keeps `|depth - origin_depth| <= length` true by
+        // construction, and stays honest: a perfectly closed loop still gets 0.
+        let closure_length = (depth_b - depth_a).abs();
+
         closure_shots.push(ExportShot {
             id: closure_id,
             from_id,
             shot_type: "CLOSURE",
             section: section_name,
             azimuth: 0.0,
-            length: 0.0,
-            depth: 0.0,
-            depth_in: 0.0,
+            length: closure_length,
+            depth: depth_b,
+            depth_in: depth_a,
             inclination: 0.0,
             left: 0.0,
             right: 0.0,
@@ -1298,7 +1320,122 @@ fn build_export_shots(project: &Project) -> (Vec<ExportShot>, Vec<ShotBaselineEn
         }
     }
 
+    enforce_ariane_geometry_invariants(&mut all_shots);
+
     (all_shots, baseline)
+}
+
+/// Rounding slack for the depth-vs-length comparison. Every number in the file is
+/// written through `format_f64` at six decimal places, so a value that is exactly
+/// on the boundary here can land a hair over it once parsed back. A micrometre of
+/// margin is physically meaningless and keeps the emitted file inside the bound.
+const ARIANE_GEOMETRY_EPSILON: f64 = 1e-6;
+
+/// Make the exported shot chain satisfy the geometry invariants an Ariane consumer
+/// enforces, so a file we produce can always be read back as geometry.
+///
+/// The one that bites is that a consumer derives each shot's vertical change from
+/// its PARENT's `Depth`, not from the shot's own `DepthIn` - so the chain must
+/// satisfy `|Depth - parent.Depth| <= Length` for every shot. Our own model is
+/// richer: a shot carries `depth_in` and `depth_out` independently, so a branch
+/// that starts at a different depth than the station it hangs off is
+/// representable here and simply is not representable in Ariane's chain. Exported
+/// verbatim, such a junction reads as a shot with more vertical drop than length -
+/// geometrically impossible - and SpeleoDB's `openspeleo_lib` raises on it, which
+/// aborts GeoJSON generation for the ENTIRE project (the upload still returns 200,
+/// so nothing surfaces to the user).
+///
+/// The repair keeps each shot's OWN vertical change and re-hangs it from the
+/// parent's depth, which is the part of the measurement we can be sure of; only a
+/// shot whose own drop already exceeds its own length is clamped further, and that
+/// is broken data either way. Shots that already satisfy the bound - every
+/// continuous chain, which is nearly all of them - are left untouched.
+///
+/// Also sweeps non-finite values, which reach the same comparison and fail it (any
+/// comparison against NaN is false), and would otherwise be written into the file.
+fn enforce_ariane_geometry_invariants(shots: &mut [ExportShot]) {
+    let mut sanitized = 0usize;
+    for shot in shots.iter_mut() {
+        for value in [
+            &mut shot.azimuth,
+            &mut shot.length,
+            &mut shot.depth,
+            &mut shot.depth_in,
+            &mut shot.inclination,
+        ] {
+            if !value.is_finite() {
+                *value = 0.0;
+                sanitized += 1;
+            }
+        }
+        // A negative tape reading is not a direction, and it makes the bound below
+        // unsatisfiable for every child.
+        if shot.length < 0.0 {
+            shot.length = 0.0;
+            sanitized += 1;
+        }
+    }
+    if sanitized > 0 {
+        tracing::warn!(
+            fields = sanitized,
+            "Ariane export: replaced non-finite or negative geometry values with 0"
+        );
+    }
+
+    let mut children: HashMap<i64, Vec<usize>> = HashMap::new();
+    let mut roots: VecDeque<usize> = VecDeque::new();
+    for (i, shot) in shots.iter().enumerate() {
+        if shot.from_id == -1 {
+            roots.push_back(i);
+        } else {
+            children.entry(shot.from_id).or_default().push(i);
+        }
+    }
+
+    // Parent-before-child, so a child is measured against its parent's ALREADY
+    // repaired depth and one junction cannot cascade into its whole branch.
+    let mut visited = vec![false; shots.len()];
+    let mut repaired = 0usize;
+    let mut queue = roots;
+    while let Some(i) = queue.pop_front() {
+        if visited[i] {
+            continue;
+        }
+        visited[i] = true;
+        let parent_depth = shots[i].depth;
+        let Some(kids) = children.get(&shots[i].id).cloned() else {
+            continue;
+        };
+        for k in kids {
+            if visited[k] {
+                continue; // a cycle; leave it alone rather than rewriting twice
+            }
+            let shot = &mut shots[k];
+            if (shot.depth - parent_depth).abs() <= shot.length {
+                queue.push_back(k);
+                continue;
+            }
+            // `depth_in` carries the sentinel -1.0 when it equals the previous
+            // depth, in which case the shot's own drop IS the one that violated
+            // the bound and only the clamp below can help it.
+            let own_delta = if (shot.depth_in + 1.0).abs() < f64::EPSILON {
+                shot.depth - parent_depth
+            } else {
+                shot.depth - shot.depth_in
+            };
+            let limit = (shot.length - ARIANE_GEOMETRY_EPSILON).max(0.0);
+            shot.depth = parent_depth + own_delta.clamp(-limit, limit);
+            repaired += 1;
+            queue.push_back(k);
+        }
+    }
+    if repaired > 0 {
+        tracing::warn!(
+            shots = repaired,
+            "Ariane export: re-hung shots whose depth change exceeded their length \
+             (a junction depth discontinuity Ariane's chain cannot express)"
+        );
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -2301,6 +2438,279 @@ mod tests {
         let shot_for_station_2 = shots.iter().find(|s| s.id == 2).unwrap();
         assert!(shot_for_station_2.latitude.abs() < f64::EPSILON);
         assert!(shot_for_station_2.longitude.abs() < f64::EPSILON);
+    }
+
+    /// Every Ariane consumer derives a shot's vertical change from its PARENT's
+    /// `Depth`, so the whole emitted chain has to satisfy
+    /// `|Depth - parent.Depth| <= Length`. A file that breaks it is not merely
+    /// odd - SpeleoDB's `openspeleo_lib` raises on the first offender and drops
+    /// GeoJSON for the ENTIRE project, while the upload still returns 200, so the
+    /// user is never told their survey has no map.
+    fn assert_ariane_chain_is_representable(shots: &[ExportShot]) {
+        let depth_by_id: HashMap<i64, f64> = shots.iter().map(|s| (s.id, s.depth)).collect();
+        for shot in shots {
+            if shot.from_id == -1 {
+                continue;
+            }
+            let Some(&parent_depth) = depth_by_id.get(&shot.from_id) else {
+                continue;
+            };
+            let delta = (shot.depth - parent_depth).abs();
+            assert!(
+                delta <= shot.length,
+                "shot id={} (from {}) drops {delta} over a length of {} - impossible geometry",
+                shot.id,
+                shot.from_id,
+                shot.length,
+            );
+            assert!(
+                shot.depth.is_finite() && shot.length.is_finite() && shot.azimuth.is_finite(),
+                "shot id={} carries a non-finite value",
+                shot.id,
+            );
+        }
+    }
+
+    /// Round-trip a REAL `.tml` through the importer and back out, then assert the
+    /// emitted chain is representable. Env-gated in the same spirit as the SpeleoDB
+    /// live tests: it needs a file we cannot commit (someone's survey), so it skips
+    /// cleanly when `TML_ROUNDTRIP_IN` is unset.
+    ///
+    /// ```text
+    /// TML_ROUNDTRIP_IN=/path/in.tml TML_ROUNDTRIP_OUT=/path/out.tml \
+    ///   cargo test --features telemetry reexport -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a real .tml via TML_ROUNDTRIP_IN"]
+    #[expect(
+        clippy::print_stdout,
+        reason = "a hand-run diagnostic tool; the shot count and output path are its result"
+    )]
+    fn reexport_of_a_real_tml_keeps_the_chain_representable() {
+        let Ok(input) = std::env::var("TML_ROUNDTRIP_IN") else {
+            return;
+        };
+        let tml = crate::parsers::tml::parse_tml(Path::new(&input)).unwrap();
+        let (sections, _closures) =
+            crate::parsers::tml::convert_tml_to_import_configs(&tml, false, true).unwrap();
+
+        // Straight into `SectionData` rather than through the import command: the
+        // shot chain is what this asserts on, and the import epilogue (placement,
+        // closures, merges) needs an `AppState` that adds nothing here.
+        let mut project = Project::new("Roundtrip".to_string(), None);
+        for section in sections {
+            project.add_section(SectionData {
+                name: section.name,
+                color: section.color,
+                shots: section.shots,
+                surveyor: section.surveyor,
+                date: section.date,
+                direction: section.direction,
+                quality: section.quality,
+            });
+        }
+
+        // Optional anchor, so the re-exported file can be taken all the way to
+        // GeoJSON by a consumer (which needs one) rather than stopping at the
+        // by-design no-anchor skip.
+        if std::env::var("TML_ROUNDTRIP_ANCHOR").is_ok() {
+            project.zero_datums.push(ZeroDatum {
+                station_ref: StationRef {
+                    section_id: 0,
+                    station_index: 0,
+                }
+                .into(),
+                gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+            });
+        }
+
+        let (shots, _baseline) = build_export_shots(&project);
+        println!("re-exported {} shots from {input}", shots.len());
+        assert_ariane_chain_is_representable(&shots);
+
+        if let Ok(out) = std::env::var("TML_ROUNDTRIP_OUT") {
+            export_tml(&project, Path::new(&out)).unwrap();
+            println!("wrote {out}");
+        }
+    }
+
+    #[test]
+    fn closure_shots_carry_the_depths_of_the_stations_they_tie() {
+        // They used to be written with `depth: 0.0` regardless of where the
+        // stations actually are, which reads as a connector with a full-depth
+        // drop and no length.
+        let mut project = Project::new("Closure Depths".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    azimuth_in: 0.0,
+                    azimuth_out: 0.0,
+                    length: 10.0,
+                    depth_in: 0.0,
+                    depth_out: 5.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    azimuth_in: 90.0,
+                    azimuth_out: 90.0,
+                    length: 10.0,
+                    depth_in: 5.0,
+                    depth_out: 9.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            path_length: 20.0,
+            misclosure_distance: 0.0,
+            error_percentage: 0.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 4.0,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: false,
+        });
+
+        let (shots, _baseline) = build_export_shots(&project);
+        let closure = shots.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
+        assert!(
+            (closure.depth - 9.0).abs() < 1e-9,
+            "the connector sits at the depth of the station it closes onto, got {}",
+            closure.depth
+        );
+        assert!(
+            (closure.depth_in - 5.0).abs() < 1e-9,
+            "and starts at the depth of the station it leaves, got {}",
+            closure.depth_in
+        );
+        assert!(
+            closure.length >= (closure.depth - closure.depth_in).abs(),
+            "its length must cover its own vertical change"
+        );
+        assert_ariane_chain_is_representable(&shots);
+    }
+
+    #[test]
+    fn a_junction_depth_discontinuity_is_re_hung_rather_than_exported_impossible() {
+        // A branch that starts at a different depth than the station it hangs off
+        // is representable in our model and is NOT representable in Ariane's
+        // chain. Exported verbatim it reads as a shot with more drop than length.
+        let mut project = Project::new("Junction".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Parent".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 20.0,
+                depth_in: 0.0,
+                depth_out: 17.0,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        // The child starts 12.2 m down while the station it merges into is 17 m
+        // down: a 4.8 m step across a 1.07 m shot.
+        project.add_section(SectionData {
+            name: Some("Branch".to_string()),
+            color: "#00ff00".to_string(),
+            shots: vec![ShotData {
+                azimuth_in: 45.0,
+                azimuth_out: 45.0,
+                length: 1.07,
+                depth_in: 12.21,
+                depth_out: 12.5,
+                ..Default::default()
+            }],
+            ..Default::default()
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 0,
+            }
+            .into(),
+            merged_at: chrono::Utc::now(),
+        });
+
+        let (shots, _baseline) = build_export_shots(&project);
+        assert_ariane_chain_is_representable(&shots);
+    }
+
+    #[test]
+    fn non_finite_geometry_never_reaches_the_file() {
+        // NaN fails every comparison, including the one a consumer uses to decide
+        // whether a shot is possible, so it aborts the same conversion.
+        let mut shots = vec![
+            ExportShot {
+                id: 1,
+                from_id: -1,
+                shot_type: "START",
+                section: "S".to_string(),
+                azimuth: 0.0,
+                length: 0.0,
+                depth: 0.0,
+                depth_in: 0.0,
+                inclination: 0.0,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                comment: None,
+                explorer: None,
+                date: None,
+                color: "0xff0000ff".to_string(),
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                locked: false,
+            },
+            ExportShot {
+                id: 2,
+                from_id: 1,
+                shot_type: "REAL",
+                section: "S".to_string(),
+                azimuth: f64::NAN,
+                length: f64::INFINITY,
+                depth: f64::NAN,
+                depth_in: -1.0,
+                inclination: f64::NEG_INFINITY,
+                left: 0.0,
+                right: 0.0,
+                up: 0.0,
+                down: 0.0,
+                comment: None,
+                explorer: None,
+                date: None,
+                color: "0xff0000ff".to_string(),
+                latitude: 0.0,
+                longitude: 0.0,
+                closure_to_id: -1,
+                locked: false,
+            },
+        ];
+
+        enforce_ariane_geometry_invariants(&mut shots);
+
+        assert_ariane_chain_is_representable(&shots);
     }
 
     #[test]
