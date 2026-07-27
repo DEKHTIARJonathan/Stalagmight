@@ -71,8 +71,19 @@ export function newOracleState(): OracleState {
  *    leaked download temp pass `check_problems` in silence - and the directory
  *    it lands in is exactly the one this oracle scans (an open SpeleoDB
  *    project's path IS `<cache>/speleodb/<uuid>/project.stalx`).
+ *  - `.vacuum.tmp`       - the push snapshot's SQLite compaction
+ *    (`persistence/sqlite/repair.rs::vacuum_temp_path`), which likewise appends to
+ *    the whole file name, so the push stages at `snapshot.stalx.vacuum.tmp` in
+ *    that same directory. Cleaned on every in-process exit from `VACUUM INTO`
+ *    (success renames it away, both failure arms unlink it) and self-healed by the
+ *    next push, so it only survives a crash or kill mid-compaction - which is
+ *    precisely what the adversarial runs provoke, and what this oracle is for.
+ *
+ * Note the app's own recovery scanner (`commands/recovery.rs`) treats ANY trailing
+ * `.tmp` as leftover, so it needs no such list; this narrower allowlist is the
+ * harness's alone, and is the only one that can silently fall behind a producer.
  */
-const LEFTOVER_TEMP_SUFFIXES = ['.stalx.tmp', '.download.tmp'] as const;
+const LEFTOVER_TEMP_SUFFIXES = ['.stalx.tmp', '.download.tmp', '.vacuum.tmp'] as const;
 
 /** Whether a directory entry is a leftover write-staging file. */
 export function isLeftoverTempName(name: string): boolean {
