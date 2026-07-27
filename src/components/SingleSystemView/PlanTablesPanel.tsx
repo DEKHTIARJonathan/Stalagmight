@@ -1,15 +1,16 @@
 import { useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CylindersTable } from './CylindersTable';
+import { ProfileChart } from './ProfileChart';
 
 type PlanTab = 'cylinders' | 'profile';
 
 /**
  * The Plan-mode bottom panel (#38): tabbed tabular data that replaces the survey data
  * table while planning. "Cylinders" is the rig editor; "Profile" is the anticipated
- * depth/time/gas profile for handoff to a deco app (Subsurface) - a stub for now, since
- * the backend doesn't yet return the per-route path (predecessor back-trace is future
- * work - see the PR's PR3). Tab state is local + transient (never persisted).
+ * depth/distance/runtime profile of the planned route (#299), drawn from the round-trip
+ * series the gas engine now publishes on `GasReachField.route_profile`. Tab state is
+ * local + transient (never persisted).
  */
 export function PlanTablesPanel() {
   const { t } = useTranslation();
@@ -24,23 +25,10 @@ export function PlanTablesPanel() {
           {t('planTables.tabs.profile')}
         </TabButton>
       </div>
-      <div className="flex-1 overflow-auto">
-        {tab === 'cylinders' ? <CylindersTable /> : <ProfileStub />}
+      {/* The chart sizes itself to the panel, so its pane must not scroll - it clips instead. */}
+      <div className={`flex-1 min-h-0 ${tab === 'cylinders' ? 'overflow-auto' : 'overflow-hidden'}`}>
+        {tab === 'cylinders' ? <CylindersTable /> : <ProfileChart />}
       </div>
-    </div>
-  );
-}
-
-function ProfileStub() {
-  const { t } = useTranslation();
-  return (
-    <div
-      className="h-full flex flex-col items-center justify-center text-center gap-1 p-6 text-text-secondary"
-      data-testid="plan-profile-stub"
-    >
-      <p className="text-sm font-medium">{t('planTables.profile.title')}</p>
-      <p className="text-xs">{t('planTables.profile.subtitle')}</p>
-      <p className="text-xs opacity-70">{t('planTables.profile.comingSoon')}</p>
     </div>
   );
 }

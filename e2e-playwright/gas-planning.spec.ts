@@ -404,6 +404,44 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
   });
 
+  test('Profile tab draws the planned dive profile and switches axis (#299)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+
+    // Entering Plan resolves a route, so the chart has something to draw - not the empty pane.
+    const svg = page.locator('[data-testid="plan-profile-svg"]');
+    await expect(svg).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="plan-profile-empty"]')).toHaveCount(0);
+    await expect(svg).toHaveAttribute('data-axis', 'distance');
+
+    // A real polyline, and the turnaround is marked. Asserted on the path DATA, not just presence:
+    // a chart whose projection divided by a zero span would still render an <svg> element, just an
+    // empty or NaN-filled one. (The mock hardcodes station z = 0, so the profile here is flat by
+    // construction - the depth math itself is pinned in the Rust tests.)
+    const d = await page.locator('[data-testid="plan-profile-line"]').getAttribute('d');
+    expect(d).toBeTruthy();
+    expect(d).not.toContain('NaN');
+    expect((d ?? '').match(/[ML]/g)?.length ?? 0).toBeGreaterThan(1);
+    await expect(page.locator('[data-testid="plan-profile-marker-turn"]')).toBeVisible();
+
+    // The axis toggle is a real re-projection, and it is reflected in aria-pressed for a11y.
+    await page.locator('[data-testid="plan-profile-axis-time"]').click();
+    await expect(svg).toHaveAttribute('data-axis', 'time');
+    await expect(page.locator('[data-testid="plan-profile-axis-time"]')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    const timePath = await page.locator('[data-testid="plan-profile-line"]').getAttribute('d');
+    expect(timePath).not.toContain('NaN');
+
+    // Switching tabs away and back keeps the chart (the tab state is local + transient).
+    await page.locator('[data-testid="plan-tab-cylinders"]').click();
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+    await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
+  });
+
   test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
     await enterMode(page, 'plan');
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
@@ -1066,9 +1104,10 @@ test.describe('Gas planning', () => {
       (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().setActiveTool('merge'),
     );
     await expect.poll(() => activeTool(page), { timeout: 2000 }).toBe('select');
-    // Profile tab is a stub.
+    // Profile tab renders the dive-profile chart (#299), not the old stub.
     await page.locator('[data-testid="plan-tab-profile"]').click();
-    await expect(page.locator('[data-testid="plan-profile-stub"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plan-profile"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plan-profile-axis-distance"]')).toBeVisible();
 
     // Export: panel hosts the real export controls (no longer a stub), no gas/plan tables.
     await enterMode(page, 'export');

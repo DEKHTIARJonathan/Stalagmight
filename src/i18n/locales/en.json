@@ -2323,8 +2323,17 @@
     },
     "profile": {
       "title": "Anticipated dive profile",
-      "subtitle": "Depth · time · gas along the planned route",
-      "comingSoon": "Export to Subsurface - coming soon"
+      "subtitle": "Depth against distance or runtime, out to the turn and back. No decompression is modelled.",
+      "noRoute": "No route to plot. Set an origin, and an endpoint the plan can actually reach.",
+      "axisLabel": "Profile x axis",
+      "axis": {
+        "distance": "Distance",
+        "time": "Time"
+      },
+      "units": {
+        "minutes": "min"
+      },
+      "aria": "Dive profile: max depth {{depth}}, {{distance}} penetration, about {{runtime}} minutes round trip."
     }
   },
   "exportPanel": {
