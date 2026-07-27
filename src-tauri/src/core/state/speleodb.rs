@@ -2964,18 +2964,24 @@ impl AppState {
             Ok(pushed) => {
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
-                    // NEVER let a successful push move BASE BACKWARD to the
-                    // empty-repo sentinel. `parse_upload_auto_response` prefers the
-                    // 200 envelope's top-level `hexsha` and falls back to the nested
-                    // `latest_commit`, but both are Options, so a deployment that
-                    // omitted them would land here with `None` - and a None BASE over
-                    // a dirty copy fences straight to Diverged, then walks the whole
-                    // history to the service-account creation root and calls that a
-                    // stranger's commit. The user gets a divergence prompt against
-                    // their own just-landed push. Keeping the previous BASE instead
-                    // costs at most one redundant ancestry recovery on the next push,
-                    // which is exactly what that machinery is for. Mirrors the same
-                    // guard the revision-restore path already applies.
+                    // NEVER let a successful push move BASE BACKWARD. A None BASE
+                    // over a dirty copy fences straight to Diverged, then walks the
+                    // whole history to the service-account creation root and calls
+                    // that a stranger's commit; the user gets a divergence prompt
+                    // against their own just-landed push. Keeping the previous BASE
+                    // instead costs at most one redundant ancestry recovery on the
+                    // next push, which is exactly what that machinery is for. Mirrors
+                    // the same guard the revision-restore path already applies.
+                    //
+                    // Presence is a sufficient test only because
+                    // `parse_upload_auto_response` now populates `latest_commit`
+                    // SOLELY from the 200 envelope's authoritative top-level
+                    // `hexsha`. It used to fall back to the response's own
+                    // eventually-consistent `latest_commit`, which is documented (and
+                    // was observed live) still pointing at the PRIOR tip right after
+                    // a push - a stale ancestor that sails through this check and
+                    // moves BASE backward past every intervening commit, which is the
+                    // exact failure the guard is here to prevent.
                     if new_base.is_some() {
                         l.base_commit_sha = new_base;
                     } else {

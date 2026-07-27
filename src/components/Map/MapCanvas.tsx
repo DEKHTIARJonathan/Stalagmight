@@ -4041,22 +4041,30 @@ function MapCanvas() {
       )}
 
       {/* Fit-to-view / exit-focus (#50) plus the read-only notices, laid out as
-          one flex row so they can never overlap. The closure notice is shown ONLY
-          when nothing else already explains the read-only state: in Survey mode,
-          and only while the project is otherwise editable. That makes it the exact
-          complement of the SpeleoDB badge inside Survey, so the two are mutually
-          exclusive by construction rather than by luck.
+          one flex row so they can never overlap. The closure notice is shown only
+          when nothing else already explains the read-only state, which inside
+          Survey means "the project is otherwise editable" - the exact complement of
+          the SpeleoDB badge, so the two are mutually exclusive by construction
+          rather than by luck.
 
-          `speleoReadOnly` is the right predicate here, not `holdsWriteLock`: a
-          force-editor genuinely CAN edit (so the SpeleoDB badge is already hidden
-          for them), which makes the closure view the only thing blocking their
-          edits - exactly when the notice earns its space. */}
+          OUTSIDE Survey that complement is unnecessary and was actively harmful.
+          Plan and Export force closure-adjusted geometry, and `showSpeleoReadOnly`
+          is itself gated on Survey - so there is no badge to collide with, and
+          requiring `appMode === 'survey'` here removed the notice from the two
+          modes that always draw corrected geometry. Someone reading coordinates or
+          lengths off the Plan view had nothing telling them they were looking at
+          loop-closure-adjusted positions rather than their measured survey.
+
+          `speleoReadOnly` is the right predicate for the Survey half, not
+          `holdsWriteLock`: a force-editor genuinely CAN edit (so the SpeleoDB badge
+          is already hidden for them), which makes the closure view the only thing
+          blocking their edits - exactly when the notice earns its space. */}
       <MapTopLeftOverlay
         focused={focusedSectionId !== null}
         onFitOrExitFocus={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
         showSpeleoReadOnly={speleoReadOnly && !placementMode && appMode === 'survey'}
         showClosureReadOnly={
-          closureAdjustedView && !placementMode && appMode === 'survey' && !speleoReadOnly
+          closureAdjustedView && !placementMode && (appMode !== 'survey' || !speleoReadOnly)
         }
         // The solve still runs where the notice is hidden (Plan/Export force
         // closure-adjusted geometry), and it is the only progress signal there -

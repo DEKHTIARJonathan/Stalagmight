@@ -834,9 +834,24 @@ fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
     let parsed: UploadAutoResponse = serde_json::from_slice(body)
         .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
     let mut project = parsed.project;
-    if let Some(hexsha) = parsed.hexsha.filter(|h| !h.is_empty()) {
-        project.latest_commit = Some(Commit { id: hexsha });
-    }
+    // The top-level `hexsha` is the ONLY trustworthy source for the commit this
+    // push just created, and the nested `project.latest_commit` is deliberately NOT
+    // used as a fallback for it. That field is eventually consistent - documented
+    // in `sync::reconcile_verdict` and observed live still pointing at the PRIOR
+    // tip (the service-account creation root) immediately after a push. Folding it
+    // in here handed the caller a stale ancestor that passed its "is there a sha?"
+    // guard and moved BASE BACKWARD past every commit in between; the next edit
+    // then fenced that BASE against our own just-landed commit and raised the
+    // divergence prompt, offering to discard un-pushed work to "take remote".
+    //
+    // `None` is the honest answer when the authoritative field is absent, and the
+    // caller already handles it: it keeps the previous BASE, which costs at most one
+    // redundant ancestry recovery on the next push - exactly what that machinery is
+    // for.
+    project.latest_commit = parsed
+        .hexsha
+        .filter(|h| !h.is_empty())
+        .map(|id| Commit { id });
     Ok(project)
 }
 
@@ -1407,10 +1422,16 @@ mod tests {
     }
 
     #[test]
-    fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
+    fn upload_auto_response_adopts_only_the_authoritative_hexsha() {
         // #197 review: a top-level hexsha is the commit THIS push created → adopt it.
-        // But a 200 envelope WITHOUT a top-level hexsha must NOT fail as Parse/Fatal
-        // (which would strand the dirty bit) - fall back to the nested latest_commit.
+        // A 200 envelope WITHOUT one must NOT fail as Parse/Fatal (that would strand
+        // the dirty bit) - but it must not fall back to the nested `latest_commit`
+        // either. That field is eventually consistent and was observed live still
+        // pointing at the PRIOR tip right after a push, so adopting it moves BASE
+        // BACKWARD past every intervening commit; the caller then fences that BASE
+        // against our own just-landed commit and raises the divergence prompt,
+        // offering to discard un-pushed work to "take remote". `None` makes the
+        // caller keep the previous BASE, which costs one redundant ancestry recovery.
         let proj = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Up","latest_commit":{"id":"nested-prior"}}"#;
 
         let with = format!("{{\"hexsha\":\"top-new\",\"project\":{proj}}}");
@@ -1424,20 +1445,16 @@ mod tests {
         let without = format!("{{\"project\":{proj}}}");
         let fallback =
             parse_upload_auto_response(without.as_bytes()).expect("missing hexsha must not error");
-        assert_eq!(
-            fallback.latest_commit.as_ref().map(|c| c.id.as_str()),
-            Some("nested-prior"),
-            "a 200 lacking hexsha falls back to the nested latest_commit, not a Parse error"
+        assert!(
+            fallback.latest_commit.is_none(),
+            "the stale nested latest_commit must never be adopted as the new BASE"
         );
 
-        // An empty-string hexsha is treated as absent (same fallback).
+        // An empty-string hexsha is treated as absent (same refusal).
         let empty = format!("{{\"hexsha\":\"\",\"project\":{proj}}}");
         let empty_fb =
             parse_upload_auto_response(empty.as_bytes()).expect("empty hexsha must not error");
-        assert_eq!(
-            empty_fb.latest_commit.as_ref().map(|c| c.id.as_str()),
-            Some("nested-prior")
-        );
+        assert!(empty_fb.latest_commit.is_none());
     }
 
     #[test]
