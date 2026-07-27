@@ -30,10 +30,55 @@ const TOAST_HEIGHT = 60;
 const TOAST_WIDTH = 320;
 const SLOT = TOAST_HEIGHT + TOAST_GAP_PX;
 
+/**
+ * Where the stack's box sits, for the hover hit-test.
+ *
+ * The stack is click-through (`pointer-events-none`), so it receives no
+ * mouseenter/mouseleave of its own - the pause is decided by testing the pointer
+ * position against this box. jsdom's `getBoundingClientRect` is all zeros, which
+ * would make every event at (0, 0) read as "inside", so the stack element (and
+ * only it) reports a real one.
+ */
+const STACK_BOX = { left: 24, top: 600, right: 344, bottom: 660 };
+const INSIDE = { clientX: 100, clientY: 630 };
+const OUTSIDE = { clientX: 900, clientY: 100 };
+
 const originalHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetHeight');
 const originalWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, 'offsetWidth');
+const originalRect = Object.getOwnPropertyDescriptor(
+  HTMLElement.prototype,
+  'getBoundingClientRect',
+);
+
+/** Move the pointer somewhere. The stack listens on document, capture-phase. */
+function movePointerTo(at: { clientX: number; clientY: number }) {
+  act(() => {
+    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ...at }));
+  });
+}
+
+const hoverStack = () => movePointerTo(INSIDE);
+const leaveStack = () => movePointerTo(OUTSIDE);
 
 function stubLayout() {
+  Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', {
+    configurable: true,
+    value(this: HTMLElement) {
+      // Toasts must keep reporting a zero rect: `measure` prefers `rect.height`
+      // and only falls back to the stubbed `offsetHeight`, so a real rect here
+      // would quietly replace the height the offsets are asserted against.
+      if (this.dataset?.testid !== 'toast-stack' && this.getAttribute('data-testid') !== 'toast-stack') {
+        return { x: 0, y: 0, top: 0, left: 0, right: 0, bottom: 0, width: 0, height: 0 } as DOMRect;
+      }
+      return {
+        ...STACK_BOX,
+        x: STACK_BOX.left,
+        y: STACK_BOX.top,
+        width: STACK_BOX.right - STACK_BOX.left,
+        height: STACK_BOX.bottom - STACK_BOX.top,
+      } as DOMRect;
+    },
+  });
   Object.defineProperty(HTMLElement.prototype, 'offsetHeight', {
     configurable: true,
     get(this: HTMLElement) {
@@ -51,6 +96,8 @@ function stubLayout() {
 function restoreLayout() {
   if (originalHeight) Object.defineProperty(HTMLElement.prototype, 'offsetHeight', originalHeight);
   if (originalWidth) Object.defineProperty(HTMLElement.prototype, 'offsetWidth', originalWidth);
+  if (originalRect)
+    Object.defineProperty(HTMLElement.prototype, 'getBoundingClientRect', originalRect);
 }
 
 /** jsdom's window.innerHeight is 768; the capacity rule needs a known one. */
@@ -429,6 +476,54 @@ describe('ToastStack - lifecycle', () => {
   });
 });
 
+/**
+ * The stack floats over the survey map and the side panels, and it is transient
+ * feedback the user never asked for - so it must not eat a click aimed at what is
+ * underneath it. It briefly did: the measured box carried `pointer-events-auto`
+ * over the whole column, gaps included, so a station click, a shot selection or a
+ * panel row click that happened to land in the lower-left corner was swallowed
+ * with no cue that anything had intercepted it.
+ */
+describe('ToastStack - click-through', () => {
+  it('opts exactly one element - the dismiss button - back into pointer events', () => {
+    // Asserted on the classes, since jsdom loads no CSS and `getComputedStyle`
+    // would report the default for all of them. That still catches the regression
+    // that matters: the column going back to `pointer-events-auto`, or a toast
+    // body opting in and re-creating the dead zone a little smaller.
+    render(<ToastStack />);
+    push('working…', 'k');
+    push('and another', 'k2');
+
+    const stack = screen.getByTestId('toast-stack');
+    expect(stack.className).toContain('pointer-events-none');
+    expect(stack.className).not.toContain('pointer-events-auto');
+
+    const opted = [...stack.querySelectorAll<HTMLElement>('*')].filter((el) =>
+      el.className.toString().includes('pointer-events-auto'),
+    );
+    expect(opted.map((el) => el.tagName)).toEqual(['BUTTON', 'BUTTON']);
+    expect(opted.every((el) => el.getAttribute('aria-label')?.startsWith('Dismiss'))).toBe(true);
+
+    // And it is still a working button.
+    act(() => (opted[0] as HTMLButtonElement).click());
+    advance(300);
+    expect(toasts()).toHaveLength(1);
+  });
+
+  it('still pauses on hover, which is now a hit-test rather than an event', () => {
+    // The pause is what `pointer-events` used to buy; losing it would be a real
+    // regression, so it is asserted right next to the click-through.
+    render(<ToastStack />);
+    push('read me', 'k');
+    advance(5500);
+    expect(Number(toastFor('read me')?.style.opacity)).toBeLessThan(1);
+
+    hoverStack();
+    advance(20000);
+    expect(toastFor('read me')?.style.opacity).toBe('1');
+  });
+});
+
 describe('ToastStack - pausing', () => {
   it('hover pauses dismissal and restores full opacity', () => {
     render(<ToastStack />);
@@ -438,11 +533,7 @@ describe('ToastStack - pausing', () => {
     advance(5500);
     expect(Number(toastFor('read me')?.style.opacity)).toBeLessThan(1);
 
-    act(() => {
-      screen.getByTestId('toast-stack').dispatchEvent(
-        new MouseEvent('mouseover', { bubbles: true }),
-      );
-    });
+    hoverStack();
     expect(toastFor('read me')?.style.opacity).toBe('1');
 
     // Well past its lifetime, but frozen.
@@ -457,14 +548,9 @@ describe('ToastStack - pausing', () => {
 
     // Deep into the fade before the pointer arrives.
     advance(5500);
-    const stack = screen.getByTestId('toast-stack');
-    act(() => {
-      stack.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    });
+    hoverStack();
     advance(20000);
-    act(() => {
-      stack.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
-    });
+    leaveStack();
 
     // Resuming where it stopped would have left ~1s of fade and killed it almost
     // at once. Having read it, the user has spent exactly the time the dwell
@@ -488,18 +574,12 @@ describe('ToastStack - pausing', () => {
     // opacity 0, below its slot.
     advance(200);
 
-    act(() => {
-      screen.getByTestId('toast-stack').dispatchEvent(
-        new MouseEvent('mouseover', { bubbles: true }),
-      );
-    });
+    hoverStack();
     expect(toastFor('stuck?')?.style.opacity).toBe('1');
 
     // No mouseout is ever dispatched. Instead the pointer simply turns up
     // somewhere else, which is positive evidence it has left the stack.
-    act(() => {
-      document.body.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-    });
+    leaveStack();
     advance(8000);
     expect(toastFor('stuck?')).toBeUndefined();
   });
@@ -508,13 +588,9 @@ describe('ToastStack - pausing', () => {
     render(<ToastStack />);
     push('read me', 'k');
 
-    const stack = screen.getByTestId('toast-stack');
-    act(() => {
-      stack.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
-    });
-    act(() => {
-      stack.dispatchEvent(new MouseEvent('mousemove', { bubbles: true }));
-    });
+    hoverStack();
+    // A second move, still within the box.
+    movePointerTo({ clientX: INSIDE.clientX + 10, clientY: INSIDE.clientY + 5 });
 
     advance(20000);
     expect(toastFor('read me')).toBeDefined();
@@ -539,11 +615,7 @@ describe('ToastStack - pausing', () => {
     push('older', 'a');
     push('newer', 'b');
 
-    act(() => {
-      screen.getByTestId('toast-stack').dispatchEvent(
-        new MouseEvent('mouseover', { bubbles: true }),
-      );
-    });
+    hoverStack();
     advance(30000);
 
     expect(toasts().map((el) => el.dataset.toastKey)).toEqual(['a', 'b']);
@@ -570,13 +642,9 @@ describe('ToastStack - manual dismiss', () => {
     render(<ToastStack />);
     push('only one', 'a');
 
-    // Hover, then dismiss the last toast: the container unmounts, so its
-    // mouseleave never fires.
-    act(() => {
-      screen.getByTestId('toast-stack').dispatchEvent(
-        new MouseEvent('mouseover', { bubbles: true }),
-      );
-    });
+    // Hover, then dismiss the last toast: the container unmounts, so nothing
+    // would ever tell the stack the pointer had left it.
+    hoverStack();
     act(() => {
       within(toastFor('only one')!).getByRole('button').click();
     });

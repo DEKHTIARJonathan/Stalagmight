@@ -487,36 +487,6 @@ export function ToastStack() {
     return () => window.clearInterval(handle);
   }, [hasToasts, endFocus]);
 
-  /**
-   * Self-heal a stranded pause.
-   *
-   * `mouseleave` is not guaranteed to arrive. The node under the pointer can be
-   * REMOVED - a toast finishing its exit, the stack reflowing, the container
-   * unmounting - and a node that no longer exists fires no leave event, so
-   * `paused` would stay true and nothing would ever dismiss again. That is the
-   * "once I have hovered them they never go away" case.
-   *
-   * So do not rely solely on the enter/leave pair: while hover-paused, any
-   * pointer movement over something OUTSIDE the stack is positive evidence the
-   * pointer has gone, and ends the hover. A focus pause is untouched by this -
-   * focus is held regardless of where the mouse happens to be, and the tick
-   * re-check above is what ends that one.
-   */
-  useEffect(() => {
-    if (!paused) return undefined;
-    const onMove = (e: Event) => {
-      const el = stackRef.current;
-      const target = e.target;
-      if (el && target instanceof Node && el.contains(target)) return;
-      endHover();
-    };
-    document.addEventListener('pointermove', onMove, true);
-    document.addEventListener('mousemove', onMove, true);
-    return () => {
-      document.removeEventListener('pointermove', onMove, true);
-      document.removeEventListener('mousemove', onMove, true);
-    };
-  }, [paused, endHover]);
 
   // The entrance. A toast renders its first frame below its slot at opacity 0,
   // then flips to its real offset on the next frame, and the CSS transition does
@@ -568,6 +538,56 @@ export function ToastStack() {
     setToastCapacity(fitToastCapacity(viewportHeight, [...liveHeights].reverse()));
   });
 
+  /**
+   * Hover detection by GEOMETRY rather than by `mouseenter`/`mouseleave`.
+   *
+   * The stack is deliberately click-through (`pointer-events-none`; only the
+   * dismiss buttons opt back in), so it receives no pointer events of its own and
+   * has no enter/leave pair to listen to. Hit-testing the pointer against the
+   * measured box gives the same pause behaviour while a click on the map or a
+   * panel underneath still lands where the user aimed it.
+   *
+   * It also subsumes the stranded-pause self-heal this replaces: `mouseleave` was
+   * never guaranteed to arrive, because the node under the pointer can simply be
+   * REMOVED (a toast finishing its exit, the stack reflowing, the container
+   * unmounting) and a node that no longer exists fires no leave event - which left
+   * `paused` stuck true and nothing ever dismissing again. A position test cannot
+   * get stranded: no box, or the pointer outside it, ends the hover. A focus pause
+   * is untouched - focus is held regardless of where the mouse is, and the tick
+   * re-check above is what ends that one.
+   *
+   * The box is cached rather than measured per event: pointer moves arrive at
+   * pointer rate (and the tick already dirties layout 20x a second), so reading
+   * `getBoundingClientRect` in the handler would force a layout flush on every
+   * mouse move across the whole app. It only moves when the stack's own geometry
+   * or the viewport does, which is exactly this effect's dependency list.
+   */
+  const hoverBox = useRef<DOMRect | null>(null);
+  useEffect(() => {
+    if (!hasToasts) {
+      hoverBox.current = null;
+      return undefined;
+    }
+    hoverBox.current = stackRef.current?.getBoundingClientRect() ?? null;
+    const onMove = (e: MouseEvent) => {
+      const box = hoverBox.current;
+      const inside =
+        !!box &&
+        e.clientX >= box.left &&
+        e.clientX <= box.right &&
+        e.clientY >= box.top &&
+        e.clientY <= box.bottom;
+      if (inside) beginHover();
+      else endHover();
+    };
+    document.addEventListener('pointermove', onMove, true);
+    document.addEventListener('mousemove', onMove, true);
+    return () => {
+      document.removeEventListener('pointermove', onMove, true);
+      document.removeEventListener('mousemove', onMove, true);
+    };
+  }, [hasToasts, stackHeight, stackWidth, viewportHeight, beginHover, endHover]);
+
   const urgent = toasts.filter((item) => isUrgent(item.kind));
   const polite = toasts.filter((item) => !isUrgent(item.kind));
   const politeMessage = useLiveRegionMessage(polite);
@@ -606,11 +626,19 @@ export function ToastStack() {
           // The box is sized from the measurement so it covers the whole column,
           // gaps included: hover pauses the stack, and a gap that was not part of
           // the hit area would un-pause every time the pointer crossed one.
-          className="absolute bottom-6 left-6 pointer-events-auto"
+          //
+          // CLICK-THROUGH. The stack floats over the survey map and the side
+          // panels, and it is transient feedback the user never asked for - so it
+          // must not eat a click aimed at what is underneath. With
+          // `pointer-events-auto` here, any click landing on the column (a station,
+          // a shot, a panel row) was swallowed with no cue that anything had
+          // intercepted it, and a pointer resting in that corner kept the dead zone
+          // alive indefinitely by re-arming the dwell on every leave. Only the
+          // dismiss buttons opt back in; the pause is hit-tested against this box
+          // instead of relying on pointer events it no longer receives.
+          className="absolute bottom-6 left-6 pointer-events-none"
           style={{ height: stackHeight || undefined, width: stackWidth || undefined }}
           ref={stackRef}
-          onMouseEnter={beginHover}
-          onMouseLeave={endHover}
           onFocusCapture={beginFocus}
           onBlurCapture={endFocus}
         >
@@ -724,11 +752,15 @@ function Toast({
         <span className="text-text-primary text-sm leading-5" aria-hidden="true">
           {item.message}
         </span>
+        {/* The one part of the stack that opts back INTO pointer events: the
+            container is click-through so a toast never eats a click meant for the
+            map or a panel, and this button is the only thing in it the user can
+            legitimately aim at. */}
         <button
           type="button"
           aria-label={dismissLabel}
           onClick={onDismiss}
-          className="shrink-0 -mr-1 mt-0.5 rounded p-1 text-text-secondary hover:text-text-primary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className="pointer-events-auto shrink-0 -mr-1 mt-0.5 rounded p-1 text-text-secondary hover:text-text-primary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
         >
           <CloseIcon size={12} />
         </button>
