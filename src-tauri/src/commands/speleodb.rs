@@ -21,6 +21,7 @@ use std::collections::HashMap;
 
 use tauri::{AppHandle, Manager};
 
+use crate::config::TokenFallback;
 use crate::core::AppState;
 // [Track A] #186/D-B2: commands now return the structured SpeleoErrorDto (carrying
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
@@ -317,6 +318,34 @@ pub async fn speleodb_set_exclude_geojson(
 #[tauri::command]
 pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_session_status).await
+}
+
+/// Record where the API key should live after the keychain failed at login, and
+/// move the held token there. `mode` is the new `token_fallback` preference -
+/// `session_only` or `plaintext` - and answering it also marks the keychain
+/// declined, so nothing touches it again until the next explicit sign-in.
+///
+/// No re-login: the token is already in memory, which is why the question is
+/// worth asking at the moment of failure rather than in Settings later. Returns
+/// the refreshed status, which reports where the key actually landed (a plaintext
+/// write can fail, and then the truthful answer is session-only).
+#[tauri::command]
+pub async fn speleodb_set_token_storage(
+    app: AppHandle,
+    mode: TokenFallback,
+) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_token_storage(mode)).await
+}
+
+/// Give the OS keychain another go (Settings' "Try again"): clear the persisted
+/// refusal and re-store the held token, which now reaches the keychain again.
+/// Safe to press twice - a keychain that is still broken just falls back the way
+/// login does, and the returned status says so.
+#[tauri::command]
+pub async fn speleodb_retry_keychain(
+    app: AppHandle,
+) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_retry_keychain).await
 }
 
 /// Report the open project's SpeleoDB link/edit status (#204) so the action shell

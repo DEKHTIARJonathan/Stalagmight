@@ -8,7 +8,7 @@
  * edits - so closing a saved-but-unpushed remote project returned straight to the home
  * screen with no notice. The guard now also fires on the unpushed work alone, which
  * means this dialog can be reached with NO lock - where every verb it used to offer
- * ("Push, release & close", "Close & keep the lock") could only fail.
+ * ("Push, release & close", "Close & keep the write lock") could only fail.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, waitFor } from '@testing-library/react';

@@ -512,6 +512,45 @@ impl TokenStore {
         }
     }
 
+    /// Re-persist the token this session ALREADY holds, at whatever tier the
+    /// current gates allow. `None` when there is nothing to move (a logged-out
+    /// session), which the caller reports rather than treating as success.
+    ///
+    /// This is what makes the storage question askable at all: when the keychain
+    /// fails at login the key is sitting right here in memory, so "put it in a
+    /// file instead" and "try the keychain again" are the same operation with the
+    /// decline flag set differently beforehand - no re-login, no re-typed password.
+    ///
+    /// Runs the full [`Self::store`] path so the decline flag and the two-gate
+    /// plaintext opt-in apply exactly as they do at login.
+    pub(crate) fn restore(
+        &mut self,
+        endpoint: &str,
+        email: &str,
+        allow_plaintext: bool,
+    ) -> Option<TokenTier> {
+        let token = self.in_memory.clone()?;
+        let tier = self.store(endpoint, email, &token, allow_plaintext);
+        // "This session only" has to be true ON DISK, not just in the label the
+        // user is shown: a plaintext copy from an earlier choice would otherwise
+        // sit there and be re-loaded on the next launch, which is the opposite of
+        // what they just asked for. The keychain tier self-heals plaintext inside
+        // `store`; only the memory landing needs sweeping here. The keychain is
+        // deliberately left untouched either way - reading it is what raises the
+        // unlock prompt this whole flow exists to stop.
+        if tier == TokenTier::Memory {
+            if let Some(plaintext) = &self.plaintext {
+                if let Err(e) = plaintext.delete(&account_key(endpoint, email)) {
+                    tracing::warn!(
+                        error = %e,
+                        "failed to delete the plaintext SpeleoDB token after a session-only choice"
+                    );
+                }
+            }
+        }
+        Some(tier)
+    }
+
     /// Whether the active token is backed by the OS keychain (vs the plaintext or
     /// in-memory tiers). Lets the UI keep warning about a non-persistent token.
     pub(crate) fn keychain_backed(&self) -> bool {
@@ -648,6 +687,21 @@ impl TokenStore {
             keychain_declined: false,
             keychain_state: KeychainState::NotAttempted,
         }
+    }
+
+    /// A store already HOLDING `token` in memory over the injected backends - the
+    /// shape a session has at the moment the storage question is asked: the key is
+    /// in hand, only its destination is undecided. Lets sibling-module tests drive
+    /// [`Self::restore`] without a login or a real keychain.
+    pub(crate) fn from_stores_holding(
+        token: &str,
+        keychain: Box<dyn SecretStore>,
+        plaintext: Option<Box<dyn SecretStore>>,
+    ) -> Self {
+        let mut store = Self::from_stores(keychain, plaintext);
+        store.in_memory = Some(token.to_owned());
+        store.active_tier = Some(TokenTier::Memory);
+        store
     }
 
     /// Inject the keychain (+ optional plaintext) backends so tier-precedence,
@@ -1235,6 +1289,85 @@ mod tests {
         assert_eq!(failing.keychain_state(), KeychainState::NotAttempted);
         assert_eq!(failing.store(EP, EMAIL, "tok", false), TokenTier::Memory);
         assert_eq!(failing.keychain_state(), KeychainState::Unavailable);
+    }
+
+    // ---- moving the key the session already holds (the login-time choice) ----
+
+    #[test]
+    fn restore_moves_the_held_token_without_touching_a_declined_keychain() {
+        // The whole premise of asking "where should the key go?" right after a
+        // keychain failure: the token is in memory, so honouring the answer must
+        // not need a re-login - and must not go near the keychain, or the choice
+        // re-raises the prompt it was offered to escape.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(
+            keychain,
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+        assert!(!touched.load(Ordering::SeqCst), "no keychain access");
+        let probe = PlaintextStore::new(temp.path().to_path_buf());
+        assert_eq!(
+            probe.load(&account_key(EP, EMAIL)).unwrap(),
+            Some("tok".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_session_only_choice_removes_an_existing_plaintext_copy() {
+        // Picking "this session only" has to be true on disk. Landing on the memory
+        // tier while a plaintext file from an earlier choice survives would leave the
+        // key readable after the restart the user was told it would not survive - and
+        // `load` would find it again on the next launch.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let key = account_key(EP, EMAIL);
+        let seeded = PlaintextStore::new(temp.path().to_path_buf());
+        seeded.store(&key, "tok").unwrap();
+
+        let (keychain, _touched) = spy_pair();
+        let mut store = TokenStore::from_stores(
+            keychain,
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert_eq!(store.restore(EP, EMAIL, false), Some(TokenTier::Memory));
+        assert_eq!(seeded.load(&key).unwrap(), None);
+    }
+
+    #[test]
+    fn retrying_the_keychain_re_stores_the_same_token_there() {
+        // The Settings "Try again" affordance: clearing the refusal and re-storing is
+        // all it takes, because the token never left memory.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let mut store = TokenStore::from_stores(
+            Box::new(InMemoryStore::new()),
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Plaintext));
+
+        store.set_keychain_declined(false);
+        assert_eq!(store.restore(EP, EMAIL, true), Some(TokenTier::Keychain));
+        assert!(store.keychain_backed());
+        assert_eq!(store.keychain_state(), KeychainState::Available);
+        // The keychain supersedes, so the plaintext copy it displaced is gone.
+        let probe = PlaintextStore::new(temp.path().to_path_buf());
+        assert_eq!(probe.load(&account_key(EP, EMAIL)).unwrap(), None);
+    }
+
+    #[test]
+    fn restore_reports_that_there_is_no_token_to_move() {
+        // A logged-out store must not answer "moved it" - the caller turns this into
+        // "not signed in" rather than a silent success.
+        let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+        assert_eq!(store.restore(EP, EMAIL, false), None);
     }
 
     #[test]

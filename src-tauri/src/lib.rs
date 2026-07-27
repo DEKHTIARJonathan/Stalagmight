@@ -1299,6 +1299,8 @@ pub fn run() {
             commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,
+            commands::speleodb::speleodb_set_token_storage,
+            commands::speleodb::speleodb_retry_keychain,
             // SpeleoDB linked-project status for the action shell (#204)
             commands::speleodb::speleodb_link_status,
             commands::speleodb::speleodb_unlink,

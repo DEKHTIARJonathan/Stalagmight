@@ -30,6 +30,8 @@ export function isReverifyDivergedError(error?: string | null): boolean {
   return !!error && error.startsWith(EDIT_REVERIFY_DIVERGED);
 }
 
-/** User-facing message shown when a read-only project rejects an edit. */
+/** User-facing toast shown when a read-only project rejects an edit. Says "write
+    lock" like the rest of the SpeleoDB copy: the point is that someone else has
+    exclusive write access, not that the file itself is locked. */
 export const READ_ONLY_EDIT_NOTICE =
-  'This project is open read-only - click Start editing to acquire the lock.';
+  'This project is open read-only - click Start editing to take the write lock.';

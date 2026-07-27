@@ -289,7 +289,7 @@ export function useSpeleoActions(): SpeleoActions {
     async (message?: string | null): Promise<DoneResult | null> => {
       setBusy(true);
       clearPushFailedBanner();
-      // #260: "Changes uploaded and lock released." lied whenever there was nothing to
+      // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to
       // upload (releasing a lock taken but never edited against). The remote dirty bit
       // is the one that means "local edits not yet on the server" - projectStore's
       // `isDirty` is the unrelated unsaved-to-disk flag - and `done` clears it, so read

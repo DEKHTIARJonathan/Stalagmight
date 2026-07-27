@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type {
   DoneResult,
+  KeychainReport,
   Permission,
   PushResult,
   RemoteState,
@@ -10,6 +11,7 @@ import type {
   SpeleoProjectSummary,
   SpeleoSessionStatus,
   StartEditingResult,
+  TokenStorage,
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc } from '../utils/ipc';
@@ -103,6 +105,20 @@ export interface SpeleoSession {
   endpoint: string | null;
   /** False when the token is held in memory only (won't survive a restart). */
   keychainBacked: boolean;
+  /**
+   * WHICH tier the API key actually lives in; `null` when signed out (there is no
+   * key to place). `keychainBacked` only answers "durable?", which cannot tell a
+   * file on disk from a session-only token - and those two have very different
+   * consequences for someone deciding whether to worry.
+   */
+  storage: TokenStorage | null;
+  /**
+   * What is known about the OS keychain, learned only from access we already had
+   * to make. `not_attempted` is a real answer we show: probing a locked Linux
+   * keyring is itself what raises the desktop unlock prompt, so a Settings panel
+   * that probed to draw a status line would re-create the nag it reports on.
+   */
+  keychain: KeychainReport;
 }
 
 export interface SpeleoLinkState {
@@ -276,6 +292,31 @@ interface SpeleoStore {
   /** Query `speleodb_session` and set it (best-effort; runs on project load so the
       action button knows who we are - e.g. to tell our own lock from another's). */
   refreshSession: () => Promise<void>;
+
+  // --- credential storage (items 1/11/12) ---
+  /**
+   * The "where should your API key go?" prompt raised by a login whose keychain
+   * write failed (`needs_storage_choice`).
+   *
+   * An INDEPENDENT overlay flag rather than the single `activeDialog` slot, for
+   * the reason the held-lock prompt is (#201): the login that raises it is
+   * usually made from inside the Settings account panel, and taking the
+   * `activeDialog` slot would unmount Settings - discarding every other setting
+   * the user had staged but not yet saved.
+   */
+  storageChoiceOpen: boolean;
+  /** Dismiss the storage prompt WITHOUT choosing. Deliberately persists nothing:
+      the session keeps working in memory and the question can be asked again on
+      the next login, which is the safe direction for a prompt someone escaped out
+      of rather than answered. */
+  closeStorageChoice: () => void;
+  /** Answer the storage question: persist the tier + the settled refusal, and move
+      the held token there (no re-login - the backend still has it). Resolves false
+      on failure, leaving the prompt open so the choice isn't silently lost. */
+  setTokenStorage: (mode: 'session_only' | 'plaintext') => Promise<boolean>;
+  /** Settings' "Try again": lift the refusal and re-store the held token, which now
+      reaches the keychain again. Resolves false on failure. */
+  retryKeychain: () => Promise<boolean>;
 
   // --- lock scan on login/app-open (#201, B1) ---
   /** One `list_projects` GET resolves lock state for ALL accessible projects:
@@ -519,6 +560,14 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         });
         set({ pendingAuth: null, authError: null });
         get().setSessionFromLogin(r);
+        // The keychain failed on THIS login and the user has not already settled
+        // where the key should go, so ask now, while the failure is in context and
+        // the token is still in hand. Raised from here so BOTH login paths reach it
+        // - the staged one applied on Settings' Save, and the "Log in now" button.
+        // Assigned rather than only raised: a login that DID reach the keychain
+        // also retires a prompt left over from an earlier failed one, which is
+        // now asking about a key that is no longer where it says.
+        set({ storageChoiceOpen: r.needs_storage_choice });
         // #201: a fresh login is an "on login" scan point - surface any locks this
         // user left held (and prime the recents badges). `prompt: true` so it raises
         // the resume/release prompt even after the app-open scan already ran.
@@ -625,6 +674,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         userEmail: s.user_email ?? null,
         endpoint: s.endpoint ?? null,
         keychainBacked: s.keychain_backed,
+        storage: s.storage ?? null,
+        keychain: s.keychain,
       },
     }),
 
@@ -634,6 +685,33 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       get().setSession(status);
     } catch {
       // Best-effort - leave whatever the store had.
+    }
+  },
+
+  storageChoiceOpen: false,
+
+  closeStorageChoice: () => set({ storageChoiceOpen: false }),
+
+  setTokenStorage: async (mode) => {
+    try {
+      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_set_token_storage', { mode });
+      // Seed from the ANSWER, not from the request: a plaintext write can itself
+      // fail, and then the honest thing to show is session-only.
+      get().setSession(status);
+      set({ storageChoiceOpen: false });
+      return true;
+    } catch {
+      return false;
+    }
+  },
+
+  retryKeychain: async () => {
+    try {
+      const status = await invokeIpc<SpeleoSessionStatus>('speleodb_retry_keychain');
+      get().setSession(status);
+      return true;
+    } catch {
+      return false;
     }
   },
 
@@ -728,6 +806,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         userEmail: r.user_email,
         endpoint: r.endpoint,
         keychainBacked: r.keychain_backed,
+        storage: r.storage,
+        keychain: r.keychain,
       },
     }),
 
@@ -777,6 +857,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       remoteSummaries: {},
       heldLocks: null,
       heldLockPromptOpen: false,
+      // Same reasoning: the storage prompt asks where to put a key that no longer
+      // exists once the session has ended.
+      storageChoiceOpen: false,
     })),
 
   seedFromStatus: (s) =>

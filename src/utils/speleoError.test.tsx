@@ -40,6 +40,8 @@ beforeEach(() => {
       userEmail: 'me@example.com',
       endpoint: ENDPOINT,
       keychainBacked: true,
+      storage: 'keychain',
+      keychain: 'available',
     },
   });
 });

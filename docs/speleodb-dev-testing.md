@@ -344,7 +344,7 @@ dirty bit, BASE never moves (no acquire), and reconnect runs the SAME acquire+fe
 as Start-editing (it folds into `speleodb_start_editing`, no new verb).
 
 The opt-in is `SpeleoDbConfig.allow_force_edit` (default false); without it the
-"Edit without lock" affordance stays hidden and `speleodb_force_edit` refuses.
+"Edit without the write lock" affordance stays hidden and `speleodb_force_edit` refuses.
 
 Offline coverage is the pure-state seam (no network): `speleodb_force_edit` flips
 both gates only when opted-in + remote + read-only; with `force_editing` set,
@@ -355,9 +355,9 @@ a non-existent lock), `speleodb_verify_lock_if_expired` is a no-op (#202 exempt)
 dialog, banner + Reconnect, the settings toggle, and the menu gating each have a
 Vitest test. The reconnect handshake needs a live box, so verify manually:
 
-1. Settings → enable "Allow editing without the lock"; open a remote project
+1. Settings → enable "Allow editing without the write lock"; open a remote project
    (opens read-only).
-2. Menu (or the status button) → "Edit without lock" → confirm the big-red dialog →
+2. Menu (or the status button) → "Edit without the write lock" → confirm the big-red dialog →
    the persistent red banner appears and the survey becomes editable; make an edit.
 3. DB-inspect the cached `.stalx`: `speleo_link.base_commit_sha` is **unchanged**
    (no acquire) and `has_unpushed_edits = 1`.
@@ -369,5 +369,5 @@ Vitest test. The reconnect handshake needs a live box, so verify manually:
 7. Reconnect while another account holds the lock → 400 → "locked by {holder}", and
    the force-edit banner persists (keep editing offline).
 8. Reconnect after the server tip moved with local edits → the divergence prompt.
-9. Opt-out account: no "Edit without lock" affordance; only read-only + the existing
+9. Opt-out account: no "Edit without the write lock" affordance; only read-only + the existing
    "Save a local copy" detach.

@@ -46,9 +46,9 @@ use crate::speleodb::{
 /// exposed to the webview.
 #[derive(Debug, Default)]
 pub(crate) struct SpeleoDbSession {
-    endpoint: Option<String>,
-    email: Option<String>,
-    token_store: TokenStore,
+    pub(super) endpoint: Option<String>,
+    pub(super) email: Option<String>,
+    pub(super) token_store: TokenStore,
     /// [Track C] (#188, C4): set once per process after the lazy silent startup
     /// rehydration runs (whether it found a token or not), so an empty/failed
     /// `load()` doesn't re-hit the keychain on every authed call.
@@ -530,7 +530,7 @@ impl AppState {
     /// then let [`SpeleoDbSession::rehydrate`] seed + wire `load()` once. Called
     /// before locking in the authed/session entry points. No network, no prompt,
     /// no config write.
-    fn speleodb_ensure_rehydrated(&self) {
+    pub(super) fn speleodb_ensure_rehydrated(&self) {
         // Cheap idempotency check first: if rehydration already ran (or a session
         // is live), skip the config read entirely.
         if let Ok(session) = self.speleodb_session_lock() {

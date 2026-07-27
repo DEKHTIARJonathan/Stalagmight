@@ -145,11 +145,13 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_remove_collaborator",
     "command.speleodb_remove_team",
     "command.speleodb_restore_revision",
+    "command.speleodb_retry_keychain",
     "command.speleodb_search_users",
     "command.speleodb_session",
     "command.speleodb_set_collaborator",
     "command.speleodb_set_exclude_geojson",
     "command.speleodb_set_team",
+    "command.speleodb_set_token_storage",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -924,7 +926,10 @@ mod tests {
         //       lock, uploads the chosen revision and releases it again):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-revert = 679.
-        assert_eq!(EVENT_NAMES.len(), 679);
+        //   + 2 credential-storage commands (the login-time "where should the key
+        //       go?" answer and the Settings keychain retry):
+        //       command.speleodb_{set_token_storage,retry_keychain} = 681.
+        assert_eq!(EVENT_NAMES.len(), 681);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

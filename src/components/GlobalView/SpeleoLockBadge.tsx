@@ -136,7 +136,7 @@ export function SpeleoLockBadge({
  * irrelevant for a linked project, so in its place we show the SpeleoDB mark plus
  * "SpeleoDB: {name}" - the server-side project name (falling back to the local
  * `name` when the scan hasn't resolved it) - then, when the lock is held, a middot
- * and "Locked by you" / "Locked by {email}". Returns `null` for a local project
+ * and "Write-locked by you" / "Write-locked by {email}". Returns `null` for a local project
  * (the caller shows the path instead). The last-edited time is not repeated here -
  * it has its own column / card footer.
  */

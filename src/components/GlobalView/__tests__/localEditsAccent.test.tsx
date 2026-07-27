@@ -185,7 +185,7 @@ describe('useSpeleoLocalStates (#270)', () => {
     // FIRST fetch and nothing after it. An id added while mounted (a second lock
     // scan landing while the held-lock prompt is up) left `loaded` true over the OLD
     // map: the new id read as absent, i.e. clean, and HeldLockResumeDialog offered
-    // an irreversible "Release lock" for work it had never actually checked.
+    // an irreversible "Release write lock" for work it had never actually checked.
     invokeIpcMock.mockReset();
     // One resolver per in-flight call, so each fetch can be settled on demand.
     const pending: Array<(states: SpeleoLocalStateMap) => void> = [];

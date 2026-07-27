@@ -4035,6 +4035,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               storage: null,
               keychain: 'not_attempted',
             };
+          // The credential-storage verbs both answer with a refreshed session. A
+          // mocked run is signed out, so they echo the logged-out shape above
+          // rather than inventing a session the rest of the mock does not have.
+          case 'speleodb_set_token_storage':
+          case 'speleodb_retry_keychain':
+            return {
+              logged_in: false,
+              user_email: null,
+              endpoint: null,
+              keychain_backed: false,
+              storage: null,
+              keychain: 'not_attempted',
+            };
           case 'speleodb_link_status':
             // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
             // included) so a spec that flips is_remote:true still matches the DTO.

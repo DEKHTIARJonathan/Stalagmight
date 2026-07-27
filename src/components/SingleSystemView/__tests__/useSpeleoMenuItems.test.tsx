@@ -2,7 +2,7 @@
  * Hook test for the SpeleoDB menu rows shared by the hamburger submenu and the
  * status button's right-click menu.
  *
- * Covers (#213) the force-edit gating - "Edit without lock" is behind the
+ * Covers (#213) the force-edit gating - "Edit without the write lock" is behind the
  * `allow_force_edit` opt-in and only offered while read-only, and a force-editor
  * gets Reconnect rather than Unlock - plus the "open on the web" destination,
  * which must be disabled whenever no URL can be formed.
@@ -44,24 +44,24 @@ beforeEach(() => {
   useSpeleoStore.setState({
     link: null,
     remoteProjectId: 'p1',
-    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true },
+    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
   });
 });
 
 describe('useSpeleoMenuItems force-edit gating (#213)', () => {
-  it('hides "Edit without lock" when the opt-in is off', () => {
+  it('hides "Edit without the write lock" when the opt-in is off', () => {
     expect(ids({ forceEditAllowed: false, editState: 'read-only' })).not.toContain(
       'speleodb-menu-edit-without-lock',
     );
   });
 
-  it('shows "Edit without lock" when opted-in and read-only', () => {
+  it('shows "Edit without the write lock" when opted-in and read-only', () => {
     expect(ids({ forceEditAllowed: true, editState: 'read-only' })).toContain(
       'speleodb-menu-edit-without-lock',
     );
   });
 
-  it('hides "Edit without lock" once we are already editing (opted-in)', () => {
+  it('hides "Edit without the write lock" once we are already editing (opted-in)', () => {
     expect(ids({ forceEditAllowed: true, editState: 'editing' })).not.toContain(
       'speleodb-menu-edit-without-lock',
     );

@@ -233,7 +233,7 @@ describe('SpeleoCollaboratorsTab', () => {
     expect(await screen.findByTestId('speleodb-web-collaborators')).toBeDisabled();
 
     useSpeleoStore.setState({
-      session: { loggedIn: true, userEmail: 'me@x.com', endpoint: 'https://x.test', keychainBacked: true },
+      session: { loggedIn: true, userEmail: 'me@x.com', endpoint: 'https://x.test', keychainBacked: true, storage: 'keychain', keychain: 'available' },
       remoteProjectId: 'p1',
     });
     await waitFor(() =>

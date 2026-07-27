@@ -57,7 +57,7 @@ beforeEach(() => {
     remoteProjectId: 'p1',
     divergence: null,
     busy: false,
-    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true },
+    session: { loggedIn: true, userEmail: 'me@x', endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
   });
   useUIStore.setState({ appMode: 'survey', openDialog: openDialogMock });
 });

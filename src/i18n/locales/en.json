@@ -633,16 +633,6 @@
         "help": "The SpeleoDB server to connect to (e.g. https://www.speleodb.org/). This only applies to future logins - your current session stays on the server it signed in to.",
         "aria": "SpeleoDB server endpoint"
       },
-      "tokenFallback": {
-        "label": "Token storage",
-        "help": "Where to keep your login token. The OS keychain is always tried first.",
-        "aria": "Token storage fallback",
-        "options": {
-          "sessionOnly": "This session only",
-          "plaintext": "Plaintext file (less secure)"
-        },
-        "plaintextWarning": "If the keychain is unavailable, your token will be written to a plaintext file on disk (readable only by your user). Prefer keeping it in memory for this session unless you understand the risk."
-      },
       "insecureHttp": {
         "label": "Allow insecure HTTP",
         "help": "By default only HTTPS (or HTTP to a private/loopback address) is allowed.",
@@ -650,16 +640,15 @@
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
       "allowForceEdit": {
-        "label": "Allow editing without the lock",
-        "help": "Adds an \"Edit without lock\" option for remote projects, so you can survey offline or while someone else holds the lock.",
+        "label": "Allow editing without the write lock",
+        "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
         "aria": "Allow editing SpeleoDB projects without the write lock",
-        "warning": "Changes made without the lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
+        "warning": "Changes made without the write lock cannot be merged to SpeleoDB until you reconnect and acquire it. If someone else edits meanwhile you may have to reconcile or keep your work as a separate local file."
       },
       "account": {
         "appliesOnSave": "Sign in and sign out apply when you press Save.",
         "signedInAs": "Signed in as {{email}}",
         "signedInAsAt": "Signed in as {{email}} at {{endpoint}}",
-        "memoryOnly": "Token kept in memory only (no keychain) - it won't survive a restart.",
         "logout": "Log out",
         "willSignOut": "You'll be signed out when you press Save.",
         "willSignIn": "Log in now to check your details, or they'll be applied when you press Save.",
@@ -671,6 +660,26 @@
         "useToken": "Paste an existing token instead of a password",
         "tryLogin": "Log in now",
         "tryingLogin": "Logging in…"
+      },
+      "credentials": {
+        "title": "Credential storage",
+        "storedIn": "Stored in: {{where}}",
+        "keyring": "Keyring: {{state}}",
+        "keyOnly": "Only your API key is stored here - never your password.",
+        "where": {
+          "keychain": "OS keychain (survives a restart)",
+          "plaintext": "a plaintext file on this computer (less secure)",
+          "memory": "this session only - you will be signed out when the app closes"
+        },
+        "keychainState": {
+          "notAttempted": "not checked yet",
+          "available": "available",
+          "unavailable": "not working on this computer",
+          "declined": "not in use - you chose otherwise when signing in"
+        },
+        "retry": "Try again",
+        "retrying": "Trying…",
+        "retryFailed": "Could not move your API key into the OS keychain."
       },
       "pollInterval": {
         "label": "Remote refresh interval",
@@ -1190,7 +1199,7 @@
       "cancel": "Cancel",
       "apply": "Apply Changes",
       "applying": "Applying...",
-      "readOnlyHint": "Applying is disabled while this project is read-only (closure-adjusted view, Plan/Export mode, or a locked remote SpeleoDB project).",
+      "readOnlyHint": "Applying is disabled while this project is read-only (closure-adjusted view, Plan/Export mode, or a write-locked remote SpeleoDB project).",
       "errorTitle": "Reconcile Failed",
       "errorUnknown": "Unknown error while applying changes",
       "errorApply": "Failed to apply collaborator changes",
@@ -1740,8 +1749,8 @@
       "aria": "Switch between map and list view"
     },
     "speleoRefresh": {
-      "title": "Refresh SpeleoDB lock state",
-      "aria": "Refresh SpeleoDB lock state"
+      "title": "Refresh SpeleoDB write-lock state",
+      "aria": "Refresh SpeleoDB write-lock state"
     },
     "tabs": {
       "map": "Map",
@@ -2733,12 +2742,33 @@
     "map": {
       "readOnlyBadge": "SpeleoDB · read-only"
     },
+    "storageChoice": {
+      "title": "Where should your API key be kept?",
+      "intro": "You are signed in, but this computer's keychain would not accept your SpeleoDB API key. Choose where it should be kept instead.",
+      "keyOnly": "Only your API key is stored - never your password. Either way you will not have to type your password again: \"this session only\" just means signing in again the next time you open the app.",
+      "session": {
+        "title": "This session only (recommended)",
+        "detail": "The key is held in memory and never written to disk. You will be signed out when the app closes.",
+        "action": "Keep it for this session"
+      },
+      "file": {
+        "title": "A file on this computer",
+        "detail": "The key survives a restart, but it is stored unencrypted and can be read by anything running as you.",
+        "action": "Save it to a file"
+      },
+      "decideLater": "Decide later",
+      "failed": "Could not save where your API key should be kept.",
+      "toasts": {
+        "session_only": "Your API key is kept for this session only.",
+        "plaintext": "Your API key is saved to a file on this computer."
+      }
+    },
     "button": {
-      "unlocked": "Read-only - click to start editing (acquire the lock)",
-      "editingDirty": "You're editing - click to push your changes and release the lock",
-      "editingClean": "You hold the lock - click to release it",
-      "forceEditing": "Editing WITHOUT the lock - your changes can't be merged until you reconnect. Click to reconnect.",
-      "forceEditingLockedBy": "Editing WITHOUT the lock ({{email}} holds it) - click to reconnect and reconcile",
+      "unlocked": "Read-only - click to start editing (take the write lock)",
+      "editingDirty": "You're editing - click to push your changes and release the write lock",
+      "editingClean": "You hold the write lock - click to release it",
+      "forceEditing": "Editing WITHOUT the write lock - your changes can't be merged until you reconnect. Click to reconnect.",
+      "forceEditingLockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - click to reconnect and reconcile",
       "lockedByOther": "Being edited by {{email}} - click to pull the latest",
       "remoteAhead": "SpeleoDB has newer changes - click to pull",
       "conflict": "Local and remote have diverged - click to resolve",
@@ -2753,17 +2783,17 @@
     },
     "menu": {
       "title": "SpeleoDB",
-      "lock": "Start editing (lock)",
-      "unlock": "Finish editing (push & unlock)",
-      "push": "Push (keep the lock)",
+      "lock": "Start editing (take the write lock)",
+      "unlock": "Finish editing (push & release)",
+      "push": "Push (keep the write lock)",
       "refresh": "Refresh from SpeleoDB",
-      "editWithoutLock": "Edit without lock…"
+      "editWithoutLock": "Edit without the write lock…"
     },
     "close": {
       "title": "Close SpeleoDB project",
       "message": "You still hold the SpeleoDB write lock. Release it so others can edit?",
-      "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release the lock before closing?",
-      "keepLock": "Close & keep the lock",
+      "dirtyMessage": "You have unpushed changes and still hold the SpeleoDB write lock. Push your changes and release it before closing?",
+      "keepLock": "Close & keep the write lock",
       "release": "Release & close",
       "pushRelease": "Push, release & close",
       "saveLocally": "Save changes locally before closing",
@@ -2778,11 +2808,11 @@
       "quitAnyway": "Quit anyway",
       "saveLocally": "Save changes locally before quitting",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
-      "keepLockHint": "Keeping the lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",
+      "keepLockHint": "Keeping the write lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",
       "pushRelease": "Push, release & quit",
-      "keepLock": "Keep the lock & quit",
-      "discardRelease": "Discard & release the lock",
-      "discardWarning": "Releasing the lock without uploading leaves your changes on this computer only, and lets anyone else start editing from the older version on SpeleoDB. Quit anyway?",
+      "keepLock": "Keep the write lock & quit",
+      "discardRelease": "Discard & release the write lock",
+      "discardWarning": "Releasing the write lock without uploading leaves your changes on this computer only, and lets anyone else start editing from the older version on SpeleoDB. Quit anyway?",
       "discardConfirm": "Yes, release & quit"
     },
     "divergence": {
@@ -2830,19 +2860,19 @@
       "reconnect": "Reconnect to sync",
       "confirm": {
         "title": "Edit without the write lock?",
-        "warning": "You are about to edit WITHOUT the SpeleoDB write lock. Your changes stay only on this computer and cannot be merged back to SpeleoDB until you reconnect and acquire the lock.",
-        "hint": "If someone else edits meanwhile, reconnecting may report a conflict - you would then reconcile, or save your work as an unmanaged local copy. Use this to survey offline or while another person holds the lock.",
-        "lockedBy": "{{email}} currently holds the lock, so their work is what a later reconnect will reconcile against.",
-        "action": "Edit without lock",
+        "warning": "You are about to edit WITHOUT the SpeleoDB write lock. Your changes stay only on this computer and cannot be merged back to SpeleoDB until you reconnect and acquire it.",
+        "hint": "If someone else edits meanwhile, reconnecting may report a conflict - you would then reconcile, or save your work as an unmanaged local copy. Use this to survey offline or while another person holds the write lock.",
+        "lockedBy": "{{email}} currently holds the write lock, so their work is what a later reconnect will reconcile against.",
+        "action": "Edit without the write lock",
         "entering": "Enabling…"
       },
       "banner": {
-        "text": "Editing WITHOUT the write lock - these changes cannot be merged to SpeleoDB until you reconnect and acquire the lock.",
-        "lockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - reconnect to acquire the lock and reconcile before your work can be merged."
+        "text": "Editing WITHOUT the write lock - these changes cannot be merged to SpeleoDB until you reconnect and acquire it.",
+        "lockedBy": "Editing WITHOUT the write lock ({{email}} holds it) - reconnect to acquire it and reconcile before your work can be merged."
       },
       "toasts": {
-        "active": "Editing without the lock. Reconnect to sync when you're ready.",
-        "failed": "Could not start editing without the lock"
+        "active": "Editing without the write lock. Reconnect to sync when you're ready.",
+        "failed": "Could not start editing without the write lock"
       }
     },
     "revisions": {
@@ -2856,10 +2886,10 @@
       "view": "View",
       "viewing": "Viewing…",
       "restoreHint": "Restoring replaces the working copy with the selected revision as an unsaved edit; push to make it the project's latest. Your project history is not rewritten.",
-      "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases the lock again.",
-      "forceEditActive": "You are force-editing without the lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
+      "lockToRestore": "The project is read-only. View opens a revision for inspection (the SpeleoDB Update returns you to the latest). Revert takes the write lock, uploads the chosen revision as a new revision, and releases it again.",
+      "forceEditActive": "You are force-editing without the write lock. Finish or discard those edits (reconnect or save a local copy) before you can view or restore a revision.",
       "unknownAuthor": "unknown author",
-      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - lock the project for editing and upload your changes first, or use Revert (that route asks before replacing them)."
+      "viewBlockedByUnpushed": "This copy has changes that are not on SpeleoDB. Viewing a revision replaces the working copy, so it would discard them - take the write lock and upload your changes first, or use Revert (that route asks before replacing them)."
     },
     "restore": {
       "title": "Restore revision {{sha}}",
@@ -2909,11 +2939,11 @@
     "editBar": {
       "someone": "someone else",
       "toasts": {
-        "editing": "You now hold the lock - editing enabled.",
-        "lockedBy": "Unable to lock the project right now - it's being edited by {{email}}. Please try again later.",
+        "editing": "You now hold the write lock - editing enabled.",
+        "lockedBy": "Could not take the write lock right now - the project is being edited by {{email}}. Please try again later.",
         "upToDate": "Already up to date.",
-        "released": "Changes uploaded and lock released.",
-        "releasedNothingToUpload": "Lock released. Nothing to upload.",
+        "released": "Changes uploaded and the write lock released.",
+        "releasedNothingToUpload": "Write lock released. Nothing to upload.",
         "pushed": "Changes pushed to SpeleoDB.",
         "startFailed": "Could not start editing",
         "updateFailed": "Could not update",
@@ -2926,9 +2956,9 @@
     },
     "done": {
       "title": "Finish editing",
-      "description": "Upload your changes to SpeleoDB and release the lock.",
+      "description": "Upload your changes to SpeleoDB and release the write lock.",
       "pushTitle": "Push changes",
-      "pushDescription": "Upload your changes to SpeleoDB and keep the lock so you can carry on editing.",
+      "pushDescription": "Upload your changes to SpeleoDB and keep the write lock so you can carry on editing.",
       "messageLabel": "Commit message (optional)",
       "messagePlaceholder": "Describe your changes…",
       "confirm": "Upload & release",
@@ -2964,7 +2994,7 @@
     },
     "banner": {
       "pushUnconfirmed": "The upload could not be confirmed. Your changes are kept - click Done again to retry.",
-      "concurrentSession": "This project is locked by your account in another session. Editing from two sessions at once can lose edits.",
+      "concurrentSession": "Your account holds the write lock on this project in another session. Editing from two sessions at once can lose edits.",
       "renderingDisabled": "Web-map rendering is turned off for this project on SpeleoDB, so the online map won't refresh (it may show older geometry).",
       "enableRendering": "Enable rendering",
       "enableRenderingConfirm": "Rendering refreshes on your NEXT push, not right now (this does not re-render the current version). Enable it?",
@@ -2977,24 +3007,24 @@
       "noAnchor": "This survey has no georeferenced zero datum, so SpeleoDB generated no new map geometry. Your data is still stored and shared; any existing online map may be stale."
     },
     "heldLocks": {
-      "title": "You hold SpeleoDB locks",
+      "title": "You hold SpeleoDB write locks",
       "description_one": "You still hold the write lock on this SpeleoDB project (perhaps from a session that did not exit cleanly). Others cannot edit it until it is released.",
       "description_other": "You still hold the write lock on {{count}} SpeleoDB projects (perhaps from a session that did not exit cleanly). Others cannot edit them until they are released.",
       "keep": "Keep working",
       "release": "Release",
-      "releaseOneAria": "Release the lock on {{name}}",
+      "releaseOneAria": "Release the write lock on {{name}}",
       "releasing": "Releasing…",
-      "releaseFailed": "Could not release the locks"
+      "releaseFailed": "Could not release the write locks"
     },
     "localEdits": {
       "titleSuffix": "These changes are only on this computer - SpeleoDB does not have them yet.",
       "heldLocks": {
         "hasLocalChanges": "Has changes only on this computer",
         "continueEditing": "Continue editing",
-        "continueEditingAria": "Open {{name}} and keep its lock",
+        "continueEditingAria": "Open {{name}} and keep its write lock",
         "opening": "Opening…",
         "checking": "Checking…",
-        "openFailed": "Could not find the local copy of {{name}} to open. Its lock is left alone so nothing is lost.",
+        "openFailed": "Could not find the local copy of {{name}} to open. Its write lock is left alone so nothing is lost.",
         "unknown": "Could not check which projects have changes only on this computer. Release with care.",
         "localStateUnknown": "Its local copy could not be read, so it may hold unsent changes",
         "unsavedChanges": "Save or discard the changes in the open project first - opening {{name}} would close it and lose them."
@@ -3002,13 +3032,13 @@
     },
     "recentBadge": {
       "remote": "Linked to SpeleoDB",
-      "lockedByYou": "Linked to SpeleoDB - locked by you",
-      "lockedByOther": "Linked to SpeleoDB - locked by {{email}}"
+      "lockedByYou": "Linked to SpeleoDB - write lock held by you",
+      "lockedByOther": "Linked to SpeleoDB - write lock held by {{email}}"
     },
     "recentInfo": {
       "prefix": "SpeleoDB: {{name}}",
-      "lockedByYou": "Locked by you",
-      "lockedByOther": "Locked by {{email}}"
+      "lockedByYou": "Write-locked by you",
+      "lockedByOther": "Write-locked by {{email}}"
     },
     "browser": {
       "title": "Open from SpeleoDB",
@@ -3020,11 +3050,11 @@
       "listUnavailable": "Your projects could not be loaded. Check your connection and use Refresh to try again.",
       "noMatches": "No projects match your filter.",
       "noAccess": "NO ACCESS",
-      "lockedBy": "Locked by {{email}}",
+      "lockedBy": "Write-locked by {{email}}",
       "open": "Open",
       "refresh": "Refresh",
       "signedInAs": "Signed in as {{email}}",
-      "concurrentSession": "This project is already locked by your account in another session. Editing it from two sessions at once is unsupported and can lose edits.",
+      "concurrentSession": "Your account already holds the write lock on this project in another session. Editing it from two sessions at once is unsupported and can lose edits.",
       "listFailed": "Could not load projects",
       "openFailed": "Could not open project"
     },
@@ -3131,15 +3161,15 @@
       "removeFailed": "Could not remove"
     },
     "lock": {
-      "title": "Lock",
-      "heldBy": "Locked by {{email}}",
-      "heldByYou": "You hold the edit lock.",
+      "title": "Write lock",
+      "heldBy": "Write lock held by {{email}}",
+      "heldByYou": "You hold the write lock.",
       "selfWarning": "Releasing here does not push your changes. Use Done to push and release.",
-      "none": "No lock is held.",
-      "releaseButton": "Release lock",
+      "none": "No write lock is held.",
+      "releaseButton": "Release write lock",
       "releasing": "Releasing…",
-      "released": "Lock released.",
-      "releaseFailed": "Could not release the lock"
+      "released": "Write lock released.",
+      "releaseFailed": "Could not release the write lock"
     },
     "delete": {
       "title": "Delete project",

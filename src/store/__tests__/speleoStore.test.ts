@@ -8,7 +8,7 @@ vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
 /** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
 const loggedInAs = (email: string) =>
   useSpeleoStore.setState({
-    session: { loggedIn: true, userEmail: email, endpoint: 'https://x/', keychainBacked: true },
+    session: { loggedIn: true, userEmail: email, endpoint: 'https://x/', keychainBacked: true, storage: 'keychain', keychain: 'available' },
   });
 
 const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
@@ -39,6 +39,7 @@ const reset = () => {
     heldLocks: null,
     heldLockPromptOpen: false,
     heldLockPromptPending: true,
+    storageChoiceOpen: false,
   });
 };
 
@@ -60,6 +61,10 @@ describe('speleoStore', () => {
         userEmail: 'u@x',
         endpoint: 'https://x/',
         keychainBacked: false,
+        // Both new fields cross intact: "durable?" and "where?" are different
+        // questions, and Settings needs the second one to say anything useful.
+        storage: 'memory',
+        keychain: 'unavailable',
       });
     });
 
@@ -136,6 +141,88 @@ describe('speleoStore', () => {
       expect(result.ok).toBe(false);
       expect(useSpeleoStore.getState().session).toBeNull();
       expect(useSpeleoStore.getState().pendingAuth).toBeNull();
+    });
+  });
+
+  describe('credential storage', () => {
+    const login = (needs_storage_choice: boolean) => {
+      useSpeleoStore.getState().setPendingAuth({
+        kind: 'login',
+        email: 'u@x',
+        password: 'pw',
+        token: '',
+        useToken: false,
+      });
+      invokeIpcMock.mockImplementation(async (cmd: string) =>
+        cmd === 'speleodb_login'
+          ? {
+              user_email: 'u@x',
+              endpoint: 'https://x/',
+              keychain_backed: false,
+              storage: 'memory',
+              keychain: 'unavailable',
+              needs_storage_choice,
+            }
+          : [],
+      );
+      return useSpeleoStore.getState().applyPendingAuth('https://x/');
+    };
+
+    it('a login whose keychain failed raises the storage question', async () => {
+      // Raised from applyPendingAuth so BOTH login paths reach it: the staged one
+      // applied on Settings' Save, and the panel's "Log in now" button.
+      await login(true);
+      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(true);
+    });
+
+    it('a login with a working keychain asks nothing', async () => {
+      await login(false);
+      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
+    });
+
+    it('setTokenStorage seeds the session from the reply, not from the request', async () => {
+      // The plaintext write can itself fail, and then the truthful thing to show is
+      // session-only - so the answer is authoritative over what was asked for.
+      useSpeleoStore.setState({ storageChoiceOpen: true });
+      invokeIpcMock.mockResolvedValue({
+        logged_in: true,
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: false,
+        storage: 'memory',
+        keychain: 'declined',
+      });
+
+      expect(await useSpeleoStore.getState().setTokenStorage('plaintext')).toBe(true);
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_set_token_storage', {
+        mode: 'plaintext',
+      });
+      expect(useSpeleoStore.getState().session?.storage).toBe('memory');
+      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
+    });
+
+    it('a refused setTokenStorage leaves the prompt up', async () => {
+      useSpeleoStore.setState({ storageChoiceOpen: true });
+      invokeIpcMock.mockRejectedValue({ message: 'not signed in' });
+
+      expect(await useSpeleoStore.getState().setTokenStorage('session_only')).toBe(false);
+      expect(useSpeleoStore.getState().storageChoiceOpen).toBe(true);
+    });
+
+    it('retryKeychain re-seeds the session from the refreshed status', async () => {
+      invokeIpcMock.mockResolvedValue({
+        logged_in: true,
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+      });
+
+      expect(await useSpeleoStore.getState().retryKeychain()).toBe(true);
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_retry_keychain');
+      expect(useSpeleoStore.getState().session?.keychain).toBe('available');
+      expect(useSpeleoStore.getState().session?.storage).toBe('keychain');
     });
   });
 
@@ -581,7 +668,7 @@ describe('speleoStore', () => {
 
     it('a logged-out scan clears the badges and consumes the app-open pending without prompting', async () => {
       useSpeleoStore.setState({
-        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
         remoteLocks: { p1: 'x' },
         remoteProjects: { p1: 'Stale' },
       });
@@ -599,7 +686,7 @@ describe('speleoStore', () => {
       // The prompt was open under the prior session; logging out must not leave it
       // lingering over a logged-out shell (not just consume the pending flag).
       useSpeleoStore.setState({
-        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+        session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
         heldLocks: [{ projectId: 'p1', projectName: 'A' }],
         heldLockPromptOpen: true,
       });
@@ -634,7 +721,7 @@ describe('speleoStore', () => {
       invokeIpcMock.mockImplementation(async (cmd: string) => {
         if (cmd === 'speleodb_list_projects') {
           useSpeleoStore.setState({
-            session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false },
+            session: { loggedIn: false, userEmail: null, endpoint: null, keychainBacked: false, storage: null, keychain: 'not_attempted' },
           });
           return [{ id: 'p1', name: 'Held', lock_holder: 'me@x' }];
         }

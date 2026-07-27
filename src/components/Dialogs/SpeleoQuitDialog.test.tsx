@@ -6,7 +6,7 @@
  *  1. "Push, release & quit" runs the existing `done` hand-off and quits ONLY
  *     once the lock is actually released;
  *  2. a failed push does NOT quit - the dialog stays up with the failure inline;
- *  3. "Keep the lock & quit" quits with NO release IPC of any kind (that is the
+ *  3. "Keep the write lock & quit" quits with NO release IPC of any kind (that is the
  *     entire point of the option: the backend veto keeps the edits safe behind
  *     the still-held lock);
  *  4. "Discard & release" is two-step, releases explicitly, then quits - and a

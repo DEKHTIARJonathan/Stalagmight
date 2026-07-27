@@ -168,6 +168,8 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
         userEmail: 'me@example.com',
         endpoint: 'https://cave.example.internal:8443/',
         keychainBacked: true,
+        storage: 'keychain',
+        keychain: 'available',
       },
     });
     invokeIpcMock.mockRejectedValue({
@@ -206,9 +208,9 @@ describe('useSpeleoActions - a failed push/unlock raises the persistent banner (
 });
 
 /**
- * #260 - "Changes uploaded and lock released." used to fire even when nothing was
- * uploaded. The remote dirty bit (`link.hasUnpushedEdits`) captured BEFORE the call
- * picks the wording.
+ * #260 - "Changes uploaded and the write lock released." used to fire even when
+ * nothing was uploaded. The remote dirty bit (`link.hasUnpushedEdits`) captured
+ * BEFORE the call picks the wording.
  */
 describe('useSpeleoActions - the release toast reflects whether anything was uploaded (#260)', () => {
   const seedLink = (hasUnpushedEdits: boolean) =>
@@ -239,7 +241,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
     });
 
     expect(showToast).toHaveBeenCalledWith(
-      'Changes uploaded and lock released.',
+      'Changes uploaded and the write lock released.',
       'speleodb-released',
       'success',
     );
@@ -257,7 +259,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
     });
 
     expect(showToast).toHaveBeenCalledWith(
-      'Lock released. Nothing to upload.',
+      'Write lock released. Nothing to upload.',
       'speleodb-released',
       'success',
     );
