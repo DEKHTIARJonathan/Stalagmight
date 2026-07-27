@@ -37,6 +37,23 @@ describe('averageAzimuth', () => {
     expect(averageAzimuth(180, 0)).toBeCloseTo(90, 6);
   });
 
+  it('matches Rust for readings outside [0, 360)', () => {
+    // Rust wraps with `rem_euclid` (sign of the divisor); a bare JS `%` keeps the
+    // sign of the dividend, so the two agreed only while `out - in + 540` stayed
+    // non-negative. Past that they returned ANTIPODES - this case read 280 here
+    // against the backend's 100. Out-of-range readings are reachable:
+    // INVALID_AZIMUTH is only a warning and DMP headings are stored verbatim.
+    expect(averageAzimuth(400, -200)).toBeCloseTo(100, 6);
+    // diff = (-400 - 400 + 540).rem_euclid(360) - 180 = 100 - 180 = -80
+    // -> (400 - 40).rem_euclid(360) = 0, i.e. the same as averaging 40 and 320.
+    expect(averageAzimuth(400, -400)).toBeCloseTo(0, 6);
+    expect(averageAzimuth(400, -400)).toBeCloseTo(averageAzimuth(40, 320), 6);
+    // diff = (10 - 730 + 540).rem_euclid(360) - 180 = 180 - 180 = 0 -> 730 % 360
+    expect(averageAzimuth(730, 10)).toBeCloseTo(10, 6);
+    // A negative pair still lands on the same bearing as its in-range twin.
+    expect(averageAzimuth(-10, -30)).toBeCloseTo(averageAzimuth(350, 330), 6);
+  });
+
   it('always returns a value in [0, 360)', () => {
     for (const [a, b] of [[0, 0], [359, 1], [180, 180], [1, 359], [200, 20]]) {
       const avg = averageAzimuth(a!, b!);

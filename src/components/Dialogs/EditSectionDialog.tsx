@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -31,6 +32,11 @@ export default function EditSectionDialog() {
     }
     return frozen.size > 0 ? frozen : undefined;
   }, [sectionId, section, isShotFrozen]);
+
+  // Reverse (#24) mutates the survey, and the closure-adjusted / Plan / Export
+  // read-only mode has no server backstop (see useEditingBlocked's
+  // backstop-asymmetry note), so its entry point has to be gated here too.
+  const editingBlocked = useEditingBlocked();
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -494,11 +500,13 @@ export default function EditSectionDialog() {
             onClick={() => {
               openDialog('reverse-section', { sectionIds: [section.id] });
             }}
-            disabled={isLoading || isDirty || pendingMidDelete !== null}
+            disabled={isLoading || isDirty || pendingMidDelete !== null || editingBlocked}
             title={
-              isDirty
-                ? 'Save or discard your edits first'
-                : 'Renumber this section end-to-end (the cave does not move)'
+              editingBlocked
+                ? 'Editing is disabled in the current view'
+                : isDirty
+                  ? 'Save or discard your edits first'
+                  : 'Renumber this section end-to-end (the cave does not move)'
             }
             data-testid="edit-section-reverse"
           >

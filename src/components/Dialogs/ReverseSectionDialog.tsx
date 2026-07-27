@@ -1,12 +1,24 @@
 import { useState } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { useGasPlanStore } from '../../store/gasPlanStore';
+import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { mirrorPlanPins, planPinsAffected } from '../../utils/reverseAftermath';
+import { applyReverseAftermath } from '../../utils/reverseAftermath';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+
+/**
+ * Stable identity for the project this dialog is acting on, following the
+ * `projectIdentityKey` pattern in `useMapTools`. Deliberately WITHOUT
+ * `modified_at`: the reverse itself bumps that, so including it would make the
+ * check fail on every success.
+ */
+function projectKeyOf(
+  project: { created_at?: string; file_path?: string | null } | null | undefined
+): string {
+  return `${project?.created_at ?? ''}|${project?.file_path ?? ''}`;
+}
 
 /**
  * Confirm dialog for reversing one or more sections end-to-end (#24).
@@ -26,30 +38,66 @@ export default function ReverseSectionDialog() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Everything below counts RESOLVED sections, never `sectionIds`. A section
+  // deleted between opening the menu and confirming would otherwise put
+  // "Reverse 3 Sections" over a 2-item list and then submit a batch the backend
+  // rolls back whole. The stale entry disables confirm instead of silently
+  // reverse-ing a different set than the one on screen.
   const sections = sectionIds
     .map((id) => project?.sections.find((s) => s.id === id))
     .filter((s): s is NonNullable<typeof s> => s !== undefined);
+  const hasMissing = sections.length < sectionIds.length;
 
-  const isMulti = sectionIds.length > 1;
-  const title = isMulti ? `Reverse ${sectionIds.length} Sections` : 'Reverse Section';
+  const isMulti = sections.length > 1;
+  const title = isMulti ? `Reverse ${sections.length} Sections` : 'Reverse Section';
 
   const handleConfirm = async () => {
-    if (sectionIds.length === 0) return;
+    if (isSubmitting || sections.length === 0 || hasMissing) return;
+
+    // Read-only self-check at confirm time: a reverse has NO server backstop for
+    // the local closure-adjusted / Plan / Export case (see useEditingBlocked's
+    // backstop-asymmetry note), so a dialog left open across a view switch to a
+    // read-only mode must refuse here rather than mutate. Re-checked now, not at
+    // open time, because the mode can flip while the dialog is up.
+    if (isEditingBlockedNow()) {
+      setError('Editing is disabled in the current view.');
+      return;
+    }
+
+    // A section with no shots is a single station and reverses to itself, so the
+    // backend deliberately changes nothing (and does not even touch the project).
+    // Sending it anyway would mark the project dirty - and cost an Undo - for an
+    // action that provably did nothing.
+    const changing = sections.filter((s) => s.shots.length > 0);
+    if (changing.length === 0) {
+      trackDialogComplete('reverse-section');
+      closeDialog();
+      return;
+    }
+
     setIsSubmitting(true);
     setError(null);
+    // Captured BEFORE the await. Escape closes this dialog (useKeyboardShortcuts /
+    // DialogWrapper) without cancelling the command already in flight, so a late
+    // reply must not close whatever dialog is open by then, nor emit a second
+    // trackDialogComplete. `dialogData` is a fresh object per openDialog call, so
+    // reference identity distinguishes even a re-opened Reverse dialog.
+    const dialogKey = dialogData;
+    const projectKey = projectKeyOf(project);
     try {
       // Reversing a multi-selection is one user action, so it goes through a
       // batch: the backend rolls the whole thing back if any section fails, and
       // it lands as a single undo entry. Looping one command per section would
       // leave the project half-reversed on a mid-loop failure while reporting an
       // error, and would need one Undo per section to get back.
+      const only = changing[0];
       const result =
-        sectionIds.length === 1 && sectionIds[0] !== undefined
-          ? await reverseSection(sectionIds[0], swapLeftRight)
+        changing.length === 1 && only !== undefined
+          ? await reverseSection(only.id, swapLeftRight)
           : await executeBatch(
-              sectionIds.map((sectionId) => ({
+              changing.map((s) => ({
                 type: 'reverse_section' as const,
-                section_id: sectionId,
+                section_id: s.id,
                 swap_left_right: swapLeftRight,
               }))
             );
@@ -60,23 +108,14 @@ export default function ReverseSectionDialog() {
       }
       // The backend mirrors everything it owns; these are the frontend's own
       // POSITIONAL refs, which a reverse leaves in-range but pointing at the
-      // opposite physical station. See utils/reverseAftermath.
-      const shotCounts = new Map(
-        sections.map((s) => [s.id, s.shots.length] as const)
-      );
-      const plan = useGasPlanStore.getState();
-      if (planPinsAffected(plan, shotCounts)) {
-        // Mirrored, not cleared: the diver picked these stations, and the point
-        // of a reverse is that the physical cave did not move.
-        plan.applyReversedPins(mirrorPlanPins(plan, shotCounts));
+      // opposite physical station. See utils/reverseAftermath. Applied even when
+      // the dialog is already gone - the reverse landed either way - but not
+      // across a project switch, whose refs belong to a different project.
+      if (projectKeyOf(useProjectStore.getState().project) === projectKey) {
+        applyReverseAftermath(new Map(changing.map((s) => [s.id, s.shots.length] as const)));
       }
-      // Selection and merge staging are cleared instead - there is no
-      // "same place" for a highlight, and a half-staged merge that silently
-      // retargets the far end is worse than one the user has to restart.
-      const ui = useUIStore.getState();
-      ui.clearSelection();
-      ui.clearMergeStations();
 
+      if (useUIStore.getState().dialogData !== dialogKey) return;
       trackDialogComplete('reverse-section');
       closeDialog();
     } catch (e) {
@@ -90,7 +129,7 @@ export default function ReverseSectionDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary">
           {isMulti
-            ? `Renumber ${sectionIds.length} sections end-to-end, so each section's last station becomes station 0.`
+            ? `Renumber ${sections.length} sections end-to-end, so each section's last station becomes station 0.`
             : 'Renumber this section end-to-end, so the last station becomes station 0.'}
         </p>
 
@@ -136,6 +175,16 @@ export default function ReverseSectionDialog() {
           </span>
         </label>
 
+        {hasMissing && (
+          <div
+            className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
+            data-testid="reverse-stale"
+          >
+            One or more of the selected sections no longer exists. Close this and pick the
+            sections again.
+          </div>
+        )}
+
         {error && (
           <div
             className="p-3 bg-error-10 border border-error-20 rounded text-error text-sm"
@@ -150,11 +199,11 @@ export default function ReverseSectionDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isSubmitting || sectionIds.length === 0}
+            disabled={isSubmitting || sections.length === 0 || hasMissing}
             data-primary-action=""
             data-testid="reverse-confirm"
           >
-            {isMulti ? `Reverse ${sectionIds.length} Sections` : 'Reverse'}
+            {isMulti ? `Reverse ${sections.length} Sections` : 'Reverse'}
           </Button>
         </div>
       </div>

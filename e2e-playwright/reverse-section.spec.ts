@@ -341,6 +341,102 @@ test.describe('Reverse Section', () => {
     expect(pins.endpoint).toEqual({ section_id: sectionId, station_index: 2 });
   });
 
+  test('moves the distance-gradient origin with the section too', async ({ page }) => {
+    // Same positional-ref hazard as the plan pins, and the origin's only other
+    // reset is a project switch - so without this the penetration ramp silently
+    // re-roots from the opposite end while still looking correct.
+    const [sectionId] = await setup(page);
+
+    await page.evaluate((id) => {
+      (window as any).__E2E_TEST__.uiStore
+        .getState()
+        .setDistanceGradientOrigin({ section_id: id, station_index: 0 });
+    }, sectionId);
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    const origin = await page.evaluate(
+      () => (window as any).__E2E_TEST__.uiStore.getState().distanceGradientOrigin
+    );
+    expect(origin).toEqual({ section_id: sectionId, station_index: 3 });
+  });
+
+  test('refuses to confirm while the view is read-only', async ({ page }) => {
+    // The closure-adjusted / Plan / Export read-only mode has NO server backstop,
+    // and the mode can flip while the dialog is up - so the check has to run at
+    // confirm time, not at open time.
+    const [sectionId] = await setup(page);
+    const before = await readShots(page, sectionId);
+
+    await page.evaluate((id) => {
+      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      ui.openDialog('reverse-section', { sectionIds: [id] });
+      ui.setAppMode('plan');
+    }, sectionId);
+
+    await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
+    await page.getByTestId('reverse-confirm').click();
+
+    await expect(page.getByTestId('reverse-error')).toBeVisible();
+    // The dialog stays up and nothing was reversed.
+    await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
+    expect((await readShots(page, sectionId)).map((s) => s.length)).toEqual(
+      before.map((s) => s.length)
+    );
+  });
+
+  test('disables confirm when a listed section has gone away', async ({ page }) => {
+    // The count, the label and the submitted batch all come off the RESOLVED
+    // sections, so a section deleted between opening the menu and confirming
+    // can't show "Reverse 2 Sections" over a 1-item list and then fail the whole
+    // batch.
+    const ids = await setup(page, 2);
+
+    await page.evaluate((sectionIds) => {
+      (window as any).__E2E_TEST__.uiStore
+        .getState()
+        .openDialog('reverse-section', { sectionIds });
+    }, ids);
+    await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
+    await expect(page.getByTestId('reverse-confirm')).toHaveText('Reverse 2 Sections');
+
+    await page.evaluate(
+      (id) => (window as any).__E2E_TEST__.projectStore.getState().deleteSection(id),
+      ids[1]
+    );
+
+    await expect(page.getByTestId('reverse-section-list').locator('li')).toHaveCount(1);
+    await expect(page.getByTestId('reverse-confirm')).toHaveText('Reverse');
+    await expect(page.getByTestId('reverse-confirm')).toBeDisabled();
+    await expect(page.getByTestId('reverse-stale')).toBeVisible();
+  });
+
+  test('does not dirty the project for a section with no shots', async ({ page }) => {
+    // A section with no shots is a single station and reverses to itself, so the
+    // backend deliberately changes nothing - sending it anyway would cost an
+    // unsaved-changes marker (and an Undo) for a provable no-op.
+    await setupMockedPage(page);
+    await createProject(page, 'Reverse Empty');
+    await seedProjectWithSections(page, [{ name: 'Empty', direction: 'in', shots: [] }]);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+
+    const sectionId = await page.evaluate(
+      () => (window as any).__E2E_TEST__.projectStore.getState().project.sections[0].id as number
+    );
+    await page.evaluate(() =>
+      (window as any).__E2E_TEST__.projectStore.setState({ isDirty: false })
+    );
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    expect(
+      await page.evaluate(
+        () => (window as any).__E2E_TEST__.projectStore.getState().isDirty as boolean
+      )
+    ).toBe(false);
+  });
+
   test('Edit Section dialog disables Reverse only while dirty', async ({ page }) => {
     const [sectionId] = await setup(page);
 

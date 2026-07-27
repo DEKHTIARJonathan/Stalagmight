@@ -201,7 +201,14 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // The pins moved because the SURVEY was renumbered, not because the diver
   // changed an input, so the drop overrides are kept (mirrored by the caller)
   // rather than cleared - the route is the same physical route.
-  applyReversedPins: (pins) => set({ ...pins, reachField: null }),
+  // `lastReachField` goes too, even though it is only ever read for MENU SHAPE:
+  // its route refs are positional and pre-reverse, and with `reachField` nulled
+  // here the ContextMenu's `reachField ?? lastReachField` fallback is GUARANTEED
+  // to be taken. A stale route set would then mark the mirrored stations
+  // off-route and hide the stage-drop entries (or offer them on a station that
+  // is no longer on the route - the unsafe direction). Blank, not mirrored: the
+  // field's refs are re-derived by the refetch this same set() triggers.
+  applyReversedPins: (pins) => set({ ...pins, reachField: null, lastReachField: null }),
 
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),

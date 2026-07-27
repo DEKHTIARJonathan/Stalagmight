@@ -18,7 +18,15 @@ export function normalizeAzimuth(value: number): number {
  * the short arc, so 350° and 10° average to 0° (not 180°).
  */
 export function averageAzimuth(azimuthIn: number, azimuthOut: number): number {
-  // diff is the signed short-arc delta in (-180, 180].
-  const diff = ((azimuthOut - azimuthIn + 540) % 360) - 180;
-  return (azimuthIn + diff / 2 + 360) % 360;
+  // diff is the signed short-arc delta in (-180, 180]. Wrapped with the
+  // Euclidean `normalizeAzimuth`, not a bare `%`: Rust uses `rem_euclid`, which
+  // keeps the sign of the DIVISOR, while JS `%` keeps the sign of the dividend.
+  // The two agree only while `azimuthOut - azimuthIn + 540` is non-negative, and
+  // an out-of-range reading breaks that - `averageAzimuth(400, -200)` came back
+  // 280 here against the backend's 100, i.e. the ANTIPODE, silently steering the
+  // "Average" fix for AZIMUTH_DEVIATION the wrong way down the passage.
+  // Out-of-range readings are reachable: INVALID_AZIMUTH is only a warning and
+  // the DMP parser stores its headings verbatim.
+  const diff = normalizeAzimuth(azimuthOut - azimuthIn + 540) - 180;
+  return normalizeAzimuth(azimuthIn + diff / 2);
 }
