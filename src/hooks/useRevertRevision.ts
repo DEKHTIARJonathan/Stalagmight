@@ -108,7 +108,22 @@ export function useRevertRevision() {
           quiet: true,
         });
       } catch (e) {
-        const dirty = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
+        const refusedForLocalEdits = unpushedLocalEdits(e);
+        // Ask the BACKEND whether the copy is dirty, because that is the bit
+        // `speleodb_done` decides on - `message: None` selects the commit message,
+        // it does not suppress the upload. Reading only the frontend mirror made
+        // this release able to publish the very edits it was about to ask the user
+        // to confirm discarding: the pre-flight above has already forced the local
+        // bit to false on the `discardLocal: false` run, so `dirty` was false by
+        // construction, while the backend row could be dirty from an autosave that
+        // landed between the pre-flight and this call - which is one of the ways
+        // the restore throws `unpushedLocalEdits` in the first place.
+        //
+        // That error IS the backend saying the bit is set, so it settles the
+        // question on its own; the refresh covers the other failure kinds.
+        if (!refusedForLocalEdits) await useSpeleoStore.getState().refreshLinkStatus();
+        const dirty =
+          refusedForLocalEdits || (useSpeleoStore.getState().link?.hasUnpushedEdits ?? false);
         // Hand the lock back ONLY while the copy is clean. `done(null)` is the one
         // release verb that both skips the push (the dirty bit is clear, so there is
         // nothing to upload) and drops the edit gate. While the copy IS dirty we keep

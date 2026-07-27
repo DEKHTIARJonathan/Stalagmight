@@ -8,7 +8,7 @@ import { useRevertRevision } from '../../hooks/useRevertRevision';
 
 /**
  * Revert-to-revision confirm, opened from the revision history of a READ-ONLY
- * project with `{ projectId, projectName, hexsha, shortSha, message, returnTo? }`.
+ * project with `{ projectId, projectName, hexsha, shortSha, returnTo?, returnData? }`.
  *
  * Where Restore hands you an un-pushed working copy and expects you to push it,
  * Revert is the whole round trip: take the write lock, check the revision out,
@@ -34,8 +34,14 @@ export default function SpeleoRevertDialog() {
     typeof dialogData.shortSha === 'string' ? dialogData.shortSha : hexsha.slice(0, 8);
   // The revision history lives INSIDE another dialog, and the single `activeDialog`
   // slot means opening this one evicted it. Put the user back where they pressed the
-  // button rather than on a bare map.
+  // button rather than on a bare map - and back on the same TAB, which needs the
+  // data to reopen with: `openDialog` defaults its second argument to `{}`, so
+  // reopening by id alone lands on the host dialog's default tab.
   const returnTo = typeof dialogData.returnTo === 'string' ? dialogData.returnTo : null;
+  const returnData =
+    typeof dialogData.returnData === 'object' && dialogData.returnData !== null
+      ? (dialogData.returnData as Record<string, unknown>)
+      : undefined;
 
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState<'locking' | 'restoring' | 'pushing' | null>(null);
@@ -61,7 +67,7 @@ export default function SpeleoRevertDialog() {
   }, [needsDiscard]);
 
   const dismiss = () => {
-    if (returnTo) openDialog(returnTo);
+    if (returnTo) openDialog(returnTo, returnData);
     else closeDialog();
   };
 

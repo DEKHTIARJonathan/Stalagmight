@@ -284,8 +284,14 @@ export function SpeleoRevisionHistory() {
                         projectName,
                         hexsha: rev.id,
                         shortSha: rev.id.slice(0, 8),
-                        message: rev.message ?? '',
                         returnTo: 'speleodb-project',
+                        // The dialog data to reopen WITH. `openDialog(returnTo)`
+                        // alone resets `dialogData` to `{}`, so the project dialog
+                        // read `tab` as undefined and defaulted to General - every
+                        // exit from the revert flow (cancel, success, or a dismissed
+                        // error) dropped the user on the metadata form instead of
+                        // the revision list they pressed Revert from.
+                        returnData: { tab: 'history' },
                       })
                     }
                     data-testid={`speleodb-revision-revert-${rev.id}`}

@@ -179,7 +179,15 @@ describe('useRevertRevision - refusing before it takes anything', () => {
 });
 
 describe('useRevertRevision - unwinding a failed restore', () => {
-  it('hands the lock straight back when the copy is clean, then offers the discard', async () => {
+  it('keeps the lock and uploads nothing when the restore is refused for local edits', async () => {
+    // The refusal IS the backend saying its dirty bit is set, so releasing here
+    // would PUBLISH the un-pushed work: `speleodb_done` pushes whenever the backend
+    // link is dirty, and `message: null` only picks the commit message - it does not
+    // suppress the upload. The old behaviour read the FRONTEND mirror, which the
+    // pre-flight has already forced to false on this route, and so released - the
+    // user's survey work went up as a revision with no message and no confirmation,
+    // and only then were they offered the armed "this replaces your un-pushed
+    // changes" button for work that was already published.
     ipc({
       speleodb_start_editing: ok({ kind: 'editing' }),
       speleodb_restore_revision: rejects(UNPUSHED_REFUSAL),
@@ -188,9 +196,8 @@ describe('useRevertRevision - unwinding a failed restore', () => {
 
     const outcome = await run();
 
-    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: false });
-    // done(null): the dirty bit is clear, so this releases without uploading anything.
-    expect(argsOf('speleodb_done')).toEqual({ message: null });
+    expect(outcome).toEqual({ kind: 'needs_discard', lockHeld: true });
+    expect(issued()).not.toContain('speleodb_done');
   });
 
   it('releases and reports the failure for an ordinary restore error', async () => {

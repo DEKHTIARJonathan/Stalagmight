@@ -497,6 +497,24 @@ pub(crate) fn poll_verdict(
     }
 }
 
+/// SpeleoDB's own project-creation commit: the one it writes when a project is
+/// created, before any survey data exists.
+///
+/// Identified by its message, and only at the root of the history - both halves
+/// matter. The message alone would hide a real revision someone happened to name
+/// the same thing; parentless alone hides a genuine first revision on any project
+/// whose history has no separate creation commit. Matching is case-insensitive and
+/// ignores surrounding whitespace, because the marker is server-generated copy
+/// rather than a stable identifier.
+fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
+    const CREATION_MESSAGE: &str = "[automated] project creation";
+    commit.parent_ids.is_empty()
+        && commit
+            .message
+            .as_deref()
+            .is_some_and(|m| m.trim().eq_ignore_ascii_case(CREATION_MESSAGE))
+}
+
 /// The revision history as a person should SEE it: newest first, ordered by the
 /// parent chain rather than by timestamp, and without SpeleoDB's own
 /// project-creation commit.
@@ -513,6 +531,15 @@ pub(crate) fn poll_verdict(
 /// account rather than by anyone who has touched the cave. In a list whose two
 /// actions are View and Revert, offering it invites someone to roll their project
 /// back to nothing.
+///
+/// It is dropped on its MESSAGE, though, not merely on being parentless. Being
+/// parentless is a property of every history's first commit, and not every project
+/// gets a separate creation commit ahead of its first upload - an import path that
+/// does not write one, or a project made before that behaviour existed, has a real
+/// survey revision at its root. Hiding it structurally meant that revision could
+/// not be viewed and could not be reverted to, with nothing on screen saying
+/// anything had been withheld. Recognising SpeleoDB's own commit instead keeps the
+/// filter aimed at the thing it was written for.
 ///
 /// Falls back to the server's order when the chain cannot be walked - a fork, a
 /// merge, or a commit outside the fetched range. The completeness check is the
@@ -552,8 +579,7 @@ pub(crate) fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommi
     let mut out = Vec::with_capacity(order.len());
     for i in order {
         if let Some(commit) = slots[i].take() {
-            // Parentless == SpeleoDB's "[Automated] Project Creation" commit.
-            if commit.parent_ids.is_empty() {
+            if is_project_creation_commit(&commit) {
                 continue;
             }
             out.push(commit);
@@ -591,6 +617,15 @@ mod tests {
             author_email: email.to_string(),
             authored_date: None,
             message: None,
+        }
+    }
+
+    /// SpeleoDB's own project-creation commit: parentless, service-account
+    /// authored, and carrying the generated marker message that identifies it.
+    fn creation_commit(id: &str) -> RevisionCommit {
+        RevisionCommit {
+            message: Some("[Automated] Project Creation".to_owned()),
+            ..commit(id, &[], "contact@speleodb.org")
         }
     }
 
@@ -1170,7 +1205,7 @@ mod tests {
             commit("8899f253", &["09f326b7"], ME),
             commit("09f326b7", &["a14d46cf"], ME),
             // The tie: sorted above the publish it actually precedes.
-            commit("e2ad104b", &[], "contact@speleodb.org"),
+            creation_commit("e2ad104b"),
             commit("a14d46cf", &["e2ad104b"], ME),
         ]
     }
@@ -1207,7 +1242,7 @@ mod tests {
         let forked = vec![
             commit("b1", &["root"], ME),
             commit("b2", &["root"], ME),
-            commit("root", &[], "contact@speleodb.org"),
+            creation_commit("root"),
         ];
         let shown = display_history(forked);
         let ids: Vec<&str> = shown.iter().map(|c| c.id.as_str()).collect();
@@ -1219,10 +1254,31 @@ mod tests {
     }
 
     #[test]
+    fn display_history_keeps_a_genuine_first_revision_at_the_root() {
+        // Not every project has a separate creation commit ahead of its first
+        // upload. Dropping the root STRUCTURALLY hid a real survey revision on any
+        // that does not: it could not be viewed and could not be reverted to, with
+        // nothing on screen saying anything had been withheld.
+        let history = vec![
+            commit("r2", &["r1"], ME),
+            RevisionCommit {
+                message: Some("first survey upload".to_owned()),
+                ..commit("r1", &[], ME)
+            },
+        ];
+        let ids: Vec<String> = display_history(history).into_iter().map(|c| c.id).collect();
+        assert_eq!(
+            ids,
+            vec!["r2", "r1"],
+            "a parentless commit that is not SpeleoDB's creation marker is a real revision"
+        );
+    }
+
+    #[test]
     fn display_history_leaves_nothing_for_a_project_that_was_only_created() {
         // A project created but never pushed to has no survey revisions at all, and
         // saying so is more honest than listing a commit that holds nothing.
-        let shown = display_history(vec![commit("root", &[], "contact@speleodb.org")]);
+        let shown = display_history(vec![creation_commit("root")]);
         assert!(shown.is_empty());
         assert!(display_history(vec![]).is_empty());
     }

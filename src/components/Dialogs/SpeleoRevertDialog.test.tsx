@@ -64,7 +64,6 @@ beforeEach(() => {
       projectName: 'Cave A',
       hexsha: 'abcdef0123',
       shortSha: 'abcdef01',
-      message: 'the bad survey',
     },
   });
   useProjectStore.setState({
@@ -130,8 +129,31 @@ describe('SpeleoRevertDialog', () => {
 
     await userEvent.click(screen.getByTestId('speleodb-revert-cancel'));
 
-    expect(openDialogMock).toHaveBeenCalledWith('speleodb-project');
+    expect(openDialogMock).toHaveBeenCalledWith('speleodb-project', undefined);
     expect(closeDialogMock).not.toHaveBeenCalled();
+  });
+
+  it('reopens the dialog it came from on the tab it came from', async () => {
+    // Reopening by id alone reset `dialogData` to `{}`, so the project dialog read
+    // `tab` as undefined and defaulted to General - every exit from the revert flow
+    // dropped the user on the metadata form instead of the revision list they
+    // pressed Revert from.
+    useUIStore.setState({
+      dialogData: {
+        projectId: 'p1',
+        projectName: 'Cave A',
+        hexsha: 'abcdef0123',
+        shortSha: 'abcdef01',
+        returnTo: 'speleodb-project',
+        returnData: { tab: 'history' },
+      },
+    });
+    ipc({});
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-cancel'));
+
+    expect(openDialogMock).toHaveBeenCalledWith('speleodb-project', { tab: 'history' });
   });
 
   it('stays open and explains the held lock when the upload fails', async () => {
