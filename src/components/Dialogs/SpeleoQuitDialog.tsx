@@ -35,6 +35,7 @@ export default function SpeleoQuitDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
+  const dialogData = useUIStore((s) => s.dialogData);
   const showToast = useUIStore((s) => s.showToast);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const saveProject = useProjectStore((s) => s.saveProject);
@@ -50,6 +51,26 @@ export default function SpeleoQuitDialog() {
   // collapses to the one honest choice: save locally, then leave, with the work
   // still only on this computer.
   const holdsLock = holdsWriteLock(link);
+
+  // Which dialog this prompt displaced in the single `activeDialog` slot, if any.
+  // Cancelling means the app keeps running, so whatever was on screen has to come
+  // back - see `openExitPrompt` in utils/quit for the import wizard this exists for.
+  const cancelReturnsTo =
+    typeof dialogData.cancelReturnsTo === 'string' ? dialogData.cancelReturnsTo : null;
+  const cancelReturnsData =
+    typeof dialogData.cancelReturnsData === 'object' && dialogData.cancelReturnsData !== null
+      ? (dialogData.cancelReturnsData as Record<string, unknown>)
+      : undefined;
+
+  /**
+   * Cancel / X / backdrop. Only these: the three verbs below all end in
+   * `performQuit()`, where restoring a dialog into a window that is going away would
+   * be pointless at best.
+   */
+  const dismiss = () => {
+    if (cancelReturnsTo) openDialog(cancelReturnsTo, cancelReturnsData);
+    else closeDialog();
+  };
 
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
@@ -138,7 +159,7 @@ export default function SpeleoQuitDialog() {
       // `guardQuit` entirely and the window goes away with no prompt, dropping
       // anything edited in that window. Same idiom as the other dialogs whose
       // work outlives their own dismissal (BulkDelete / DeleteShotChoice).
-      onClose={busyAny ? () => {} : closeDialog}
+      onClose={busyAny ? () => {} : dismiss}
       size="md"
       data-testid="speleodb-quit-dialog"
     >
@@ -184,7 +205,7 @@ export default function SpeleoQuitDialog() {
         <SpeleoPushFailureNotice />
 
         <div className="flex flex-wrap justify-end gap-2 pt-2 border-t border-border">
-          <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-quit-cancel">
+          <Button onClick={dismiss} disabled={busyAny} data-testid="speleodb-quit-cancel">
             {t('common.actions.cancel')}
           </Button>
           {holdsLock ? (

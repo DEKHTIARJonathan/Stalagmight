@@ -201,7 +201,15 @@ export default function HeldLockResumeDialog() {
   return (
     <DialogWrapper
       title={t('speleodb.heldLocks.title')}
-      onClose={keep}
+      // Not dismissable while a row's verb is in flight - the Keep button below is
+      // already `disabled={busy}` for it, and DialogWrapper routes BOTH Escape and a
+      // backdrop click here, so ungated they did what the equivalent button refuses.
+      // `keep` runs `clearHeldLocks()`, which drops the WHOLE list including rows that
+      // were cleanly releasable; landing that mid-`releaseOne` leaves the remaining
+      // locks with no way to re-raise the prompt until the next login scan (the same
+      // hazard `continueEditing` guards against by not dismissing on a failed
+      // acquire). Same hardening as SpeleoQuitDialog / SpeleoUnpushedLocalDialog.
+      onClose={busy ? () => {} : keep}
       size="md"
       data-testid="speleodb-held-lock-dialog"
     >

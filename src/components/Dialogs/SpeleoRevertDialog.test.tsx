@@ -174,6 +174,65 @@ describe('SpeleoRevertDialog', () => {
   });
 });
 
+/**
+ * [#260] A failed upload used to leave this dialog open pointing at two controls its
+ * OWN scrim covers - the shell banner's Retry and the toolbar's SpeleoDB button
+ * (`AlertDialog` is `fixed inset-0 z-[60]`, so both are dimmed and unclickable). The
+ * store half already suppresses the banner while this dialog owns the failure, which
+ * means without this the failure has no reachable surface at all.
+ */
+describe('SpeleoRevertDialog - a failed upload is actionable from the dialog', () => {
+  const pushFails = () =>
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: rejects({ message: 'the server refused the upload' }),
+    });
+
+  it('shows the server reason inline instead of only behind the scrim', async () => {
+    pushFails();
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+
+    const notice = await screen.findByTestId('speleodb-push-failure-inline');
+    expect(notice.textContent).toContain('the server refused the upload');
+  });
+
+  it('swaps the primary control for a retry of the upload', async () => {
+    pushFails();
+    render(<SpeleoRevertDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+
+    expect(await screen.findByTestId('speleodb-revert-retry-upload-btn')).toBeInTheDocument();
+    // Not the plain Revert: re-running it from the top hits the pre-flight
+    // un-pushed-edits refusal, whose "replace my changes" is the user's own revert.
+    expect(screen.queryByTestId('speleodb-revert-confirm-btn')).not.toBeInTheDocument();
+    expect(screen.queryByTestId('speleodb-revert-discard-offer-btn')).not.toBeInTheDocument();
+  });
+
+  it('re-issues the upload and finishes when the retry succeeds', async () => {
+    pushFails();
+    render(<SpeleoRevertDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-revert-confirm-btn'));
+    const retry = await screen.findByTestId('speleodb-revert-retry-upload-btn');
+
+    // The retry runs against a working copy that now HAS un-pushed edits (the revert
+    // itself), so it must waive the pre-flight guard or it would never reach `done`.
+    useSpeleoStore.setState({ link: { ...LINK, editState: 'editing', hasUnpushedEdits: true } });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+    await userEvent.click(retry);
+
+    await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_done')).toBe(true);
+  });
+});
+
 describe('SpeleoRevertDialog - the armed discard', () => {
   beforeEach(() => {
     // An un-pushed copy: the pre-flight refuses without touching SpeleoDB at all.

@@ -139,3 +139,63 @@ describe('SpeleoCloseDialog with no lock (#270)', () => {
     expect(screen.queryByTestId('speleodb-close-push-release')).not.toBeInTheDocument();
   });
 });
+
+/**
+ * The other two hand-back exits (#270) route through this same dialog rather than
+ * getting one of their own, and carry their request in. A prompt that swallowed the
+ * action that raised it would only trade a silent swap for a dead end.
+ */
+describe('SpeleoCloseDialog replays the exit that raised it', () => {
+  let loadProject: ReturnType<typeof vi.fn>;
+  let openDialog: ReturnType<typeof vi.fn>;
+
+  beforeEach(() => {
+    loadProject = vi.fn(async () => ({ success: true }));
+    openDialog = vi.fn();
+    useProjectStore.setState({ loadProject: loadProject as never });
+    useUIStore.setState({ openDialog: openDialog as never });
+  });
+
+  it('opens the chosen project after the close lands', async () => {
+    seedLink({ editState: 'read-only', hasUnpushedEdits: true });
+    useUIStore.setState({ dialogData: { pendingOpenPath: '/cave/other.stalx' } });
+    render(<SpeleoCloseDialog />);
+    expect(screen.getByTestId('speleodb-close-pending-note')).toBeInTheDocument();
+
+    await userEvent.click(screen.getByTestId('speleodb-close-anyway'));
+
+    await waitFor(() => expect(loadProject).toHaveBeenCalledWith('/cave/other.stalx'));
+  });
+
+  it('reopens the new-project dialog after the close lands', async () => {
+    seedLink({ editState: 'read-only', hasUnpushedEdits: true });
+    useUIStore.setState({ dialogData: { pendingNewProject: true } });
+    render(<SpeleoCloseDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-close-anyway'));
+
+    await waitFor(() => expect(openDialog).toHaveBeenCalledWith('new-project'));
+  });
+
+  // A close that did NOT happen leaves the project open, so replaying would open a
+  // second project over one the user never left.
+  it('replays nothing when the close itself fails', async () => {
+    seedLink({ editState: 'read-only', hasUnpushedEdits: true });
+    useUIStore.setState({ dialogData: { pendingOpenPath: '/cave/other.stalx' } });
+    useProjectStore.setState({
+      closeProject: vi.fn(async () => ({ success: false, error: 'busy' })) as never,
+    });
+    render(<SpeleoCloseDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-close-anyway'));
+
+    await waitFor(() => expect(closeDialog).toHaveBeenCalled());
+    expect(loadProject).not.toHaveBeenCalled();
+  });
+
+  it('shows no follow-up note for a plain Close', () => {
+    seedLink({ editState: 'read-only', hasUnpushedEdits: true });
+    render(<SpeleoCloseDialog />);
+    expect(screen.queryByTestId('speleodb-close-pending-note')).not.toBeInTheDocument();
+  });
+});

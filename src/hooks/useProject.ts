@@ -13,7 +13,7 @@ import {
 import { openOrImport, pickAndRoute } from '../utils/openOrImport';
 import { newProjectGuarded, saveProjectAs } from '../utils/projectActions';
 import { debugLog } from '../utils/debugLog';
-import { hasUnpushedSpeleoWork } from '../utils/quit';
+import { needsSpeleoHandBackPrompt } from '../utils/quit';
 
 export function useProject() {
   const { setView, openDialog } = useUIStore();
@@ -96,13 +96,11 @@ export function useProject() {
     // work hardest (`notifyReverifyDivergence`, a `ReLogin` that runs
     // `clearSession()`) are exactly the ones that drop to read-only while KEEPING
     // the unpushed edits. Closing there returned straight to the home screen with
-    // no notice at all. Both terms are needed and neither subsumes the other: the
-    // held lock must be resolved because the app keeps running (quit does not need
-    // that - the backend releases on exit), and unpushed work must be surfaced
-    // because nothing else will surface it. `hasUnpushedSpeleoWork` is the term
-    // literally shared with `guardQuit`, so the two cannot silently diverge again.
-    const speleoLink = useSpeleoStore.getState().link;
-    if (hasUnpushedSpeleoWork(speleoLink) || speleoLink?.editState === 'editing') {
+    // no notice at all. `needsSpeleoHandBackPrompt` is the exact predicate the two
+    // OTHER hand-back exits (open-another-.stalx, New Project) now use, and its
+    // unpushed-work half is literally shared with `guardQuit`, so none of the four
+    // can silently diverge again.
+    if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
       openDialog('speleodb-close');
       return { success: false, error: 'Showing dialog' };
     }

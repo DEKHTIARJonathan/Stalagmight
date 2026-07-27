@@ -156,7 +156,7 @@ function attempt(
  * collapses on the strength of a degenerate measurement.
  */
 /**
- * May a resize drag's `requested` size be written to the store / persisted?
+ * What size a resize drag's `requested` value should actually write.
  *
  * The other half of the display-only rule above, and the one it is easy to miss:
  * the squeeze must not be routed OUT of the store, but a drag can route it back
@@ -169,13 +169,30 @@ function attempt(
  * grew again - a silent, unattributable loss of their layout.
  *
  * Shrinking stays reachable while squeezed (a smaller panel is always
- * affordable), so only the direction the screen cannot honour is refused, and the
+ * affordable), so only the direction the screen cannot honour is clamped, and the
  * drag does exactly what it visibly appears to do either way.
+ *
+ * This CLAMPS rather than refusing, because refusing was itself lossy. `display`
+ * and `user` are both re-read every render, so the drag mutates its own inputs: a
+ * shrink-then-grow inside ONE squeezed drag lowers `user` on the way down, the
+ * panel becomes unsqueezed at the new size, and the grow then lands one step past
+ * the fresh clamp. The end-of-drag persist saw only that final unreachable number
+ * and wrote NOTHING - so the shrink the user did reach was dropped too, and the
+ * pre-drag width came back on reload.
+ *
+ * The clamp target is `user`, not `display`: `user` is the size the panel WOULD
+ * render at with room to do so, which is exactly what the store is for, while
+ * `display` is a temporary consequence of this viewport. Clamping to `display`
+ * would re-introduce the original defect from the other side - the squeezed 400px
+ * panel would come back as 200 - so an unreachable request resolves to "leave your
+ * own size alone", which persists whatever the reachable part of the drag reached.
  */
-export function acceptsResize(display: number, user: number, requested: number): boolean {
+export function resolveResize(display: number, user: number, requested: number): number {
   // Not squeezed: the rendering IS the user's own size, so every request is real.
-  if (display >= user) return true;
-  return requested <= display;
+  if (display >= user) return requested;
+  // Reachable while squeezed: the edge really did move there.
+  if (requested <= display) return requested;
+  return user;
 }
 
 export function computeSidePanelLayout(opts: SidePanelSqueezeOpts): SidePanelSqueeze {
@@ -307,7 +324,16 @@ export function computeDataPanelLayout(opts: DataPanelSqueezeOpts): DataPanelLay
   // hover-mode panel floats at its persisted height, and a viewport-collapsed one
   // reports the user's height and can still be floated open at it - so the cap
   // cannot be conditional on `pinnedOpen` or on `collapsed`.
-  const fits = Math.min(height, Math.floor(viewportHeight));
+  //
+  // The cap therefore has to be the SAME floor the squeeze enforces, not the bare
+  // container: capping at `viewportHeight` allows equality, and a persisted height
+  // at or above the container yielded exactly `viewportHeight` - which is the
+  // height-0 side bar and the 0px map, i.e. the cap let through the one value it
+  // existed to stop. `Math.max(0, ...)` covers a container smaller than the map
+  // floor itself, where no height leaves a map and the least-bad answer is to give
+  // the side bars their full height so the Data tab stays reachable. None of this
+  // is persisted, so the user's own height still returns when the viewport grows.
+  const fits = Math.min(height, Math.max(0, Math.floor(viewportHeight - mapMinHeight)));
   // A floating (hover) panel overlays the map instead of taking layout height, so
   // there is nothing to squeeze FOR THE MAP: it is only capped at the container.
   if (!pinnedOpen) return { height: fits, collapsed: false };
@@ -321,8 +347,8 @@ export function computeDataPanelLayout(opts: DataPanelSqueezeOpts): DataPanelLay
   // Even the minimum starves the map: fall back to the opener bar, which is
   // reachable (its tab floats the panel over the map at no layout cost) and is the
   // floor - if the map still cannot reach its minimum beside a bar, there is
-  // nothing further to give. The height is reported un-squeezed (only capped at
-  // the container) so the user's value is what returns when the viewport grows.
+  // nothing further to give. The height is reported un-squeezed apart from the cap
+  // above, so the user's value is what returns when the viewport grows.
   return { height: fits, collapsed: true };
 }
 

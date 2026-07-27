@@ -69,6 +69,25 @@ const TRANSITION_MS = 180;
 const ENTER_RISE_PX = 12;
 /** How far ABOVE its slot a leaving toast drifts while it fades, in px. */
 const EXIT_RISE_PX = 12;
+/**
+ * Opacity below which a toast counts as GONE for hit-testing.
+ *
+ * Opacity has no effect on hit-testing, and this stack portals into a
+ * `fixed inset-0 z-[99999]` layer that sits above every dialog (`DialogWrapper`
+ * is `z-50`). The dismiss button is the one `pointer-events-auto` element in the
+ * whole stack, so leaving it permanently armed left a live ~24px target in the
+ * bottom-left corner for the entire 180ms exit AND the 1.5s fade tail - long
+ * after there was anything to see. A click aimed at a modal underneath it was
+ * swallowed, with no cue that anything had intercepted it. Under this threshold
+ * the button drops out of hit-testing so the click lands where it was aimed.
+ *
+ * It costs nothing in reachability. The pause is hit-tested on POINTER POSITION
+ * (see the hover effect below), so a pointer anywhere over the column snaps every
+ * toast back to full opacity before a click can land: a toast under the cursor is
+ * always fully interactive, and keyboard focus is unaffected by `pointer-events`
+ * either way.
+ */
+const INTERACTIVE_OPACITY_MIN = 0.1;
 
 /** Full lifetime of a toast of a given kind, dwell plus fade. */
 function lifetimeOf(kind: ToastKind): number {
@@ -411,20 +430,31 @@ export function ToastStack() {
 
   // React 18 ref callbacks cannot return a cleanup, so the per-id bookkeeping is
   // pruned here instead: anything not in the current list is gone for good.
-  // Re-measuring afterwards is what turns "a new toast mounted" into "everything
-  // above it slides up", one frame later - by which time the newcomer is still at
-  // opacity 0, so the correction is never visible.
+  //
+  // UNOBSERVING is not optional. This component is always mounted (App renders it
+  // unconditionally), so the observer's disconnect-on-unmount never actually
+  // runs - dropping the map entry without unobserving left every toast element
+  // the session had ever shown pinned inside the ResizeObserver, and through it
+  // in memory, for as long as the app was open.
+  //
+  // Keyed to `toasts`, and deliberately NOT re-measuring: `attach` measures each
+  // element as it mounts, and the ResizeObserver above catches every later size
+  // change (a font swap, a UI-scale change, a wrap point moving) - which is the
+  // entire reason that observer exists. Running `getBoundingClientRect` over every
+  // mounted toast on every render forced a pre-paint layout flush per toast per
+  // render, over a live WebGL map, and could not tell the geometry anything those
+  // two had not already recorded.
   useLayoutEffect(() => {
     const liveIds = new Set(toasts.map((item) => item.id));
-    for (const id of [...nodes.current.keys()]) if (!liveIds.has(id)) nodes.current.delete(id);
+    for (const [id, el] of [...nodes.current.entries()]) {
+      if (liveIds.has(id)) continue;
+      observer.current?.unobserve(el);
+      nodes.current.delete(id);
+    }
     for (const id of [...sizes.current.keys()]) if (!liveIds.has(id)) sizes.current.delete(id);
     for (const id of [...lastOffsets.current.keys()]) if (!liveIds.has(id)) lastOffsets.current.delete(id);
     for (const id of [...settled.current]) if (!liveIds.has(id)) settled.current.delete(id);
-
-    let changed = false;
-    for (const el of nodes.current.values()) if (measure(el)) changed = true;
-    if (changed) bump();
-  });
+  }, [toasts]);
 
   const hasToasts = toasts.length > 0;
   useEffect(() => {
@@ -458,6 +488,15 @@ export function ToastStack() {
         if (!live.some((item) => item.id === id)) map.delete(id);
       }
 
+      // Did anything the RENDER reads actually move this tick? The clocks are
+      // refs, so a change in them is invisible until someone asks for a frame -
+      // but during the DWELL nothing rendered moves at all (opacity is a flat 1,
+      // the offsets are unchanged), and a paused stack is frozen by definition.
+      // Bumping unconditionally re-rendered the whole stack 20 times a second for
+      // each toast's entire 6.5-10.5s life, over a live WebGL map, to paint the
+      // frame that was already on screen.
+      let dirty = false;
+
       for (const item of live) {
         let clock = map.get(item.id);
         if (!clock || clock.revision !== item.revision) {
@@ -467,6 +506,8 @@ export function ToastStack() {
         if (item.leaving) {
           // An exit always runs to completion - it is already off the user's
           // reading path, and freezing it mid-slide on hover just leaves litter.
+          // `leftFor` is bookkeeping only: nothing rendered reads it, and the
+          // removal it leads to is a store write, which re-renders on its own.
           clock.leftFor += TICK_MS;
           if (clock.leftFor >= (reducedMotionRef.current ? 0 : TRANSITION_MS)) {
             store.removeToast(item.id);
@@ -475,14 +516,23 @@ export function ToastStack() {
         }
         if (hoverPausedRef.current || focusPausedRef.current) continue;
         clock.elapsed += TICK_MS;
+        // Past the dwell the opacity ramp - and the exit rise it drives - moves on
+        // every tick, so those ticks, and only those, need a frame. Under reduced
+        // motion there is no ramp: full opacity until the toast is simply removed.
+        if (!reducedMotionRef.current && clock.elapsed > dwellOf(item.kind)) dirty = true;
         if (clock.elapsed >= lifetimeOf(item.kind)) store.removeToast(item.id);
       }
 
       // Backstop for the entrance flip below: a toast must never be stranded at
-      // opacity 0 if the frame callback never runs (a backgrounded window).
-      for (const item of live) settled.current.add(item.id);
+      // opacity 0 if the frame callback never runs (a backgrounded window). That
+      // flip IS rendered, so it is one of the things worth a frame.
+      for (const item of live) {
+        if (settled.current.has(item.id)) continue;
+        settled.current.add(item.id);
+        dirty = true;
+      }
 
-      bump();
+      if (dirty) bump();
     }, TICK_MS);
     return () => window.clearInterval(handle);
   }, [hasToasts, endFocus]);
@@ -557,10 +607,10 @@ export function ToastStack() {
    * re-check above is what ends that one.
    *
    * The box is cached rather than measured per event: pointer moves arrive at
-   * pointer rate (and the tick already dirties layout 20x a second), so reading
-   * `getBoundingClientRect` in the handler would force a layout flush on every
-   * mouse move across the whole app. It only moves when the stack's own geometry
-   * or the viewport does, which is exactly this effect's dependency list.
+   * pointer rate, so reading `getBoundingClientRect` in the handler would force a
+   * layout flush on every mouse move across the whole app, over a live WebGL map.
+   * It only moves when the stack's own geometry or the viewport does, which is
+   * exactly this effect's dependency list.
    */
   const hoverBox = useRef<DOMRect | null>(null);
   useEffect(() => {
@@ -580,11 +630,16 @@ export function ToastStack() {
       if (inside) beginHover();
       else endHover();
     };
-    document.addEventListener('pointermove', onMove, true);
-    document.addEventListener('mousemove', onMove, true);
+    // ONE listener, never a pointermove/mousemove pair. A pointer event is a
+    // superset of the mouse event it is paired with (and fires for pen and touch
+    // besides), so registering both ran this hit-test TWICE for every mouse move
+    // anywhere in the app. `mousemove` stays as a genuine fallback for a runtime
+    // without PointerEvent - which no webview this ships in is - rather than as a
+    // second registration alongside it.
+    const moveEvent = typeof PointerEvent === 'function' ? 'pointermove' : 'mousemove';
+    document.addEventListener(moveEvent, onMove, true);
     return () => {
-      document.removeEventListener('pointermove', onMove, true);
-      document.removeEventListener('mousemove', onMove, true);
+      document.removeEventListener(moveEvent, onMove, true);
     };
   }, [hasToasts, stackHeight, stackWidth, viewportHeight, beginHover, endHover]);
 
@@ -712,6 +767,11 @@ function Toast({
     }
   }
 
+  // Hit-testing follows what the user can SEE. `opacity` alone decides it, which
+  // covers both invisible states without restating them: a leaving toast and a
+  // toast on its entrance frame both render at 0 (see the branch above).
+  const interactive = opacity >= INTERACTIVE_OPACITY_MIN;
+
   // Up is negative. A toast enters from below its slot, sits ON it, and leaves
   // above it. Under reduced motion there is no travel at all: it is placed in its
   // slot and taken away from it, with the same lifetime either way.
@@ -752,15 +812,18 @@ function Toast({
         <span className="text-text-primary text-sm leading-5" aria-hidden="true">
           {item.message}
         </span>
-        {/* The one part of the stack that opts back INTO pointer events: the
-            container is click-through so a toast never eats a click meant for the
-            map or a panel, and this button is the only thing in it the user can
-            legitimately aim at. */}
+        {/* The one part of the stack that opts back INTO pointer events, and only
+            while it is visible: the container is click-through so a toast never
+            eats a click meant for the map or a panel, this button is the only
+            thing in it the user can legitimately aim at, and an invisible button
+            is not something anyone can aim at (see INTERACTIVE_OPACITY_MIN). */}
         <button
           type="button"
           aria-label={dismissLabel}
           onClick={onDismiss}
-          className="pointer-events-auto shrink-0 -mr-1 mt-0.5 rounded p-1 text-text-secondary hover:text-text-primary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+          className={`${
+            interactive ? 'pointer-events-auto' : 'pointer-events-none'
+          } shrink-0 -mr-1 mt-0.5 rounded p-1 text-text-secondary hover:text-text-primary hover:bg-hover focus:outline-none focus-visible:ring-2 focus-visible:ring-accent`}
         >
           <CloseIcon size={12} />
         </button>

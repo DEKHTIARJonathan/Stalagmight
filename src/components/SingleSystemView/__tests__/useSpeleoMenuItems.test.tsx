@@ -76,6 +76,35 @@ describe('useSpeleoMenuItems force-edit gating (#213)', () => {
   });
 });
 
+/**
+ * The Push row needs the WRITE LOCK, not just an open edit gate. Gated on
+ * `editState === 'editing'` alone it was ENABLED for a force-editor - who edits
+ * without a lock (#213), so unpushed edits are the normal state there - and the
+ * backend can only refuse it: "reconnect to acquire the write lock before pushing".
+ */
+describe('useSpeleoMenuItems push row', () => {
+  const push = (o: Partial<SpeleoLinkState> = {}) =>
+    items(o).find((it) => it.id === 'speleodb-menu-push');
+
+  it('is enabled while holding the lock with edits to push', () => {
+    expect(push({ editState: 'editing', hasUnpushedEdits: true })?.disabled).toBe(false);
+  });
+
+  it('is disabled while holding the lock with nothing to push', () => {
+    expect(push({ editState: 'editing', hasUnpushedEdits: false })?.disabled).toBe(true);
+  });
+
+  it('is disabled for a force-editor even with unpushed edits (no lock to push under)', () => {
+    expect(
+      push({ editState: 'editing', forceEditing: true, hasUnpushedEdits: true })?.disabled,
+    ).toBe(true);
+  });
+
+  it('is disabled while read-only', () => {
+    expect(push({ editState: 'read-only', hasUnpushedEdits: true })?.disabled).toBe(true);
+  });
+});
+
 describe('useSpeleoMenuItems destinations', () => {
   const openWeb = (o: Partial<SpeleoLinkState> = {}) =>
     items(o).find((it) => it.id === 'speleodb-menu-open-web');

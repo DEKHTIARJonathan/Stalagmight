@@ -20,16 +20,33 @@ import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
  * - **saved locally but not pushed** (`link.hasUnpushedEdits`) → a note that the
  *   work is safe on disk, it just isn't on SpeleoDB yet.
  * Then it encourages pushing + releasing the lock before leaving.
+ *
+ * #270: "closing" here means any of the three exits that hand the open project
+ * back while the app keeps running - Close, opening another `.stalx`, and New
+ * Project (see `needsSpeleoHandBackPrompt`). The latter two carry their request in
+ * as `pendingOpenPath` / `pendingNewProject`, the same shape `UnsavedChangesDialog`
+ * uses, and it is replayed once the SpeleoDB side is resolved.
  */
 export default function SpeleoCloseDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
+  const dialogData = useUIStore((s) => s.dialogData);
   const link = useSpeleoStore((s) => s.link);
   const closeProject = useProjectStore((s) => s.closeProject);
+  const loadProject = useProjectStore((s) => s.loadProject);
   const saveProject = useProjectStore((s) => s.saveProject);
   const isDirtyLocal = useProjectStore((s) => s.isDirty);
   const { busy, done } = useSpeleoActions();
+
+  // What the user actually asked for, when this prompt was raised by something
+  // other than plain Close. Routing those exits here is only half the fix: a
+  // prompt that swallowed the action that raised it would trade a silent swap for
+  // a dead end, and the user would be sitting in the same project wondering why
+  // Ctrl+O did nothing.
+  const pendingOpenPath =
+    typeof dialogData.pendingOpenPath === 'string' ? dialogData.pendingOpenPath : null;
+  const pendingNewProject = dialogData.pendingNewProject === true;
 
   const sdbDirty = link?.hasUnpushedEdits ?? false;
   // #270: the close guard now also fires on un-pushed edits ALONE, matching
@@ -75,6 +92,23 @@ export default function SpeleoCloseDialog() {
     }
   };
 
+  /**
+   * Hand the project back, then replay whatever the user actually asked for. The
+   * close has to land first in every case: it is what releases (or deliberately
+   * keeps) the server lock and clears the SpeleoDB link, so replaying before it
+   * would leave the shell linked to a project that is on its way out. A FAILED
+   * close replays nothing - the project is still open, so the exit did not happen.
+   */
+  const closeThen = async (opts?: { releaseLock?: boolean }) => {
+    const result = await closeProject(opts);
+    if (!result.success) return;
+    // loadProject switches the view and surfaces its own failures.
+    if (pendingOpenPath) await loadProject(pendingOpenPath);
+    // `createProject` seeds the shell from here; the close above already left us
+    // on the global view (App falls back to it whenever no project is open).
+    else if (pendingNewProject) openDialog('new-project');
+  };
+
   const pushReleaseThenClose = async () => {
     if (!(await maybeSaveLocally())) return;
     // done(null) pushes (when dirty) and releases the lock. Only leave once the
@@ -83,7 +117,7 @@ export default function SpeleoCloseDialog() {
     const resolved = await done(null);
     if (resolved?.kind === 'released') {
       closeDialog();
-      await closeProject();
+      await closeThen();
     }
   };
 
@@ -94,7 +128,7 @@ export default function SpeleoCloseDialog() {
     // the default lock-release (fix 1), so the user keeps their editing claim.
     // Also the lock-less exit: there is no lock to release, and asking the backend
     // to release one it does not hold is the only other option.
-    await closeProject({ releaseLock: false });
+    await closeThen({ releaseLock: false });
   };
 
   return (
@@ -115,6 +149,16 @@ export default function SpeleoCloseDialog() {
               ? t('speleodb.close.dirtyMessage')
               : t('speleodb.close.message')}
         </p>
+
+        {/* Say what happens AFTER the close when the user did not ask for one. Every
+            verb below is honest as written - the project really is closed - but the
+            title and buttons all say "close", and someone who pressed Ctrl+O or New
+            Project needs to be told their request survived the prompt. */}
+        {(pendingOpenPath || pendingNewProject) && (
+          <p className="text-xs text-text-secondary" data-testid="speleodb-close-pending-note">
+            {pendingOpenPath ? t('speleodb.close.thenOpen') : t('speleodb.close.thenNew')}
+          </p>
+        )}
 
         {isDirtyLocal ? (
           <label className="flex items-center gap-2 text-sm">

@@ -168,6 +168,58 @@ describe('guardQuit', () => {
   });
 });
 
+/**
+ * [#270] `uiStore` has ONE `activeDialog` slot and `openDialog` replaces it
+ * unconditionally, so raising an exit prompt evicts whatever was on screen. That is
+ * fine for the exit; it is not fine for CANCEL, which leaves the user in the app with
+ * the evicted dialog gone. Press X mid-DMP-placement and the wizard was swapped out
+ * for the exit prompt - cancelling then dropped the user back on a bare map with the
+ * sections they had placed discarded, a discard they consented to only as part of
+ * quitting.
+ */
+describe('guardQuit puts back the dialog it displaces', () => {
+  it('carries the displaced dialog and its data into the SpeleoDB prompt', () => {
+    useSpeleoStore.setState({ link: link() });
+    useUIStore.setState({
+      activeDialog: 'dmp-selection',
+      dialogData: { dmpFile: { sections: 3 } },
+    });
+
+    expect(guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit', {
+      cancelReturnsTo: 'dmp-selection',
+      cancelReturnsData: { dmpFile: { sections: 3 } },
+    });
+  });
+
+  it('carries it into the unsaved-changes prompt alongside pendingQuit', () => {
+    useProjectStore.setState({ isDirty: true });
+    useUIStore.setState({ activeDialog: 'dmp-import-new', dialogData: { dmpFile: {} } });
+
+    expect(guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('unsaved-changes', {
+      pendingQuit: true,
+      cancelReturnsTo: 'dmp-import-new',
+      cancelReturnsData: { dmpFile: {} },
+    });
+  });
+
+  it('adds nothing when no dialog was on screen', () => {
+    useSpeleoStore.setState({ link: link() });
+    expect(guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
+  });
+
+  it('does not ask a prompt to return to ITSELF - that is a loop, not a hop', () => {
+    // Reachable: the dialog is up, the user presses X again rather than answering it.
+    useSpeleoStore.setState({ link: link() });
+    useUIStore.setState({ activeDialog: 'speleodb-quit', dialogData: {} });
+
+    expect(guardQuit()).toBe(true);
+    expect(openDialog).toHaveBeenCalledWith('speleodb-quit');
+  });
+});
+
 describe('the one-shot quit confirmation', () => {
   it('is armed by performQuit and consumed exactly once', () => {
     expect(consumeQuitConfirmation()).toBe(false);
@@ -190,6 +242,35 @@ describe('the one-shot quit confirmation', () => {
     performQuit();
     expect(closeMock).toHaveBeenCalledTimes(1);
     expect(consumeQuitConfirmation()).toBe(true);
+  });
+
+  // Hardening, not a fix for a reachable trigger. Every un-arming path is on the
+  // emitting side (a rejected `close()`) or the receiving side (a consume), so a
+  // request that IS emitted but whose event is never DELIVERED would leave the flag
+  // armed forever - and the next genuine close would consume it and skip `guardQuit`
+  // entirely, quitting silently over unpushed edits.
+  it('expires instead of arming a much later close request', () => {
+    vi.useFakeTimers();
+    try {
+      performQuit();
+      vi.advanceTimersByTime(60_000);
+      expect(consumeQuitConfirmation()).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('survives the round trip it was armed for', () => {
+    vi.useFakeTimers();
+    try {
+      performQuit();
+      // A close request -> Rust prevent -> re-emit -> listener round trip is a single
+      // IPC hop; the deadline must not be tight enough to lose a real one.
+      vi.advanceTimersByTime(250);
+      expect(consumeQuitConfirmation()).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('un-arms itself when the window close is rejected, so the next X is guarded again', async () => {

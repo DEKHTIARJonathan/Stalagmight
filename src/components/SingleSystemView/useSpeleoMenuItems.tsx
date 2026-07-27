@@ -28,6 +28,7 @@ import {
 } from '../common/SpeleoBadgedIcon';
 import type { AppMenuItem } from '../common/AppMenu';
 import { SlidersIcon, PencilIcon, LockIcon } from '../common/icons';
+import { holdsWriteLock } from '../../utils/quit';
 
 export function useSpeleoMenuItems(): AppMenuItem[] {
   const { t } = useTranslation();
@@ -44,6 +45,11 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
   const forceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
   const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
   const forceEditAllowed = useSpeleoStore((s) => s.link?.forceEditAllowed ?? false);
+  // Derived in the SELECTOR so this stays a boolean primitive like its neighbours -
+  // the shared predicate applied to the link object, not a sixth hand-rolled copy of
+  // `editState === 'editing' && !forceEditing`. That spelling had already drifted at
+  // one of its six call sites, which is why `holdsWriteLock` exists.
+  const holdsLock = useSpeleoStore((s) => holdsWriteLock(s.link));
   const { busy, startEditing, update, done } = useSpeleoActions();
   // No page argument: the plain project page is the one a "take me to this project"
   // row should land on.
@@ -57,8 +63,10 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
       editState === 'editing' && forceEditing
         ? {
             // #213: a force-editor holds no lock, so the top action is
-            // Reconnect (acquire + reconcile), NOT Unlock. Done/push are
-            // backend-guarded for this state, so we never offer them here.
+            // Reconnect (acquire + reconcile), NOT Unlock. The release and push
+            // verbs both need the lock, so neither is offered in this state - the
+            // Unlock row below is replaced by this one, and the Push row keys on
+            // `holdsLock`, which a force-editor does not have.
             id: 'speleodb-menu-reconnect',
             label: t('speleodb.forceEdit.reconnect'),
             icon: <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-yellow-400" size={sz} />,
@@ -67,7 +75,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
               void startEditing();
             },
           }
-        : editState === 'editing'
+        : holdsLock
         ? {
             id: 'speleodb-menu-unlock',
             label: t('speleodb.menu.unlock'),
@@ -92,8 +100,13 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
         id: 'speleodb-menu-push',
         label: t('speleodb.menu.push'),
         icon: <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />,
-        // Push-without-unlock only makes sense while editing with edits.
-        disabled: busy || editState !== 'editing' || !hasUnpushedEdits,
+        // Push-without-unlock needs the WRITE LOCK and something to push. Keyed on
+        // `editState === 'editing'` alone, this row was enabled for a force-editor -
+        // who has the edit gate open with no lock (#213) and therefore normally has
+        // unpushed edits, that being the point of force-editing - and the backend can
+        // only refuse it ("reconnect to acquire the write lock before pushing").
+        // Newly reachable from the far more discoverable right-click status menu.
+        disabled: busy || !holdsLock || !hasUnpushedEdits,
         // Collect a commit message via the done dialog in push mode (like
         // push & release, but the lock is retained - fix 8).
         onClick: () => openDialog('speleodb-done', { mode: 'push' }),
@@ -158,6 +171,7 @@ export function useSpeleoMenuItems(): AppMenuItem[] {
     isRemote,
     editState,
     forceEditing,
+    holdsLock,
     hasUnpushedEdits,
     forceEditAllowed,
     busy,

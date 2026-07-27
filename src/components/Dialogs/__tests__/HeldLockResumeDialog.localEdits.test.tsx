@@ -273,6 +273,38 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     );
   });
 
+  // The X, Escape and a backdrop click all route to DialogWrapper's single `onClose`,
+  // which is the same handler as the Keep button - and Keep is `disabled={busy}`, so
+  // ungated they did what that button refuses. It matters more here than in most
+  // dialogs: Keep runs `clearHeldLocks()`, which drops the WHOLE list including rows
+  // that were cleanly releasable, and nothing re-raises this prompt until the next
+  // login scan. Asserted through the X, the one of the three that is unambiguously
+  // reachable mid-verb (the row button that started it takes the focus with it when
+  // it disables, so Escape has nowhere to land).
+  it('ignores a dismissal while a row verb is in flight', async () => {
+    let settleRelease: () => void = () => {};
+    useSpeleoStore.setState({
+      releaseLock: vi.fn(
+        () =>
+          new Promise<void>((resolve) => {
+            settleRelease = resolve;
+          }),
+      ) as never,
+    });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-release-${CLEAN}`));
+    // The Keep button says no; the dismissals must agree.
+    await waitFor(() => expect(screen.getByTestId('speleodb-held-lock-keep')).toBeDisabled());
+
+    await userEvent.click(screen.getByLabelText('Close dialog'));
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+
+    settleRelease();
+  });
+
   it('keeps the prompt (and the other locks) when the re-acquire is refused', async () => {
     // A contended lock must not read as success: dismissing here also DISCARDS the
     // remaining locks, and the prompt cannot be re-raised until the next login scan.

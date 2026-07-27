@@ -55,6 +55,8 @@ async function pressWindowX(): Promise<void> {
 beforeEach(() => {
   listeners.length = 0;
   destroyMock.mockClear();
+  destroyMock.mockResolvedValue(undefined);
+  unlisten.mockClear();
   confirmMock.mockClear();
   confirmMock.mockResolvedValue(true);
   resetQuitConfirmationForTests();
@@ -278,6 +280,27 @@ describe('useBeforeUnload - the tier-1 cleanup waits for the tier-2 guard', () =
 
     expect(onConfirm).not.toHaveBeenCalled();
     expect(destroyMock).not.toHaveBeenCalled();
+  });
+
+  // A failed destroy leaves the window on screen, so it must leave the app quittable
+  // too. Latching `isClosing` and unregistering the listener BEFORE the destroy made
+  // one rejection permanent: the early return swallowed every later close request,
+  // and there was no listener left for the OS X to reach anyway.
+  it('a rejecting destroy still lets a second X try', async () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => {});
+    destroyMock.mockRejectedValueOnce(new Error('capability denied'));
+    render(<Harness shouldBlock={false} guard={() => false} />);
+    await flush();
+
+    await pressWindowX();
+    expect(destroyMock).toHaveBeenCalledTimes(1);
+    // The listener is still registered - it was never torn down.
+    expect(unlisten).not.toHaveBeenCalled();
+
+    await pressWindowX();
+
+    expect(destroyMock).toHaveBeenCalledTimes(2);
+    err.mockRestore();
   });
 
   it('a throwing cleanup still lets the window close', async () => {

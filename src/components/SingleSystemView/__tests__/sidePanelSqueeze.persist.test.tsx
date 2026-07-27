@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderHook } from '@testing-library/react';
 
-import { useSidePanelSqueeze, acceptsResize } from '../sidePanelSqueeze';
+import { useSidePanelSqueeze, resolveResize } from '../sidePanelSqueeze';
 import { MAP_MIN_WIDTH, PANEL_SIZE_BOUNDS } from '../layoutConstants';
 import { BAR } from '../Dock';
 import { useUIStore } from '../../../store/uiStore';
@@ -117,29 +117,62 @@ describe('useSidePanelSqueeze - the squeeze never reaches the persisted store', 
  * minimum therefore looked inert to drag, and then came back at the dragged width
  * instead of 400 once the user returned to 100% zoom: a silent, unattributable
  * loss of their layout.
+ *
+ * The rule CLAMPS rather than refusing, and clamps to the user's own size rather
+ * than to the rendering: refusing discarded whole drags (see the last case), and
+ * clamping to the rendering would come back as 200 - the same loss from the other
+ * side.
  */
-describe('acceptsResize - a squeezed drag cannot raise the persisted size', () => {
+describe('resolveResize - a squeezed drag cannot raise the persisted size', () => {
   const USER = 400;
   const SQUEEZED = 200;
 
-  it('accepts anything while the panel renders at the user\'s own size', () => {
-    expect(acceptsResize(USER, USER, 500)).toBe(true);
-    expect(acceptsResize(USER, USER, 250)).toBe(true);
+  it('takes any request while the panel renders at the user\'s own size', () => {
+    expect(resolveResize(USER, USER, 500)).toBe(500);
+    expect(resolveResize(USER, USER, 250)).toBe(250);
   });
 
-  it('refuses a size the squeezed rendering could never have reached', () => {
+  it('keeps the user\'s own size for a request the squeezed rendering never reached', () => {
     // The whole widening direction: the first pixel of drag already exceeds the
     // clamp, so every one of these is a width the edge did not move to.
-    expect(acceptsResize(SQUEEZED, USER, SQUEEZED + 1)).toBe(false);
-    expect(acceptsResize(SQUEEZED, USER, 300)).toBe(false);
-    expect(acceptsResize(SQUEEZED, USER, USER + 100)).toBe(false);
+    expect(resolveResize(SQUEEZED, USER, SQUEEZED + 1)).toBe(USER);
+    expect(resolveResize(SQUEEZED, USER, 300)).toBe(USER);
+    expect(resolveResize(SQUEEZED, USER, USER + 100)).toBe(USER);
   });
 
-  it('still accepts a shrink, which IS reachable while squeezed', () => {
+  it('still takes a shrink, which IS reachable while squeezed', () => {
     // A smaller panel is always affordable, so dragging one narrower is a real
-    // request and must persist - refusing it would make a squeezed panel
+    // request and must persist - dropping it would make a squeezed panel
     // un-resizable in both directions rather than one.
-    expect(acceptsResize(SQUEEZED, USER, SQUEEZED)).toBe(true);
-    expect(acceptsResize(SQUEEZED, USER, 150)).toBe(true);
+    expect(resolveResize(SQUEEZED, USER, SQUEEZED)).toBe(SQUEEZED);
+    expect(resolveResize(SQUEEZED, USER, 150)).toBe(150);
+  });
+
+  /**
+   * The drag mutates its own inputs: both `display` and `user` are re-read every
+   * render, so shrinking re-solves the squeeze under the pointer. Refusing the
+   * unreachable END of such a drag threw away the reachable part of it too.
+   */
+  it('persists the reachable part of a shrink-then-grow inside one squeezed drag', () => {
+    // Down from 400 to 150 - reachable, so the store now holds 150 and the panel is
+    // no longer squeezed at that size.
+    let user = USER;
+    let display = SQUEEZED;
+    user = resolveResize(display, user, 150);
+    expect(user).toBe(150);
+    display = 150;
+
+    // Back up to 300: reachable at this instant (nothing is squeezed at 150), so it
+    // lands - and the squeeze immediately re-applies, clamping the rendering to 200.
+    user = resolveResize(display, user, 300);
+    expect(user).toBe(300);
+    display = SQUEEZED;
+
+    // One more pixel of the same drag is now past the FRESH clamp. Refusing it left
+    // the end-of-drag persist writing nothing at all, so the 400 the user had
+    // deliberately moved away from came straight back on reload.
+    const persisted = resolveResize(display, user, 310);
+    expect(persisted).toBe(300);
+    expect(persisted).not.toBe(USER);
   });
 });

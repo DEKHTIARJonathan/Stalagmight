@@ -17,6 +17,7 @@ import { exists } from '@tauri-apps/plugin-fs';
 import { useProjectStore } from '../store/projectStore';
 import { useUIStore } from '../store/uiStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { needsSpeleoHandBackPrompt } from './quit';
 import { surfaceSaveFailure } from './saveFeedback';
 import { getErrorMessage, invokeIpc } from './ipc';
 import {
@@ -34,11 +35,25 @@ import type { CommandResult } from '../types/commands';
  * `createProject` silently clobber unsaved edits. Mirrors the `.stalx`-open guard
  * in `routeOpenedFile`. In GlobalView no project is open, so this falls straight
  * through to the new-project dialog.
+ *
+ * #270: it also mirrors that guard's SpeleoDB half, which it was missing. Starting
+ * a new project is one of the four ways to leave an open one, and gating on the
+ * DISK-dirty bit alone let a remote project that was saved but still held a lock -
+ * or still had edits SpeleoDB has never seen - be swapped out with no notice, while
+ * closing the same project prompted. SpeleoDB first for the same reason `guardQuit`
+ * orders it that way: that prompt subsumes the disk one (it has its own "save
+ * changes locally" checkbox), and the reverse order would let "Discard Changes"
+ * walk straight past the lock. The prompt reopens the new-project dialog itself
+ * once resolved, so the user's New Project is not swallowed by the prompt.
  */
 export function newProjectGuarded(): void {
   const { openDialog } = useUIStore.getState();
   const ps = useProjectStore.getState();
-  if (ps.project && ps.isDirty) {
+  if (!ps.project) {
+    openDialog('new-project');
+  } else if (needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
+    openDialog('speleodb-close', { pendingNewProject: true });
+  } else if (ps.isDirty) {
     openDialog('unsaved-changes', { pendingNewProject: true });
   } else {
     openDialog('new-project');

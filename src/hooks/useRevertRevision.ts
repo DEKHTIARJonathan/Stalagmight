@@ -130,8 +130,22 @@ export function useRevertRevision() {
         // the lock on purpose: releasing would strand the user's own un-pushed work
         // with nothing protecting it, and `done(message)` would publish edits they
         // never asked to publish.
-        const released = dirty ? false : (await done(null))?.kind === 'released';
-        const lockHeld = !released;
+        //
+        // `lockHeld` answers "am I now holding a lock I did not have?", so it must
+        // key on whether a lock IS held, not on whether this release succeeded.
+        // Folding every non-`released` answer into `true` made `not_editing` - the
+        // edit gate having already dropped under us, usually a 401 auto-drop - report
+        // "You still hold the write lock" for a gate that was demonstrably gone. A
+        // thrown release (`null`) genuinely leaves it unknown, and staying on the
+        // pessimistic answer there is right: being told to check a lock we no longer
+        // hold is a wasted trip, being told nothing about one we DO hold is a
+        // stranded server mutex.
+        let lockHeld = true;
+        if (!dirty) {
+          const resolved = await done(null);
+          const kind = resolved ? asDoneKind(resolved.kind) : null;
+          lockHeld = !(kind === 'released' || kind === 'not_editing');
+        }
         if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
         return {
           kind: 'restore_failed',

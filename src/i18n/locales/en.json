@@ -2809,7 +2809,9 @@
       "saveLocally": "Save changes locally before closing",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
-      "closeAnyway": "Close anyway"
+      "closeAnyway": "Close anyway",
+      "thenOpen": "Once this project is closed, the project you chose opens.",
+      "thenNew": "Once this project is closed, the new-project dialog opens."
     },
     "quit": {
       "title": "Quit with changes not on SpeleoDB",
@@ -2928,6 +2930,7 @@
       "reverting": "Reverting…",
       "discardOffer": "Replace my changes & revert",
       "discardConfirm": "Yes, replace my changes & revert",
+      "retryUpload": "Retry the upload",
       "steps": {
         "locking": "Taking the write lock…",
         "restoring": "Replacing the working copy with revision {{sha}}…",
@@ -2941,9 +2944,9 @@
         "restoreFailed": "The write lock was released and nothing was changed.",
         "restoreFailedLockHeld": "You still hold the write lock, because this copy has changes that are not on SpeleoDB.",
         "lockStillHeld": "The write lock was kept, because releasing it would leave your unpushed changes unprotected.",
-        "pushFailed": "Revision {{sha}} is in your working copy, but it could not be uploaded. You are holding the write lock: use Retry on the upload banner, or finish editing from the SpeleoDB button.",
-        "pushUnconfirmed": "The revert was uploaded, but an edit landed after it, so the write lock is still held. Finish editing from the SpeleoDB button to upload the rest and release it.",
-    "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Sign in again, then start editing to upload it."
+        "pushFailed": "Revision {{sha}} is in your working copy and you still hold the write lock, but it could not be uploaded. That upload is all that is left, so retry it below.",
+        "pushUnconfirmed": "The revert was uploaded, but an edit landed after it, so the write lock is still held. Close this dialog, then finish editing from the SpeleoDB button in the toolbar to upload the rest and release it.",
+        "notEditing": "Revision {{sha}} is in your working copy, but your SpeleoDB session ended before it could be uploaded, so nothing was published and no write lock is held. Close this dialog, sign in again, then start editing to upload it."
       }
     },
     "editBar": {
@@ -3147,10 +3150,16 @@
       "loadFailed": "Could not load collaborators",
       "retry": "Retry",
       "readOnlyBadge": "View only. You need admin access to change collaborators.",
-      "changesInstantNote": "Changes below take effect on SpeleoDB immediately - there is no separate save step.",
+      "changesConfirmNote": "Each change is applied on SpeleoDB the moment you confirm it - there is no separate save step.",
       "you": "(you)",
       "teamTag": "(team)",
       "remove": "Remove",
+      "removeConfirm": "Confirm remove",
+      "removeFor": "Remove {{name}}",
+      "removeConfirmFor": "Confirm removing {{name}} from this project",
+      "levelPending": "Not applied yet",
+      "applyLevelFor": "Apply the access level change for {{name}}",
+      "cancelLevelFor": "Discard the access level change for {{name}}",
       "add": "Add",
       "addUser": "Add collaborator",
       "addLevel": "Access level",

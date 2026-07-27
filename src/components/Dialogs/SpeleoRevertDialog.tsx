@@ -5,6 +5,7 @@ import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRevertRevision } from '../../hooks/useRevertRevision';
+import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
  * Revert-to-revision confirm, opened from the revision history of a READ-ONLY
@@ -53,6 +54,12 @@ export default function SpeleoRevertDialog() {
   // True when the failure left us holding a lock we did not have before, so the
   // dialog can say so instead of leaving the user to discover it from the toolbar.
   const [lockHeld, setLockHeld] = useState(false);
+  // The upload - and ONLY the upload - failed: the revision is already in the working
+  // copy and the write lock is still ours, so everything except the last round trip
+  // is done. That earns its own primary control, because re-running the whole revert
+  // from the top would hit the pre-flight un-pushed-edits refusal and offer to
+  // "replace my changes" - where "my changes" would be the user's own revert.
+  const [retryUpload, setRetryUpload] = useState(false);
   const [message, setMessage] = useState(() =>
     t('speleodb.revert.commitMessage', { sha: hexsha.slice(0, 8) }),
   );
@@ -75,6 +82,10 @@ export default function SpeleoRevertDialog() {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
+    // Cleared for the duration of the attempt: this run either fails at the upload
+    // again (and re-arms it below) or gets past that step, in which case the retry
+    // control must not linger over an outcome it no longer describes.
+    setRetryUpload(false);
     const outcome = await revertRevision({
       projectId,
       projectName,
@@ -121,8 +132,12 @@ export default function SpeleoRevertDialog() {
         setBusy(false);
         return;
       case 'push_failed':
-        // The revision IS in the working copy and the lock IS still held - the
-        // #260 banner's Retry is the way on, so stay open and say that.
+        // The revision IS in the working copy and the lock IS still held, so the
+        // only thing left to do is upload again. The #260 shell banner's Retry does
+        // exactly that, but it is behind this dialog's own full-viewport scrim -
+        // dimmed and unclickable - so this dialog has to carry the retry itself.
+        // `SpeleoPushFailureNotice` below reports WHY the upload failed.
+        setRetryUpload(true);
         setError(t('speleodb.revert.errors.pushFailed', { sha: shortSha }));
         setBusy(false);
         return;
@@ -187,6 +202,21 @@ export default function SpeleoRevertDialog() {
                   ? t('speleodb.revert.discardConfirm')
                   : t('speleodb.revert.discardOffer')}
             </Button>
+          ) : retryUpload ? (
+            // Re-issue the upload. `discardLocal` is honest here and needed: the
+            // un-pushed edits the pre-flight would refuse over ARE the revision this
+            // revert already wrote into the working copy, so waiving that guard
+            // waives it against the user's own confirmed revert, nothing else. Not
+            // `danger` - the destructive part already happened and was consented to.
+            <Button
+              variant="primary"
+              onClick={() => void run(true)}
+              disabled={busy}
+              data-primary-action=""
+              data-testid="speleodb-revert-retry-upload-btn"
+            >
+              {busy ? t('speleodb.revert.reverting') : t('speleodb.revert.retryUpload')}
+            </Button>
           ) : (
             <Button
               variant="danger"
@@ -250,6 +280,13 @@ export default function SpeleoRevertDialog() {
             {error}
           </p>
         )}
+        {/* #260: a failed upload leaves this dialog open, and the shell banner that
+            carries the server's reason sits behind `AlertDialog`'s full-viewport
+            scrim - dimmed and unclickable. Render the same line here, above the
+            button that retries it, exactly as the done / close / quit dialogs do.
+            It renders nothing unless there IS a push failure, so the other failure
+            kinds are unaffected. */}
+        <SpeleoPushFailureNotice />
       </div>
     </AlertDialog>
   );

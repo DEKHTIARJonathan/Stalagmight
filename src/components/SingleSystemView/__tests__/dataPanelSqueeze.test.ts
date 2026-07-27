@@ -54,8 +54,9 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
     const r = computeDataPanelLayout(opts({ viewportHeight: MIN + MAP_MIN_HEIGHT - 1 }));
     expect(r.collapsed).toBe(true);
     // Un-squeezed (so the user's value returns when the viewport does), but still
-    // capped at the container it would be floated open inside - see the cap tests.
-    expect(r.height).toBe(MIN + MAP_MIN_HEIGHT - 1);
+    // capped at what leaves the map its floor inside the container it would be
+    // floated open in - see the cap tests.
+    expect(r.height).toBe(MIN - 1);
     expect(computeDataPanelLayout(opts({ viewportHeight: 900, height: USER_HEIGHT })).height).toBe(
       USER_HEIGHT,
     );
@@ -95,7 +96,7 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
     );
   });
 
-  it('caps a FLOATING panel at the container even though it is not squeezed', () => {
+  it('caps a FLOATING panel below the container even though it is not squeezed', () => {
     // The #260 hole: `closedBottomInset` on BOTH side Docks is fed this height
     // whenever the Data panel is open - and `isOpen` includes hover-floating open.
     // A 500px persisted height against a 330px Main therefore raised each side
@@ -103,17 +104,32 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
     // and clipping the Data tab above Main's top: the exact failure MAP_MIN_HEIGHT
     // was added to remove, reached through the branch that skips the squeeze.
     const r = computeDataPanelLayout(opts({ pinnedOpen: false }));
-    expect(r.height).toBeLessThanOrEqual(MEASURED_MAIN_HEIGHT);
-    expect(r.height).toBe(MEASURED_MAIN_HEIGHT);
+    expect(r.height).toBe(MEASURED_MAIN_HEIGHT - MAP_MIN_HEIGHT);
   });
 
-  it('caps the height in EVERY branch, floating or collapsed, at every viewport', () => {
+  // The cap used to be `Math.min(height, floor(viewportHeight))`, which ALLOWS
+  // equality - so a persisted height at or above the container reported exactly the
+  // container height, which is the height-0 side bar and the 0px map. The cap let
+  // through the single value it existed to stop.
+  it('never reports the whole container, not even when the height is exactly it', () => {
+    for (const viewportHeight of [330, 500, 900]) {
+      const r = computeDataPanelLayout(opts({ viewportHeight, height: viewportHeight }));
+      expect(r.height, `vh=${viewportHeight}`).toBeLessThan(viewportHeight);
+      expect(computeDataPanelLayout(opts({ viewportHeight, height: viewportHeight, pinnedOpen: false })).height)
+        .toBeLessThan(viewportHeight);
+    }
+  });
+
+  it('leaves the map its floor in EVERY branch, floating or collapsed, at every viewport', () => {
     for (const pinnedOpen of [true, false]) {
       for (const viewportHeight of [1, 50, 120, 299, 330, 400, 500, 900]) {
         const r = computeDataPanelLayout(opts({ pinnedOpen, viewportHeight }));
-        expect(r.height, `pinned=${pinnedOpen} vh=${viewportHeight}`).toBeLessThanOrEqual(
-          viewportHeight,
-        );
+        const label = `pinned=${pinnedOpen} vh=${viewportHeight}`;
+        expect(r.height, label).toBeLessThanOrEqual(Math.max(0, viewportHeight - MAP_MIN_HEIGHT));
+        // A container smaller than the map floor has no answer that leaves a map;
+        // 0 is the least-bad one, since it at least keeps the side bars (and with
+        // them the Data tab) at full height.
+        expect(r.height, label).toBeGreaterThanOrEqual(0);
       }
     }
   });
@@ -122,7 +138,7 @@ describe('computeDataPanelLayout (#260, vertical)', () => {
     // Same half-pixel-border argument as the squeeze path below: a fractional
     // viewport must not become a fractional style value.
     expect(computeDataPanelLayout(opts({ pinnedOpen: false, viewportHeight: 330.7 })).height).toBe(
-      330,
+      330 - MAP_MIN_HEIGHT,
     );
   });
 

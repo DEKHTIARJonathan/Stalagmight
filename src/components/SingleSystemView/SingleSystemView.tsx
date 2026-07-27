@@ -26,7 +26,7 @@ import {
   MAP_MIN_WIDTH,
   MAP_MIN_HEIGHT,
 } from './layoutConstants';
-import { useSidePanelSqueeze, useDataPanelSqueeze, acceptsResize } from './sidePanelSqueeze';
+import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
@@ -230,8 +230,10 @@ export default function SingleSystemView() {
 
   // #260: a drag on a SQUEEZED panel is measured against the squeezed rendering,
   // so a size above the clamp is unreachable and must not be persisted - see
-  // `acceptsResize`, which states the rule next to the display-only one it is the
-  // other half of.
+  // `resolveResize`, which states the rule next to the display-only one it is the
+  // other half of. It CLAMPS rather than refusing: the drag mutates its own inputs,
+  // so a shrink-then-grow could end on an unreachable number and a refusal there
+  // discarded the reachable part of the same drag too.
   //
   // Read through a ref rather than deps: these props feed useResizeHandle, which
   // re-binds its listeners whenever their identity changes, and the display size
@@ -246,10 +248,10 @@ export default function SingleSystemView() {
     detail: { display: detailDisplayWidth, user: detailPanelWidth },
     data: { display: dataDisplayHeight, user: dataTableHeight },
   };
-  /** Is `size` a size this drag could actually have produced on screen? */
-  const reachable = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
+  /** The size to write for `size`, clamped to what this drag could reach on screen. */
+  const resolveSize = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
     const { display, user } = squeezeRef.current[axis];
-    return acceptsResize(display, user, size);
+    return resolveResize(display, user, size);
   }, []);
 
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
@@ -258,41 +260,41 @@ export default function SingleSystemView() {
   // the ~60×/s store-width updates during the drag itself.
   const applySectionsWidth = useCallback(
     (size: number) => {
-      if (reachable('sections', size)) setSectionsPanelWidth(size);
+      setSectionsPanelWidth(resolveSize('sections', size));
     },
-    [reachable, setSectionsPanelWidth],
+    [resolveSize, setSectionsPanelWidth],
   );
   const applyDetailWidth = useCallback(
     (size: number) => {
-      if (reachable('detail', size)) setDetailPanelWidth(size);
+      setDetailPanelWidth(resolveSize('detail', size));
     },
-    [reachable, setDetailPanelWidth],
+    [resolveSize, setDetailPanelWidth],
   );
   const applyDataHeight = useCallback(
     (size: number) => {
-      if (reachable('data', size)) setDataTableHeight(size);
+      setDataTableHeight(resolveSize('data', size));
     },
-    [reachable, setDataTableHeight],
+    [resolveSize, setDataTableHeight],
   );
   const handleSectionsResizeEnd = useCallback(
     (size: number) => {
-      if (reachable('sections', size)) savePanelSizes('sections', size);
+      savePanelSizes('sections', resolveSize('sections', size));
     },
-    [reachable, savePanelSizes],
+    [resolveSize, savePanelSizes],
   );
   const handleDetailResizeEnd = useCallback(
     (size: number) => {
-      if (reachable('detail', size)) savePanelSizes('detail', size);
+      savePanelSizes('detail', resolveSize('detail', size));
     },
-    [reachable, savePanelSizes],
+    [resolveSize, savePanelSizes],
   );
   // Don't persist the temporary focus-mode height (#50): exit restores the prior
   // height only in memory, so a focus-time drag must not leak to config.
   const handleDataResizeEnd = useCallback(
     (size: number) => {
-      if (focusedSectionId === null && reachable('data', size)) savePanelSizes('data-table', size);
+      if (focusedSectionId === null) savePanelSizes('data-table', resolveSize('data', size));
     },
-    [reachable, savePanelSizes, focusedSectionId],
+    [resolveSize, savePanelSizes, focusedSectionId],
   );
 
   // Programmatic Details reveal (jump-to-warning from the data table). The store

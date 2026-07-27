@@ -155,6 +155,33 @@ describe('SpeleoDbProjectDialog', () => {
     expect(closeDialog).toHaveBeenCalled();
   });
 
+  /**
+   * `closeOnBackdropClick={false}` signals "do not dismiss this by accident", but it
+   * only ever covered the backdrop: Escape and the X ran straight through and threw
+   * away staged General-tab metadata edits with no notice. DialogWrapper has the
+   * confirm overlay built in; the dialog just never told it it was dirty.
+   */
+  it('asks before discarding staged metadata edits on Escape', async () => {
+    seed();
+    render(<SpeleoDbProjectDialog />);
+    await userEvent.type(await screen.findByTestId('speleodb-settings-name'), 'B');
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(screen.getByText('Unsaved Changes')).toBeInTheDocument();
+    expect(closeDialog).not.toHaveBeenCalled();
+  });
+
+  it('does not ask when nothing was staged', async () => {
+    seed();
+    render(<SpeleoDbProjectDialog />);
+    await screen.findByTestId('speleodb-settings-name');
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(closeDialog).toHaveBeenCalled();
+  });
+
   it('says so - and asks the server nothing - when the project is not linked', async () => {
     render(<SpeleoDbProjectDialog />);
     expect(screen.getByTestId('speleodb-project-not-remote')).toBeInTheDocument();

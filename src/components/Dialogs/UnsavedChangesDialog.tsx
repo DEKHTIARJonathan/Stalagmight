@@ -23,6 +23,17 @@ export default function UnsavedChangesDialog() {
   // Save saves then quits, Cancel stays. Unlike the New/Open paths, quit offers a
   // Save option so the user isn't forced to choose between losing work and staying.
   const pendingQuit = dialogData?.pendingQuit === true;
+  // Set by `openExitPrompt` when this prompt displaced a dialog in the single
+  // `activeDialog` slot. Cancelling leaves the app running, so that dialog - which
+  // may be a multi-step import wizard whose state lives in its `dialogData` - has to
+  // come back rather than silently vanish. Absent on the New/Open paths, which are
+  // raised from a bare view.
+  const cancelReturnsTo =
+    typeof dialogData?.cancelReturnsTo === 'string' ? dialogData.cancelReturnsTo : null;
+  const cancelReturnsData =
+    typeof dialogData?.cancelReturnsData === 'object' && dialogData.cancelReturnsData !== null
+      ? (dialogData.cancelReturnsData as Record<string, unknown>)
+      : undefined;
 
   const handleDiscard = async () => {
     // Concurrency guard is handled at store level (store.isClosing)
@@ -62,8 +73,12 @@ export default function UnsavedChangesDialog() {
     }
   };
 
+  // Cancel / X / backdrop only. Discard and Save & Quit both end in `performQuit()`
+  // or a load that replaces the screen, where putting the old dialog back would be
+  // pointless at best.
   const handleCancel = () => {
-    closeDialog();
+    if (cancelReturnsTo) openDialog(cancelReturnsTo, cancelReturnsData);
+    else closeDialog();
   };
 
   return (

@@ -323,3 +323,57 @@ describe('SpeleoQuitDialog - not dismissable mid-verb', () => {
     await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
   });
 });
+
+/**
+ * [#270] `uiStore` has ONE `activeDialog` slot, so raising this prompt evicts
+ * whatever was on screen. That is fine for the exit and wrong for Cancel: the app
+ * keeps running, and the evicted dialog can be a multi-step import wizard whose
+ * placed sections the user never agreed to drop except as part of quitting.
+ */
+describe('SpeleoQuitDialog - Cancel puts back the dialog it displaced', () => {
+  const displaced = () =>
+    useUIStore.setState({
+      dialogData: {
+        cancelReturnsTo: 'dmp-selection',
+        cancelReturnsData: { dmpFile: { sections: 3 } },
+      },
+    });
+
+  it('reopens it with its data, rather than dropping to a bare view', async () => {
+    displaced();
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-quit-cancel'));
+
+    expect(useUIStore.getState().activeDialog).toBe('dmp-selection');
+    expect(useUIStore.getState().dialogData).toEqual({ dmpFile: { sections: 3 } });
+  });
+
+  it('reopens it on Escape too - the same handler', async () => {
+    displaced();
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.keyboard('{Escape}');
+
+    expect(useUIStore.getState().activeDialog).toBe('dmp-selection');
+  });
+
+  it('closes plainly when nothing was displaced', async () => {
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-quit-cancel'));
+
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+
+  it('does NOT restore it on the way out - the window is going away', async () => {
+    displaced();
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    render(<SpeleoQuitDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-quit-push-release'));
+
+    await waitFor(() => expect(performQuitMock).toHaveBeenCalledTimes(1));
+    expect(useUIStore.getState().activeDialog).toBeNull();
+  });
+});

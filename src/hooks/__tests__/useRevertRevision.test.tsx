@@ -213,6 +213,38 @@ describe('useRevertRevision - unwinding a failed restore', () => {
     expect(issued()).toContain('speleodb_done');
   });
 
+  it('reports NO lock held when the release says the edit gate had already dropped', async () => {
+    // `lockHeld` answers "am I now holding a lock I did not have?", and `not_editing`
+    // is the backend saying the gate - and with it the lock - was already gone (a 401
+    // auto-drop is the usual way in). Folding every non-`released` answer into
+    // `lockHeld: true` made the dialog say "You still hold the write lock" about a
+    // lock that demonstrably was not held.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects({ message: 'offline' }),
+      speleodb_done: ok({ kind: 'not_editing' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toMatchObject({ kind: 'restore_failed', lockHeld: false });
+  });
+
+  it('stays on the pessimistic answer when the release itself throws', async () => {
+    // A thrown release leaves the lock genuinely unknown. Being sent to check a lock
+    // we no longer hold costs a trip; being told nothing about one we DO hold strands
+    // a server mutex, so "unknown" reports as held.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects({ message: 'offline' }),
+      speleodb_done: rejects({ message: 'offline' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toMatchObject({ kind: 'restore_failed', lockHeld: true });
+  });
+
   it('KEEPS the lock when the copy is dirty - releasing would strand un-pushed work', async () => {
     // The armed-discard retry waives the pre-flight, so the flow reaches the backend
     // with un-pushed edits still present and fails there for its own reason. Releasing

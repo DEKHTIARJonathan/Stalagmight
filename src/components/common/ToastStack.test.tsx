@@ -50,10 +50,23 @@ const originalRect = Object.getOwnPropertyDescriptor(
   'getBoundingClientRect',
 );
 
-/** Move the pointer somewhere. The stack listens on document, capture-phase. */
+/**
+ * Move the pointer somewhere.
+ *
+ * The stack listens on document, capture-phase, for exactly ONE move event:
+ * `pointermove` wherever PointerEvent exists (every webview the app ships in, and
+ * the jsdom this runs under), `mousemove` only as the fallback for a runtime
+ * without it.
+ * The same choice is made here rather than firing both, so a component that went
+ * back to double-registering - or that listened for the wrong one - shows up as a
+ * failure instead of being papered over. A plain MouseEvent under the pointer
+ * type is enough: the handler reads nothing but clientX/clientY.
+ */
+const MOVE_EVENT = typeof PointerEvent === 'function' ? 'pointermove' : 'mousemove';
+
 function movePointerTo(at: { clientX: number; clientY: number }) {
   act(() => {
-    document.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, ...at }));
+    document.dispatchEvent(new MouseEvent(MOVE_EVENT, { bubbles: true, ...at }));
   });
 }
 
@@ -165,9 +178,12 @@ afterEach(() => {
   vi.useRealTimers();
   vi.unstubAllGlobals();
   restoreLayout();
-  act(() => {
-    useUIStore.getState().clearToast();
-  });
+  // Empty the shared store by writing the field, exactly as `beforeEach` does.
+  // Not through a store action: the component is already unmounted by now (RTL's
+  // cleanup runs first), so this is plain state hygiene between cases and there
+  // is nothing left to animate. It used to go through `clearToast()`, a store
+  // action with no production caller that survived only to serve this one line.
+  useUIStore.setState({ toasts: [] });
 });
 
 describe('ToastStack - rendering', () => {
@@ -493,6 +509,11 @@ describe('ToastStack - click-through', () => {
     render(<ToastStack />);
     push('working…', 'k');
     push('and another', 'k2');
+    // Let the entrance settle first: a toast's first frame is deliberately at
+    // opacity 0, and an invisible dismiss button opts OUT of hit-testing (see
+    // "an invisible toast is not clickable" below). This case is about the steady
+    // state - which single element is clickable once a toast is up.
+    advance(100);
 
     const stack = screen.getByTestId('toast-stack');
     expect(stack.className).toContain('pointer-events-none');
@@ -521,6 +542,225 @@ describe('ToastStack - click-through', () => {
     hoverStack();
     advance(20000);
     expect(toastFor('read me')?.style.opacity).toBe('1');
+  });
+});
+
+/**
+ * Opacity has no effect on hit-testing, and the stack portals into a
+ * `fixed inset-0 z-[99999]` layer that sits above every dialog (`DialogWrapper`
+ * is `z-50`). So the dismiss button - the only `pointer-events-auto` element in
+ * the whole stack - stayed a live ~24px target in the bottom-left corner for the
+ * full 180ms exit and the 1.5s fade tail, long after there was anything to see,
+ * swallowing clicks aimed at a modal underneath it.
+ */
+describe('ToastStack - an invisible toast is not clickable', () => {
+  const dismissFor = (message: string) => within(toastFor(message)!).getByRole('button');
+
+  it('keeps the dismiss button hit-testable while the toast is visible', () => {
+    render(<ToastStack />);
+    push('read me', 'k');
+    advance(100);
+
+    expect(toastFor('read me')?.style.opacity).toBe('1');
+    expect(dismissFor('read me').className).toContain('pointer-events-auto');
+
+    // Still well inside the fade, but still plainly visible - and still a
+    // working control, which is the half of this that must not regress.
+    advance(5400);
+    expect(Number(toastFor('read me')?.style.opacity)).toBeGreaterThan(0.5);
+    expect(dismissFor('read me').className).toContain('pointer-events-auto');
+
+    act(() => dismissFor('read me').click());
+    advance(300);
+    expect(toasts()).toHaveLength(0);
+  });
+
+  it('takes the dismiss button out of hit-testing while the toast is leaving', () => {
+    render(<ToastStack />);
+    push('going', 'a');
+    push('staying', 'b');
+    advance(100);
+
+    act(() => dismissFor('going').click());
+
+    // Mounted for the whole 180ms exit, at opacity 0 the entire time.
+    expect(toastFor('going')?.dataset.toastLeaving).toBe('true');
+    expect(toastFor('going')?.style.opacity).toBe('0');
+    expect(dismissFor('going').className).not.toContain('pointer-events-auto');
+    expect(dismissFor('going').className).toContain('pointer-events-none');
+
+    // Its neighbour is untouched - this is per-toast, not a stack-wide switch.
+    expect(dismissFor('staying').className).toContain('pointer-events-auto');
+  });
+
+  it('takes it out in the fade tail too, once the toast is all but gone', () => {
+    render(<ToastStack />);
+    push('fading out', 'k');
+
+    // 5s dwell + 1.4s of the 1.5s fade: ~7% opacity, i.e. nothing a user could
+    // see, let alone aim at. The toast is still mounted for another 100ms.
+    advance(6400);
+    const opacity = Number(toastFor('fading out')?.style.opacity);
+    expect(opacity).toBeGreaterThan(0);
+    expect(opacity).toBeLessThan(0.1);
+    expect(dismissFor('fading out').className).not.toContain('pointer-events-auto');
+  });
+
+  it('re-arms the button the moment hovering brings the toast back', () => {
+    render(<ToastStack />);
+    push('nearly gone', 'k');
+    advance(6400);
+    expect(dismissFor('nearly gone').className).not.toContain('pointer-events-auto');
+
+    // The pause is hit-tested on pointer position, so a pointer over the column
+    // restores full opacity - and with it the button - before any click lands.
+    hoverStack();
+    expect(toastFor('nearly gone')?.style.opacity).toBe('1');
+    expect(dismissFor('nearly gone').className).toContain('pointer-events-auto');
+  });
+});
+
+/**
+ * The stack is mounted for the whole session (App renders it unconditionally),
+ * so anything it accumulates or repeats per toast, it accumulates or repeats for
+ * the session - over a live WebGL map.
+ */
+describe('ToastStack - long-session cost', () => {
+  /**
+   * jsdom ships no ResizeObserver, so the component's observer path is dead in
+   * these tests unless one is installed. This one only records what it is asked
+   * to watch and stop watching; it never reports a resize.
+   */
+  function recordResizeObserver() {
+    const observed: HTMLElement[] = [];
+    const unobserved: HTMLElement[] = [];
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        constructor(_callback: ResizeObserverCallback) {}
+        observe(el: HTMLElement) {
+          observed.push(el);
+        }
+        unobserve(el: HTMLElement) {
+          unobserved.push(el);
+        }
+        disconnect() {}
+      },
+    );
+    // `useViewportHeight` watches the document element through the same global;
+    // only the toast boxes are interesting here.
+    const toastsOnly = (els: HTMLElement[]) => els.filter((el) => el.dataset.toastId);
+    return { observed: () => toastsOnly(observed), unobserved: () => toastsOnly(unobserved) };
+  }
+
+  it('unobserves a toast element once the toast has left the stack', () => {
+    const ro = recordResizeObserver();
+    render(<ToastStack />);
+    push('short lived', 'k');
+    advance(100);
+
+    const el = toastFor('short lived')!;
+    expect(ro.observed()).toContain(el);
+    expect(ro.unobserved()).toHaveLength(0);
+
+    // Live out the dwell and the fade.
+    advance(7000);
+    expect(toasts()).toHaveLength(0);
+
+    // Dropping the id from the node map is NOT enough: the observer keeps its own
+    // strong reference to every element it watches, and this component never
+    // unmounts, so its disconnect-on-unmount never runs. Without the unobserve
+    // every toast element the session ever showed stayed alive in it.
+    expect(ro.unobserved()).toContain(el);
+  });
+
+  it('leaves nothing observed after a churn of toasts', () => {
+    const ro = recordResizeObserver();
+    render(<ToastStack />);
+    for (let i = 0; i < 4; i += 1) push(`m${i}`, `k${i}`);
+    advance(7000);
+
+    expect(toasts()).toHaveLength(0);
+    expect(ro.observed()).toHaveLength(4);
+    expect(ro.unobserved()).toHaveLength(4);
+  });
+
+  it('does not re-measure the mounted toasts on every frame of the dwell', () => {
+    render(<ToastStack />);
+    push('sits there', 'k');
+    advance(200);
+
+    const original = HTMLElement.prototype.getBoundingClientRect;
+    const measured: HTMLElement[] = [];
+    const spy = vi
+      .spyOn(HTMLElement.prototype, 'getBoundingClientRect')
+      .mockImplementation(function measureSpy(this: HTMLElement) {
+        measured.push(this);
+        return original.call(this);
+      });
+
+    // 40 ticks, every one of them inside the 5s dwell, where nothing rendered
+    // moves. A dependency-less layout effect used to re-run
+    // getBoundingClientRect over every mounted toast on every render, and the
+    // tick used to force a render 20 times a second - together ~200 forced
+    // pre-paint layout flushes per toast, for the frame already on screen.
+    advance(2000);
+    spy.mockRestore();
+
+    expect(measured.filter((el) => el.dataset.toastId)).toHaveLength(0);
+  });
+
+  it('stops re-rendering the stack on every tick of the dwell', () => {
+    render(<ToastStack />);
+    push('sits there', 'k');
+    advance(200);
+
+    // The capacity report is a dependency-less effect, so it runs exactly once
+    // per render of the stack: swapping the store action in turns it into a
+    // render counter. The swap is itself one render, hence the clear after it.
+    const real = useUIStore.getState().setToastCapacity;
+    const rendered = vi.fn();
+    try {
+      act(() => {
+        useUIStore.setState({
+          setToastCapacity: (capacity: number) => {
+            rendered();
+            real(capacity);
+          },
+        });
+      });
+      rendered.mockClear();
+
+      advance(2000);
+      expect(rendered).not.toHaveBeenCalled();
+
+      // The fade still animates, so what was removed is repaint of an unchanged
+      // frame, not the lifecycle itself.
+      advance(3000);
+      expect(rendered).toHaveBeenCalled();
+    } finally {
+      useUIStore.setState({ setToastCapacity: real });
+    }
+  });
+
+  it('registers ONE document move listener, not a pointermove/mousemove pair', () => {
+    const isMove = (type: unknown) => type === 'pointermove' || type === 'mousemove';
+    const added = vi.spyOn(document, 'addEventListener');
+    const removed = vi.spyOn(document, 'removeEventListener');
+
+    render(<ToastStack />);
+    push('hover me', 'k');
+    advance(300);
+
+    const moves = (spy: typeof added) => spy.mock.calls.filter((call) => isMove(call[0])).length;
+    // Net of the re-registrations the effect makes as the stack's geometry
+    // settles. Both were registered in capture phase on document, so every mouse
+    // move anywhere in the app ran the hover hit-test twice.
+    const liveListeners = moves(added) - moves(removed);
+    added.mockRestore();
+    removed.mockRestore();
+
+    expect(liveListeners).toBe(1);
   });
 });
 

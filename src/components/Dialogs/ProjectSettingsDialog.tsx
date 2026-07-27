@@ -31,7 +31,10 @@ export function ProjectSettingsDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
   // The SpeleoDB tab is only meaningful for a remote (linked) project.
-  const isRemote = useSpeleoStore((s) => s.link) != null;
+  // The BOOLEAN, not the link object: `seedFromStatus` hands out a fresh link on
+  // every poll tick, so selecting the object re-rendered the whole settings dialog
+  // on each one.
+  const isRemote = useSpeleoStore((s) => s.link != null);
   const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
     useShallow((s) => ({
       project: s.project,

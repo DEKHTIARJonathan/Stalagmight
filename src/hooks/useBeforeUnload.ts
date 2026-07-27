@@ -74,16 +74,20 @@ export function useBeforeUnload(
 
     let isMounted = true;
 
-    // Close the window immediately without confirmation
-    const closeWindowNow = async () => {
+    // Close the window immediately without confirmation. Returns false when the
+    // destroy REJECTED and the window is therefore still here - the caller has to
+    // know, because everything it does around this call is one-way.
+    const closeWindowNow = async (): Promise<boolean> => {
       debugLog('[useBeforeUnload] closeWindowNow called');
       try {
         const appWindow = getCurrentWindow();
         debugLog('[useBeforeUnload] Got window, calling destroy');
         await appWindow.destroy();
         debugLog('[useBeforeUnload] Window destroyed');
+        return true;
       } catch (e) {
         console.error('[useBeforeUnload] Window destroy failed:', e);
+        return false;
       }
     };
 
@@ -165,17 +169,30 @@ export function useBeforeUnload(
             }
           }
 
-          // Mark that we're closing to prevent re-triggering
+          // Mark that we're closing, so a close request arriving while `destroy()`
+          // is in flight is ignored rather than running this whole flow again.
           isClosing.current = true;
 
-          // Unregister our listener before destroying to prevent loops
+          // Destroy the window. Both the latch above and the unregister below are
+          // one-way, and `destroy()` CAN reject (a revoked/regressed
+          // `core:window:allow-destroy` capability, an IPC failure). Doing either of
+          // them up front made a single failed destroy permanently un-quittable: the
+          // window stayed, and every later close request hit the `isClosing` early
+          // return - with no listener left to reach in any case, so not even the OS
+          // X could try again. So the latch is released and the listener is left
+          // registered whenever the close did not actually happen.
+          if (!(await closeWindowNow())) {
+            debugLog('[useBeforeUnload] Destroy failed - staying quittable');
+            isClosing.current = false;
+            return;
+          }
+
+          // The window IS gone. Drop the listener so nothing can re-enter this flow
+          // during teardown.
           if (unlistenRef.current) {
             unlistenRef.current();
             unlistenRef.current = null;
           }
-
-          // Destroy the window
-          await closeWindowNow();
         });
 
         if (isMounted) {

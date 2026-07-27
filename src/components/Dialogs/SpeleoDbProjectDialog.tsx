@@ -32,7 +32,10 @@ export function SpeleoDbProjectDialog() {
   const initialTab = useUIStore((s) => s.dialogData.tab);
   // A project can unlink from another surface while this sits open (the delete flow
   // closes the dialog itself), which leaves every tab with nothing to administer.
-  const isRemote = useSpeleoStore((s) => s.link) !== null;
+  // The BOOLEAN, not the link object - `seedFromStatus` reallocates the link on
+  // every poll tick, and selecting it re-rendered this whole tabbed dialog (roster
+  // rows, revision list, metadata form) on each one.
+  const isRemote = useSpeleoStore((s) => s.link !== null);
   const metadata = useSpeleoProjectMetadata();
 
   const [tab, setTab] = useState<SpeleoProjectTab>(isTab(initialTab) ? initialTab : 'general');
@@ -48,6 +51,13 @@ export function SpeleoDbProjectDialog() {
       // Same fixed footprint as Project Settings, so the content pane scrolls
       // within the dialog instead of overflowing the screen.
       fixedSize={{ width: 'min(720px, 95vw)', height: 'clamp(420px, 75vh, 760px)' }}
+      // `closeOnBackdropClick={false}` says "do not dismiss this by accident", but it
+      // only covers the backdrop - Escape and the X still ran straight through and
+      // silently dropped staged General-tab metadata edits. `canSave` is exactly the
+      // "there are unsaved edits on the server metadata form" bit the footer's Save
+      // button is already gated on, so wiring it here reuses DialogWrapper's built-in
+      // confirm overlay instead of inventing a second notion of dirty.
+      isDirty={metadata.canSave}
       closeOnBackdropClick={false}
       overflow="hidden"
       bodyClassName="flex flex-col flex-1 min-h-0"
