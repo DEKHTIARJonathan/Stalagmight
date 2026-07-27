@@ -393,7 +393,11 @@ impl Project {
 )]
 mod tests {
     use super::*;
-    use crate::models::{SectionData, ShotData};
+    use crate::config::ClosureAdjustmentConfig;
+    use crate::models::{
+        ClosureStrategy, LoopClosure, SectionData, ShotData, Station, StationMerge,
+    };
+    use chrono::Utc;
 
     fn shot(azimuth: f64, length: f64, depth_in: f64, depth_out: f64) -> ShotData {
         ShotData {
@@ -1020,6 +1024,106 @@ mod tests {
         // toggle and the in-app reverse both use to keep the cave still.
         let (rx, ry) = shot_run_displacement(&[data]);
         assert!((dx - rx).abs() < 1e-9 && (dy - ry).abs() < 1e-9);
+    }
+
+    /// A datum-less component whose loop closure is eligible for the
+    /// least-squares solve: two sections merged end to end and tied back with a
+    /// closure that has a real misclosure. `plan_adjustment_anchors` has to
+    /// invent a gauge anchor for exactly this shape.
+    ///
+    /// Returns the project plus both section ids; `a` is the lower id, so it is
+    /// the one the default anchor is picked from.
+    fn project_with_eligible_closure() -> (Project, SectionId, SectionId) {
+        let mut project = Project::new("closure".to_string(), None);
+        let a = project
+            .add_section(SectionData {
+                shots: vec![shot(0.0, 10.0, 0.0, 0.0), shot(0.0, 10.0, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        let b = project
+            .add_section(SectionData {
+                // 0.5m long, so the loop does not quite close.
+                shots: vec![shot(180.0, 20.5, 0.0, 0.0)],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        project.station_merges.push(StationMerge {
+            station_a: project.key_for_ref(StationRef::new(a, 2)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(b, 0)).unwrap(),
+            merged_at: Utc::now(),
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: project.key_for_ref(StationRef::new(b, 1)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
+            path_length: 40.5,
+            misclosure_distance: 0.5,
+            error_percentage: 1.2,
+            horizontal_misclosure: 0.5,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::LeastSquaresWeighted,
+            is_aligned: false,
+        });
+        (project, a, b)
+    }
+
+    /// The reverse promises every station keeps its world position, and
+    /// Plan/Export mode FORCES the closure-adjusted view - so the guarantee has
+    /// to hold for ADJUSTED coordinates, not only the measured walk every other
+    /// reverse test asserts on.
+    ///
+    /// It did not. A component with an eligible closure and no zero datum has its
+    /// otherwise-free translation pinned by `default_anchor_for_component`, which
+    /// picked the lex-min `(section_id, station_index)`. A reverse renumbers
+    /// station `i` to `N - i`, so `(a, 0)` became the OTHER physical end and the
+    /// entire adjusted component slid by the adjustment residual between the two
+    /// ends of the section.
+    #[test]
+    fn reverse_preserves_adjusted_coordinates_of_a_datum_less_component() {
+        let (project, a, b) = project_with_eligible_closure();
+        let config = ClosureAdjustmentConfig::default();
+        let shots_a = project.get_section(a).unwrap().shots.len() as u32;
+
+        let before = project.clone().into_adjusted_station_coordinates(&config);
+        let mut project = project;
+        assert!(project.reverse_section(a, false));
+        let after = project.into_adjusted_station_coordinates(&config);
+
+        let at = |stations: &[Station], sr: StationRef| {
+            stations
+                .iter()
+                .find(|s| s.station_ref == sr)
+                .map(|s| (s.coordinates.x, s.coordinates.y))
+                .unwrap()
+        };
+
+        // Sanity: without an anchor the solve would be free to translate at will,
+        // so pin that the adjustment actually did something first.
+        assert!(
+            (at(&before, StationRef::new(b, 1)).1 - at(&before, StationRef::new(a, 0)).1).abs()
+                < 0.5,
+            "precondition: the closure should have been adjusted"
+        );
+
+        // Section `a`'s station `i` is now station `shots_a - i`; `b` is untouched.
+        for i in 0..=shots_a {
+            let p = at(&before, StationRef::new(a, i));
+            let q = at(&after, StationRef::new(a, shots_a - i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-6 && (p.1 - q.1).abs() < 1e-6,
+                "adjusted station a:{i} moved: {p:?} -> {q:?}"
+            );
+        }
+        for i in 0..=1 {
+            let p = at(&before, StationRef::new(b, i));
+            let q = at(&after, StationRef::new(b, i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-6 && (p.1 - q.1).abs() < 1e-6,
+                "adjusted station b:{i} moved: {p:?} -> {q:?}"
+            );
+        }
     }
 
     #[test]

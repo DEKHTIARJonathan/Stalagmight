@@ -511,7 +511,7 @@ impl AppState {
         // introduce corruption into a clean project.
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
 
-        let result = match &cmd {
+        let mut result = match &cmd {
             Command::CreateProject { name, location } => {
                 self.create_project(name.clone(), location.clone())
             }
@@ -695,7 +695,44 @@ impl AppState {
             }
         }
 
+        if result.success {
+            result = self.settle_reversed_sections(&cmd, result);
+        }
+
         result
+    }
+
+    /// Finish a successful operation that REVERSED some sections' station numbering
+    /// (a forward `ReverseSection`, a batch of them, or an undo/redo of either - all
+    /// re-reverse the numbering, and every fix-up here is its own inverse).
+    ///
+    /// Two things live outside `Project` and so are out of reach of
+    /// `reverse_section`'s own cross-reference rewrite, which walks
+    /// `for_each_station_ref` (merges, closures, zero datums, station offsets,
+    /// station comments):
+    ///
+    /// * the sibling `.plnx`'s saved dive plans, whose station keys still RESOLVE
+    ///   after a reverse - onto the station next door, silently;
+    /// * `resolved_warnings` rows that are still keyed by position, whose `shot_id`
+    ///   the reverse detached from its record.
+    ///
+    /// It also reports the sections on the result. A reverse keeps every station's
+    /// world position, so there is nothing in the geometry for a consumer to diff:
+    /// without this signal the frontend had to INFER a reverse from station
+    /// positions, which cannot tell a reversed section from one that was reversed
+    /// and moved in the same action.
+    pub(super) fn settle_reversed_sections(
+        &self,
+        cmd: &Command,
+        result: CommandResult,
+    ) -> CommandResult {
+        let reversed = cmd.reversed_section_ids();
+        if reversed.is_empty() {
+            return result;
+        }
+        self.remap_dive_plans_for_reversed_sections(&reversed);
+        self.pin_position_keyed_warnings_after_reverse(&reversed);
+        result.with_reversed_section_ids(reversed)
     }
 
     // === Shot operations ===

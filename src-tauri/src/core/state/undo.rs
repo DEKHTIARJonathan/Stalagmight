@@ -57,7 +57,7 @@ impl AppState {
         // IMPORTANT: No early returns after this point - all paths must flow
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
-        let result = match &entry.undo_data {
+        let mut result = match &entry.undo_data {
             UndoData::InverseCommand(inverse_cmd) => {
                 // Execute the inverse command (without pushing to undo stack)
                 self.execute_without_undo(inverse_cmd.clone())
@@ -423,6 +423,7 @@ impl AppState {
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
+            result = self.settle_reversed_sections(&entry.command, result);
             if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_redo(entry);
             }
@@ -484,7 +485,7 @@ impl AppState {
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
-        let result = match &entry.undo_data {
+        let mut result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
                 Ok(mut proj) => {
                     if Self::restore_snapshot_into(&mut proj, after.as_str()) {
@@ -704,6 +705,7 @@ impl AppState {
         // Important: Use the original entry with its original undo_data, not regenerated data
         // This ensures undo after redo works correctly
         if result.success {
+            result = self.settle_reversed_sections(&entry.command, result);
             if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_undo(entry);
             }

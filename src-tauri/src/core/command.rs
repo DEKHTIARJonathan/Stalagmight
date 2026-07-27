@@ -254,6 +254,28 @@ pub struct CommandResult {
     /// Path the project was saved to (for SaveProject command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
+    /// IDs of the sections whose station NUMBERING this operation reversed
+    /// (station `i` became station `N - i`), for `ReverseSection` and for an
+    /// undo/redo of one - an undo of a reverse re-reverses the numbering, so it
+    /// reports the same sections.
+    ///
+    /// Every station keeps its world position, so this is not a geometry change
+    /// the frontend can see by diffing coordinates: it exists so a positional
+    /// station reference held on the frontend (a selection, a pinned plan point)
+    /// can be mirrored EXACTLY rather than inferred by comparing station
+    /// positions across the operation - an inference that misses a section which
+    /// was reversed and moved in the same action.
+    ///
+    /// Same wire contract as `section_ids` above - `skip_serializing_if` + `default`, so
+    /// the key is simply absent for every command that reversed nothing and an older
+    /// frontend is unaffected - but typed `Option` rather than `Vec` so ts-rs emits it as
+    /// `reversed_section_ids?:` instead of a required array. That absence IS the wire
+    /// truth (`section_ids` is typed required despite the same serde attributes, which is
+    /// why its consumers already need `?? []`), and a required field would break every
+    /// existing `CommandResult` literal on the frontend before the consumer is switched
+    /// over.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reversed_section_ids: Option<Vec<u32>>,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -316,6 +338,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            reversed_section_ids: None,
         }
     }
 
@@ -328,6 +351,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            reversed_section_ids: None,
         }
     }
 
@@ -361,6 +385,12 @@ impl CommandResult {
         self
     }
 
+    /// Attach the sections whose station numbering this operation reversed.
+    pub fn with_reversed_section_ids(mut self, section_ids: Vec<u32>) -> Self {
+        self.reversed_section_ids = Some(section_ids);
+        self
+    }
+
     /// Attach a single warning message to this result.
     pub fn with_warning(mut self, message: &str) -> Self {
         self.warnings.push(ValidationWarning {
@@ -373,6 +403,27 @@ impl CommandResult {
 }
 
 impl Command {
+    /// The sections whose station numbering this command reverses, in command
+    /// order, `Batch` included (reversing a multi-selection is one batched user
+    /// action).
+    ///
+    /// Read declaratively off the command rather than inferred afterwards from
+    /// moved stations: a reverse keeps every station's world position, so there
+    /// is nothing in the geometry to diff, and a section that was reversed AND
+    /// moved in the same action defeats a position-based heuristic outright.
+    /// Undo/redo of a snapshot pair reuses this on the stored command - undoing a
+    /// reverse re-reverses the numbering, so the same sections apply.
+    pub fn reversed_section_ids(&self) -> Vec<SectionId> {
+        match self {
+            Command::ReverseSection { section_id, .. } => vec![*section_id],
+            Command::Batch { commands } => commands
+                .iter()
+                .flat_map(Command::reversed_section_ids)
+                .collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// Get a human-readable description of this command
     pub fn description(&self) -> String {
         match self {

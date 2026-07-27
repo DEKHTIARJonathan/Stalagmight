@@ -1104,6 +1104,40 @@ mod tests {
         assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
     }
 
+    /// The `rem_euclid` wrap is a CORRECTION, not a reinterpretation of stored data.
+    ///
+    /// Rust's `%` is truncated, so for a reading pair more than 540 degrees apart in the
+    /// negative direction the old `(az_out - az_in + 540.0) % 360.0` left `diff` outside
+    /// `(-180, 180]` and the result came back 180 degrees from the true circular mean.
+    /// An azimuth still means what it always meant (degrees clockwise from north), so
+    /// unlike the v11 -> v12 inclination flip there is no stored VALUE whose meaning
+    /// changed and therefore nothing a migration could rewrite without baking the
+    /// 180-degree error in permanently.
+    ///
+    /// The affected data is also a strict subset of data the app already flags: the pair
+    /// has to differ by more than 540 degrees, which is impossible while both readings sit
+    /// in `[0, 360)`, so at least one of them is out of range and the shot already raises
+    /// `INVALID_AZIMUTH` in the warnings panel. (Reachable because the DMP parser stores
+    /// headings verbatim and validation only warns; Compass and TML normalise on import.)
+    #[test]
+    fn average_azimuth_of_far_out_of_range_readings_is_the_true_circular_mean() {
+        // 600 degrees is 240; paired with 0 the true mean is 300 (the short way round).
+        let truncated = |azimuth_in: f64, azimuth_out: f64| {
+            let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
+            (azimuth_in + diff / 2.0 + 360.0) % 360.0
+        };
+        assert!((average_azimuth_of(600.0, 0.0) - 300.0).abs() < 1e-9);
+        assert!(
+            (truncated(600.0, 0.0) - 120.0).abs() < 1e-9,
+            "precondition: the old truncated wrap returned the antipode"
+        );
+        // The mean of the SAME bearings written in range is identical, which is what makes
+        // normalising stored readings a no-op for geometry rather than a second fix.
+        assert!((average_azimuth_of(240.0, 0.0) - average_azimuth_of(600.0, 0.0)).abs() < 1e-9);
+        // In-range pairs are untouched by the change beyond float noise.
+        assert!((average_azimuth_of(350.0, 10.0) - 0.0).abs() < 1e-9);
+    }
+
     #[test]
     fn slope_length_from_components_pythagorean() {
         let s = slope_length_from_components(3.0, 4.0);

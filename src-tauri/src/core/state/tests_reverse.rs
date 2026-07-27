@@ -668,3 +668,232 @@ fn reverse_reports_the_section_it_touched() {
     });
     assert_eq!(result.section_id, Some(section_id));
 }
+
+/// A resolved-warning row with a NULL `shot_uuid` is keyed by `(section_id, shot_id)`,
+/// and the reverse deliberately keeps shot IDs attached to POSITIONS - so after it that
+/// key names a DIFFERENT physical shot. The save-time carry-over then upgrades the row
+/// through `live_by_id.get(&(section_id, shot_id))` and pins it, by UUID, to the mirrored
+/// shot - permanently suppressing an unrelated shot's warning.
+///
+/// Not a legacy-only shape: `commands::validation` deliberately stores `None` whenever the
+/// shot's UUID is not yet on disk, which includes any shot created in the current session.
+#[test]
+fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let (state, section_id) = state_with_section();
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("cave.stalx")),
+                is_autosave: false,
+            })
+            .success
+    );
+
+    // Shot ids and UUIDs as they stand before the reverse.
+    let (ids, uuids): (Vec<u32>, Vec<String>) = {
+        let guard = state.project.lock().unwrap();
+        let section = guard.as_ref().unwrap().get_section(section_id).unwrap();
+        (
+            section.shots.iter().map(|s| s.id).collect(),
+            section
+                .shots
+                .iter()
+                .map(|s| s.uuid.clone().unwrap())
+                .collect(),
+        )
+    };
+    assert!(ids.len() >= 3);
+
+    // A position-keyed ignore on the FIRST shot.
+    state
+        .save_resolved_warning(&crate::persistence::ResolvedWarning {
+            section_id,
+            shot_id: ids[0],
+            warning_code: "TEST_IGNORE".to_string(),
+            resolved_at: chrono::Utc::now(),
+            resolved_comment: None,
+            shot_uuid: None,
+        })
+        .unwrap();
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    // The save is where the row's position key would be re-read as an identity.
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: None,
+                is_autosave: false,
+            })
+            .success
+    );
+
+    let rows = state.load_resolved_warnings().unwrap();
+    assert_eq!(rows.len(), 1, "the ignore must survive the reverse");
+    assert_eq!(
+        rows[0].shot_uuid.as_deref(),
+        Some(uuids[0].as_str()),
+        "the ignore must stay on the shot it was taken on, not migrate to the \
+         shot the reverse moved onto that position (which is {:?})",
+        uuids.last()
+    );
+}
+
+/// `Project`'s `Serialize` includes `collab`, so a snapshot-pair undo reinstates the
+/// EXPORT PROVENANCE from before the command - and undo does not un-write the sibling
+/// `.tml`. The reverse makes the damage concrete:
+///
+/// ```text
+///   reverse (baseline cleared) -> save (re-exports the .tml, seeds baseline B')
+///                              -> undo (resurrects baseline B and sha S)
+/// ```
+///
+/// `compute_collab` then sees a sibling whose sha no longer matches the resurrected S and
+/// reports it as collaborator-changed, after which `apply_changeset` writes every matched
+/// edit at baseline B's PRE-reverse `shot_index` - scrambling the section.
+#[test]
+fn undoing_a_reverse_does_not_resurrect_the_pre_reverse_collab_provenance() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+
+    let mut project = Project::new("Collab".to_string(), None);
+    let section_id = project
+        .add_section(crate::models::SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![
+                shot(0.0, 10.0, 0.0, 1.0),
+                shot(90.0, 5.0, 1.0, 2.0),
+                shot(200.0, 7.0, 2.0, 3.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    project.collab = Some(crate::models::CollabState::new("collab.tml".to_string()));
+    state.set_project_for_tests(project);
+
+    let collab_now = || {
+        let guard = state.project.lock().unwrap();
+        guard.as_ref().unwrap().collab.clone().unwrap()
+    };
+
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(temp.path().join("collab.stalx")),
+                is_autosave: false,
+            })
+            .success
+    );
+    let before = collab_now();
+    assert_eq!(
+        before.shot_baseline.len(),
+        3,
+        "first export seeds a baseline"
+    );
+    let sha_before = before.last_export_tml_sha256.unwrap();
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: None,
+                is_autosave: false,
+            })
+            .success
+    );
+    let after = collab_now();
+    let sha_after = after.last_export_tml_sha256.clone().unwrap();
+    assert_ne!(
+        sha_before, sha_after,
+        "the reverse changed the exported .tml"
+    );
+    assert_eq!(
+        after.shot_baseline.len(),
+        3,
+        "the save re-seeded the baseline"
+    );
+
+    let undone = state.undo();
+    assert!(undone.success, "{:?}", undone.error);
+    let collab = collab_now();
+    assert_eq!(
+        collab.last_export_tml_sha256.as_deref(),
+        Some(sha_after.as_str()),
+        "the .tml on disk is still the post-reverse export, so its sha must not rewind - \
+         otherwise every later open reports a phantom collaborator edit"
+    );
+    assert!(
+        collab.shot_baseline.is_empty(),
+        "a baseline whose shot_index values name the other layout must be dropped, not \
+         restored: reconcile applies edits positionally"
+    );
+}
+
+/// The renumbering signal has to survive the shapes a reverse actually arrives in:
+/// batched (reversing a multi-selection is one atomic user action) and replayed through
+/// undo/redo, where the snapshot restore leaves NOTHING in the geometry to diff - every
+/// station keeps its world position either way.
+#[test]
+fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
+    let (state, first) = state_with_section();
+    let second = state
+        .execute(Command::CreateSection {
+            name: Some("Side".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            shots: vec![shot(45.0, 8.0, 0.0, 1.0), shot(135.0, 4.0, 1.0, 1.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let batch = state.execute(Command::Batch {
+        commands: vec![
+            Command::ReverseSection {
+                section_id: first,
+                swap_left_right: false,
+            },
+            Command::ReverseSection {
+                section_id: second,
+                swap_left_right: false,
+            },
+        ],
+    });
+    assert!(batch.success, "{:?}", batch.error);
+    assert_eq!(batch.reversed_section_ids, Some(vec![first, second]));
+
+    let undone = state.undo();
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(
+        undone.reversed_section_ids,
+        Some(vec![first, second]),
+        "undoing a reverse re-reverses the numbering, so it reports the same sections"
+    );
+
+    let redone = state.redo();
+    assert!(redone.success, "{:?}", redone.error);
+    assert_eq!(redone.reversed_section_ids, Some(vec![first, second]));
+
+    // A command that renumbers nothing must leave the field off the wire entirely.
+    let moved = state.execute(Command::MoveSection {
+        section_id: first,
+        offset: Coordinates::new(1.0, 2.0, 0.0),
+    });
+    assert!(moved.success, "{:?}", moved.error);
+    assert!(moved.reversed_section_ids.is_none());
+}

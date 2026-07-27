@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::models::{ClosureRef, ClosureStrategy, Coordinates, SectionId, Station, StationRef};
+use crate::models::{
+    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef,
+};
 
 use super::Project;
 
@@ -287,23 +289,64 @@ impl Project {
         self.compute_station_coordinates_with_progress(None)
     }
 
+    /// Reverse-invariant identity of station `idx` inside one section: the UUIDs
+    /// of the two shots it sits between, ordered so the pair does not depend on
+    /// which way the section is numbered.
+    ///
+    /// A station is the boundary between shots `idx - 1` and `idx`. A reverse
+    /// sends station `i` to `shots.len() - i` and keeps each UUID with its
+    /// record, so the mirrored station has exactly the same two neighbouring
+    /// shots with their sides swapped - the *ordered* pair is therefore identical
+    /// before and after. `None` marks a missing neighbour (a section end) or a
+    /// shot minted before UUIDs existed; `None` sorts first, so an end station
+    /// always outranks an interior one and the anchor stays at an end of the
+    /// section, as it was when this picked station 0.
+    fn station_reverse_identity(section: &Section, idx: usize) -> (Option<&str>, Option<&str>) {
+        let before = idx
+            .checked_sub(1)
+            .and_then(|i| section.shots.get(i))
+            .and_then(|s| s.uuid.as_deref());
+        let after = section.shots.get(idx).and_then(|s| s.uuid.as_deref());
+        if before <= after {
+            (before, after)
+        } else {
+            (after, before)
+        }
+    }
+
     /// Pick a deterministic anchor station for a component that has no zero datum.
     ///
-    /// Returns the lexicographically smallest `(section_id, station_index)` station
-    /// in the component. The anchor only fixes the otherwise-free absolute translation
-    /// (gauge) of a datum-less component - the *shape* of the adjusted geometry is
-    /// independent of this choice. Picking the lex-min keeps it stable and reproducible
-    /// across reloads so the adjusted view doesn't jump between refreshes.
+    /// The anchor only fixes the otherwise-free absolute translation (gauge) of a
+    /// datum-less component - the *shape* of the adjusted geometry is independent
+    /// of this choice - but the gauge has to be pinned to the same PHYSICAL
+    /// station every time, or the adjusted view jumps.
+    ///
+    /// Picking the lex-min `(section_id, station_index)` did not do that. A
+    /// section id survives every edit, but a station INDEX does not: reversing a
+    /// section renumbers station `i` to `N - i`, so `(S, 0)` becomes the far
+    /// physical end and the whole adjusted component translates by the adjustment
+    /// residual - breaking the reverse's "every station keeps its position"
+    /// guarantee exactly where closure-adjusted geometry is forced (Plan/Export).
+    ///
+    /// So: lowest section id in the component (stable), then the station with the
+    /// smallest [`Self::station_reverse_identity`] within it - an identity built
+    /// from the neighbouring shots' UUIDs, which travel with their records
+    /// through a reverse. Ties (a section whose shots predate UUIDs, so every
+    /// identity is `(None, None)`) fall back to the lowest index, i.e. the old
+    /// behaviour; the load-time mint means a loaded project never hits that.
+    /// UUIDs persist, so the choice is still reproducible across reloads.
     fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
-        self.sections
+        let section = self
+            .sections
             .iter()
             .filter(|s| component.contains(&s.id))
-            .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
-            .min_by(|a, b| {
-                a.section_id
-                    .cmp(&b.section_id)
-                    .then(a.station_index.cmp(&b.station_index))
-            })
+            .min_by_key(|s| s.id)?;
+        let index = (0..=section.shots.len()).min_by(|&a, &b| {
+            Self::station_reverse_identity(section, a)
+                .cmp(&Self::station_reverse_identity(section, b))
+                .then(a.cmp(&b))
+        })?;
+        Some(StationRef::new(section.id, index as u32))
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.

@@ -168,6 +168,83 @@ fn from_keys(project: &Project, keys: Vec<StationKey>, stale: &mut u32) -> Vec<S
         .collect()
 }
 
+/// Mirror one stored key of a section whose numbering was JUST reversed, so it keeps naming
+/// the same PHYSICAL station. `None` when the key belongs to another section, no longer
+/// resolves, or cannot be re-keyed - the caller then leaves it alone.
+///
+/// A `StationKey` survives a reverse in the sense that it still resolves, which is exactly why
+/// this is needed: it resolves to the station NEXT DOOR. Station `i` becomes station `N - i`,
+/// while `AfterShot(u)` follows its record, which moved from position `p` to `N - 1 - p`. So a
+/// key that named station `j` before the reverse resolves to `j' = N - j + 1` after it (and
+/// `SectionStart` stays at 0 while its physical station became `N`). Undoing that:
+///
+/// ```text
+///   j' == 0  ->  N          (SectionStart, whose physical station is now the far end)
+///   j'  > 0  ->  j' - 1
+/// ```
+///
+/// The rule reads the POST-reverse project only, and it is its own inverse - so the same call
+/// fixes up an undo/redo of a reverse, which re-reverses the numbering.
+fn mirror_key_after_reverse(
+    project: &Project,
+    section_id: crate::models::SectionId,
+    key: &StationKey,
+) -> Option<StationKey> {
+    if key.section_id != section_id {
+        return None;
+    }
+    let shot_count = project.get_section(section_id)?.shots.len() as u32;
+    let resolved = project.resolve_key(key)?;
+    let mirrored = if resolved.station_index == 0 {
+        shot_count
+    } else {
+        resolved.station_index - 1
+    };
+    project.key_for_ref(StationRef::new(section_id, mirrored))
+}
+
+/// Apply [`mirror_key_after_reverse`] in place; `true` when the key moved.
+fn mirror_in_place(
+    project: &Project,
+    section_id: crate::models::SectionId,
+    key: &mut StationKey,
+) -> bool {
+    match mirror_key_after_reverse(project, section_id, key) {
+        Some(next) => {
+            *key = next;
+            true
+        }
+        None => false,
+    }
+}
+
+/// Mirror every station key a persisted plan holds in `section_id`. Returns how many moved.
+fn mirror_persisted(
+    project: &Project,
+    section_id: crate::models::SectionId,
+    p: &mut PersistedDivePlanSnapshot,
+) -> u32 {
+    let mut moved = 0u32;
+    let mut apply = |key: &mut StationKey| {
+        if mirror_in_place(project, section_id, key) {
+            moved += 1;
+        }
+    };
+    for key in p.origin.iter_mut().chain(p.endpoint.iter_mut()) {
+        apply(key);
+    }
+    for key in &mut p.waypoints {
+        apply(key);
+    }
+    for key in p.stage_drop_overrides.iter_mut().flatten() {
+        apply(key);
+    }
+    for m in &mut p.marked_points {
+        apply(&mut m.station);
+    }
+    moved
+}
+
 /// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
 /// mid-scalar into invalid text.
 fn truncate_chars(s: String, max: usize) -> String {
@@ -341,6 +418,134 @@ impl AppState {
             return Err("That dive plan no longer exists.".to_string());
         }
         Ok(())
+    }
+
+    /// Re-point every saved plan's station keys after `section_ids` had their numbering
+    /// reversed, so a plan keeps naming the same PHYSICAL stations.
+    ///
+    /// This is the one cross-reference store the reverse cannot reach on its own.
+    /// `Project::for_each_station_ref` enumerates merges, closures, zero datums, station
+    /// offsets and station comments; a plan's origin/endpoint/way points/stage drops/marked
+    /// points live OUTSIDE the project, in the sibling `.plnx`. And unlike every other edit,
+    /// the failure is SILENT: an `AfterShot(uuid)` key still resolves after a reverse, just to
+    /// the station next door, so `stale_ref_count` stays 0 and the panel shows no warning while
+    /// the route - and with it the gas plan - has quietly been re-priced against a different
+    /// pair of stations.
+    ///
+    /// Best-effort by design: a `.plnx` that is missing, foreign, unreadable or unwritable is
+    /// logged and skipped. The survey edit itself has already committed and must not be failed
+    /// or rolled back over a sidecar, and the user's next explicit plan save rewrites the file
+    /// from the live (correct) refs anyway.
+    ///
+    /// `section_ids` is applied IN ORDER and may repeat a section (a batch that reverses the
+    /// same section twice); the mirror is an involution, so replaying it per entry lands on the
+    /// right station either way.
+    pub(super) fn remap_dive_plans_for_reversed_sections(
+        &self,
+        section_ids: &[crate::models::SectionId],
+    ) {
+        if section_ids.is_empty() {
+            return;
+        }
+        // Resolve the sidecar path BEFORE taking the project lock: `plnx_context` takes it too,
+        // and the mutex is not reentrant.
+        let Ok(ctx) = self.plnx_context() else {
+            return;
+        };
+        if !ctx.path.exists() {
+            return;
+        }
+        match probe_ownership(&ctx) {
+            Ok(Ownership::Owned | Ownership::Fresh) => {}
+            Ok(Ownership::Foreign) => return,
+            Err(e) => {
+                tracing::warn!(
+                    reason = %e,
+                    purpose = "re-point dive plans after a section reverse",
+                    "Could not read the dive-plan file's identity; leaving it untouched"
+                );
+                return;
+            }
+        }
+        let store = match PlnxStore::open(&ctx.path) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::warn!(
+                    reason = %e,
+                    purpose = "re-point dive plans after a section reverse",
+                    "Could not open the dive-plan file; saved plans may now point at the mirrored stations"
+                );
+                return;
+            }
+        };
+        let rows = match store.list() {
+            Ok(r) => r,
+            Err(e) => {
+                tracing::warn!(
+                    reason = %e,
+                    purpose = "re-point dive plans after a section reverse",
+                    "Could not list saved dive plans"
+                );
+                return;
+            }
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return;
+        };
+        for meta in rows {
+            let Ok(Some(row)) = store.get(meta.id) else {
+                continue;
+            };
+            let mut persisted: PersistedDivePlanSnapshot =
+                match serde_json::from_str(&row.snapshot_json) {
+                    Ok(p) => p,
+                    Err(e) => {
+                        tracing::warn!(
+                            plan_id = meta.id,
+                            reason = %e,
+                            purpose = "re-point dive plans after a section reverse",
+                            "Could not parse a saved dive plan; leaving it as-is"
+                        );
+                        continue;
+                    }
+                };
+            let moved: u32 = section_ids
+                .iter()
+                .map(|sid| mirror_persisted(project, *sid, &mut persisted))
+                .sum();
+            if moved == 0 {
+                continue;
+            }
+            let Ok(json) = serde_json::to_string(&persisted) else {
+                continue;
+            };
+            // Keep `updated_at`: the plan still names the same physical stations, so this is
+            // not a user edit and must not look like one in the plan list.
+            if let Err(e) = store.update(
+                meta.id,
+                &meta.name,
+                &meta.updated_at,
+                DIVE_PLAN_SCHEMA_VERSION as i32,
+                &json,
+            ) {
+                tracing::warn!(
+                    plan_id = meta.id,
+                    reason = %e,
+                    purpose = "re-point dive plans after a section reverse",
+                    "Could not rewrite a saved dive plan; it now points at the mirrored stations"
+                );
+                continue;
+            }
+            tracing::info!(
+                plan_id = meta.id,
+                moved,
+                "Re-pointed a saved dive plan after a section reverse"
+            );
+        }
     }
 
     /// Canonicalize an IPC snapshot's positional refs to stable keys against the open
@@ -768,6 +973,97 @@ mod tests {
         assert_eq!(snapshot.marked_points.len(), 1);
         assert_eq!(snapshot.marked_points[0].station, StationRef::new(sec, 1));
         assert_eq!(snapshot.marked_points[0].label.as_deref(), Some("photo"));
+    }
+
+    /// The reverse renumbers station `i` to `N - i`, but a plan's `AfterShot(uuid)` key
+    /// still RESOLVES afterwards - to the station NEXT DOOR, because the anchoring shot
+    /// travelled with its record. That makes this the one survey edit whose damage is
+    /// silent: `from_key` never increments `stale`, so `stale_ref_count` stays 0 and the
+    /// panel shows no warning while the route (and with it the gas plan) has quietly been
+    /// re-priced against different stations.
+    #[test]
+    fn a_reverse_re_points_a_saved_plan_and_the_mirror_puts_it_back() {
+        let (mut project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project.clone());
+        let persisted = state
+            .to_persisted(&snapshot_with_route_points(sec))
+            .unwrap();
+
+        assert!(project.reverse_section(sec, false));
+        *state.project.lock().unwrap() = Some(project);
+
+        // Left alone, every key still resolves - onto the wrong physical station.
+        let (drifted, stale) = state.resolve_persisted(persisted.clone()).unwrap();
+        assert_eq!(
+            stale, 0,
+            "nothing reports stale - that is what makes it silent"
+        );
+        assert_eq!(drifted.origin, Some(StationRef::new(sec, 0)));
+        assert_eq!(drifted.endpoint, Some(StationRef::new(sec, 1)));
+        assert_eq!(drifted.waypoints, vec![StationRef::new(sec, 2)]);
+
+        // Mirrored, each key names the physical station it always did: the entrance
+        // (station 0) is now station 3, the far end is now station 0, and the way
+        // point / marked point moved from 2 to 1.
+        let mut mirrored = persisted;
+        let guard = state.project.lock().unwrap();
+        let moved = mirror_persisted(guard.as_ref().unwrap(), sec, &mut mirrored);
+        drop(guard);
+        assert_eq!(moved, 4, "origin + endpoint + way point + marked point");
+        let (snapshot, stale) = state.resolve_persisted(mirrored).unwrap();
+        assert_eq!(stale, 0);
+        assert_eq!(snapshot.origin, Some(StationRef::new(sec, 3)));
+        assert_eq!(snapshot.endpoint, Some(StationRef::new(sec, 0)));
+        assert_eq!(snapshot.waypoints, vec![StationRef::new(sec, 1)]);
+        assert_eq!(snapshot.marked_points[0].station, StationRef::new(sec, 1));
+    }
+
+    /// End to end through the real `.plnx`: the command path has to reach the sidecar,
+    /// because `Project::for_each_station_ref` (which the reverse's own ref rewrite walks)
+    /// enumerates merges, closures, datums, offsets and comments - not the plan, which
+    /// lives outside the project entirely. And it has to reach it on the way BACK too:
+    /// undoing a reverse re-reverses the numbering.
+    #[test]
+    fn a_saved_plan_follows_its_stations_through_a_reverse_and_its_undo() {
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_3_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let saved = state
+            .save_dive_plan(None, "Plan".to_string(), snapshot_with_route_points(sec))
+            .unwrap();
+
+        let result = state.execute(crate::core::Command::ReverseSection {
+            section_id: sec,
+            swap_left_right: false,
+        });
+        assert!(result.success, "{:?}", result.error);
+        assert_eq!(result.reversed_section_ids, Some(vec![sec]));
+
+        let plan = state.load_dive_plan(saved.id).unwrap();
+        assert_eq!(plan.stale_ref_count, 0);
+        assert_eq!(plan.snapshot.origin, Some(StationRef::new(sec, 3)));
+        assert_eq!(plan.snapshot.endpoint, Some(StationRef::new(sec, 0)));
+        assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(sec, 1)]);
+        assert_eq!(
+            plan.snapshot.marked_points[0].station,
+            StationRef::new(sec, 1)
+        );
+        // The plan still names the same physical stations, so this is not a user edit
+        // and must not surface as one in the plan list.
+        assert_eq!(plan.meta.updated_at, saved.updated_at);
+
+        let undone = state.undo();
+        assert!(undone.success, "{:?}", undone.error);
+        assert_eq!(undone.reversed_section_ids, Some(vec![sec]));
+        let plan = state.load_dive_plan(saved.id).unwrap();
+        assert_eq!(plan.stale_ref_count, 0);
+        assert_eq!(plan.snapshot.origin, Some(StationRef::new(sec, 0)));
+        assert_eq!(plan.snapshot.endpoint, Some(StationRef::new(sec, 3)));
+        assert_eq!(plan.snapshot.waypoints, vec![StationRef::new(sec, 2)]);
     }
 
     #[test]
