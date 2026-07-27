@@ -111,6 +111,10 @@ export default function ReverseSectionDialog() {
       // opposite physical station. See utils/reverseAftermath. Applied even when
       // the dialog is already gone - the reverse landed either way - but not
       // across a project switch, whose refs belong to a different project.
+      // Keyed off the sections this dialog submitted rather than the result's
+      // `reversed_section_ids`: the call is synchronous and all-or-nothing, so on
+      // success the two lists are the same, and unlike undo/redo - which replays a
+      // history entry the frontend never saw - there is nothing here to discover.
       if (projectKeyOf(useProjectStore.getState().project) === projectKey) {
         applyReverseAftermath(new Map(changing.map((s) => [s.id, s.shots.length] as const)));
       }

@@ -9,14 +9,13 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  captureStationPositions,
   mirrorRef,
   mirrorPlanPins,
+  netReversedShotCounts,
   planPinsAffected,
-  sectionsRenumberedByReverse,
   type PlanPins,
 } from '../reverseAftermath';
-import type { Station } from '../../types/project';
+import type { Section } from '../../types/project';
 
 const REVERSED = 7;
 const UNTOUCHED = 9;
@@ -144,83 +143,59 @@ describe('planPinsAffected', () => {
 });
 
 /**
- * Undo/redo of a reverse (#24). The undo IPC result names no sections, so which
- * sections flipped is read off the station geometry: a reverse keeps every world
- * coordinate and only renumbers, so station `i` landing where station `N - i`
- * used to be IS the flip the pins have to follow.
+ * Which sections a reverse (or the undo/redo of one) renumbered comes straight
+ * off `CommandResult.reversed_section_ids` (#24) - the geometry cannot answer it,
+ * because a reverse keeps every world coordinate and a section that was reversed
+ * AND moved in the same action matches neither arrangement afterwards.
  */
-describe('sectionsRenumberedByReverse', () => {
-  const station = (section_id: number, station_index: number, x: number): Station => ({
-    station_ref: { section_id, station_index },
-    coordinates: { x, y: 0, z: 0 },
-    is_zero_datum: false,
-    gps_coordinates: null,
-    merged_with: [],
-    closures_with: [],
-  });
+describe('netReversedShotCounts', () => {
+  /** Only `id` and `shots.length` are read, so the shots are placeholders. */
+  const section = (id: number, shotCount: number) =>
+    ({ id, shots: Array.from({ length: shotCount }, () => ({})) }) as unknown as Pick<
+      Section,
+      'id' | 'shots'
+    >;
 
-  /** A section laid out along +x at the given offsets, in station order. */
-  const line = (section_id: number, xs: number[]): Station[] =>
-    xs.map((x, i) => station(section_id, i, x));
+  const sections = [section(REVERSED, 7), section(UNTOUCHED, 4)];
 
-  const capture = (stations: Station[], ids: number[] = [REVERSED]) =>
-    captureStationPositions(stations, new Set(ids));
-
-  it('reports a flipped section with its shot count', () => {
-    const before = capture(line(REVERSED, [0, 10, 25, 40]));
-    // Same four places, numbered from the other end.
-    const after = capture(line(REVERSED, [40, 25, 10, 0]));
-    expect(sectionsRenumberedByReverse(before, after)).toEqual(new Map([[REVERSED, 3]]));
-  });
-
-  it('tolerates the few-ulp drift of a re-walked chain', () => {
-    const before = capture(line(REVERSED, [0, 10, 25]));
-    const after = capture(line(REVERSED, [25 + 1e-12, 10 - 1e-12, 0]));
-    expect(sectionsRenumberedByReverse(before, after).has(REVERSED)).toBe(true);
-  });
-
-  it('says nothing flipped when the numbering is unchanged', () => {
-    const stations = line(REVERSED, [0, 10, 25, 40]);
-    expect(sectionsRenumberedByReverse(capture(stations), capture(stations)).size).toBe(0);
-  });
-
-  it('ignores an ordinary edit that moved the cave', () => {
-    const before = capture(line(REVERSED, [0, 10, 25, 40]));
-    const after = capture(line(REVERSED, [0, 10, 25, 41]));
-    expect(sectionsRenumberedByReverse(before, after).size).toBe(0);
-  });
-
-  it('ignores a section whose station count changed', () => {
-    // Undoing a shot delete puts a station back: not a renumbering, and a
-    // mirror against the wrong count would land on an unrelated station.
-    const before = capture(line(REVERSED, [0, 10, 25]));
-    const after = capture(line(REVERSED, [25, 10, 5, 0]));
-    expect(sectionsRenumberedByReverse(before, after).size).toBe(0);
-  });
-
-  it('leaves a palindromic section alone (mirroring it would be a no-op)', () => {
-    // A section folding back exactly on itself matches BOTH ways; identity wins,
-    // so an unrelated undo does not churn the pins for a move to a station at
-    // the very same coordinate.
-    const stations = line(REVERSED, [0, 10, 0]);
-    expect(sectionsRenumberedByReverse(capture(stations), capture(stations)).size).toBe(0);
-  });
-
-  it('only looks at the sections it was asked to watch', () => {
-    const ids = [REVERSED];
-    const before = captureStationPositions(
-      [...line(REVERSED, [0, 10]), ...line(UNTOUCHED, [0, 5])],
-      new Set(ids)
+  it('pairs each reported section with its shot count', () => {
+    expect(netReversedShotCounts([REVERSED], sections)).toEqual(new Map([[REVERSED, 7]]));
+    expect(netReversedShotCounts([UNTOUCHED, REVERSED], sections)).toEqual(
+      new Map([
+        [REVERSED, 7],
+        [UNTOUCHED, 4],
+      ])
     );
-    const after = captureStationPositions(
-      [...line(REVERSED, [0, 10]), ...line(UNTOUCHED, [5, 0])],
-      new Set(ids)
-    );
-    // The unwatched section flipped, but nothing points into it.
-    expect(sectionsRenumberedByReverse(before, after).size).toBe(0);
   });
 
-  it('captures nothing when no ref holds a section', () => {
-    expect(captureStationPositions(line(REVERSED, [0, 10]), new Set()).size).toBe(0);
+  it('is empty when the operation renumbered nothing', () => {
+    // Absent is the wire truth for every command that reversed nothing.
+    expect(netReversedShotCounts(undefined, sections).size).toBe(0);
+    expect(netReversedShotCounts([], sections).size).toBe(0);
+  });
+
+  it('cancels a section listed twice, and keeps a third listing', () => {
+    // The ids arrive in command order WITH repeats, and the mirror is an
+    // involution: two reverses of one section in a batch put the numbering back
+    // where it started, so mirroring the pins at all would break them.
+    expect(netReversedShotCounts([REVERSED, REVERSED], sections).size).toBe(0);
+    expect(netReversedShotCounts([REVERSED, REVERSED, REVERSED], sections)).toEqual(
+      new Map([[REVERSED, 7]])
+    );
+    expect(netReversedShotCounts([REVERSED, UNTOUCHED, REVERSED], sections)).toEqual(
+      new Map([[UNTOUCHED, 4]])
+    );
+  });
+
+  it('drops a section the refreshed project no longer has', () => {
+    // Nothing left to mirror into, and no count to mirror against.
+    expect(netReversedShotCounts([REVERSED], []).size).toBe(0);
+  });
+
+  it('drops a shot-less section, which reverses to itself', () => {
+    // The backend reports it (the command names it either way), but a single
+    // station has no other end - mirroring it would only churn the UI state
+    // `applyReverseAftermath` clears.
+    expect(netReversedShotCounts([REVERSED], [section(REVERSED, 0)]).size).toBe(0);
   });
 });

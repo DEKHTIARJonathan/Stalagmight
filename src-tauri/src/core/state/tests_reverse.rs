@@ -453,6 +453,276 @@ fn import_reverse_lands_the_section_in_the_same_place() {
     }
 }
 
+/// The three-shot file every placement test below imports. It turns a corner and
+/// changes depth, so a placement that lands on the wrong physical station shows
+/// up as a moved station rather than a coincidence.
+fn import_shots() -> Vec<ShotData> {
+    vec![
+        shot(0.0, 10.0, 0.0, 2.0),
+        shot(90.0, 5.0, 2.0, 2.0),
+        shot(210.0, 7.5, 2.0, 1.0),
+    ]
+}
+
+/// Import [`import_shots`] under `placement`, optionally reversed, and return the
+/// imported section's station coordinates in the FILE's order (station 0 of the
+/// file first) so the two runs are directly comparable.
+///
+/// The project already contains one placed section, passed to `placement` as its
+/// id: `FromExisting`/`ManualSnap` need a real station to attach to, and it fixes
+/// the world frame for both runs.
+fn import_one(reverse: bool, placement: fn(SectionId) -> ImportPlacement) -> Vec<Coordinates> {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Import".to_string(),
+        location: None,
+    });
+    let anchor = state
+        .execute(Command::CreateSection {
+            name: Some("Anchor".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            shots: vec![shot(0.0, 6.0, 0.0, 1.0), shot(90.0, 6.0, 1.0, 2.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let result = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: import_shots(),
+            placement: placement(anchor),
+            station_comments: Vec::new(),
+            reverse,
+        }],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let imported = project.sections.iter().find(|s| s.id != anchor).unwrap().id;
+    let coords = abs_coord_map(&project);
+    let mut out: Vec<Coordinates> = (0..=import_shots().len() as u32)
+        .map(|i| coords[&StationRef::new(imported, i)])
+        .collect();
+    // Reversed numbering walks the same stations from the other end.
+    if reverse {
+        out.reverse();
+    }
+    out
+}
+
+/// The placements that re-anchor a section through an INDEX. `Origin` and
+/// `Manual` (covered above) position station 0 directly and carry no station
+/// index the reverse can misplace; these three do, and the wizard hands the index
+/// over ALREADY MIRRORED (`src/utils/reversePlacement.ts`) because the backend
+/// reverses before the section exists. If the mirrored index does not land on the
+/// physical station the user clicked, the passage attaches by the wrong end -
+/// invisible in the shot list, obvious on the map.
+#[test]
+fn import_reverse_lands_indexed_placements_on_the_station_the_user_picked() {
+    // (label, placement as the user built it, the same placement mirrored for a
+    // reversed import). Three shots, so the mirror is `3 - i`.
+    let cases: [(
+        &str,
+        fn(SectionId) -> ImportPlacement,
+        fn(SectionId) -> ImportPlacement,
+    ); 3] = [
+        (
+            "zero datum on the file's station 1",
+            |_| ImportPlacement::ZeroDatum {
+                coordinates: GpsCoordinates {
+                    latitude: 20.2,
+                    longitude: -87.4,
+                    depth_reference: 0.0,
+                },
+                station_index: 1,
+            },
+            |_| ImportPlacement::ZeroDatum {
+                coordinates: GpsCoordinates {
+                    latitude: 20.2,
+                    longitude: -87.4,
+                    depth_reference: 0.0,
+                },
+                station_index: 2,
+            },
+        ),
+        // Only the IMPORT side mirrors: the target was already in the project
+        // with its final numbering, so its index must not move.
+        (
+            "the file's station 1 merged onto an existing station",
+            |anchor| ImportPlacement::FromExisting {
+                import_station: 1,
+                existing_station: StationRef::new(anchor, 2),
+            },
+            |anchor| ImportPlacement::FromExisting {
+                import_station: 2,
+                existing_station: StationRef::new(anchor, 2),
+            },
+        ),
+        (
+            "the file's station 0 snapped onto an existing station",
+            |anchor| ImportPlacement::ManualSnap {
+                align_station_index: 0,
+                snapped_to_station: StationRef::new(anchor, 0),
+            },
+            |anchor| ImportPlacement::ManualSnap {
+                align_station_index: 3,
+                snapped_to_station: StationRef::new(anchor, 0),
+            },
+        ),
+    ];
+
+    for (label, plain_placement, reversed_placement) in cases {
+        let plain = import_one(false, plain_placement);
+        let reversed = import_one(true, reversed_placement);
+        assert_eq!(
+            plain.len(),
+            reversed.len(),
+            "{label}: station count changed"
+        );
+        for (i, (a, b)) in plain.iter().zip(&reversed).enumerate() {
+            assert!(
+                (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6,
+                "{label}: the file's station {i} moved: {a:?} vs {b:?}"
+            );
+        }
+    }
+}
+
+/// Import a two-section batch wired together by `FromImporting`, optionally with
+/// BOTH sections reversed, and return each section's stations in FILE order.
+///
+/// The trunk has three shots and the branch two, so the two sides of the
+/// connection mirror by different divisors - a mirror that used one section's
+/// shot count for the other lands on a different physical station.
+fn import_two(
+    reverse: bool,
+    import_station: u32,
+    target_station_index: u32,
+) -> (Vec<Coordinates>, Vec<Coordinates>) {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Import".to_string(),
+        location: None,
+    });
+
+    let config =
+        |section_index: u32, name: &str, shots: Vec<ShotData>, placement| ImportSectionConfig {
+            section_index,
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots,
+            placement,
+            station_comments: Vec::new(),
+            reverse,
+        };
+    let result = state.execute_import_sections(
+        vec![
+            config(0, "Trunk", import_shots(), ImportPlacement::Origin),
+            config(
+                1,
+                "Branch",
+                // Its far end sits at the trunk's station-1 depth, so the
+                // connection below is clean in all three axes.
+                vec![shot(45.0, 8.0, 4.0, 3.0), shot(135.0, 4.0, 3.0, 2.0)],
+                ImportPlacement::FromImporting {
+                    import_station,
+                    target_section_index: 0,
+                    target_station_index,
+                },
+            ),
+        ],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let coords = abs_coord_map(&project);
+    let stations = |index: usize, shot_count: u32| {
+        let section_id = project.sections[index].id;
+        let mut out: Vec<Coordinates> = (0..=shot_count)
+            .map(|i| coords[&StationRef::new(section_id, i)])
+            .collect();
+        if reverse {
+            out.reverse();
+        }
+        out
+    };
+    (stations(0, 3), stations(1, 2))
+}
+
+/// The cross-section connection, with BOTH sections reversed and DIFFERENT shot
+/// counts - the case a single-section test cannot reach.
+///
+/// The user, looking at the file's order, ties the branch's station 2 to the
+/// trunk's station 1. Reversed, those become the branch's station 0 (`2 - 2`, two
+/// shots) and the trunk's station 2 (`3 - 1`, three shots). Every index in play
+/// moves, and the two sides land on different numbers, so swapping the divisors
+/// picks a station the user never chose rather than coincidentally the right one.
+/// The batch creates the trunk before the branch merges onto it, so each index
+/// has to address the post-reverse numbering of its OWN section; this asserts the
+/// resulting world geometry rather than the stored indices, because that is what
+/// the surveyor sees.
+#[test]
+fn import_reverse_connects_two_reversed_sections_by_the_stations_the_user_picked() {
+    // As the user drew it: branch station 2 onto trunk station 1.
+    let (trunk_plain, branch_plain) = import_two(false, 2, 1);
+    // The same intent through the wizard's mirror: 2 - 2 on the branch, 3 - 1 on
+    // the trunk.
+    let (trunk_reversed, branch_reversed) = import_two(true, 0, 2);
+
+    for (label, plain, reversed) in [
+        ("trunk", &trunk_plain, &trunk_reversed),
+        ("branch", &branch_plain, &branch_reversed),
+    ] {
+        assert_eq!(
+            plain.len(),
+            reversed.len(),
+            "{label}: station count changed"
+        );
+        for (i, (a, b)) in plain.iter().zip(reversed).enumerate() {
+            assert!(
+                (a.x - b.x).abs() < 1e-6 && (a.y - b.y).abs() < 1e-6 && (a.z - b.z).abs() < 1e-6,
+                "{label}: the file's station {i} moved under a reversed import: {a:?} vs {b:?}"
+            );
+        }
+    }
+
+    // And the connection itself is where the user put it: the branch's station 2
+    // sits exactly on the trunk's station 1, both in the file's numbering.
+    assert_coords_close(branch_reversed[2], trunk_reversed[1]);
+    // Not vacuous - the trunk's stations are genuinely distinct places, so
+    // landing on the wrong one is detectable.
+    for i in [0usize, 2, 3] {
+        assert!(
+            (trunk_reversed[i].x - trunk_reversed[1].x).abs() > 1e-3
+                || (trunk_reversed[i].y - trunk_reversed[1].y).abs() > 1e-3,
+            "precondition: trunk station {i} coincides with station 1"
+        );
+    }
+}
+
 /// Reversing a multi-selection goes through a batch so it is one user action:
 /// every section or none, and a single Undo to get back.
 #[test]
@@ -645,6 +915,155 @@ fn import_reverse_drops_an_out_of_range_station_comment() {
         project.resolve_key(key),
         Some(StationRef::new(section.id, 1)),
         "the in-range comment must still mirror to station 1"
+    );
+}
+
+/// Reversing swaps each shot's depths, negates its pitch and normalises its
+/// azimuths, so the per-project discrepancy checks can read differently
+/// afterwards - and the shot ids stay with POSITIONS, so a warning that survives
+/// now names a different row. `reverse_section` re-runs `Validator::validate_shot`
+/// over the reversed section for exactly that reason; without it the panel keeps
+/// showing the pre-reverse verdict against the post-reverse rows.
+///
+/// The fixture makes both directions visible at once: the file's first shot has
+/// out-of-range azimuths (a warning the reverse's normalisation REMOVES) and its
+/// last shot records an 80-degree descent on a level leg (a mismatch the reverse
+/// carries to position 1 with the sign flipped).
+#[test]
+fn reverse_re_emits_warnings_computed_from_the_reversed_geometry() {
+    let state = AppState::new().unwrap();
+    // Built directly rather than through `CreateProject` so the thresholds are the
+    // library defaults, not whatever this machine's config seeds a new project
+    // with - the assertion below counts warnings exactly.
+    let mut project = Project::new("Warnings".to_string(), None);
+
+    // Validation only WARNS on an out-of-range azimuth, so a project can carry
+    // one; `reverse_shots` rem_euclid's both readings, so it cannot survive.
+    let mut out_of_range = shot(0.0, 10.0, 0.0, 0.0);
+    out_of_range.azimuth_in = 400.0;
+    out_of_range.azimuth_out = 400.0;
+    // A level shot recording an 80-degree descent: the implied inclination is 0,
+    // so the two disagree by 80 - well past the 15-degree default threshold.
+    let mut mismatch = shot(90.0, 10.0, 1.0, 1.0);
+    mismatch.pitch_in = Some(80.0);
+    mismatch.pitch_out = Some(80.0);
+
+    let section_id = project
+        .add_section(crate::models::SectionData {
+            name: Some("Main".to_string()),
+            shots: vec![out_of_range, shot(45.0, 8.0, 0.0, 1.0), mismatch],
+            ..Default::default()
+        })
+        .id;
+    state.set_project_for_tests(project);
+
+    let result = state.execute(Command::ReverseSection {
+        section_id,
+        swap_left_right: false,
+    });
+    assert!(result.success, "reverse failed: {:?}", result.error);
+
+    // Skipping the re-emission reports none; validating the PRE-reverse shots
+    // reports three (an INVALID_AZIMUTH per out-of-range leg, plus the mismatch).
+    assert_eq!(
+        result.warnings.len(),
+        1,
+        "warnings must be recomputed from the reversed section: {:?}",
+        result.warnings
+    );
+    let warning = &result.warnings[0];
+    assert_eq!(warning.code, "INCLINATION_DEPTH_MISMATCH");
+    assert!(
+        warning
+            .message
+            .starts_with(&format!("Shot {section_id}:1 ")),
+        "the mismatched shot is now FIRST, so the warning must name row 1: {}",
+        warning.message
+    );
+    assert!(
+        warning.message.contains("-80.0"),
+        "the reverse negates pitch, so the recorded inclination is now -80: {}",
+        warning.message
+    );
+}
+
+/// `Command::ReverseSection` is graded `GEOMETRY_ONLY` in `commands.rs`, whose
+/// comment claims the reconcile epilogue is a no-op for it. Only a MERGED section
+/// can test that claim: the epilogue's `realign_merges` is tolerance-gated and
+/// does nothing unless a merge is actually drifted - and a reverse that failed to
+/// carry the merge to the mirrored station leaves exactly that drift, at which
+/// point the epilogue re-closes it by MOVING a section. `Project::reverse_section`
+/// on its own never runs that pass, so the model-level tests cannot see it.
+#[test]
+fn reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute() {
+    let (state, main_id) = state_with_section();
+    let side_id = state
+        .execute(Command::CreateSection {
+            name: Some("Side passage".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff6b6b".to_string(),
+            direction: None,
+            // Starts at the main line's station-1 depth so the merge is clean.
+            shots: vec![shot(45.0, 8.0, 2.0, 2.0), shot(135.0, 4.0, 2.0, 3.0)],
+        })
+        .section_id
+        .unwrap();
+
+    let merged = state.execute(Command::MergeStations {
+        station_a: StationRef::new(side_id, 0),
+        station_b: StationRef::new(main_id, 1),
+    });
+    assert!(merged.success, "merge failed: {:?}", merged.error);
+
+    let before = abs_coord_map(&state.get_project_state().unwrap());
+
+    let result = state.execute(Command::ReverseSection {
+        section_id: main_id,
+        swap_left_right: false,
+    });
+    assert!(result.success, "reverse failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let after = abs_coord_map(&project);
+    assert_eq!(before.len(), after.len(), "station count changed");
+
+    // The main line's station i is now station 3 - i, in the same place; the side
+    // passage was not renumbered and must not have been dragged either.
+    for i in 0..=3u32 {
+        assert_coords_close(
+            before[&StationRef::new(main_id, i)],
+            after[&StationRef::new(main_id, 3 - i)],
+        );
+    }
+    for i in 0..=2u32 {
+        assert_coords_close(
+            before[&StationRef::new(side_id, i)],
+            after[&StationRef::new(side_id, i)],
+        );
+    }
+
+    // The merge followed the physical station rather than the index, and is still
+    // closed - "the epilogue is a no-op" means `realign_merges` found nothing.
+    assert_eq!(project.station_merges.len(), 1);
+    let merge = &project.station_merges[0];
+    let resolved = [
+        project.resolve_key(&merge.station_a),
+        project.resolve_key(&merge.station_b),
+    ];
+    assert!(
+        resolved.contains(&Some(StationRef::new(main_id, 2))),
+        "the merge must follow the main line's middle station to its mirrored \
+         index 2: {resolved:?}"
+    );
+    assert!(
+        resolved.contains(&Some(StationRef::new(side_id, 0))),
+        "the side passage's end of the merge must not move: {resolved:?}"
+    );
+    assert!(
+        project.check_merge_alignment().is_empty(),
+        "the merge drifted through the reverse: {:?}",
+        project.check_merge_alignment()
     );
 }
 
@@ -896,4 +1315,61 @@ fn reverse_reports_every_renumbered_section_through_batch_undo_and_redo() {
     });
     assert!(moved.success, "{:?}", moved.error);
     assert!(moved.reversed_section_ids.is_none());
+}
+
+/// The history dropdown undoes several entries at once. Each inner step knows what
+/// it renumbered, but only the aggregate reaches the frontend, which mirrors its
+/// positional refs from it - so a reverse buried in the middle of the range must
+/// still be reported, or the gas plan and the distance origin are left on the
+/// mirrored stations with nothing to signal it.
+#[test]
+fn undo_to_and_redo_to_report_every_reverse_in_the_range() {
+    let (state, section) = state_with_section();
+
+    let reversed = state.execute(Command::ReverseSection {
+        section_id: section,
+        swap_left_right: false,
+    });
+    assert!(reversed.success, "{:?}", reversed.error);
+
+    // Bury the reverse behind a later, non-renumbering edit so undo_to has to walk
+    // past it rather than land on it.
+    let moved = state.execute(Command::MoveSection {
+        section_id: section,
+        offset: Coordinates::new(1.0, 2.0, 0.0),
+    });
+    assert!(moved.success, "{:?}", moved.error);
+
+    // Index 1 = two undos: the move, then the reverse.
+    let undone = state.undo_to(1);
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(
+        undone.reversed_section_ids,
+        Some(vec![section]),
+        "a reverse inside the undone range must reach the frontend"
+    );
+
+    let redone = state.redo_to(1);
+    assert!(redone.success, "{:?}", redone.error);
+    assert_eq!(redone.reversed_section_ids, Some(vec![section]));
+}
+
+/// Two reverses of one section undo to the original numbering, so the aggregate
+/// lists it twice and the frontend's once-per-entry mirror nets out. Deduping here
+/// would mirror once and leave every pin on the wrong station.
+#[test]
+fn undo_to_repeats_a_section_reversed_twice() {
+    let (state, section) = state_with_section();
+
+    for _ in 0..2 {
+        let reversed = state.execute(Command::ReverseSection {
+            section_id: section,
+            swap_left_right: false,
+        });
+        assert!(reversed.success, "{:?}", reversed.error);
+    }
+
+    let undone = state.undo_to(1);
+    assert!(undone.success, "{:?}", undone.error);
+    assert_eq!(undone.reversed_section_ids, Some(vec![section, section]));
 }

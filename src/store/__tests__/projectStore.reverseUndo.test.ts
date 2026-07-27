@@ -8,9 +8,10 @@
  * IN RANGE, now naming the opposite physical station, and (for the plan) written
  * straight into the saved dive plan. No error is ever raised.
  *
- * `executeUndoRedo` therefore snapshots the watched sections' station positions
- * around the IPC and re-mirrors whatever flipped. These tests drive the real
- * store action with the IPC mocked, so deleting that wiring fails here.
+ * `executeUndoRedo` therefore re-mirrors the sections the backend reports on the
+ * result as renumbered (`CommandResult.reversed_section_ids`, populated for a
+ * forward reverse and for the undo/redo that re-reverses it). These tests drive
+ * the real store action with the IPC mocked, so deleting that wiring fails here.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -42,6 +43,8 @@ function line(xs: number[]): Station[] {
 const FORWARD = [0, 10, 25, 40];
 /** The same four places, numbered from the other end - i.e. after a reverse. */
 const REVERSED = [40, 25, 10, 0];
+/** Reversed AND translated, as one batch that reverses and moves produces. */
+const REVERSED_AND_MOVED = REVERSED.map((x) => x + 1000);
 
 function projectWith(stations: Station[]) {
   return {
@@ -73,14 +76,27 @@ function projectWith(stations: Station[]) {
   };
 }
 
-/** Point every read-only refresh IPC at a project whose stations are `stations`. */
-function serveState(stations: Station[]) {
+/**
+ * Point every read-only refresh IPC at a project whose stations are `stations`,
+ * and have undo/redo report `reversedSectionIds` as renumbered. Omit it for an
+ * operation that reversed nothing: the field is then absent from the wire, which
+ * is what the backend does for every other command.
+ */
+function serveState(stations: Station[], reversedSectionIds?: number[]) {
   invokeIpcMock.mockImplementation(async (command: string) => {
     switch (command) {
       case 'undo':
       case 'redo':
       case 'undo_to':
-        return { success: true, warnings: [], error: null, section_ids: [] };
+        return {
+          success: true,
+          warnings: [],
+          error: null,
+          section_ids: [],
+          ...(reversedSectionIds === undefined
+            ? {}
+            : { reversed_section_ids: reversedSectionIds }),
+        };
       case 'get_project_state':
         return {
           project: projectWith(stations),
@@ -121,7 +137,7 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     gas.addMarkedPoint(ref(0));
     gas.setStageDropOverride(0, ref(2));
 
-    serveState(line(FORWARD));
+    serveState(line(FORWARD), [SECTION]);
     await useProjectStore.getState().undo();
 
     const after = useGasPlanStore.getState();
@@ -135,9 +151,8 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('mirrors the distance-gradient origin and clears armed tool state', async () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(3) });
-    // Watched only because a positional ref points into the section: with the
-    // plan empty, the distance origin has to be enough on its own.
-    serveState(line(FORWARD));
+    // With the plan empty, the distance origin has to be enough on its own.
+    serveState(line(FORWARD), [SECTION]);
     await useProjectStore.getState().undo();
 
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
@@ -147,13 +162,14 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('re-mirrors on redo too, and on a multi-step undo_to', async () => {
     useGasPlanStore.getState().setOrigin(ref(3));
 
-    serveState(line(FORWARD));
+    serveState(line(FORWARD), [SECTION]);
     await useProjectStore.getState().redo();
     expect(useGasPlanStore.getState().origin).toEqual(ref(0));
 
-    // And back again through the history dropdown's multi-step path.
+    // And back again through the history dropdown's multi-step path, which
+    // reports the sections every step it walked past renumbered.
     useProjectStore.setState({ stations: line(FORWARD) });
-    serveState(line(REVERSED));
+    serveState(line(REVERSED), [SECTION]);
     await useProjectStore.getState().undoTo(2);
     expect(useGasPlanStore.getState().origin).toEqual(ref(3));
   });
@@ -161,11 +177,43 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
   it('leaves the pins alone on an undo that did not renumber anything', async () => {
     useGasPlanStore.getState().setOrigin(ref(3));
 
-    // Same numbering before and after: an ordinary undo must not churn the plan.
+    // No `reversed_section_ids` on the wire: an ordinary undo must not churn
+    // the plan.
     serveState(line(REVERSED));
     await useProjectStore.getState().undo();
 
     expect(useGasPlanStore.getState().origin).toEqual(ref(3));
     expect(useUIStore.getState().selection).toBeNull();
+  });
+
+  it('mirrors a section that was reversed AND moved in the same operation', async () => {
+    // The case that defeats any position-diffing inference: undoing a batch that
+    // both reversed and moved the section leaves its stations matching NEITHER
+    // the old numbering nor its mirror, so the geometry reports nothing while
+    // the numbering really did flip. The backend says so outright instead.
+    useGasPlanStore.getState().setOrigin(ref(3));
+    useUIStore.setState({ distanceGradientOrigin: ref(1) });
+
+    serveState(line(REVERSED_AND_MOVED), [SECTION]);
+    await useProjectStore.getState().undo();
+
+    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
+  });
+
+  it('applies the mirror once per reported entry, so a doubled section is a no-op', async () => {
+    // The ids come in command order WITH repeats - a batch that reverses one
+    // section twice lists it twice, and that numbering is back where it started.
+    // Mirroring per DISTINCT id would move the pins off their stations.
+    useGasPlanStore.getState().setOrigin(ref(3));
+
+    serveState(line(REVERSED), [SECTION, SECTION]);
+    await useProjectStore.getState().undo();
+    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
+
+    // An odd number of entries is one net flip.
+    serveState(line(FORWARD), [SECTION, SECTION, SECTION]);
+    await useProjectStore.getState().undo();
+    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
   });
 });

@@ -11,12 +11,7 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
-import {
-  applyReverseAftermath,
-  captureStationPositions,
-  sectionsRenumberedByReverse,
-  sectionsWithPositionalRefs,
-} from '../utils/reverseAftermath';
+import { applyReverseAftermath, netReversedShotCounts } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -514,15 +509,16 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE
-    // physical station, silently and persistably. Snapshot the stations those
-    // refs live in now, and re-mirror whatever flipped once the refreshed state
-    // lands; the mirror is an involution, so this inverts the forward one. Empty
-    // when nothing holds a ref, which is the common case and costs nothing.
-    const watched = sectionsWithPositionalRefs();
-    const positionsBefore = captureStationPositions(get().stations, watched);
+    // physical station, silently and persistably. The backend names the sections
+    // it renumbered on the result (undo/redo of a reverse re-reverses the same
+    // ones), so re-mirror them once the refreshed state lands; the mirror is an
+    // involution, so this inverts the forward one. Absent on everything else,
+    // which is the common case and costs nothing.
+    let reversedSectionIds: readonly SectionId[] | undefined;
     try {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
+        reversedSectionIds = result.reversed_section_ids;
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
@@ -549,11 +545,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
+      // Shot counts read from the REFRESHED project, which is the numbering the
+      // pins now have to match (a reverse never changes a count, so this is the
+      // same figure either way - see netReversedShotCounts).
       applyReverseAftermath(
-        sectionsRenumberedByReverse(
-          positionsBefore,
-          captureStationPositions(get().stations, watched)
-        )
+        netReversedShotCounts(reversedSectionIds, get().project?.sections ?? [])
       );
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a

@@ -831,6 +831,11 @@ impl AppState {
 
         // Execute (index + 1) undos to include the target index
         let count = index + 1;
+        // Concatenated in step order, repeats intact: the frontend mirrors its
+        // positional refs once per entry, so undoing two reverses of one section
+        // lists it twice and nets out. Dropping these would leave the gas plan and
+        // the distance origin on the mirrored stations after a multi-step undo.
+        let mut reversed: Vec<u32> = Vec::new();
         for i in 0..count {
             let result = self.undo_inner();
             if !result.success {
@@ -841,13 +846,20 @@ impl AppState {
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
             }
+            if let Some(ids) = result.reversed_section_ids {
+                reversed.extend(ids);
+            }
         }
 
         // Dirty-bit flip (#191, D-B16): undo_to ran one or more undos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Undo to index completed");
-        CommandResult::success()
+        if reversed.is_empty() {
+            CommandResult::success()
+        } else {
+            CommandResult::success().with_reversed_section_ids(reversed)
+        }
     }
 
     /// Perform multiple redos to reach a specific history point
@@ -878,6 +890,8 @@ impl AppState {
 
         // Execute (index + 1) redos to include the target index
         let count = index + 1;
+        // Concatenated in step order, repeats intact - see `undo_to`.
+        let mut reversed: Vec<u32> = Vec::new();
         for i in 0..count {
             let result = self.redo_inner();
             if !result.success {
@@ -888,12 +902,19 @@ impl AppState {
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
             }
+            if let Some(ids) = result.reversed_section_ids {
+                reversed.extend(ids);
+            }
         }
 
         // Dirty-bit flip (#191, D-B16): redo_to ran one or more redos. Set-only;
         // no-op for local-only.
         self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Redo to index completed");
-        CommandResult::success()
+        if reversed.is_empty() {
+            CommandResult::success()
+        } else {
+            CommandResult::success().with_reversed_section_ids(reversed)
+        }
     }
 }
