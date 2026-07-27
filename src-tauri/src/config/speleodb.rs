@@ -45,9 +45,23 @@ pub struct SpeleoDbConfig {
     pub email: Option<String>,
     /// [Track C] (#188, D-188): opt-in plaintext token fallback preference.
     /// Default `SessionOnly`; only `Plaintext` enables the two-gate plaintext
-    /// write. #205 Settings owns the warned confirmation that flips it.
+    /// write. The warned confirmation that flips it is raised at LOGIN, at the
+    /// moment the keychain actually fails, rather than buried in Settings.
     #[serde(default)]
     pub token_fallback: TokenFallback,
+    /// The user declined the OS keychain when it failed at login, and chose where
+    /// the API key should live instead (see `token_fallback`).
+    ///
+    /// While this is set the app must not touch the keychain AT ALL - not to
+    /// store, not to read on startup, not to probe for a status line. On Linux a
+    /// locked keyring turns every one of those into a desktop unlock prompt, so a
+    /// user who dismissed it once was being asked again on every single launch.
+    /// The refusal is persisted rather than session-scoped precisely so a restart
+    /// does not re-ask; it is cleared only when the user explicitly signs in to
+    /// SpeleoDB again, which is the one moment they have opted back into the
+    /// question.
+    #[serde(default)]
+    pub keychain_declined: bool,
     /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
     /// Off by default. Relaxes ONLY the public-http scheme block in
     /// `speleodb::tls::enforce` (Track A #187) - NEVER TLS cert verification
@@ -84,6 +98,7 @@ impl Default for SpeleoDbConfig {
             endpoint: None,
             email: None,
             token_fallback: TokenFallback::default(),
+            keychain_declined: false,
             insecure_http: false,
             allow_force_edit: false,
             poll_interval_seconds: default_poll_interval_seconds(),

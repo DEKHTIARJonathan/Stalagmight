@@ -307,7 +307,80 @@ pub struct SpeleoLoginResult {
     pub endpoint: String,
     /// True when the token was stored in the OS keychain; false means a
     /// session-only in-memory fallback (e.g. headless CI with no secret service).
+    ///
+    /// Kept alongside `storage` rather than replaced by it: this bool answers
+    /// "durable?" for existing callers, while `storage` answers "where?".
     pub keychain_backed: bool,
+    /// Where the API key actually ended up. `keychain_backed` cannot distinguish
+    /// the plaintext file from session-only memory, and the two have very
+    /// different consequences for the user.
+    pub storage: TokenStorage,
+    /// What this login taught us about the OS keychain.
+    pub keychain: KeychainReport,
+    /// The keychain failed during THIS login and the user has not already told us
+    /// where to put the key instead - so the frontend should ask, now, while the
+    /// failure is in context. False when the keychain worked, and false when the
+    /// user has already declined it (we are not re-litigating a settled choice).
+    pub needs_storage_choice: bool,
+}
+
+/// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
+/// boundary.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenStorage {
+    /// The OS keychain: survives a restart, encrypted by the platform.
+    Keychain,
+    /// A `0o600` file under the app config dir: survives a restart, but readable
+    /// by anything running as this user.
+    Plaintext,
+    /// This session only: gone when the app closes.
+    Memory,
+}
+
+/// What is known about the OS keychain - strictly what earlier access taught us,
+/// never the result of a probe. Probing a locked keyring is itself what raises a
+/// desktop unlock prompt, so `NotAttempted` is a real answer we show rather than
+/// go looking.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum KeychainReport {
+    /// Nothing has touched it yet (no login this session, no rehydrate).
+    NotAttempted,
+    /// A read or write succeeded.
+    Available,
+    /// A read or write failed - absent, locked, or refused.
+    Unavailable,
+    /// The user declined it; we are deliberately leaving it alone until they sign
+    /// in again.
+    Declined,
+}
+
+// The storage layer and the IPC surface keep separate enums on purpose, so the
+// tiers can be reworked without breaking the webview contract. These are the two
+// bridges, kept next to the IPC types they produce.
+
+impl From<super::auth::TokenTier> for TokenStorage {
+    fn from(tier: super::auth::TokenTier) -> Self {
+        match tier {
+            super::auth::TokenTier::Keychain => Self::Keychain,
+            super::auth::TokenTier::Plaintext => Self::Plaintext,
+            super::auth::TokenTier::Memory => Self::Memory,
+        }
+    }
+}
+
+impl From<super::auth::KeychainState> for KeychainReport {
+    fn from(state: super::auth::KeychainState) -> Self {
+        match state {
+            super::auth::KeychainState::NotAttempted => Self::NotAttempted,
+            super::auth::KeychainState::Available => Self::Available,
+            super::auth::KeychainState::Unavailable => Self::Unavailable,
+            super::auth::KeychainState::Declined => Self::Declined,
+        }
+    }
 }
 
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
@@ -545,6 +618,12 @@ pub struct SpeleoSessionStatus {
     /// False when the token is held in memory only (no OS keychain) - surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
     pub keychain_backed: bool,
+    /// Where the API key actually lives, for the Settings credential-storage line.
+    /// `None` when logged out (there is no key to place).
+    pub storage: Option<TokenStorage>,
+    /// What is known about the OS keychain, WITHOUT probing it - see
+    /// [`KeychainReport`].
+    pub keychain: KeychainReport,
 }
 
 /// IPC-facing status of the currently open project's SpeleoDB link, so the
@@ -714,10 +793,10 @@ pub struct UnpushedLocalEdits {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
-        SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult, Visibility,
+        DoneResult, KeychainReport, Permission, Project, PushResult, RemoteState, RevisionCommit,
+        RevisionHistory, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+        SpeleoOpenResult, SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus,
+        StartEditingResult, TokenStorage, UpdateResult, Visibility,
     };
 
     #[test]
@@ -729,6 +808,9 @@ mod tests {
             user_email: "u@x".to_owned(),
             endpoint: "https://x/".to_owned(),
             keychain_backed: true,
+            storage: TokenStorage::Keychain,
+            keychain: KeychainReport::Available,
+            needs_storage_choice: false,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {
@@ -736,6 +818,8 @@ mod tests {
             user_email: Some("u@x".to_owned()),
             endpoint: Some("https://x/".to_owned()),
             keychain_backed: true,
+            storage: Some(TokenStorage::Keychain),
+            keychain: KeychainReport::Available,
         })
         .expect("serialize session status");
         let summary = serde_json::to_string(&SpeleoProjectSummary {

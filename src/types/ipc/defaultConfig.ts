@@ -324,6 +324,7 @@ export const defaultConfig: Config = {
     "endpoint": null,
     "email": null,
     "token_fallback": "session_only",
+    "keychain_declined": false,
     "insecure_http": false,
     "allow_force_edit": false,
     "poll_interval_seconds": 60

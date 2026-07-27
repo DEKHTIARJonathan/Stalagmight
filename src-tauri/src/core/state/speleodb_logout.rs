@@ -42,6 +42,32 @@ impl AppState {
         let _ = self.speleodb_write_config_email(Some(email.to_owned()));
     }
 
+    /// Persist whether the user has declined the OS keychain (items 11/12).
+    ///
+    /// This has to survive a restart to do its job at all: the whole complaint is
+    /// that dismissing the desktop unlock prompt once did not stop it coming back
+    /// on the next launch. Best-effort in the same sense as the email above - a
+    /// failed write means the next launch asks again, which is annoying but never
+    /// unsafe. A poisoned config mutex is recovered rather than treated as "cannot
+    /// write", mirroring the email path.
+    pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
+        let mut config = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if config.speleodb.keychain_declined == declined {
+            return; // no write, no disk churn on every login
+        }
+        config.speleodb.keychain_declined = declined;
+        if let Err(e) = config.save() {
+            tracing::warn!(
+                error = %e,
+                declined,
+                "failed to persist the SpeleoDB keychain preference; the next launch may ask again"
+            );
+        }
+    }
+
     /// Write (or clear, with `None`) the persisted account email. `None` is the
     /// logout half (#270): the email is the *rehydrate seed* - leaving it behind
     /// means a keychain entry that outlived a failed logout delete is found again

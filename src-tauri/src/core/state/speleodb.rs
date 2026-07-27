@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::{AppState, VirtualShotMode};
-use crate::speleodb::auth::{SecretStoreError, TokenStore};
+use crate::speleodb::auth::{SecretStoreError, TokenStore, TokenTier};
 use crate::speleodb::client;
 // [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
 // conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
@@ -35,10 +35,10 @@ use crate::speleodb::models::{SpeleoProjectSummary, SpeleoRevision};
 use crate::speleodb::sync::{self, PushPlan, ReconcileVerdict};
 use crate::speleodb::SpeleoDbAction;
 use crate::speleodb::{
-    DoneResult, PushResult, RemoteState, SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    DoneResult, KeychainReport, PushResult, RemoteState, SpeleoAdoptResult, SpeleoDbError,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoPublishParams, SpeleoPublishResult, SpeleoSessionStatus,
-    StartEditingResult, UpdateResult, Visibility,
+    StartEditingResult, TokenStorage, UpdateResult, Visibility,
 };
 
 /// Per-session SpeleoDB connection state held in [`AppState`]. The token lives
@@ -337,6 +337,14 @@ impl SpeleoDbSession {
             user_email: logged_in.then(|| self.email.clone()).flatten(),
             endpoint: logged_in.then(|| self.endpoint.clone()).flatten(),
             keychain_backed: logged_in && self.token_store.keychain_backed(),
+            // Reporting only - reading these never touches the keychain, which is
+            // what lets Settings show where the key lives without re-raising a
+            // desktop unlock prompt every time it is opened.
+            storage: logged_in
+                .then(|| self.token_store.active_tier())
+                .flatten()
+                .map(TokenStorage::from),
+            keychain: self.token_store.keychain_state().into(),
             logged_in,
         }
     }
@@ -375,11 +383,20 @@ impl SpeleoDbSession {
     /// Idempotent: marks `rehydrate_attempted` so a failed/empty load doesn't
     /// re-hit the keychain every call, and short-circuits if a session is already
     /// established this run.
-    fn rehydrate(&mut self, resolved_endpoint: Option<String>, config_email: Option<String>) {
+    fn rehydrate(
+        &mut self,
+        resolved_endpoint: Option<String>,
+        config_email: Option<String>,
+        keychain_declined: bool,
+    ) {
         if self.rehydrate_attempted || self.endpoint.is_some() {
             return;
         }
         self.rehydrate_attempted = true;
+        // Apply the persisted refusal BEFORE the load below. This is the launch-time
+        // nag fix: startup rehydration is what re-raised the desktop unlock prompt on
+        // every single launch for someone who had already dismissed it once.
+        self.token_store.set_keychain_declined(keychain_declined);
 
         let (Some(endpoint), Some(email)) = (resolved_endpoint, config_email) else {
             // No persisted account → stay logged-out (no keychain probe).
@@ -525,14 +542,13 @@ impl AppState {
         }
 
         let resolved_endpoint = self.speleodb_resolve_endpoint(None);
-        let config_email = self
-            .config
-            .lock()
-            .ok()
-            .and_then(|c| c.speleodb.email.clone());
+        let (config_email, keychain_declined) =
+            self.config.lock().ok().map_or((None, false), |c| {
+                (c.speleodb.email.clone(), c.speleodb.keychain_declined)
+            });
 
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session.rehydrate(resolved_endpoint, config_email);
+            session.rehydrate(resolved_endpoint, config_email, keychain_declined);
         }
     }
 
@@ -885,7 +901,7 @@ impl AppState {
             .map(|c| c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext)
             .unwrap_or(false);
 
-        let keychain_backed = {
+        let (tier, keychain_state) = {
             let mut session = self.speleodb_session_lock().map_err(local_dto)?;
             // If a *different* account is already active, forget it first so its
             // keychain entry isn't orphaned. (The UI logs out before re-login, but
@@ -896,9 +912,10 @@ impl AppState {
             if switching {
                 session.forget();
             }
-            // [Track C] (#188): store() now returns the resolved TokenTier; only
-            // Keychain counts as "backed" for the UI's restart warning (Plaintext
-            // and Memory both report false - #205 owns surfacing the distinction).
+            // Signing in is the one moment the user has opted back into being
+            // asked, so a previous refusal is cleared here and the keychain gets
+            // another go. Everywhere else the refusal is honoured silently.
+            session.token_store.set_keychain_declined(false);
             let tier = session
                 .token_store
                 .store(&endpoint, &email, &token, allow_plaintext);
@@ -907,15 +924,27 @@ impl AppState {
             // A fresh login established a session this run; don't let a later lazy
             // rehydration clobber it.
             session.rehydrate_attempted = true;
-            tier == crate::speleodb::auth::TokenTier::Keychain
+            (tier, session.token_store.keychain_state())
         };
 
         self.speleodb_persist_email(&email);
+        // Clear the persisted refusal too: the in-session flag above only lives
+        // until the process exits, and the two must not disagree across a restart.
+        self.speleodb_persist_keychain_declined(false);
 
+        let keychain = KeychainReport::from(keychain_state);
         Ok(SpeleoLoginResult {
             user_email: email,
             endpoint,
-            keychain_backed,
+            keychain_backed: tier == TokenTier::Keychain,
+            storage: tier.into(),
+            keychain,
+            // Ask ONLY when this login actually hit a broken keychain. A working
+            // keychain needs no question, and a user who already declined has
+            // settled it - re-asking on every login would be the same nag in a new
+            // costume. The refusal was cleared above, so `Declined` cannot appear
+            // here; the check is on the failure itself.
+            needs_storage_choice: keychain == KeychainReport::Unavailable,
         })
     }
 
@@ -3085,7 +3114,9 @@ mod tests {
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
-    use crate::speleodb::{DoneResult, PushResult, RemoteState, SpeleoDbError, TransportCause};
+    use crate::speleodb::{
+        DoneResult, KeychainReport, PushResult, RemoteState, SpeleoDbError, TransportCause,
+    };
     use tempfile::TempDir;
 
     #[test]
@@ -4981,7 +5012,7 @@ mod tests {
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
-        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()));
+        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), false);
 
         let status = session.status();
         assert!(status.logged_in, "a stored keychain token survives restart");
@@ -4996,18 +5027,49 @@ mod tests {
     }
 
     #[test]
+    fn rehydration_leaves_a_declined_keychain_alone() {
+        // Item 12: the launch-time nag. A user who dismissed the desktop unlock
+        // prompt once was asked again on EVERY launch, because rehydration read the
+        // keychain unconditionally. With the refusal persisted, startup must not go
+        // near it - even though a token is sitting right there.
+        let endpoint = "https://x/";
+        let email = "u@x";
+        let keychain = InMemoryStore::new();
+        keychain
+            .store(
+                &crate::speleodb::auth::account_key(endpoint, email),
+                "kc-tok",
+            )
+            .expect("seed keychain");
+
+        let mut session = fresh_session_with_stores(Box::new(keychain), None);
+        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), true);
+
+        let status = session.status();
+        assert!(
+            !status.logged_in,
+            "a declined keychain must not be read on startup, even holding a token"
+        );
+        assert_eq!(
+            status.keychain,
+            KeychainReport::Declined,
+            "and the reason is reported as a choice, not as a broken keychain"
+        );
+    }
+
+    #[test]
     fn rehydration_noop_without_config_account() {
         // No persisted account → stays logged-out, and the keychain is NOT probed
         // (no endpoint/email to key it). rehydrate_attempted is still latched so
         // it won't retry every call.
         let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(None, None);
+        session.rehydrate(None, None, false);
         assert!(!session.status().logged_in);
         assert!(session.rehydrate_attempted);
 
         // A blank endpoint/email also yields a logged-out no-op.
         let mut session = fresh_session_with_stores(Box::new(InMemoryStore::new()), None);
-        session.rehydrate(Some("   ".to_owned()), Some(String::new()));
+        session.rehydrate(Some("   ".to_owned()), Some(String::new()), false);
         assert!(!session.status().logged_in);
     }
 
@@ -5028,7 +5090,7 @@ mod tests {
             Box::new(SharedStore(std::sync::Arc::clone(&keychain))),
             None,
         );
-        session.rehydrate(None, None); // marks attempted, finds nothing
+        session.rehydrate(None, None, false); // marks attempted, finds nothing
         assert!(session.rehydrate_attempted);
         assert!(!session.status().logged_in);
 
@@ -5045,7 +5107,7 @@ mod tests {
         // before any seed/probe, so the session stays logged-out and never adopts
         // endpoint/email despite the now-present token. This is the idempotency
         // invariant: `rehydrate_attempted` gates the keychain probe to once.
-        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()));
+        session.rehydrate(Some(endpoint.to_owned()), Some(email.to_owned()), false);
         assert!(
             !session.status().logged_in,
             "the latch must block the re-probe even with a now-seeded keychain"
@@ -5057,7 +5119,11 @@ mod tests {
 
         // A live session (endpoint set) is also skipped.
         let mut live = authed_session();
-        live.rehydrate(Some("https://other/".to_owned()), Some("z@z".to_owned()));
+        live.rehydrate(
+            Some("https://other/".to_owned()),
+            Some("z@z".to_owned()),
+            false,
+        );
         assert_eq!(live.endpoint.as_deref(), Some("https://x/"));
     }
 

@@ -4025,7 +4025,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // the settings tab + browser render without a live server. No e2e spec
           // drives the hand-off yet; these keep the mounts from erroring on null.
           case 'speleodb_session':
-            return { logged_in: false, user_email: null, endpoint: null, keychain_backed: false };
+            return {
+              logged_in: false,
+              user_email: null,
+              endpoint: null,
+              keychain_backed: false,
+              // No login this session, so nothing has touched the keychain - which
+              // is exactly what the UI must be able to say without probing.
+              storage: null,
+              keychain: 'not_attempted',
+            };
           case 'speleodb_link_status':
             // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
             // included) so a spec that flips is_remote:true still matches the DTO.
@@ -4098,6 +4107,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               user_email: 'test@example.com',
               endpoint: 'https://speleodb.example',
               keychain_backed: true,
+              storage: 'keychain',
+              keychain: 'available',
+              needs_storage_choice: false,
             };
 
           default:

@@ -66,12 +66,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
-    SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
-    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
-    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, KeychainReport, Permission, PushResult, RemoteState, SpeleoAdoptResult,
+    SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
+    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -307,6 +307,8 @@ fn main() {
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
+    export::<TokenStorage>(&out_dir);
+    export::<KeychainReport>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome)
@@ -524,6 +526,8 @@ fn main() {
         "TokenFallback",
         "Permission",
         "SpeleoProjectSummary",
+        "TokenStorage",
+        "KeychainReport",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoAdoptResult",

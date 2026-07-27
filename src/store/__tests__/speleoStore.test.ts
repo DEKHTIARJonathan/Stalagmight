@@ -52,6 +52,8 @@ describe('speleoStore', () => {
         user_email: 'u@x',
         endpoint: 'https://x/',
         keychain_backed: false,
+        storage: 'memory',
+        keychain: 'unavailable',
       });
       expect(useSpeleoStore.getState().session).toEqual({
         loggedIn: true,
@@ -65,7 +67,14 @@ describe('speleoStore', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       useSpeleoStore
         .getState()
-        .setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/', keychain_backed: true });
+        .setSessionFromLogin({
+          user_email: 'u@x',
+          endpoint: 'https://x/',
+          keychain_backed: true,
+          storage: 'keychain',
+          keychain: 'available',
+          needs_storage_choice: false,
+        });
       useSpeleoStore.getState().clearSession();
       const s = useSpeleoStore.getState();
       expect(s.session).toBeNull();
@@ -108,7 +117,14 @@ describe('speleoStore', () => {
       // session the backend dropped.
       useSpeleoStore
         .getState()
-        .setSessionFromLogin({ user_email: 'u@x', endpoint: 'https://x/', keychain_backed: true });
+        .setSessionFromLogin({
+          user_email: 'u@x',
+          endpoint: 'https://x/',
+          keychain_backed: true,
+          storage: 'keychain',
+          keychain: 'available',
+          needs_storage_choice: false,
+        });
       useSpeleoStore.getState().setPendingAuth({ kind: 'logout' });
       invokeIpcMock.mockRejectedValue({
         message: 'Logged out, but the stored SpeleoDB credential could not be removed',

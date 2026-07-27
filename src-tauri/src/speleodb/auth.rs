@@ -304,6 +304,28 @@ pub(crate) enum TokenTier {
     Memory,
 }
 
+/// What we have LEARNED about the OS keychain - never what we went looking for.
+///
+/// Settings needs to tell the user where their API key actually lives, but on
+/// Linux a locked keyring turns any keychain access into a desktop unlock
+/// prompt, so *probing* to draw a status line would re-introduce exactly the
+/// nag the decline flag exists to stop. So this is only ever set as a
+/// side effect of access we already had to make (a login write, a startup
+/// rehydrate read), and `NotAttempted` is an honest answer we are willing to
+/// show.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum KeychainState {
+    /// Nothing has touched the keychain this session, so we genuinely do not know.
+    NotAttempted,
+    /// A keychain read or write succeeded.
+    Available,
+    /// A keychain read or write failed (absent, locked, or refused).
+    Unavailable,
+    /// The user declined it; we are deliberately not touching it until they sign
+    /// in again.
+    Declined,
+}
+
 /// Holds the SpeleoDB token backend-side across an ordered tier list. The active
 /// token is never returned to the webview; only [`Self::keychain_backed`] is
 /// surfaced (so the UI can warn that a non-keychain token won't survive a
@@ -324,6 +346,14 @@ pub(crate) struct TokenStore {
     /// session (the production [`Default`] wires it; the two-gate in [`Self::store`]
     /// decides whether it is actually *written*).
     plaintext: Option<Box<dyn SecretStore>>,
+    /// The user declined the keychain (persisted as `config.speleodb.keychain_declined`).
+    /// While set, NEITHER [`Self::store`] NOR [`Self::load`] goes near it, which is
+    /// what stops a dismissed unlock prompt coming back on every launch.
+    /// [`Self::clear`] still sweeps every tier regardless - a refusal must never
+    /// strand a token somewhere we then refuse to look.
+    keychain_declined: bool,
+    /// What keychain access we have already made taught us. See [`KeychainState`].
+    keychain_state: KeychainState,
 }
 
 impl Default for TokenStore {
@@ -360,7 +390,46 @@ impl TokenStore {
             keychain: Box::new(KeyringStore),
             plaintext: plaintext_root
                 .map(|r| Box::new(PlaintextStore::new(r)) as Box<dyn SecretStore>),
+            keychain_declined: false,
+            keychain_state: KeychainState::NotAttempted,
         }
+    }
+
+    /// Apply the persisted decline flag (from `config.speleodb.keychain_declined`).
+    /// Called when seeding the session and again when the user signs in - a fresh
+    /// login is the one moment they have opted back into being asked, so that is
+    /// where `false` is passed to re-enable the keychain.
+    pub(crate) fn set_keychain_declined(&mut self, declined: bool) {
+        self.keychain_declined = declined;
+        self.keychain_state = if declined {
+            KeychainState::Declined
+        } else {
+            // Re-enabling makes what we previously learned stale: an "Unavailable"
+            // from before the user fixed their keyring would otherwise be reported
+            // forever. Say we do not know, and let the next real access answer.
+            KeychainState::NotAttempted
+        };
+    }
+
+    /// What we know about the keychain, for the Settings credential-storage line.
+    /// Reporting only - this never triggers keychain access.
+    pub(crate) fn keychain_state(&self) -> KeychainState {
+        self.keychain_state
+    }
+
+    /// The tier the active token lives in, or `None` when there is no token.
+    pub(crate) fn active_tier(&self) -> Option<TokenTier> {
+        self.active_tier
+    }
+
+    /// Record the outcome of a keychain access. Only ever called from a real
+    /// read/write, never from a probe.
+    fn note_keychain(&mut self, ok: bool) {
+        self.keychain_state = if ok {
+            KeychainState::Available
+        } else {
+            KeychainState::Unavailable
+        };
     }
 
     /// Store `token` for `(endpoint, email)` across the tier list. Tries the
@@ -381,8 +450,16 @@ impl TokenStore {
         let key = account_key(endpoint, email);
         self.in_memory = Some(token.to_owned());
 
+        // Declined: go straight to the non-keychain tiers. Deliberately NOT
+        // recorded as a keychain failure - the keychain may be perfectly healthy;
+        // we simply are not asking.
+        if self.keychain_declined {
+            return self.store_without_keychain(&key, token, allow_plaintext);
+        }
+
         match self.keychain.store(&key, token) {
             Ok(()) => {
+                self.note_keychain(true);
                 // Self-heal (guardrail 6): a usable keychain removes any stale
                 // plaintext copy so the escape hatch never shadows the keychain.
                 if let Some(plaintext) = &self.plaintext {
@@ -395,31 +472,42 @@ impl TokenStore {
                 TokenTier::Keychain
             }
             Err(e) => {
+                self.note_keychain(false);
                 tracing::warn!(
                     error = %e,
                     "OS keychain unavailable; falling back to a non-keychain SpeleoDB token tier for this session"
                 );
-                // Two-gate plaintext opt-in (C6): gate 1 = the persisted
-                // preference (`allow_plaintext`); gate 2 = this keychain failure
-                // (intrinsic - we only reach here in the keychain-Err branch).
-                match (allow_plaintext, &self.plaintext) {
-                    (true, Some(plaintext)) => match plaintext.store(&key, token) {
-                        Ok(()) => {
-                            tracing::debug!(tier = plaintext.kind(), "SpeleoDB token stored");
-                            self.active_tier = Some(TokenTier::Plaintext);
-                            TokenTier::Plaintext
-                        }
-                        Err(e) => {
-                            tracing::warn!(error = %e, "plaintext SpeleoDB token write failed; holding in memory only");
-                            self.active_tier = Some(TokenTier::Memory);
-                            TokenTier::Memory
-                        }
-                    },
-                    _ => {
-                        self.active_tier = Some(TokenTier::Memory);
-                        TokenTier::Memory
-                    }
+                self.store_without_keychain(&key, token, allow_plaintext)
+            }
+        }
+    }
+
+    /// The non-keychain half of [`Self::store`]: the two-gate plaintext opt-in,
+    /// else session-only memory. Reached either because the keychain FAILED or
+    /// because the user DECLINED it - the tier decision is identical, but only the
+    /// former is a keychain failure, so the caller owns [`Self::note_keychain`].
+    fn store_without_keychain(
+        &mut self,
+        key: &str,
+        token: &str,
+        allow_plaintext: bool,
+    ) -> TokenTier {
+        match (allow_plaintext, &self.plaintext) {
+            (true, Some(plaintext)) => match plaintext.store(key, token) {
+                Ok(()) => {
+                    tracing::debug!(tier = plaintext.kind(), "SpeleoDB token stored");
+                    self.active_tier = Some(TokenTier::Plaintext);
+                    TokenTier::Plaintext
                 }
+                Err(e) => {
+                    tracing::warn!(error = %e, "plaintext SpeleoDB token write failed; holding in memory only");
+                    self.active_tier = Some(TokenTier::Memory);
+                    TokenTier::Memory
+                }
+            },
+            _ => {
+                self.active_tier = Some(TokenTier::Memory);
+                TokenTier::Memory
             }
         }
     }
@@ -443,21 +531,30 @@ impl TokenStore {
         }
         let key = account_key(endpoint, email);
 
-        // Keychain-first (precedence): a hit supersedes and self-heals plaintext.
-        match self.keychain.load(&key) {
-            Ok(Some(token)) => {
-                if let Some(plaintext) = &self.plaintext {
-                    if let Err(e) = plaintext.delete(&key) {
-                        tracing::warn!(error = %e, "failed to delete stale plaintext SpeleoDB token");
+        // Declined: skip the keychain entirely. THIS is the launch-time nag fix -
+        // rehydration on startup is what re-raised the desktop unlock prompt on
+        // every single launch for a user who had already dismissed it once.
+        if !self.keychain_declined {
+            // Keychain-first (precedence): a hit supersedes and self-heals plaintext.
+            match self.keychain.load(&key) {
+                Ok(Some(token)) => {
+                    self.note_keychain(true);
+                    if let Some(plaintext) = &self.plaintext {
+                        if let Err(e) = plaintext.delete(&key) {
+                            tracing::warn!(error = %e, "failed to delete stale plaintext SpeleoDB token");
+                        }
                     }
+                    self.in_memory = Some(token.clone());
+                    self.active_tier = Some(TokenTier::Keychain);
+                    return Some(token);
                 }
-                self.in_memory = Some(token.clone());
-                self.active_tier = Some(TokenTier::Keychain);
-                return Some(token);
-            }
-            Ok(None) => {}
-            Err(e) => {
-                tracing::warn!(error = %e, "keychain read failed during SpeleoDB rehydration");
+                // Reachable and healthy: the keychain answered, it just holds
+                // nothing for this account. That IS an availability signal.
+                Ok(None) => self.note_keychain(true),
+                Err(e) => {
+                    self.note_keychain(false);
+                    tracing::warn!(error = %e, "keychain read failed during SpeleoDB rehydration");
+                }
             }
         }
 
@@ -548,6 +645,8 @@ impl TokenStore {
             active_tier: Some(TokenTier::Memory),
             keychain: Box::new(InMemoryStore::new()),
             plaintext: None,
+            keychain_declined: false,
+            keychain_state: KeychainState::NotAttempted,
         }
     }
 
@@ -562,6 +661,8 @@ impl TokenStore {
             active_tier: None,
             keychain,
             plaintext,
+            keychain_declined: false,
+            keychain_state: KeychainState::NotAttempted,
         }
     }
 }
@@ -574,9 +675,11 @@ impl TokenStore {
 )]
 mod tests {
     use super::{
-        account_key, normalize_endpoint, InMemoryStore, PlaintextStore, SecretStore,
+        account_key, normalize_endpoint, InMemoryStore, KeychainState, PlaintextStore, SecretStore,
         SecretStoreError, TokenStore, TokenTier,
     };
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
 
     /// A [`SecretStore`] whose every op errors - simulates a headless box with no
     /// secret service. Drives the plaintext two-gate + the keychain-failure path.
@@ -1034,5 +1137,120 @@ mod tests {
             TokenStore::from_stores(Box::new(InMemoryStore::new()), Some(Box::new(plaintext)));
         assert_eq!(store.load(EP, EMAIL), Some("pt-tok".to_owned()));
         assert!(!store.keychain_backed());
+    }
+
+    // ---- the keychain decline gate (items 11/12) ----
+
+    /// A [`SecretStore`] that records whether it was touched AT ALL. The decline
+    /// flag's real property is not "we chose another tier" but "we never went near
+    /// the keychain" - on Linux the access itself is what raises the unlock prompt,
+    /// so only a spy can tell the two apart.
+    struct SpyStore {
+        inner: InMemoryStore,
+        touched: Arc<AtomicBool>,
+    }
+
+    impl SecretStore for SpyStore {
+        fn kind(&self) -> &'static str {
+            "spy"
+        }
+        fn store(&self, k: &str, v: &str) -> Result<(), SecretStoreError> {
+            self.touched.store(true, Ordering::SeqCst);
+            self.inner.store(k, v)
+        }
+        fn load(&self, k: &str) -> Result<Option<String>, SecretStoreError> {
+            self.touched.store(true, Ordering::SeqCst);
+            self.inner.load(k)
+        }
+        fn delete(&self, k: &str) -> Result<(), SecretStoreError> {
+            self.touched.store(true, Ordering::SeqCst);
+            self.inner.delete(k)
+        }
+    }
+
+    /// A spy plus the flag to read it by, since [`SecretStore`] is moved into the
+    /// store and cannot be inspected afterwards.
+    fn spy_pair() -> (Box<dyn SecretStore>, Arc<AtomicBool>) {
+        let touched = Arc::new(AtomicBool::new(false));
+        (
+            Box::new(SpyStore {
+                inner: InMemoryStore::new(),
+                touched: Arc::clone(&touched),
+            }),
+            touched,
+        )
+    }
+
+    #[test]
+    fn a_declined_keychain_is_never_touched_by_store_or_load() {
+        // Item 12. The point is not that we pick a different tier - it is that we
+        // do not go near the keychain at all, because on Linux the access itself
+        // is what raises the desktop unlock prompt the user already dismissed.
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        store.set_keychain_declined(true);
+
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert!(
+            !touched.load(Ordering::SeqCst),
+            "store must not touch a declined keychain"
+        );
+
+        // A cold session (the startup rehydrate) is the path that used to nag.
+        let (keychain2, touched2) = spy_pair();
+        let mut cold = TokenStore::from_stores(keychain2, None);
+        cold.set_keychain_declined(true);
+        assert_eq!(cold.load(EP, EMAIL), None);
+        assert!(
+            !touched2.load(Ordering::SeqCst),
+            "rehydration must not touch a declined keychain"
+        );
+    }
+
+    #[test]
+    fn declining_still_honours_the_plaintext_choice() {
+        // Declining the keychain is not the same as declining persistence: the
+        // user is offered plaintext at the same moment, and picking it must work.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let plaintext = PlaintextStore::new(temp.path().to_path_buf());
+        let (keychain, touched) = spy_pair();
+        let mut store = TokenStore::from_stores(keychain, Some(Box::new(plaintext)));
+        store.set_keychain_declined(true);
+
+        assert_eq!(store.store(EP, EMAIL, "tok", true), TokenTier::Plaintext);
+        assert!(!touched.load(Ordering::SeqCst), "still no keychain access");
+    }
+
+    #[test]
+    fn keychain_state_reports_only_what_access_taught_us() {
+        // Item 1: Settings shows where the key lives WITHOUT probing, so an
+        // untouched store must say so rather than guess.
+        let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+        assert_eq!(store.keychain_state(), KeychainState::NotAttempted);
+
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Keychain);
+        assert_eq!(store.keychain_state(), KeychainState::Available);
+
+        let mut failing = TokenStore::from_stores(Box::new(FailingSecretStore), None);
+        assert_eq!(failing.keychain_state(), KeychainState::NotAttempted);
+        assert_eq!(failing.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert_eq!(failing.keychain_state(), KeychainState::Unavailable);
+    }
+
+    #[test]
+    fn declining_is_reported_as_declined_not_as_unavailable() {
+        // The two are different things to tell a user: "your keychain is broken"
+        // versus "you chose otherwise, and here is how to change your mind".
+        let mut store = TokenStore::from_stores(Box::new(FailingSecretStore), None);
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert_eq!(store.keychain_state(), KeychainState::Unavailable);
+
+        store.set_keychain_declined(true);
+        assert_eq!(store.keychain_state(), KeychainState::Declined);
+
+        // Re-enabling (a fresh login) must not keep reporting a stale verdict from
+        // before the user fixed their keyring.
+        store.set_keychain_declined(false);
+        assert_eq!(store.keychain_state(), KeychainState::NotAttempted);
     }
 }
