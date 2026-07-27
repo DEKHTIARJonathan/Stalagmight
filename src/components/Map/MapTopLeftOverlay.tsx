@@ -12,9 +12,11 @@ import { FitToViewIcon, LockIcon } from '../common/icons';
  * they lay out instead, and a future third notice cannot reintroduce the bug.
  *
  * Every gate arrives pre-computed. That is deliberate: it keeps the raw
- * `geometryMode === 'closureAdjusted'` comparison (and the `speleoReadOnly`
- * subscription) in `MapCanvas`, where `scripts/check-readonly-gates.mjs`
- * allow-lists them by exact count, so this file adds none of its own.
+ * geometry-mode comparison (and the `speleoReadOnly` subscription) in
+ * `MapCanvas`, where `scripts/check-readonly-gates.mjs` allow-lists them by
+ * exact count, so this file adds none of its own - which is also why the
+ * comparison is not spelled out literally anywhere below. That lint scans
+ * source text, comments included.
  */
 export function MapTopLeftOverlay({
   focused,
