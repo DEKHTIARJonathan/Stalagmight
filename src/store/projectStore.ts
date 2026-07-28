@@ -492,18 +492,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     command: string,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> }
-  ): Promise<CommandResult> => runSerialized(() => executeCommandInner(command, args, meta));
+  ): Promise<CommandResult> => {
+    // Captured when the user ISSUES the command, not when the queue gets round to it. The two
+    // differ once a mutation can wait behind another: project load/create/close do not go
+    // through the queue, so B can open while this entry is still waiting, and reading the
+    // identity inside the callback would capture B and run A's section ids against B's
+    // sections - which, since section ids are small per-project integers, would mostly RESOLVE.
+    const requestProjectKey = get().project?.created_at ?? null;
+    return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey));
+  };
 
   const executeCommandInner = async (
     command: string,
     args: Record<string, unknown> | undefined,
-    meta: { purpose: string; fields?: Record<string, unknown> }
+    meta: { purpose: string; fields?: Record<string, unknown> },
+    requestProjectKey: string | null
   ): Promise<CommandResult> => {
-    // #24: captured BEFORE the await so a project SWITCH mid-flight is detectable. Only
-    // `created_at` - it is immutable for the life of a project, whereas `file_path` changes on
-    // a first save or Save As, which would make the guard reject a reply that is perfectly
-    // valid and silently leave the frontend's positional refs on the wrong physical station.
-    const requestProjectKey = get().project?.created_at ?? null;
+    // Refuse before the IPC leaves: a command issued against a project that is no longer open
+    // must not mutate whatever replaced it.
+    if (projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+      return emptyCommandResult(false, 'The project changed before this action could run.');
+    }
     try {
       const result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
@@ -573,10 +582,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
     checkPartialFailure: boolean,
-  ): Promise<CommandResult> =>
-    runSerialized(() =>
-      executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure)
+  ): Promise<CommandResult> => {
+    // Captured at ISSUE time - see `executeCommand`.
+    const requestProjectKey = get().project?.created_at ?? null;
+    return runSerialized(() =>
+      executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure, requestProjectKey)
     );
+  };
 
   const executeUndoRedoInner = async (
     command: string,
@@ -584,10 +596,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     meta: { purpose: string; fields?: Record<string, unknown> },
     toastId: string,
     checkPartialFailure: boolean,
+    requestProjectKey: string | null,
   ): Promise<CommandResult> => {
+    if (projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+      return emptyCommandResult(false, 'The project changed before this action could run.');
+    }
     let result: CommandResult;
-    // Captured before the await - see `executeCommand` for why this is `created_at` alone.
-    const requestProjectKey = get().project?.created_at ?? null;
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE

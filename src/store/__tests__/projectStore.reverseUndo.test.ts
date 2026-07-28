@@ -309,7 +309,7 @@ describe('frontend mutation ordering (#24)', () => {
       }
       if (command === 'can_undo' || command === 'can_redo') return false;
       if (command === 'get_project_warnings') return [];
-      if (command === 'check_project_integrity') return { violations: [] };
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
       // Both mutations report a reverse, at DIFFERENT counts.
       call += 1;
       const shot_count = call === 1 ? 7 : 6;
@@ -332,5 +332,59 @@ describe('frontend mutation ordering (#24)', () => {
     // Composed in issue order: i -> 7 - i then i -> 6 - i, i.e. 1 -> 6 -> 0.
     // The reverse order would give 1 -> 5 -> 2, a different station.
     expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+  });
+
+  it('never sends a queued command against a project that opened while it waited', async () => {
+    // Project load/create/close do NOT go through the mutation queue, so a command can be
+    // issued against A, wait behind another entry, and reach the front after B has opened.
+    // Section ids are small per-project integers, so running A's ids against B would mostly
+    // RESOLVE - mutating the wrong survey rather than failing.
+    const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
+    let releaseFirst: (() => void) | undefined;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const reverseCalls: unknown[] = [];
+    // The refresh has to reflect the switch too, or the first command's own
+    // `refreshProjectState` would put project A back and mask the boundary entirely.
+    let openProjectCreatedAt = '2026-01-01T00:00:00Z';
+    invokeIpcMock.mockImplementation(async (command: string, args?: unknown) => {
+      if (command === 'get_project_state') {
+        return {
+          project: { ...projectWith(stations), created_at: openProjectCreatedAt },
+          stations,
+          stats: null,
+          frozen_shots: [],
+        };
+      }
+      if (command === 'can_undo' || command === 'can_redo') return false;
+      if (command === 'get_project_warnings') return [];
+      if (command === 'check_project_integrity') return { messages: [], save_blocked: false };
+      reverseCalls.push(args);
+      if (reverseCalls.length === 1) await firstHeld;
+      return { success: true, warnings: [], error: null, section_ids: [] };
+    });
+
+    useProjectStore.setState({ project: projectWith(stations) as never });
+    const store = useProjectStore.getState();
+
+    // Let the first entry actually reach its IPC and park there, so the second is genuinely
+    // WAITING behind it rather than both being rejected before either starts.
+    const first = store.reverseSection(SECTION, false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const second = store.reverseSection(SECTION, false);
+
+    // Project B opens while the second entry is still queued behind the first.
+    openProjectCreatedAt = '2099-12-31T00:00:00Z';
+    useProjectStore.setState({
+      project: { ...projectWith(stations), created_at: openProjectCreatedAt } as never,
+    });
+    releaseFirst?.();
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    expect(firstResult.success).toBe(true);
+    expect(reverseCalls).toHaveLength(1);
+    expect(secondResult.success).toBe(false);
+    expect(secondResult.error).toContain('project changed');
   });
 });
