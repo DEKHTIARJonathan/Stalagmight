@@ -39,6 +39,7 @@ import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
+import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
@@ -574,8 +575,33 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   updateConfig: async (config: Config) => {
     try {
       const routingBefore = get().config?.gas.include_reference_legs;
-      // Rust command returns Result<(), String> - success returns nothing, error throws
-      await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
+      // Rust command returns Result<ConfigSaveReport, String> - an error throws; the
+      // report carries the one thing a save can half-do (see below).
+      const report = await invokeIpc<ConfigSaveReport | null>(
+        'update_config',
+        { config },
+        { purpose: 'persist user settings' },
+      );
+      // Turning the "never use the OS keychain" switch on EVICTS the API key an
+      // earlier login left in the keyring, and a locked or read-only keyring can
+      // refuse that delete. The settings are saved either way (the eviction runs
+      // before the write precisely so a partial failure lands in the recoverable
+      // direction), so this cannot be an error - but it must not pass as unqualified
+      // success either: Settings would be telling the user their key is not in the
+      // OS keychain while a working bearer token sits in it. The backend reports
+      // only a residue that may GENUINELY have survived, so this does not fire on
+      // the headless box that has no keychain to strand anything in.
+      if (report?.keychain_residue) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('settings.speleodb.disableKeychain.evictionFailed', {
+              reason: report.keychain_residue,
+            }),
+            'speleodb-keychain-residue',
+            'warning',
+          );
+      }
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
       // The closure-adjustment sigmas feed the adjusted solve, so a settings change

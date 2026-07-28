@@ -1,8 +1,27 @@
 use anyhow::Result;
 
-use crate::config::{Config, TokenFallback};
+use crate::config::{Config, ConfigSaveReport, TokenFallback};
 
 use super::AppState;
+
+/// What [`AppState::speleodb_disable_keychain`] was able to establish about the
+/// keychain entry it was asked to evict. Three outcomes rather than a bool,
+/// because the two that are not "gone" mean opposite things to the user: one is
+/// the ordinary path, the other is a live bearer token left on their machine.
+enum KeychainEviction {
+    /// The keyring answered, and holds nothing for this account any more. The
+    /// caller may record `keychain_has_token = false`.
+    Emptied,
+    /// Nothing was attempted: there is no persisted account to key an entry by, so
+    /// there was nothing to delete and nothing was learned. Claims nothing and
+    /// warns about nothing - this is the common path for anyone turning the switch
+    /// on before they have ever signed in, and a warning that fires there is one
+    /// the user learns to ignore.
+    NotAttempted,
+    /// The delete failed over a keychain that may still be holding the entry.
+    /// Carries the reason, for the parenthetical in the warning.
+    MayRemain(String),
+}
 
 impl AppState {
     /// Get config
@@ -18,8 +37,14 @@ impl AppState {
             .clone()
     }
 
-    /// Update config
-    pub fn update_config(&self, mut config: Config) -> Result<()> {
+    /// Update config.
+    ///
+    /// Returns a [`ConfigSaveReport`] rather than `()`: the save is a yes/no in
+    /// every respect but one, and that one - evicting the keyring entry when the
+    /// "never use the OS keychain" switch goes on - can fail over settings that
+    /// were nevertheless written. See the eviction branch below for why that is
+    /// reported instead of refused.
+    pub fn update_config(&self, mut config: Config) -> Result<ConfigSaveReport> {
         tracing::info!(purpose = "apply user settings", "Updating configuration");
         // Preserve backend-only fields the frontend never receives. `webkit_memory`
         // is `#[serde(skip_serializing)]` + `#[ts(skip)]`, so a settings-save payload
@@ -76,6 +101,7 @@ impl AppState {
                 existing.cache.tile_cache_enabled,
             )
         };
+        let mut report = ConfigSaveReport::default();
         // The keyring switch has to bite NOW, not at the next launch: a user turning
         // it on has just been asked one unlock prompt too many, and the live session
         // would otherwise keep reaching for the keychain until they restart.
@@ -95,8 +121,34 @@ impl AppState {
             // recoverable direction (the next launch opens the keyring, finds
             // nothing, and asks for a sign-in); saving first would leave the file
             // saying "off" over an entry that survived.
-            if self.speleodb_disable_keychain(config.speleodb.token_fallback) {
-                config.speleodb.keychain_has_token = false;
+            match self.speleodb_disable_keychain(config.speleodb.token_fallback) {
+                KeychainEviction::Emptied => config.speleodb.keychain_has_token = false,
+                // Nothing was checked, so nothing is claimed and nothing is said.
+                KeychainEviction::NotAttempted => {}
+                // REPORTED, not refused, and the settings still save. The
+                // evict-before-save ordering above exists precisely so a partial
+                // failure lands in the recoverable direction, and refusing here
+                // would land in the other one twice over: the eviction has already
+                // run, so the user would be told "nothing was saved" over a keyring
+                // we may well have just emptied, and the rest of their settings
+                // would be abandoned along with it. Worse, the switch's own help
+                // text points it at "your keyring is locked or unavailable" - the
+                // very box whose delete fails - so refusing would leave exactly the
+                // users it exists for unable to turn the keyring off at all.
+                //
+                // What must NOT happen is recording a removal that did not happen:
+                // `keychain_has_token` says what the keyring actually holds, and
+                // clearing it here would send the next launch past an entry that is
+                // still in there. So it is left alone, and the user is told.
+                KeychainEviction::MayRemain(reason) => {
+                    tracing::warn!(
+                        reason = %reason,
+                        purpose = "turn the OS keyring off",
+                        "could not remove the SpeleoDB token from the OS keyring; it may still be \
+                         stored on this machine"
+                    );
+                    report.keychain_residue = Some(reason);
+                }
             }
         } else {
             let mut session = self
@@ -150,7 +202,7 @@ impl AppState {
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = config;
-        Ok(())
+        Ok(report)
     }
 
     /// Apply a NEW standing "never use the OS keyring" instruction to the live
@@ -169,11 +221,22 @@ impl AppState {
     /// The cost of being wrong the other way is one delete against a keyring that
     /// holds nothing, which is `Ok` (a missing entry maps to success).
     ///
-    /// Returns whether the keychain is now known to hold nothing for this account,
-    /// i.e. whether the caller may record `keychain_has_token = false`. A refused
-    /// delete answers `false`: the entry is probably still there, and a later
-    /// re-enable should still know the keyring is worth looking in.
-    fn speleodb_disable_keychain(&self, fallback: TokenFallback) -> bool {
+    /// Reports which of [`KeychainEviction`]'s three outcomes the delete reached.
+    /// A refused delete does NOT answer `Emptied`: the entry may well still be
+    /// there, so the caller leaves `keychain_has_token` set (a later re-enable
+    /// should still know the keyring is worth looking in) and tells the user.
+    ///
+    /// The two non-`Emptied` answers are kept apart because only one of them is
+    /// worth interrupting anyone over. `NotAttempted` is the ordinary case - no
+    /// account persisted, nothing to key an entry by - and reporting it would fire
+    /// the warning for every user who turns this switch on before signing in.
+    /// `MayRemain` is the one that matters: a working bearer token left in the
+    /// keyring of someone who just asked for the keyring not to be used.
+    /// `TokenStore::evict_from_keychain` owns the line between them, with the same
+    /// three-way probe `TokenStore::clear` and the session-only sweep use - a
+    /// missing entry is already `Ok`, and a keychain this session has learned is
+    /// unusable cannot have stranded anything.
+    fn speleodb_disable_keychain(&self, fallback: TokenFallback) -> KeychainEviction {
         // Seeds `endpoint` / `email` from config when the session is still cold -
         // Settings is reachable without having touched SpeleoDB this run, and
         // without an account there is no key to evict by. Called with NO lock held:
@@ -193,20 +256,14 @@ impl AppState {
                 "turned the OS keyring off without an eviction"
             );
             // We verified nothing, so we claim nothing: leave the recorded belief
-            // alone rather than assert an emptiness we did not check.
-            return false;
+            // alone rather than assert an emptiness we did not check. And say
+            // nothing to the user - there was no credential here to strand.
+            return KeychainEviction::NotAttempted;
         };
 
-        let emptied = match session.token_store.evict_from_keychain(&endpoint, &email) {
-            Ok(()) => true,
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    "could not remove the SpeleoDB token from the OS keyring while turning it off; \
-                     it may still be stored on this machine"
-                );
-                false
-            }
+        let evicted = match session.token_store.evict_from_keychain(&endpoint, &email) {
+            Ok(()) => KeychainEviction::Emptied,
+            Err(e) => KeychainEviction::MayRemain(e.to_string()),
         };
         session.token_store.set_keychain_disabled(true);
         // The key is still in hand, so honour the instruction now: re-store it at
@@ -228,17 +285,17 @@ impl AppState {
         {
             Ok(landed) => tracing::info!(
                 ?landed,
-                emptied,
+                emptied = matches!(evicted, KeychainEviction::Emptied),
                 "OS keyring turned off; the SpeleoDB key was moved out of it"
             ),
             Err(e) => tracing::warn!(
                 error = %e,
-                emptied,
+                emptied = matches!(evicted, KeychainEviction::Emptied),
                 "OS keyring turned off, but an older copy of the SpeleoDB key could not be \
                  removed from this machine"
             ),
         }
-        emptied
+        evicted
     }
 
     /// Reload config from disk without saving
@@ -304,6 +361,26 @@ mod tests {
         }
     }
 
+    /// A keychain that hands the entry back but will not delete it - the locked or
+    /// read-only keyring whose credential provably SURVIVES the eviction, as
+    /// opposed to [`FailingSecretStore`], which cannot even be asked.
+    struct DeleteRefusingStore(InMemoryStore);
+
+    impl SecretStore for DeleteRefusingStore {
+        fn kind(&self) -> &'static str {
+            "refusing"
+        }
+        fn store(&self, key: &str, token: &str) -> Result<(), SecretStoreError> {
+            self.0.store(key, token)
+        }
+        fn load(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
+            self.0.load(key)
+        }
+        fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
+            Err(SecretStoreError::for_test("the keyring is locked"))
+        }
+    }
+
     /// A state whose session is signed in over the injected keychain backend.
     /// `endpoint` is seeded, which short-circuits `speleodb_ensure_rehydrated`, so
     /// nothing in these tests reaches a real keyring.
@@ -356,10 +433,14 @@ mod tests {
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             assert!(probe.load(&account_key(EP, EMAIL)).unwrap().is_some());
 
-            state
+            let report = state
                 .update_config(settings_save(&state, true))
                 .expect("settings saved");
 
+            assert_eq!(
+                report.keychain_residue, None,
+                "an eviction that worked must not warn about a residue there isn't"
+            );
             assert_eq!(
                 probe.load(&account_key(EP, EMAIL)).unwrap(),
                 None,
@@ -374,6 +455,155 @@ mod tests {
             assert!(
                 !state.get_config().speleodb.keychain_has_token,
                 "the recorded belief has to follow, or the next launch opens the keyring for nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn turning_the_keyring_off_reports_a_key_the_keyring_would_not_give_up() {
+        // The eviction is the only thing that makes the switch honest, and a locked
+        // or read-only keyring can refuse it. The save reported unqualified success
+        // over that refusal: Settings then told the user their API key would not be
+        // stored in the OS keychain while the previous login's live bearer token was
+        // still sitting in it, with the failure visible only in the backend log.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                assert_eq!(
+                    session.token_store.store(EP, EMAIL, "tok", false),
+                    TokenTier::Keychain
+                );
+                drop(session);
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.keychain_has_token = true;
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("the settings still save - the residue is reported, not refused");
+
+            let residue = report
+                .keychain_residue
+                .expect("a credential the keyring refused to give up must reach the user");
+            assert!(
+                residue.contains("locked"),
+                "the reason belongs in the warning so it is actionable: {residue}"
+            );
+            let saved = state.get_config();
+            assert!(
+                saved.speleodb.keychain_disabled,
+                "refusing the toggle would strand the locked-keyring box the switch exists for"
+            );
+            assert!(
+                saved.speleodb.keychain_has_token,
+                "the recorded belief must not claim a removal that did not happen"
+            );
+        });
+    }
+
+    #[test]
+    fn an_unreadable_keyring_is_reported_rather_than_assumed_empty() {
+        // The keyring that worked at some earlier login and has since stopped
+        // answering: the delete fails and the probe fails with it. "Cannot be read"
+        // is a fact about right now; the entry is still there on the next launch.
+        // Only `Ok(None)` proves absence - the same line `TokenStore::clear` and the
+        // session-only sweep draw.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(FailingSecretStore));
+            {
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.keychain_has_token = true;
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert!(
+                report.keychain_residue.is_some(),
+                "a keyring that will not answer has not proved it is empty"
+            );
+            assert!(
+                state.get_config().speleodb.keychain_has_token,
+                "an indeterminate eviction must leave the recorded belief alone"
+            );
+        });
+    }
+
+    #[test]
+    fn a_keychainless_box_turns_the_keyring_off_without_a_false_alarm() {
+        // The configuration this switch EXISTS for - its help text says so:
+        // headless Linux with no secret service, where every keychain op dies at
+        // `Entry::new` before it can be asked about the entry, so the delete fails
+        // and nothing can have been stranded. Warning on every raw delete failure
+        // would fire here, on the most common path there is for this toggle, and a
+        // warning that always fires is one the user learns to ignore.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(FailingSecretStore));
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                // A login this session that the keychain refused: THAT is what
+                // records `Unavailable`, and it is the only evidence separating a
+                // keychain-less box from a keyring that has gone quiet.
+                assert_eq!(
+                    session.token_store.store(EP, EMAIL, "tok", false),
+                    TokenTier::Memory
+                );
+                assert_eq!(
+                    session.token_store.keychain_state(),
+                    KeychainState::Unavailable
+                );
+                drop(session);
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.keychain_has_token = true;
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "a keychain that cannot hold anything has stranded nothing to warn about"
+            );
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "and the next launch has no reason to open a keyring that holds nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn turning_the_keyring_off_with_no_account_raises_no_alarm() {
+        // Nobody signed in, so there is no account to key an entry by and the
+        // eviction never runs. The pre-fix code answered this exactly as it
+        // answered a refused delete - `false` - which is why "report on every
+        // `false`" would cry wolf at every user who turns the switch on before they
+        // have ever touched SpeleoDB.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(InMemoryStore::new()));
+            {
+                // `endpoint` stays seeded so nothing reaches a real keyring; the
+                // email is what makes the account key, and there isn't one.
+                let mut session = state.speleodb.lock().expect("session");
+                session.email = None;
+                drop(session);
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.keychain_has_token = true;
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "there was nothing to delete, so there is nothing to warn about"
+            );
+            assert!(
+                state.get_config().speleodb.keychain_has_token,
+                "and nothing was checked, so nothing is claimed either way"
             );
         });
     }

@@ -2983,10 +2983,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
           case 'update_config':
-            // Mock update_config - store config and return success
+            // Mock update_config - store config and return the real command's shape:
+            // a ConfigSaveReport whose only field is the keyring residue a "never use
+            // the OS keychain" save could not evict. `null` is the ordinary answer.
             console.log('[Mock IPC] update_config called with:', args);
             savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
-            return { success: true };
+            return { keychain_residue: null };
 
           case 'update_data_table_view': {
             console.log('[Mock IPC] update_data_table_view called with:', args);

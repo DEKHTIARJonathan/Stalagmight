@@ -778,15 +778,46 @@ impl TokenStore {
     /// reports from then on, which is the honest one to show, while the recorded
     /// outcome stays behind it for the sweep. Reports the failure so the caller can leave
     /// `keychain_has_token` set rather than record a removal that did not happen.
+    ///
+    /// `Err` means what it means in [`Self::clear`] and [`sweep_tier`] - "the
+    /// credential may STILL be in there" - not "the delete call failed". The two
+    /// are not the same, and the gap is not academic: this switch exists FOR the
+    /// keychain-less box (the help text says so), where every op dies at
+    /// `Entry::new` before it can be asked about the entry, so a raw failure would
+    /// warn about a stranded credential on the one configuration that cannot have
+    /// stranded one. A missing entry is already `Ok` ([`KeyringStore::delete`] maps
+    /// `NoEntry` to success), so the ordinary nothing-to-delete case never reaches
+    /// the probe at all.
     pub(crate) fn evict_from_keychain(
         &mut self,
         endpoint: &str,
         email: &str,
     ) -> Result<(), SecretStoreError> {
         let key = account_key(endpoint, email);
+        // Asked BEFORE the delete, because `note_keychain` below overwrites the
+        // very field [`Self::unreadable_keychain_may_hold`] reads: a refused delete
+        // records `Unavailable`, so an answer taken afterwards would say "nothing
+        // can be in there" for EVERY failure and suppress the one report this
+        // exists to make.
+        let unreadable_may_hold = self.unreadable_keychain_may_hold();
         let result = self.keychain.delete(&key);
+        // The RAW outcome is what gets recorded: a keyring that refused a delete is
+        // unusable whether or not it was holding anything of ours, and the Settings
+        // credential line and the later sweeps both need that fact.
         self.note_keychain(result.is_ok());
-        result
+        let Err(e) = result else {
+            return Ok(());
+        };
+        if may_have_survived_delete(self.keychain.as_ref(), &key, unreadable_may_hold) {
+            return Err(e);
+        }
+        tracing::debug!(
+            error = %e,
+            keychain_state = ?self.keychain_state,
+            purpose = "defensive eviction from a keychain with nothing of ours to strand",
+            "SpeleoDB keychain delete failed for an account it does not hold"
+        );
+        Ok(())
     }
 
     /// Whether the keychain may STILL be holding a credential for `account_key`
@@ -915,8 +946,8 @@ impl TokenStore {
     }
 }
 
-/// Delete `key` from one tier, reporting the failure unless the tier is then
-/// PROVEN to be holding nothing.
+/// After a delete that FAILED, whether the credential may still be sitting in
+/// `store`.
 ///
 /// The same discrimination [`TokenStore::clear`] makes, asked the other way round.
 /// `clear` probes before deleting because it has to warn about a keychain whose
@@ -939,15 +970,13 @@ impl TokenStore {
 /// `unreadable_may_hold` is the caller's per-tier answer to that third outcome; see
 /// [`TokenStore::sweep_persistent_tiers`] for why the keychain and the plaintext
 /// file answer it differently.
-fn sweep_tier(
-    store: &dyn SecretStore,
-    key: &str,
-    unreadable_may_hold: bool,
-) -> Result<(), SecretStoreError> {
-    let Err(e) = store.delete(key) else {
-        return Ok(());
-    };
-    let may_have_survived = match store.load(key) {
+///
+/// One function rather than one per caller: [`sweep_tier`] and
+/// [`TokenStore::evict_from_keychain`] both have to ask it after their own delete
+/// fails, and answering it differently in the two places is how one of them ends up
+/// promising something the other knows is not true.
+fn may_have_survived_delete(store: &dyn SecretStore, key: &str, unreadable_may_hold: bool) -> bool {
+    match store.load(key) {
         Ok(entry) => entry.is_some(),
         Err(probe) => {
             tracing::debug!(
@@ -958,8 +987,20 @@ fn sweep_tier(
             );
             unreadable_may_hold
         }
+    }
+}
+
+/// Delete `key` from one tier, reporting the failure unless the tier is then
+/// PROVEN to be holding nothing ([`may_have_survived_delete`] owns that question).
+fn sweep_tier(
+    store: &dyn SecretStore,
+    key: &str,
+    unreadable_may_hold: bool,
+) -> Result<(), SecretStoreError> {
+    let Err(e) = store.delete(key) else {
+        return Ok(());
     };
-    if may_have_survived {
+    if may_have_survived_delete(store, key, unreadable_may_hold) {
         tracing::warn!(
             error = %e,
             tier = store.kind(),

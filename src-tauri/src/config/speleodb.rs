@@ -117,6 +117,25 @@ pub struct SpeleoDbConfig {
     pub poll_interval_seconds: u32,
 }
 
+/// What a settings save has to tell the user beyond "it was written".
+///
+/// Saving settings is normally a yes/no, which is why the one thing it can half-do
+/// went unreported: turning [`SpeleoDbConfig::keychain_disabled`] on EVICTS the
+/// entry an earlier login left in the OS keyring, and a locked or read-only keyring
+/// can refuse that delete. The save still succeeds - deliberately, see
+/// `AppState::update_config` - so an `Err` would be a lie in the other direction,
+/// and the frontend needs a third answer to render.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ConfigSaveReport {
+    /// Set when the OS keyring was turned off but the API key it already held
+    /// could not be removed, carrying the reason for the parenthetical in the
+    /// warning. `None` covers both "there was nothing to remove" and "it is gone",
+    /// because a warning that fires on the ordinary path is one the user learns to
+    /// ignore - which costs them the case where it is real.
+    #[serde(default)]
+    pub keychain_residue: Option<String>,
+}
+
 /// Floor for [`SpeleoDbConfig::poll_interval_seconds`]. Enforced both in the
 /// Settings UI and here on load (a hand-edited sub-floor value is corrected up).
 pub const MIN_POLL_INTERVAL_SECONDS: u32 = 30;
