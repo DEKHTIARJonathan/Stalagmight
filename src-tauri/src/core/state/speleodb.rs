@@ -993,8 +993,14 @@ impl AppState {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
-        // The keychain entry went with it (or was never ours to begin with), so the
-        // next launch must not open the keyring looking for one.
+        // A literal `false`, not the token store's belief, and one of the two places
+        // that is deliberate (see `speleodb_persist_keychain_has_token`). The sweep
+        // above may well have failed against a locked keyring, so an entry can
+        // survive - but the token in it is the one the server just rejected, and the
+        // seed that would find it is still on disk. Opening the keyring on the next
+        // launch to recover a dead token is a desktop unlock prompt spent on nothing;
+        // the next successful login overwrites the entry anyway (this path sets no
+        // refusal flag, so `store` still reaches the keyring).
         self.speleodb_persist_keychain_has_token(false);
     }
 
@@ -1098,7 +1104,7 @@ impl AppState {
         // later") left a file the user never agreed to. An unsettled login lands in
         // memory instead, and the answer moves it - which costs nothing, because
         // the key is still in hand (`TokenStore::restore`).
-        let (previously_declined, keychain_disabled, prefers_plaintext) = self
+        let (previously_declined, keychain_disabled, prefers_plaintext, config_has_token) = self
             .config
             .lock()
             .ok()
@@ -1107,15 +1113,16 @@ impl AppState {
                     c.speleodb.keychain_declined,
                     c.speleodb.keychain_disabled,
                     c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
+                    c.speleodb.keychain_has_token,
                 )
             })
-            .unwrap_or((false, false, false));
+            .unwrap_or((false, false, false, false));
         // A standing "never use the keychain" outranks the per-login question: it is
         // not asked, not retried, and signing in does not clear it.
         let previously_declined = previously_declined || keychain_disabled;
         let allow_plaintext = previously_declined && prefers_plaintext;
 
-        let (tier, keychain_state) = {
+        let (tier, keychain_state, has_token) = {
             let mut session = self.speleodb_session_lock().map_err(local_dto)?;
             // If a *different* account is already active, forget it first so its
             // keychain entry isn't orphaned. (The UI logs out before re-login, but
@@ -1131,6 +1138,16 @@ impl AppState {
             // another go. Everywhere else the refusal is honoured silently.
             session.token_store.set_keychain_disabled(keychain_disabled);
             session.token_store.set_keychain_declined(keychain_disabled);
+            // Re-assert what the config already knows about the keyring's contents,
+            // the same way `speleodb_disable_keychain` does and for the same reason:
+            // the live store learns it at rehydrate, but a session established by a
+            // login this run never rehydrates, so without this the store would come
+            // to the write below believing the keyring holds nothing - and the
+            // write-back after it would then record that as fact. Evidence only, and
+            // only ever raised.
+            session
+                .token_store
+                .note_keychain_has_token(config_has_token);
             let tier = session
                 .token_store
                 .store(&endpoint, &email, &token, allow_plaintext);
@@ -1139,7 +1156,11 @@ impl AppState {
             // A fresh login established a session this run; don't let a later lazy
             // rehydration clobber it.
             session.rehydrate_attempted = true;
-            (tier, session.token_store.keychain_state())
+            (
+                tier,
+                session.token_store.keychain_state(),
+                session.token_store.keychain_has_token(),
+            )
         };
 
         self.speleodb_persist_email(&email);
@@ -1155,9 +1176,26 @@ impl AppState {
         if tier == TokenTier::Keychain {
             self.speleodb_persist_keychain_declined(false);
         }
-        // Record where the key actually landed, so the next launch can decide
-        // whether the keyring is worth opening without opening it.
-        self.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
+        // Record what the KEYRING is believed to hold, so the next launch can decide
+        // whether it is worth opening without opening it.
+        //
+        // Read off the token store, NOT computed as `tier == TokenTier::Keychain`.
+        // The landing tier answers "where did this login's key go", which is a
+        // different question and the wrong one: when an earlier login stored to the
+        // keyring and the keyring is merely LOCKED today, this login falls back to
+        // memory or plaintext WITHOUT removing that entry, so writing `false` here
+        // erased the only record that it exists. What that record buys is the
+        // discrimination in `TokenStore::unreadable_keychain_may_hold` - a locked
+        // keyring and a box with no secret service both fail every op and both record
+        // `Unavailable` - so losing it meant the next launch skipped the keyring, and
+        // turning the keyring off classified the failed eviction and its failed probe
+        // as "nothing was in there" and reported success over a live bearer token.
+        //
+        // The store's own field raises on a keychain write/read that proved an entry
+        // is there and falls only on a delete or probe that proved one is not, which
+        // is exactly the rule this flag needs. `false` here therefore still means the
+        // keychain-less box (nothing ever landed) and still keeps its startup skip.
+        self.speleodb_persist_keychain_has_token(has_token);
 
         let keychain = KeychainReport::from(keychain_state);
         Ok(SpeleoLoginResult {
@@ -6814,6 +6852,108 @@ mod tests {
                     .status()
                     .logged_in,
                 "and the logout itself still happened"
+            );
+        });
+    }
+
+    /// A keyring that refuses EVERY op - the locked or absent secret service. The
+    /// two are indistinguishable from here, which is the whole reason
+    /// `config.speleodb.keychain_has_token` exists.
+    struct LockedKeyringStore;
+
+    impl SecretStore for LockedKeyringStore {
+        fn kind(&self) -> &'static str {
+            "locked"
+        }
+        fn store(&self, _: &str, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            Err(crate::speleodb::auth::SecretStoreError::for_test(
+                "the keyring is locked",
+            ))
+        }
+        fn load(&self, _: &str) -> Result<Option<String>, crate::speleodb::auth::SecretStoreError> {
+            Err(crate::speleodb::auth::SecretStoreError::for_test(
+                "the keyring is locked",
+            ))
+        }
+        fn delete(&self, _: &str) -> Result<(), crate::speleodb::auth::SecretStoreError> {
+            Err(crate::speleodb::auth::SecretStoreError::for_test(
+                "the keyring is locked",
+            ))
+        }
+    }
+
+    /// Put a locked keyring under a state's COLD session, leaving
+    /// `rehydrate_attempted` false so the next authed call still runs the startup
+    /// rehydrate through it.
+    fn lock_the_keyring(state: &AppState) {
+        state.speleodb.lock().expect("session lock").token_store =
+            TokenStore::from_stores(Box::new(LockedKeyringStore), None);
+    }
+
+    #[test]
+    fn a_login_the_keyring_refuses_does_not_erase_an_earlier_logins_entry() {
+        // The persisted `keychain_has_token` answers "what is in the keyring", and it
+        // used to be written as `tier == TokenTier::Keychain` - "where did THIS login's
+        // key go". Those come apart on exactly one machine, and it is the interesting
+        // one: a keyring that took a token on Monday and is merely LOCKED today. The
+        // login falls back to memory WITHOUT removing Monday's entry, so `false` was
+        // recorded over a live bearer token that is still in there.
+        //
+        // That flag is also the only thing separating a locked keyring from a box with
+        // no secret service - both fail every op and both record `Unavailable` - so
+        // losing it is not just a missed prompt. Turning the keyring off on the next
+        // launch then classified the failed eviction AND its failed probe as "nothing
+        // was in there", reported success, and sent every later launch past the entry.
+        crate::test_helpers::with_isolated_config(|| {
+            let (base, _listener) = always_answering_stub(r#"{"email":"u@x"}"#);
+            let state = AppState::new().expect("state");
+            {
+                // What Monday's successful keychain login left on disk. The endpoint is
+                // the Settings preference (login never writes it), and it has to be
+                // here or the restart below has no account key to evict by.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some(base.clone());
+                config.speleodb.email = Some("u@x".to_owned());
+                config.speleodb.keychain_has_token = true;
+                config.save().expect("seed the previous launch's config");
+            }
+            lock_the_keyring(&state);
+            // Today's startup: the rehydrate read fails, recording `Unavailable` - the
+            // verdict a keychain-less box records too.
+            state.speleodb_session_status().expect("status");
+
+            let result = state
+                .speleodb_login(Some(base), None, None, Some("tok-today".to_owned()))
+                .expect("the paste login succeeds; only the keychain write fails");
+
+            assert_eq!(
+                result.storage,
+                crate::speleodb::TokenStorage::Memory,
+                "the locked keyring refused the write, so the key is session-only"
+            );
+            assert_eq!(result.keychain, KeychainReport::Unavailable);
+            assert!(
+                state.get_config().speleodb.keychain_has_token,
+                "and Monday's entry is still in there - nothing removed it, so the record \
+                 of it must not be overwritten with where TODAY's key happened to land"
+            );
+
+            // The next launch, reading the config this login just wrote.
+            let restarted = AppState::new().expect("restarted state");
+            lock_the_keyring(&restarted);
+            let mut settings = restarted.get_config();
+            settings.speleodb.keychain_disabled = true;
+            let report = restarted
+                .update_config(settings)
+                .expect("the settings still save - the residue is reported, not refused");
+
+            assert!(
+                report.keychain_residue.is_some(),
+                "turning the keyring off must still report the entry it could not remove"
+            );
+            assert!(
+                restarted.get_config().speleodb.keychain_has_token,
+                "and must not record a removal that did not happen"
             );
         });
     }

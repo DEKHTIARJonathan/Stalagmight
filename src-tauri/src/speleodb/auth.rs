@@ -364,18 +364,26 @@ pub(crate) struct TokenStore {
     /// What keychain access we have already made taught us. See [`KeychainState`].
     keychain_state: KeychainState,
     /// A keychain entry for the persisted account is BELIEVED TO EXIST: mirrored
-    /// from `config.speleodb.keychain_has_token` when the session rehydrates, and
-    /// set again the moment a keychain write of ours succeeds (the config flag is
-    /// re-written from the tier a login lands on, which loses the fact that an
-    /// EARLIER entry is still in there).
+    /// from `config.speleodb.keychain_has_token` when the session rehydrates (and
+    /// again at login, which never rehydrates), and set the moment a keychain write
+    /// or read of ours proves an entry is in there.
     ///
-    /// Positive evidence ONLY. `false` means "no reason to think so", never "proven
-    /// empty" - it defaults to `false` for every config written before the flag
-    /// existed - which is why nothing reads it to SKIP a delete or a sweep. What it
-    /// is read for is [`Self::unreadable_keychain_may_hold`]: a keyring that took a
-    /// token on Monday and is merely locked today records the same
-    /// [`KeychainState::Unavailable`] as a box with no secret service at all, and
-    /// this flag is the only thing that tells the two apart.
+    /// This is the AUTHORITATIVE copy, and the config flag is written back FROM it
+    /// ([`Self::keychain_has_token`] is read by `speleodb_persist_keychain_has_token`'s
+    /// callers). It used to be the other way round for the two login-shaped writers,
+    /// which recomputed the persisted flag as `tier == TokenTier::Keychain` - "where
+    /// THIS store landed", not "what the keyring holds". Those are different
+    /// questions, and the second is the only one anyone reads the flag to answer.
+    ///
+    /// RAISED by evidence, LOWERED only by proof: a delete the keyring accepted, or
+    /// a probe / read that answered `Ok(None)`. `false` otherwise means "no reason
+    /// to think so", never "proven empty" - it defaults to `false` for every config
+    /// written before the flag existed - which is why nothing reads it to SKIP a
+    /// delete or a sweep. What it is read for is
+    /// [`Self::unreadable_keychain_may_hold`]: a keyring that took a token on Monday
+    /// and is merely locked today records the same [`KeychainState::Unavailable`] as
+    /// a box with no secret service at all, and this flag is the only thing that
+    /// tells the two apart.
     keychain_has_token: bool,
 }
 
@@ -462,8 +470,8 @@ impl TokenStore {
     ///
     /// Only ever raises the belief, never lowers it: a launch that could not read
     /// the keyring has learned nothing that would justify `false`, and the paths
-    /// that DO prove the entry gone - a delete the keyring accepted, a probe that
-    /// answered `Ok(None)` - clear it themselves.
+    /// that DO prove the entry gone - a delete the keyring accepted, a probe or a
+    /// [`Self::load`] read that answered `Ok(None)` - clear it themselves.
     pub(crate) fn note_keychain_has_token(&mut self, has_token: bool) {
         self.keychain_has_token |= has_token;
     }
@@ -549,6 +557,24 @@ impl TokenStore {
         self.keychain_declined
     }
 
+    /// The live belief behind [`Self::unreadable_keychain_may_hold`]: is a keychain
+    /// entry for this account believed to exist? See [`Self::keychain_has_token`]
+    /// for what `true` and `false` each mean (positive evidence, and the absence of
+    /// it - never "proven empty" unless something proved it).
+    ///
+    /// Read by the config layer so `config.speleodb.keychain_has_token` MIRRORS this
+    /// field instead of being recomputed from the tier a store happened to land on.
+    /// The two answer different questions, and the second one is not the question
+    /// anybody asks the config: a login whose keychain write fails lands on memory
+    /// while an entry an EARLIER login put in the keyring is still sitting there, so
+    /// deriving the persisted flag from the landing tier wrote `false` over the only
+    /// record that the entry exists. The next launch then skipped the keyring, and
+    /// turning the keyring off classified the failed eviction as "nothing was in
+    /// there" and reported success over a live bearer token.
+    pub(crate) fn keychain_has_token(&self) -> bool {
+        self.keychain_has_token
+    }
+
     /// The tier the active token lives in, or `None` when there is no token.
     pub(crate) fn active_tier(&self) -> Option<TokenTier> {
         self.active_tier
@@ -592,12 +618,12 @@ impl TokenStore {
         match self.keychain.store(&key, token) {
             Ok(()) => {
                 self.note_keychain(true);
-                // First-hand evidence that the keyring is holding a token of ours,
-                // and it has to be kept HERE: `config.speleodb.keychain_has_token`
-                // is re-written from whatever tier the NEXT login lands on, so a
-                // later login that the keyring refuses records `false` over this
-                // entry and the config forgets it exists. See
-                // `unreadable_keychain_may_hold` for what that evidence buys.
+                // First-hand evidence that the keyring is holding a token of ours.
+                // The config flag is written back from this field rather than from
+                // the tier a store landed on, so a later login the keyring refuses
+                // no longer records `false` over this entry - see
+                // [`Self::keychain_has_token`] and `unreadable_keychain_may_hold`
+                // for what that evidence buys.
                 self.keychain_has_token = true;
                 // Self-heal (guardrail 6): a usable keychain removes any stale
                 // plaintext copy so the escape hatch never shadows the keychain.
@@ -779,6 +805,11 @@ impl TokenStore {
             match self.keychain.load(&key) {
                 Ok(Some(token)) => {
                     self.note_keychain(true);
+                    // The keyring answered AND handed the entry over - first-hand
+                    // proof it is holding one, which is what
+                    // [`Self::unreadable_keychain_may_hold`] wants if this same
+                    // keyring goes quiet later in the session.
+                    self.keychain_has_token = true;
                     if let Some(plaintext) = &self.plaintext {
                         if let Err(e) = plaintext.delete(&key) {
                             tracing::warn!(error = %e, "failed to delete stale plaintext SpeleoDB token");
@@ -789,8 +820,18 @@ impl TokenStore {
                     return Some(token);
                 }
                 // Reachable and healthy: the keychain answered, it just holds
-                // nothing for this account. That IS an availability signal.
-                Ok(None) => self.note_keychain(true),
+                // nothing for this account. That IS an availability signal - and it
+                // is also the one PROOF OF ABSENCE a read can give, so the recorded
+                // belief has to follow it down. This is what "a stale `true`
+                // self-corrects on the miss" means now that the config mirrors the
+                // field (`speleodb_persist_keychain_has_token`) rather than deriving
+                // it from a landing tier: an entry removed outside the app would
+                // otherwise stay believed-in forever, and warn about itself the
+                // first time this keyring is locked.
+                Ok(None) => {
+                    self.note_keychain(true);
+                    self.keychain_has_token = false;
+                }
                 Err(e) => {
                     self.note_keychain(false);
                     tracing::warn!(error = %e, "keychain read failed during SpeleoDB rehydration");
@@ -2424,6 +2465,61 @@ mod tests {
             store.restore(EP, EMAIL, false).is_err(),
             "the keyring may still be holding Monday's entry, so nothing about \"gone when the \
              app closes\" is settled"
+        );
+    }
+
+    #[test]
+    fn a_keyring_that_answered_empty_is_no_longer_believed_to_hold_a_token() {
+        // The other direction of the recorded belief, and the one that keeps it from
+        // becoming a warning that can never be switched off. `keychain_has_token` is
+        // now what `config.speleodb.keychain_has_token` is written FROM, so it has to
+        // fall on proof or a stale `true` outlives everything: the login that used to
+        // reset it (by recomputing the flag as "did THIS store land on the keychain")
+        // no longer does, deliberately.
+        //
+        // A read that answers `Ok(None)` is that proof - the keyring was reachable and
+        // holds nothing for this account - and it costs no extra keychain access,
+        // because the rehydrate read has already happened. Without it, an entry removed
+        // outside the app (seahorse, a reinstall) stays believed-in forever and warns
+        // about itself the first time the keyring is locked.
+        let (keychain, locked) = LockableStore::pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        // What the config still records from a login whose entry has since been
+        // removed by hand.
+        store.note_keychain_has_token(true);
+
+        assert_eq!(
+            store.load(EP, EMAIL),
+            None,
+            "the keyring opened and had nothing for us"
+        );
+        assert!(
+            !store.keychain_has_token(),
+            "which is proof, not merely silence - so the belief must not survive it"
+        );
+
+        // Now the screen locks, and today's login is refused by the keyring it can no
+        // longer reach. Nothing about that re-creates an entry this session watched
+        // the keyring deny having.
+        locked.store(true, Ordering::SeqCst);
+        assert_eq!(
+            store.store(EP, EMAIL, "todays-token", false),
+            TokenTier::Memory
+        );
+        assert!(
+            !store.keychain_has_token(),
+            "and this is what the login persists, so the next launch does not open a \
+             keyring we watched answer empty"
+        );
+
+        // The payoff: answering the prompt with "this session only" settles, instead of
+        // refusing over a copy that provably is not there.
+        store.set_keychain_declined(true);
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("a keyring proven empty this session has stranded nothing"),
+            Some(TokenTier::Memory)
         );
     }
 

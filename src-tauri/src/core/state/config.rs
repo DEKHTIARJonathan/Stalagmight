@@ -846,15 +846,16 @@ mod tests {
                     session.token_store.keychain_state(),
                     KeychainState::Unavailable
                 );
-                drop(session);
                 // The other half, written by the SAME call the login makes and with
                 // the same argument, rather than hand-set: a keychain-less box cannot
-                // reach `keychain_has_token = true`, because the only writers of
-                // `true` pass `tier == TokenTier::Keychain` and this tier never is.
-                // Hand-setting it here would have been a state production cannot
+                // reach `keychain_has_token = true`, because the store only raises it
+                // where a keychain read or write actually succeeded, and none can
+                // here. Hand-setting it would have been a state production cannot
                 // produce, and would have made this test demand silence over the one
                 // piece of evidence that a credential really is stranded.
-                state.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
+                let believed = session.token_store.keychain_has_token();
+                drop(session);
+                state.speleodb_persist_keychain_has_token(believed);
                 assert!(!state.get_config().speleodb.keychain_has_token);
             }
 

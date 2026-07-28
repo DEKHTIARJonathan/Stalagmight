@@ -42,14 +42,36 @@ impl AppState {
         let _ = self.speleodb_write_config_email(Some(email.to_owned()));
     }
 
-    /// Record whether the OS keychain now holds a token for the persisted account.
+    /// Record whether the OS keychain is believed to hold a token for the persisted
+    /// account.
     ///
     /// This is what lets startup skip the keyring entirely: the next launch reads
     /// this instead of opening the keychain to find out, which on Linux is the
-    /// unlock prompt itself. Written wherever the answer changes - a store that
-    /// landed (or failed to land) on the keychain tier, and every path that clears
-    /// the token. Best-effort like its siblings: a lost write costs at most one
-    /// prompt, or one sign-in.
+    /// unlock prompt itself. Since #260 it is also the discriminator behind
+    /// `TokenStore::unreadable_keychain_may_hold` - a locked keyring and a box with
+    /// no secret service fail every op identically, and a recorded store is the only
+    /// thing that tells them apart - so the two meanings have to be the SAME fact,
+    /// and they are: what the keyring holds.
+    ///
+    /// `has_token` therefore comes from `TokenStore::keychain_has_token`, which
+    /// raises on evidence and falls only on proof (a delete the keyring accepted, a
+    /// probe or read that answered `Ok(None)`). It is NOT "where this session's
+    /// store landed": a login the keyring refuses falls back to memory or plaintext
+    /// WITHOUT removing an entry an earlier login left there, so deriving it that
+    /// way wrote `false` over a live bearer token's only record - after which the
+    /// next launch skipped the keyring and turning the keyring off reported the
+    /// failed eviction as an empty one.
+    ///
+    /// The two DESTRUCTIVE callers pass a literal `false` instead, and are the
+    /// deliberate exceptions, for reasons of their own rather than one shared one:
+    /// logout below also clears the persisted account email, which is the rehydrate
+    /// seed, so nothing is left that could key an entry by it; the 401 auto-drop
+    /// (`AppState::speleodb_forget`) leaves the seed, but the credential it just
+    /// swept is one the server has already rejected - re-finding a dead token costs
+    /// a launch-time unlock prompt and buys nothing. See both call sites.
+    ///
+    /// Best-effort like its siblings: a lost write costs at most one prompt, or one
+    /// sign-in.
     pub(super) fn speleodb_persist_keychain_has_token(&self, has_token: bool) {
         let mut config = self
             .config
