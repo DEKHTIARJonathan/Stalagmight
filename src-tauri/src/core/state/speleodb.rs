@@ -3783,6 +3783,7 @@ mod tests {
         SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility, REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::preserved_display_settings;
+    use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::auth::{account_key, InMemoryStore, SecretStore, TokenStore};
@@ -4733,18 +4734,17 @@ mod tests {
         //     5. speleodb_restore_revision - stamp BASE = the CURRENT server tip (NOT
         //        the restored revision) when re-minting the link on a revision restore
         //        (#218); the restored tree rides as an unpushed edit on top of HEAD.
-        let src = include_str!("speleodb.rs");
-        let prod = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
+        //
+        // Counted across the WHOLE speleodb family, not just this file: BASE writes
+        // that move to a sibling module must keep being counted here, or the split
+        // that moved them would silently retire the guard (#275).
         assert_eq!(
-            prod.matches("base_commit_sha =").count(),
+            speleodb_prod_matches("base_commit_sha =", &[]),
             4,
             "unexpected BASE mutate-advance count (sanctioned: push-200, ancestry-landed x2, publish tip recovery)"
         );
         assert_eq!(
-            prod.matches("base_commit_sha:").count(),
+            speleodb_prod_matches("base_commit_sha:", &[]),
             5,
             "unexpected BASE stamp count (sanctioned: open-on-pull, fast-forward restamp, publish-create, adopt-ariane, revision-restore)"
         );
@@ -4814,9 +4814,12 @@ mod tests {
             !render.contains("export_tml_with_baseline("),
             "the push render must NOT call the baseline/collab export (the baseline is discarded)"
         );
-        // Nothing in the push ever CALLS the Ariane-collab sibling writer.
-        assert!(
-            !prod.contains("write_collab_sibling("),
+        // Nothing in the push ever CALLS the Ariane-collab sibling writer. Scanned
+        // across the whole family: an absence assertion pinned to one file passes
+        // vacuously the moment its subject moves to a sibling (#275).
+        assert_eq!(
+            speleodb_prod_matches("write_collab_sibling(", &[]),
+            0,
             "the push must never call write_collab_sibling - sibling-.tml stays untouched (#196 b5)"
         );
     }
