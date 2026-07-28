@@ -12,6 +12,8 @@ function createMockElement(id: string): HTMLElement {
     removeAttribute: vi.fn((name: string) => { attrs.delete(name); }),
     hasAttribute: (name: string) => attrs.has(name),
     getAttribute: (name: string) => attrs.get(name) ?? null,
+    // dialogStack stamps the paint layer here; a real element always has it.
+    style: {} as CSSStyleDeclaration,
   } as unknown as HTMLElement;
 }
 
@@ -192,6 +194,65 @@ describe('dialogStack', () => {
 
       expect(isTopmost(a)).toBe(false);
       expect(isTopmost(b)).toBe(true);
+    });
+  });
+
+  describe('paint order', () => {
+    // The reason these exist: `inert` and z-index used to be decided by different
+    // mechanisms, so the topmost dialog could be the interactive one while being
+    // painted UNDERNEATH the dialog that raised it (#258 - the file picker buried
+    // by the revert dialog). A user clicking controls they cannot see is worse
+    // than either problem alone, so the two orders are now stamped together.
+    it('paints each dialog above the one below it', () => {
+      const a = createMockElement('dialog-a');
+      const b = createMockElement('dialog-b');
+      pushAndTrack(a);
+      pushAndTrack(b);
+
+      expect(Number(b.style.zIndex)).toBeGreaterThan(Number(a.style.zIndex));
+    });
+
+    it('DO NOT REGRESS: the topmost dialog is both interactive AND on top', () => {
+      // Pinning them together, because the defect was precisely that they
+      // disagreed - each half looked correct on its own.
+      const host = createMockElement('host');
+      const overlay = createMockElement('overlay');
+      pushAndTrack(host);
+      pushAndTrack(overlay);
+
+      expect(isTopmost(overlay)).toBe(true);
+      expect(overlay.hasAttribute('inert')).toBe(false);
+      expect(host.hasAttribute('inert')).toBe(true);
+      expect(Number(overlay.style.zIndex)).toBeGreaterThan(Number(host.style.zIndex));
+    });
+
+    it('hands the top layer back when the overlay closes', () => {
+      const a = createMockElement('dialog-a');
+      const b = createMockElement('dialog-b');
+      pushAndTrack(a);
+      pushAndTrack(b);
+      const wasOnTop = Number(b.style.zIndex);
+
+      popDialog(b);
+
+      // The popped container keeps no stale layer - it may be re-used later, and
+      // starting from wherever it last sat would re-create this class of bug.
+      expect(b.style.zIndex).toBe('');
+      expect(Number(a.style.zIndex)).toBeLessThan(wasOnTop);
+      expect(isTopmost(a)).toBe(true);
+    });
+
+    it('re-ranks a dialog that is re-pushed rather than leaving it buried', () => {
+      // `pushDialog` de-duplicates by moving an existing entry to the top; the
+      // layer has to follow, or a re-raised dialog stays painted where it was.
+      const a = createMockElement('dialog-a');
+      const b = createMockElement('dialog-b');
+      pushAndTrack(a);
+      pushAndTrack(b);
+      pushDialog(a);
+
+      expect(isTopmost(a)).toBe(true);
+      expect(Number(a.style.zIndex)).toBeGreaterThan(Number(b.style.zIndex));
     });
   });
 });
