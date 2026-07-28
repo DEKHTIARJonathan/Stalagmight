@@ -30,6 +30,7 @@ const dto = (over: Partial<SpeleoErrorDto> = {}): SpeleoErrorDto => ({
   status: null,
   transport: 'Unknown',
   unpushed_local: null,
+  dump_candidates: null,
   ...over,
 });
 

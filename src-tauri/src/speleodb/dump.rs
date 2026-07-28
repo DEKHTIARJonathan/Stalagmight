@@ -14,6 +14,7 @@ use std::ffi::OsStr;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+use super::models::SpeleoDumpCandidate;
 use super::SpeleoDbError;
 
 /// Hard ceiling on a single extracted dump entry. The `.stalx` is a SQLite DB;
@@ -49,8 +50,17 @@ pub(crate) enum DumpClassification {
     AdoptAriane(String),
     /// Neither a `*.stalx` nor an `ariane.tml` - nothing to open.
     NothingToOpen,
-    /// More than one `*.stalx` - ambiguous; fail closed (never guess which).
+    /// More than one `*.stalx` - ambiguous; never guess which. [#258] routes this
+    /// to the picker.
     AmbiguousStalx(Vec<String>),
+    /// No `*.stalx` but more than one `ariane.tml` - ambiguous on the adoption
+    /// path. [#258]
+    ///
+    /// This used to take the first in central-directory order and say nothing,
+    /// which meant adopting a project could import the wrong survey silently. It
+    /// is only reachable when there is no `.stalx` at all, so it never competes
+    /// with the rule that a `.tml` is disregarded whenever a `.stalx` exists.
+    AmbiguousAriane(Vec<String>),
 }
 
 /// Classify a dump from its list of entry paths. Pure; never panics.
@@ -63,11 +73,39 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
 
     match stalx.as_slice() {
         [only] => DumpClassification::Stalx(only.clone()),
-        [] => match entry_paths.iter().find(|p| is_ariane_tml(p)) {
-            Some(tml) => DumpClassification::AdoptAriane(tml.clone()),
-            None => DumpClassification::NothingToOpen,
-        },
+        [] => {
+            let tml: Vec<String> = entry_paths
+                .iter()
+                .filter(|p| is_ariane_tml(p))
+                .cloned()
+                .collect();
+            match tml.as_slice() {
+                [only] => DumpClassification::AdoptAriane(only.clone()),
+                [] => DumpClassification::NothingToOpen,
+                _ => DumpClassification::AmbiguousAriane(tml),
+            }
+        }
         _ => DumpClassification::AmbiguousStalx(stalx),
+    }
+}
+
+/// Is `chosen` one of the entries this dump is actually ambiguous BETWEEN?
+///
+/// [#258] The single validation standing between a webview-supplied `entryPath` and
+/// the extract. `chosen` crosses IPC, so it is attacker-influenceable; this refuses
+/// anything the classifier did not itself offer, which rejects both a non-openable
+/// entry and a stale pick made against a dump that has since changed.
+///
+/// It must be run against the entry list of the archive being extracted, not a list
+/// remembered from an earlier download - otherwise it validates a listing the
+/// extract does not honour. Comparison is exact: the archive is keyed by byte-equal
+/// names, so any normalisation here would let a near-miss resolve to a real entry.
+pub(crate) fn candidate_is_member(entry_paths: &[String], chosen: &str) -> bool {
+    match classify(entry_paths) {
+        DumpClassification::AmbiguousStalx(paths) | DumpClassification::AmbiguousAriane(paths) => {
+            paths.iter().any(|p| p == chosen)
+        }
+        _ => false,
     }
 }
 
@@ -157,6 +195,62 @@ impl<'a> Dump<'a> {
             names.push(entry.name().to_owned());
         }
         Ok(names)
+    }
+
+    /// The entries named by `wanted`, with the metadata a [#258] picker renders,
+    /// sorted canonical-first and then by path.
+    ///
+    /// A sibling of [`Self::entry_paths`] rather than a widening of it: that method
+    /// feeds every classify site and a stack of unit tests, and none of them wants
+    /// the extra fields. The metadata itself is free - the loop already calls
+    /// `by_index`, which parses each entry's local header, so `size()` and
+    /// `last_modified()` cost no additional pass.
+    ///
+    /// The ordering is decided HERE, once, rather than in the frontend:
+    /// central-directory order is arbitrary, and the canonical entry has to lead
+    /// because it is the only pick that does not set up a silent replace on the next
+    /// push.
+    pub(crate) fn entry_details(
+        &mut self,
+        wanted: &[String],
+    ) -> Result<Vec<SpeleoDumpCandidate>, SpeleoDbError> {
+        let mut out = Vec::with_capacity(wanted.len());
+        for i in 0..self.archive.len() {
+            let entry = self
+                .archive
+                .by_index(i)
+                .map_err(|e| SpeleoDbError::Parse(format!("could not read ZIP entry {i}: {e}")))?;
+            let entry_path = entry.name().to_owned();
+            if !wanted.iter().any(|w| *w == entry_path) {
+                continue;
+            }
+            let is_canonical = Path::new(&entry_path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n == super::client::CANONICAL_STALX_WIRE_NAME);
+            out.push(SpeleoDumpCandidate {
+                entry_path,
+                size_bytes: entry.size(),
+                modified: entry.last_modified().map(|d| {
+                    format!(
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                        d.year(),
+                        d.month(),
+                        d.day(),
+                        d.hour(),
+                        d.minute(),
+                        d.second()
+                    )
+                }),
+                is_canonical,
+            });
+        }
+        out.sort_by(|a, b| {
+            b.is_canonical
+                .cmp(&a.is_canonical)
+                .then_with(|| a.entry_path.cmp(&b.entry_path))
+        });
+        Ok(out)
     }
 
     /// Extract a single entry (the one chosen by [`classify`]) to `dest`, creating

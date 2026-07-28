@@ -56,6 +56,16 @@ pub enum SpeleoDbAction {
     /// channel. The FE offers the binary choice described on
     /// [`super::models::UnpushedLocalEdits`], which the error carries.
     UnpushedLocalEdits,
+    /// [#258] The dump held more than one openable file, so there is nothing to
+    /// guess. A routing signal like [`SpeleoDbAction::Adopt`], not a failure, and
+    /// not status-derived: the FE reads
+    /// [`super::models::SpeleoErrorDto::dump_candidates`] and offers a picker, then
+    /// re-calls the same command with the chosen `entryPath`.
+    ///
+    /// The paths that cannot resolve (the fast-forward verbs take no `entryPath`)
+    /// still receive this action; having no candidates to act on, the FE falls back
+    /// to showing the error's own message, which names the remedy.
+    Ambiguous,
     /// Unmapped / 422 / 4xx we do not model - surface, fail closed.
     Fatal,
 }
@@ -217,6 +227,14 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         }),
         _ => None,
     };
+    // [#258] Same discipline as `unpushed_local`: only the two ambiguity errors
+    // carry candidates, so the field stays a sound discriminant on the FE side.
+    let dump_candidates = match err {
+        SpeleoDbError::AmbiguousDump(candidates) | SpeleoDbError::AmbiguousAriane(candidates) => {
+            Some(candidates.clone())
+        }
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -240,6 +258,13 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         SpeleoDbError::WouldDiscardLocalEdits { .. } => {
             (SpeleoDbAction::UnpushedLocalEdits, None, err.to_string())
         }
+        // [#258] More than one openable file: also a routing signal. The FE reads
+        // `dump_candidates` (built above) and offers the choice. Where it cannot
+        // resolve, the Display already names the remedy, so this is never worse
+        // than the `Fatal` it replaces.
+        SpeleoDbError::AmbiguousDump(_) | SpeleoDbError::AmbiguousAriane(_) => {
+            (SpeleoDbAction::Ambiguous, None, err.to_string())
+        }
         // Everything below fails closed; each Display is already user-facing.
         //
         // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,
@@ -253,7 +278,6 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         | SpeleoDbError::MissingCredentials
         | SpeleoDbError::Parse(_)
         | SpeleoDbError::EmptyDump
-        | SpeleoDbError::AmbiguousDump(_)
         | SpeleoDbError::Io(_)
         | SpeleoDbError::InvalidProjectId
         | SpeleoDbError::InvalidRevision
@@ -266,6 +290,7 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         status,
         transport,
         unpushed_local,
+        dump_candidates,
     }
 }
 

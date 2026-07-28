@@ -13,7 +13,7 @@
 
 use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
-use super::speleodb_pull::classify_dump_entry;
+use super::speleodb_pull::resolve_dump_entry;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
@@ -168,8 +168,7 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive (identical to the pull path).
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry =
-            classify_dump_entry(&dump.entry_paths().map_err(local_dto)?).map_err(local_dto)?;
+        let entry = resolve_dump_entry(&mut dump, None).map_err(local_dto)?;
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Carry the user's local view toggles across the download-replace, same as a

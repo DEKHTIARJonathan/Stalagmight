@@ -50,6 +50,7 @@ async fn run_blocking<T: Send + 'static>(
             status: None,
             transport: None,
             unpushed_local: None,
+            dump_candidates: None,
         })?
 }
 

@@ -46,6 +46,14 @@ const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
 /// idempotent attempts while a same-size upload (120 s) succeeds. Named separately
 /// from [`UPLOAD_TIMEOUT`] so the two budgets can drift apart later.
 const DUMP_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// The wire filename every push gives the `.stalx`, and therefore the ONE entry a
+/// Stalagmight-managed repo is supposed to contain.
+///
+/// Single-sourced because two distant places must agree on it: the push writes it
+/// ([`build_upload_parts`]), and the #258 dump picker flags the candidate matching
+/// it so a user resolving an ambiguous dump is not silently steered into replacing
+/// the canonical file with a stray one.
+pub(crate) const CANONICAL_STALX_WIRE_NAME: &str = "project.stalx";
 /// Body-size ceiling for a dump download (#270).
 ///
 /// `Body::read_to_vec()` silently applies ureq's own default ceiling of 10 MiB,
@@ -749,7 +757,10 @@ fn build_upload_parts(
         src: src.to_path_buf(),
     };
     Ok(UploadParts {
-        parts: vec![part(stalx, "project.stalx"), part(tml, "ariane.tml")],
+        parts: vec![
+            part(stalx, CANONICAL_STALX_WIRE_NAME),
+            part(tml, "ariane.tml"),
+        ],
         message: message.to_owned(),
     })
 }

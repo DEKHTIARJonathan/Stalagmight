@@ -26,16 +26,75 @@ use crate::speleodb::models::SpeleoProjectSummary;
 use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
-/// Map a downloaded dump's entry list to the single openable `.stalx` path, or
-/// the appropriate error. Extracted from [`AppState::speleodb_open_project`] so
-/// the classification→error mapping is unit-testable without the network.
-pub(super) fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
+/// Why a dump could not be opened without asking the user first. [#258]
+///
+/// Distinct from [`SpeleoDbError`] so the name-only classification stays a pure,
+/// archive-free function: turning an ambiguity into the IPC error needs each
+/// candidate's size and timestamp, which live in the archive the classifier
+/// deliberately does not hold.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) enum UnopenableDump {
+    /// `.tml`-only - route to the one-time adoption flow (#214).
+    Adopt,
+    /// Nothing openable at all.
+    Empty,
+    /// More than one `.stalx`.
+    AmbiguousStalx(Vec<String>),
+    /// No `.stalx` and more than one `ariane.tml`.
+    AmbiguousAriane(Vec<String>),
+}
+
+/// Map a downloaded dump's entry list to the single openable `.stalx` path, or the
+/// reason a human has to decide. Pure, so it is unit-testable without an archive.
+pub(super) fn classify_dump_entry(names: &[String]) -> Result<String, UnopenableDump> {
     match dump::classify(names) {
         DumpClassification::Stalx(path) => Ok(path),
-        DumpClassification::AdoptAriane(_) => Err(SpeleoDbError::AdoptAriane),
-        DumpClassification::NothingToOpen => Err(SpeleoDbError::EmptyDump),
-        DumpClassification::AmbiguousStalx(paths) => Err(SpeleoDbError::AmbiguousDump(paths)),
+        DumpClassification::AdoptAriane(_) => Err(UnopenableDump::Adopt),
+        DumpClassification::NothingToOpen => Err(UnopenableDump::Empty),
+        DumpClassification::AmbiguousStalx(paths) => Err(UnopenableDump::AmbiguousStalx(paths)),
+        DumpClassification::AmbiguousAriane(paths) => Err(UnopenableDump::AmbiguousAriane(paths)),
     }
+}
+
+/// Turn an [`UnopenableDump`] into the IPC error, reading each ambiguous
+/// candidate's metadata out of the archive it came from.
+pub(super) fn unopenable_to_error(
+    reason: UnopenableDump,
+    dump: &mut dump::Dump<'_>,
+) -> SpeleoDbError {
+    match reason {
+        UnopenableDump::Adopt => SpeleoDbError::AdoptAriane,
+        UnopenableDump::Empty => SpeleoDbError::EmptyDump,
+        UnopenableDump::AmbiguousStalx(paths) => match dump.entry_details(&paths) {
+            Ok(candidates) => SpeleoDbError::AmbiguousDump(candidates),
+            Err(e) => e,
+        },
+        UnopenableDump::AmbiguousAriane(paths) => match dump.entry_details(&paths) {
+            Ok(candidates) => SpeleoDbError::AmbiguousAriane(candidates),
+            Err(e) => e,
+        },
+    }
+}
+
+/// Which entry of this dump to open, honouring an explicit [#258] choice.
+///
+/// `chosen` is the `entryPath` the picker sent back. It crosses IPC, so it is
+/// accepted ONLY when the classifier itself offered it for THIS archive - which
+/// refuses a non-openable entry and a stale pick (the dump moved on while the
+/// picker was open) alike. A refused choice falls through to a fresh
+/// classification, so the user is re-offered what the dump holds NOW rather than
+/// told their pick was invalid.
+pub(super) fn resolve_dump_entry(
+    dump: &mut dump::Dump<'_>,
+    chosen: Option<&str>,
+) -> Result<String, SpeleoDbError> {
+    let names = dump.entry_paths()?;
+    if let Some(chosen) = chosen {
+        if dump::candidate_is_member(&names, chosen) {
+            return Ok(chosen.to_owned());
+        }
+    }
+    classify_dump_entry(&names).map_err(|reason| unopenable_to_error(reason, dump))
 }
 
 impl AppState {
@@ -156,8 +215,7 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry =
-            classify_dump_entry(&dump.entry_paths().map_err(local_dto)?).map_err(local_dto)?;
+        let entry = resolve_dump_entry(&mut dump, None).map_err(local_dto)?;
 
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -
@@ -314,7 +372,16 @@ impl AppState {
             }
             DumpClassification::NothingToOpen => return Err(local_dto(SpeleoDbError::EmptyDump)),
             DumpClassification::AmbiguousStalx(paths) => {
-                return Err(local_dto(SpeleoDbError::AmbiguousDump(paths)));
+                return Err(local_dto(unopenable_to_error(
+                    UnopenableDump::AmbiguousStalx(paths),
+                    &mut dump,
+                )));
+            }
+            DumpClassification::AmbiguousAriane(paths) => {
+                return Err(local_dto(unopenable_to_error(
+                    UnopenableDump::AmbiguousAriane(paths),
+                    &mut dump,
+                )));
             }
         };
 
@@ -522,7 +589,7 @@ impl AppState {
             client::download_dump(endpoint, token, insecure_http, project_id),
         )?;
         let mut dump = dump::Dump::open(&zip)?;
-        let entry = classify_dump_entry(&dump.entry_paths()?)?;
+        let entry = resolve_dump_entry(&mut dump, None)?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset
@@ -586,8 +653,7 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::classify_dump_entry;
-    use crate::speleodb::SpeleoDbError;
+    use super::{classify_dump_entry, UnopenableDump};
 
     /// The production region of this file, split out of the test module so the
     /// source-level tripwire below cannot match its own assertions.
@@ -637,15 +703,38 @@ mod tests {
         );
         assert!(matches!(
             classify_dump_entry(&["ariane.tml".to_owned()]),
-            Err(SpeleoDbError::AdoptAriane)
+            Err(UnopenableDump::Adopt)
         ));
         assert!(matches!(
             classify_dump_entry(&["notes.txt".to_owned()]),
-            Err(SpeleoDbError::EmptyDump)
+            Err(UnopenableDump::Empty)
         ));
-        assert!(matches!(
+        assert_eq!(
             classify_dump_entry(&["a.stalx".to_owned(), "b.stalx".to_owned()]),
-            Err(SpeleoDbError::AmbiguousDump(v)) if v.len() == 2
-        ));
+            Err(UnopenableDump::AmbiguousStalx(vec![
+                "a.stalx".to_owned(),
+                "b.stalx".to_owned()
+            ])),
+            "the ambiguity must carry BOTH paths, in order - the picker renders them"
+        );
+        // [#258] Two ariane.tml with no .stalx used to take the first silently.
+        assert_eq!(
+            classify_dump_entry(&["ariane.tml".to_owned(), "misc/ariane.tml".to_owned()]),
+            Err(UnopenableDump::AmbiguousAriane(vec![
+                "ariane.tml".to_owned(),
+                "misc/ariane.tml".to_owned()
+            ]))
+        );
+        // A .stalx alongside any number of .tml is NOT ambiguous: the .tml is a
+        // derived render sidecar and is disregarded whenever a .stalx exists.
+        assert_eq!(
+            classify_dump_entry(&[
+                "misc/project.stalx".to_owned(),
+                "ariane.tml".to_owned(),
+                "misc/ariane.tml".to_owned()
+            ])
+            .expect("stalx wins"),
+            "misc/project.stalx"
+        );
     }
 }

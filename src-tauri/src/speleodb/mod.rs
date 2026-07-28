@@ -37,7 +37,7 @@ pub(crate) mod tls;
 pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
     DoneResult, KeychainReport, Permission, PushResult, RemoteState, SpeleoAdoptResult,
-    SpeleoCollaborator, SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus,
     SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
     SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
     SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
@@ -90,9 +90,22 @@ pub(crate) enum SpeleoDbError {
     /// hard error.
     #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]
     AdoptAriane,
-    /// The dump held more than one `.stalx` - ambiguous; fail closed.
-    #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
-    AmbiguousDump(Vec<String>),
+    /// The dump held more than one `.stalx` - ambiguous. [#258] Surfaced to the FE
+    /// as `SpeleoDbAction::Ambiguous` with the candidates attached, so the user can
+    /// pick one; the message below is the fallback for the paths that still fail
+    /// closed (the fast-forward verbs, which carry no `entryPath` to resolve with).
+    #[error(
+        "SpeleoDB contains more than one Stalagmight file ({}). Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.iter().map(|c| c.entry_path.as_str()).collect::<Vec<_>>().join(", ")
+    )]
+    AmbiguousDump(Vec<SpeleoDumpCandidate>),
+    /// The dump held no `.stalx` but more than one `ariane.tml` - ambiguous on the
+    /// adoption path. [#258]
+    #[error(
+        "SpeleoDB contains more than one Ariane file ({}). Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.iter().map(|c| c.entry_path.as_str()).collect::<Vec<_>>().join(", ")
+    )]
+    AmbiguousAriane(Vec<SpeleoDumpCandidate>),
     /// A local filesystem error while extracting/writing.
     #[error("filesystem error: {0}")]
     Io(String),
@@ -139,7 +152,7 @@ pub(crate) enum SpeleoDbError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpeleoDbError, TransportCause};
+    use super::{SpeleoDbError, SpeleoDumpCandidate, TransportCause};
 
     #[test]
     fn error_display_strings_are_stable() {
@@ -181,10 +194,30 @@ mod tests {
             SpeleoDbError::MissingCredentials.to_string(),
             "email and password are required to log in"
         );
+        // [#258] The ambiguity Display is the FALLBACK: every path that can offer
+        // the picker routes on `action == Ambiguous` and never shows this string.
+        // The paths that cannot (the fast-forward verbs carry no `entryPath`) show
+        // it, so it has to name the remedy rather than merely state the problem.
+        let candidate = |path: &str| SpeleoDumpCandidate {
+            entry_path: path.to_owned(),
+            size_bytes: 0,
+            modified: None,
+            is_canonical: false,
+        };
         assert_eq!(
-            SpeleoDbError::AmbiguousDump(vec!["a.stalx".to_owned(), "b.stalx".to_owned()])
+            SpeleoDbError::AmbiguousDump(vec![candidate("a.stalx"), candidate("b.stalx")])
                 .to_string(),
-            "SpeleoDB contained multiple ambiguous .stalx files: a.stalx, b.stalx"
+            "SpeleoDB contains more than one Stalagmight file (a.stalx, b.stalx). \
+             Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one."
+        );
+        assert_eq!(
+            SpeleoDbError::AmbiguousAriane(vec![
+                candidate("ariane.tml"),
+                candidate("misc/ariane.tml")
+            ])
+            .to_string(),
+            "SpeleoDB contains more than one Ariane file (ariane.tml, misc/ariane.tml). \
+             Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one."
         );
         // [#270] Transport gained a typed `cause`, but its Display is unchanged:
         // it stays the RAW diagnostic line (logs / bug reports). What changed is

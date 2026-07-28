@@ -765,6 +765,47 @@ pub struct SpeleoErrorDto {
     /// what the frontend needs to offer the binary choice; `None` on every other
     /// error, which is what makes it a sound discriminant.
     pub unpushed_local: Option<UnpushedLocalEdits>,
+    /// [#258] Set ONLY when the dump held more than one openable file
+    /// (`action == Ambiguous`), listing them so the frontend can offer a picker
+    /// instead of dead-ending. `None` on every other error.
+    pub dump_candidates: Option<Vec<SpeleoDumpCandidate>>,
+}
+
+/// [#258] One openable file inside an ambiguous project dump, carried on
+/// [`SpeleoErrorDto::dump_candidates`].
+///
+/// `size_bytes` and `modified` are free: the classifier already walks the central
+/// directory, which carries both. `modified` is `None` when the entry declares no
+/// timestamp - and note that a dump produced by `git archive` stamps every entry
+/// with the same commit time, so the frontend suppresses a metadata column whose
+/// values all agree rather than showing a uselessly uniform one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoDumpCandidate {
+    /// The entry's path inside the dump ZIP, and the value the frontend sends back
+    /// as `entryPath` to resolve. It must be byte-identical to the archive's own
+    /// name: it is looked up as an exact key and is never normalised, so a
+    /// helpfully-cleaned path resolves to "not found" rather than the wrong file.
+    pub entry_path: String,
+    /// Uncompressed size, from the central directory.
+    ///
+    /// Typed as a TS `number`, not ts-rs's default `bigint` for `u64`: serde emits
+    /// a JSON number and the webview parses it as one, so `bigint` would describe a
+    /// value that never arrives. Sizes here are bounded by the 512 MiB per-entry cap
+    /// anyway, far inside the exact-integer range.
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    /// Last-modified (RFC-3339) when the entry carries one.
+    pub modified: Option<String>,
+    /// Whether this entry is the canonical file the push writes to.
+    ///
+    /// This is the load-bearing field, not a display nicety. The push always
+    /// uploads under the canonical wire name, and the server's `upload/auto/` is
+    /// additive, so choosing any OTHER entry means the next push replaces the
+    /// canonical file with this one's contents and leaves the extra file in the
+    /// tree. The frontend pre-selects the canonical candidate for exactly that
+    /// reason.
+    pub is_canonical: bool,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -849,6 +890,7 @@ mod tests {
             status: Some(401),
             transport: None,
             unpushed_local: None,
+            dump_candidates: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
