@@ -277,7 +277,7 @@ pub(super) fn local_dto(err: SpeleoDbError) -> SpeleoErrorDto {
 /// Map a downloaded dump's entry list to the single openable `.stalx` path, or
 /// the appropriate error. Extracted from [`AppState::speleodb_open_project`] so
 /// the classification→error mapping is unit-testable without the network.
-fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
+pub(super) fn classify_dump_entry(names: &[String]) -> Result<String, SpeleoDbError> {
     match dump::classify(names) {
         DumpClassification::Stalx(path) => Ok(path),
         DumpClassification::AdoptAriane(_) => Err(SpeleoDbError::AdoptAriane),
@@ -474,7 +474,7 @@ impl SpeleoDbSession {
 
 /// Internal verdict of the push half of `speleodb_done`.
 #[derive(Debug)]
-enum PushOutcome {
+pub(super) enum PushOutcome {
     /// The push landed (200 → BASE advanced; or 304 → already at the tip). The dirty
     /// bit was cleared UNLESS an edit landed after push_start (then it is retained for
     /// the next push), so the caller must re-check it before releasing the lock.
@@ -509,7 +509,7 @@ fn clear_snapshot_dirty(snapshot: &Path) -> Result<(), SpeleoDbError> {
 /// before letting the caller fail closed. `(base None, tip None)` is the valid
 /// empty-repo state and never retries. Generic over the injected `fetch` so the
 /// retry is unit-tested without HTTP.
-fn head_with_empty_retry<F>(
+pub(super) fn head_with_empty_retry<F>(
     base: Option<&str>,
     mut fetch: F,
 ) -> Result<(Option<String>, Vec<crate::speleodb::models::RevisionCommit>), SpeleoDbError>
@@ -938,7 +938,7 @@ impl AppState {
     /// A poisoned session lock silently declines to record, which costs the shortcut
     /// rather than granting one: the same call also fails `speleodb_active_token`, so
     /// the poll has no lock holder to compare against either.
-    fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
+    pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.lock_acquired_here = project_id.map(str::to_owned);
         }
@@ -964,7 +964,7 @@ impl AppState {
     /// released the mutex before we took it - and its gate store is visible across
     /// that edge, so we see an open gate and decline - or it has not recorded yet, in
     /// which case its write lands after our clear and stands.
-    fn speleodb_forget_lock_acquired_if_gate_shut(&self) {
+    pub(super) fn speleodb_forget_lock_acquired_if_gate_shut(&self) {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
@@ -975,7 +975,7 @@ impl AppState {
 
     /// Whether THIS process took `project_id`'s write lock and is still editing
     /// under it (see [`Self::speleodb_note_lock_acquired`]).
-    fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
+    pub(super) fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
         self.speleodb_session_lock()
             .is_ok_and(|session| session.lock_acquired_here.as_deref() == Some(project_id))
     }
@@ -1015,7 +1015,7 @@ impl AppState {
     /// reconciles. (This is the AppState auto-drop sink; `Session::forget` is left
     /// untouched so the login switch-account path does not spuriously close the
     /// gate.)
-    fn speleodb_forget(&self) {
+    pub(super) fn speleodb_forget(&self) {
         // Drop the transient edit gate for a remote edit session. A dead token
         // surfaces as a 401 on ANY SpeleoDB call (e.g. a background list_projects /
         // refresh), and this is the auto-drop sink for all of them - so an
@@ -2689,7 +2689,7 @@ impl AppState {
     /// touches the `speleo_link` table), and refresh the link's cached `project_name`.
     /// Best-effort - a failure is logged, never surfaced (the server write already
     /// landed). Locks project → database in that order (mirrors `speleodb_render_tml`).
-    fn speleodb_fold_local_name(&self, name: &str) {
+    pub(super) fn speleodb_fold_local_name(&self, name: &str) {
         // Snapshot + update the in-memory name under the project lock, then release it
         // before taking the database lock (project → database order).
         let to_persist = match self.project.lock() {
@@ -2935,7 +2935,7 @@ impl AppState {
     /// lock-holder probes (the concurrent-session notice on open, the contended-lock
     /// report), so a transient 401 must fall through rather than auto-drop the whole
     /// session (#197 review). Shared by both probe sites so they can't diverge.
-    fn speleodb_lock_holder(
+    pub(super) fn speleodb_lock_holder(
         &self,
         endpoint: &str,
         token: &str,
@@ -3032,7 +3032,7 @@ impl AppState {
     /// - `speleodb_take_remote` is only ever reached WITH un-pushed edits and exists
     ///   to discard them, behind the frontend's second destroy-confirmation, so it
     ///   passes `Discard`.
-    fn speleodb_fast_forward(
+    pub(super) fn speleodb_fast_forward(
         &self,
         endpoint: &str,
         token: &str,
@@ -3384,7 +3384,7 @@ impl AppState {
     /// live and in the server source - so every fence resolves the tip from the
     /// parent-id topology ([`sync::tip_of`]) instead. Returns `(tip, commits)`;
     /// `tip` is `None` for an empty / ambiguous (forked) history.
-    fn speleodb_server_head(
+    pub(super) fn speleodb_server_head(
         &self,
         endpoint: &str,
         token: &str,
@@ -3481,7 +3481,7 @@ impl AppState {
     /// Build the upload (VACUUM snapshot with the dirty bit cleared in the copy +
     /// the `.tml` render) and push it as one commit, then reconcile the dirty bit
     /// from the result.
-    fn speleodb_upload(
+    pub(super) fn speleodb_upload(
         &self,
         endpoint: &str,
         token: &str,
@@ -3657,7 +3657,7 @@ impl AppState {
     }
 
     /// The authenticated user's email (for ancestry authorship checks), if any.
-    fn speleodb_my_email(&self) -> Option<String> {
+    pub(super) fn speleodb_my_email(&self) -> Option<String> {
         self.speleodb_session_lock()
             .ok()
             .and_then(|s| s.email.clone())
@@ -3665,7 +3665,7 @@ impl AppState {
 
     /// Load the open project's `speleo_link`, apply `f`, and persist it. Errors if
     /// no remote project is open.
-    fn speleodb_mutate_link(
+    pub(super) fn speleodb_mutate_link(
         &self,
         f: impl FnOnce(&mut crate::models::SpeleoLink),
     ) -> Result<(), SpeleoDbError> {
