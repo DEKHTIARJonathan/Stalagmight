@@ -1718,24 +1718,43 @@ impl AppState {
         // same fail direction as today, over a window of milliseconds rather than a
         // whole process lifetime.
         //
-        // THREE probe states, not two, because the two questions the probe answers
-        // fail safe in opposite directions - and only the FIRST is about authorship:
+        // FOUR outcomes over three probe states, because a HELD mutex says nothing on
+        // its own - only its holder does - and the two questions the probe answers
+        // fail safe in opposite directions, of which only the FIRST is about
+        // authorship:
         //
-        // - `Ok(None)` (unheld) is the only answer that proves the unheld -> ours
-        //   transition, so it alone may mint an authorship record. A lock this call
-        //   demonstrably took is also ours to hand back on the way out - unless the
-        //   unwind itself turns up local work behind it (the closure below).
-        // - `Ok(Some(_))` is a lock the account ALREADY held: the acquire below is a
-        //   server-side no-op, we INHERITED it, and no unwind here may hand it back.
-        // - `Err` is neither. Provenance is unknown, so no record (as above), and the
+        // - `Ok(None)` (unheld) proves the unheld -> ours transition, so it may mint an
+        //   authorship record. A lock this call demonstrably took is also ours to hand
+        //   back on the way out - unless the unwind itself turns up local work behind
+        //   it (the closure below).
+        // - `Ok(Some(us))` is a lock OUR OWN ACCOUNT already held: the acquire below is
+        //   a server-side no-op, we INHERITED it, and no unwind here may hand it back.
+        // - `Ok(Some(someone_else))` followed by a SUCCESSFUL acquire is neither - it is
+        //   `Ok(None)` arriving late. A holder who is still there answers the acquire
+        //   with the 400 that returns `LockedBy` before either flag below is read, so
+        //   reaching the arms at all means they let go in between and THIS call made the
+        //   unheld -> ours transition. Reading it as inherited (what this used to do)
+        //   costs the authorship shortcut over a push that really was ours AND, worse,
+        //   skips the unwind release - stranding a mutex we took over an edit session
+        //   that never started, which blocks every other writer until the server-side
+        //   timeout or the next login's held-lock prompt.
+        // - `Err` is provenance we could not read at all. No record (as above), and the
         //   keep-or-release question is settled by what a release would COST rather
         //   than by who took the lock - see `keep_lock_on_unwind` below, which is
         //   that cost as the pre-acquire evidence can price it, and NOT a claim about
         //   inheritance. It is one of the two keep rules, not the whole decision: what
         //   a failure turns up afterwards is the other.
         //
-        // `acquired_here` stays keyed on `Ok(None)` alone: it licenses the authorship
-        // shortcut, and only a mutex the server said was free proves we earned it.
+        // Telling the middle two apart needs OUR email, which `speleodb_active_token`
+        // above proved we have (it refuses without one) - but a concurrent logout can
+        // still drop it under an in-flight call, so a holder we cannot compare against
+        // is NOT "not us": it falls through to the `Err` answer. "Cannot say" must
+        // never mint a claim; that is the same direction a failed probe fails in.
+        //
+        // Comparison is `lock_held_by_me`, the same case-insensitive predicate the #202
+        // re-verify and the gate re-derivation use - SpeleoDB may normalise case, and
+        // three hand-rolled spellings of "is this holder us?" is how they drift apart.
+        let me = self.speleodb_my_email();
         let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
             &endpoint,
             &token,
@@ -1746,11 +1765,17 @@ impl AppState {
             // walk away.
             Ok(None) => (true, false),
             // Already ours -> inherited: no record, and never hand it back.
-            Ok(Some(_)) => (false, true),
-            // Unknown -> no record either way, and keep the lock only when there is
+            Ok(Some(holder)) if lock_held_by_me(Some(holder.as_str()), me.as_deref()) => {
+                (false, true)
+            }
+            // Someone else's, and the acquire below still succeeded -> they released in
+            // between and this call took it: answer exactly as `Ok(None)` does.
+            Ok(Some(_)) if me.is_some() => (true, false),
+            // Unknown - an unreadable probe, or a holder we have no email to compare
+            // against. No record either way, and keep the lock only when there is
             // un-pushed work behind it to protect - as far as the OPEN project's link
             // can tell, which is not the only copy there is (see the closure below).
-            Err(_) => (false, link.has_unpushed_edits),
+            Ok(Some(_)) | Err(_) => (false, link.has_unpushed_edits),
         };
 
         // The unwind shared by every arm below that walks away WITHOUT an edit
@@ -5531,6 +5556,188 @@ mod tests {
                 .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
             "a lock taken by THIS call must be handed back when the reconcile refuses \
              the edit session; saw {seen:?}"
+        );
+    }
+
+    /// [`FREE_MUTEX_DIVERGED_BODY`] with ANOTHER account on the mutex: the narrow race
+    /// where the probe sees a holder who lets go before our acquire lands. A holder who
+    /// is still there answers the acquire with a 400 instead, which returns `LockedBy`
+    /// long before any unwind - so reaching the arms over this body means the mutex
+    /// changed hands to US in between.
+    const OTHER_HOLDER_DIVERGED_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "active_mutex":{"user":"someone.else@x"},
+        "commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
+                   {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn a_lock_another_holder_released_just_before_our_acquire_is_still_handed_back() {
+        // The probe answers "held", which used to be read as INHERITED on the strength
+        // of the mutex being non-empty alone - discarding WHO held it. But another
+        // holder who is still holding never reaches these arms (the acquire 400s and
+        // returns `LockedBy`), so a held mutex followed by a successful acquire means
+        // that holder released in between and THIS call made the unheld -> ours
+        // transition. Treating it as inherited skipped the unwind release and stranded
+        // a mutex we had just taken over an edit session that never started, blocking
+        // every other writer until the server-side timeout.
+        //
+        // Same diverged history and dirty fixture as the two tests above, so the only
+        // input that differs is the mutex holder's identity.
+        let (base, _listener, seen) = recording_stub(OTHER_HOLDER_DIVERGED_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        let result = state.speleodb_start_editing().expect("start editing");
+        assert!(
+            matches!(result, StartEditingResult::DivergenceNeeded),
+            "same divergence routing regardless of who held the mutex, got {result:?}"
+        );
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/acquire/"))),
+            "precondition: the acquire really ran against the stub and succeeded, so \
+             the mutex is ours now and the assertion below is about the unwind, not \
+             about a flow that never left the process; saw {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "a lock the PREVIOUS holder let go of, taken by this very call, must be \
+             handed back like any other freshly taken lock; saw {seen:?}"
+        );
+    }
+
+    /// [`HELD_BY_SAME_ACCOUNT_AT_BASE_BODY`] with ANOTHER account on the mutex, over a
+    /// history whose tip IS our BASE - the same released-in-between race reaching the
+    /// UpToDate arm, which is the only arm that can be observed to record provenance
+    /// (the divergence arm releases, and a release ends the claim by design).
+    const HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "active_mutex":{"user":"someone.else@x"},
+        "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn a_lock_another_holder_released_just_before_our_acquire_records_authorship() {
+        // The other half of the same race. Classifying it as inherited also withheld
+        // the authorship record from a lock this process demonstrably took, and the
+        // shortcut in `speleodb_remote_state` hangs on that record: without it, our own
+        // landed-but-unrecorded push later reads as a stranger's commit and the status
+        // button paints `Conflict` against our own work.
+        let (base, _listener, seen) = recording_stub(HELD_BY_ANOTHER_ACCOUNT_AT_BASE_BODY);
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        assert!(
+            matches!(
+                state.speleodb_start_editing().expect("start editing"),
+                StartEditingResult::Editing
+            ),
+            "the tip IS our BASE, so the reconcile is clean and the lock is kept"
+        );
+        assert!(
+            seen.lock()
+                .expect("request log")
+                .iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/acquire/"))),
+            "precondition: the acquire ran and succeeded over the other account's \
+             released mutex"
+        );
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "the unheld -> ours transition was made by THIS call, so it is ours to \
+             record - a holder who let go before we asked is not an inherited lock"
+        );
+    }
+
+    /// [`SAME_ACCOUNT_HOLDER_BODY`]'s mutex spelled in a different case. SpeleoDB may
+    /// normalise the address it echoes back, so "is this holder us?" is case-insensitive
+    /// everywhere ([`lock_held_by_me`]).
+    const SAME_ACCOUNT_UPPERCASE_HOLDER_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "active_mutex":{"user":"U@X"},
+        "commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
+                   {"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn a_holder_differing_only_in_case_is_still_our_own_inherited_lock() {
+        // DO-NOT-REGRESS: passes before the who-holds-it split as well as after, and
+        // exists to pin the direction the split must NOT be taken in. Now that the
+        // held-mutex arm compares the holder against our email, a case-SENSITIVE
+        // comparison would read our own account back in a different case as "someone
+        // else", hand the resume an authorship claim it never earned, and release the
+        // very mutex the held-lock prompt's "Continue editing" exists to keep - over
+        // un-pushed work that is still only on this machine.
+        let (base, _listener, seen) = recording_stub(SAME_ACCOUNT_UPPERCASE_HOLDER_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        let result = state.speleodb_start_editing().expect("start editing");
+        assert!(
+            matches!(result, StartEditingResult::DivergenceNeeded),
+            "a moved tip over un-pushed work still routes to the divergence prompt, \
+             got {result:?}"
+        );
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/acquire/"))),
+            "precondition: the resume really did run the acquire against the stub; \
+             saw {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "U@X is u@x: the lock is ours already, so this is a resume and the mutex \
+             stays put; saw {seen:?}"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "and an inherited lock still mints no authorship record"
+        );
+    }
+
+    #[test]
+    fn a_holder_we_cannot_compare_against_never_mints_an_authorship_record() {
+        // The fail-safe on the held-mutex split, pinned structurally because no unit
+        // test can reach it: `speleodb_active_token` refuses without an email, so by the
+        // probe we always have one - unless a concurrent logout drops the session under
+        // an in-flight call, which is a race no single-threaded test has a seam for.
+        //
+        // The guard is what keeps that race failing in the safe direction.
+        // `lock_held_by_me` answers FALSE for an unknown self-email (it is "the lock is
+        // not ours", not "we cannot say"), so without the `me.is_some()` guard the
+        // holder arm would read a logged-out session as "someone else's lock we just
+        // took" and mint a record on it. Unknown provenance must answer like a failed
+        // probe: no claim.
+        let start_editing = prod_source()
+            .split_once("fn speleodb_start_editing")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_start_editing body precedes the next method");
+        let probe = start_editing
+            .split_once("match self.speleodb_lock_holder_checked(")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("};").next())
+            .expect("the probe match precedes the unwind closure");
+
+        assert!(
+            probe.contains("lock_held_by_me("),
+            "the held-mutex arm must ask the shared case-insensitive predicate who the \
+             holder is, not re-spell the comparison"
+        );
+        assert!(
+            probe.contains("Ok(Some(_)) if me.is_some() => (true, false)"),
+            "claiming a held mutex as ours to record must be guarded on HAVING an email \
+             to compare against"
+        );
+        assert!(
+            probe.contains("Ok(Some(_)) | Err(_) => (false, link.has_unpushed_edits)"),
+            "and a holder we cannot compare against must fall through to the same \
+             answer an unreadable probe gets: no record, keep only to protect work"
         );
     }
 
