@@ -108,6 +108,9 @@ describe('useRevertRevision - the happy path', () => {
 
     expect(outcome).toEqual({ kind: 'reverted' });
     expect(issued()).toEqual([
+      // [#258] The lock-free probe leads: the "which file?" question is settled
+      // before anything is acquired.
+      'speleodb_dump_candidates',
       'speleodb_start_editing',
       'speleodb_restore_revision',
       'speleodb_done',
@@ -201,7 +204,7 @@ describe('useRevertRevision - refusing before it takes anything', () => {
     const outcome = await run();
 
     expect(outcome).toEqual({ kind: 'locked_by', email: 'other@x' });
-    expect(issued()).toEqual(['speleodb_start_editing']);
+    expect(issued()).toEqual(['speleodb_dump_candidates', 'speleodb_start_editing']);
   });
 
   it('reports a divergence and unwinds nothing (the backend released its own lock)', async () => {
@@ -210,7 +213,7 @@ describe('useRevertRevision - refusing before it takes anything', () => {
     const outcome = await run();
 
     expect(outcome).toEqual({ kind: 'diverged' });
-    expect(issued()).toEqual(['speleodb_start_editing']);
+    expect(issued()).toEqual(['speleodb_dump_candidates', 'speleodb_start_editing']);
   });
 
   it('reports a plain lock failure when nothing else explains it', async () => {
@@ -453,6 +456,50 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null, is_canonical: false },
     ],
   };
+
+  it('asks BEFORE taking the lock when the probe finds a choice', async () => {
+    // The point of the probe: no lock is taken at all, so there is nothing to hand
+    // back. Contrast the case below, which is the fallback for when the probe could
+    // not know - the composite gets as far as the restore and unwinds.
+    ipc({
+      speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'awaiting_dump_choice', candidates: AMBIGUOUS.dump_candidates });
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
+  it('does not probe on the retry - the answer is already in hand', async () => {
+    ipc({
+      speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).not.toContain('speleodb_dump_candidates');
+  });
+
+  it('a probe that fails is advisory only and never blocks the revert', async () => {
+    // It reports nothing of its own: the flow proceeds and the real call stays the
+    // one authoritative place a problem is surfaced.
+    ipc({
+      speleodb_dump_candidates: rejects({ message: 'offline', action: 'Retry' }),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    expect(await run()).toEqual({ kind: 'reverted' });
+  });
 
   it('hands the lock back and reports the choice, NOT a restore failure', async () => {
     // The reported bug: this used to come back as `restore_failed`, so the dialog

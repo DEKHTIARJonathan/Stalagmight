@@ -150,6 +150,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_remove_collaborator",
     "command.speleodb_remove_team",
     "command.speleodb_restore_revision",
+    "command.speleodb_dump_candidates",
     "command.speleodb_retry_keychain",
     "command.speleodb_search_users",
     "command.speleodb_session",
@@ -964,7 +965,10 @@ mod tests {
         //       only way to learn whether the picker earns its upkeep:
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-dump-picker = 695.
-        assert_eq!(EVENT_NAMES.len(), 695);
+        //   + 1 lock-free dump probe (#258), so the revert composite can ask which
+        //       file to use BEFORE it acquires the write lock rather than after:
+        //       command.speleodb_dump_candidates = 696.
+        assert_eq!(EVENT_NAMES.len(), 696);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

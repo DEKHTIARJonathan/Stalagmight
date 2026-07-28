@@ -22,7 +22,7 @@ use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::{AppState, VirtualShotMode};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
-use crate::speleodb::models::SpeleoProjectSummary;
+use crate::speleodb::models::{SpeleoDumpCandidate, SpeleoProjectSummary};
 use crate::speleodb::{client, sync};
 use crate::speleodb::{SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
@@ -122,6 +122,64 @@ impl AppState {
         let entry = resolve_dump_entry(dump, candidate)?;
         self.speleodb_remember_dump_entry(project_id, &entry);
         Ok(entry)
+    }
+
+    /// [#258] Ask what a dump holds WITHOUT taking a lock or touching the cache.
+    ///
+    /// Exists so the revert composite can put its question before the write lock
+    /// rather than after it. Restoring a revision needs the lock, so discovering the
+    /// ambiguity inside that call meant taking the lock, failing, handing it back to
+    /// ask, and re-taking it - a visible round trip for a question that needed no
+    /// lock at all.
+    ///
+    /// Advisory, and deliberately never fails the caller's flow: anything that is not
+    /// a clear ambiguity answers `None`, leaving the real call to produce the
+    /// authoritative error. A probe that could report its own failures would just be a
+    /// second place the same problem is surfaced, out of order with the flow.
+    ///
+    /// Short-circuits on a remembered answer, so the common path costs no network at
+    /// all - opening a project already settles this, and opening takes no lock. The
+    /// remembered name is not re-validated here; if it turns out not to be in the
+    /// revision's tree, the restore falls back to asking, which is the one case that
+    /// still pays the lock round trip.
+    pub(crate) fn speleodb_dump_candidates(
+        &self,
+        project_id: String,
+        hexsha: Option<String>,
+    ) -> Result<Option<Vec<SpeleoDumpCandidate>>, SpeleoErrorDto> {
+        if validate_project_id(&project_id).is_err() {
+            return Ok(None);
+        }
+        if self.speleodb_recalled_dump_entry(&project_id).is_some() {
+            return Ok(None);
+        }
+        let Ok((endpoint, token)) = self.speleodb_active_token() else {
+            return Ok(None);
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        let downloaded = match &hexsha {
+            Some(sha) => self.speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump_at_hash(&endpoint, &token, insecure_http, &project_id, sha),
+            ),
+            None => self.speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                client::download_dump(&endpoint, &token, insecure_http, &project_id),
+            ),
+        };
+        let Ok(zip) = downloaded else { return Ok(None) };
+        let Ok(mut dump) = dump::Dump::open(&zip) else {
+            return Ok(None);
+        };
+        // Through the shared resolver, not the bare one: an unambiguous probe RECORDS
+        // what it found, so the flow that follows asks nothing either. The recall side
+        // is a no-op here, since a hit would have short-circuited above.
+        match self.speleodb_resolve_entry_remembering(&project_id, &mut dump, None) {
+            Ok(_) => Ok(None),
+            Err(SpeleoDbError::AmbiguousDump(candidates))
+            | Err(SpeleoDbError::AmbiguousAriane(candidates)) => Ok(Some(candidates)),
+            Err(_) => Ok(None),
+        }
     }
 
     /// List the projects visible to the logged-in user, as display summaries.
@@ -763,9 +821,10 @@ mod tests {
         );
         assert_eq!(
             speleodb_prod_matches("speleodb_resolve_entry_remembering(", &[]),
-            4,
-            "expected one definition plus the three classify sites (pull, fast-forward, \
-             restore); a change here means a site was added or one stopped remembering"
+            5,
+            "expected one definition plus the four classify sites (pull, fast-forward, \
+             restore, and the lock-free probe); a change here means a site was added or \
+             one stopped remembering"
         );
     }
 

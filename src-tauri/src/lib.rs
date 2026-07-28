@@ -1323,6 +1323,7 @@ pub fn run() {
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
+            commands::speleodb::speleodb_dump_candidates,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)

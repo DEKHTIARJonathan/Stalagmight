@@ -271,6 +271,9 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
     'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_push: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_restore_revision: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
+  speleodb_dump_candidates:
+    'Read-only #258 probe: downloads a dump and reports whether it holds more than one ' +
+    'openable file. Same live-server dependency as the write-workflow commands below.',
   speleodb_start_editing: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_update: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
 

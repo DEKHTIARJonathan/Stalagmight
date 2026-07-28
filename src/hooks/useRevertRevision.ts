@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
+import { invokeIpc } from '../utils/ipc';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../utils/speleoError';
@@ -195,6 +196,25 @@ export function useRevertRevision() {
       // flipped the bit since the dialog last rendered.
       if (!discardLocal && (useSpeleoStore.getState().link?.hasUnpushedEdits ?? false)) {
         return { kind: 'needs_discard', lockHeld: false };
+      }
+
+      // [#258] Ask which file BEFORE acquiring, for the same reason the un-pushed
+      // check above runs before any IPC: a question that needs no lock should not
+      // cost one. Discovering the ambiguity inside the restore meant taking the
+      // lock, failing, handing it back to ask, and re-taking it - all visible.
+      //
+      // Skipped once `entryPath` is set, because that IS the answer. The probe takes
+      // nothing, touches no cache, never reports its own failures, and does not even
+      // download when this session already settled the question - which it usually
+      // has, since opening the project settles it and opening takes no lock.
+      if (!entryPath) {
+        const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
+          'speleodb_dump_candidates',
+          { projectId, hexsha },
+        ).catch(() => null);
+        if (candidates && candidates.length > 0) {
+          return { kind: 'awaiting_dump_choice', candidates };
+        }
       }
 
       onStep?.('locking');

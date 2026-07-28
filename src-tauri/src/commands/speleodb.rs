@@ -29,10 +29,10 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption,
-    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -131,6 +131,26 @@ pub async fn speleodb_open_project_discarding_local(
         )
     })
     .await
+}
+
+/// [#258] What a project dump holds, WITHOUT taking the write lock or touching the
+/// cache. `hexsha` targets a specific revision; omit it for the current tip.
+///
+/// Lets a flow that needs the lock (the revert composite) put its "which file is the
+/// survey?" question BEFORE acquiring, instead of taking the lock, failing, handing
+/// it back to ask, and re-taking it.
+///
+/// Returns the candidates when there is a real choice to make, and `null` otherwise -
+/// including when the session already knows the answer, in which case it does not
+/// download at all. Advisory: it never reports its own failures, so the call that
+/// follows stays the one authoritative place a problem is surfaced.
+#[tauri::command]
+pub async fn speleodb_dump_candidates(
+    app: AppHandle,
+    project_id: String,
+    hexsha: Option<String>,
+) -> Result<Option<Vec<SpeleoDumpCandidate>>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_dump_candidates(project_id, hexsha)).await
 }
 
 /// [#214] Adopt an Ariane (`.tml`-only) project: import its `ariane.tml`, save a
