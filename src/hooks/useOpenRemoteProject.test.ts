@@ -766,6 +766,149 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_adopt_ariane', expect.anything());
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
+
+    /**
+     * [#270] The entry check runs BEFORE the command, which is where it has to run -
+     * it is the only place that can stop it. But the pull verbs' await is the
+     * DOWNLOAD, and unlike the two prompt windows this branch already closed, that is
+     * not a user sitting on a dialog: it is the network, on EVERY open.
+     * `download_dump` gets 120 s per attempt (`DUMP_DOWNLOAD_TIMEOUT`, idempotent so
+     * retried) against a 640 MB body ceiling, then the pull fetches the revision
+     * history and extracts. The poll's floor is 30 s, and `SpeleoStatusButton` stays
+     * MOUNTED throughout - `App` renders dialogs as siblings of `SingleSystemView`,
+     * so raising the browser does not unmount the toolbar - so `refreshLinkStatus`
+     * keeps landing and `seedFromStatus` rewrites `link` wholesale.
+     *
+     * `finishOpen` cannot be left to catch it: its first act is the optimistic seed,
+     * which overwrites the very link the poll just wrote, so by the time
+     * `loadProject` closes the open project the newly-discovered work is hidden and
+     * the newly-discovered lock is silently released.
+     */
+    describe('the link changes while the pull is in flight', () => {
+      /**
+       * A pull that lands, with `during` standing in for the poll rewriting the store
+       * WHILE the command is in flight - run synchronously inside the mock, before it
+       * resolves, so the hook resumes on a link the entry check never saw.
+       */
+      const pullDuringWhich = (during: () => void, cmd = 'speleodb_open_project') => {
+        invokeIpcMock.mockImplementation((c: string) => {
+          if (c !== cmd) return Promise.resolve(null);
+          during();
+          return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        });
+      };
+
+      it('refuses when the open project goes unpushed during the download', async () => {
+        anotherOpen(openLink());
+        pullDuringWhich(() =>
+          useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) }),
+        );
+
+        const outcome = await hook().openRemote(SUMMARY);
+
+        expect(outcome.status).toBe('error');
+        // Not a dead token - there is nothing to re-login for.
+        if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+        // The entry check DID pass, so the pull ran - this is the late half. What
+        // must not run is the seed (which overwrites the link the poll just wrote)
+        // and the load (which closes p9 backend-side).
+        expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_open_project', expect.anything());
+        expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+        expect(loadProjectMock).not.toHaveBeenCalled();
+      });
+
+      it('refuses when the write lock on the open project resolves during the download', async () => {
+        // The other disjunct of `needsSpeleoHandBackPrompt`: nothing unpushed, but we
+        // now hold the lock, and the app keeps running so nothing else releases it.
+        anotherOpen(openLink());
+        pullDuringWhich(() => useSpeleoStore.setState({ link: openLink({ editState: 'editing' }) }));
+
+        const outcome = await hook().openRemote(SUMMARY);
+
+        expect(outcome.status).toBe('error');
+        expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+        expect(loadProjectMock).not.toHaveBeenCalled();
+      });
+
+      it('still opens when nothing changed during the download', async () => {
+        // Do-not-regress: the late re-check refuses on a genuine CHANGE only. A clean
+        // open project that stays clean must still be swapped out, or every remote
+        // open pays for the guard.
+        anotherOpen(openLink());
+        pullDuringWhich(() => {});
+
+        expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+      });
+
+      it('still opens when the pull names the project already on screen', async () => {
+        // Do-not-regress, and the reason the late re-check is skipped by PATH rather
+        // than run unconditionally. `replace_cache_stalx_abandoning` calls
+        // `close_project_if_open_at(dest)` before the rename, so this pull has ALREADY
+        // closed the open project backend-side; refusing now would leave the shell
+        // rendering a project the backend does not have open, where auto-save and
+        // every later command fail with "no project open". Nothing is protected by
+        // refusing either - `finishOpen` skips the seed for this path, so the poll's
+        // update survives, and the load re-resolves the same project's link.
+        //
+        // Driven through the half of the guard that is NOT exempt for the same
+        // project - disk-dirty - so the path skip is the only thing that can let it
+        // through.
+        useProjectStore.setState({
+          project: { file_path: '/cache/p1.stalx' } as never,
+          isDirty: false,
+        });
+        useSpeleoStore.setState({ link: openLink(), remoteProjectId: 'p1' });
+        pullDuringWhich(() => useProjectStore.setState({ isDirty: true }));
+
+        expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+      });
+
+      it('refuses the take-remote when the open project goes unpushed during ITS download', async () => {
+        // Same command family, same window: `speleodb_open_project_discarding_local`
+        // waives the guard for the TARGET's cache copy, which says nothing about the
+        // work in the project being swapped out.
+        anotherOpen(openLink());
+        pullDuringWhich(
+          () => useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) }),
+          'speleodb_open_project_discarding_local',
+        );
+
+        const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+
+        expect(outcome.status).toBe('error');
+        if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+        expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+        expect(loadProjectMock).not.toHaveBeenCalled();
+      });
+
+      it('does NOT refuse the adopt when the link changes during it', async () => {
+        // DO-NOT-REGRESS on a deliberate asymmetry, so nobody "fixes the drift" by
+        // adding the late re-check to the adopt as well. The window is identical, but
+        // `speleodb_adopt_ariane` rebuilds its destination through
+        // `adopt_import_and_save` -> `do_create_project_full`, which commits the new
+        // project into `AppState` UNCONDITIONALLY - for every target, not only a
+        // re-adopt of the open one. The swap has therefore already happened by the
+        // time this resolves, and refusing would not undo it: it would leave the shell
+        // rendering the old project while every edit and every auto-save landed on the
+        // adopted one. Going through with the load is the lesser failure. Closing this
+        // window has to start in `speleodb_adopt_ariane`.
+        anotherOpen(openLink());
+        invokeIpcMock.mockImplementation((c: string) => {
+          if (c !== 'speleodb_adopt_ariane') return Promise.resolve(null);
+          useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
+          return Promise.resolve({
+            local_path: '/cache/p1.stalx',
+            type_flipped: true,
+            concurrent_session: false,
+          });
+        });
+
+        expect(await hook().adoptRemote(SUMMARY)).toEqual({ status: 'opened' });
+        expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+      });
+    });
   });
 
   /**

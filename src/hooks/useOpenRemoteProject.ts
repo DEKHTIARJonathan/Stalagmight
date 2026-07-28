@@ -285,6 +285,80 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     [t],
   );
 
+  /**
+   * [#270] `handBackRefusal` again, on the far side of the command - for the pull
+   * verbs, whose await is the DOWNLOAD.
+   *
+   * The entry check has to run before the command; it is the only place that can
+   * stop it. But its answer is stale by the time the command returns, and here the
+   * gap is not a user sitting on a dialog the way the adopt confirm and the
+   * refused-open prompt are. It is the network, on EVERY open: `download_dump` runs
+   * on its own `DUMP_DOWNLOAD_TIMEOUT` budget of 120 s per attempt (idempotent, so
+   * retried), against a body ceiling of 640 MB, and the pull then fetches the
+   * revision history and extracts the archive before returning. The status poll's
+   * floor is 30 s, so at least one poll can land inside a single slow attempt.
+   *
+   * It does land, because `SpeleoStatusButton` stays MOUNTED underneath: `App`
+   * renders the dialogs as SIBLINGS of `SingleSystemView`, so raising the browser
+   * (or the refused-open prompt) does not unmount the toolbar, and its interval
+   * keeps calling `refreshLinkStatus` throughout the wait. `seedFromStatus` rewrites
+   * `link` wholesale - `hasUnpushedEdits`, `editState`, `lockHolder` - so the
+   * project on screen can acquire un-pushed work, or have its lock resolved, between
+   * the entry check and the load that closes it backend-side. (GlobalView's remote
+   * rows are the one host where it cannot: `view === 'global'` renders GlobalView
+   * INSTEAD of `SingleSystemView`, so the button is unmounted and the poll unarmed.
+   * The hook is shared, so the guard belongs here rather than in the host that
+   * happens to need it.)
+   *
+   * `finishOpen` cannot be left to notice, for the reason the entry check exists at
+   * all: its first act is the optimistic seed, which overwrites exactly what the
+   * poll just wrote. By the time `loadProject` replaces the project the evidence is
+   * already gone - the newly-discovered work hidden, or the newly-discovered lock
+   * silently released.
+   *
+   * Refusing here leaves the pulled copy on disk, and that is a price rather than a
+   * second data risk. Under `LocalEditsPolicy::Protect` the backend runs
+   * `guard_local_edits` before it downloads anything AND again inside
+   * `replace_cache_stalx`, and that guard fails CLOSED (a local copy it cannot read
+   * refuses too), so a replace only ever happens over a cache copy with
+   * `has_unpushed_edits == false` - a clean copy of a server revision, re-downloadable
+   * in full. `Discard` is the take-remote branch, where the user confirmed that exact
+   * loss by name. The local `display_settings` are carried across the replace either
+   * way. So nothing that exists only on this computer is spent by refusing, and the
+   * project on screen - which is what this guard is about - is untouched.
+   *
+   * Skipped when the pull names the project ALREADY ON SCREEN, and that is not a
+   * courtesy: refusing there would be worse than the swap it prevents.
+   * `replace_cache_stalx_abandoning` calls `close_project_if_open_at(dest)` before
+   * the rename, so a pull whose destination is the open project has already closed
+   * it backend-side by the time we get here; returning an error would leave the shell
+   * displaying a project the backend does not have open, where every later command,
+   * auto-save included, fails with "no project open" - the exact state that
+   * function's own failure path goes out of its way to undo. And there is nothing to
+   * protect: `finishOpen` skips the seed for that path (`alreadyOpen`), so the poll's
+   * update is not overwritten, and the `loadProject` that follows re-resolves the
+   * same project's link anyway.
+   *
+   * Decided by the SAME literal path comparison `finishOpen` makes, deliberately, so
+   * the two can never disagree - this skips exactly when that skips the seed, and
+   * guards exactly when it seeds. See `alreadyOpen` for why literal is the correct
+   * test and not merely the careless one. Known residual: `close_project_if_open_at`
+   * canonicalizes (`project_io::same_file`), so an ALIAS spelling closes the project
+   * backend-side while this side reads "not already open". Only the disk-dirty half
+   * can then refuse (the hand-back half is exempt - an alias is the same project, so
+   * `remoteProjectId === summary.id`), and only if `isDirty` flipped during the
+   * download. Narrow, and the alternative - canonicalizing here - is the thing the
+   * do-not-regress tests at the foot of the suite exist to block; alias tolerance has
+   * to start in `do_load_project_full`, with this side following.
+   */
+  const handBackRefusalAfterPull = useCallback(
+    (summary: SpeleoProjectSummary, localPath: string): string | null => {
+      if ((useProjectStore.getState().project?.file_path ?? null) === localPath) return null;
+      return handBackRefusal(summary);
+    },
+    [handBackRefusal],
+  );
+
   const openRemote = useCallback(
     async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
       // Before the pull, the seed and the load: nothing about the open project may be
@@ -326,9 +400,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
+      // The link the entry check read is now as old as the download, and the poll
+      // underneath has had the whole of it to rewrite the link (see
+      // `handBackRefusalAfterPull`). Re-read it BEFORE the seed overwrites it and
+      // before the load closes the open project.
+      const landed = handBackRefusalAfterPull(summary, result.local_path);
+      if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, openDialog, cancelReturnsTo, t],
+    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDialog, cancelReturnsTo, t],
   );
 
   /**
@@ -446,9 +526,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
+      // Same download, same window, same re-read - this verb is `openRemote`'s pull
+      // with the guard waived for the TARGET's cache copy, which says nothing about
+      // the project on screen. See `handBackRefusalAfterPull`.
+      const landed = handBackRefusalAfterPull(summary, result.local_path);
+      if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, t],
+    [finishOpen, handBackRefusal, handBackRefusalAfterPull, t],
   );
 
   const adoptRemote = useCallback(
@@ -499,6 +584,31 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           reLogin: speleoErrorAction(e) === 'ReLogin',
         };
       }
+      /**
+       * [#270] NO second, post-command run of that guard here, unlike the two pull
+       * verbs (`handBackRefusalAfterPull`) - and this is a deliberate asymmetry, not
+       * the drift it looks like. The window is the same: `speleodb_adopt_ariane`
+       * downloads the same dump on the same budget while the same poll runs. What
+       * differs is what has already happened by the time it returns.
+       *
+       * A pull extracts over a cache file, and only closes the open project when that
+       * file IS the open project. An adopt does not extract at all: it rebuilds the
+       * destination through `adopt_import_and_save` -> `do_create_project_full`,
+       * which COMMITS the new project into `AppState` unconditionally, whatever was
+       * open before ("Adoption replaces the open AppState project", as its own doc
+       * says). So the swap has already happened backend-side for EVERY target, not
+       * only for a re-adopt of the open one. Refusing on this side would not undo it;
+       * it would leave the shell rendering the old project while every command - each
+       * edit, each auto-save - lands on the adopted one. That is a worse failure than
+       * the one a late check would catch, and it is the failure `finishOpen` avoids
+       * by going through with the load.
+       *
+       * So the adopt route's protection is the pre-command check above, and it stays
+       * exactly that. Closing this window properly has to start in
+       * `speleodb_adopt_ariane` - build the adopted `.stalx` without committing it to
+       * `AppState`, and let the FE's `loadProject` be what opens it, the way a pull
+       * already works - with this side following, never leading.
+       */
       // Post-adoption notice: Stalagmight now owns edits. When the server type could
       // not be flipped (no write access), say so - the user can still edit locally.
       return finishOpen(result, summary.permission, {
