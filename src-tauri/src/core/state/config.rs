@@ -646,6 +646,58 @@ mod tests {
     }
 
     #[test]
+    fn a_keychainless_box_that_just_restarted_turns_the_keyring_off_without_a_false_alarm() {
+        // The keychain-less box of `a_keychainless_box_turns_the_keyring_off_without
+        // _a_false_alarm` again, but reached the way a RESTART reaches it. The sign-in
+        // that test makes is what records `Unavailable`; a launch under a persisted
+        // "this session only" decline records nothing at all, because rehydration
+        // applies the decline BEFORE the load and the load then skips the keyring
+        // entirely. Suppressing on `Unavailable` alone left that launch sitting at
+        // `NotAttempted` and warned it about a credential a keychain-less box cannot
+        // hold - the false alarm this whole line exists to avoid, fired at the user
+        // who had already answered the storage question once.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(FailingSecretStore));
+            {
+                let mut config = state.config.lock().expect("config");
+                // What that earlier session-only answer persisted, and what
+                // `SpeleoDbSession::rehydrate` reads back on the next launch.
+                config.speleodb.keychain_declined = true;
+                assert!(
+                    !config.speleodb.keychain_has_token,
+                    "a keychain-less box cannot reach `true`: the only writers of it pass \
+                     `tier == TokenTier::Keychain`"
+                );
+                drop(config);
+                let mut session = state.speleodb.lock().expect("session");
+                // The live store as that rehydrate leaves it: the decline applied, and
+                // NO keychain access behind it - no login this run to record one.
+                session.token_store.set_keychain_declined(true);
+                session.token_store.note_keychain_has_token(false);
+                assert_eq!(
+                    session.token_store.keychain_state(),
+                    KeychainState::Declined,
+                    "the user chose this, and nothing underneath it has been learned"
+                );
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "a keychain that cannot hold anything has stranded nothing to warn about, \
+                 restart or no restart"
+            );
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "and the next launch still has no reason to open a keyring that holds nothing"
+            );
+        });
+    }
+
+    #[test]
     fn turning_the_keyring_off_with_no_account_raises_no_alarm() {
         // Nobody signed in, so there is no account to key an entry by and the
         // eviction never runs. The pre-fix code answered this exactly as it
