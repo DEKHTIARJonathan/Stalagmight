@@ -167,7 +167,12 @@ export function useSpeleoActions(): SpeleoActions {
           return false;
         case 'divergence_needed':
           // #198 seam: applyStartEditing recorded the divergence origin. The
-          // divergence dialog decides what happens next; nothing is held yet.
+          // divergence dialog decides what happens next. `false` means "we are not
+          // editing", NOT "no lock exists": a lock this call TOOK is handed back
+          // before we get here, but one it merely RESUMED is deliberately kept, so
+          // a divergence cannot free a project whose un-pushed work the lock was
+          // guarding. Either way there is no edit session, which is what callers
+          // gate on.
           return false;
         default: {
           // A variant this frontend has not been taught must NOT fall through to
