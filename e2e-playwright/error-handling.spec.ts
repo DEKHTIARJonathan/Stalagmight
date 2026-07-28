@@ -574,27 +574,22 @@ test.describe('Error Handling', () => {
       await setupMockedPage(page);
       await createProjectViaApp(page, 'Error Test Project');
 
+      // `save_project` returns a CommandResult, not Result<_, String>, so the
+      // real backend can never reject the promise - a failure is always
+      // success:false. Simulating a throw exercised a path the app does not
+      // have, which is why this assertion used to be skipped rather than met.
       await setIpcOverrides(page, {
-        save_project: { __throw: 'Permission denied: cannot write to file' },
+        save_project: { success: false, error: 'Permission denied: cannot write to file' },
       });
 
       // Trigger save with Ctrl+S
       await page.keyboard.press('Control+s');
 
-      // Wait for error to be displayed - could be in dialog or notification
-      // The app may show error via dialog or inline - check both patterns
-      const errorVisible = await page.waitForSelector(
-        'text=/Permission denied|cannot write|save.*fail/i',
-        { timeout: 5000 }
-      ).catch(() => null);
-
-      // If no explicit error message found, verify app is still functional
-      if (!errorVisible) {
-        // App should remain functional even after error
-        await expect(page.getByTestId('map-canvas')).toBeVisible();
-      } else {
-        expect(await errorVisible.isVisible()).toBe(true);
-      }
+      // The failure must reach the user - that is what this test is named for.
+      // It may land in a dialog or an inline notification; either satisfies it.
+      await expect(
+        page.locator('text=/Permission denied|cannot write|save.*fail/i').first(),
+      ).toBeVisible({ timeout: 5000 });
 
       // Verify app remains functional after error
       await expect(page.getByTestId('map-canvas')).toBeVisible();

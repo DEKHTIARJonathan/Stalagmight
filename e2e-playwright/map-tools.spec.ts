@@ -132,11 +132,15 @@ test.describe('Map Tools', () => {
       // The app should remain functional
       await expect(canvas).toBeVisible();
 
-      // Test Ctrl+click for multi-select. `page.mouse.click` takes no
-      // `modifiers` option, so the key has to be held around the click.
-      await page.keyboard.down('Control');
+      // Ctrl+click. NB this does not reach multi-select: `CTRL_PAN_TOOLS`
+      // includes 'select', so MapCanvas's mousedown-capture handler claims
+      // ctrl+left for pan and preventDefaults it. What this covers is that
+      // entering ctrl-pan leaves the app intact. Multi-select toggling is
+      // covered where the tool is not pan-claimed.
+      // (`page.mouse.click` takes no `modifiers` option, hence the down/up.)
+      await page.keyboard.down('ControlOrMeta');
       await page.mouse.click(centerX + 50, centerY);
-      await page.keyboard.up('Control');
+      await page.keyboard.up('ControlOrMeta');
       await waitForMapIdle(page);
 
       // The app should remain functional

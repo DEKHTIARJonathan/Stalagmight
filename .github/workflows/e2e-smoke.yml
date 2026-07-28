@@ -50,6 +50,8 @@ jobs:
       # in the vitest suite, which only `check` runs - and `check` path-ignores
       # `e2e-playwright/**`, so a mock-only edit (the exact change most likely to
       # break the contract) would otherwise be gated by nothing.
+      # On a PR that touches src/ too this runs in both jobs. That duplication is
+      # deliberate: this is the copy that closes the gap, so do not delete it.
       - name: Mock IPC contract
         run: pnpm test:mock-contract
       # The timing instrumentation below decides which tests get cut, so its

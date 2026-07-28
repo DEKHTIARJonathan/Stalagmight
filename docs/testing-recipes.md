@@ -125,11 +125,19 @@ pnpm typecheck:playwright  # e2e-playwright/ + playwright.config.ts
 The first two are `check` gates, the third is a `smoke` gate - it has to be,
 because `check` path-ignores `e2e-playwright/**`.
 
-`e2e/legacy/` is the one tree nothing type-checks. `tsconfig.e2e.json` exists but
-is deliberately not gated: the quarantined WDIO suite has roughly 600 pre-existing
-errors (mostly the ambient `browser` global and untyped hook parameters) and runs
-in no automated job, so gating it would mean fixing 600 errors in code that is on
-its way out.
+`e2e/legacy/` is the one *test* tree nothing type-checks. `tsconfig.e2e.json`
+exists but is deliberately not gated: the quarantined WDIO suite has 606
+pre-existing errors (mostly the ambient `browser` global and untyped hook
+parameters) and runs in no automated job, so gating it would mean fixing 606
+errors in code that is on its way out. Some non-test files are ungoverned too -
+`scripts/**/*.ts`, `vite.config.ts`, `wdio.replay.conf.ts`, `src-tauri/bindings/`
+are in no tsconfig's `include`.
+
+Note the strictness difference: `tsconfig.playwright.json` is `strict`, but
+unlike the root config it does not set `noUncheckedIndexedAccess`,
+`exactOptionalPropertyTypes`, `noUnusedLocals`/`noUnusedParameters`,
+`noImplicitReturns`, or `noFallthroughCasesInSwitch`. "The specs are
+type-checked" is true but weaker than what `src/` gets.
 
 The agent harness runs under `tsx`, which transpiles without type-checking, and
 it is exercised on demand only, so `typecheck:agent` (a CI `check` step) is the

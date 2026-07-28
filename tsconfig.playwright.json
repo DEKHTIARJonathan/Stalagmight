@@ -13,6 +13,15 @@
     "strictNullChecks": true,
     "noImplicitAny": true,
 
+    // The specs import from `src/`, which pulls ~200 app files into this
+    // program. These two keep it buildable when that reach grows: without
+    // `jsx`, the first spec whose import chain touches a .tsx fails the gate
+    // with an error that has nothing to do with the spec.
+    "jsx": "react-jsx",
+    // `types` is an allowlist: naming it at all drops the implicit @types/node
+    // that playwright.config.ts and the specs rely on for `process`.
+    "types": ["vite/client", "node"],
+
     "skipLibCheck": true,
     // Type-check only. Without this, a bare `tsc -p tsconfig.playwright.json`
     // emits a .js next to every .ts in the program - including the src/ files
