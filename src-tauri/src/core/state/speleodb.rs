@@ -391,6 +391,12 @@ impl SpeleoDbSession {
         };
         self.endpoint = None;
         self.email = None;
+        // The recorded "the keyring holds a token for us" belief is about the account
+        // that just left, so it leaves with it - see
+        // [`TokenStore::forget_keychain_belief`]. After the sweep above, which needs
+        // it. This is what stops a login as a DIFFERENT account inheriting it through
+        // the store the switch reuses.
+        self.token_store.forget_keychain_belief();
         cleared
     }
 
@@ -424,7 +430,11 @@ impl SpeleoDbSession {
         // Linux that read is the desktop unlock prompt, so a signed-out launch was
         // raising one purely to discover there was nothing to find. What the
         // keychain holds is recorded when we put it there, so the answer is already
-        // on disk. A stale `true` costs one prompt and self-corrects on the miss.
+        // on disk. A stale `true` costs ONE prompt and self-corrects on the miss -
+        // durably: the load below lowers the store's belief on an `Ok(None)`, and
+        // `AppState::speleodb_ensure_rehydrated` writes that correction back to the
+        // config afterwards. Without that write-back the same stale `true` would be
+        // re-read and the same prompt raised on every launch.
         if !keychain_has_token {
             self.token_store.set_keychain_declined(true);
         }
@@ -568,8 +578,12 @@ impl AppState {
     /// endpoint (same precedence as login, sans a dialog override) + email
     /// **outside** the session lock to avoid a config↔session lock-order hazard,
     /// then let [`SpeleoDbSession::rehydrate`] seed + wire `load()` once. Called
-    /// before locking in the authed/session entry points. No network, no prompt,
-    /// no config write.
+    /// before locking in the authed/session entry points. No network, no prompt.
+    ///
+    /// It makes exactly ONE config write, and only in one direction: the
+    /// keychain-belief write-back at the end, when the rehydrate read PROVED the
+    /// keyring holds nothing for this account. See there for why it cannot be left
+    /// to the live store alone.
     pub(super) fn speleodb_ensure_rehydrated(&self) {
         // Cheap idempotency check first: if rehydration already ran (or a session
         // is live), skip the config read entirely.
@@ -595,14 +609,40 @@ impl AppState {
                 )
             });
 
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.rehydrate(
-                resolved_endpoint,
-                config_email,
-                keychain_declined,
-                keychain_disabled,
-                keychain_has_token,
-            );
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        session.rehydrate(
+            resolved_endpoint,
+            config_email,
+            keychain_declined,
+            keychain_disabled,
+            keychain_has_token,
+        );
+        let believed = session.token_store.keychain_has_token();
+        // Released before the write-back: the writer takes the config lock, and the
+        // documented order is config-then-session.
+        drop(session);
+
+        // The read `rehydrate` just wired is the one keychain access that can PROVE
+        // the entry is gone - `TokenStore::load`'s `Ok(None)`, which is what an entry
+        // removed outside the app (seahorse, a reinstall) answers with. The store
+        // lowers its own belief on it, but only the CONFIG survives the process, so
+        // without this the next launch reads the stale `true` back and opens the
+        // keyring again - on Linux that read IS the desktop unlock prompt - for the
+        // same miss, every launch, forever. `rehydrate`'s "a stale `true` costs one
+        // prompt and self-corrects on the miss" is true only because of this line.
+        //
+        // Written HERE rather than inside `TokenStore`, which is deliberately
+        // config-agnostic (the 401 auto-drop reaches it with no config in hand). This
+        // is the one place that already holds both halves: it read the persisted
+        // belief to hand to `rehydrate`, and it owns the lock order.
+        //
+        // ONLY a lowering, and only from a value actually read off the config. A
+        // failed config read hands `false` down, and re-persisting that would record
+        // a removal nothing observed - the exact mistake the flag was fixed for.
+        if keychain_has_token && !believed {
+            self.speleodb_persist_keychain_has_token(false);
         }
     }
 
@@ -1113,7 +1153,14 @@ impl AppState {
                     c.speleodb.keychain_declined,
                     c.speleodb.keychain_disabled,
                     c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
-                    c.speleodb.keychain_has_token,
+                    // Scoped to the account the flag is ABOUT. `keychain_has_token`
+                    // and `speleodb.email` are written by the same login, so the
+                    // email is what the belief is stamped with; a keyring entry is
+                    // keyed by (endpoint, email), so a different account's entry is
+                    // not even reachable under this one's key. See the re-assert
+                    // below for what carrying it across would claim.
+                    c.speleodb.keychain_has_token
+                        && c.speleodb.email.as_deref() == Some(email.as_str()),
                 )
             })
             .unwrap_or((false, false, false, false));
@@ -1145,6 +1192,23 @@ impl AppState {
             // to the write below believing the keyring holds nothing - and the
             // write-back after it would then record that as fact. Evidence only, and
             // only ever raised.
+            //
+            // Evidence about THIS account only - see where `config_has_token` is
+            // read. Signing in as somebody else used to import the previous account's
+            // record into a store about to be keyed by the new one: the write below
+            // fails against a locked keyring without lowering it, and the new email
+            // and the old account's `true` were then persisted together, so every
+            // later launch opened the keyring for the new account and the keyring
+            // switch reported a residue for a credential that is not theirs and that
+            // no operation keyed by them can find or remove. Worse on the warm path:
+            // the `switching` sweep above may have just PROVED the old entry gone,
+            // and re-asserting raised the belief back over that proof.
+            //
+            // What this does NOT do is rescue the old account's entry. Once the email
+            // on disk moves, nothing can key an operation by the old one anyway (the
+            // same reason logout records `false` after clearing the seed), so the
+            // entry is left where the account switch left it - and the honest record
+            // for the account that IS signed in is what this login can still write.
             session
                 .token_store
                 .note_keychain_has_token(config_has_token);
@@ -6954,6 +7018,137 @@ mod tests {
             assert!(
                 restarted.get_config().speleodb.keychain_has_token,
                 "and must not record a removal that did not happen"
+            );
+        });
+    }
+
+    /// A keyring that ANSWERS and holds nothing for anybody, under a state's COLD
+    /// session with `rehydrate_attempted` still false. The opposite fixture to
+    /// [`lock_the_keyring`]: this one can give the startup read the one answer that
+    /// PROVES an entry is gone.
+    fn empty_the_keyring(state: &AppState) {
+        state.speleodb.lock().expect("session lock").token_store =
+            TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+    }
+
+    #[test]
+    fn a_keyring_that_answered_empty_is_not_opened_again_after_a_restart() {
+        // The self-correction the whole "a stale `true` costs ONE prompt" argument
+        // rests on. An entry removed outside the app - seahorse, a reinstall - leaves
+        // `config.speleodb.keychain_has_token = true` over a keyring that no longer
+        // holds anything, and the startup read is what finds that out: `Ok(None)` is
+        // the one proof of absence a read can give, and the live store lowers its
+        // belief on it.
+        //
+        // The live store is not what the next launch reads. Lowering it there and
+        // stopping meant the config kept saying `true`, so every launch re-opened the
+        // keyring - which on Linux IS the desktop unlock prompt - to be told the same
+        // thing again, forever. The correction has to reach disk to be a correction.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            {
+                // What a previous launch's successful keychain login left on disk,
+                // and an account to key the startup read by.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some("https://sdb.example".to_owned());
+                config.speleodb.email = Some("u@x".to_owned());
+                config.speleodb.keychain_has_token = true;
+                config.save().expect("seed the previous launch's config");
+            }
+            empty_the_keyring(&state);
+
+            // The startup rehydrate: no network, and the keyring answers empty.
+            state.speleodb_session_status().expect("status");
+
+            assert!(
+                !state
+                    .speleodb
+                    .lock()
+                    .expect("session lock")
+                    .token_store
+                    .keychain_has_token(),
+                "premise: the read proved the keyring holds nothing for this account"
+            );
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "and the correction has to reach the config, not just the live store"
+            );
+
+            // The next launch, reading the config off disk.
+            let restarted = AppState::new().expect("restarted state");
+            assert!(
+                !restarted.get_config().speleodb.keychain_has_token,
+                "or the same stale `true` opens the keyring again on every launch"
+            );
+        });
+    }
+
+    #[test]
+    fn one_accounts_keyring_entry_is_not_reported_to_the_next_account() {
+        // The account switch, on the machine the recorded belief exists for. The
+        // config's `keychain_has_token` is written by the same login that writes
+        // `speleodb.email`, so it is a fact ABOUT that account - and a keyring entry
+        // is keyed by (endpoint, email), so the previous account's entry is not even
+        // reachable under this one's key.
+        //
+        // Signing in as somebody else used to inherit it twice over: re-asserted from
+        // the config, and carried in the live store the switch reuses. The new
+        // login's keychain write fails against the locked keyring without lowering
+        // it, so the NEW email and the OLD account's `true` were persisted together -
+        // after which every launch opened the keyring for an account it holds nothing
+        // for, and turning the keyring off reported a residue belonging to somebody
+        // else, which no operation keyed by this account can find or remove.
+        crate::test_helpers::with_isolated_config(|| {
+            let (base, _listener) = always_answering_stub(r#"{"email":"new@x"}"#);
+            let state = AppState::new().expect("state");
+            {
+                // The PREVIOUS account's launch: its entry is in the keyring and the
+                // config records it.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some(base.clone());
+                config.speleodb.email = Some("old@x".to_owned());
+                config.speleodb.keychain_has_token = true;
+                config.save().expect("seed the previous account's config");
+            }
+            lock_the_keyring(&state);
+            // Today's startup, as the previous account: the read fails, so the belief
+            // it mirrored in stands - about `old@x`.
+            state.speleodb_session_status().expect("status");
+
+            let result = state
+                .speleodb_login(Some(base), None, None, Some("tok-new".to_owned()))
+                .expect("the paste login succeeds; only the keychain write fails");
+
+            assert_eq!(
+                result.storage,
+                crate::speleodb::TokenStorage::Memory,
+                "the locked keyring refused the write, so the key is session-only"
+            );
+            assert_eq!(
+                state.get_config().speleodb.email.as_deref(),
+                Some("new@x"),
+                "premise: the persisted account is now somebody else"
+            );
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "and what the keyring held for the PREVIOUS account is not a record \
+                 about this one - the two are keyed apart"
+            );
+
+            // The next launch, reading the config this login just wrote, on the same
+            // keyring that still will not answer.
+            let restarted = AppState::new().expect("restarted state");
+            lock_the_keyring(&restarted);
+            let mut settings = restarted.get_config();
+            settings.speleodb.keychain_disabled = true;
+            let report = restarted
+                .update_config(settings)
+                .expect("the settings still save");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "warning this account about a credential of somebody else's - one its \
+                 own eviction could never have removed - is the false alarm"
             );
         });
     }

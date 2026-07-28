@@ -936,8 +936,9 @@ mod tests {
                 config.speleodb.keychain_declined = true;
                 assert!(
                     !config.speleodb.keychain_has_token,
-                    "a keychain-less box cannot reach `true`: the only writers of it pass \
-                     `tier == TokenTier::Keychain`"
+                    "a keychain-less box cannot reach `true`: the flag mirrors \
+                     `TokenStore::keychain_has_token`, which rises only where a keychain \
+                     read or write actually succeeded, and none can here"
                 );
                 drop(config);
                 let mut session = state.speleodb.lock().expect("session");

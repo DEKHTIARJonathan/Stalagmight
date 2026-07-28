@@ -476,6 +476,25 @@ impl TokenStore {
         self.keychain_has_token |= has_token;
     }
 
+    /// Drop that belief because the ACCOUNT it is about has left the session.
+    ///
+    /// Not a proof of absence, and not the `false` the doc above warns is never one:
+    /// the belief is about `(endpoint, email)`, and this store outlives the account
+    /// it recorded it for. Signing in as somebody else reuses the same store, and an
+    /// entry the previous account left is keyed by an account key the new one can
+    /// neither read nor delete - so carrying the belief across made every later
+    /// launch open the keyring for the new account, and made the keyring switch
+    /// report a residue that is not theirs and that nothing keyed by them can
+    /// remove.
+    ///
+    /// Called from `SpeleoDbSession::forget_reporting`, where `endpoint` / `email`
+    /// are cleared - the one place an account leaves - and AFTER the sweep there,
+    /// which still needs the belief to decide what an unreadable keyring may be
+    /// holding for the account it is sweeping.
+    pub(crate) fn forget_keychain_belief(&mut self) {
+        self.keychain_has_token = false;
+    }
+
     /// Whether the keychain is off, for whatever reason. THE gate: every path that
     /// would otherwise touch the keyring asks this, because on Linux the touch is
     /// itself the desktop unlock prompt.
@@ -824,10 +843,15 @@ impl TokenStore {
                 // is also the one PROOF OF ABSENCE a read can give, so the recorded
                 // belief has to follow it down. This is what "a stale `true`
                 // self-corrects on the miss" means now that the config mirrors the
-                // field (`speleodb_persist_keychain_has_token`) rather than deriving
-                // it from a landing tier: an entry removed outside the app would
-                // otherwise stay believed-in forever, and warn about itself the
-                // first time this keyring is locked.
+                // field rather than deriving it from a landing tier: an entry
+                // removed outside the app would otherwise stay believed-in forever,
+                // and warn about itself the first time this keyring is locked.
+                //
+                // Lowering it HERE is only half of that. The correction reaches disk
+                // because `AppState::speleodb_ensure_rehydrated` reads this field
+                // back out and persists the drop right after the rehydrate that made
+                // this read; without that, the next launch re-reads the stale `true`
+                // and repeats the prompt.
                 Ok(None) => {
                     self.note_keychain(true);
                     self.keychain_has_token = false;

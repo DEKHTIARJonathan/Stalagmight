@@ -71,7 +71,14 @@ impl AppState {
     /// a launch-time unlock prompt and buys nothing. See both call sites.
     ///
     /// Best-effort like its siblings: a lost write costs at most one prompt, or one
-    /// sign-in.
+    /// sign-in. Best-effort is not write-ONCE, though - the value is PUT BACK when
+    /// the save fails, the same way `speleodb_persist_storage_choice` does and for
+    /// the same reason. The early return below compares against the in-memory value,
+    /// so a mutation left standing over a file that never took it makes every later
+    /// call with the same belief a no-op, and a transient failure (a full disk, a
+    /// config file a backup sweep has open) permanent until the next launch. What
+    /// that costs here is not a re-asked prompt but a lost RECORD: the launch after
+    /// it reads `false` off disk and skips a keyring entry that really exists.
     pub(super) fn speleodb_persist_keychain_has_token(&self, has_token: bool) {
         let mut config = self
             .config
@@ -80,8 +87,10 @@ impl AppState {
         if config.speleodb.keychain_has_token == has_token {
             return;
         }
+        let previous = config.speleodb.keychain_has_token;
         config.speleodb.keychain_has_token = has_token;
         if let Err(e) = config.save() {
+            config.speleodb.keychain_has_token = previous;
             tracing::warn!(
                 error = %e,
                 has_token,
@@ -104,6 +113,13 @@ impl AppState {
     /// key (login gates it on `TokenTier::Keychain`; so does the Settings "Try
     /// again"). Revoking the refusal on a retry that fell back to another tier
     /// brought the launch-time unlock prompt straight back (#259).
+    ///
+    /// The value is PUT BACK on a failed save, for the reason spelled out on
+    /// [`Self::speleodb_persist_keychain_has_token`]: the early return here compares
+    /// against the in-memory value, so a mutation left standing over a file that
+    /// never took it turns every later call with the same answer into a no-op. A
+    /// keychain that starts working again would then never get its `false` to disk,
+    /// and the launch after it would still skip a keyring that now works.
     pub(super) fn speleodb_persist_keychain_declined(&self, declined: bool) {
         let mut config = self
             .config
@@ -112,8 +128,10 @@ impl AppState {
         if config.speleodb.keychain_declined == declined {
             return; // no write, no disk churn on every login
         }
+        let previous = config.speleodb.keychain_declined;
         config.speleodb.keychain_declined = declined;
         if let Err(e) = config.save() {
+            config.speleodb.keychain_declined = previous;
             tracing::warn!(
                 error = %e,
                 declined,
@@ -132,6 +150,12 @@ impl AppState {
     /// Returns the reason the write did not land, so LOGOUT can report it. A
     /// silently-skipped clear is the whole hazard here: the caller was told logout
     /// succeeded while the seed that re-authenticates them is still on disk.
+    ///
+    /// No repeated-value guard, deliberately, so nothing here needs the roll-back its
+    /// two guarded siblings above make on a failed save: every call re-attempts the
+    /// write, which is what makes the next one a real retry rather than a no-op. The
+    /// value applied over a file that refused it is the SAFE direction besides - an
+    /// in-memory seed this process will not rehydrate from.
     ///
     /// A POISONED config mutex is recovered (`into_inner`) rather than treated as
     /// "cannot write", exactly as the save pipeline does with the project lock
@@ -280,7 +304,87 @@ fn logout_residue_error(
     reason = "unit test fixtures fail loudly on setup errors"
 )]
 mod tests {
-    use super::logout_residue_error;
+    use super::{logout_residue_error, AppState};
+
+    /// Make every `config.save()` fail, by squatting the config FILE's path with a
+    /// DIRECTORY - the write cannot land no matter how the save is spelled. Returns
+    /// the squatted path so the test can unblock it and retry. (Same idiom as
+    /// `logout_reports_a_seed_that_could_not_be_cleared`.)
+    fn squat_the_config_file() -> std::path::PathBuf {
+        let squatted = crate::test_helpers::config_path_override()
+            .expect("the override is active")
+            .join("config.toml");
+        std::fs::create_dir_all(&squatted).expect("squat the config file path");
+        squatted
+    }
+
+    #[test]
+    fn a_keychain_record_that_could_not_be_saved_is_retried_not_swallowed() {
+        // Both writers here mutate the in-memory config, then save, then guard the
+        // NEXT call on that same in-memory value. Leaving the mutation applied over a
+        // file that never took it made the very next call a no-op: the guard matched,
+        // so a transient failure - a full disk, a config file locked by a backup
+        // sweep - became permanent until the process restarted.
+        //
+        // What that costs here is not a re-asked prompt but a lost RECORD: the launch
+        // after it reads `false` off disk and skips a keyring entry that really
+        // exists, which is the entire failure `keychain_has_token` was introduced to
+        // prevent.
+        crate::test_helpers::with_isolated_config(|| {
+            let squatted = squat_the_config_file();
+            let state = AppState::new().expect("state");
+
+            state.speleodb_persist_keychain_has_token(true);
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "the value goes back when the save fails, or the retry below is a no-op"
+            );
+
+            // The retry, on a machine where whatever blocked the write has cleared.
+            std::fs::remove_dir(&squatted).expect("unblock the config file");
+            state.speleodb_persist_keychain_has_token(true);
+
+            assert!(
+                crate::config::Config::load()
+                    .expect("read the config back off disk")
+                    .speleodb
+                    .keychain_has_token,
+                "the retry has to re-attempt the disk write, not short-circuit on the \
+                 value the failed attempt left behind"
+            );
+        });
+    }
+
+    #[test]
+    fn a_keychain_refusal_that_could_not_be_saved_is_retried_not_swallowed() {
+        // The sibling writer, the same shape, and the same fix. Its stake is the
+        // launch-time unlock prompt in both directions: a `true` that never lands
+        // brings the prompt back, and a `false` that never lands - written only once
+        // the keychain has actually taken the key - leaves the next launch skipping a
+        // keyring that has started working again.
+        crate::test_helpers::with_isolated_config(|| {
+            let squatted = squat_the_config_file();
+            let state = AppState::new().expect("state");
+
+            state.speleodb_persist_keychain_declined(true);
+            assert!(
+                !state.get_config().speleodb.keychain_declined,
+                "the value goes back when the save fails, or the retry below is a no-op"
+            );
+
+            std::fs::remove_dir(&squatted).expect("unblock the config file");
+            state.speleodb_persist_keychain_declined(true);
+
+            assert!(
+                crate::config::Config::load()
+                    .expect("read the config back off disk")
+                    .speleodb
+                    .keychain_declined,
+                "the retry has to re-attempt the disk write, not short-circuit on the \
+                 value the failed attempt left behind"
+            );
+        });
+    }
 
     #[test]
     fn a_clean_logout_reports_nothing() {
