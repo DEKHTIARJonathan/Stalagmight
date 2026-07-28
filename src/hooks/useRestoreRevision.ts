@@ -1,10 +1,11 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import type { SpeleoOpenResult } from '../types/ipc.generated';
+import { dumpCandidates } from '../utils/speleoError';
 
 export interface RestoreRevisionArgs {
   projectId: string;
@@ -33,6 +34,12 @@ export interface RestoreRevisionArgs {
    * Everything else about the call is unchanged.
    */
   quiet?: boolean;
+  /**
+   * [#258] The dump entry the user picked, when this call is a retry from the
+   * ambiguity picker. Absent on a first attempt, which is what makes the backend
+   * classify normally.
+   */
+  entryPath?: string;
 }
 
 /**
@@ -49,8 +56,11 @@ export function useRestoreRevision() {
   const clearSelection = useUIStore((s) => s.clearSelection);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
+  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
+  /** [#258] The picker replays this very call with the chosen entry. */
+  const selfRef = useRef<((a: RestoreRevisionArgs) => Promise<void>) | null>(null);
 
-  return useCallback(
+  const restoreRevision = useCallback(
     async ({
       projectId,
       projectName,
@@ -59,6 +69,7 @@ export function useRestoreRevision() {
       restore,
       discardLocal = false,
       quiet = false,
+      entryPath,
     }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
@@ -70,6 +81,30 @@ export function useRestoreRevision() {
         restore,
         // Never waived for a View, whatever the caller passed.
         discardLocal: restore && discardLocal,
+        entryPath: entryPath ?? null,
+      }).catch((e: unknown) => {
+        // [#258] More than one openable file in the revision's tree. Offer the
+        // choice, then RETHROW rather than returning quietly: this hook is a middle
+        // step of the revert composite (start editing -> restore -> push), and a
+        // silent success there would push a tree that was never checked out. Every
+        // caller's existing failure path stays correct, and the picker adds the way
+        // forward beside it.
+        const candidates = dumpCandidates(e);
+        if (candidates) {
+          openDumpPicker(candidates, 'stalx', async (chosen) => {
+            await selfRef.current?.({
+              projectId,
+              projectName,
+              hexsha,
+              shortSha,
+              restore,
+              discardLocal,
+              quiet,
+              entryPath: chosen,
+            });
+          });
+        }
+        throw e;
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),
@@ -98,6 +133,20 @@ export function useRestoreRevision() {
         );
       }
     },
-    [t, showToast, setView, clearSelection, refreshProjectState, refreshLinkStatus],
+    [
+      t,
+      showToast,
+      setView,
+      clearSelection,
+      refreshProjectState,
+      refreshLinkStatus,
+      openDumpPicker,
+    ],
   );
+
+  useEffect(() => {
+    selfRef.current = restoreRevision;
+  }, [restoreRevision]);
+
+  return restoreRevision;
 }

@@ -56,3 +56,4 @@ export { default as SpeleoNoPermissionDialog } from './SpeleoNoPermissionDialog'
 export { default as SpeleoUnpushedLocalDialog } from './SpeleoUnpushedLocalDialog';
 export { default as HeldLockResumeDialog } from './HeldLockResumeDialog';
 export { default as SpeleoStorageChoiceDialog } from './SpeleoStorageChoiceDialog';
+export { default as SpeleoDumpPickerDialog } from './SpeleoDumpPickerDialog';

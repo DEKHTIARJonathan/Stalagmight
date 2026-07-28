@@ -149,6 +149,11 @@ export default function OpenFromSpeleoDbDialog() {
     if (outcome.status === 'adopt') {
       setPendingAdopt(project);
       setBusy(false);
+    } else if (outcome.status === 'ambiguous') {
+      // #258: the hook raised the file picker, which is an independent overlay - so
+      // unlike the prompt below, THIS dialog stays mounted underneath it and has to
+      // release its busy flag or the list stays frozen behind the choice.
+      setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
       // #270: the hook raised the keep-local / take-remote prompt, which has already
       // replaced this browser as the active dialog - so this component is unmounting

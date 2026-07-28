@@ -2974,6 +2974,18 @@
       "doneToast": "Project adopted. Start editing, then Done, to push it to SpeleoDB.",
       "doneToastNoWrite": "Project adopted locally, but its SpeleoDB type could not be changed (you may not have write access)."
     },
+    "dumpPicker": {
+      "titleStalx": "Choose which file to open",
+      "titleAriane": "Choose which file to adopt",
+      "body": "This SpeleoDB project holds more than one openable file, so Stalagmight cannot tell which one is the survey. Pick the one you want.",
+      "consequence": "The file you choose becomes the project. The next time you push, it replaces the project file on SpeleoDB - so unless you know otherwise, choose the one marked current. To stop being asked, remove the extra file(s) on SpeleoDB, leaving a single one.",
+      "currentBadge": "current",
+      "columnFile": "File",
+      "columnSize": "Size",
+      "columnModified": "Modified",
+      "confirmStalx": "Open",
+      "confirmAriane": "Adopt"
+    },
     "forceEdit": {
       "reconnect": "Reconnect to sync",
       "confirm": {

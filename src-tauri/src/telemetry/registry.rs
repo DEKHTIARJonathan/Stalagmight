@@ -239,6 +239,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.gpx-placement",
     "action.dialog.gpx-selection",
     "action.dialog.held-lock-resume",
+    "action.dialog.speleodb-dump-picker",
     "action.dialog.import",
     "action.dialog.insert-station",
     "action.dialog.keyboard-shortcuts",
@@ -308,6 +309,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.gpx-placement",
     "dialog-cancel.gpx-selection",
     "dialog-cancel.held-lock-resume",
+    "dialog-cancel.speleodb-dump-picker",
     "dialog-cancel.import",
     "dialog-cancel.insert-station",
     "dialog-cancel.keyboard-shortcuts",
@@ -404,6 +406,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.gpx-placement",
     "dwell.dialog.gpx-selection",
     "dwell.dialog.held-lock-resume",
+    "dwell.dialog.speleodb-dump-picker",
     "dwell.dialog.import",
     "dwell.dialog.insert-station",
     "dwell.dialog.keyboard-shortcuts",
@@ -549,6 +552,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.gpx-placement",
     "active-dwell.dialog.gpx-selection",
     "active-dwell.dialog.held-lock-resume",
+    "active-dwell.dialog.speleodb-dump-picker",
     "active-dwell.dialog.import",
     "active-dwell.dialog.insert-station",
     "active-dwell.dialog.keyboard-shortcuts",
@@ -801,8 +805,14 @@ mod tests {
     // `activeDialog`-derived stale check: either genuinely removed
     // (`adjust-closures`) or relocated OUT of the single `activeDialog` slot into an
     // independent overlay (`held-lock-resume`, #201 - so it can layer over another
-    // dialog during login). The slots are kept for event-numbering stability.
-    const REMOVED_DIALOGS: &[&str] = &["adjust-closures", "held-lock-resume"];
+    // dialog during login), or BORN as one (`speleodb-dump-picker`, #258 - the
+    // ambiguous-dump question is raised from four surfaces, three of which already
+    // hold the slot themselves). The slots are kept for event-numbering stability.
+    const REMOVED_DIALOGS: &[&str] = &[
+        "adjust-closures",
+        "held-lock-resume",
+        "speleodb-dump-picker",
+    ];
 
     /// `action.toggle.*` events that are intentionally NOT derived from
     /// `DISPLAY_DEFAULTS`. `geometryMode` is an enum display mode tracked via an
@@ -948,7 +958,13 @@ mod tests {
         //   + 2 plan-anchor round-trip commands (#310, the live-pin half of what the
         //       `.plnx` already did on save):
         //       command.plan_{anchors_for_refs,refs_for_anchors} = 691.
-        assert_eq!(EVENT_NAMES.len(), 691);
+        //   + 4 ambiguous-dump picker dialog events (#258). The condition is
+        //       EXOGENOUS - only a web-UI upload or a non-Stalagmight client can
+        //       produce a multi-file dump - so incidence and cancel rate are the
+        //       only way to learn whether the picker earns its upkeep:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-dump-picker = 695.
+        assert_eq!(EVENT_NAMES.len(), 695);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

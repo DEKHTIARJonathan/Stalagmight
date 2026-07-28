@@ -1,5 +1,6 @@
 import type {
   SpeleoDbAction,
+  SpeleoDumpCandidate,
   SpeleoErrorDto,
   TransportCause,
   UnpushedLocalEdits,
@@ -108,4 +109,29 @@ export function unpushedLocalEdits(e: unknown): UnpushedLocalEdits | null {
   const { project_id, local_path } = payload;
   if (typeof project_id !== 'string' || typeof local_path !== 'string' || !local_path) return null;
   return payload;
+}
+
+/**
+ * [#258] The openable files an ambiguous dump offered, or `null`.
+ *
+ * A dump holding more than one `.stalx` (or, with no `.stalx`, more than one
+ * `ariane.tml`) is a question rather than a failure: the backend rejects with
+ * `action === 'Ambiguous'` and attaches the candidates so the UI can offer a
+ * choice instead of a dead end.
+ *
+ * Validated structurally, like `unpushedLocalEdits`, and for the same reason: a
+ * list we cannot render must fall through to the generic error path, whose
+ * message names the remedy, rather than raise an empty picker. Note the
+ * fast-forward verbs (Start editing / Update / Take remote) carry no way to send
+ * a choice back, so they legitimately produce this action with nothing to act on
+ * - the empty check below is what routes those to the message.
+ */
+export function dumpCandidates(e: unknown): SpeleoDumpCandidate[] | null {
+  if (speleoErrorAction(e) !== 'Ambiguous') return null;
+  const payload = (e as Partial<SpeleoErrorDto>).dump_candidates;
+  if (!Array.isArray(payload) || payload.length === 0) return null;
+  const usable = payload.every(
+    (c) => c && typeof c === 'object' && typeof c.entry_path === 'string' && c.entry_path !== '',
+  );
+  return usable ? payload : null;
 }

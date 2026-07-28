@@ -5,6 +5,7 @@ import type {
   Permission,
   PushResult,
   RemoteState,
+  SpeleoDumpCandidate,
   SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
@@ -17,6 +18,10 @@ import type {
 import { invokeIpc } from '../utils/ipc';
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
+
+/** [#258] Which ambiguity the picker is resolving. Both share the mechanics and
+    differ only in the verb the user is offered. */
+export type DumpPickerKind = 'stalx' | 'ariane';
 
 /**
  * Shared SpeleoDB frontend state (#204/#203/#205). Holds the backend **session**
@@ -351,6 +356,38 @@ interface SpeleoStore {
       the next login, which is the safe direction for a prompt someone escaped out
       of rather than answered. */
   closeStorageChoice: () => void;
+
+  /** [#258] The ambiguous-dump picker: the candidates a rejected pull offered, and
+   *  the pending call to replay once the user has chosen.
+   *
+   *  An INDEPENDENT overlay for the same reason as the storage prompt above, plus
+   *  one of its own: this question is raised from FOUR unrelated surfaces (the
+   *  Open-from-SpeleoDB browser, GlobalView, the refused-open prompt, and the
+   *  revision history inside the project dialog), and three of those already
+   *  occupy the single `activeDialog` slot themselves. */
+  dumpPickerOpen: boolean;
+  /** The entries the backend offered, already ordered canonical-first. */
+  dumpPickerCandidates: SpeleoDumpCandidate[];
+  /** Which question is being asked - it changes the verb, not the mechanics. */
+  dumpPickerKind: DumpPickerKind;
+  /** A resolve is in flight, so the dialog must not be dismissed out from under it. */
+  dumpPickerBusy: boolean;
+  /** Raise the picker for `candidates`, replaying `retry` with the chosen entry. */
+  openDumpPicker: (
+    candidates: SpeleoDumpCandidate[],
+    kind: DumpPickerKind,
+    retry: (entryPath: string) => Promise<void>,
+  ) => void;
+  /** Dismiss WITHOUT choosing. Nothing was downloaded over and nothing was
+      replaced - the classify step runs before the cache is touched - so cancelling
+      is genuinely free and the question can simply be asked again. */
+  closeDumpPicker: () => void;
+  /** Re-run the pending call with the chosen entry, then close. Left OPEN on
+      failure so the choice is not silently lost; the caller surfaces the error. */
+  resolveDumpPicker: (entryPath: string) => Promise<void>;
+  /** The pending call, held so the dialog itself stays presentational. Not part of
+      the picker's public surface - callers go through `openDumpPicker`. */
+  dumpPickerRetry: ((entryPath: string) => Promise<void>) | null;
   /** Answer the storage question: persist the tier + the settled refusal, and move
       the held token there (no re-login - the backend still has it).
       Resolves the tier the key ACTUALLY LANDED ON, which is not always the one that
@@ -802,6 +839,45 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
 
   closeStorageChoice: () => set({ storageChoiceOpen: false }),
 
+  dumpPickerOpen: false,
+  dumpPickerCandidates: [],
+  dumpPickerKind: 'stalx',
+  dumpPickerBusy: false,
+  dumpPickerRetry: null,
+
+  openDumpPicker: (candidates, kind, retry) =>
+    set({
+      dumpPickerOpen: true,
+      dumpPickerCandidates: candidates,
+      dumpPickerKind: kind,
+      dumpPickerBusy: false,
+      dumpPickerRetry: retry,
+    }),
+
+  closeDumpPicker: () =>
+    set({
+      dumpPickerOpen: false,
+      dumpPickerCandidates: [],
+      dumpPickerBusy: false,
+      dumpPickerRetry: null,
+    }),
+
+  resolveDumpPicker: async (entryPath) => {
+    const retry = get().dumpPickerRetry;
+    if (!retry) return;
+    set({ dumpPickerBusy: true });
+    try {
+      await retry(entryPath);
+      // Only close on success. A failed retry may itself be a FRESH ambiguity (the
+      // tree moved while the dialog was open), and that re-raise has already
+      // replaced the candidate list - closing here would throw it away.
+      if (!get().dumpPickerBusy) return;
+      set({ dumpPickerOpen: false, dumpPickerCandidates: [], dumpPickerRetry: null });
+    } finally {
+      set({ dumpPickerBusy: false });
+    }
+  },
+
   // Both credential verbs write `config.speleodb.{token_fallback,keychain_declined}`
   // on the backend, so the frontend's config copy is stale the moment they return.
   // `update_config` now preserves that pair server-side (the Settings form does not
@@ -988,6 +1064,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // Same reasoning: the storage prompt asks where to put a key that no longer
       // exists once the session has ended.
       storageChoiceOpen: false,
+      // The candidates describe a server tree this session can no longer reach.
+      dumpPickerOpen: false,
+      dumpPickerCandidates: [],
+      dumpPickerBusy: false,
+      dumpPickerRetry: null,
     })),
 
   seedFromStatus: (s) =>

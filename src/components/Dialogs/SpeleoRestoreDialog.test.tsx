@@ -71,6 +71,8 @@ describe('SpeleoRestoreDialog (#218)', () => {
       // The first attempt never waives the un-pushed-edits guard - only the armed
       // second press does, after the refusal has named what is being discarded.
       discardLocal: false,
+      // [#258] and it names no dump entry, so the backend classifies normally.
+      entryPath: null,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

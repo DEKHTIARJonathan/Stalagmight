@@ -1,10 +1,15 @@
-import { useCallback } from 'react';
+import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
-import { speleoErrorAction, humanizeSpeleoError, unpushedLocalEdits } from '../utils/speleoError';
+import {
+  speleoErrorAction,
+  humanizeSpeleoError,
+  unpushedLocalEdits,
+  dumpCandidates,
+} from '../utils/speleoError';
 import { needsSpeleoHandBackPrompt } from '../utils/quit';
 import type {
   SpeleoProjectSummary,
@@ -47,6 +52,13 @@ export type OpenRemoteOutcome =
     }
   | { status: 'load_failed' }
   | { status: 'unpushed_local' }
+  /**
+   * [#258] The dump held more than one openable file. Like `unpushed_local`, the
+   * hook has ALREADY raised the prompt - the caller must only clear its busy flag
+   * and must not surface this as an error, because nothing failed: the user is
+   * being asked a question the app could not answer for them.
+   */
+  | { status: 'ambiguous' }
   | { status: 'error'; message: string; reLogin: boolean };
 
 interface UseOpenRemoteProjectOpts {
@@ -78,6 +90,16 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
   const setLinkOnOpen = useSpeleoStore((s) => s.setLinkOnOpen);
+  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
+  /**
+   * [#258] The picker replays the very call that raised it, so the retry has to
+   * reach `openRemote` from inside `openRemote`'s own definition. A ref rather
+   * than a mutual dependency keeps the callback's identity stable - the retry only
+   * ever runs after a user has clicked, long after this is populated.
+   */
+  const openRemoteRef = useRef<
+    ((s: SpeleoProjectSummary, o?: { entryPath?: string }) => Promise<OpenRemoteOutcome>) | null
+  >(null);
 
   // Shared tail: a pull (open or adopt) produced a local .stalx - seed the link
   // optimistically from the summary permission, then load. Roll the seed back if the
@@ -360,7 +382,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   );
 
   const openRemote = useCallback(
-    async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+    async (
+      summary: SpeleoProjectSummary,
+      opts?: { entryPath?: string },
+    ): Promise<OpenRemoteOutcome> => {
       // Before the pull, the seed and the load: nothing about the open project may be
       // given up silently (see `handBackRefusal`).
       const refusal = handBackRefusal(summary);
@@ -373,6 +398,9 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
+          // [#258] Present only on a retry from the picker; absent on a first
+          // attempt, which is what makes the backend classify normally.
+          entryPath: opts?.entryPath ?? null,
         });
       } catch (e) {
         // #214: an Ariane (.tml-only) project routes here (backend returns the typed
@@ -383,6 +411,21 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // keep-local / take-remote prompt HERE rather than at each call site, so both
         // entry points (the browser dialog and the GlobalView remote rows) get the
         // choice instead of a dead-end error. Every other failure falls through.
+        // #258: more than one openable file, so the app has no basis to choose.
+        // Raise the picker HERE for the same reason the refused-open prompt is
+        // raised here - all three hosts of this hook get the choice rather than
+        // each having to recognise the typed action for itself.
+        const candidates = dumpCandidates(e);
+        if (candidates) {
+          openDumpPicker(candidates, 'stalx', async (entryPath) => {
+            const retried = await openRemoteRef.current?.(summary, { entryPath });
+            // A retry that fails for some OTHER reason must not be swallowed by the
+            // dialog: rethrow so the store leaves the picker open and the host
+            // surfaces the message, exactly as the first attempt would have.
+            if (retried?.status === 'error') throw new Error(retried.message);
+          });
+          return { status: 'ambiguous' };
+        }
         const unpushed = unpushedLocalEdits(e);
         if (unpushed) {
           openDialog('speleodb-unpushed-local', {
@@ -408,7 +451,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDialog, cancelReturnsTo, t],
+    [
+      finishOpen,
+      handBackRefusal,
+      handBackRefusalAfterPull,
+      openDialog,
+      openDumpPicker,
+      cancelReturnsTo,
+      t,
+    ],
   );
 
   /**
@@ -632,6 +683,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     },
     [finishOpen, handBackRefusal, t],
   );
+
+  useEffect(() => {
+    openRemoteRef.current = openRemote;
+  }, [openRemote]);
 
   return { openRemote, adoptRemote, keepLocalCopy, takeRemoteDiscardingLocal };
 }

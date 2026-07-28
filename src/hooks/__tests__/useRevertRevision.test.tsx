@@ -119,6 +119,9 @@ describe('useRevertRevision - the happy path', () => {
       restore: true,
       // The first attempt never waives the un-pushed-edits guard.
       discardLocal: false,
+      // [#258] A first attempt sends no chosen entry, which is what makes the
+      // backend classify the dump normally rather than honour a stale pick.
+      entryPath: null,
     });
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
   });
