@@ -89,7 +89,20 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
     }
 }
 
-/// Is `chosen` one of the entries this dump is actually ambiguous BETWEEN?
+/// Which KIND of openable entry a picker choice landed on. [#258]
+///
+/// The kind has to travel with the path. An `ariane.tml` and a `.stalx` are both
+/// openable entries a user can be asked to choose between, but only one of them can
+/// be written into the cache `.stalx` - the other has to be imported. Handing back a
+/// bare path let a chosen `.tml` be extracted as if it were a database, which fails
+/// to open AND replaces whatever clean copy was there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChosenKind {
+    Stalx,
+    Ariane,
+}
+
+/// Which set `chosen` belongs to, or `None` if this dump never offered it.
 ///
 /// [#258] The single validation standing between a webview-supplied `entryPath` and
 /// the extract. `chosen` crosses IPC, so it is attacker-influenceable; this refuses
@@ -100,12 +113,12 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
 /// remembered from an earlier download - otherwise it validates a listing the
 /// extract does not honour. Comparison is exact: the archive is keyed by byte-equal
 /// names, so any normalisation here would let a near-miss resolve to a real entry.
-pub(crate) fn candidate_is_member(entry_paths: &[String], chosen: &str) -> bool {
+pub(crate) fn chosen_candidate(entry_paths: &[String], chosen: &str) -> Option<ChosenKind> {
+    let holds = |paths: &[String]| paths.iter().any(|p| p == chosen);
     match classify(entry_paths) {
-        DumpClassification::AmbiguousStalx(paths) | DumpClassification::AmbiguousAriane(paths) => {
-            paths.iter().any(|p| p == chosen)
-        }
-        _ => false,
+        DumpClassification::AmbiguousStalx(paths) if holds(&paths) => Some(ChosenKind::Stalx),
+        DumpClassification::AmbiguousAriane(paths) if holds(&paths) => Some(ChosenKind::Ariane),
+        _ => None,
     }
 }
 
@@ -360,7 +373,8 @@ impl<'a> Dump<'a> {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        candidate_is_member, classify, download_temp_path, Dump, DumpClassification, SpeleoDbError,
+        chosen_candidate, classify, download_temp_path, ChosenKind, Dump, DumpClassification,
+        SpeleoDbError,
     };
 
     fn paths(items: &[&str]) -> Vec<String> {
@@ -381,35 +395,43 @@ mod tests {
     }
 
     #[test]
-    fn candidate_is_member_accepts_only_what_the_classifier_offered() {
+    fn chosen_candidate_accepts_only_what_the_classifier_offered_and_says_which_kind() {
         // [#258] This is the whole trust boundary for the webview-supplied
         // entryPath: it must admit exactly the entries the picker was shown, and
         // nothing else.
         let ambiguous = paths(&["a.stalx", "b.stalx", "notes.txt"]);
-        assert!(candidate_is_member(&ambiguous, "a.stalx"));
-        assert!(candidate_is_member(&ambiguous, "b.stalx"));
+        assert_eq!(
+            chosen_candidate(&ambiguous, "a.stalx"),
+            Some(ChosenKind::Stalx)
+        );
+        assert_eq!(
+            chosen_candidate(&ambiguous, "b.stalx"),
+            Some(ChosenKind::Stalx)
+        );
         assert!(
-            !candidate_is_member(&ambiguous, "notes.txt"),
+            chosen_candidate(&ambiguous, "notes.txt").is_none(),
             "a non-openable entry of the same archive must be refused"
         );
         assert!(
-            !candidate_is_member(&ambiguous, "c.stalx"),
+            chosen_candidate(&ambiguous, "c.stalx").is_none(),
             "an entry that is not in this archive at all must be refused"
         );
         assert!(
-            !candidate_is_member(&ambiguous, "A.STALX"),
+            chosen_candidate(&ambiguous, "A.STALX").is_none(),
             "matching is exact: the archive is keyed by byte-equal names, so a \
              near-miss must not resolve to a real entry"
         );
         // A dump that is NOT ambiguous offers nothing, so no pick is honoured -
         // this is what stops a chosen path steering an unambiguous open.
-        assert!(!candidate_is_member(
-            &paths(&["misc/project.stalx"]),
-            "misc/project.stalx"
-        ));
+        assert!(chosen_candidate(&paths(&["misc/project.stalx"]), "misc/project.stalx").is_none());
         // The ariane arm is a member set too.
         let two_tml = paths(&["ariane.tml", "misc/ariane.tml"]);
-        assert!(candidate_is_member(&two_tml, "misc/ariane.tml"));
+        // ...and it reports the kind, because only a `.stalx` may be extracted into
+        // the cache database. A `.tml` has to be imported instead.
+        assert_eq!(
+            chosen_candidate(&two_tml, "misc/ariane.tml"),
+            Some(ChosenKind::Ariane)
+        );
     }
 
     #[test]

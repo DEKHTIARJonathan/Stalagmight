@@ -90,8 +90,15 @@ pub(super) fn resolve_dump_entry(
 ) -> Result<String, SpeleoDbError> {
     let names = dump.entry_paths()?;
     if let Some(chosen) = chosen {
-        if dump::candidate_is_member(&names, chosen) {
-            return Ok(chosen.to_owned());
+        match dump::chosen_candidate(&names, chosen) {
+            Some(dump::ChosenKind::Stalx) => return Ok(chosen.to_owned()),
+            // An `ariane.tml` is openable, but NOT by this path: every caller hands
+            // the result to `replace_cache_stalx_with`, which would write TML bytes
+            // into the cache `.stalx` - unopenable, and over whatever clean copy was
+            // there. It routes to adoption instead, the one flow that imports rather
+            // than extracts, and which carries the chosen entry so the pick is kept.
+            Some(dump::ChosenKind::Ariane) => return Err(SpeleoDbError::AdoptAriane),
+            None => {}
         }
     }
     classify_dump_entry(&names).map_err(|reason| unopenable_to_error(reason, dump))
@@ -119,9 +126,28 @@ impl AppState {
     ) -> Result<String, SpeleoDbError> {
         let recalled = self.speleodb_recalled_dump_entry(project_id);
         let candidate = chosen.or(recalled.as_deref());
-        let entry = resolve_dump_entry(dump, candidate)?;
-        self.speleodb_remember_dump_entry(project_id, &entry);
-        Ok(entry)
+        match resolve_dump_entry(dump, candidate) {
+            Ok(entry) => {
+                self.speleodb_remember_dump_entry(project_id, &entry);
+                Ok(entry)
+            }
+            // [#258] The pick was an `ariane.tml`, so this path refuses it and the
+            // flow routes to adoption. Record it anyway: adoption is a SEPARATE
+            // command reached through a confirm dialog, so without this the answer
+            // would be lost between the two and the picker would re-ask forever.
+            // Only when it really is this archive's Ariane pick - the same refusal
+            // arises for an ordinary `.tml`-only dump, where there was no choice.
+            Err(SpeleoDbError::AdoptAriane) => {
+                if let Some(chosen) = candidate {
+                    let names = dump.entry_paths()?;
+                    if dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane) {
+                        self.speleodb_remember_dump_entry(project_id, chosen);
+                    }
+                }
+                Err(SpeleoDbError::AdoptAriane)
+            }
+            Err(e) => Err(e),
+        }
     }
 
     /// [#258] Ask what a dump holds WITHOUT taking a lock or touching the cache.
@@ -435,6 +461,7 @@ impl AppState {
         project_name: String,
         latest_commit_sha: Option<String>,
         discard_local: bool,
+        entry_path: Option<String>,
     ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -453,22 +480,41 @@ impl AppState {
         // `.stalx` has since appeared (a stale `type_tag`, a TOCTOU race with another
         // writer), refuse and tell the user to reopen normally rather than clobber it.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let tml_entry = match dump::classify(&dump.entry_paths().map_err(local_dto)?) {
-            DumpClassification::AdoptAriane(tml) => tml,
-            DumpClassification::Stalx(_) => {
+        let names = dump.entry_paths().map_err(local_dto)?;
+        // [#258] A dump with several `ariane.tml` is ambiguous, and this is the flow
+        // that answers it: the picker's choice arrives here, checked for membership
+        // against THIS archive exactly like a `.stalx` pick. Without it the picker
+        // would re-raise the same question on every retry, because nothing else on
+        // this path can act on the answer.
+        // The picker's answer reaches this command either directly, or - when the
+        // ambiguity surfaced on the OPEN path, which refuses a `.tml` and routes
+        // here - through the entry that path recorded for this session.
+        let remembered = self.speleodb_recalled_dump_entry(&project_id);
+        let picked = entry_path
+            .as_deref()
+            .or(remembered.as_deref())
+            .filter(|chosen| {
+                dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane)
+            });
+        let tml_entry = match (picked, dump::classify(&names)) {
+            (Some(chosen), _) => chosen.to_owned(),
+            (None, DumpClassification::AdoptAriane(tml)) => tml,
+            (None, DumpClassification::Stalx(_)) => {
                 return Err(local_dto(SpeleoDbError::Parse(
                     "this project now has a Stalagmight file on the server; reopen it normally"
                         .to_owned(),
                 )));
             }
-            DumpClassification::NothingToOpen => return Err(local_dto(SpeleoDbError::EmptyDump)),
-            DumpClassification::AmbiguousStalx(paths) => {
+            (None, DumpClassification::NothingToOpen) => {
+                return Err(local_dto(SpeleoDbError::EmptyDump))
+            }
+            (None, DumpClassification::AmbiguousStalx(paths)) => {
                 return Err(local_dto(unopenable_to_error(
                     UnopenableDump::AmbiguousStalx(paths),
                     &mut dump,
                 )));
             }
-            DumpClassification::AmbiguousAriane(paths) => {
+            (None, DumpClassification::AmbiguousAriane(paths)) => {
                 return Err(local_dto(unopenable_to_error(
                     UnopenableDump::AmbiguousAriane(paths),
                     &mut dump,
@@ -826,6 +872,20 @@ mod tests {
              restore, and the lock-free probe); a change here means a site was added or \
              one stopped remembering"
         );
+    }
+
+    #[test]
+    fn a_chosen_ariane_entry_is_never_handed_to_the_cache_replace() {
+        // [#258] Every caller passes this result to `replace_cache_stalx_with`, so
+        // returning a `.tml` path here wrote TML bytes into the cache `.stalx` - a
+        // file that cannot be opened, written over whatever clean copy was there.
+        // The choice is honoured, but by the adoption flow, which imports.
+        let zip = make_zip(&["ariane.tml", "misc/ariane.tml"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        assert!(matches!(
+            resolve_dump_entry(&mut dump, Some("misc/ariane.tml")),
+            Err(SpeleoDbError::AdoptAriane)
+        ));
     }
 
     #[test]

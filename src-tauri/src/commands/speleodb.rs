@@ -175,10 +175,17 @@ pub async fn speleodb_adopt_ariane(
     project_name: String,
     latest_commit_sha: Option<String>,
     discard_local: Option<bool>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha, discard_local)
+        s.speleodb_adopt_ariane(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            discard_local,
+            entry_path,
+        )
     })
     .await
 }
