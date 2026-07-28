@@ -45,7 +45,9 @@ const READ_ONLY_LINK: SpeleoLinkState = {
 
 beforeEach(() => {
   useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
-  useSpeleoStore.setState({ link: null });
+  // A CONFIRMED-local project. Since #270 the SpeleoDB term fails closed, so
+  // `link: null` alone is the UNRESOLVED state (read-only), not the editable one.
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
 });
 
 describe('useEditingBlocked()', () => {

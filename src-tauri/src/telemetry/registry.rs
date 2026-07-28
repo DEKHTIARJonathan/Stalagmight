@@ -133,9 +133,11 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_list_collaborators",
     "command.speleodb_list_projects",
     "command.speleodb_list_teams",
+    "command.speleodb_local_project_states",
     "command.speleodb_login",
     "command.speleodb_logout",
     "command.speleodb_open_project",
+    "command.speleodb_open_project_discarding_local",
     "command.speleodb_patch_project",
     "command.speleodb_publish",
     "command.speleodb_push",
@@ -145,11 +147,13 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_remove_collaborator",
     "command.speleodb_remove_team",
     "command.speleodb_restore_revision",
+    "command.speleodb_retry_keychain",
     "command.speleodb_search_users",
     "command.speleodb_session",
     "command.speleodb_set_collaborator",
     "command.speleodb_set_exclude_geojson",
     "command.speleodb_set_team",
+    "command.speleodb_set_token_storage",
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
@@ -248,8 +252,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-divergence",
     "action.dialog.speleodb-force-edit",
     "action.dialog.speleodb-close",
+    "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
+    "action.dialog.speleodb-unpushed-local",
     "action.dialog.speleodb-restore",
+    "action.dialog.speleodb-revert",
+    "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
     "action.dialog.split-section",
     "action.dialog.swap-comments",
@@ -312,8 +320,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-divergence",
     "dialog-cancel.speleodb-force-edit",
     "dialog-cancel.speleodb-close",
+    "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
+    "dialog-cancel.speleodb-unpushed-local",
     "dialog-cancel.speleodb-restore",
+    "dialog-cancel.speleodb-revert",
+    "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
     "dialog-cancel.split-section",
     "dialog-cancel.swap-comments",
@@ -402,8 +414,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-divergence",
     "dwell.dialog.speleodb-force-edit",
     "dwell.dialog.speleodb-close",
+    "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
+    "dwell.dialog.speleodb-unpushed-local",
     "dwell.dialog.speleodb-restore",
+    "dwell.dialog.speleodb-revert",
+    "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
     "dwell.dialog.split-section",
     "dwell.dialog.swap-comments",
@@ -542,8 +558,12 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-divergence",
     "active-dwell.dialog.speleodb-force-edit",
     "active-dwell.dialog.speleodb-close",
+    "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
+    "active-dwell.dialog.speleodb-unpushed-local",
     "active-dwell.dialog.speleodb-restore",
+    "active-dwell.dialog.speleodb-revert",
+    "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
     "active-dwell.dialog.split-section",
     "active-dwell.dialog.swap-comments",
@@ -888,9 +908,32 @@ mod tests {
         //   + 4 unrecognised-shot-kind dialog events (#27):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .unrecognised-shot-kind = 661.
+        //   + 1 SpeleoDB per-project local-state command (the local half of the
+        //       held-lock / GlobalView joins):
+        //       command.speleodb_local_project_states = 662.
+        //   + 1 SpeleoDB discard-local re-pull command (the "take remote and
+        //       discard local" branch of the refused-open prompt):
+        //       command.speleodb_open_project_discarding_local = 663.
+        //   + 4 quit-with-unpushed-edits dialog events:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-quit = 667.
+        //   + 4 refused-open (unpushed local edits) dialog events:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-unpushed-local = 671.
+        //   + 4 SpeleoDB project dialog events (the per-project administration
+        //       promoted out of Project Settings):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-project = 675.
+        //   + 4 revert-a-revision dialog events (the read-only route that takes the
+        //       lock, uploads the chosen revision and releases it again):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-revert = 679.
+        //   + 2 credential-storage commands (the login-time "where should the key
+        //       go?" answer and the Settings keychain retry):
+        //       command.speleodb_{set_token_storage,retry_keychain} = 681.
         //   + 2 dive-profile export commands (#299):
-        //       command.{export_dive_profile,render_dive_profile_text} = 663.
-        assert_eq!(EVENT_NAMES.len(), 663);
+        //       command.{export_dive_profile,render_dive_profile_text} = 683.
+        assert_eq!(EVENT_NAMES.len(), 683);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

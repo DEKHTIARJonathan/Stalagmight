@@ -154,6 +154,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
         section_offsets: Record<string, unknown>;
       } | null = null;
       let projectPath: string | null = null;
+      // `BinaryEnvelope::is_remote` (#270): whether the loaded `.stalx` lives in
+      // the SpeleoDB cache. The frontend resolves the read-only gate from this
+      // SYNCHRONOUSLY at load, so leaving it off the envelope pinned every
+      // Playwright load to `projectLinkKind: 'local'`. Local by default (what
+      // almost every spec means); flip per-spec with __MOCK_SET_PROJECT_IS_REMOTE__.
+      let projectIsRemote = false;
+      // Window teardown calls, so an exit-guard spec can assert the POSITIVE
+      // outcome of an unguarded close instead of only "no dialog appeared".
+      let windowDestroyCount = 0;
+      let windowCloseCount = 0;
       let sectionCounter = 0;
       // Shot ids are section-encoded, exactly as the backend allocates them:
       // `Section::new` seeds `next_shot_id = section.id * FEATURE_ID_STRIDE` and
@@ -295,6 +305,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             __E2E_TEST__?: { projectStore?: { setState: (partial: { databaseOpen: boolean }) => void } };
           }
         ).__E2E_TEST__?.projectStore?.setState({ databaseOpen: path !== null });
+      };
+      // Make the next binary load report the project as a SpeleoDB-cached copy
+      // (or back to local), so a spec can exercise the #270 read-only gate from
+      // the load path itself rather than by poking the speleo store afterwards.
+      (window as unknown as Record<string, unknown>).__MOCK_SET_PROJECT_IS_REMOTE__ = (
+        isRemote: boolean,
+      ) => {
+        projectIsRemote = isRemote;
+      };
+      (window as unknown as Record<string, unknown>).__MOCK_GET_WINDOW_TEARDOWN_COUNTS__ = () => ({
+        destroy: windowDestroyCount,
+        close: windowCloseCount,
+      });
+      (window as unknown as Record<string, unknown>).__MOCK_RESET_WINDOW_TEARDOWN_COUNTS__ = () => {
+        windowDestroyCount = 0;
+        windowCloseCount = 0;
       };
       (window as unknown as Record<string, unknown>).__MOCK_GET_TRACK_IMPORTED_FILE_CALLS__ = () => [...trackImportedFileCalls];
       (window as unknown as Record<string, unknown>).__MOCK_RESET_TRACK_IMPORTED_FILE_CALLS__ = () => {
@@ -989,6 +1015,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // discriminant in bits 0-1 rather than a single is_reference bit.
               version: 3,
               loading_id: jsonResult.loadingId,
+              // Added to the envelope at v3 alongside the ShotKind bits
+              // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
+              // it here made every mocked load resolve `isRemote: undefined` and
+              // open the SpeleoDB read-only gate. The version tripwire pins the
+              // NUMBER, not the field set, so it stayed green.
+              is_remote: projectIsRemote,
               project_header: {
                 name: jsonResult.project.name ?? 'Test Project',
                 location: jsonResult.project.location ?? null,
@@ -3020,10 +3052,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
 
           case 'update_config':
-            // Mock update_config - store config and return success
+            // Mock update_config - store config and return the real command's shape:
+            // a ConfigSaveReport whose only field is the keyring residue a "never use
+            // the OS keychain" save could not evict. `null` is the ordinary answer.
             console.log('[Mock IPC] update_config called with:', args);
             savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
-            return { success: true };
+            return { keychain_residue: null };
 
           case 'update_data_table_view': {
             console.log('[Mock IPC] update_data_table_view called with:', args);
@@ -3386,6 +3420,22 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'plugin:window|set_title':
           case 'plugin:window|current':
             return { label: 'main' };
+
+          // The real teardown the exit flow ends in (`useBeforeUnload`'s
+          // closeWindowNow -> getCurrentWindow().destroy()). Counted, not just
+          // swallowed, so a spec can assert that an UNGUARDED close actually
+          // PROCEEDED - "no dialog appeared" alone also holds when the close
+          // handler silently did nothing.
+          case 'plugin:window|destroy':
+            windowDestroyCount += 1;
+            return null;
+
+          // `performQuit()` asks for a close; the real backend prevents it and
+          // re-emits `tauri://close-requested`, which the app turns into the
+          // destroy above. Counted for the same reason.
+          case 'plugin:window|close':
+            windowCloseCount += 1;
+            return null;
 
           case 'get_stations':
             return [];
@@ -4066,7 +4116,29 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // the settings tab + browser render without a live server. No e2e spec
           // drives the hand-off yet; these keep the mounts from erroring on null.
           case 'speleodb_session':
-            return { logged_in: false, user_email: null, endpoint: null, keychain_backed: false };
+            return {
+              logged_in: false,
+              user_email: null,
+              endpoint: null,
+              keychain_backed: false,
+              // No login this session, so nothing has touched the keychain - which
+              // is exactly what the UI must be able to say without probing.
+              storage: null,
+              keychain: 'not_attempted',
+            };
+          // The credential-storage verbs both answer with a refreshed session. A
+          // mocked run is signed out, so they echo the logged-out shape above
+          // rather than inventing a session the rest of the mock does not have.
+          case 'speleodb_set_token_storage':
+          case 'speleodb_retry_keychain':
+            return {
+              logged_in: false,
+              user_email: null,
+              endpoint: null,
+              keychain_backed: false,
+              storage: null,
+              keychain: 'not_attempted',
+            };
           case 'speleodb_link_status':
             // Full SpeleoLinkStatus shape (remote_state / access_denied / server_error
             // included) so a spec that flips is_remote:true still matches the DTO.
@@ -4083,6 +4155,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             };
           case 'speleodb_list_projects':
             return [];
+          // #270: local (un-pushed) state per project id, keyed by id. Nothing is
+          // cached in a mocked run, so every list renders without a local-edit
+          // accent; specs that need one override this per spec.
+          case 'speleodb_local_project_states':
+            return {};
           case 'speleodb_take_remote':
             // Returns the reloaded .stalx path (#198); no e2e spec drives it yet.
             return '/mock/project.stalx';
@@ -4134,6 +4211,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               user_email: 'test@example.com',
               endpoint: 'https://speleodb.example',
               keychain_backed: true,
+              storage: 'keychain',
+              keychain: 'available',
+              needs_storage_choice: false,
             };
 
           default:

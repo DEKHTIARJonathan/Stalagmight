@@ -1,12 +1,16 @@
-import { useEffect } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoMenuItems } from './useSpeleoMenuItems';
+import { SpeleoStatusMenu } from './SpeleoStatusMenu';
 import { permissionAtLeast } from '../../utils/speleoPermission';
 import { MIN_POLL_INTERVAL_SECONDS, MAX_POLL_INTERVAL_SECONDS } from '../../types/config';
-import { LockIcon, PencilIcon } from '../common/icons';
+import { UNPUSHED_ACCENT } from '../../utils/speleoLocalState';
+import { holdsWriteLock } from '../../utils/quit';
+import { LockIcon } from '../common/icons';
 import {
   SpeleoBadgedIcon,
   HourglassGlyph,
@@ -15,6 +19,7 @@ import {
   CrossedPencilGlyph,
   QuestionMarkGlyph,
   EditNoLockGlyph,
+  PenGlyph,
 } from '../common/SpeleoBadgedIcon';
 
 type ButtonKind =
@@ -32,8 +37,10 @@ type ButtonKind =
  * The single SpeleoDB status button (T2c), mounted right of the hamburger when a
  * remote project is open. The white logo carries a state glyph + color; one click
  * drives the hand-off:
- * - 🟡 pencil (read-only, up to date) → acquire the lock (Start editing)
- * - 🟢 lock (we hold it) → release; if dirty, the push&release dialog
+ * - (no badge) read-only, up to date - the resting state → acquire the write lock
+ *   (Start editing). Bare on purpose: nothing is wrong and nothing is held, so it
+ *   is the one state with nothing to announce.
+ * - 🟢 pen (we hold the write lock) → release; if dirty, the push&release dialog
  * - 🟥 crossed-pencil on faint red (force-editing WITHOUT the lock, #213) → Reconnect
  * - 🟠 hourglass (someone else holds it) → pull the latest; if dirty, resolve
  * - 🔵 pull (remote advanced) → pull the latest; if dirty, resolve
@@ -41,6 +48,15 @@ type ButtonKind =
  * - 🟥 crimson (conflict) → the resolution dialog (#198)
  * - ❗ red exclamation (no permission - shared as a file) → offer converting to a
  *   plain unmanaged .stalx (fix 10)
+ *
+ * Across ALL of those states (#270) the mark itself turns from white to yellow
+ * whenever the project has edits that are not on SpeleoDB, and gains a standalone
+ * yellow "!" when those edits are not even protected by a held lock - which is what
+ * makes the "unlocked" state stop being dirty-blind.
+ *
+ * A RIGHT-click opens the hamburger's SpeleoDB submenu against the button instead
+ * (`SpeleoStatusMenu`), so every hand-off verb is reachable from the indicator that
+ * reports the state, not only the one the left click happens to be wired to.
  *
  * It also owns the remote-state poll (configurable interval, clamped 30s..24h)
  * while a remote project is open.
@@ -60,6 +76,13 @@ export function SpeleoStatusButton() {
   // and crash the whole SingleSystemView on mount. Fall back to the 60s default.
   const pollInterval = useProjectStore((s) => s.config?.speleodb?.poll_interval_seconds ?? 60);
   const { busy, startEditing, update, done } = useSpeleoActions();
+  // The right-click menu's rows - the same array the hamburger's SpeleoDB submenu
+  // renders. Held in LOCAL state rather than the `activeDialog` slot: the store-driven
+  // ContextMenu is hard-wired to survey-entity targets, and routing through
+  // `activeDialog` would evict the very dialogs these rows open.
+  const speleoItems = useSpeleoMenuItems();
+  const [menuOpen, setMenuOpen] = useState(false);
+  const buttonRef = useRef<HTMLButtonElement>(null);
 
   const isRemote = link !== null;
 
@@ -91,6 +114,37 @@ export function SpeleoStatusButton() {
   // a status change that landed while away surfaces on the next tick.
   if (!link || appMode !== 'survey') return null;
 
+  // #270: work that exists ONLY on this computer. This is NOT projectStore.isDirty
+  // (unsaved to disk) - it survives a save and a restart, and it is what a lock
+  // release or a pull would put at risk. It colours the mark in EVERY state, so the
+  // "unlocked" state stops being dirty-blind.
+  const unpushed = link.hasUnpushedEdits;
+  // We hold the server write lock - see `holdsWriteLock` for why force-editing is
+  // excluded, and why the predicate is shared rather than re-spelled here.
+  const lockHeld = holdsWriteLock(link);
+  // Local-only changes with no lock to protect them: the state that most needs
+  // calling out, so it gets a second, standalone "!" beside the mark.
+  const unpushedUnlocked = unpushed && !lockHeld;
+  const tint = unpushed ? UNPUSHED_ACCENT : undefined;
+  // Appended to whichever state title applies, so the new dirty variants of the
+  // existing states all say the one thing the user needs to know. Left off when we
+  // hold the lock: those titles already talk about pushing.
+  const unpushedSuffix = unpushedUnlocked ? ` ${t('speleodb.localEdits.titleSuffix')}` : '';
+
+  // The standalone "!", rendered beside the mark (not on it - the corner badge is
+  // the state glyph). Kept out of the accessible name: the title/aria-label below
+  // already carries the wording.
+  const unpushedBadge = unpushedUnlocked ? (
+    <span
+      className="ml-0.5 inline-flex items-center"
+      style={{ color: UNPUSHED_ACCENT }}
+      data-testid="speleodb-status-unpushed-badge"
+      aria-hidden="true"
+    >
+      <ExclamationGlyph size={11} />
+    </span>
+  ) : null;
+
   // Logged out: every lock action needs a token (the backend gate would reject the
   // acquire anyway), so present the mark grayed + inert and point the user at login
   // via the tooltip, rather than a live "Start editing" that can only fail (#201).
@@ -101,17 +155,27 @@ export function SpeleoStatusButton() {
   // Showing the inert logged-out mark then would wrongly hide Done/push for a
   // project we actually hold the lock on, so fall through to the normal rendering.
   if (!loggedIn && link.editState !== 'editing') {
+    const loggedOutTitle = `${t('speleodb.button.loggedOut')}${unpushedSuffix}`;
     return (
       <button
         type="button"
         disabled
-        title={t('speleodb.button.loggedOut')}
-        aria-label={t('speleodb.button.loggedOut')}
+        title={loggedOutTitle}
+        aria-label={loggedOutTitle}
         data-testid="speleodb-status-button"
         data-kind="logged_out"
-        className="flex items-center justify-center w-8 h-8 rounded ml-1 opacity-40 cursor-not-allowed"
+        data-unpushed={unpushed ? 'true' : 'false'}
+        className={`flex items-center justify-center h-8 rounded ml-1 opacity-40 cursor-not-allowed ${
+          unpushedUnlocked ? 'px-1' : 'w-8'
+        }`}
       >
-        <SpeleoBadgedIcon badge={<LockIcon size={10} />} badgeColor="text-text-secondary" size={20} />
+        <SpeleoBadgedIcon
+          badge={<LockIcon size={10} />}
+          badgeColor="text-text-secondary"
+          size={20}
+          tint={tint}
+        />
+        {unpushedBadge}
       </button>
     );
   }
@@ -157,6 +221,18 @@ export function SpeleoStatusButton() {
                 : 'unlocked';
 
   const handleClick = () => {
+    // While the right-click menu is open the button is a TOGGLE, not the verb.
+    // `useDismissableLayer` treats a mousedown on the trigger as "inside" and does
+    // not dismiss - right for AppMenu, whose trigger toggles, but here the verb
+    // behind this button is the destructive hand-off (start editing, release, or
+    // the push & release dialog). Without this, a user who right-clicked to look at
+    // the menu and then left-clicked to dismiss it acquired or released the
+    // SpeleoDB write lock they never asked for, and the stale menu stayed open over
+    // the changed state.
+    if (menuOpen) {
+      setMenuOpen(false);
+      return;
+    }
     switch (kind) {
       case 'unlocked':
         void startEditing();
@@ -206,11 +282,14 @@ export function SpeleoStatusButton() {
     }
   };
 
+  // `unlocked` gets NO badge: it is the resting state of a remote project - nothing
+  // is wrong, nothing is held, nothing needs doing - and decorating it spent the
+  // badge slot on the one case that has nothing to say. The tooltip still offers
+  // "click to start editing", and the #270 yellow tint still calls out un-pushed
+  // work, so the two things worth noticing keep their signal.
   const glyph =
-    kind === 'unlocked' ? (
-      <PencilIcon size={10} />
-    ) : kind === 'editing' ? (
-      <LockIcon size={10} />
+    kind === 'unlocked' ? null : kind === 'editing' ? (
+      <PenGlyph size={11} />
     ) : kind === 'force_edit' ? (
       <EditNoLockGlyph size={12} />
     ) : kind === 'locked_by_other' ? (
@@ -227,7 +306,7 @@ export function SpeleoStatusButton() {
 
   const glyphColor =
     kind === 'unlocked'
-      ? 'text-yellow-400'
+      ? undefined
       : kind === 'editing'
         ? 'text-green-400'
         : kind === 'force_edit'
@@ -289,20 +368,43 @@ export function SpeleoStatusButton() {
                   : t('speleodb.button.conflict');
 
   return (
-    <button
-      type="button"
-      onClick={handleClick}
-      disabled={busy}
-      title={title}
-      aria-label={title}
-      data-testid="speleodb-status-button"
-      data-kind={kind}
-      className={`flex items-center justify-center w-8 h-8 rounded ml-1 transition-colors disabled:opacity-50 ${bgClass}`}
-    >
-      {/* The state badge sits on the ICON - a small disc + glyph anchored to the
-          logo's corner (like the DisplayMenu shot/station symbols), not floating
-          on the button. */}
-      <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} />
-    </button>
+    <>
+      <button
+        ref={buttonRef}
+        type="button"
+        onClick={handleClick}
+        // Known limitation: `onContextMenu` never fires on a DISABLED button, so
+        // right-click is inert while `busy` and in the logged-out branch above.
+        // Both are states in which every row of the menu would be disabled anyway,
+        // so there is nothing to reach.
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setMenuOpen(true);
+        }}
+        disabled={busy}
+        title={`${title}${unpushedSuffix}`}
+        aria-label={`${title}${unpushedSuffix}`}
+        data-testid="speleodb-status-button"
+        data-kind={kind}
+        data-unpushed={unpushed ? 'true' : 'false'}
+        className={`flex items-center justify-center h-8 rounded ml-1 transition-colors disabled:opacity-50 ${
+          unpushedUnlocked ? 'px-1' : 'w-8'
+        } ${bgClass}`}
+      >
+        {/* The state badge sits on the ICON - a small disc + glyph anchored to the
+            logo's corner (like the DisplayMenu shot/station symbols), not floating
+            on the button. The MARK itself turns yellow while there are un-pushed
+            local edits (#270). */}
+        <SpeleoBadgedIcon badge={glyph} badgeColor={glyphColor} size={20} tint={tint} />
+        {unpushedBadge}
+      </button>
+      {menuOpen && (
+        <SpeleoStatusMenu
+          items={speleoItems}
+          triggerRef={buttonRef}
+          onClose={() => setMenuOpen(false)}
+        />
+      )}
+    </>
   );
 }

@@ -8,7 +8,7 @@ import { DialogWrapper } from './DialogWrapper';
 
 /**
  * Optimistic force-edit confirm (#213, E2). Reached from the read-only shell's
- * "Edit without lock" affordance (menu / status button), gated on the
+ * "Edit without the write lock" affordance (menu / status button), gated on the
  * `allow_force_edit` opt-in. Force-edit lets the user edit WITHOUT the SpeleoDB
  * write lock (to survey offline, or while someone else holds it), so their `.stalx`
  * cannot be merged back until they reconnect and acquire the lock - a data-safety

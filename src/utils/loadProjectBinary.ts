@@ -66,9 +66,12 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * version check below is the only thing standing between a format change and a
  * silently misdecoded project.
  *
- * 3 (#27): the per-shot flags byte carries a 2-bit `ShotKind` discriminant in
- * bits 0-1 instead of a single `is_reference` bit, so a v2 reader would decode
- * a Reference (2) as "not virtual".
+ * 3 covers two changes that landed in the same unreleased version:
+ * - #27: the per-shot flags byte carries a 2-bit `ShotKind` discriminant in
+ *   bits 0-1 instead of a single `is_reference` bit, so a v2 reader would
+ *   decode a Reference (2) as "not virtual".
+ * - #270: the envelope carries `is_remote`, so the SpeleoDB read-only gate
+ *   settles with the load.
  */
 const EXPECTED_VERSION = 3;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */
@@ -85,6 +88,9 @@ const STATION_UINT_FIELDS = 2;
 export interface BinaryEnvelope {
   version: number;
   loading_id: bigint | number;
+  /** Is this a SpeleoDB project? Same value the backend set its edit gate
+   *  from, so the frontend's read-only gate settles with the load (#270). */
+  is_remote: boolean;
   project_header: ProjectHeaderBinary;
   shot_count: number;
   shots_floats: Uint8Array;
@@ -399,6 +405,9 @@ export function buildResult(env: BinaryEnvelope, totalBytes: number): LoadProjec
     // (issue #57 / Codex). Shape mirrors Rust's Vec<FrozenShotRef>.
     frozen_shots: env.frozen_shots as FrozenShotRef[],
     displaySettings: env.display_settings,
+    // #270: the SpeleoDB read-only gate is resolved from this, synchronously,
+    // before the project view renders - never from the async link-status poll.
+    isRemote: env.is_remote,
     surveyData,
   };
 }

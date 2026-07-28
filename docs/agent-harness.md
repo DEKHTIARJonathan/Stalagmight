@@ -59,13 +59,35 @@ hazards over long runs.
   `.claude/agents/code-analyst.md` (Opus, read-only; per-issue root-cause
   analysis it spawns).
 
+## Build freshness + the E2E build stamp
+
+`app_start(build: "auto")` rebuilds when either signal says stale
+(`e2e/agent/lib/build.ts`):
+
+1. **mtimes** - any file under `src/`, `src-tauri/src/`, or one of
+   `tauri.conf.json` / `package.json` / `index.html` / `vite.config.ts` is newer
+   than the debug binary.
+2. **E2E build stamp** - `buildApp` writes
+   `$CARGO_TARGET_DIR/debug/.stalagmight-e2e-build-stamp.json` after a
+   successful build, recording `viteE2E`, the vite mode, and the mtime of the
+   binary it produced. A missing stamp, a stamp whose `viteE2E` disagrees with
+   what the start needs, or a binary whose mtime no longer matches the stamp
+   (`./scripts/dev.sh` or a plain `pnpm tauri build` relinked it) is stale.
+
+mtimes alone cannot see *how* a binary was built, so before the stamp a
+`dev.sh`-built binary looked fresh and `auto` attached to a hookless dist, only
+to fail the post-attach `__E2E_TEST__` check - a full attach cycle plus a manual
+`build: "force"` per rerun (issue #260). The stamp lives in the cargo target dir
+(a build output, gitignored / outside the repo), never in the source tree. The
+post-attach `__E2E_TEST__` check remains the definitive backstop.
+
 ## Tools
 
 Lifecycle:
 
 | Tool | Purpose |
 |---|---|
-| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
+| `app_start(build?, headed?, freshProfile?)` | Build if stale, launch, attach, verify hooks. `build`: auto/skip/force. Staleness = source mtimes newer than the binary **or** the E2E build stamp not vouching for it (see below). Default is headless on Xvfb even when a desktop display exists (no window pops up, no focus stealing); `headed: true` shows the window on the real display. |
 | `app_stop` | Close app + driver, reap the process group. |
 | `app_restart(freshProfile?=false)` | Restart keeping the profile (persisted-state repros). |
 | `app_status` | Liveness: state, uptime, driverAlive, sessionDir, node. |
@@ -190,8 +212,9 @@ Gitignored; the 20 newest sessions are kept.
 ## Troubleshooting
 
 - `app_start` fails `UND_ERR_INVALID_ARG` -> you are on Node 23+; use Node 22.
-- `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`;
-  rerun `app_start` with `build: "force"`.
+- `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
+  `build: "auto"` should have caught that before attach (see the build stamp
+  below); if you land here anyway, rerun `app_start` with `build: "force"`.
 - The window never appears on screen -> that is the default: sessions run on a
   throwaway Xvfb even when a desktop display exists (GDK is pinned to X11 there,
   since a Wayland-preferring GTK would otherwise render to the real compositor).

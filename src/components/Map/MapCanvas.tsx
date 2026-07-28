@@ -5,7 +5,12 @@ import type { SectionId, ShotId, StationRef, DistanceField } from '../../types/p
 import type { GasReachField } from '../../types/ipc.generated';
 import type { BatchCommand, ProjectWarning } from '../../types/commands';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore, isMapReadOnly, type Selection } from '../../store/uiStore';
+import {
+  useUIStore,
+  isMapReadOnly,
+  showsClosureAdjustedNotice,
+  type Selection,
+} from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
@@ -44,7 +49,7 @@ import { installPanZoomDebug } from './panZoomDebug';
 import { getMapThemeColors } from '../../utils/themeColors';
 import { formatFixed } from '../../i18n/format';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
-import { FitToViewIcon, LockIcon } from '../common/icons';
+import { MapTopLeftOverlay } from './MapTopLeftOverlay';
 import { useSpeleoStore, selectSpeleoReadOnly } from '../../store/speleoStore';
 import { useNetworkStore } from '../../store/networkStore';
 import { FEATURE_ID_STRIDE } from '../../utils/ids';
@@ -288,6 +293,10 @@ function MapCanvas() {
 
   // Geometry display mode (measured vs read-only closure-adjusted).
   const geometryMode = useUIStore((s) => s.geometryMode);
+  // Derived once for the top-left overlay, so its two gates share a single raw
+  // comparison and `scripts/check-readonly-gates.mjs`'s exact-count allow-list for
+  // this file stays put. NOT an editability gate - that is `useEditingBlocked()`.
+  const closureAdjustedView = geometryMode === 'closureAdjusted';
   // T2b: a remote SpeleoDB project opened without the write lock shows a
   // top-left read-only badge, mirroring the closure-adjusted view-only badge.
   const speleoReadOnly = useSpeleoStore(selectSpeleoReadOnly);
@@ -996,13 +1005,13 @@ function MapCanvas() {
   const toolCallbacks = useMemo(() => ({
     ...baseToolCallbacks,
     onHiddenStationClick: () => {
-      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden');
+      showToast("Enable 'Stations' in Display menu to interact with station markers", 'stations-hidden', 'warning');
     },
     onHiddenShotClick: () => {
-      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden');
+      showToast("Enable 'Shots' in Display menu to interact with shot lines", 'shots-hidden', 'warning');
     },
     // No stock fallback: surface a subsystem-specific toast (renderFatalMessage).
-    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal'),
+    onRenderFatal: (reason: string) => showToast(renderFatalMessage(reason), 'render-fatal', 'error'),
   }), [baseToolCallbacks, showToast]);
 
   // Box select handlers
@@ -1404,11 +1413,11 @@ function MapCanvas() {
             ...extra,
           });
         } else {
-          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked');
+          showToast(result.reason ?? 'Merge not possible.', 'snap-merge-blocked', 'warning');
           moveCallbacks?.onCancel?.();
         }
       } catch (e) {
-        showToast(getErrorMessage(e), 'snap-merge-error');
+        showToast(getErrorMessage(e), 'snap-merge-error', 'error');
         moveCallbacks?.onCancel?.();
       }
     },
@@ -2424,7 +2433,7 @@ function MapCanvas() {
         // leaving the user stuck in a read-only view showing measured geometry.
         if (!ok) {
           setGeometryMode('measured');
-          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed');
+          showToast(t('map.geometry.computeFailed'), 'geometry-compute-failed', 'error');
         }
       });
     }
@@ -2776,7 +2785,7 @@ function MapCanvas() {
         // Fail closed: keep anchoredIdsLoaded=false so segment drag remains blocked.
         // This prevents moving anchored segments when the IPC fails.
         setAnchoredSectionIds(new Set());
-        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error');
+        showToast('Failed to load anchored segments. Move Segment is temporarily blocked.', 'anchored-ids-error', 'error');
       });
     } else {
       setAnchoredSectionIds(new Set());
@@ -4036,32 +4045,25 @@ function MapCanvas() {
         />
       )}
 
-      {/* Fit-to-view button (+ exit-focus, #50). The SpeleoDB read-only badge (T2b)
-          sits to its RIGHT in the same top-left flex row when a remote project is
-          open without the lock - the flex gap tracks the button's variable width
-          (it widens with the exit-focus label). */}
-      <div className="absolute top-2 left-2 flex items-center gap-2">
-        <button
-          onClick={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
-          className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
-          title={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-          aria-label={focusedSectionId !== null ? t('sections.focus.exit') : t('map.fitToViewTitle')}
-          data-testid="fit-to-view-button"
-        >
-          <FitToViewIcon size={16} />
-          {/* In focus mode the button also exits focus - label it so that's clear. */}
-          {focusedSectionId !== null && <span>{t('sections.focus.exitLabel')}</span>}
-        </button>
-        {speleoReadOnly && !placementMode && appMode === 'survey' && (
-          <div
-            className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-1.5"
-            data-testid="speleodb-readonly-banner"
-          >
-            <LockIcon size={13} />
-            <span className="text-accent font-medium">{t('speleodb.map.readOnlyBadge')}</span>
-          </div>
-        )}
-      </div>
+      {/* Fit-to-view / exit-focus (#50) plus the read-only notices, laid out as
+          one flex row so they can never overlap. Both rules for the closure notice
+          - Survey only, and only when nothing else already explains the read-only
+          state - live in `showsClosureAdjustedNotice`, next to `isMapReadOnly`. */}
+      <MapTopLeftOverlay
+        focused={focusedSectionId !== null}
+        onFitOrExitFocus={() => (focusedSectionId !== null ? exitSectionFocus() : fitToBounds())}
+        showSpeleoReadOnly={speleoReadOnly && !placementMode && appMode === 'survey'}
+        showClosureReadOnly={showsClosureAdjustedNotice({
+          geometryMode,
+          appMode,
+          placementMode: placementMode !== null,
+          speleoReadOnly,
+        })}
+        // The solve still runs where the notice is hidden (Plan/Export force
+        // closure-adjusted geometry), and it is the only progress signal there -
+        // so the indicator is gated on the solve, not on the notice.
+        showClosureComputing={closureAdjustedView && !placementMode && adjustedLoading}
+      />
 
       {/* Placement mode indicator */}
       {placementMode && (
@@ -4135,23 +4137,6 @@ function MapCanvas() {
             :
           </span>{' '}
           {t('map.move.instructions')}
-        </div>
-      )}
-
-      {/* Closure-adjusted read-only banner (+ "computing" while solving). Survey only: Plan and
-          Export are read-only workspaces outright, so the badge is noise there - same gate the
-          SpeleoDB read-only banner above already uses. */}
-      {geometryMode === 'closureAdjusted' && !placementMode && appMode === 'survey' && (
-        <div
-          className="absolute top-2 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
-          data-testid="geometry-readonly-banner"
-        >
-          <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
-          {adjustedLoading && (
-            <span className="text-text-secondary" data-testid="geometry-computing">
-              {t('map.geometry.computing')}
-            </span>
-          )}
         </div>
       )}
 

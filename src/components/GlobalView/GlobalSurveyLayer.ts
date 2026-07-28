@@ -140,7 +140,7 @@ export default class GlobalSurveyLayer {
    */
   private handleRenderFatal(reason: string): void {
     console.error(`[globalCustomRender] survey rendering unavailable: ${reason}`);
-    useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal');
+    useUIStore.getState().showToast('Survey rendering unavailable (WebGL2/GPU)', 'render-fatal', 'error');
   }
 
   /**

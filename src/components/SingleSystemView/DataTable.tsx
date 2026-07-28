@@ -1090,7 +1090,7 @@ export default function DataTable({ sections }: DataTableProps) {
       // remove unselected shots). Drafts only trail the real shots, so this is
       // unreachable in practice.
       if (lastIdx - firstIdx + 1 !== inRange.length) {
-        showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete');
+        showToast(t('dataTable.multiDeleteUnsupported'), 'data-table-delete', 'warning');
         return;
       }
 

@@ -20,6 +20,7 @@ import { useGasPlanStore } from './gasPlanStore';
 
 // Import tool utilities for internal use and re-export for convenience
 import { NON_INTERACTIVE_TOOLS, isNonInteractiveTool } from '../utils/toolUtils';
+import { MAX_VISIBLE_TOASTS, clampToastCapacity } from '../utils/toastCapacity';
 import { getGroupForTool } from '../utils/toolGroups';
 export { NON_INTERACTIVE_TOOLS, isNonInteractiveTool };
 
@@ -62,6 +63,42 @@ export const GEOMETRY_MODE_DEFAULT: GeometryMode = 'measured';
  */
 export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>): boolean {
   return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
+}
+
+/**
+ * Whether the map shows the "closure-adjusted, so read-only" notice - a narrower
+ * question than [`isMapReadOnly`], which is why it is its own predicate: the map can
+ * be read-only without this badge earning its space.
+ *
+ * Survey ONLY (#299): Plan and Export are read-only workspaces outright, so the
+ * badge announces nothing new there and is noise over the fit-to-view button.
+ * `showClosureComputing` is deliberately NOT gated this way - the solve still runs
+ * in Plan/Export, where it is the only progress signal - so hiding the notice here
+ * does not hide progress there.
+ *
+ * And only when nothing else already explains the read-only state, which inside
+ * Survey means the project is otherwise editable: the exact complement of the
+ * SpeleoDB badge, which occupies the same corner, so the two are mutually exclusive
+ * by construction rather than by luck. `speleoReadOnly` is the right predicate for
+ * that half rather than `holdsWriteLock`, because a force-editor genuinely CAN edit
+ * - the SpeleoDB badge is already hidden for them, which makes the closure view the
+ * only thing blocking their edits, and exactly when the notice earns its space.
+ *
+ * Both rules have been got wrong in opposite directions, so both are pinned by a
+ * truth table in `uiStore.isMapReadOnly.test.ts`.
+ */
+export function showsClosureAdjustedNotice(args: {
+  geometryMode: GeometryMode;
+  appMode: AppMode;
+  placementMode: boolean;
+  speleoReadOnly: boolean;
+}): boolean {
+  return (
+    args.geometryMode === 'closureAdjusted' &&
+    !args.placementMode &&
+    args.appMode === 'survey' &&
+    !args.speleoReadOnly
+  );
 }
 
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
@@ -232,6 +269,99 @@ export function selectionsEqual(a: Selection, b: Selection): boolean {
   }
   return false;
 }
+
+/**
+ * Toast severity. `info` is the historical neutral look and the default, so the
+ * two-argument `showToast(message, key)` call sites keep rendering exactly as
+ * they did. The other three carry an accent (green / yellow / red) drawn from the
+ * `--cc-success` / `--cc-warning` / `--cc-error` theme tokens.
+ */
+export type ToastKind = 'info' | 'success' | 'warning' | 'error';
+
+/** One entry in the toast stack. Ordered oldest-first in `UIStore.toasts`. */
+export interface ToastItem {
+  /** Process-unique, monotonically increasing. React key and timer identity. */
+  id: number;
+  message: string;
+  /** De-duplication key. At most one non-leaving toast per key is on screen. */
+  key: string;
+  kind: ToastKind;
+  /**
+   * When this toast was last pushed/refreshed, on the MONOTONIC clock
+   * (`performance.now()`), which is the only thing the de-duplication window
+   * below is measured against.
+   *
+   * Not wall-clock, which it used to be: `Date.now()` can step backwards (an NTP
+   * correction, a manual clock change), and a negative age passes `< WINDOW_MS`
+   * just as happily as a fresh one - so every repeat of a key would collapse into
+   * the toast already on screen for as long as the skew lasted, however far apart
+   * the events really were.
+   */
+  refreshedAt: number;
+  /**
+   * Bumped every time the same key refreshes this toast. ToastStack keys its
+   * dwell/fade clock on (id, revision), so a refresh restarts the timer without
+   * remounting the element (which would replay the enter animation).
+   */
+  revision: number;
+  /**
+   * True once the toast is on its way out (evicted by the stack cap, or the user
+   * hit dismiss). Leaving toasts are excluded from de-duplication and from the
+   * visible-count cap, and ToastStack drops them once their exit finishes.
+   */
+  leaving: boolean;
+}
+
+/**
+ * Hard ceiling on how many toasts stay fully live at once. A push past the
+ * effective cap evicts the OLDEST (marks it leaving, so it animates out instead
+ * of blinking away).
+ *
+ * The EFFECTIVE cap is usually smaller: it is "whatever fits in 20% of the
+ * window height", which only the DOM can answer, so ToastStack measures it and
+ * feeds it back through `setToastCapacity`. Until something reports a real
+ * measurement the store uses this maximum, which keeps it deterministic on its
+ * own (and correct in unit tests of unrelated components, where no stack is
+ * mounted to measure anything).
+ */
+export { MAX_VISIBLE_TOASTS };
+
+/**
+ * Hard ceiling on the array, live + leaving. Exit animations are driven by
+ * ToastStack, so if it is not mounted (unit tests of unrelated components)
+ * nothing would ever reap the leaving entries. Anything past this is dropped
+ * outright rather than allowed to grow without bound.
+ */
+const MAX_TOTAL_TOASTS = MAX_VISIBLE_TOASTS + 4;
+
+/**
+ * Apply the live-toast cap: mark the oldest overflow `leaving` (so it animates
+ * away rather than blinking out), then trim the array to its hard ceiling.
+ */
+function capToasts(next: ToastItem[], capacity: number): ToastItem[] {
+  const live = next.filter((t) => !t.leaving);
+  const overflow = live.length - capacity;
+  const evicted = overflow > 0 ? new Set(live.slice(0, overflow).map((t) => t.id)) : null;
+  const marked = evicted ? next.map((t) => (evicted.has(t.id) ? { ...t, leaving: true } : t)) : next;
+  return marked.slice(-MAX_TOTAL_TOASTS);
+}
+
+/**
+ * How long after a toast appears a repeat of its key still counts as the SAME
+ * event rather than a new one.
+ *
+ * Deliberately far shorter than a toast's visible life. Matching for the whole
+ * lifetime turned each key into a single slot, so repeating an action - lock,
+ * unlock, lock, unlock - had every new toast steal the previous one of its kind
+ * and the stack could never grow past one per key. Inside a second a repeat is a
+ * burst (a double-click, a loop firing the same warning) where collapsing is
+ * both wanted and imperceptible; past that it is something the user did again
+ * and it earns its own line.
+ */
+export const TOAST_DEDUP_WINDOW_MS = 1000;
+
+/** Source of `ToastItem.id`. Module-scoped so ids never repeat within a session. */
+let nextToastId = 1;
 
 interface UIStore {
   // View state
@@ -458,10 +588,44 @@ interface UIStore {
   setHoveredShot: (shot: { sectionId: SectionId; shotId: ShotId } | null) => void;
   setHoveredSectionId: (sectionId: SectionId | null) => void;
 
-  // Toast state (per-key throttling)
-  toast: { message: string; key: string; timestamp: number } | null;
-  lastToastByKey: Record<string, number>;
-  showToast: (message: string, key: string) => void;
+  // Toast stack (oldest first, newest last - see src/components/common/ToastStack.tsx)
+  toasts: ToastItem[];
+  /**
+   * How many toasts may be live at once. Reported by ToastStack from measured
+   * geometry (see `fitToastCapacity`); defaults to `MAX_VISIBLE_TOASTS` so the
+   * store behaves sanely with no stack mounted.
+   */
+  toastCapacity: number;
+  /**
+   * Push a toast onto the stack. `kind` is optional and defaults to `'info'`, so
+   * every pre-existing two-argument call site keeps the neutral look it had.
+   *
+   * `key` is the de-duplication key: if a toast with the same key is already on
+   * screen (and not already leaving), it is REFRESHED in place - newest wording
+   * and kind win, its timer restarts, and it moves to the newest slot - instead
+   * of stacking a duplicate.
+   */
+  showToast: (message: string, key: string, kind?: ToastKind) => void;
+  /**
+   * Set the live-toast cap from measured geometry. Clamped into
+   * [MIN_VISIBLE_TOASTS, MAX_VISIBLE_TOASTS]; shrinking it evicts the oldest
+   * toasts immediately, so nothing can sit off-screen with a running timer.
+   */
+  setToastCapacity: (capacity: number) => void;
+  /** Begin one toast's exit animation (the per-toast dismiss button). */
+  dismissToast: (id: number) => void;
+  /** Drop one toast outright. ToastStack calls this when a toast's life ends. */
+  removeToast: (id: number) => void;
+  /**
+   * Drop every toast immediately - no exit animation, no eviction bookkeeping.
+   *
+   * A TEST-HARNESS reset, and deliberately nothing else: no production code path
+   * calls it, and none should. The app dismisses toasts one at a time (the stack
+   * owns the dwell/fade clock and calls `removeToast`), so a bulk wipe would take
+   * a toast off screen mid-animation with its ToastStack timer still running.
+   * It stays because the toast tests - including `ToastStack.test.tsx`'s teardown
+   * - reset the stack through it between cases.
+   */
   clearToast: () => void;
 
   // Snap state
@@ -1629,29 +1793,69 @@ export const useUIStore = create<UIStore>((set) => ({
   setHoveredShot: (hoveredShot) => set({ hoveredShot }),
   setHoveredSectionId: (hoveredSectionId) => set({ hoveredSectionId }),
 
-  // Toast state (per-key throttling)
-  toast: null,
-  lastToastByKey: {},
-  showToast: (message, key) => {
-    const now = Date.now();
-    const lastTime = useUIStore.getState().lastToastByKey[key] || 0;
+  // Toast stack. Pure data: no timers live here. The dwell/fade clock (and with
+  // it hover/focus pausing, which only the DOM knows about) belongs to
+  // ToastStack, which calls removeToast when a toast's life ends.
+  toasts: [],
+  toastCapacity: MAX_VISIBLE_TOASTS,
+  showToast: (message, key, kind = 'info') => {
+    const prev = useUIStore.getState().toasts;
 
-    // Throttle: only show if no recent toast for this key (5 second cooldown)
-    if (now - lastTime > 5000) {
-      set({
-        toast: { message, key, timestamp: now },
-        lastToastByKey: { ...useUIStore.getState().lastToastByKey, [key]: now },
-      });
-      // Auto-clear after 3 seconds
-      setTimeout(() => {
-        const t = useUIStore.getState().toast;
-        if (t && t.timestamp === now) {
-          set({ toast: null });
-        }
-      }, 3000);
+    // Same key fired again WITHIN THE BURST WINDOW: refresh in place rather than
+    // stacking a duplicate. This replaces the old 5s per-key throttle - which
+    // swallowed the repeat outright, so a *changed* message under a reused key
+    // was lost.
+    //
+    // The window matters. Matching for the toast's whole visible life made a key
+    // a single slot, so a user repeating an action (lock, unlock, lock, unlock)
+    // saw each new toast STEAL the earlier one of its kind and the stack could
+    // never grow past one per key. Those are distinct things the user did and
+    // each deserves its own line. A repeat inside a second is a burst - a
+    // double-click, or a loop firing the same warning - where collapsing is both
+    // wanted and imperceptible, since the two would overlap anyway.
+    // `performance.now()`, not `Date.now()`: a wall clock that steps backwards
+    // makes the age negative, which passes this test and collapses unrelated
+    // repeats for as long as the skew lasts (see `ToastItem.refreshedAt`).
+    const now = performance.now();
+    const existing = prev.find(
+      (t) => t.key === key && !t.leaving && now - t.refreshedAt < TOAST_DEDUP_WINDOW_MS,
+    );
+    if (existing) {
+      const refreshed: ToastItem = {
+        ...existing,
+        message,
+        kind,
+        refreshedAt: now,
+        revision: existing.revision + 1,
+      };
+      // Move to the newest slot (end of the array = nearest the bottom edge).
+      set({ toasts: [...prev.filter((t) => t.id !== existing.id), refreshed] });
+      return;
     }
+
+    const pushed: ToastItem = {
+      id: nextToastId++,
+      message,
+      key,
+      kind,
+      refreshedAt: now,
+      revision: 0,
+      leaving: false,
+    };
+    set({ toasts: capToasts([...prev, pushed], useUIStore.getState().toastCapacity) });
   },
-  clearToast: () => set({ toast: null }),
+  setToastCapacity: (capacity) => {
+    const clamped = clampToastCapacity(capacity);
+    const state = useUIStore.getState();
+    if (state.toastCapacity === clamped) return;
+    // Evict on the way down as well as on push: a toast the window no longer has
+    // room for must not linger invisibly with its timer still running.
+    set({ toastCapacity: clamped, toasts: capToasts(state.toasts, clamped) });
+  },
+  dismissToast: (id) =>
+    set((s) => ({ toasts: s.toasts.map((t) => (t.id === id ? { ...t, leaving: true } : t)) })),
+  removeToast: (id) => set((s) => ({ toasts: s.toasts.filter((t) => t.id !== id) })),
+  clearToast: () => set({ toasts: [] }),
 
   // Snap state
   snappedStation: null,

@@ -36,7 +36,9 @@ import {
   buildRecentListItems,
   filterRecentListItems,
 } from './recentListItems';
+import { canPublishRecent, publishRecentToSpeleoDb } from './publishRecentToSpeleoDb';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
+import { useSpeleoLocalStates } from '../../hooks/useSpeleoLocalStates';
 import { SpeleoAdoptConfirm } from '../Dialogs/SpeleoAdoptConfirm';
 import type { ProjectMetadata } from '../../types/project';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
@@ -179,7 +181,7 @@ export default function GlobalView() {
         const outcome = await openRemote(summary);
         if (outcome.status === 'adopt') setPendingAdopt(summary);
         else if (outcome.status === 'error') {
-          showToast(outcome.message, 'speleodb-open-remote-error');
+          showToast(outcome.message, 'speleodb-open-remote-error', 'error');
         }
       } finally {
         remoteBusyRef.current = false;
@@ -196,7 +198,7 @@ export default function GlobalView() {
     setRemoteBusy(true);
     try {
       const outcome = await adoptRemote(summary);
-      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error');
+      if (outcome.status === 'error') showToast(outcome.message, 'speleodb-open-remote-error', 'error');
     } finally {
       remoteBusyRef.current = false;
       setRemoteBusy(false);
@@ -206,18 +208,8 @@ export default function GlobalView() {
     void scanLocksOnOpen();
   }, [scanLocksOnOpen]);
 
-  // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
-  // for the recents badges. `prompt`-less, so it never re-raises the held-lock
-  // dialog (that is reserved for login / app-open).
-  const [refreshingLocks, setRefreshingLocks] = useState(false);
-  const handleRefreshLocks = useCallback(async () => {
-    setRefreshingLocks(true);
-    try {
-      await scanLocksOnOpen();
-    } finally {
-      setRefreshingLocks(false);
-    }
-  }, [scanLocksOnOpen]);
+  // (The manual re-scan button's handler lives further down, next to the
+  // local-state hook it also has to refresh - see handleRefreshLocks.)
 
   // Close on outside mousedown / external scroll / resize (shared hook, same as
   // Select/AppMenu). Escape is handled in the global-view keyboard handler.
@@ -481,6 +473,24 @@ export default function GlobalView() {
     setContextMenu((prev) => ({ ...prev, visible: false }));
   }, [contextMenu.projectPath]);
 
+  // Publish a LOCAL recent to SpeleoDB (context-menu twin of the in-project
+  // hamburger item). The backend publishes the OPEN project and the dialog
+  // prefills from it at mount, so this OPENS the project first and only raises
+  // the dialog once that load has settled - see publishRecentToSpeleoDb.ts. A
+  // failed open raises nothing: loadProject already surfaced the failure (the
+  // loading-error panel / permission / corruption dialog), exactly as the plain
+  // context-menu Open does.
+  const handlePublishToSpeleoDb = useCallback(async () => {
+    const path = contextMenu.projectPath;
+    setContextMenu((prev) => ({ ...prev, visible: false }));
+    if (!path) return;
+    await publishRecentToSpeleoDb(path, {
+      loadProject,
+      openDialog,
+      markSource: () => setProjectActionSource('context-menu'),
+    });
+  }, [contextMenu.projectPath, loadProject, openDialog]);
+
   // Handle search input changes (instant filtering)
   const handleSearchChange = useCallback((e: ChangeEvent<HTMLInputElement>) => {
     setSearchTerm(e.target.value);
@@ -595,6 +605,41 @@ export default function GlobalView() {
     () => filterRecentListItems(listItems, searchTerm),
     [listItems, searchTerm]
   );
+  // #270: which of these projects hold work that never reached SpeleoDB. ONE local
+  // IPC call for the whole list (never per row), keyed on the id SET of everything
+  // this screen can list - deliberately NOT the search-filtered subset, so typing in
+  // the box does not re-issue it. A failure yields no accents (see the hook).
+  const localStateIds = useMemo(
+    () => [
+      ...recentProjects
+        .map((p) => p.speleodb_project_id)
+        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+      ...Object.keys(remoteSummaries),
+    ],
+    [recentProjects, remoteSummaries]
+  );
+  const { states: localStates, reload: reloadLocalStates } = useSpeleoLocalStates(localStateIds);
+
+  // Manual SpeleoDB re-scan (the header refresh button, #201): re-reads lock state
+  // for the recents badges. `prompt`-less, so it never re-raises the held-lock
+  // dialog (that is reserved for login / app-open).
+  //
+  // The local (un-pushed) states are refreshed alongside the locks, or the button
+  // would only be half a refresh: the accent that marks work existing solely on
+  // this computer is LOCAL state, which the lock scan does not touch, and the hook
+  // keys its fetch on the id SET - so over an unchanged recents list nothing
+  // re-issued it and the accent stayed at whatever it was when GlobalView mounted.
+  const [refreshingLocks, setRefreshingLocks] = useState(false);
+  const handleRefreshLocks = useCallback(async () => {
+    setRefreshingLocks(true);
+    reloadLocalStates();
+    try {
+      await scanLocksOnOpen();
+    } finally {
+      setRefreshingLocks(false);
+    }
+  }, [scanLocksOnOpen, reloadLocalStates]);
+
   const isSearching = searchTerm.trim().length > 0;
   // Gate the tabs and content area on the combined count (loaded + missing) so
   // an all-missing recent list still renders its removable rows instead of the
@@ -964,6 +1009,7 @@ export default function GlobalView() {
                   remoteLocks={remoteLocks}
                   remoteProjects={remoteProjects}
                   myEmail={speleoEmail}
+                  localStates={localStates}
                   onSort={handleHeaderSort}
                   onSelect={handleProjectSelect}
                   onOpen={handleOpenFromList}
@@ -985,7 +1031,7 @@ export default function GlobalView() {
                         sectionCount={item.project.section_count}
                         totalLength={item.project.total_length}
                         isSelected={multiSelectedIds.has(item.filePath)}
-                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects)}
+                        speleoLock={resolveSpeleoLock(item.project, remoteLocks, speleoEmail, remoteProjects, localStates)}
                         onSelect={(ctrlKey) => handleProjectSelect(item.filePath, ctrlKey)}
                         onContextMenu={(e) => handleContextMenu(e, item.filePath)}
                       />
@@ -998,6 +1044,7 @@ export default function GlobalView() {
                           remoteLocks,
                           speleoEmail,
                           remoteProjects,
+                          localStates,
                         )}
                         busy={remoteBusy}
                         onOpen={(summary) => void handleOpenRemote(summary)}
@@ -1090,6 +1137,23 @@ export default function GlobalView() {
           >
             {t('globalView.contextMenu.showInFolder')}
           </button>
+          {/* Publish to SpeleoDB - only for a LOCAL recent, only while signed in,
+              only on a single selection (publishing is per project). Same label
+              and same dialog as the in-project hamburger item. */}
+          {canPublishRecent(
+            recentProjects.find((p) => p.file_path === contextMenu.projectPath),
+            speleoLoggedIn,
+            selectedCount,
+          ) && (
+            <button
+              className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"
+              onClick={() => { void handlePublishToSpeleoDb(); }}
+              role="menuitem"
+              data-testid="context-menu-publish-speleodb"
+            >
+              {t('speleodb.publish.menuItem')}
+            </button>
+          )}
           {selectedCount >= 2 && (
             <button
               className="w-full px-4 py-2 text-left text-sm hover:bg-background-50 flex items-center gap-2"

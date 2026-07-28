@@ -10,8 +10,9 @@
 //! break the pull (the server stores "other" files under `misc/` today, but that
 //! is not part of the contract).
 
+use std::ffi::OsStr;
 use std::io::{Cursor, Read};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use super::SpeleoDbError;
 
@@ -19,6 +20,23 @@ use super::SpeleoDbError;
 /// a few hundred MB is far past any real cave project but small enough that a
 /// lying ZIP header (a zip bomb) can't exhaust memory before we reject it.
 const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+
+/// Hard ceiling on how many entries a dump may declare.
+///
+/// [`MAX_ENTRY_BYTES`] bounds one entry's CONTENT and says nothing about how many
+/// there are, so it does not cover this at all. A central-directory record is only
+/// ~46 bytes plus its name, so even the (reduced) body ceiling admits millions of
+/// them - and every one costs a `String` in [`Dump::entry_paths`], on top of the
+/// `Vec::with_capacity(archive.len())` it sizes from the archive's own claim. That
+/// is gigabytes of allocation from a body that is merely large, reached before any
+/// per-entry cap can apply.
+///
+/// A real dump is a `.stalx`, an `ariane.tml` and a handful of `misc/` files, so
+/// 10 000 is several orders of magnitude of headroom over anything legitimate while
+/// still bounding the walk. (The check necessarily lands AFTER `ZipArchive::new`,
+/// which parses the whole central directory eagerly - the `zip` crate exposes no
+/// hook to bound that - so it caps the amplification, not the parse itself.)
+const MAX_ENTRIES: usize = 10_000;
 
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -68,6 +86,34 @@ fn is_ariane_tml(path: &str) -> bool {
         .is_some_and(|n| n.eq_ignore_ascii_case("ariane.tml"))
 }
 
+/// Write `bytes` to `path`, then flush them all the way to the device.
+///
+/// `std::fs::write` returns once the bytes are in the page cache, which is enough
+/// for a process death but not for a power loss. Callers that go on to `rename`
+/// this file over a destination they must not destroy need the stronger promise -
+/// see `Dump::extract_entry_to`.
+fn write_and_sync(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write as _;
+    let mut file = std::fs::File::create(path)?;
+    file.write_all(bytes)?;
+    file.sync_all()
+}
+
+/// The sibling temp path used to stage an extraction before it replaces `dest`.
+///
+/// Lives in the SAME directory as `dest` so the follow-up `rename` stays on one
+/// filesystem (a cross-device rename fails with `EXDEV`), and carries a dedicated
+/// `.download.tmp` suffix so it can never collide with the save pipeline's
+/// `<stem>.stalx.tmp`.
+fn download_temp_path(dest: &Path) -> PathBuf {
+    let mut name = dest
+        .file_name()
+        .unwrap_or_else(|| OsStr::new("dump"))
+        .to_os_string();
+    name.push(".download.tmp");
+    dest.with_file_name(name)
+}
+
 /// A dump ZIP parsed once. Lists its entry paths and extracts the chosen entry
 /// from the *same* archive, so the central directory isn't re-parsed between the
 /// classify step and the extract step.
@@ -77,9 +123,26 @@ pub(crate) struct Dump<'a> {
 
 impl<'a> Dump<'a> {
     /// Parse an in-memory dump ZIP.
+    ///
+    /// Rejects an absurd entry count up front (see [`MAX_ENTRIES`]) so the
+    /// per-entry work in [`Self::entry_paths`] can never be driven to exhaustion by
+    /// a server that claims millions of files.
     pub(crate) fn open(zip_bytes: &'a [u8]) -> Result<Self, SpeleoDbError> {
+        Self::open_capped(zip_bytes, MAX_ENTRIES)
+    }
+
+    /// [`Self::open`] with an explicit entry ceiling (parameterized for testing, the
+    /// same way [`Self::extract_entry_capped`] is - building ten thousand real ZIP
+    /// entries to exercise one comparison buys nothing).
+    fn open_capped(zip_bytes: &'a [u8], max_entries: usize) -> Result<Self, SpeleoDbError> {
         let archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
             .map_err(|e| SpeleoDbError::Parse(format!("dump is not a valid ZIP: {e}")))?;
+        let entries = archive.len();
+        if entries > max_entries {
+            return Err(SpeleoDbError::Parse(format!(
+                "dump declares {entries} entries, over the {max_entries}-entry limit"
+            )));
+        }
         Ok(Self { archive })
     }
 
@@ -147,8 +210,54 @@ impl<'a> Dump<'a> {
                 "dump entry `{entry_path}` exceeded the {max_bytes}-byte limit while reading"
             )));
         }
-        std::fs::write(dest, &buf)
-            .map_err(|e| SpeleoDbError::Io(format!("could not write {}: {e}", dest.display())))?;
+        // Replace `dest` ATOMICALLY: stage the bytes in a sibling temp file, FLUSH
+        // them to the device, then rename over the destination. A write that dies
+        // part-way (crash, full disk, killed process, power loss) then leaves the
+        // PREVIOUS cache `.stalx` intact instead of a truncated stub, and no reader
+        // ever observes a half-written file - which a plain `fs::write` could not
+        // promise, because it truncates `dest` in place.
+        //
+        // The `sync_all` is what makes that true across POWER LOSS specifically, and
+        // not merely across a process death. Without it the rename is only ordered
+        // against the write in the page cache, not on the device: ext4's default
+        // `data=ordered` happens to cover this case, but that is a filesystem
+        // accident rather than a guarantee, and on a filesystem that reorders them
+        // the crash window leaves `dest` renamed to a file whose contents never
+        // landed - i.e. exactly the destroyed-previous-copy outcome the staging
+        // exists to prevent. The parent directory is synced too, so the rename
+        // itself survives; that one is best-effort because opening a directory as a
+        // file is not portable (it fails on Windows, where the rename is journaled
+        // by the filesystem anyway).
+        //
+        // Closing any live SQLite handle to `dest` first is the CALLER's job (see
+        // `AppState::close_project_if_open_at`). The two halves fix different failure
+        // modes and are both required: the close is what lets the rename succeed on
+        // Windows (SQLite opens the file without `FILE_SHARE_DELETE`, so replacing it
+        // under a live handle is denied), and the rename is what keeps an interrupted
+        // write from tearing the file even when nothing has it open.
+        let temp = download_temp_path(dest);
+        if let Err(e) = write_and_sync(&temp, &buf) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(SpeleoDbError::Io(format!(
+                "could not write {}: {e}",
+                temp.display()
+            )));
+        }
+        if let Err(e) = std::fs::rename(&temp, dest) {
+            let _ = std::fs::remove_file(&temp);
+            return Err(SpeleoDbError::Io(format!(
+                "could not replace {}: {e}",
+                dest.display()
+            )));
+        }
+        // Best-effort: makes the rename itself durable. A failure here means the
+        // content is on the device but the directory entry may not be, which is the
+        // pre-existing behaviour and not worth failing an otherwise-complete replace.
+        if let Some(parent) = dest.parent() {
+            if let Ok(dir) = std::fs::File::open(parent) {
+                let _ = dir.sync_all();
+            }
+        }
         Ok(())
     }
 }
@@ -156,7 +265,7 @@ impl<'a> Dump<'a> {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify, Dump, DumpClassification, SpeleoDbError};
+    use super::{classify, download_temp_path, Dump, DumpClassification, SpeleoDbError};
 
     fn paths(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
@@ -316,6 +425,107 @@ mod tests {
         assert!(
             !dest.exists(),
             "nothing should be written when over the cap"
+        );
+    }
+
+    #[test]
+    fn open_rejects_an_archive_with_too_many_entries() {
+        // A central-directory record is ~46 bytes plus its name, so a body that is
+        // merely large can declare millions of entries - and `entry_paths` sizes a
+        // `Vec` from the archive's own claim and then allocates a `String` per entry.
+        // `MAX_ENTRY_BYTES` bounds one entry's CONTENT and does nothing about the
+        // count, so this is its own ceiling.
+        //
+        // Driven at a small explicit cap: building 10 001 real entries just to prove
+        // the comparison would make this test slow for no extra coverage.
+        let entries: Vec<(String, &[u8])> =
+            (0..6).map(|i| (format!("f{i}.txt"), &b""[..])).collect();
+        let borrowed: Vec<(&str, &[u8])> = entries.iter().map(|(n, d)| (n.as_str(), *d)).collect();
+        let zip = make_zip(&borrowed);
+
+        let err = Dump::open_capped(&zip, 5)
+            .err()
+            .expect("an over-count archive must be rejected");
+        assert!(
+            matches!(err, SpeleoDbError::Parse(_)),
+            "an over-count archive should map to Parse, got {err:?}"
+        );
+        // At the cap it is accepted, and a real dump (a handful of files) is nowhere
+        // near the production ceiling.
+        assert!(
+            Dump::open_capped(&zip, 6).is_ok(),
+            "exactly at the cap is allowed"
+        );
+        assert!(
+            Dump::open(&zip).is_ok(),
+            "a normal dump is far below the production ceiling"
+        );
+    }
+
+    #[test]
+    fn extract_entry_to_leaves_no_temp_file_behind() {
+        // The atomic replace stages through a sibling temp file; a successful
+        // extract must consume it (rename), never leave it littering the cache dir.
+        let zip = make_zip(&[("misc/project.stalx", b"PAYLOAD")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        dump.extract_entry_to("misc/project.stalx", &dest)
+            .expect("extract");
+        assert!(
+            !download_temp_path(&dest).exists(),
+            "the staging temp file must be renamed away, not left behind"
+        );
+        let leftovers: Vec<_> = std::fs::read_dir(dir.path())
+            .expect("readdir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(
+            leftovers,
+            vec!["project.stalx".to_owned()],
+            "only the destination should remain in the directory"
+        );
+    }
+
+    #[test]
+    fn extract_entry_to_fully_replaces_an_existing_dest() {
+        // A pre-existing (longer) file must be REPLACED wholesale, not partially
+        // overwritten - the old tail must not survive the shorter new contents.
+        let zip = make_zip(&[("misc/project.stalx", b"NEW")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        std::fs::write(&dest, b"OLD-AND-MUCH-LONGER-CONTENTS").expect("seed dest");
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        dump.extract_entry_to("misc/project.stalx", &dest)
+            .expect("extract over existing dest");
+        assert_eq!(std::fs::read(&dest).expect("readable"), b"NEW");
+    }
+
+    #[test]
+    fn extract_entry_to_leaves_dest_intact_when_the_staged_write_fails() {
+        // Failure injection: squat the staging temp path with a DIRECTORY, so the
+        // staged write cannot succeed. The atomic replace must then fail with the
+        // previous `dest` byte-for-byte untouched (the whole point of not
+        // truncating in place).
+        let zip = make_zip(&[("misc/project.stalx", b"NEW")]);
+        let dir = tempfile::tempdir().expect("tempdir");
+        let dest = dir.path().join("project.stalx");
+        std::fs::write(&dest, b"ORIGINAL").expect("seed dest");
+        std::fs::create_dir(download_temp_path(&dest)).expect("squat the temp path");
+
+        let mut dump = Dump::open(&zip).expect("valid zip opens");
+        let err = dump
+            .extract_entry_to("misc/project.stalx", &dest)
+            .expect_err("a blocked staging write must fail the extract");
+        assert!(
+            matches!(err, SpeleoDbError::Io(_)),
+            "a blocked staging write should map to Io, got {err:?}"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("original still readable"),
+            b"ORIGINAL",
+            "the destination must be untouched when the extract fails"
         );
     }
 }

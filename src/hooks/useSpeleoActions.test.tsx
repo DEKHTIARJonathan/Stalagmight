@@ -17,7 +17,8 @@ import { renderHook, act } from '@testing-library/react';
 const invokeIpcMock = vi.hoisted(() => vi.fn());
 vi.mock('../utils/ipc', () => ({
   invokeIpc: invokeIpcMock,
-  getErrorMessage: (_e: unknown, f: string) => f,
+  // The one-arg call (humanizeSpeleoError) must still yield a string.
+  getErrorMessage: (_e: unknown, f?: string) => f ?? 'mock error',
 }));
 
 import { useSpeleoActions } from './useSpeleoActions';
@@ -37,7 +38,6 @@ beforeEach(() => {
   });
   useSpeleoStore.setState({
     busy: false,
-    setBusy: vi.fn(),
     applyDone: vi.fn(),
     applyPush: vi.fn(),
     bumpPoll: vi.fn(),
@@ -108,7 +108,207 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
     // is best-effort and isDirty simply stays set (safe: the push already
     // persisted the same edits).
     expect(outcome).toEqual({ kind: 'released' });
-    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-action-error');
+    expect(showToast).not.toHaveBeenCalledWith(expect.anything(), 'speleodb-action-error', 'error');
+  });
+});
+
+/**
+ * #260 - a failed push/unlock keeps BOTH surfaces: the immediate error toast
+ * (which auto-clears) and the durable `push_failed` banner carrying the same
+ * humanized line plus the verb/message its Retry replays.
+ */
+describe('useSpeleoActions - a failed push/unlock raises the persistent banner (#260)', () => {
+  beforeEach(() => {
+    // Use the REAL banner reducers (the outer beforeEach only stubs the apply* verbs).
+    useSpeleoStore.setState({ banner: null });
+  });
+
+  it('push failure raises push_failed with the push origin + message, and still toasts', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('my message');
+    });
+
+    expect(useSpeleoStore.getState().banner).toEqual({
+      kind: 'push_failed',
+      message: expect.any(String),
+      origin: 'push',
+      pushMessage: 'my message',
+    });
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
+  });
+
+  it('done failure raises push_failed with the done origin', async () => {
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done(null);
+    });
+
+    expect(useSpeleoStore.getState().banner).toMatchObject({
+      kind: 'push_failed',
+      origin: 'done',
+      pushMessage: null,
+    });
+  });
+
+  it('a transport failure reaches the banner humanized, not as a raw errno (#270)', async () => {
+    // What the user actually hit: the host blackholed at the routing level, so the
+    // backend surfaced EINVAL. The DTO's typed `transport` cause is what the
+    // humanizer keys off; the raw text must not reach the user.
+    useSpeleoStore.setState({
+      session: {
+        loggedIn: true,
+        userEmail: 'me@example.com',
+        endpoint: 'https://cave.example.internal:8443/',
+        keychainBacked: true,
+        storage: 'keychain',
+        keychain: 'available',
+      },
+    });
+    invokeIpcMock.mockRejectedValue({
+      message: 'Network error talking to SpeleoDB: Invalid argument',
+      action: 'Retry',
+      status: null,
+      transport: 'Unknown',
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('wrap up');
+    });
+
+    const banner = useSpeleoStore.getState().banner as { kind: string; message: string };
+    expect(banner.kind).toBe('push_failed');
+    expect(banner.message).not.toContain('Invalid argument');
+    expect(banner.message).toContain('https://cave.example.internal:8443/');
+  });
+
+  it('a retry clears the stale failure banner before the new attempt lands', async () => {
+    useSpeleoStore.setState({
+      banner: { kind: 'push_failed', message: 'old', origin: 'push', pushMessage: null },
+    });
+    invokeIpcMock.mockResolvedValue({ kind: 'divergence_needed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push();
+    });
+
+    // Even on a non-success outcome that leaves the banner slot alone, the previous
+    // failure must not linger (it described an attempt that has been superseded).
+    expect(useSpeleoStore.getState().banner).toBeNull();
+  });
+});
+
+/**
+ * #260 - "Changes uploaded and the write lock released." used to fire even when
+ * nothing was uploaded. The remote dirty bit (`link.hasUnpushedEdits`) captured
+ * BEFORE the call picks the wording.
+ */
+describe('useSpeleoActions - the release toast reflects whether anything was uploaded (#260)', () => {
+  const seedLink = (hasUnpushedEdits: boolean) =>
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE',
+        editState: 'editing',
+        lockHolder: null,
+        lockedByOther: false,
+        hasUnpushedEdits,
+        forceEditing: false,
+        forceEditAllowed: false,
+        remoteState: 'up_to_date',
+        noAccess: false,
+        serverError: null,
+      },
+    });
+
+  it('says the changes were uploaded when there were unpushed edits', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    seedLink(true);
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(
+      'Changes uploaded and the write lock released.',
+      'speleodb-released',
+      'success',
+    );
+  });
+
+  it('says nothing was uploaded when the session had no unpushed edits', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    seedLink(false);
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(
+      'Write lock released. Nothing to upload.',
+      'speleodb-released',
+      'success',
+    );
+  });
+});
+
+/**
+ * The toast KIND is the whole point of the accent rework: before it, a
+ * successful push and a failed one rendered identically, so a landed upload gave
+ * no perceptible confirmation. These pin the semantics at the source.
+ */
+describe('useSpeleoActions - toast kinds', () => {
+  it('a landed push asks for a success toast', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'pushed' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('m');
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-pushed', 'success');
+  });
+
+  it('a released lock asks for a success toast', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'released' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
+  });
+
+  it('a failed unlock asks for an error toast (and still raises the #260 banner)', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockRejectedValue(new Error('offline'));
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done();
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
+    expect(useSpeleoStore.getState().banner).toMatchObject({ kind: 'push_failed' });
   });
 });
 
@@ -152,5 +352,223 @@ describe('useSpeleoActions - fast-forward resets the on-screen tree (#218)', () 
     expect(loadProject).toHaveBeenCalledWith('/y.stalx');
     expect(refreshProjectState).toHaveBeenCalled();
     expect(refreshLinkStatus).toHaveBeenCalled();
+  });
+
+  /**
+   * [#270] Both fast-forward arms ignored `loadProject`'s answer and carried on.
+   * `takeRemote` has read it since it was written, for the reason that applies
+   * here too: `loadProject` reports `success: false` when a NEWER load superseded
+   * it, so the swapped tree is not what is on screen.
+   *
+   * `startEditing`'s own contract makes this load-bearing - `true` means "we hold
+   * the lock", and `HeldLockResumeDialog` hands the shell over on it (discarding
+   * every remaining lock), while `useRevertRevision` goes straight on to restore
+   * + push. `refreshProjectState` has no staleness guard at all and overwrites
+   * project/stations/surveyData wholesale, so it must not run either.
+   */
+  it('startEditing (→ fast_forwarded) refuses when the reload did not land', async () => {
+    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ applyStartEditing: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/y.stalx' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    expect(refreshProjectState).not.toHaveBeenCalled();
+    expect(refreshLinkStatus).not.toHaveBeenCalled();
+  });
+
+  it('update (→ fast_forwarded) stops when the reload did not land', async () => {
+    const loadProject = vi.fn(async () => ({ success: false, superseded: true }));
+    const refreshProjectState = vi.fn(async () => {});
+    const refreshLinkStatus = vi.fn(async () => {});
+    useProjectStore.setState({ loadProject, refreshProjectState, checkProjectIntegrity: vi.fn(async () => []) });
+    useSpeleoStore.setState({ applyUpdate: vi.fn(), refreshLinkStatus });
+    invokeIpcMock.mockResolvedValue({ kind: 'fast_forwarded', local_path: '/x.stalx' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.update();
+    });
+
+    expect(refreshProjectState).not.toHaveBeenCalled();
+    expect(refreshLinkStatus).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * [#270] `busy` is ONE shared boolean, and `clearLink` (project close/switch) and
+ * `restoreLink` (a rolled-back remote open) both reset it out of band. A verb
+ * whose call was still in flight then cleared the flag for a NEWER verb on a
+ * NEWER project. That is a data-safety seam, not cosmetics: `SpeleoQuitDialog` /
+ * `SpeleoCloseDialog` refuse to close while busy because dismissing mid-push lets
+ * the in-flight release resolve and call `performQuit()`, whose one-shot flag
+ * makes the resulting close skip `guardQuit` entirely.
+ */
+describe('useSpeleoActions - the shared busy flag is ownership-checked (#270)', () => {
+  it("a stale verb finishing does not clear a newer verb's busy flag", async () => {
+    useSpeleoStore.setState({ applyPush: vi.fn(), applyStartEditing: vi.fn() });
+    // Both calls hang until we settle them by hand, so the two verbs genuinely
+    // overlap the way they do when a close lands mid-push.
+    let settlePush: (r: { kind: string }) => void = () => {};
+    let settleStart: (r: { kind: string }) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_push') return new Promise((res) => { settlePush = res; });
+      return new Promise((res) => { settleStart = res; });
+    });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let pushDone: Promise<unknown> = Promise.resolve();
+    let startDone: Promise<unknown> = Promise.resolve();
+    await act(async () => {
+      pushDone = result.current.push('m');
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // The project closes under it (close/switch resets the link AND the flag) ...
+    act(() => {
+      useSpeleoStore.getState().clearLink();
+    });
+    expect(useSpeleoStore.getState().busy).toBe(false);
+
+    // ... and a verb for the NEXT project claims the flag.
+    await act(async () => {
+      startDone = result.current.startEditing();
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // Now the abandoned push lands. Its `finally` must NOT clear a flag it no
+    // longer owns - doing so re-opened the mid-push dismiss route above.
+    await act(async () => {
+      settlePush({ kind: 'pushed' });
+      await pushDone;
+    });
+    expect(useSpeleoStore.getState().busy).toBe(true);
+
+    // The owner's own release still works.
+    await act(async () => {
+      settleStart({ kind: 'editing' });
+      await startDone;
+    });
+    expect(useSpeleoStore.getState().busy).toBe(false);
+  });
+});
+
+// #270: `speleodb_push_only` / `speleodb_done` answer `not_editing` when the edit
+// gate was already closed - nothing was uploaded and nothing was released. Reported
+// as Pushed/Released, that produced a green "Changes pushed to SpeleoDB." toast, a
+// disk flush and a cleared dirty bit for work that never left this computer. It is
+// reachable in normal use: a 401 auto-drop closes the gate but keeps the dirty bit,
+// and the push-failure banner's Retry re-issues the verb from exactly that state.
+describe('useSpeleoActions - a no-op push/release is reported honestly (#270)', () => {
+  it('push (→ not_editing) warns instead of claiming success, and does not flush', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.push('m');
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-not-editing', 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-pushed', 'success');
+    // The flush exists to clear `isDirty` after a CONFIRMED upload; nothing was
+    // uploaded, so a false-clean local state must not be manufactured.
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('done (→ not_editing) warns, and the caller sees a kind that is not "released"', async () => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let resolved: { kind: string } | null = null;
+    await act(async () => {
+      resolved = (await result.current.done()) as { kind: string } | null;
+    });
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-not-editing', 'warning');
+    expect(showToast).not.toHaveBeenCalledWith(expect.any(String), 'speleodb-released', 'success');
+    // The close/quit dialogs only leave on `released`, so they correctly stay open.
+    expect(resolved).toEqual({ kind: 'not_editing' });
+    expect(saveProjectMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * [#270] Every attempt clears the durable failure banner on its way in, because
+   * a fresh attempt supersedes the old error. `not_editing` neither lands nor
+   * throws, so nothing re-raised it and the only surviving trace was a 3 s toast -
+   * and inside `SpeleoDoneDialog` (which stays open on any kind but `released`)
+   * the inline notice went blank too, leaving the same button with no error text.
+   * The way in is exactly the documented one: a 401 auto-drop closes the edit gate
+   * and the banner's own Retry re-issues the verb from there.
+   */
+  it.each([
+    ['push', 'push' as const],
+    ['done', 'done' as const],
+  ])('%s (→ not_editing) keeps a durable surface, with the message it was given', async (verb, origin) => {
+    useSpeleoStore.setState({
+      banner: { kind: 'push_failed', message: 'the old error', origin, pushMessage: 'my notes' },
+    });
+    invokeIpcMock.mockResolvedValue({ kind: 'not_editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      if (verb === 'push') await result.current.push('my notes');
+      else await result.current.done('my notes');
+    });
+
+    expect(useSpeleoStore.getState().banner).toEqual({
+      kind: 'push_failed',
+      // Re-raised with what actually happened, not the stale line from before.
+      message: expect.stringContaining('Nothing was uploaded'),
+      origin,
+      // Retry replays the commit message the user typed.
+      pushMessage: 'my notes',
+    });
+  });
+});
+
+// #270: `startEditing(): Promise<boolean>` had all four known variants handled but no
+// exhaustiveness guard, so a fifth backend variant fell through to `return true` -
+// "we hold the lock". `HeldLockResumeDialog` acts on that by calling
+// `clearHeldLocks()`, discarding every remaining lock with no way to re-raise the
+// prompt until the next login scan.
+describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', () => {
+  it('answers false for a variant it does not recognise', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'something_new' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(false);
+    warn.mockRestore();
+  });
+
+  it('still answers true when we really do hold the lock', async () => {
+    useSpeleoStore.setState({ applyStartEditing: vi.fn() });
+    invokeIpcMock.mockResolvedValue({ kind: 'editing' });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let held: boolean | undefined;
+    await act(async () => {
+      held = await result.current.startEditing();
+    });
+
+    expect(held).toBe(true);
   });
 });

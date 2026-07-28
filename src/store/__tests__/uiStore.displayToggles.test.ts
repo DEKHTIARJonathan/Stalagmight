@@ -1,9 +1,9 @@
 /**
  * Unit tests for display toggle state logic in uiStore.
- * Tests toggle defaults, toggle action, toast throttling, and selection clearing.
+ * Tests toggle defaults, toggle action, the toast surface, and selection clearing.
  */
 
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { invoke } from '@tauri-apps/api/core';
 
 // Mock Tauri invoke to prevent noisy console warnings and verify persistence calls
@@ -38,8 +38,7 @@ const getCleanTestState = () => ({
   distanceField: null,
   showIssueSeverity: false,
   gridSpacing: 10,
-  toast: null,
-  lastToastByKey: {},
+  toasts: [],
   selection: null,
   multiSelection: [],
 });
@@ -506,97 +505,40 @@ describe('Toggle State Preservation', () => {
   });
 });
 
-describe('Toast Throttling', () => {
+/**
+ * Toast behaviour moved to the stack model (one array, per-key refresh, capped at
+ * MAX_VISIBLE_TOASTS) and is covered in full by uiStore.toast.test.ts. What stays
+ * here is only the display-toggle suite's own interest in it: that a toast lands,
+ * and that clearToast wipes the stack.
+ */
+describe('Toasts (display-toggle surface)', () => {
   beforeEach(() => {
     useUIStore.setState(getCleanTestState());
-    vi.useFakeTimers();
-  });
-
-  afterEach(() => {
-    // Clear any pending timers before switching back to real timers
-    vi.clearAllTimers();
-    vi.useRealTimers();
   });
 
   it('first toast shows immediately', () => {
-    const { showToast } = useUIStore.getState();
-    showToast('Test message', 'test-key');
-    expect(useUIStore.getState().toast?.message).toBe('Test message');
+    useUIStore.getState().showToast('Test message', 'test-key');
+    expect(useUIStore.getState().toasts.map((t) => t.message)).toEqual(['Test message']);
   });
 
-  it('rapid toasts with same key are throttled', () => {
+  it('toasts with different keys coexist', () => {
     const { showToast } = useUIStore.getState();
-    showToast('First', 'same-key');
-    expect(useUIStore.getState().toast?.message).toBe('First');
-
-    showToast('Second', 'same-key'); // Should be ignored (within 5s cooldown)
-    expect(useUIStore.getState().toast?.message).toBe('First');
-  });
-
-  it('toast shows after 5 second cooldown', () => {
-    const { showToast } = useUIStore.getState();
-    showToast('First', 'test-key');
-    expect(useUIStore.getState().toast?.message).toBe('First');
-
-    // Advance time past 5 second cooldown
-    vi.advanceTimersByTime(5001);
-
-    showToast('Second', 'test-key');
-    expect(useUIStore.getState().toast?.message).toBe('Second');
-  });
-
-  it('toast auto-clears after 3 seconds', () => {
-    const { showToast } = useUIStore.getState();
-    showToast('Test', 'test-key');
-    expect(useUIStore.getState().toast).not.toBeNull();
-
-    // Advance time past 3 second auto-clear
-    vi.advanceTimersByTime(3001);
-
-    expect(useUIStore.getState().toast).toBeNull();
-  });
-
-  it('separate throttle tracking for different keys', () => {
-    const { showToast } = useUIStore.getState();
-
-    // Show toast for stations key
     showToast('Stations message', 'stations');
-    expect(useUIStore.getState().toast?.message).toBe('Stations message');
-
-    // Show toast for shots key (different key, should show)
     showToast('Shots message', 'shots');
-    expect(useUIStore.getState().toast?.message).toBe('Shots message');
-
-    // Try again for stations key (same key, should be throttled)
-    showToast('Stations again', 'stations');
-    expect(useUIStore.getState().toast?.message).toBe('Shots message');
+    expect(useUIStore.getState().toasts.map((t) => t.message)).toEqual([
+      'Stations message',
+      'Shots message',
+    ]);
   });
 
-  it('toast tracks lastToastByKey correctly', () => {
-    const { showToast } = useUIStore.getState();
-
-    // Initial state has no toast history
-    expect(useUIStore.getState().lastToastByKey).toEqual({});
-
-    // Show first toast
-    showToast('Test', 'key-a');
-    expect(useUIStore.getState().lastToastByKey['key-a']).toBeDefined();
-    expect(typeof useUIStore.getState().lastToastByKey['key-a']).toBe('number');
-
-    // Show toast with different key
-    showToast('Test 2', 'key-b');
-    expect(useUIStore.getState().lastToastByKey['key-a']).toBeDefined();
-    expect(useUIStore.getState().lastToastByKey['key-b']).toBeDefined();
-  });
-
-  it('clearToast removes current toast', () => {
+  it('clearToast removes every toast', () => {
     const { showToast, clearToast } = useUIStore.getState();
 
     showToast('Test', 'key');
-    expect(useUIStore.getState().toast).not.toBeNull();
+    expect(useUIStore.getState().toasts).toHaveLength(1);
 
     clearToast();
-    expect(useUIStore.getState().toast).toBeNull();
+    expect(useUIStore.getState().toasts).toEqual([]);
   });
 });
 

@@ -135,6 +135,7 @@ export default function PublishToSpeleoDbDialog() {
             ? t('speleodb.publish.reloadFailedWithCollaborators')
             : t('speleodb.publish.reloadFailed'),
           'speleodb-publish',
+          'error',
         );
         return;
       }
@@ -166,13 +167,14 @@ export default function PublishToSpeleoDbDialog() {
         showToast(
           t('speleodb.publish.collaboratorsPartial', { emails: failed.join(', ') }),
           'speleodb-publish',
+          'warning',
         );
       } else {
-        showToast(t('speleodb.publish.success'), 'speleodb-publish');
+        showToast(t('speleodb.publish.success'), 'speleodb-publish', 'success');
       }
       closeDialog();
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), 'speleodb-publish');
+      showToast(humanizeSpeleoError(e, t('speleodb.publish.failed')), 'speleodb-publish', 'error');
       if (speleoErrorAction(e) === 'ReLogin') {
         useSpeleoStore.getState().clearSession();
       }

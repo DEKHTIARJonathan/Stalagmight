@@ -5458,16 +5458,23 @@ fn test_remove_recent_projects_fails_when_lock_poisoned() {
 
 #[test]
 fn test_remove_recent_project_removes_present_entry() {
-    let state = AppState::new().unwrap();
-    {
-        let mut recent = state.recent_projects.lock().unwrap();
-        *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
-    }
+    // Isolated because `remove_from_recent_projects` persists the trimmed list and
+    // reports a save failure as `success: false`, WITHOUT taking the config lock.
+    // `command_tests.rs` points the process-global `XDG_CONFIG_HOME` at a chmod-555
+    // dir to force a save failure, holding only the config lock - so without this
+    // guard the two overlap and this assert trips at random under a parallel run.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        {
+            let mut recent = state.recent_projects.lock().unwrap();
+            *recent = vec![PathBuf::from("/a.stalx"), PathBuf::from("/b.stalx")];
+        }
 
-    let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
-    assert!(result.success);
-    let recent = state.recent_projects.lock().unwrap();
-    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        let result = state.remove_from_recent_projects(PathBuf::from("/a.stalx"));
+        assert!(result.success);
+        let recent = state.recent_projects.lock().unwrap();
+        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+    });
 }
 
 #[test]
@@ -5476,17 +5483,21 @@ fn test_remove_recent_project_absent_is_idempotent_success() {
     // recent" means "ensure it's absent". Returning a failure used to strand a zombie
     // "missing" row that the frontend (whose config copy lagged the trimmed backend
     // list) could never clear, because it only refreshes on success.
-    let state = AppState::new().unwrap();
-    {
-        let mut recent = state.recent_projects.lock().unwrap();
-        *recent = vec![PathBuf::from("/b.stalx")];
-    }
+    // Isolated for the same reason as the sibling above: this asserts on `success`,
+    // which a concurrently-forced config-save failure would flip.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        {
+            let mut recent = state.recent_projects.lock().unwrap();
+            *recent = vec![PathBuf::from("/b.stalx")];
+        }
 
-    let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
-    assert!(result.success, "removing an absent recent must succeed");
-    // The list is left untouched (nothing to remove).
-    let recent = state.recent_projects.lock().unwrap();
-    assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+        let result = state.remove_from_recent_projects(PathBuf::from("/gone.stalx"));
+        assert!(result.success, "removing an absent recent must succeed");
+        // The list is left untouched (nothing to remove).
+        let recent = state.recent_projects.lock().unwrap();
+        assert_eq!(*recent, vec![PathBuf::from("/b.stalx")]);
+    });
 }
 
 #[test]
@@ -20139,6 +20150,7 @@ fn profile_stalx_load() {
         warnings,
         display_settings,
         loading_id: 0,
+        is_remote: false,
     };
     let bin = crate::core::load_binary::encode(result).expect("encode");
     let t8 = Instant::now();
@@ -20445,45 +20457,65 @@ fn logout_closes_edit_gate_on_remote_edit_session() {
     // #197: logging out mid-edit on a remote project must drop the edit gate (so a
     // token-less session can't keep mutating a project it can never push) - the
     // lock release is best-effort and needs no token in this offline fixture.
-    let (state, _sid, _shid, _temp) = remote_fixture_editable();
-    assert!(
-        state.edit_enabled(),
-        "precondition: remote edit session, gate on"
-    );
-    state.speleodb_logout().expect("logout");
-    assert!(
-        !state.edit_enabled(),
-        "logout must drop the edit gate on a remote edit session"
-    );
+    //
+    // Under `with_isolated_config` because logout WRITES the config (it clears the
+    // persisted account email, the rehydrate seed) and now REPORTS a failure to do
+    // so. Without the isolation lock this test raced other config-touching tests for
+    // the global config path and failed on their temp dir.
+    crate::test_helpers::with_isolated_config(|| {
+        let (state, _sid, _shid, _temp) = remote_fixture_editable();
+        assert!(
+            state.edit_enabled(),
+            "precondition: remote edit session, gate on"
+        );
+        state.speleodb_logout().expect("logout");
+        assert!(
+            !state.edit_enabled(),
+            "logout must drop the edit gate on a remote edit session"
+        );
+    });
 }
 
 #[test]
 fn logout_leaves_local_project_editable() {
     // Logout must NOT touch a local-only project's gate (no remote link → no lock).
-    let state = AppState::new().unwrap();
-    assert!(
-        state
-            .execute(Command::CreateProject {
-                name: "Local".to_string(),
-                location: None,
-            })
-            .success
-    );
-    assert!(state.edit_enabled(), "local project editable");
-    state.speleodb_logout().expect("logout");
-    assert!(
-        state.edit_enabled(),
-        "logout must not disable editing on a local-only project"
-    );
+    //
+    // Isolated for the same reason as `logout_closes_edit_gate_on_remote_edit_session`:
+    // logout writes the config to clear the rehydrate seed and now reports a failure
+    // to do so, so it has to hold the config serialization lock.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        assert!(
+            state
+                .execute(Command::CreateProject {
+                    name: "Local".to_string(),
+                    location: None,
+                })
+                .success
+        );
+        assert!(state.edit_enabled(), "local project editable");
+        state.speleodb_logout().expect("logout");
+        assert!(
+            state.edit_enabled(),
+            "logout must not disable editing on a local-only project"
+        );
+    });
 }
 
 #[test]
 fn done_without_edit_session_is_noop_not_a_release() {
     // #197 review: Done on a remote project opened READ-ONLY (never Started editing →
     // edit_enabled false, no lock held this session) must NOT POST /release/ for a
-    // mutex it never acquired. It short-circuits to Released with no server call - the
-    // offline fixture has no live endpoint, so reaching active_token/release would
-    // error; the Ok(Released) proves the guard fired before any network work.
+    // mutex it never acquired. It short-circuits with no server call - the offline
+    // fixture has no live endpoint, so reaching active_token/release would error; the
+    // `Ok` proves the guard fired before any network work.
+    //
+    // UPDATED: the arm was `Released`. That conflated "your edits are on the server,
+    // the lock is gone" with "there was no edit session at all", and the two diverge
+    // whenever the gate is closed over a project that is still dirty (a 401 auto-drop
+    // closes the gate and deliberately keeps the dirty bit). The frontend clears its
+    // `hasUnpushedEdits` on `Released`, which disarmed the quit guard over work
+    // nothing had uploaded - so the no-session case now has its own arm.
     let (state, _sid, _shid, _temp) = remote_fixture();
     assert!(
         !state.edit_enabled(),
@@ -20493,8 +20525,8 @@ fn done_without_edit_session_is_noop_not_a_release() {
         .speleodb_done(None)
         .expect("non-dirty no-session Done is a no-op, not an error");
     assert!(
-        matches!(done, crate::speleodb::models::DoneResult::Released),
-        "Done without an edit session reports Released (already read-only), got {done:?}"
+        matches!(done, crate::speleodb::models::DoneResult::NotEditing),
+        "Done without an edit session reports NotEditing, not a release, got {done:?}"
     );
     assert!(
         !state.edit_enabled(),

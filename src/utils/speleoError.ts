@@ -1,38 +1,75 @@
-import type { SpeleoDbAction, SpeleoErrorDto } from '../types/ipc.generated';
+import type {
+  SpeleoDbAction,
+  SpeleoErrorDto,
+  TransportCause,
+  UnpushedLocalEdits,
+} from '../types/ipc.generated';
+import i18n from '../i18n';
+import { useSpeleoStore } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
 
 /**
- * A SpeleoDB IPC rejection that is a network/timeout transport error, whose
- * message is already self-framed ("Network error talking to SpeleoDB: …") so the
- * humanizer must NOT prepend an operation prefix on top of it.
+ * The typed transport cause of a rejected SpeleoDB IPC call, or `null` when the
+ * rejection is not a transport failure.
  *
- * Detected STRUCTURALLY from the typed DTO, not by string-matching the backend's
- * Display text (which silently breaks whenever that wording changes - fix S5):
- * `dto_for_error` maps `SpeleoDbError::Transport` to `action: 'Retry'` with
- * `status: null`, whereas a retryable 5xx (also `Retry`) carries its HTTP `status`.
- * See `src-tauri/src/speleodb/contract.rs`.
+ * Read STRUCTURALLY off the DTO's `transport` discriminant, which the backend
+ * sets only for `SpeleoDbError::Transport` (see `src-tauri/src/speleodb/
+ * contract.rs`). Never sniffed from the message text: that text is the backend's
+ * raw cause (an OS errno such as "Invalid argument"), which is locale- and
+ * platform-dependent.
  */
-function isTransportError(e: unknown): boolean {
-  if (e && typeof e === 'object' && 'action' in e && 'status' in e) {
-    const dto = e as Partial<SpeleoErrorDto>;
-    return dto.action === 'Retry' && (dto.status === null || dto.status === undefined);
+function transportCause(e: unknown): TransportCause | null {
+  if (e && typeof e === 'object' && 'transport' in e) {
+    const cause = (e as Partial<SpeleoErrorDto>).transport;
+    return typeof cause === 'string' ? (cause as TransportCause) : null;
   }
-  return false;
+  return null;
+}
+
+const TRANSPORT_KEYS: Record<TransportCause, string> = {
+  Refused: 'speleodb.transport.refused',
+  Timeout: 'speleodb.transport.timeout',
+  Dns: 'speleodb.transport.dns',
+  Tls: 'speleodb.transport.tls',
+  Unknown: 'speleodb.transport.unreachable',
+};
+
+/**
+ * [#270] The user-facing line for a transport failure.
+ *
+ * The backend's own text was passed straight through, so a blackholed host read
+ * "Network error talking to SpeleoDB: Invalid argument" - a bare errno that says
+ * neither what failed nor what to do, and does not even hint the server was
+ * unreachable. The message is built here instead: translatable, cause-specific,
+ * and naming the server we are actually signed in to (self-hosted users need to
+ * know WHICH box). The raw cause is not dropped - it stays on the error and in
+ * the backend log (`client::with_retry` warns with the cause + endpoint), which
+ * is what makes a bug report actionable.
+ */
+function transportMessage(cause: TransportCause): string {
+  // The session endpoint is where we are actually authenticated (the config value
+  // only affects future logins), so it is the honest answer to "which server?".
+  const endpoint =
+    useSpeleoStore.getState().session?.endpoint?.trim() || i18n.t('speleodb.transport.thisServer');
+  return i18n.t(TRANSPORT_KEYS[cause], { endpoint });
 }
 
 /**
  * Turn a rejected SpeleoDB IPC error into a single user-facing line.
  *
  * The backend already provides a clean detail (auth failures parse
- * `non_field_errors`; transport strips `io:`/`(os error N)`). This adds the
- * operation frame the backend can't know - e.g. `Login to SpeleoDB failed: …`,
- * `Unable to open the project: …` - except on transport errors, which are
- * returned verbatim so they don't read as "Login failed: Network error…".
+ * `non_field_errors`). This adds the operation frame the backend can't know -
+ * e.g. `Login to SpeleoDB failed: …`, `Unable to open the project: …` - except on
+ * transport errors, which are replaced wholesale by the humanized #270 line (it
+ * is already self-framed and would otherwise read as "Login failed: Network
+ * error…").
  */
 export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string {
+  const cause = transportCause(e);
+  if (cause) return transportMessage(cause);
   // Strip a trailing period so "…credentials." reads cleanly after our prefix.
   const msg = getErrorMessage(e).replace(/\.\s*$/, '');
-  if (!contextPrefix || isTransportError(e)) return msg;
+  if (!contextPrefix) return msg;
   return `${contextPrefix}: ${msg}`;
 }
 
@@ -40,10 +77,10 @@ export function humanizeSpeleoError(e: unknown, contextPrefix?: string): string 
  * Extract the typed {@link SpeleoDbAction} from a rejected SpeleoDB IPC call.
  *
  * The `speleodb_*` commands reject with a {@link SpeleoErrorDto} (`{ message,
- * action, status? }`), so the UI can branch on `action` (ReLogin / ReadOnly /
- * Fence / …) instead of scraping the display message. Returns `null` for a
- * non-DTO rejection (a plain string / Error), so callers fall back to a generic
- * message via `getErrorMessage`.
+ * action, status?, transport? }`), so the UI can branch on `action` (ReLogin /
+ * ReadOnly / Fence / …) instead of scraping the display message. Returns `null`
+ * for a non-DTO rejection (a plain string / Error), so callers fall back to a
+ * generic message via `getErrorMessage`.
  */
 export function speleoErrorAction(e: unknown): SpeleoDbAction | null {
   if (e && typeof e === 'object' && 'action' in e) {
@@ -51,4 +88,24 @@ export function speleoErrorAction(e: unknown): SpeleoDbAction | null {
     return typeof action === 'string' ? (action as SpeleoDbAction) : null;
   }
   return null;
+}
+
+/**
+ * [#270] The un-pushed local edits an open was refused over, or `null`.
+ *
+ * `speleodb_open_project` refuses rather than overwrite a cached `.stalx` that
+ * still holds edits the server has never seen; the refusal carries the project
+ * id, the local path and when it was last edited so the UI can name exactly what
+ * is at stake. Read structurally off the DTO (never sniffed from the message),
+ * and only trusted when the payload is actually shaped like the record - a
+ * refusal we cannot describe must fall back to the generic error path rather
+ * than raise a prompt with blanks in it.
+ */
+export function unpushedLocalEdits(e: unknown): UnpushedLocalEdits | null {
+  if (speleoErrorAction(e) !== 'UnpushedLocalEdits') return null;
+  const payload = (e as Partial<SpeleoErrorDto>).unpushed_local;
+  if (!payload || typeof payload !== 'object') return null;
+  const { project_id, local_path } = payload;
+  if (typeof project_id !== 'string' || typeof local_path !== 'string' || !local_path) return null;
+  return payload;
 }

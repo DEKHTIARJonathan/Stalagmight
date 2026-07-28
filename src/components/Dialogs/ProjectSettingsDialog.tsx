@@ -6,7 +6,7 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
-import { SpeleoDbSettingsTab } from './settings/SpeleoDbSettingsTab';
+import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
 import type { SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
@@ -31,7 +31,10 @@ export function ProjectSettingsDialog() {
   const closeDialog = useUIStore((s) => s.closeDialog);
   const showToast = useUIStore((s) => s.showToast);
   // The SpeleoDB tab is only meaningful for a remote (linked) project.
-  const isRemote = useSpeleoStore((s) => s.link) != null;
+  // The BOOLEAN, not the link object: `seedFromStatus` hands out a fresh link on
+  // every poll tick, so selecting the object re-rendered the whole settings dialog
+  // on each one.
+  const isRemote = useSpeleoStore((s) => s.link != null);
   const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
@@ -111,7 +114,7 @@ export function ProjectSettingsDialog() {
       const result = await updateProjectSettings(trimmedName, validation);
       if (!result.success) {
         setSaving(false);
-        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings');
+        showToast(result.error ?? t('dialogs.projectSettings.saveFailed'), 'project-settings', 'error');
         return;
       }
     }
@@ -123,7 +126,7 @@ export function ProjectSettingsDialog() {
       const collabResult = await setCollabEnabled(collabEnabled);
       if (!collabResult.success) {
         setSaving(false);
-        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings');
+        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings', 'error');
         return;
       }
     }
@@ -227,7 +230,7 @@ export function ProjectSettingsDialog() {
               )}
               {tab === 'speleodb' && isRemote && (
                 <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
-                  <SpeleoDbSettingsTab />
+                  <ProjectSettingsSpeleoStub />
                 </div>
               )}
             </div>

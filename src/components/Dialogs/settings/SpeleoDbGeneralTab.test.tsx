@@ -1,5 +1,6 @@
 /**
- * Component test (#206) - the SpeleoDB Project Settings tab.
+ * Component test (#206) - the General tab of the SpeleoDB project dialog and the
+ * metadata hook behind it.
  *
  * Covers the logic the pure Rust builder tests can't: the FE that decides WHAT goes
  * in the PATCH (only changed fields), the both-or-neither + range coordinate gating,
@@ -10,9 +11,13 @@ import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+  getErrorMessage: (e: unknown) => (e instanceof Error ? e.message : String(e)),
+}));
 
-import { SpeleoDbSettingsTab } from './SpeleoDbSettingsTab';
+import { SpeleoDbGeneralTab } from './SpeleoDbGeneralTab';
+import { useSpeleoProjectMetadata } from '../../../hooks/useSpeleoProjectMetadata';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useUIStore } from '../../../store/uiStore';
@@ -27,6 +32,27 @@ const META: SpeleoProjectMetadata = {
   longitude: null,
   exclude_geojson: false,
 };
+
+/** Stands in for SpeleoDbProjectDialog: it owns the hook, the body renders the form
+ *  and the footer owns Save, so both read one diff. */
+function Harness() {
+  const metadata = useSpeleoProjectMetadata();
+  return (
+    <>
+      <SpeleoDbGeneralTab metadata={metadata} />
+      {metadata.canEdit && (
+        <button
+          type="button"
+          disabled={!metadata.canSave}
+          onClick={() => void metadata.handleSave()}
+          data-testid="speleodb-settings-save"
+        >
+          save
+        </button>
+      )}
+    </>
+  );
+}
 
 const seedRemote = (permission: Permission) =>
   useSpeleoStore.setState({
@@ -51,17 +77,15 @@ beforeEach(() => {
   useUIStore.setState({ showToast: vi.fn() });
 });
 
-describe('SpeleoDbSettingsTab', () => {
+describe('SpeleoDbGeneralTab', () => {
   it('loads metadata on mount and PATCHes ONLY the changed field', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_get_project_metadata') return Promise.resolve(META);
       if (cmd === 'speleodb_patch_project') return Promise.resolve({ ...META, name: 'Cave B' });
-      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
-      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
       return Promise.resolve(null);
     });
     seedRemote('READ_AND_WRITE');
-    render(<SpeleoDbSettingsTab />);
+    render(<Harness />);
 
     const nameInput = await screen.findByTestId('speleodb-settings-name');
     expect(nameInput).toHaveValue('Cave A');
@@ -90,13 +114,9 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('disables Save when only one coordinate is entered (both-or-neither)', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
-      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
-      return Promise.resolve(META);
-    });
+    invokeIpcMock.mockResolvedValue(META);
     seedRemote('READ_AND_WRITE');
-    render(<SpeleoDbSettingsTab />);
+    render(<Harness />);
 
     const lat = await screen.findByTestId('speleodb-settings-latitude');
     await userEvent.type(lat, '45');
@@ -105,13 +125,9 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('disables Save for an out-of-range coordinate pair', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
-      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
-      return Promise.resolve(META);
-    });
+    invokeIpcMock.mockResolvedValue(META);
     seedRemote('READ_AND_WRITE');
-    render(<SpeleoDbSettingsTab />);
+    render(<Harness />);
 
     const lat = await screen.findByTestId('speleodb-settings-latitude');
     const lon = screen.getByTestId('speleodb-settings-longitude');
@@ -122,16 +138,33 @@ describe('SpeleoDbSettingsTab', () => {
   });
 
   it('is read-only (badge, disabled fields, no Save) without write permission', async () => {
-    invokeIpcMock.mockImplementation((cmd: string) => {
-      if (cmd === 'speleodb_list_collaborators') return Promise.resolve({ users: [], teams: [] });
-      if (cmd === 'speleodb_list_teams') return Promise.resolve([]);
-      return Promise.resolve(META);
-    });
+    invokeIpcMock.mockResolvedValue(META);
     seedRemote('READ_ONLY');
-    render(<SpeleoDbSettingsTab />);
+    render(<Harness />);
 
     expect(await screen.findByTestId('speleodb-settings-readonly-badge')).toBeInTheDocument();
     expect(screen.getByTestId('speleodb-settings-name')).toBeDisabled();
     expect(screen.queryByTestId('speleodb-settings-save')).toBeNull();
+  });
+
+  it('offers a retry after a failed load', async () => {
+    let attempt = 0;
+    invokeIpcMock.mockImplementation(() => {
+      attempt += 1;
+      return attempt === 1 ? Promise.reject(new Error('offline')) : Promise.resolve(META);
+    });
+    seedRemote('READ_AND_WRITE');
+    render(<Harness />);
+
+    await userEvent.click(await screen.findByTestId('speleodb-settings-retry'));
+    expect(await screen.findByTestId('speleodb-settings-name')).toHaveValue('Cave A');
+  });
+
+  it('does not call the server for a project with no SpeleoDB link', async () => {
+    invokeIpcMock.mockResolvedValue(META);
+    render(<Harness />);
+
+    await waitFor(() => expect(screen.queryByTestId('speleodb-settings-loading')).toBeNull());
+    expect(invokeIpcMock).not.toHaveBeenCalled();
   });
 });

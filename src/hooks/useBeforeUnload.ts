@@ -3,6 +3,7 @@ import { listen, type UnlistenFn } from '@tauri-apps/api/event';
 import { confirm } from '@tauri-apps/plugin-dialog';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { debugLog } from '../utils/debugLog';
+import { consumeQuitConfirmation } from '../utils/quit';
 
 /**
  * Hook to show a confirmation dialog when the user tries to close the app window
@@ -12,14 +13,26 @@ import { debugLog } from '../utils/debugLog';
  * This hook MUST always listen for that event, otherwise the window cannot be closed.
  * When shouldBlock is false, we immediately close. When true, we show a confirmation.
  *
+ * `guard` is the second, in-app tier: the OS window X arrives here as a
+ * `tauri://close-requested` event, so this is the ONLY place that can route it
+ * through the app's own exit guards (`guardQuit`). Before it existed, closing via
+ * X destroyed the window whenever `shouldBlock` was false - discarding unsaved-
+ * to-disk work and unpushed SpeleoDB edits with no prompt at all, while the menu
+ * Quit prompted for both. A native `confirm` string is not a substitute for the
+ * app's own dialog, which is why the guard opens a real dialog and aborts the
+ * close instead of answering here.
+ *
  * @param shouldBlock - Whether to block the close action and show confirmation
  * @param message - The message to show in the confirmation dialog
  * @param onConfirm - Optional callback to run cleanup before closing (e.g., delete placed sections)
+ * @param guard - Optional in-app guard run after any `shouldBlock` confirmation.
+ *   Returns true when it opened a dialog and the close must be abandoned.
  */
 export function useBeforeUnload(
   shouldBlock: boolean,
   message: string,
-  onConfirm?: () => Promise<void>
+  onConfirm?: () => Promise<void>,
+  guard?: () => boolean
 ) {
   // Track if a dialog is currently being shown to prevent duplicates
   const isShowingDialog = useRef(false);
@@ -29,11 +42,28 @@ export function useBeforeUnload(
   const isClosing = useRef(false);
   // Track current blocking state for the listener callback
   const shouldBlockRef = useRef(shouldBlock);
+  // Kept in a ref (not a dep) so a re-rendered guard identity never tears down
+  // and re-registers the close listener.
+  const guardRef = useRef(guard);
+  // Tier 1's answer for the quit attempt currently in flight.
+  //
+  // A tier-2 dialog aborts the close and re-issues it (via `performQuit`) once the
+  // user acts, so a single quit reaches this listener twice. Remembering the answer
+  // is what lets tier 1 run BEFORE that dialog without asking twice - and running
+  // it before is the whole point: the dialog's actions are irreversible (a push and
+  // a lock RELEASE), so nothing that can still cancel the quit may come after them.
+  // Dropped on any un-confirmed close request, so an attempt the user abandoned at
+  // the dialog cannot lend its answer to a later one.
+  const tier1Confirmed = useRef(false);
 
   // Keep ref in sync with prop
   useEffect(() => {
     shouldBlockRef.current = shouldBlock;
   }, [shouldBlock]);
+
+  useEffect(() => {
+    guardRef.current = guard;
+  }, [guard]);
 
   useEffect(() => {
     // Always clean up any existing listener first
@@ -44,16 +74,20 @@ export function useBeforeUnload(
 
     let isMounted = true;
 
-    // Close the window immediately without confirmation
-    const closeWindowNow = async () => {
+    // Close the window immediately without confirmation. Returns false when the
+    // destroy REJECTED and the window is therefore still here - the caller has to
+    // know, because everything it does around this call is one-way.
+    const closeWindowNow = async (): Promise<boolean> => {
       debugLog('[useBeforeUnload] closeWindowNow called');
       try {
         const appWindow = getCurrentWindow();
         debugLog('[useBeforeUnload] Got window, calling destroy');
         await appWindow.destroy();
         debugLog('[useBeforeUnload] Window destroyed');
+        return true;
       } catch (e) {
         console.error('[useBeforeUnload] Window destroy failed:', e);
+        return false;
       }
     };
 
@@ -71,54 +105,93 @@ export function useBeforeUnload(
             return;
           }
 
-          // If not blocking, immediately close the window
-          if (!shouldBlockRef.current) {
-            debugLog('[useBeforeUnload] Not blocking, closing immediately');
-            isClosing.current = true;
-            await closeWindowNow();
+          // A quit the user already confirmed in-app (performQuit) comes back
+          // through this same event. Consume the one-shot so the in-app guard
+          // below is skipped for THIS close only - otherwise e.g. "Discard &
+          // Quit" would re-open the dialog it came from, forever.
+          const preConfirmed = consumeQuitConfirmation();
+
+          // A close request that is NOT pre-confirmed starts a fresh quit attempt,
+          // so any tier-1 answer left over from one the user abandoned at a tier-2
+          // dialog must not carry into it.
+          if (!preConfirmed) tier1Confirmed.current = false;
+
+          // Tier 1: the in-memory states with no in-app dialog of their own (an
+          // import wizard mid-flight, a dirty dive plan). Deliberately NOT skipped
+          // by `preConfirmed` alone: a quit confirms the PROJECT, which says nothing
+          // about the dive plan the same close would drop. It is skipped only when
+          // THIS attempt already asked it - see `tier1Confirmed`. Since `quitApp`
+          // now routes menu Quit / Ctrl+Q through this same listener, that ask
+          // always happens before the tier-2 dialog acts.
+          if (shouldBlockRef.current && !tier1Confirmed.current) {
+            // Prevent multiple dialogs
+            if (isShowingDialog.current || !isMounted) return;
+            isShowingDialog.current = true;
+            let proceed = false;
+            try {
+              proceed = await confirm(message, {
+                title: 'Close Application',
+                kind: 'warning',
+                okLabel: 'Discard and Close',
+                cancelLabel: 'Cancel',
+              });
+            } catch (e) {
+              console.error('Close confirmation error:', e);
+              proceed = false;
+            } finally {
+              isShowingDialog.current = false;
+            }
+            if (!proceed) return;
+            tier1Confirmed.current = true;
+          }
+
+          // Tier 2: the app's own exit guards (unpushed SpeleoDB edits under our
+          // write lock, then unsaved-to-disk changes). Opening a dialog abandons
+          // this close; the dialog's own action re-issues it via performQuit,
+          // which arms `preConfirmed` so we land past this branch next time.
+          if (!preConfirmed && guardRef.current?.()) {
+            debugLog('[useBeforeUnload] In-app guard opened a dialog, aborting close');
             return;
           }
 
-          // Prevent multiple dialogs
-          if (isShowingDialog.current || !isMounted) return;
-          isShowingDialog.current = true;
-
-          try {
-            const confirmed = await confirm(message, {
-              title: 'Close Application',
-              kind: 'warning',
-              okLabel: 'Discard and Close',
-              cancelLabel: 'Cancel',
-            });
-
-            if (confirmed) {
-              // Mark that we're closing to prevent re-triggering
-              isClosing.current = true;
-
-              // Run cleanup callback if provided
-              if (onConfirm) {
-                try {
-                  await onConfirm();
-                } catch (e) {
-                  console.error('Cleanup callback failed:', e);
-                }
-              }
-
-              // Unregister our listener before destroying to prevent loops
-              if (unlistenRef.current) {
-                unlistenRef.current();
-                unlistenRef.current = null;
-              }
-
-              // Destroy the window
-              await closeWindowNow();
+          // Past every guard: the window IS going away, so the tier-1 cleanup is
+          // finally safe to perform. It is destructive by contract ("e.g. delete
+          // placed sections"), so it may only run once the close is actually going
+          // ahead - running it inside the tier-1 confirmation performed the deletions
+          // for a close that tier 2 then aborted. Keyed on `shouldBlock` rather than
+          // on "we prompted this pass", so it still runs on the pre-confirmed pass
+          // that skips an already-answered prompt.
+          if (shouldBlockRef.current && onConfirm) {
+            try {
+              await onConfirm();
+            } catch (e) {
+              console.error('Cleanup callback failed:', e);
             }
-          } catch (e) {
-            console.error('Close confirmation error:', e);
-          } finally {
-            if (!isClosing.current) {
-              isShowingDialog.current = false;
-            }
+          }
+
+          // Mark that we're closing, so a close request arriving while `destroy()`
+          // is in flight is ignored rather than running this whole flow again.
+          isClosing.current = true;
+
+          // Destroy the window. Both the latch above and the unregister below are
+          // one-way, and `destroy()` CAN reject (a revoked/regressed
+          // `core:window:allow-destroy` capability, an IPC failure). Doing either of
+          // them up front made a single failed destroy permanently un-quittable: the
+          // window stayed, and every later close request hit the `isClosing` early
+          // return - with no listener left to reach in any case, so not even the OS
+          // X could try again. So the latch is released and the listener is left
+          // registered whenever the close did not actually happen.
+          if (!(await closeWindowNow())) {
+            debugLog('[useBeforeUnload] Destroy failed - staying quittable');
+            isClosing.current = false;
+            return;
+          }
+
+          // The window IS gone. Drop the listener so nothing can re-enter this flow
+          // during teardown.
+          if (unlistenRef.current) {
+            unlistenRef.current();
+            unlistenRef.current = null;
           }
         });
 

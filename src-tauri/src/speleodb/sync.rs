@@ -13,7 +13,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use super::models::RevisionCommit;
+use super::models::{RemoteState, RevisionCommit};
 
 /// Verdict of the base-SHA fence: our recorded BASE commit compared against the
 /// server's current tip, given whether we hold un-pushed local edits.
@@ -402,6 +402,192 @@ pub(crate) fn plan_push(
     }
 }
 
+/// The passive status-button verdict: how the open project stands against the
+/// server tip, for the poll that drives the toolbar mark. Pure over an
+/// already-fetched tip + history so every branch is unit-tested offline.
+///
+/// This is deliberately the SAME reasoning the write path uses, not a cheaper
+/// approximation. A bare [`fence`] is not a verdict: a dirty copy whose tip has
+/// moved fences to `Diverged` even when the only commit in the gap is **our own
+/// just-landed push**, which [`plan_push`] recovers from via `AdoptThenUpload`.
+/// Two ways into that state:
+///
+/// - a status poll that read the link row BEFORE a push and resolved the tip
+///   AFTER it (nothing holds a command-level lock, so a push lands inside that
+///   window), and
+/// - the #193 ambiguous-push case, where a lost confirmation leaves BASE behind.
+///
+/// Reporting `Conflict` there advertises a conflict against the user's own
+/// commit and routes their next click to the divergence dialog - a self-conflict
+/// nobody else was involved in. Classifying the gap by authorship keeps the
+/// passive button honest about what Done would actually do on click.
+///
+/// `we_hold_the_lock` is what makes that authorship test SAFE, and it is not
+/// optional. `author_email == my_email` is a proxy for "this session pushed it",
+/// and a second session signed in as the SAME account breaks the proxy exactly:
+/// its commit reads as ours, so the gap classifies as `Landed` and the mark keeps
+/// its resting state over a genuine conflict - the case
+/// [`concurrent_session_notice`] exists to warn about (#193 b8), ending in Done
+/// superseding the other session's revision with no prompt at any point. Our own
+/// landed-but-unrecorded push can only have been made while we held the
+/// single-writer lock, so requiring it costs the recovery nothing and denies the
+/// same-account session the shortcut.
+///
+/// It also keeps this verdict AGREEING with [`reconcile_verdict`], which has no
+/// authorship recovery. That function drives Start editing - reachable only while
+/// the lock is NOT ours - so the two now answer the same thing in every state a
+/// user can click through. Without the gate the poll could paint the resting,
+/// unbadged mark while the click behind it raised the divergence prompt: the same
+/// passive/active disagreement this function exists to remove, moved from the
+/// badge to the click.
+///
+/// `FailClosed` stays separate from [`reconcile_verdict`]'s handling: a recorded
+/// BASE with no server tip is a transient empty response, and nothing local is at
+/// risk, so it degrades to `Unknown` rather than shouting `Conflict`.
+#[must_use]
+pub(crate) fn poll_verdict(
+    base: Option<&str>,
+    tip: Option<&str>,
+    dirty: bool,
+    commits: &[RevisionCommit],
+    my_email: &str,
+    we_hold_the_lock: bool,
+) -> RemoteState {
+    match fence(base, tip, dirty) {
+        FenceOutcome::UpToDate => RemoteState::UpToDate,
+        // Only advertise a clean pull when BASE genuinely descends to the tip. A
+        // FastForward whose BASE is NOT an ancestor is a server-side history
+        // rewrite that Update's stricter reconcile calls Diverged - paint it the
+        // same here, so the button never offers a pull that would immediately fail
+        // closed to the divergence prompt on click.
+        FenceOutcome::FastForward => {
+            if base_is_ancestor_of_tip(base, tip.unwrap_or_default(), commits) {
+                RemoteState::RemoteAhead
+            } else {
+                RemoteState::Conflict
+            }
+        }
+        // Not our lock, so a commit in the gap is not ours to explain away - even
+        // when it carries our email. Fail closed to the divergence prompt, which is
+        // also exactly what `reconcile_verdict` will say when the mark is clicked.
+        FenceOutcome::Diverged if !we_hold_the_lock => RemoteState::Conflict,
+        FenceOutcome::Diverged => match classify_ancestry(
+            base, tip, commits, my_email,
+            // Both timing inputs are `None` on purpose: only the AUTHORSHIP half of
+            // the answer is read below (`clear_dirty` is destructured away), so
+            // threading a `last_edit_at` that cannot change the verdict would be a
+            // live wire - a later change making it load-bearing in
+            // `classify_ancestry` would silently move this verdict with no test
+            // noticing. `plan_push` is where the freshness fold is actually used.
+            None, None,
+        ) {
+            // Every commit between BASE and the tip is ours - our push landed.
+            // Nothing remote to reconcile, so the button keeps showing the
+            // ordinary editing state and Done still works.
+            AncestryOutcome::Landed { .. } => RemoteState::UpToDate,
+            // A stranger's commit, or history we cannot reason about safely (a
+            // merge, a commit missing from the fetched range). `NotLanded` means
+            // base == tip, which the fence already routed to UpToDate, so it is
+            // unreachable here.
+            AncestryOutcome::Diverged
+            | AncestryOutcome::NotLanded
+            | AncestryOutcome::FailClosed => RemoteState::Conflict,
+        },
+        FenceOutcome::FailClosed => RemoteState::Unknown,
+    }
+}
+
+/// SpeleoDB's own project-creation commit: the one it writes when a project is
+/// created, before any survey data exists.
+///
+/// Identified by its message, and only at the root of the history - both halves
+/// matter. The message alone would hide a real revision someone happened to name
+/// the same thing; parentless alone hides a genuine first revision on any project
+/// whose history has no separate creation commit. Matching is case-insensitive and
+/// ignores surrounding whitespace, because the marker is server-generated copy
+/// rather than a stable identifier.
+fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
+    const CREATION_MESSAGE: &str = "[automated] project creation";
+    commit.parent_ids.is_empty()
+        && commit
+            .message
+            .as_deref()
+            .is_some_and(|m| m.trim().eq_ignore_ascii_case(CREATION_MESSAGE))
+}
+
+/// The revision history as a person should SEE it: newest first, ordered by the
+/// parent chain rather than by timestamp, and without SpeleoDB's own
+/// project-creation commit.
+///
+/// Two complaints, one cause. The server orders by `authored_date`, and project
+/// creation plus the first upload land inside the same second - so the tie breaks
+/// arbitrarily and the creation commit can sort ABOVE the publish that came after
+/// it. That is the same unreliable ordering every fence in this module already
+/// refuses to trust, so the fix is the same: walk the parent chain, which has no
+/// ties to break.
+///
+/// The root is dropped because it is not a revision of the survey. SpeleoDB writes
+/// it when the project is created, before any data exists, authored by the service
+/// account rather than by anyone who has touched the cave. In a list whose two
+/// actions are View and Revert, offering it invites someone to roll their project
+/// back to nothing.
+///
+/// It is dropped on its MESSAGE, though, not merely on being parentless. Being
+/// parentless is a property of every history's first commit, and not every project
+/// gets a separate creation commit ahead of its first upload - an import path that
+/// does not write one, or a project made before that behaviour existed, has a real
+/// survey revision at its root. Hiding it structurally meant that revision could
+/// not be viewed and could not be reverted to, with nothing on screen saying
+/// anything had been withheld. Recognising SpeleoDB's own commit instead keeps the
+/// filter aimed at the thing it was written for.
+///
+/// Falls back to the server's order when the chain cannot be walked - a fork, a
+/// merge, or a commit outside the fetched range. The completeness check is the
+/// point of that: a walk that does not account for every commit would silently
+/// HIDE real revisions, which is far worse than showing them in a debatable order.
+/// The root is dropped either way.
+#[must_use]
+pub(crate) fn display_history(commits: Vec<RevisionCommit>) -> Vec<RevisionCommit> {
+    let by_id: HashMap<&str, usize> = commits
+        .iter()
+        .enumerate()
+        .map(|(i, c)| (c.id.as_str(), i))
+        .collect();
+
+    let walked = tip_of(&commits)
+        .and_then(|tip| {
+            let mut order = Vec::with_capacity(commits.len());
+            let mut cursor = tip;
+            loop {
+                let &i = by_id.get(cursor)?;
+                order.push(i);
+                if order.len() > commits.len() {
+                    return None; // cycle / runaway guard
+                }
+                match commits[i].parent_ids.first() {
+                    Some(parent) => cursor = parent.as_str(),
+                    None => break, // reached the root
+                }
+            }
+            Some(order)
+        })
+        // Every commit must be accounted for, or we would be hiding revisions.
+        .filter(|order| order.len() == commits.len());
+
+    let order = walked.unwrap_or_else(|| (0..commits.len()).collect());
+    let mut slots: Vec<Option<RevisionCommit>> = commits.into_iter().map(Some).collect();
+    let mut out = Vec::with_capacity(order.len());
+    for i in order {
+        if let Some(commit) = slots[i].take() {
+            if is_project_creation_commit(&commit) {
+                continue;
+            }
+            out.push(commit);
+        }
+    }
+    out
+}
+
 /// Whether opening a remote project should warn about a concurrent SAME-ACCOUNT
 /// session (#193 b8). [`classify_ancestry`] treats `author_email == my_email` as
 /// "this session's push"; a second session under the same account editing the same
@@ -418,9 +604,9 @@ pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_emai
 #[cfg(test)]
 mod tests {
     use super::{
-        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice,
-        edits_captured_by_push, fence, plan_push, reconcile_verdict, tip_of, AncestryOutcome,
-        FenceOutcome, PushPlan, ReconcileVerdict, RevisionCommit,
+        base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
+        edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, tip_of,
+        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -431,6 +617,15 @@ mod tests {
             author_email: email.to_string(),
             authored_date: None,
             message: None,
+        }
+    }
+
+    /// SpeleoDB's own project-creation commit: parentless, service-account
+    /// authored, and carrying the generated marker message that identifies it.
+    fn creation_commit(id: &str) -> RevisionCommit {
+        RevisionCommit {
+            message: Some("[Automated] Project Creation".to_owned()),
+            ..commit(id, &[], "contact@speleodb.org")
         }
     }
 
@@ -892,6 +1087,200 @@ mod tests {
             plan_push(Some("a"), None, &[], ME, Some(T1), Some(T2)),
             PushPlan::Diverged
         );
+    }
+
+    // ---- poll_verdict: the passive status-button verdict ----
+
+    #[test]
+    fn poll_verdict_reports_our_own_landed_push_as_up_to_date_not_a_conflict() {
+        // The self-conflict. A status poll read the link row before a push and
+        // resolved the tip after it, so it fences a BASE one commit behind - and
+        // that commit is OUR OWN. A bare fence calls this Diverged; reporting it as
+        // a conflict paints the button red against the user's own work and sends
+        // their next click to the divergence dialog.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
+            RemoteState::UpToDate
+        );
+    }
+
+    #[test]
+    fn poll_verdict_reports_a_same_account_second_session_as_a_conflict() {
+        // #193 b8, the case `concurrent_session_notice` warns about. The gap commit
+        // carries OUR email but was pushed by our other session, so the authorship
+        // proxy - "same email means this session pushed it" - is exactly wrong here.
+        // We are not the lock holder, which is what says so: our own unrecorded push
+        // could only have been made while we held the single writer lock.
+        //
+        // Getting this wrong is silent data loss, not a bad badge: the mark keeps
+        // its resting state, the user edits on and presses Done, and `plan_push`
+        // classifies the same gap as `Landed` and supersedes the other session's
+        // revision with no prompt at any point.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_agrees_with_reconcile_verdict_wherever_the_mark_is_clickable() {
+        // The passive mark and the verb behind it must not disagree. `poll_verdict`
+        // has authorship recovery and `reconcile_verdict` (which drives Start
+        // editing) has none, so the recovery is gated on holding the lock -
+        // reachable only when Start editing is NOT the click action. Pin the
+        // agreement: with the lock not ours, both say the same thing.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, false),
+            RemoteState::Conflict
+        );
+        assert_eq!(
+            reconcile_verdict(Some("c0"), Some("c1"), true, &commits),
+            ReconcileVerdict::Diverged,
+            "a calm, unbadged mark whose click raises the divergence prompt is the \
+             same passive/active split the recovery was added to remove"
+        );
+    }
+
+    #[test]
+    fn poll_verdict_still_reports_a_strangers_commit_as_a_conflict() {
+        // The recovery above must not swallow a real divergence: someone else's
+        // commit sits between BASE and the tip.
+        let commits = vec![commit("c1", &["c0"], OTHER), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, ME, true),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_reports_a_conflict_when_we_cannot_identify_our_own_commits() {
+        // No session email -> `classify_ancestry` can match nothing as ours, so it
+        // fails closed. The passive button says the same thing Done would.
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), true, &commits, "", true),
+            RemoteState::Conflict
+        );
+    }
+
+    #[test]
+    fn poll_verdict_maps_the_clean_and_anomalous_arms_unchanged() {
+        let commits = vec![commit("c1", &["c0"], ME), commit("c0", &[], ME)];
+        // base == tip: nothing to reconcile.
+        assert_eq!(
+            poll_verdict(Some("c1"), Some("c1"), true, &commits, ME, true),
+            RemoteState::UpToDate
+        );
+        // Clean copy, tip genuinely descends from BASE: a real pull is available.
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("c1"), false, &commits, ME, false),
+            RemoteState::RemoteAhead
+        );
+        // Clean copy but BASE is NOT an ancestor (a server-side history rewrite):
+        // never advertise a pull the Update verb would immediately fail closed on.
+        let forked = vec![commit("x1", &["x0"], ME), commit("x0", &[], ME)];
+        assert_eq!(
+            poll_verdict(Some("c0"), Some("x1"), false, &forked, ME, false),
+            RemoteState::Conflict
+        );
+        // A recorded BASE with no server tip is a transient empty response, not a
+        // conflict - nothing local is at risk of being clobbered.
+        assert_eq!(
+            poll_verdict(Some("c0"), None, true, &[], ME, true),
+            RemoteState::Unknown
+        );
+    }
+
+    // ---- display_history: what the revision list shows ----
+
+    /// The shape of a real project: SpeleoDB's creation commit, the publish that
+    /// followed it inside the same second, then ordinary edits. The server returns
+    /// these newest-first by `authored_date`, and the tie between the first two
+    /// breaks arbitrarily - here, the wrong way round, exactly as observed live.
+    fn creation_then_publish() -> Vec<RevisionCommit> {
+        vec![
+            commit("8899f253", &["09f326b7"], ME),
+            commit("09f326b7", &["a14d46cf"], ME),
+            // The tie: sorted above the publish it actually precedes.
+            creation_commit("e2ad104b"),
+            commit("a14d46cf", &["e2ad104b"], ME),
+        ]
+    }
+
+    #[test]
+    fn display_history_hides_the_project_creation_commit() {
+        // It is not a revision of the survey - it predates any data, and it is
+        // authored by the service account, not by anyone who has been in the cave.
+        // Offering it in a list whose actions are View and Revert invites someone to
+        // roll their project back to an empty one.
+        let shown = display_history(creation_then_publish());
+        assert!(
+            !shown.iter().any(|c| c.id == "e2ad104b"),
+            "the automated creation commit must not be listed"
+        );
+        assert_eq!(shown.len(), 3);
+    }
+
+    #[test]
+    fn display_history_orders_by_ancestry_not_by_a_tied_timestamp() {
+        // The bug this fixes: creation and the first publish share a timestamp, so
+        // the server's `-authored_date` order put the root ABOVE the publish that
+        // descends from it. The parent chain has no tie to break.
+        let shown = display_history(creation_then_publish());
+        let ids: Vec<&str> = shown.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(ids, vec!["8899f253", "09f326b7", "a14d46cf"]);
+    }
+
+    #[test]
+    fn display_history_falls_back_rather_than_hiding_revisions() {
+        // A history we cannot walk (here a fork: two leaves, so no single tip) must
+        // still list every real revision. Showing them in a debatable order is a
+        // small cost; silently dropping someone's work from their own history is not.
+        let forked = vec![
+            commit("b1", &["root"], ME),
+            commit("b2", &["root"], ME),
+            creation_commit("root"),
+        ];
+        let shown = display_history(forked);
+        let ids: Vec<&str> = shown.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            vec!["b1", "b2"],
+            "both branches survive; only the root goes"
+        );
+    }
+
+    #[test]
+    fn display_history_keeps_a_genuine_first_revision_at_the_root() {
+        // Not every project has a separate creation commit ahead of its first
+        // upload. Dropping the root STRUCTURALLY hid a real survey revision on any
+        // that does not: it could not be viewed and could not be reverted to, with
+        // nothing on screen saying anything had been withheld.
+        let history = vec![
+            commit("r2", &["r1"], ME),
+            RevisionCommit {
+                message: Some("first survey upload".to_owned()),
+                ..commit("r1", &[], ME)
+            },
+        ];
+        let ids: Vec<String> = display_history(history).into_iter().map(|c| c.id).collect();
+        assert_eq!(
+            ids,
+            vec!["r2", "r1"],
+            "a parentless commit that is not SpeleoDB's creation marker is a real revision"
+        );
+    }
+
+    #[test]
+    fn display_history_leaves_nothing_for_a_project_that_was_only_created() {
+        // A project created but never pushed to has no survey revisions at all, and
+        // saying so is more honest than listing a commit that holds nothing.
+        let shown = display_history(vec![creation_commit("root")]);
+        assert!(shown.is_empty());
+        assert!(display_history(vec![]).is_empty());
     }
 
     // ---- concurrent_session_notice (#193 b8) ----

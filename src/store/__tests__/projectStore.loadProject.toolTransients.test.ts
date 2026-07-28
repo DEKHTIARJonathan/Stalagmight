@@ -38,6 +38,8 @@ describe('projectStore.loadProject tool-transient wiring (#275 B1)', () => {
 
     loadBinaryMock.mockResolvedValue({
       loadingId: 1n,
+      // A local project (#270): the load result carries the backend's is_remote.
+      isRemote: false,
       project: {
         name: 'Loaded Cave',
         location: null,

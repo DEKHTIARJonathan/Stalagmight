@@ -9,7 +9,7 @@ import {
 import { ElidedPath, Tooltip } from '../common';
 import { setProjectActionSource } from '../../utils/telemetry';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
-import { SpeleoRecentInfo, type SpeleoLockInfo } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
 
 interface SystemCardProps {
   name: string;
@@ -102,10 +102,15 @@ export default function SystemCard({
           : 'border-border hover:border-accent'
         }
       `}
+      // #270: a yellow bar down the leading edge when this project holds work that
+      // is only on this computer. Accent only - no badge here (the recents list is a
+      // chooser; the actionable "!" lives on the status button).
+      style={unpushedAccentStyle(speleoLock?.hasLocalEdits === true)}
       onClick={handleClick}
       onDoubleClick={handleDoubleClick}
       onContextMenu={handleContextMenu}
       data-testid={`system-card-${filePath}`}
+      data-local-edits={speleoLock?.hasLocalEdits === true ? 'true' : 'false'}
       role="button"
       tabIndex={0}
       aria-pressed={isSelected}

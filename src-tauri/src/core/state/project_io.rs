@@ -702,23 +702,37 @@ impl AppState {
         Ok(())
     }
 
+    /// Drop the open project's resources.
+    ///
+    /// Every lock here is RECOVERED from poisoning rather than skipped. A poisoned
+    /// mutex means some earlier call panicked while holding it; the guarded values
+    /// are `Option<Project>` / `Option<Database>` / the undo stack, and setting
+    /// them to `None`/empty is precisely the recovery - there is no half-written
+    /// state to protect. Skipping the drop, by contrast, is never safe: this
+    /// function is the pre-rename close that `close_project_if_open_at` relies on,
+    /// and it used to report `true` while still holding the live SQLite handle and
+    /// its 256 MB mmap, so the caller went on to rename a new file over it - the
+    /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        if let Ok(mut proj) = self.project.lock() {
+        {
+            let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: dropping project");
             *proj = None;
             tracing::debug!("close_project: project dropped");
         }
 
         tracing::debug!("close_project: acquiring database lock");
-        if let Ok(mut db) = self.database.lock() {
+        {
+            let mut db = self.database.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: dropping database");
             *db = None;
             tracing::debug!("close_project: database dropped");
         }
 
         tracing::debug!("close_project: acquiring undo_stack lock");
-        if let Ok(mut undo_stack) = self.undo_stack.lock() {
+        {
+            let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
             tracing::debug!("close_project: undo stack cleared");
@@ -736,5 +750,70 @@ impl AppState {
         tracing::info!(purpose = "release project resources", "Project closed");
         tracing::debug!("close_project: returning success");
         CommandResult::success()
+    }
+
+    /// The path of the `.stalx` currently open, when one is open and it has been
+    /// saved somewhere (a never-saved project has no `file_path`).
+    ///
+    /// Recovers a poisoned lock rather than reporting "nothing open": every caller
+    /// uses this to decide whether the live handle / live link belongs to a file it
+    /// is about to touch, and answering "no" on a poisoned mutex is the unsafe
+    /// direction in both.
+    pub(super) fn open_project_path(&self) -> Option<PathBuf> {
+        let guard = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        guard.as_ref().and_then(|p| p.file_path.clone())
+    }
+
+    /// Close the open project IF AND ONLY IF it is the file at `dest`; returns
+    /// whether it was closed.
+    ///
+    /// Guards every path that REPLACES a `.stalx` on disk out from under the app
+    /// (the SpeleoDB cache download-replace: pull / fast-forward / revision swap).
+    /// Two reasons the live handle has to go first:
+    ///
+    /// - `Database::open_existing` enables a 256 MB mmap over the file. Truncating
+    ///   or replacing a file that SQLite has mmap'd can fault the mapped pages
+    ///   (SIGBUS) and hands the connection a torn view of a different database.
+    /// - On Windows, SQLite opens the file WITHOUT `FILE_SHARE_DELETE`, so
+    ///   `MoveFileEx(REPLACE_EXISTING)` over a live handle fails with "Access is
+    ///   denied" - the same hazard the save pipeline's pre-rename close covers.
+    ///
+    /// Closing is deliberately conditional: these callers replace a file that is
+    /// USUALLY, but not always, the open project (a pull can target a cached
+    /// project the user does not currently have open), and dropping an unrelated
+    /// open project would throw away its undo/redo history for nothing.
+    pub(super) fn close_project_if_open_at(&self, dest: &std::path::Path) -> bool {
+        let Some(open_path) = self.open_project_path() else {
+            return false;
+        };
+        if !same_file(&open_path, dest) {
+            return false;
+        }
+        tracing::info!(
+            path = ?dest,
+            purpose = "release the live handle before replacing the file",
+            "Closing the open project because its .stalx is about to be replaced"
+        );
+        self.close_project();
+        true
+    }
+}
+
+/// Whether two paths denote the same file on disk.
+///
+/// Canonicalization resolves `.`/`..`, symlinks, and (on Windows) case/short-name
+/// differences, so two spellings of the open project's path still compare equal.
+/// When either side cannot be canonicalized - most commonly because `dest` does
+/// not exist yet (a first pull into an empty cache) - it cannot be the file a live
+/// connection is holding unless it is LITERALLY the same path, so fall back to a
+/// plain comparison instead of guessing.
+///
+/// Shared with `speleodb_local_state`, where the same question ("is the open
+/// project THIS file?") decides whether the live in-memory link may vouch for a
+/// copy that could not be read.
+pub(super) fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+    match (a.canonicalize(), b.canonicalize()) {
+        (Ok(ca), Ok(cb)) => ca == cb,
+        _ => a == b,
     }
 }

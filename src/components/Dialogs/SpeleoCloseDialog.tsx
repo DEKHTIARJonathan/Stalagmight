@@ -6,8 +6,10 @@ import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
 import { getErrorMessage } from '../../utils/ipc';
+import { holdsWriteLock } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
  * Close-flow guard (T2d): shown when closing a SpeleoDB project while you still
@@ -18,18 +20,42 @@ import { DialogWrapper } from './DialogWrapper';
  * - **saved locally but not pushed** (`link.hasUnpushedEdits`) → a note that the
  *   work is safe on disk, it just isn't on SpeleoDB yet.
  * Then it encourages pushing + releasing the lock before leaving.
+ *
+ * #270: "closing" here means any of the three exits that hand the open project
+ * back while the app keeps running - Close, opening another `.stalx`, and New
+ * Project (see `needsSpeleoHandBackPrompt`). The latter two carry their request in
+ * as `pendingOpenPath` / `pendingNewProject`, the same shape `UnsavedChangesDialog`
+ * uses, and it is replayed once the SpeleoDB side is resolved.
  */
 export default function SpeleoCloseDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
   const openDialog = useUIStore((s) => s.openDialog);
+  const dialogData = useUIStore((s) => s.dialogData);
   const link = useSpeleoStore((s) => s.link);
   const closeProject = useProjectStore((s) => s.closeProject);
+  const loadProject = useProjectStore((s) => s.loadProject);
   const saveProject = useProjectStore((s) => s.saveProject);
   const isDirtyLocal = useProjectStore((s) => s.isDirty);
   const { busy, done } = useSpeleoActions();
 
+  // What the user actually asked for, when this prompt was raised by something
+  // other than plain Close. Routing those exits here is only half the fix: a
+  // prompt that swallowed the action that raised it would trade a silent swap for
+  // a dead end, and the user would be sitting in the same project wondering why
+  // Ctrl+O did nothing.
+  const pendingOpenPath =
+    typeof dialogData.pendingOpenPath === 'string' ? dialogData.pendingOpenPath : null;
+  const pendingNewProject = dialogData.pendingNewProject === true;
+
   const sdbDirty = link?.hasUnpushedEdits ?? false;
+  // #270: the close guard now also fires on un-pushed edits ALONE, matching
+  // `guardQuit` - so this dialog is reachable with no lock (a re-verify divergence,
+  // or a token loss that ran `clearSession()`). Every verb below needs one, so it
+  // adapts exactly the way SpeleoQuitDialog does rather than offering two buttons
+  // that can only fail. `forceEditing` is the #213 state of editing WITHOUT a lock,
+  // which is equally nothing to push or release.
+  const holdsLock = holdsWriteLock(link);
   const [saveLocally, setSaveLocally] = useState(isDirtyLocal);
   const [saving, setSaving] = useState(false);
   const busyAny = busy || saving;
@@ -57,13 +83,30 @@ export default function SpeleoCloseDialog() {
       // A thrown save (rare - real failures resolve as {success:false}) must not be
       // treated as success; surface it and keep the project open over unsaved work.
       openDialog('error', {
-        title: 'Save Failed',
-        message: getErrorMessage(e, 'Failed to save project'),
+        title: t('speleodb.errors.saveFailedTitle'),
+        message: getErrorMessage(e, t('speleodb.errors.saveFailedMessage')),
       });
       return false;
     } finally {
       setSaving(false);
     }
+  };
+
+  /**
+   * Hand the project back, then replay whatever the user actually asked for. The
+   * close has to land first in every case: it is what releases (or deliberately
+   * keeps) the server lock and clears the SpeleoDB link, so replaying before it
+   * would leave the shell linked to a project that is on its way out. A FAILED
+   * close replays nothing - the project is still open, so the exit did not happen.
+   */
+  const closeThen = async (opts?: { releaseLock?: boolean }) => {
+    const result = await closeProject(opts);
+    if (!result.success) return;
+    // loadProject switches the view and surfaces its own failures.
+    if (pendingOpenPath) await loadProject(pendingOpenPath);
+    // `createProject` seeds the shell from here; the close above already left us
+    // on the global view (App falls back to it whenever no project is open).
+    else if (pendingNewProject) openDialog('new-project');
   };
 
   const pushReleaseThenClose = async () => {
@@ -74,7 +117,7 @@ export default function SpeleoCloseDialog() {
     const resolved = await done(null);
     if (resolved?.kind === 'released') {
       closeDialog();
-      await closeProject();
+      await closeThen();
     }
   };
 
@@ -83,20 +126,39 @@ export default function SpeleoCloseDialog() {
     closeDialog();
     // Explicitly retain the server lock: this is the one close path that opts out of
     // the default lock-release (fix 1), so the user keeps their editing claim.
-    await closeProject({ releaseLock: false });
+    // Also the lock-less exit: there is no lock to release, and asking the backend
+    // to release one it does not hold is the only other option.
+    await closeThen({ releaseLock: false });
   };
 
   return (
     <DialogWrapper
       title={t('speleodb.close.title')}
-      onClose={closeDialog}
+      // Not dismissable mid-verb, for the same reason as the quit dialog: the
+      // in-flight push/release outlives the dismissal and goes on to act on a
+      // decision the user can no longer see.
+      onClose={busyAny ? () => {} : closeDialog}
       size="md"
       data-testid="speleodb-close-dialog"
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          {sdbDirty ? t('speleodb.close.dirtyMessage') : t('speleodb.close.message')}
+          {!holdsLock
+            ? t('speleodb.close.messageNoLock')
+            : sdbDirty
+              ? t('speleodb.close.dirtyMessage')
+              : t('speleodb.close.message')}
         </p>
+
+        {/* Say what happens AFTER the close when the user did not ask for one. Every
+            verb below is honest as written - the project really is closed - but the
+            title and buttons all say "close", and someone who pressed Ctrl+O or New
+            Project needs to be told their request survived the prompt. */}
+        {(pendingOpenPath || pendingNewProject) && (
+          <p className="text-xs text-text-secondary" data-testid="speleodb-close-pending-note">
+            {pendingOpenPath ? t('speleodb.close.thenOpen') : t('speleodb.close.thenNew')}
+          </p>
+        )}
 
         {isDirtyLocal ? (
           <label className="flex items-center gap-2 text-sm">
@@ -115,26 +177,47 @@ export default function SpeleoCloseDialog() {
           </p>
         ) : null}
 
+        {/* #260: same problem as the Finish-editing dialog - this one also stays
+            open when `done` throws, with the shell banner stranded behind its
+            scrim. Show the failure here; "Push & release" below is the retry. */}
+        <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={busyAny} data-testid="speleodb-close-cancel">
             {t('common.actions.cancel')}
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void closeKeepingLock()}
-            disabled={busyAny}
-            data-testid="speleodb-close-keep-lock"
-          >
-            {t('speleodb.close.keepLock')}
-          </Button>
-          <Button
-            variant="primary"
-            onClick={() => void pushReleaseThenClose()}
-            disabled={busyAny}
-            data-testid="speleodb-close-push-release"
-          >
-            {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
-          </Button>
+          {holdsLock ? (
+            <>
+              <Button
+                variant="secondary"
+                onClick={() => void closeKeepingLock()}
+                disabled={busyAny}
+                data-testid="speleodb-close-keep-lock"
+              >
+                {t('speleodb.close.keepLock')}
+              </Button>
+              <Button
+                variant="primary"
+                onClick={() => void pushReleaseThenClose()}
+                disabled={busyAny}
+                data-testid="speleodb-close-push-release"
+              >
+                {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
+              </Button>
+            </>
+          ) : (
+            // No lock: nothing to push and nothing to release. The one honest action
+            // is to flush the .stalx (the checkbox above) and hand the project back,
+            // with the work still only on this computer. Same shape as
+            // SpeleoQuitDialog's "Quit anyway", and not `danger` - nothing is lost.
+            <Button
+              variant="primary"
+              onClick={() => void closeKeepingLock()}
+              disabled={busyAny}
+              data-testid="speleodb-close-anyway"
+            >
+              {t('speleodb.close.closeAnyway')}
+            </Button>
+          )}
         </div>
       </div>
     </DialogWrapper>

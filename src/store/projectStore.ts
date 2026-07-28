@@ -39,6 +39,7 @@ import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
+import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
 
@@ -155,6 +156,32 @@ function parseLoadError(e: unknown): LoadError {
   return { code: 'UNKNOWN', message: String(e) };
 }
 
+/**
+ * What a `loadProject` call resolved to.
+ *
+ * `success: false` used to carry two very different things under one boolean: a
+ * genuine failure (the file is gone, corrupt, unreadable - the previous project
+ * is still on screen and the user has been shown an error), and "SUPERSEDED" -
+ * another load started while this one was in flight, so this call's result was
+ * deliberately dropped and the project on screen is now someone else's.
+ *
+ * Callers that undo something on failure need to tell those apart: a rollback is
+ * correct for the first and actively harmful for the second, where it writes
+ * pre-attempt state over the project the user actually opened (#270). So the
+ * superseded case says so. It is optional because "not superseded" is the only
+ * meaning `success: false` ever had for the callers that just check the boolean,
+ * and every existing call site (and test double) keeps compiling unchanged.
+ */
+export interface LoadProjectOutcome {
+  success: boolean;
+  /**
+   * This call lost its slot to a NEWER load (the `clientOpId` moved under it).
+   * Nothing about the failure describes the project now on screen, so a caller
+   * must not roll anything back on it. Never set together with `success: true`.
+   */
+  superseded?: boolean;
+}
+
 interface ProjectStore {
   // State
   project: Project | null;
@@ -218,7 +245,7 @@ interface ProjectStore {
   cancelLoading: () => Promise<void>;
 
   /** Load a project using the consolidated load_project_full command */
-  loadProject: (path: string) => Promise<{ success: boolean }>;
+  loadProject: (path: string) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
@@ -445,7 +472,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
         }
       }
       return result;
@@ -489,14 +516,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (isReverifyDivergedError(result.error)) {
           useSpeleoStore.getState().notifyReverifyDivergence();
         } else if (isEditDisabledError(result.error)) {
-          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+          useUIStore.getState().showToast(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
         } else {
-          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+          useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
         }
       }
     } catch (e) {
       result = emptyCommandResult(false, String(e));
-      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId);
+      useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
       // Undo/redo can change which cross-references resolve - e.g. undoing a
@@ -548,8 +575,52 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   updateConfig: async (config: Config) => {
     try {
       const routingBefore = get().config?.gas.include_reference_legs;
-      // Rust command returns Result<(), String> - success returns nothing, error throws
-      await invokeIpc('update_config', { config }, { purpose: 'persist user settings' });
+      // Rust command returns Result<ConfigSaveReport, String> - an error throws; the
+      // report carries the one thing a save can half-do (see below).
+      const report = await invokeIpc<ConfigSaveReport | null>(
+        'update_config',
+        { config },
+        { purpose: 'persist user settings' },
+      );
+      // Turning the "never use the OS keychain" switch on EVICTS the API key an
+      // earlier login left in the keyring, and a locked or read-only keyring can
+      // refuse that delete. The settings are saved either way (the eviction runs
+      // before the write precisely so a partial failure lands in the recoverable
+      // direction), so this cannot be an error - but it must not pass as unqualified
+      // success either: Settings would be telling the user their key is not in the
+      // OS keychain while a working bearer token sits in it. The backend reports
+      // only a residue that may GENUINELY have survived, so this does not fire on
+      // the headless box that has no keychain to strand anything in.
+      if (report?.keychain_residue) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('settings.speleodb.disableKeychain.evictionFailed', {
+              reason: report.keychain_residue,
+            }),
+            'speleodb-keychain-residue',
+            'warning',
+          );
+      }
+      // The other half of that same move: the key is re-landed wherever the closed
+      // gate allows, which under the default "this session only" preference is
+      // memory - and the sweep that makes that true has to remove any copy an
+      // earlier storage choice wrote to disk. When it cannot, the saved settings say
+      // the key is gone when the app closes while the next launch reads the survivor
+      // straight back and signs the user in. Deliberately does not name the keyring:
+      // the backend cannot tell which store stranded it, and it is mutually
+      // exclusive with the message above, which can.
+      if (report?.persistent_residue) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('settings.speleodb.disableKeychain.sweepFailed', {
+              reason: report.persistent_residue,
+            }),
+            'speleodb-token-residue',
+            'warning',
+          );
+      }
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
       // The closure-adjustment sigmas feed the adjusted solve, so a settings change
@@ -663,7 +734,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (key !== path) inFlightLoads.delete(key);
     }
 
-    const promise: Promise<{ success: boolean }> = (async () => {
+    const promise: Promise<LoadProjectOutcome> = (async () => {
       // [perf-debug] Trace each post-IPC step distinctly so we know whether
       // the visible "stuck progress bar" freeze is JSON.parse on the IPC
       // resolution, the Zustand set, the view switch / MapCanvas mount, or
@@ -695,10 +766,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tIpcDone = performance.now();
         recordPerfTiming('load_project_full IPC+parse', tIpcDone - tIpcStart);
 
-        // Check clientOpId hasn't changed (cancelled/new load started)
+        // Check clientOpId hasn't changed (cancelled/new load started). Reported
+        // as SUPERSEDED, not as a plain failure: the caller's rollback (if it has
+        // one) would land on a project this call never opened.
         if (get().loading.clientOpId !== clientOpId) {
           clearProjectActionSource();
-          return { success: false };
+          return { success: false, superseded: true };
         }
 
         // Count the open with its entry-point source now that the load has
@@ -750,6 +823,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         const tSetDone = performance.now();
         recordPerfTiming('store set(project+stations)', tSetDone - tSetStart);
 
+        // #270: resolve the SpeleoDB edit gate BEFORE `setView('single')` paints
+        // the project. `refreshLinkStatus` below is fired unawaited, so until it
+        // answers the shell used to have no idea what this project was - and the
+        // read-only selector read "no idea" as editable, showing a locked remote
+        // project with every edit affordance on. `result.isRemote` is the backend's
+        // own `EXISTS(speleo_link)` verdict for THIS load - the very value it set
+        // its own edit gate from - so the two gates cannot disagree, and it costs
+        // no round trip: a remote project is read-only from the first frame and a
+        // local one is editable from the first frame (no read-only flash).
+        // `path` identifies WHICH project this link is for, so a link left over
+        // from the previously-open remote project is replaced rather than reused.
+        useSpeleoStore.getState().syncProjectLink(result.isRemote, path);
+
         // Apply display settings to UI store (merge, don't overwrite)
         useUIStore.getState().applyDisplaySettings(result.displaySettings);
         useUIStore.getState().triggerFitToBounds();
@@ -777,12 +863,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         await get().refreshUndoState();
         recordPerfTiming('loadProject total', performance.now() - tStart);
 
-        // #204: seed the SpeleoDB action-shell edit-state from the freshly-loaded
-        // project (is_remote / edit gate / permission / lock holder). Best-effort
-        // and non-blocking - a local project resolves to `link = null` (shell
-        // hidden); a remote one seeds read-only/editing. Covers reopen-from-recents
-        // (where the browser's optimistic setLinkOnOpen never ran) and the
-        // fast-forward reload path (which routes back through loadProject).
+        // #204: refine the SpeleoDB action-shell edit-state (permission / lock
+        // holder / remote state) from the backend. Best-effort and non-blocking -
+        // it is only a REFINEMENT now: `syncProjectLink` above already settled the
+        // gate itself, so a slow or failing status call can no longer leave a
+        // remote project looking editable. Deliberately not awaited: for a remote
+        // project this command also makes best-effort `get_project` /
+        // `get_revisions` HTTP calls, and no open should wait on the network.
         void useSpeleoStore.getState().refreshLinkStatus();
         // Also refresh who we are, so the action button can tell our own held lock
         // from someone else's (otherwise a reopen-from-recents has no session and
@@ -874,7 +961,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
                   .getState()
                   .showToast(
                     i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
-                    'collab-sibling-warning'
+                    'collab-sibling-warning',
+                    'warning'
                   );
               }
             })
@@ -889,9 +977,48 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
         // Handle ALREADY_OPEN specially - not an error, just switch view
         if (error.code === 'ALREADY_OPEN') {
+          // The same staleness guard both neighbouring branches carry (the
+          // success path above, the error path below). Without it this branch
+          // acted for a load that had already lost its slot: it flipped the view
+          // and called `resetLoading()`, which tears down the loading modal of the
+          // NEWER load still running, and then reported success - a boolean
+          // `keepLocalCopy` / `finishOpen` now act on.
+          if (get().loading.clientOpId !== clientOpId) {
+            clearProjectActionSource();
+            return { success: false, superseded: true };
+          }
+          // #270 (hardening): resolve the edit gate SYNCHRONOUSLY when nothing has
+          // resolved it, mirroring the success path's `syncProjectLink` before the
+          // view paints. `refreshLinkStatus` below refines it, but it is unawaited
+          // and swallows its errors, so with `unknown` left standing a failed
+          // status call renders the project permanently read-only under the
+          // fail-closed gate AND leaves no status button to act from (it arms its
+          // recovery poll on `link !== null`). Seeding remote is the pessimistic
+          // direction - read-only, with a way out on screen - and the status reply
+          // resolves it either way (a non-remote status seeds `local`).
+          if (useSpeleoStore.getState().projectLinkKind === 'unknown') {
+            useSpeleoStore.getState().syncProjectLink(true, path);
+          }
           useUIStore.getState().setView('single');
           get().resetLoading();
           await get().refreshUndoState();
+          // #270: then re-resolve from the backend, which knows what the short
+          // circuit cannot - the lock holder, the permission, the remote state,
+          // and whether a link seeded on the way in still matches the server. That
+          // mattered because this branch RENDERS a project while returning a
+          // success the callers act on: the refused-open prompt's "Keep the local
+          // copy" used to seed a pessimistic read-only link over a project we hold
+          // the lock on, and this branch preserved it verbatim - a read-only survey
+          // UI and a disarmed quit guard that healed only on the next status poll
+          // (Survey mode only, 30 s to 24 h).
+          //
+          // Unawaited and best-effort on purpose: `speleodb_link_status` does
+          // blocking HTTP for a remote project, and no caller of `loadProject` may
+          // be stalled behind the network. So it is a REFINEMENT, never the fix -
+          // the seeding side (`keepLocalCopy`, and now every route through
+          // `finishOpen`) is correct on its own, offline included, and the
+          // fail-closed fallback above covers the case nothing else resolved.
+          void useSpeleoStore.getState().refreshLinkStatus();
           return { success: true };
         }
 
@@ -994,6 +1121,12 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         integritySaveBlocked: false,
         integrityDialogOpen: false,
       });
+
+      // #270: a freshly created project is local by construction - it has no
+      // `speleo_link` row until a later Publish - and saying so before the view
+      // renders is what keeps the pessimistic default from leaving it read-only:
+      // nothing on this path ever calls `refreshLinkStatus`.
+      useSpeleoStore.getState().syncProjectLink(false);
 
       // Apply display settings from backend (defaults for new project)
       useUIStore.getState().applyDisplaySettings(result.displaySettings);

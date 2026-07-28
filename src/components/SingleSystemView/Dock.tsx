@@ -1,4 +1,4 @@
-import { memo, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
+import { memo, useCallback, useEffect, useRef, useState, type CSSProperties, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { PanelOpenerTab, type PanelEdge } from './PanelOpenerTab';
 import { useResizeHandle } from './useResizeHandle';
@@ -8,6 +8,31 @@ import { clamp } from '../../utils/clamp';
 
 /** Width/height of the always-present closed-state opener bar (px). */
 export const BAR = 12;
+
+/**
+ * Clamp an opener-tab inset so the tab box can never leave its container (#260).
+ *
+ * The tab anchors are FIXED insets from one container edge (`right: tabInset` for
+ * the bottom Data tab, `top: tabTop` for the side tabs). Once the container is
+ * smaller than the inset the tab's whole box lands outside it: the Data tab walked
+ * off the left edge of a narrow map column and rendered on top of the Sections
+ * panel, and a side tab drops below its bar when an open Data panel shortens it.
+ *
+ * `container === null` means "not measured yet" (first paint, or a zero-layout
+ * test environment) and passes the requested inset through unchanged, so a
+ * degenerate measurement can't yank the tab to 0.
+ *
+ * A MEASURED zero is not that case and is clamped like any other reading. The two
+ * used to be conflated on `container > 0`, which opted out in exactly the
+ * situation the clamp exists for: a side bar whose overlay computes to height 0
+ * (`closedBottomInset` >= the container height) is a real measurement, and
+ * passing `top: 79` through then put the tab 79px below a zero-height bar -
+ * outside the container, which is the escape being prevented.
+ */
+export function clampTabInset(requested: number, container: number | null, tab: number): number {
+  if (container === null || !Number.isFinite(container)) return requested;
+  return clamp(requested, 0, Math.max(0, container - tab));
+}
 
 interface DockProps {
   reveal: PanelReveal;
@@ -92,8 +117,30 @@ function DockComponent({
 }: DockProps) {
   const vertical = edge === 'left' || edge === 'right';
   const clipRef = useRef<HTMLDivElement>(null);
-  const outerRef = useRef<HTMLDivElement>(null);
+  // Nullable ref type (not `useRef<HTMLDivElement>(null)`) because the callback
+  // ref below assigns it - a RefObject initialized with null is read-only.
+  const outerRef = useRef<HTMLDivElement | null>(null);
   const handleRef = useRef<HTMLDivElement>(null);
+  // #260: the tab anchors below are FIXED insets from one container edge, so once
+  // the container is smaller than the inset the tab's box lands outside it
+  // entirely (the bottom Data tab rendered over the Sections panel; a side tab
+  // drops below its bar when an open Data panel shortens it). Measure the
+  // container and the tab so the inset can be clamped to what actually fits.
+  const [outerEl, setOuterEl] = useState<HTMLDivElement | null>(null);
+  const [tabEl, setTabEl] = useState<HTMLDivElement | null>(null);
+  // Only ONE dimension of each box feeds the anchor: the bottom tab is inset from
+  // its container's RIGHT edge (so: width), the side tabs from the TOP edge (so:
+  // height). Track that single number rather than the whole box - see the
+  // observer below for why the other dimension must not be in the loop at all.
+  // `null` (not 0) is "not measured yet", so a measured zero clamps like any
+  // other reading (see clampTabInset).
+  const anchorAxis: 'width' | 'height' = edge === 'bottom' ? 'width' : 'height';
+  const [outerExtent, setOuterExtent] = useState<number | null>(null);
+  const [tabExtent, setTabExtent] = useState<number | null>(null);
+  const setOuterNode = useCallback((node: HTMLDivElement | null) => {
+    outerRef.current = node;
+    setOuterEl(node);
+  }, []);
   // "active" while hovering the handle or dragging it; both the panel's
   // inner-edge border and the opener tab border tint accent then, identically.
   const [resizeHover, setResizeHover] = useState(false);
@@ -139,6 +186,30 @@ function DockComponent({
   // switch, fullscreen toggle, section-focus collapse): otherwise the parent's
   // sibling-resizing flag would stick true and permanently suspend the sibling
   // panels' open/close easing for the rest of the session.
+  // Measure the overlay wrapper and the tab box so the tab anchors can be clamped
+  // into the container (#260). One observer for both; `border-box` so the tab's
+  // border counts (its box is what must stay inside).
+  useEffect(() => {
+    if (typeof ResizeObserver === 'undefined') return undefined;
+    // ONLY the anchor's own axis. This previously stored the whole box and kept the
+    // previous object when NEITHER dimension had moved - which a resize drag makes
+    // useless: it fires ~60x/s and the dragged dimension moves every tick, so the
+    // "unchanged" test was never true and the Dock re-rendered at observer rate for
+    // a number its anchor does not even read. One number per element also hands the
+    // bail-out to React itself: setting state to an identical primitive re-renders
+    // nothing, so no hand-written comparison is needed.
+    const read = (el: Element) => el.getBoundingClientRect()[anchorAxis];
+    const sync = () => {
+      if (outerEl) setOuterExtent(read(outerEl));
+      if (tabEl) setTabExtent(read(tabEl));
+    };
+    sync();
+    const ro = new ResizeObserver(sync);
+    if (outerEl) ro.observe(outerEl);
+    if (tabEl) ro.observe(tabEl);
+    return () => ro.disconnect();
+  }, [outerEl, tabEl, anchorAxis]);
+
   useEffect(() => {
     onResizingChange?.(isResizing);
     return () => {
@@ -225,12 +296,21 @@ function DockComponent({
 
   // Tab anchored flush to the inner edge (rides the wrapper's edge for free).
   // Side tabs sit at `tabTop` so their top aligns with the panel's header divider.
-  const tabAnchor: CSSProperties =
-    edge === 'left'
-      ? { left: '100%', top: tabTop }
-      : edge === 'right'
-        ? { right: '100%', top: tabTop }
-        : { bottom: '100%', right: tabInset };
+  //
+  // #260: the inset is clamped to what the container can actually hold, so the
+  // tab can never leave it. `left/right: 100%` is deliberate (the tab overhangs
+  // the inner edge and that is the design); it's the inset along the OTHER axis
+  // that escapes when the container shrinks - `right: tabInset` walks the bottom
+  // tab off the left edge and over the Sections panel once the map column is
+  // narrower than the inset, and `top: tabTop` pushes a side tab below its bar
+  // once an open Data panel has shortened it. Until the first measurement the
+  // extent is null and the requested inset is used unclamped; a measured zero is
+  // clamped like any other reading (see clampTabInset).
+  const tabAnchor: CSSProperties = (() => {
+    const inset = clampTabInset(edge === 'bottom' ? tabInset : tabTop, outerExtent, tabExtent ?? 0);
+    if (edge === 'bottom') return { bottom: '100%', right: inset };
+    return edge === 'left' ? { left: '100%', top: inset } : { right: '100%', top: inset };
+  })();
 
   // Resize handle on the inner edge (only while docked).
   const handleClass =
@@ -242,7 +322,7 @@ function DockComponent({
 
   const overlay = (
     <div
-      ref={outerRef}
+      ref={setOuterNode}
       className={`absolute pointer-events-auto ${fullscreen ? 'z-40' : reveal.isFloatingOpen ? 'z-30' : 'z-20'}`}
       style={{ ...outerStyle, transition: sizeTransition }}
       // The slide-out ends when THIS wrapper's own width/height transition
@@ -329,7 +409,7 @@ function DockComponent({
       )}
 
       {!fullscreen && (
-        <div className="absolute z-[2]" style={tabAnchor}>
+        <div ref={setTabEl} className="absolute z-[2]" style={tabAnchor}>
           <PanelOpenerTab
             reveal={reveal}
             edge={edge}

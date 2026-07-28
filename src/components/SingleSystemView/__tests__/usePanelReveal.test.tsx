@@ -73,3 +73,75 @@ describe('usePanelReveal - close-grace + pin clearing', () => {
     expect(result.current.isFloatingOpen).toBe(false);
   });
 });
+
+/**
+ * #260: when the viewport can't afford a pinned side panel AND the map's minimum
+ * width, the panel is force-closed for display only. It must behave exactly like a
+ * hover panel - un-reflowed, still floatable over the map - WITHOUT touching the
+ * persisted mode/open, so the user's real layout comes straight back.
+ */
+describe('usePanelReveal - viewport-forced close (#260)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    // The normal case being squeezed: pinned open in the user's saved layout.
+    useUIStore.setState({ detailPanelMode: 'pin', detailPanelOpen: true });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('un-pins the panel for layout without changing the persisted mode/open', () => {
+    const { result, rerender } = renderHook(
+      ({ forcedClosed }: { forcedClosed: boolean }) =>
+        usePanelReveal('detail', { forcedClosed }),
+      { initialProps: { forcedClosed: false } },
+    );
+
+    expect(result.current.isPinnedOpen).toBe(true);
+
+    rerender({ forcedClosed: true });
+
+    expect(result.current.isPinnedOpen).toBe(false);
+    expect(result.current.isOpen).toBe(false);
+    // The user's saved layout is untouched - this is a display clamp, not a change.
+    expect(useUIStore.getState().detailPanelMode).toBe('pin');
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+  });
+
+  it('still lets the opener tab float it over the map (no layout width, so no conflict)', () => {
+    const { result } = renderHook(() => usePanelReveal('detail', { forcedClosed: true }));
+
+    act(() => result.current.openClick());
+
+    expect(result.current.isFloatingOpen).toBe(true);
+    expect(result.current.isPinnedOpen).toBe(false);
+    // openClick took the hover branch, so it wrote nothing to the store.
+    expect(useUIStore.getState().detailPanelOpen).toBe(true);
+  });
+
+  it('does not snap a floated panel shut on the still-pinned persisted mode', () => {
+    // The pin-clears-hover effect keys on mode === 'pin', which is still true while
+    // force-closed - it must not fire, or the panel would close the instant it opened.
+    const { result } = renderHook(() => usePanelReveal('detail', { forcedClosed: true }));
+
+    act(() => result.current.onRegionEnter());
+    act(() => vi.advanceTimersByTime(50));
+
+    expect(result.current.isFloatingOpen).toBe(true);
+  });
+
+  it('restores the pinned layout as soon as the viewport can afford it again', () => {
+    const { result, rerender } = renderHook(
+      ({ forcedClosed }: { forcedClosed: boolean }) =>
+        usePanelReveal('detail', { forcedClosed }),
+      { initialProps: { forcedClosed: true } },
+    );
+
+    expect(result.current.isPinnedOpen).toBe(false);
+
+    rerender({ forcedClosed: false });
+
+    expect(result.current.isPinnedOpen).toBe(true);
+  });
+});

@@ -2,7 +2,7 @@ import { type MouseEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
 import { Button } from '../common/Button';
-import { SpeleoRecentInfo, type SpeleoLockInfo } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, unpushedAccentStyle, type SpeleoLockInfo } from './SpeleoLockBadge';
 
 interface RemoteSystemCardProps {
   summary: SpeleoProjectSummary;
@@ -40,8 +40,12 @@ export default function RemoteSystemCard({
       className={`bg-panel border border-border rounded-lg p-4 transition-colors ${
         busy ? 'opacity-60 cursor-default' : 'cursor-pointer hover:border-accent'
       }`}
+      // #270: a purely-remote row can still have a local cached copy carrying
+      // un-pushed work (pulled, edited, then closed) - accent it the same way.
+      style={unpushedAccentStyle(lock.hasLocalEdits)}
       data-testid={`system-card-remote-${summary.id}`}
       data-remote="true"
+      data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
       role="button"
       aria-disabled={busy || undefined}
       tabIndex={0}

@@ -14,6 +14,7 @@ vi.mock('../../utils/telemetry', async (importOriginal) => ({
 import InsertStationDialog from './InsertStationDialog';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { MIN_SPLIT_CHILD_LENGTH_M } from '../../utils/shotSplit';
 import type { Project, SectionId, ShotId } from '../../types/project';
 import type { CommandResult } from '../../types/commands';
@@ -31,6 +32,9 @@ let closeDialog: ReturnType<typeof vi.fn>;
 let setSelection: ReturnType<typeof vi.fn>;
 
 beforeEach(() => {
+  // The open project is a confirmed-local one: since #270 the SpeleoDB gate
+  // fails closed, so an unresolved project would block the split too.
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   splitShotAtDistance = vi.fn();
   closeDialog = vi.fn();
   setSelection = vi.fn();

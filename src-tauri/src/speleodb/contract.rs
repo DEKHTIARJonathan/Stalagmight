@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::models::SpeleoErrorDto;
+use super::models::{SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
@@ -49,8 +49,43 @@ pub enum SpeleoDbAction {
     /// [`SpeleoDbError::AdoptAriane`] dump classification crossing the same typed
     /// action channel so the FE never branches on message text.
     Adopt,
+    /// The re-pull was REFUSED because the local copy still holds edits the server
+    /// has never seen. Like [`SpeleoDbAction::Adopt`] this is a routing signal, not
+    /// a failure, and it is NOT derived from an HTTP status - it is the local
+    /// [`SpeleoDbError::WouldDiscardLocalEdits`] guard crossing the same typed
+    /// channel. The FE offers the binary choice described on
+    /// [`super::models::UnpushedLocalEdits`], which the error carries.
+    UnpushedLocalEdits,
     /// Unmapped / 422 / 4xx we do not model - surface, fail closed.
     Fatal,
+}
+
+/// Why a transport attempt never reached (or never finished with) the server.
+///
+/// [#270] Derived from the TYPED `ureq::Error` / `io::ErrorKind` at the point of
+/// failure (`client::classify_transport`), never from the error's Display text -
+/// `io::Error`'s message comes from `strerror`, so it is OS- and locale-
+/// dependent and unusable as a discriminant. Crosses IPC on
+/// [`SpeleoErrorDto::transport`] so the frontend renders a translated,
+/// actionable line ("could not reach SpeleoDB at <endpoint> …") instead of
+/// surfacing a bare errno like "Invalid argument". The raw cause is kept in the
+/// error's `detail` (and logged) so bug reports stay actionable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub enum TransportCause {
+    /// The host answered the dial with a refusal / dropped the connection
+    /// (nothing listening on that port, or the server closed on us).
+    Refused,
+    /// A configured timeout elapsed (dial, response, or body read).
+    Timeout,
+    /// The hostname could not be resolved.
+    Dns,
+    /// The TLS handshake / certificate validation failed.
+    Tls,
+    /// Anything else - no route, a blackholed address (the EINVAL this fix was
+    /// found through), an unclassified transport failure. Fails to the generic
+    /// "could not reach the server" line rather than showing the raw errno.
+    Unknown,
 }
 
 /// The SpeleoDB endpoint a status came from, so [`map_status`] can apply the
@@ -156,10 +191,32 @@ pub(crate) fn map_status(endpoint: Endpoint, status: u16) -> SpeleoDbAction {
 /// named fn called at the call site (not a blanket `From`).
 ///
 /// - `Status { status, message }` → `map_status(endpoint, status)`, `status: Some`.
-/// - `Transport` (network/timeout, post-retry) → `Retry`, `status: None`.
+/// - `Transport` (network/timeout, post-retry) → `Retry`, `status: None`, and
+///   the typed [`TransportCause`] on `transport` (#270) so the FE can render a
+///   translated "could not reach <endpoint>" line instead of the raw errno.
 /// - `NotAuthenticated` → `ReLogin` (no usable token).
 /// - `InsecureEndpoint` and every other local error → `Fatal`, `status: None`.
 pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoErrorDto {
+    // Only a Transport error carries a cause; every other arm leaves it None,
+    // which is what makes `transport` a sound discriminant on the FE side.
+    let transport = match err {
+        SpeleoDbError::Transport { cause, .. } => Some(*cause),
+        _ => None,
+    };
+    // Likewise the refused-replace payload: only the guard's own error carries it,
+    // so `unpushed_local` stays a sound discriminant on the FE side.
+    let unpushed_local = match err {
+        SpeleoDbError::WouldDiscardLocalEdits {
+            project_id,
+            local_path,
+            last_edit_at,
+        } => Some(UnpushedLocalEdits {
+            project_id: project_id.clone(),
+            local_path: local_path.clone(),
+            last_edit_at: last_edit_at.clone(),
+        }),
+        _ => None,
+    };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
         // N:" wrapper - the frontend frames it per operation ("Login to SpeleoDB
@@ -169,28 +226,56 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
             Some(*status),
             message.clone(),
         ),
-        // Transport is already fully framed ("Network error talking to SpeleoDB: …").
-        SpeleoDbError::Transport(_) => (SpeleoDbAction::Retry, None, err.to_string()),
+        // Transport: the Display keeps the RAW cause ("Network error talking to
+        // SpeleoDB: Invalid argument") - that string is the diagnostic/log
+        // surface. The FE renders `transport` instead of it (#270).
+        SpeleoDbError::Transport { .. } => (SpeleoDbAction::Retry, None, err.to_string()),
         SpeleoDbError::NotAuthenticated => (SpeleoDbAction::ReLogin, None, err.to_string()),
         // Ariane (`.tml`-only) project: not a failure, a routing signal. The FE
         // offers the one-time C2 adoption flow (#214) on `action == Adopt` rather
         // than toasting the message.
         SpeleoDbError::AdoptAriane => (SpeleoDbAction::Adopt, None, err.to_string()),
-        // InsecureEndpoint / NoEndpoint / MissingCredentials / Parse / EmptyDump /
-        // AmbiguousDump / Io / InvalidProjectId - all fail closed; their Display is
-        // already user-facing.
-        _ => (SpeleoDbAction::Fatal, None, err.to_string()),
+        // A refused re-pull: also a routing signal, not a failure. The FE reads
+        // `unpushed_local` (built above) and offers keep-local vs take-remote.
+        SpeleoDbError::WouldDiscardLocalEdits { .. } => {
+            (SpeleoDbAction::UnpushedLocalEdits, None, err.to_string())
+        }
+        // Everything below fails closed; each Display is already user-facing.
+        //
+        // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,
+        // `WouldDiscardLocalEdits`) exist precisely because a ROUTING signal must
+        // not reach the user as `Fatal` - and a wildcard here is what silently
+        // routes the next one wrongly: a new variant compiles clean and lands in
+        // `Fatal`, so the frontend toasts a dead end instead of offering the choice
+        // the variant was added to offer. Listing them makes adding a variant fail
+        // the build until someone decides which side of that line it is on.
+        SpeleoDbError::NoEndpoint
+        | SpeleoDbError::MissingCredentials
+        | SpeleoDbError::Parse(_)
+        | SpeleoDbError::EmptyDump
+        | SpeleoDbError::AmbiguousDump(_)
+        | SpeleoDbError::Io(_)
+        | SpeleoDbError::InvalidProjectId
+        | SpeleoDbError::InvalidRevision
+        | SpeleoDbError::InsecureEndpoint { .. }
+        | SpeleoDbError::NoRemoteProject => (SpeleoDbAction::Fatal, None, err.to_string()),
     };
     SpeleoErrorDto {
         message,
         action,
         status,
+        transport,
+        unpushed_local,
     }
 }
 
 #[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
 mod tests {
-    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction};
+    use super::{dto_for_error, map_status, Endpoint, SpeleoDbAction, TransportCause};
     use crate::speleodb::SpeleoDbError;
 
     #[test]
@@ -377,10 +462,39 @@ mod tests {
         // Transport → Retry, no status.
         let dto = dto_for_error(
             Endpoint::DownloadDump,
-            &SpeleoDbError::Transport("timeout".to_owned()),
+            &SpeleoDbError::Transport {
+                cause: TransportCause::Timeout,
+                detail: "timed out".to_owned(),
+            },
         );
         assert_eq!(dto.action, SpeleoDbAction::Retry);
         assert_eq!(dto.status, None);
+        // [#270] and it carries the typed cause, so the FE renders a translated
+        // "could not reach <endpoint>" line instead of the raw errno in `message`.
+        assert_eq!(dto.transport, Some(TransportCause::Timeout));
+        assert!(
+            dto.message.contains("timed out"),
+            "the raw cause stays on the message for the log: {}",
+            dto.message
+        );
+
+        // Every non-transport error leaves `transport` unset - that is what makes
+        // it a sound discriminant on the frontend side.
+        for err in [
+            SpeleoDbError::Status {
+                status: 500,
+                message: "boom".to_owned(),
+            },
+            SpeleoDbError::NotAuthenticated,
+            SpeleoDbError::AdoptAriane,
+            SpeleoDbError::NoRemoteProject,
+        ] {
+            assert_eq!(
+                dto_for_error(Endpoint::UploadAuto, &err).transport,
+                None,
+                "{err:?} must not look like a transport failure"
+            );
+        }
 
         // NotAuthenticated → ReLogin; InsecureEndpoint / local → Fatal.
         assert_eq!(
@@ -407,6 +521,43 @@ mod tests {
         let adopt = dto_for_error(Endpoint::DownloadDump, &SpeleoDbError::AdoptAriane);
         assert_eq!(adopt.action, SpeleoDbAction::Adopt);
         assert_eq!(adopt.status, None);
+    }
+
+    #[test]
+    fn the_action_match_is_exhaustive_so_a_new_variant_cannot_default_to_fatal() {
+        // The fail-closed arm used to be `_ =>`, sitting directly under two arms that
+        // exist precisely because a ROUTING signal must not reach the user as `Fatal`
+        // (`AdoptAriane` → Adopt, `WouldDiscardLocalEdits` → UnpushedLocalEdits). A
+        // wildcard is what silently routes the NEXT such variant wrongly: it compiles
+        // clean, lands in Fatal, and the frontend toasts a dead end instead of offering
+        // the choice the variant was added to offer.
+        //
+        // Guarded at the source, because "this match has no wildcard" is not observable
+        // from its results - and rustc's own exhaustiveness check is the real enforcement
+        // the moment the wildcard is gone.
+        let src = include_str!("contract.rs");
+        let start = src
+            .find("let (action, status, message) = match err {")
+            .expect("the action match is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    };\n").expect("the match terminates")];
+        // Anchor the slice before trusting the absence check below. `!contains` passes
+        // vacuously on an empty or short body, so a `cargo fmt` reflow that moves the
+        // `\n    };\n` terminator would turn this test green while guarding nothing -
+        // the one failure mode a source-level tripwire must not have. These two arms
+        // are the routing signals the wildcard used to swallow, so requiring them
+        // proves we sliced the right match.
+        for arm in ["AdoptAriane", "WouldDiscardLocalEdits"] {
+            assert!(
+                body.contains(arm),
+                "sliced the wrong region: the action match must contain the `{arm}` arm"
+            );
+        }
+        assert!(
+            !body.contains("_ =>"),
+            "the action match must stay exhaustive - a wildcard lets a new SpeleoDbError \
+             variant default to Fatal without anyone deciding that it should"
+        );
     }
 
     #[test]

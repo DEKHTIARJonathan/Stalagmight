@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
+import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
  * Commit-message confirm for the action shell (#204), in two modes read off
@@ -19,6 +20,12 @@ import { DialogWrapper } from './DialogWrapper';
  * resolution dialog over it (fix 3); a `push_unconfirmed` keeps it open for a retry
  * (the #200 banner surfaces the ambiguity); a thrown (network) error likewise keeps
  * it open so the message and a retry survive.
+ *
+ * [#260] A thrown error is ALSO rendered INLINE here (`SpeleoPushFailureNotice`):
+ * the shell's push-failure banner sits behind this dialog's modal scrim, so it was
+ * unreadable and unclickable exactly when it mattered. The retry is this dialog's
+ * own primary button; the standalone banner takes over only once the dialog is
+ * dismissed with the failure unresolved.
  */
 export default function SpeleoDoneDialog() {
   const { t } = useTranslation();
@@ -71,6 +78,10 @@ export default function SpeleoDoneDialog() {
             data-testid="speleodb-done-message"
           />
         </div>
+        {/* #260: the failure of the LAST attempt, right above the button that made
+            it - the shell banner is unreachable behind this dialog's scrim. The
+            same button below is the retry; re-pressing it clears this first. */}
+        <SpeleoPushFailureNotice />
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button onClick={closeDialog} disabled={busy} data-testid="speleodb-done-cancel">
             {t('common.actions.cancel')}

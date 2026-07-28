@@ -1295,9 +1295,12 @@ pub fn run() {
             commands::speleodb::speleodb_login,
             commands::speleodb::speleodb_list_projects,
             commands::speleodb::speleodb_open_project,
+            commands::speleodb::speleodb_open_project_discarding_local,
             commands::speleodb::speleodb_adopt_ariane,
             commands::speleodb::speleodb_logout,
             commands::speleodb::speleodb_session,
+            commands::speleodb::speleodb_set_token_storage,
+            commands::speleodb::speleodb_retry_keychain,
             // SpeleoDB linked-project status for the action shell (#204)
             commands::speleodb::speleodb_link_status,
             commands::speleodb::speleodb_unlink,
@@ -1312,6 +1315,9 @@ pub fn run() {
             // SpeleoDB held-lock resume/release prompt - release all + per-project (#201)
             commands::speleodb::speleodb_release_all_locks,
             commands::speleodb::speleodb_release_lock,
+            // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
+            // local half of the held-lock / GlobalView project joins
+            commands::speleodb::speleodb_local_project_states,
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,

@@ -1,42 +1,246 @@
 /**
  * Quit entry point, shared by every affordance (GlobalView menu, in-project
- * menu, and the Ctrl+Q shortcut in both shortcut hooks) so the unsaved-changes
- * guard + close contract lives in exactly one place.
+ * menu, the Ctrl+Q shortcut in both shortcut hooks, AND the OS window close
+ * button) so the exit guards + close contract live in exactly one place.
  */
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { useProjectStore } from '../store/projectStore';
+import { useSpeleoStore, type SpeleoLinkState } from '../store/speleoStore';
 import { useUIStore } from '../store/uiStore';
 
 /**
- * Perform the actual quit: request a window close.
+ * Set by {@link performQuit} for exactly one `tauri://close-requested` round
+ * trip: the quit the user just confirmed in-app must not be re-guarded by
+ * {@link guardQuit} when the window close comes back through the App-level
+ * close listener. Without it, "Discard & Quit" would re-open the very dialog it
+ * came from - an unbreakable loop, since the guard reads live store state that
+ * a discard deliberately leaves dirty.
  *
- * The Rust `on_window_event` handler re-emits `tauri://close-requested`, which
- * the App-level `useBeforeUnload` listener turns into a window destroy (no
- * import is in progress at this point, so it doesn't re-prompt). Requires the
- * `core:window:allow-close` capability; a rejection is logged so a denied/
- * regressed capability is visible rather than failing silently.
- *
- * Call this only AFTER any unsaved-changes confirmation - it does NOT prompt.
+ * Stored as an EXPIRY rather than a bare boolean, because "consumed exactly
+ * once" only holds while the round trip actually completes. Every un-arming path
+ * we have is on the emitting side (a rejected `close()`) or the receiving side
+ * (a consume), so a request that is emitted successfully but whose event is never
+ * DELIVERED leaves the flag armed forever - and the next genuine close consumes
+ * it and skips `guardQuit` entirely, quitting silently over unpushed edits. That
+ * delivery gap is narrow but real: the close listener's effect deps
+ * (`[message, onConfirm]`) tear it down and re-register asynchronously, and the
+ * listener's own early `return` when a close is already in flight consumes the
+ * flag without acting on it. Nothing reachable was found that triggers it, so
+ * the deadline is hardening, not a fix: it bounds the damage of any such gap to
+ * the round trip it was armed for.
  */
-export function performQuit(): void {
+let quitConfirmedUntil = 0;
+
+/**
+ * How long an armed confirmation stays valid. The round trip it covers is a
+ * single IPC hop (request close -> Rust prevents it -> re-emit -> listener), so
+ * this is orders of magnitude longer than it needs to be; it is sized to never
+ * expire under a real quit, only to stop an UNDELIVERED one arming the next.
+ */
+const QUIT_CONFIRMATION_TTL_MS = 10_000;
+
+/**
+ * Read AND clear the one-shot confirmation. Consuming it (rather than peeking)
+ * is what keeps it from going stale: if the close attempt is then abandoned for
+ * any other reason, the next close request is guarded normally again.
+ */
+export function consumeQuitConfirmation(): boolean {
+  const confirmed = Date.now() < quitConfirmedUntil;
+  quitConfirmedUntil = 0;
+  return confirmed;
+}
+
+/** Test-only reset so a leaked confirmation can't bleed across cases. */
+export function resetQuitConfirmationForTests(): void {
+  quitConfirmedUntil = 0;
+}
+
+/**
+ * Ask the window to close. The Rust `on_window_event` handler PREVENTS the close
+ * and re-emits `tauri://close-requested`, which the App-level `useBeforeUnload`
+ * listener turns into the real destroy - so this is a request to run the exit
+ * flow, never a close in itself. Requires the `core:window:allow-close`
+ * capability; a rejection is logged (and runs `onRejected`) so a denied or
+ * regressed capability is visible rather than failing silently.
+ */
+function requestWindowClose(onRejected?: () => void): void {
   getCurrentWindow()
     .close()
     .catch((err) => {
+      onRejected?.();
       console.error('[quit] window.close() failed:', err);
     });
 }
 
 /**
- * Quit the application. If a project has unsaved changes, route through the
- * in-app unsaved-changes dialog (Save / Discard & Quit / Cancel) - the same
- * guard New/Open use - instead of destroying the window and silently dropping
- * the edits. Otherwise quit immediately.
+ * Perform the actual quit: request a window close, pre-confirmed.
+ *
+ * The one-shot flag above tells the close listener this quit is already confirmed,
+ * so it skips {@link guardQuit} instead of re-prompting. A rejected close un-arms
+ * the flag, so the next close request is guarded again.
+ *
+ * Call this only AFTER any exit confirmation - it does NOT prompt.
+ */
+export function performQuit(): void {
+  quitConfirmedUntil = Date.now() + QUIT_CONFIRMATION_TTL_MS;
+  requestWindowClose(() => {
+    quitConfirmedUntil = 0;
+  });
+}
+
+/**
+ * Work that exists ONLY on this computer: edits SpeleoDB has never seen.
+ *
+ * Shared by EVERY exit ({@link guardQuit} plus the three hand-back exits behind
+ * {@link needsSpeleoHandBackPrompt}) so they cannot drift again. The predicate
+ * keys on the WORK AT RISK, not on the lock, because the states where the work is
+ * most stranded are precisely the ones that drop the lock while keeping the
+ * edits: `notifyReverifyDivergence()` sets read-only, and any `ReLogin` error
+ * runs `clearSession()`, which does too.
+ *
+ * Quit needs only this - and deliberately so: holding the lock with nothing
+ * unpushed is safe to walk away from, because the backend's exit-time release
+ * vetoes itself when there ARE unpushed edits (aab5121d). The hand-back exits
+ * additionally have to resolve a held lock, since they hand the project back
+ * while the app keeps running.
+ */
+export function hasUnpushedSpeleoWork(link: SpeleoLinkState | null): boolean {
+  return link?.hasUnpushedEdits === true;
+}
+
+/**
+ * Do we hold the SpeleoDB write lock?
+ *
+ * `editState === 'editing'` is the app's hold-lock signal (the backend enforces
+ * hold-lock ⟹ edit-enabled), EXCEPT while force-editing (#213), which is editing
+ * with no lock at all - so a force-editor must count as NOT holding it.
+ *
+ * Shared because that second half is the easy half to forget, and forgetting it
+ * is not cosmetic: it offers a force-editor lock-owner actions (release, restore,
+ * push-and-release) that the backend can only refuse. It lived spelled out at six
+ * call sites and one had already drifted - `SpeleoProjectAdmin`'s Lock section
+ * told a force-editor "held by you" and offered them Release.
+ */
+export function holdsWriteLock(link: SpeleoLinkState | null): boolean {
+  return link?.editState === 'editing' && !link.forceEditing;
+}
+
+/**
+ * The SpeleoDB guard for every exit that HANDS THE OPEN PROJECT BACK while the app
+ * keeps running. There are three, and they are reached from the same in-project
+ * hamburger menu, so a user has no reason to expect them to differ:
+ *
+ * - Close                (`useProject.handleCloseProject`)
+ * - Open another `.stalx` (`routeOpenedFile`, also Ctrl+O and drag-drop)
+ * - New Project          (`newProjectGuarded`, also Ctrl+N)
+ *
+ * Both terms are needed and neither subsumes the other. The held lock must be
+ * resolved because the app keeps running, so nothing else will ever release it -
+ * this is what {@link guardQuit} does NOT need, since the backend releases on
+ * process exit. The unpushed work must be surfaced because nothing else surfaces
+ * it, and it survives in the cache `.stalx` long after the project is swapped out.
+ *
+ * Only the close exit used to have EITHER: opening another project or starting a
+ * new one gated on disk-dirty alone, so a remote project saved to disk with
+ * unpushed edits was swapped out with no notice at all - the same defect, on the
+ * two exits nobody had looked at.
+ */
+export function needsSpeleoHandBackPrompt(link: SpeleoLinkState | null): boolean {
+  return hasUnpushedSpeleoWork(link) || holdsWriteLock(link);
+}
+
+/**
+ * Raise one of the exit prompts, remembering the dialog it displaces so its own
+ * Cancel can put that dialog back.
+ *
+ * `uiStore` keeps a SINGLE `activeDialog` slot and `openDialog` replaces it
+ * unconditionally, so an exit prompt evicts whatever was on screen. That is fine for
+ * the exit itself - the app is going away - but not for CANCEL, which leaves the user
+ * in the app with the evicted dialog gone. The sharp case is a multi-step import
+ * wizard: press X mid-placement and tier 1 asks "Import is in progress. Discard all
+ * import data and close?"; confirming that swaps the wizard out for this prompt, and
+ * cancelling here drops the user back into the app with the wizard - and the sections
+ * they had placed - discarded. They consented to that discard only as PART of
+ * quitting. Both new prompts on this branch solved the same eviction with a return
+ * hop (`SpeleoUnpushedLocalDialog`'s `cancelReturnsTo`, `SpeleoRevertDialog`'s
+ * `returnTo`); this is that hop for the quit guards.
+ *
+ * The wizard's own state lives in `dialogData`, so carrying the pair back restores
+ * it. (`openDialog` also resets `dmpImportWizardPhase`, which drives onboarding
+ * hints only - the wizard itself does not read it.)
+ */
+function openExitPrompt(dialog: string, data?: Record<string, unknown>): void {
+  const { activeDialog, dialogData, openDialog } = useUIStore.getState();
+  // Re-opening ourselves is not a return hop, it is a loop - and there is nothing to
+  // restore when nothing was displaced.
+  const displaced =
+    activeDialog && activeDialog !== dialog
+      ? { cancelReturnsTo: activeDialog, cancelReturnsData: dialogData }
+      : null;
+  if (!displaced && !data) openDialog(dialog);
+  else openDialog(dialog, { ...data, ...displaced });
+}
+
+/**
+ * The exit guards, in the order the close flow uses them (see
+ * `useProject.handleCloseProject`). Returns `true` when a dialog was opened and
+ * the caller must NOT quit; `false` when there is nothing to protect.
+ *
+ * Ordering - SpeleoDB first, unsaved-to-disk second - is the same as the
+ * close-project flow's, and matters because the two conditions overlap: a project
+ * can be both unsaved to disk AND unpushed to the server. The SpeleoDB prompt is
+ * the one that subsumes the other (it carries its own "Save changes locally"
+ * checkbox, defaulted to on, exactly like `SpeleoCloseDialog`), so running it
+ * first composes the two into ONE decision. The reverse order could not: the
+ * unsaved-changes dialog knows nothing about the lock, so its "Discard & Quit"
+ * would quit straight past the unpushed edits.
+ *
+ * Both branches terminate: each dialog quits via {@link performQuit}, which
+ * arms the one-shot confirmation so the resulting close request skips this
+ * guard entirely.
+ */
+export function guardQuit(): boolean {
+  const { project, isDirty } = useProjectStore.getState();
+  if (!project) return false;
+
+  const link = useSpeleoStore.getState().link;
+  // Keyed on the WORK AT RISK only - see {@link hasUnpushedSpeleoWork}. Whether we
+  // still hold the write lock changes which choices the dialog can offer (it
+  // adapts), not whether the user should be told. Holding the lock with nothing
+  // unpushed needs no prompt at QUIT time specifically: the backend's exit-time
+  // release is safe then, and vetoes itself otherwise (aab5121d). The close flow
+  // does not get that for free, so it guards on the lock as well.
+  if (hasUnpushedSpeleoWork(link)) {
+    openExitPrompt('speleodb-quit');
+    return true;
+  }
+
+  if (isDirty) {
+    openExitPrompt('unsaved-changes', { pendingQuit: true });
+    return true;
+  }
+
+  return false;
+}
+
+/**
+ * Quit the application.
+ *
+ * Deliberately runs NO guard here: it asks for a close, un-confirmed, and the
+ * App-level `useBeforeUnload` listener runs the whole exit flow - the native
+ * import / dive-plan confirm first, then {@link guardQuit}. That listener is the
+ * only place both tiers exist, and the ONLY ordering in which every cancellable
+ * question is asked before anything irreversible happens.
+ *
+ * It used to call `guardQuit()` directly and then `performQuit()`, which put the
+ * tiers in the opposite order for menu Quit / Ctrl+Q: `SpeleoQuitDialog` ran and
+ * its "Push, release & quit" pushed AND RELEASED the server lock, and only then
+ * did the re-issued close reach the native "You have unsaved changes to this dive
+ * plan. Discard and close?" prompt. Cancelling there left the user in the app with
+ * the lock irreversibly surrendered and the project silently read-only, with
+ * nothing saying why. The window X never had the bug - it always arrived at the
+ * listener first - so the two paths now share that one order.
  */
 export function quitApp(): void {
-  const { project, isDirty } = useProjectStore.getState();
-  if (project && isDirty) {
-    useUIStore.getState().openDialog('unsaved-changes', { pendingQuit: true });
-    return;
-  }
-  performQuit();
+  requestWindowClose();
 }

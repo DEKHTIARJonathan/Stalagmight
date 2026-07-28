@@ -267,6 +267,8 @@ const UNMOCKED_COMMAND_REASONS: Record<string, string> = {
   speleodb_force_edit: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_get_revisions: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_open_project: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
+  speleodb_open_project_discarding_local:
+    'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_push: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_restore_revision: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',
   speleodb_start_editing: 'SpeleoDB write-workflow, env-gated live tests only, not mocked e2e',

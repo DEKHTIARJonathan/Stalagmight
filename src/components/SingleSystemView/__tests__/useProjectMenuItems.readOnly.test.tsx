@@ -39,7 +39,8 @@ function importItemDisabled(): boolean | undefined {
 
 beforeEach(() => {
   useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
-  useSpeleoStore.setState({ link: null, session: null });
+  // Confirmed-local project - the editable baseline (#270 fail-closed gate).
+  useSpeleoStore.setState({ link: null, projectLinkKind: 'local', session: null });
 });
 
 describe('useProjectMenuItems Import item - composed read-only gate (#275)', () => {

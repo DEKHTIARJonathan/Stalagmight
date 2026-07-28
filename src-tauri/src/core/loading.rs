@@ -696,6 +696,12 @@ pub struct LoadProjectFullResult {
     pub warnings: Vec<crate::models::ProjectWarning>,
     /// Display settings from the project database
     pub display_settings: DisplaySettings,
+    /// Is this a SpeleoDB project (it carries a `speleo_link` row)? The SAME
+    /// value this load used to set the backend edit gate (`set_edit_enabled
+    /// (!is_remote)`), handed to the frontend so its read-only gate resolves
+    /// synchronously with the load instead of waiting on a `speleodb_link_status`
+    /// round trip that arrives after the project has already rendered (#270).
+    pub is_remote: bool,
 }
 
 // ============================================================================
@@ -1064,6 +1070,7 @@ mod tests {
             stats,
             warnings: Vec::new(),
             display_settings: DisplaySettings::default(),
+            is_remote: false,
         };
         assert_wire(
             &serde_json::to_value(&load).expect("serialize load result"),

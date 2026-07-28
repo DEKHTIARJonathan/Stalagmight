@@ -6,8 +6,11 @@ import { useUIStore } from '../../../store/uiStore';
 import { useSpeleoStore } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
+import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
-import { humanizeSpeleoError } from '../../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits } from '../../../utils/speleoError';
+import { holdsWriteLock } from '../../../utils/quit';
+import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { formatDate } from '../../../i18n/format';
 import type { SpeleoRevision } from '../../../types/ipc.generated';
 
@@ -26,17 +29,20 @@ function formatWhen(iso: string | null): string {
 }
 
 /**
- * [#218] Read-only revision history for the open remote project, shown in the
- * Project Settings SpeleoDB tab directly below the Lock section. Fetches
+ * [#218] Read-only revision history for the open remote project - the History tab
+ * of the SpeleoDB project dialog. Fetches
  * `speleodb_get_revisions` on mount and lists the server-ordered (newest-first)
  * commit chain: short SHA, author, date, message, a merge marker for >1 parent.
  *
- * Each PAST revision offers one action, keyed on the edit state:
+ * Each PAST revision offers actions keyed on the edit state:
  * - **Restore** (genuine lock held): a git-forward restore that pulls the revision
  *   into the working copy as an unsaved, pushable edit (via a confirm dialog carrying
  *   the disclaimer + unsaved-changes safeguard).
  * - **View** (read-only): a non-destructive peek - it checks the revision out
  *   read-only, and the SpeleoDB Update action fast-forwards back to the latest.
+ * - **Revert** (read-only, upload rights): the whole round trip - take the lock,
+ *   check the revision out, upload it, release the lock - so a user who never held
+ *   the lock can undo a bad revision and end read-only exactly as they started.
  * - **Neither** (force-editing, i.e. editing WITHOUT the lock): a revision swap would
  *   clobber the unsaved lock-less edits, so the backend refuses both and a hint asks
  *   the user to finish or discard the force-edit session first.
@@ -48,16 +54,31 @@ export function SpeleoRevisionHistory() {
   const openDialog = useUIStore((s) => s.openDialog);
   const showToast = useUIStore((s) => s.showToast);
   const projectId = useSpeleoStore((s) => s.remoteProjectId);
-  const editState = useSpeleoStore((s) => s.link?.editState);
   const isForceEditing = useSpeleoStore((s) => s.link?.forceEditing ?? false);
   // A genuine lock-held session (NOT force-editing, which holds no lock) may Restore;
   // a plain read-only session may View. A force-editor gets neither: swapping the tree
   // would clobber their unsaved, lock-less edits, so the backend refuses both and the
-  // UI offers no action. Mirrors SpeleoStatusButton / the hamburger menu, which also
-  // AND out forceEditing.
-  const iHoldLock = editState === 'editing' && !isForceEditing;
+  // UI offers no action. Shared predicate - see `holdsWriteLock`.
+  const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  // A View is read-only in INTENT, but not in effect: the backend swaps the working
+  // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
+  // does and refuses whenever this copy holds work the server has never seen. That
+  // state is ordinary here - a push that failed, or a lock released without one,
+  // leaves exactly it - so offering a button that can only be refused made the whole
+  // section a dead end: the raw "local edits that were never pushed" line for what
+  // the user asked to be a peek, with nothing said about how to get out of it.
+  // Named up front instead, with the way through (see the hint below).
+  const hasUnpushedEdits = useSpeleoStore((s) => s.link?.hasUnpushedEdits ?? false);
+  const viewBlocked = !iHoldLock && !isForceEditing && hasUnpushedEdits;
+  // Revert takes the lock, uploads the chosen revision and releases again, so it needs
+  // upload rights. A `null` permission is "not known" (offline), not "none" - treat it
+  // as potentially editable and let the backend gate decide, the same way the status
+  // button does, rather than hiding the only route a read-only user has.
+  const permission = useSpeleoStore((s) => s.link?.permission ?? null);
+  const canRevert = permission === null || permissionAtLeast(permission, 'READ_AND_WRITE');
   const projectName = useProjectStore((s) => s.project?.name ?? '');
   const restoreRevision = useRestoreRevision();
+  const web = useSpeleoWebLink('revisions');
 
   const [revisions, setRevisions] = useState<SpeleoRevision[] | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -97,7 +118,17 @@ export function SpeleoRevisionHistory() {
         restore: false,
       });
     } catch (e) {
-      showToast(humanizeSpeleoError(e, t('speleodb.restore.failed')), 'speleodb-restore');
+      // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
+      // dirty bit can flip between render and click (an auto-save, a poll), so the
+      // race still has to say the same thing the hint does rather than fall through
+      // to the backend's raw line.
+      showToast(
+        unpushedLocalEdits(e)
+          ? t('speleodb.revisions.viewBlockedByUnpushed')
+          : humanizeSpeleoError(e, t('speleodb.restore.failed')),
+        'speleodb-restore',
+        'error',
+      );
     } finally {
       setPendingId(null);
     }
@@ -108,11 +139,33 @@ export function SpeleoRevisionHistory() {
 
   return (
     <SettingsSection title={t('speleodb.revisions.title')} data-testid="speleodb-revisions">
+      {/* Sits under the section heading rather than in it: SettingsSection takes a
+          plain string title. */}
+      <div className="flex justify-end">
+        <button
+          type="button"
+          disabled={web.url === null}
+          title={web.url === null ? t('speleodb.web.unavailable') : undefined}
+          onClick={web.open}
+          className="text-xs text-accent hover:underline disabled:opacity-50 disabled:no-underline"
+          data-testid="speleodb-web-revisions"
+        >
+          {t('speleodb.web.openRevisions')}
+        </button>
+      </div>
       <div className="mb-2 space-y-1" data-testid="speleodb-revisions-hint">
         <p className="text-xs text-text-secondary">{t('speleodb.revisions.restoreHint')}</p>
         {isForceEditing ? (
           <p className="text-xs text-warning" data-testid="speleodb-revisions-forceedit-hint">
             {t('speleodb.revisions.forceEditActive')}
+          </p>
+        ) : viewBlocked ? (
+          // Says WHY View is gone and WHAT clears it, because the block is not
+          // permanent: locking the project for editing and uploading the changes
+          // resolves it, and Revert stays on offer here precisely because it carries
+          // its own explicit discard route for the same changes.
+          <p className="text-xs text-warning" data-testid="speleodb-revisions-unpushed-hint">
+            {t('speleodb.revisions.viewBlockedByUnpushed')}
           </p>
         ) : (
           !iHoldLock && (
@@ -203,7 +256,7 @@ export function SpeleoRevisionHistory() {
                     {t('speleodb.revisions.restore')}
                   </Button>
                 )}
-                {!isCurrent && !iHoldLock && !isForceEditing && (
+                {!isCurrent && !iHoldLock && !isForceEditing && !viewBlocked && (
                   <Button
                     variant="secondary"
                     size="sm"
@@ -214,6 +267,36 @@ export function SpeleoRevisionHistory() {
                     {pendingId === rev.id
                       ? t('speleodb.revisions.viewing')
                       : t('speleodb.revisions.view')}
+                  </Button>
+                )}
+                {/* After View, so the non-destructive read is what a scanning eye hits
+                    first. Offered even when `viewBlocked`, unlike View: that state used
+                    to show no buttons at all, and Revert is the one route out of it -
+                    it takes the lock for the user, with the armed discard as the
+                    explicit consent for replacing their un-pushed work. */}
+                {!isCurrent && !iHoldLock && !isForceEditing && canRevert && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={() =>
+                      openDialog('speleodb-revert', {
+                        projectId,
+                        projectName,
+                        hexsha: rev.id,
+                        shortSha: rev.id.slice(0, 8),
+                        returnTo: 'speleodb-project',
+                        // The dialog data to reopen WITH. `openDialog(returnTo)`
+                        // alone resets `dialogData` to `{}`, so the project dialog
+                        // read `tab` as undefined and defaulted to General - every
+                        // exit from the revert flow (cancel, success, or a dismissed
+                        // error) dropped the user on the metadata form instead of
+                        // the revision list they pressed Revert from.
+                        returnData: { tab: 'history' },
+                      })
+                    }
+                    data-testid={`speleodb-revision-revert-${rev.id}`}
+                  >
+                    {t('speleodb.revert.action')}
                   </Button>
                 )}
               </li>

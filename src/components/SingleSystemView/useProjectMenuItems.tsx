@@ -13,9 +13,9 @@ import { useProject } from '../../hooks/useProject';
 import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useEditingBlocked } from '../../hooks/useEditingBlocked';
-import { useSpeleoActions } from '../../hooks/useSpeleoActions';
+import { useSpeleoMenuItems } from './useSpeleoMenuItems';
 import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
-import { SpeleoBadgedIcon, PushGlyph, RefreshGlyph, EditNoLockGlyph } from '../common/SpeleoBadgedIcon';
+import { SpeleoBadgedIcon } from '../common/SpeleoBadgedIcon';
 import { dmpImportFilters } from '../../utils/fileDialogs';
 import { setSource } from '../../utils/telemetry';
 import { MENU_ICON_COLORS } from '../common/menuColors';
@@ -29,8 +29,6 @@ import {
   SlidersIcon,
   InfoIcon,
   DatabaseIcon,
-  PencilIcon,
-  LockIcon,
   FilePlusIcon,
 } from '../common/icons';
 
@@ -57,7 +55,9 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
   // The signed-in session gates "Publish to SpeleoDB" (a local project can only be
   // published while logged in).
   const speleoSession = useSpeleoStore((s) => s.session);
-  const { busy: speleoBusy, startEditing, update, done } = useSpeleoActions();
+  // The submenu's rows live in their own hook - the toolbar status button's
+  // right-click menu renders the very same array.
+  const speleoItems = useSpeleoMenuItems();
   // The read-only map (closure-adjusted view, Plan/Export #243, or a locked
   // remote SpeleoDB project) rejects imports - they add sections. Disable the
   // Import item up front (the toolbar Import button and Ctrl+I already do), so
@@ -120,91 +120,7 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
               id: 'speleodb-menu',
               label: t('speleodb.menu.title'),
               icon: <SpeleoDbLogo size={sz} />,
-              submenu: [
-                speleoLink.editState === 'editing' && speleoLink.forceEditing
-                  ? {
-                      // #213: a force-editor holds no lock, so the top action is
-                      // Reconnect (acquire + reconcile), NOT Unlock. Done/push are
-                      // backend-guarded for this state, so we never offer them here.
-                      id: 'speleodb-menu-reconnect',
-                      label: t('speleodb.forceEdit.reconnect'),
-                      icon: (
-                        <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
-                      ),
-                      disabled: speleoBusy,
-                      onClick: () => {
-                        void startEditing();
-                      },
-                    }
-                  : speleoLink.editState === 'editing'
-                  ? {
-                      id: 'speleodb-menu-unlock',
-                      label: t('speleodb.menu.unlock'),
-                      icon: (
-                        <SpeleoBadgedIcon badge={<LockIcon size={9} />} badgeColor="text-green-400" size={sz} />
-                      ),
-                      disabled: speleoBusy,
-                      onClick: () => {
-                        // Release; the push&release dialog when there are local edits.
-                        if (speleoLink.hasUnpushedEdits) openDialog('speleodb-done');
-                        else void done(null);
-                      },
-                    }
-                  : {
-                      id: 'speleodb-menu-lock',
-                      label: t('speleodb.menu.lock'),
-                      icon: (
-                        <SpeleoBadgedIcon badge={<PencilIcon size={9} />} badgeColor="text-yellow-400" size={sz} />
-                      ),
-                      disabled: speleoBusy,
-                      onClick: () => {
-                        void startEditing();
-                      },
-                    },
-                {
-                  id: 'speleodb-menu-push',
-                  label: t('speleodb.menu.push'),
-                  icon: (
-                    <SpeleoBadgedIcon badge={<PushGlyph size={9} />} badgeColor="text-green-400" size={sz} />
-                  ),
-                  // Push-without-unlock only makes sense while editing with edits.
-                  disabled: speleoBusy || speleoLink.editState !== 'editing' || !speleoLink.hasUnpushedEdits,
-                  // Collect a commit message via the done dialog in push mode (like
-                  // push & release, but the lock is retained - fix 8).
-                  onClick: () => openDialog('speleodb-done', { mode: 'push' }),
-                },
-                {
-                  id: 'speleodb-menu-refresh',
-                  label: t('speleodb.menu.refresh'),
-                  icon: (
-                    <SpeleoBadgedIcon badge={<RefreshGlyph size={11} />} badgeColor="text-blue-400" size={sz} />
-                  ),
-                  disabled: speleoBusy,
-                  onClick: () => {
-                    void update();
-                  },
-                },
-                // #213: optimistic force-edit - edit WITHOUT the lock, behind the
-                // `allow_force_edit` opt-in (hidden otherwise) and a big-red confirm.
-                // Only offered while read-only; a force-editor uses Reconnect above.
-                ...(speleoLink.forceEditAllowed && speleoLink.editState !== 'editing'
-                  ? [
-                      {
-                        id: 'speleodb-menu-edit-without-lock',
-                        label: t('speleodb.menu.editWithoutLock'),
-                        icon: (
-                          <SpeleoBadgedIcon
-                            badge={<EditNoLockGlyph size={11} />}
-                            badgeColor="text-red-500"
-                            size={sz}
-                          />
-                        ),
-                        disabled: speleoBusy,
-                        onClick: () => openDialog('speleodb-force-edit'),
-                      },
-                    ]
-                  : []),
-              ],
+              submenu: speleoItems,
             },
           ]
         : []),
@@ -297,5 +213,5 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       quitMenuItem(t),
     ];
-  }, [t, openDialog, showDevStats, toggleDisplay, editingBlocked, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoBusy, startEditing, update, done]);
+  }, [t, openDialog, showDevStats, toggleDisplay, editingBlocked, onSave, saveFailed, handleNewProject, handleOpenProject, handleSaveProjectAs, handleCloseProject, speleoLink, speleoSession, speleoItems]);
 }

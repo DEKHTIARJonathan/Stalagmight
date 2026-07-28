@@ -9,6 +9,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { Panel } from '../common/Panel';
 import { Button } from '../common/Button';
 import { WarningResolution } from './WarningResolution';
+import { ProjectStatsActions } from './ProjectStatsActions';
 import { AlertCircleIcon, AlertTriangleIcon, CheckCircleIcon, ChevronDownIcon, ChevronRightIcon, LinkOffIcon } from '../common/icons';
 import { DetailLink } from '../common/DetailLink';
 import { EntityBlob } from '../common/EntityBlob';
@@ -922,7 +923,7 @@ function StationDetail({ station }: { station: Station }) {
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEdit} disabled={editingBlocked}>
+        <Button size="sm" className="w-full" onClick={handleEdit} disabled={editingBlocked} data-testid="station-edit-button">
           {t('common.actions.edit')}
         </Button>
       </div>
@@ -1145,10 +1146,16 @@ function ShotDetail({ section, shot, stations }: { section: Section; shot: Shot;
       </Panel>
 
       <div className="p-3 border-t border-border space-y-2">
-        <Button size="sm" className="w-full" onClick={handleCycleShotKind} disabled={editingBlocked}>
+        <Button
+          size="sm"
+          className="w-full"
+          onClick={handleCycleShotKind}
+          disabled={editingBlocked}
+          data-testid="shot-kind-cycle-button"
+        >
           {t('detailPanel.shot.markAs', { kind: t(SHOT_KIND_LABEL_KEY[nextShotKind(shot.kind)]) })}
         </Button>
-        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked}>
+        <Button size="sm" variant="danger" className="w-full" onClick={handleDelete} disabled={editingBlocked} data-testid="shot-delete-button">
           {t('common.actions.delete')}
         </Button>
       </div>
@@ -1372,7 +1379,7 @@ function SectionDetail({ section, stations, totalProjectLength }: SectionDetailP
       </Panel>
 
       <div className="p-3 border-t border-border">
-        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked}>
+        <Button size="sm" className="w-full" onClick={handleEditSection} disabled={editingBlocked} data-testid="section-edit-button">
           {t('detailPanel.section.edit')}
         </Button>
       </div>
@@ -1389,7 +1396,6 @@ interface ProjectStatsProps {
 function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const openDialog = useUIStore((s) => s.openDialog);
   if (!project || !stats) {
     return (
       <div className="p-4 text-center text-text-secondary">
@@ -1510,17 +1516,8 @@ function ProjectStats({ project, stats, stations }: ProjectStatsProps) {
             </div>
           </div>
 
-          {/* Per-project settings: name, validation, and Ariane collaboration
-              (Experimental tab) - all stored in the .stalx. */}
-          <div className="pt-2 border-t border-border">
-            <button
-              onClick={() => openDialog('project-settings')}
-              className="w-full text-center text-sm px-2 py-1 rounded bg-background-50 hover:bg-background text-text-primary"
-              data-testid="open-project-settings"
-            >
-              {t('detailPanel.projectSettings.open')}
-            </button>
-          </div>
+          {/* Per-project settings (local .stalx) + the SpeleoDB project actions. */}
+          <ProjectStatsActions />
         </div>
       </Panel>
     </div>

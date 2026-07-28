@@ -15,6 +15,11 @@
  * only OR the resulting plain booleans - so this hook is the single place
  * that does it correctly (#275).
  *
+ * The SpeleoDB term fails CLOSED (#270): a project whose remoteness has not been
+ * established yet (`projectLinkKind === 'unknown'`) counts as read-only, so there
+ * is no window where a remote project without the write lock presents as
+ * editable. Only a confirmed-local project or a held write lock opens the gate.
+ *
  * Backstop asymmetry: the SpeleoDB term (`selectSpeleoReadOnly`) has a
  * fail-safe server guard (`AppState::guard_mutation` rejects mutations without
  * the write lock). The `isMapReadOnly` term (closure-adjusted view, Plan/Export

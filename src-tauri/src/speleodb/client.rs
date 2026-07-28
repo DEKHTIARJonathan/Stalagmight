@@ -29,7 +29,7 @@ use super::models::{
     Commit, Permission, Project, RevisionHistory, Team, TeamPermission, TeamPermissionList,
     UserAutocomplete, UserPermission, UserPermissionList,
 };
-use super::SpeleoDbError;
+use super::{SpeleoDbError, TransportCause};
 
 /// Global per-request timeout for reads. Larger than the tile timeout because a
 /// project dump (whole working tree as a ZIP) can be bigger than a single tile.
@@ -39,6 +39,50 @@ const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 // (Referenced by `upload_auto`, so rustc does not flag it dead even while that
 // method's orchestration caller is pending - no dead_code expectation needed.)
 const UPLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Dump-download timeout (#270). The dump is the whole working tree as a ZIP - the
+/// same payload the upload sends back - so it does NOT belong on the shared
+/// small-GET budget: `timeout_global` is end-to-end *including the body read*, so a
+/// big project on a slow link blows the 30 s read budget on every one of the three
+/// idempotent attempts while a same-size upload (120 s) succeeds. Named separately
+/// from [`UPLOAD_TIMEOUT`] so the two budgets can drift apart later.
+const DUMP_DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(120);
+/// Body-size ceiling for a dump download (#270).
+///
+/// `Body::read_to_vec()` silently applies ureq's own default ceiling of 10 MiB,
+/// so raising [`DUMP_DOWNLOAD_TIMEOUT`] alone fixed nothing for exactly the
+/// projects it was meant to help: a dump over 10 MiB could never be opened,
+/// restored or fast-forwarded at ANY timeout. Worse, the refusal arrives as an
+/// `io::Error` wrapping `BodyExceedsLimit`, which lands in
+/// [`classify_transport`]'s catch-all - so a healthy `200` was reported to the
+/// user as "Could not reach SpeleoDB at the configured endpoint", and retried
+/// three times first.
+///
+/// The dump is the whole working tree as a ZIP - the same payload the (uncapped)
+/// upload sends back - so the ceiling exists only as a sanity bound against a
+/// runaway response, not as a project-size policy. It must stay far above any
+/// plausible survey (the "a dump over 10 MiB must still be openable" property is
+/// the whole point), but NOT arbitrarily far: the whole body is read into memory
+/// (`read_to_vec` is `read_to_end` into a `Vec`), and `Dump::extract_entry_capped`
+/// then builds a SECOND buffer of up to `dump::MAX_ENTRY_BYTES` + 1 on top of it,
+/// so the ceiling is a peak-RSS budget as much as a sanity bound - and this app
+/// already has documented WebKitGTK memory-ceiling trouble.
+///
+/// 640 MiB, chosen to be COHERENT with `MAX_ENTRY_BYTES` (512 MiB): the extractable
+/// `.stalx` is what a dump is downloaded for, so a body whose every entry is over
+/// that per-entry cap can never yield one. The earlier 2 GiB left 1.5 GiB of
+/// allowed body that could only ever be downloaded, held, and then rejected - a
+/// guaranteed-futile multi-gigabyte allocation. The remaining 128 MiB is headroom
+/// for ZIP overhead plus the dump's other entries (`ariane.tml`, `misc/`).
+///
+/// Streaming the body to the staging temp file instead of buffering would retire
+/// the budget question entirely, but `Dump` parses an in-memory `&[u8]` and all
+/// four pull flows are built on that, so it is its own change.
+const DUMP_MAX_BYTES: u64 = 640 * 1024 * 1024;
+/// ureq's own default body ceiling, applied by a bare `Body::read_to_vec()` - i.e.
+/// the limit that actually bites on every endpoint except the two dump downloads.
+/// Mirrored here (ureq does not export it) so [`with_retry`] can name the limit
+/// that was really exceeded instead of quoting the dump one at a JSON endpoint.
+const DEFAULT_MAX_BYTES: u64 = 10 * 1024 * 1024;
 /// Transient-transport retries (total attempts = 1 + MAX_RETRIES).
 const MAX_RETRIES: u32 = 2;
 /// Backoff delays between retries (mirrors the tile-fetch idiom).
@@ -50,13 +94,37 @@ fn agent() -> ureq::Agent {
     agent_with_timeout(REQUEST_TIMEOUT)
 }
 
+/// Build a fresh agent for a dump download, on the longer
+/// [`DUMP_DOWNLOAD_TIMEOUT`] budget. Both dump endpoints go through here so
+/// neither can silently fall back to the small-GET budget.
+fn dump_agent() -> ureq::Agent {
+    agent_with_timeout(DUMP_DOWNLOAD_TIMEOUT)
+}
+
 /// Build a fresh agent with an explicit global timeout (upload uses the longer
-/// [`UPLOAD_TIMEOUT`]). `http_status_as_error(false)` is kept so the status
-/// branching shape #186 keys off is preserved.
+/// [`UPLOAD_TIMEOUT`], the dump download [`DUMP_DOWNLOAD_TIMEOUT`]).
+/// `http_status_as_error(false)` is kept so the status branching shape #186 keys
+/// off is preserved.
+///
+/// `max_redirects(0)` is a SECURITY setting, not a tidiness one. The http /
+/// private-network policy ([`super::tls::enforce`]) runs once per request against
+/// the CONFIGURED base URL, so it says nothing about where a redirect goes. With
+/// ureq's default of 10 redirects, a `302` to `http://<anything>/` was followed in
+/// plaintext straight past the policy that exists to forbid exactly that - the
+/// endpoint the policy vetted is not the endpoint the credentials-bearing request
+/// ends up at. Zero redirects means the 3xx comes back as an ordinary status and
+/// is reported by [`status_error`] like any other unexpected response.
+///
+/// (Redirected credentials were never the exposure here: ureq defaults to
+/// `RedirectAuthHeaders::Never`, so the `Authorization` header is dropped on a
+/// cross-host hop. Verified against the pinned ureq; the plaintext-to-anywhere hole
+/// is what this closes. The v2 API is not expected to redirect at all, so nothing
+/// legitimate is lost.)
 fn agent_with_timeout(timeout: Duration) -> ureq::Agent {
     ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .http_status_as_error(false)
+        .max_redirects(0)
         .build()
         .new_agent()
 }
@@ -102,7 +170,7 @@ fn with_retry(
     super::tls::enforce(base, insecure_http)?;
 
     let max_retries = if idempotent { MAX_RETRIES } else { 0 };
-    let mut last_err: Option<String> = None;
+    let mut last_err: Option<(TransportCause, String)> = None;
     for i in 0..=max_retries {
         if i > 0 {
             let delay = RETRY_DELAYS
@@ -133,20 +201,76 @@ fn with_retry(
                         attempt = i + 1,
                         "SpeleoDB idempotent request returned 5xx; will retry"
                     );
-                    last_err = Some(format!("HTTP {status}"));
+                    last_err = Some((TransportCause::Unknown, format!("HTTP {status}")));
                     continue;
                 }
                 return Ok((status, body));
             }
+            Err(e) if is_body_limit(&e) => {
+                // Not transient and not a reachability problem: the server
+                // answered fine, the response is just bigger than we will hold.
+                // Retrying re-downloads the whole oversized body to fail again,
+                // and reporting it as "cannot reach the endpoint" sends the user
+                // looking at their network for a payload-size refusal.
+                let limit = body_limit_for(endpoint);
+                tracing::error!(
+                    ?endpoint,
+                    limit,
+                    "SpeleoDB response body exceeded the download ceiling"
+                );
+                return Err(SpeleoDbError::Parse(format!(
+                    "SpeleoDB's reply was larger than the {} this app will hold in memory. \
+                     If this was a project download, the project is too large for this \
+                     version to open - report it so the limit can be raised.",
+                    human_bytes(limit)
+                )));
+            }
             Err(e) => {
                 tracing::debug!(error = %e, attempt = i + 1, "SpeleoDB request failed; will retry if attempts remain");
-                last_err = Some(e.to_string());
+                last_err = Some((classify_transport(&e), clean_transport(&e.to_string())));
             }
         }
     }
-    Err(SpeleoDbError::Transport(clean_transport(
-        &last_err.unwrap_or_else(|| "unknown transport error".to_owned()),
-    )))
+    let (cause, detail) = last_err.unwrap_or((
+        TransportCause::Unknown,
+        "unknown transport error".to_owned(),
+    ));
+    // [#270] The user is shown a translated "could not reach <endpoint>" line, so
+    // this is where the RAW cause has to survive: log it (with the classification
+    // and which endpoint failed) or a bug report has nothing to go on.
+    tracing::warn!(
+        ?endpoint,
+        ?cause,
+        detail = %detail,
+        "SpeleoDB transport failure (attempts exhausted)"
+    );
+    Err(SpeleoDbError::Transport { cause, detail })
+}
+
+/// Classify a transport failure from the TYPED `ureq::Error` (and, for io
+/// errors, [`std::io::ErrorKind`]) - never from its Display text: an
+/// `io::Error`'s message comes from the platform's `strerror`, so it is OS- and
+/// locale-dependent and cannot be matched on. The classification crosses IPC and
+/// picks which translated line the frontend shows (#270).
+fn classify_transport(err: &ureq::Error) -> TransportCause {
+    match err {
+        ureq::Error::Timeout(_) => TransportCause::Timeout,
+        ureq::Error::HostNotFound => TransportCause::Dns,
+        ureq::Error::Tls(_) => TransportCause::Tls,
+        ureq::Error::ConnectionFailed => TransportCause::Refused,
+        ureq::Error::Io(e) => match e.kind() {
+            std::io::ErrorKind::TimedOut => TransportCause::Timeout,
+            std::io::ErrorKind::ConnectionRefused
+            | std::io::ErrorKind::ConnectionReset
+            | std::io::ErrorKind::ConnectionAborted
+            | std::io::ErrorKind::BrokenPipe
+            | std::io::ErrorKind::NotConnected => TransportCause::Refused,
+            // Everything else - EINVAL from a blackholed route, no-route,
+            // network-down, an unexpected io kind - is a plain "cannot reach it".
+            _ => TransportCause::Unknown,
+        },
+        _ => TransportCause::Unknown,
+    }
 }
 
 /// Strip `ureq`/std-io noise from a transport error string so it reads as a
@@ -167,6 +291,74 @@ fn read_status_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), 
     let status = resp.status().as_u16();
     let body = resp.into_body().read_to_vec()?;
     Ok((status, body))
+}
+
+/// [`read_status_body`] on an explicit body ceiling.
+///
+/// The limit is a parameter purely so the over-limit path can be exercised for
+/// real in a test - see `an_over_limit_read_is_reported_as_a_size_refusal`, which
+/// is what pins [`is_body_limit`]'s Display match to ureq's actual wording. In
+/// production there is exactly one caller and one limit.
+fn read_body_limited(
+    resp: http::Response<ureq::Body>,
+    limit: u64,
+) -> Result<(u16, Vec<u8>), ureq::Error> {
+    let status = resp.status().as_u16();
+    let body = resp.into_body().with_config().limit(limit).read_to_vec()?;
+    Ok((status, body))
+}
+
+/// [`read_status_body`] for a dump download, on the [`DUMP_MAX_BYTES`] ceiling
+/// instead of the 10 MiB one `read_to_vec()` applies by default.
+fn read_dump_body(resp: http::Response<ureq::Body>) -> Result<(u16, Vec<u8>), ureq::Error> {
+    read_body_limited(resp, DUMP_MAX_BYTES)
+}
+
+/// Whether a transport failure is the body-size ceiling being hit.
+///
+/// It is neither transient (retrying re-downloads the same oversized body) nor a
+/// reachability problem, so it must not be classified as one.
+///
+/// Matched STRUCTURALLY on ureq's own variant. This used to test
+/// `Error::Io(e) if e.to_string().contains("larger than request limit")`, on the
+/// premise that the limit reader's `Error::BodyExceedsLimit(_).into_io()` meant
+/// the failure surfaced as an `Io`. It does not: `From<io::Error> for ureq::Error`
+/// detects its own boxed error and unwraps it, so what arrives here is
+/// `BodyExceedsLimit` again - and the arm never matched. Every oversized response
+/// therefore fell through to the retry-then-"could not reach SpeleoDB" path this
+/// exists to prevent, after three full re-downloads of the payload. Nothing caught
+/// it because nothing provoked a real over-limit read; the test below now does
+/// (`an_over_limit_read_is_reported_as_a_size_refusal_not_a_retried_transport_failure`).
+fn is_body_limit(err: &ureq::Error) -> bool {
+    matches!(err, ureq::Error::BodyExceedsLimit(_))
+}
+
+/// Which body ceiling actually applied to `endpoint`.
+///
+/// [`with_retry`] is shared by all thirteen endpoints, but only the two dump
+/// downloads read through [`read_dump_body`]; the rest use [`read_status_body`],
+/// which takes ureq's own [`DEFAULT_MAX_BYTES`]. Quoting the dump ceiling at a JSON
+/// endpoint told the user their reply had exceeded a limit six-and-a-half times the
+/// one it actually hit.
+fn body_limit_for(endpoint: Endpoint) -> u64 {
+    match endpoint {
+        Endpoint::DownloadDump => DUMP_MAX_BYTES,
+        _ => DEFAULT_MAX_BYTES,
+    }
+}
+
+/// A byte count as GiB / MiB / KiB for a user-facing message. Whole units only
+/// (the ceilings are all round powers of two), falling back to bytes below 1 KiB.
+fn human_bytes(bytes: u64) -> String {
+    const KIB: u64 = 1024;
+    const MIB: u64 = 1024 * KIB;
+    const GIB: u64 = 1024 * MIB;
+    match bytes {
+        b if b >= GIB => format!("{} GiB", b / GIB),
+        b if b >= MIB => format!("{} MiB", b / MIB),
+        b if b >= KIB => format!("{} KiB", b / KIB),
+        b => format!("{b} bytes"),
+    }
 }
 
 /// Map a non-2xx response into a [`SpeleoDbError::Status`], extracting a
@@ -445,11 +637,11 @@ pub(crate) fn download_dump(
     let auth = bearer(token);
 
     let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = agent()
+        let resp = dump_agent()
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
-        read_status_body(resp)
+        read_dump_body(resp)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -477,11 +669,11 @@ pub(crate) fn download_dump_at_hash(
     let auth = bearer(token);
 
     let (status, body) = with_retry(base, insecure_http, true, Endpoint::DownloadDump, || {
-        let resp = agent()
+        let resp = dump_agent()
             .get(&url)
             .header("Authorization", auth.as_str())
             .call()?;
-        read_status_body(resp)
+        read_dump_body(resp)
     })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
@@ -642,9 +834,24 @@ fn parse_upload_auto_response(body: &[u8]) -> Result<Project, SpeleoDbError> {
     let parsed: UploadAutoResponse = serde_json::from_slice(body)
         .map_err(|e| SpeleoDbError::Parse(format!("upload auto response: {e}")))?;
     let mut project = parsed.project;
-    if let Some(hexsha) = parsed.hexsha.filter(|h| !h.is_empty()) {
-        project.latest_commit = Some(Commit { id: hexsha });
-    }
+    // The top-level `hexsha` is the ONLY trustworthy source for the commit this
+    // push just created, and the nested `project.latest_commit` is deliberately NOT
+    // used as a fallback for it. That field is eventually consistent - documented
+    // in `sync::reconcile_verdict` and observed live still pointing at the PRIOR
+    // tip (the service-account creation root) immediately after a push. Folding it
+    // in here handed the caller a stale ancestor that passed its "is there a sha?"
+    // guard and moved BASE BACKWARD past every commit in between; the next edit
+    // then fenced that BASE against our own just-landed commit and raised the
+    // divergence prompt, offering to discard un-pushed work to "take remote".
+    //
+    // `None` is the honest answer when the authoritative field is absent, and the
+    // caller already handles it: it keeps the previous BASE, which costs at most one
+    // redundant ancestry recovery on the next push - exactly what that machinery is
+    // for.
+    project.latest_commit = parsed
+        .hexsha
+        .filter(|h| !h.is_empty())
+        .map(|id| Commit { id });
     Ok(project)
 }
 
@@ -884,8 +1091,13 @@ fn send_json_request(
         Err(_) => Outcome::NetworkError,
     };
     super::metrics::record(endpoint, outcome, started.elapsed());
-    let (status, body) =
-        result.map_err(|e| SpeleoDbError::Transport(clean_transport(&e.to_string())))?;
+    let (status, body) = result.map_err(|e| {
+        let cause = classify_transport(&e);
+        let detail = clean_transport(&e.to_string());
+        // Same #270 contract as `with_retry`: the raw cause lives in the log.
+        tracing::warn!(?endpoint, ?cause, detail = %detail, "SpeleoDB transport failure");
+        SpeleoDbError::Transport { cause, detail }
+    })?;
     if !(200..300).contains(&status) {
         return Err(status_error(status, &body));
     }
@@ -1143,7 +1355,11 @@ pub(crate) fn grant_permission(
 }
 
 #[cfg(test)]
-#[expect(clippy::expect_used, reason = "unit test fixtures")]
+#[expect(
+    clippy::expect_used,
+    clippy::panic,
+    reason = "unit test fixtures / let-else assertion"
+)]
 mod tests {
     use std::io::Write as _;
     use std::net::TcpListener;
@@ -1152,13 +1368,15 @@ mod tests {
     use std::sync::Arc;
 
     use super::{
-        add_team_permission, add_user_permission, api_url, bearer, build_upload_parts,
-        clean_transport, delete_project, download_dump_at_hash, list_teams, list_user_autocomplete,
+        add_team_permission, add_user_permission, api_url, bearer, body_limit_for,
+        build_upload_parts, classify_transport, clean_transport, delete_project, download_dump,
+        download_dump_at_hash, human_bytes, list_teams, list_user_autocomplete,
         list_user_permissions, mime_for, parse_error_message, parse_upload_auto_response,
         remove_team_permission, remove_user_permission, set_user_permission, with_retry, Endpoint,
-        RevisionHistory, UserInfo,
+        RevisionHistory, UserInfo, DEFAULT_MAX_BYTES, DUMP_DOWNLOAD_TIMEOUT, DUMP_MAX_BYTES,
+        REQUEST_TIMEOUT,
     };
-    use crate::speleodb::{Permission, SpeleoDbError};
+    use crate::speleodb::{Permission, SpeleoDbError, TransportCause};
 
     #[test]
     fn revisions_payload_decodes_verified_v2_field_names() {
@@ -1204,10 +1422,16 @@ mod tests {
     }
 
     #[test]
-    fn upload_auto_response_prefers_hexsha_then_falls_back_to_nested() {
+    fn upload_auto_response_adopts_only_the_authoritative_hexsha() {
         // #197 review: a top-level hexsha is the commit THIS push created → adopt it.
-        // But a 200 envelope WITHOUT a top-level hexsha must NOT fail as Parse/Fatal
-        // (which would strand the dirty bit) - fall back to the nested latest_commit.
+        // A 200 envelope WITHOUT one must NOT fail as Parse/Fatal (that would strand
+        // the dirty bit) - but it must not fall back to the nested `latest_commit`
+        // either. That field is eventually consistent and was observed live still
+        // pointing at the PRIOR tip right after a push, so adopting it moves BASE
+        // BACKWARD past every intervening commit; the caller then fences that BASE
+        // against our own just-landed commit and raises the divergence prompt,
+        // offering to discard un-pushed work to "take remote". `None` makes the
+        // caller keep the previous BASE, which costs one redundant ancestry recovery.
         let proj = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Up","latest_commit":{"id":"nested-prior"}}"#;
 
         let with = format!("{{\"hexsha\":\"top-new\",\"project\":{proj}}}");
@@ -1221,20 +1445,16 @@ mod tests {
         let without = format!("{{\"project\":{proj}}}");
         let fallback =
             parse_upload_auto_response(without.as_bytes()).expect("missing hexsha must not error");
-        assert_eq!(
-            fallback.latest_commit.as_ref().map(|c| c.id.as_str()),
-            Some("nested-prior"),
-            "a 200 lacking hexsha falls back to the nested latest_commit, not a Parse error"
+        assert!(
+            fallback.latest_commit.is_none(),
+            "the stale nested latest_commit must never be adopted as the new BASE"
         );
 
-        // An empty-string hexsha is treated as absent (same fallback).
+        // An empty-string hexsha is treated as absent (same refusal).
         let empty = format!("{{\"hexsha\":\"\",\"project\":{proj}}}");
         let empty_fb =
             parse_upload_auto_response(empty.as_bytes()).expect("empty hexsha must not error");
-        assert_eq!(
-            empty_fb.latest_commit.as_ref().map(|c| c.id.as_str()),
-            Some("nested-prior")
-        );
+        assert!(empty_fb.latest_commit.is_none());
     }
 
     #[test]
@@ -1323,6 +1543,83 @@ mod tests {
         assert_eq!(
             clean_transport("dns error (lookup failed)"),
             "dns error (lookup failed)"
+        );
+    }
+
+    #[test]
+    fn classify_transport_reads_the_typed_error_not_its_message() {
+        // [#270] The classification MUST come from the typed error / io::ErrorKind:
+        // an io::Error's Display comes from the platform strerror, so it is OS- and
+        // locale-dependent and unusable as a discriminant.
+        assert_eq!(
+            classify_transport(&ureq::Error::HostNotFound),
+            TransportCause::Dns
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Timeout(ureq::Timeout::Global)),
+            TransportCause::Timeout
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Tls("handshake failed")),
+            TransportCause::Tls
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::ConnectionFailed),
+            TransportCause::Refused
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::ConnectionRefused,
+                "Connection refused"
+            ))),
+            TransportCause::Refused
+        );
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "timed out"
+            ))),
+            TransportCause::Timeout
+        );
+        // The errno that started #270: a blackholed host surfaces EINVAL. It has no
+        // useful meaning for a user, so it lands in the catch-all (the FE shows the
+        // generic "could not reach the server" line) - never as raw text.
+        assert_eq!(
+            classify_transport(&ureq::Error::Io(std::io::Error::new(
+                std::io::ErrorKind::InvalidInput,
+                "Invalid argument"
+            ))),
+            TransportCause::Unknown
+        );
+    }
+
+    #[test]
+    fn transport_error_keeps_the_raw_cause_for_the_log() {
+        // [#270] The user-facing line is rendered FE-side from the typed cause, but
+        // the raw cause must survive on the error (it is what a bug report needs).
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        drop(listener); // nothing is listening on this port now
+        let err = with_retry(
+            &format!("http://127.0.0.1:{port}"),
+            false,
+            false,
+            Endpoint::ListProjects,
+            || {
+                Err(ureq::Error::Io(std::io::Error::new(
+                    std::io::ErrorKind::ConnectionRefused,
+                    "Connection refused (os error 111)",
+                )))
+            },
+        )
+        .expect_err("a transport failure surfaces");
+        let SpeleoDbError::Transport { cause, detail } = err else {
+            panic!("expected a Transport error, got: {err:?}");
+        };
+        assert_eq!(cause, TransportCause::Refused);
+        assert_eq!(
+            detail, "Connection refused",
+            "the raw cause is kept (os-error noise stripped) so the log stays actionable"
         );
     }
 
@@ -1550,7 +1847,7 @@ mod tests {
             },
         )
         .expect_err("transport error surfaces");
-        assert!(matches!(err, SpeleoDbError::Transport(_)));
+        assert!(matches!(err, SpeleoDbError::Transport { .. }));
         assert_eq!(
             n2.load(Ordering::SeqCst),
             1,
@@ -1570,6 +1867,13 @@ mod tests {
 
     impl LoopbackStub {
         fn start(statuses: Vec<u16>) -> Self {
+            Self::start_with_body_len(statuses, 2)
+        }
+
+        /// [`Self::start`] with a body of `body_len` bytes instead of the default
+        /// `{}` - for the over-limit read, which needs a response bigger than the
+        /// ceiling it is read under.
+        fn start_with_body_len(statuses: Vec<u16>, body_len: usize) -> Self {
             let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
             let port = listener.local_addr().expect("addr").port();
             let captured = Arc::new(std::sync::Mutex::new(Vec::new()));
@@ -1598,13 +1902,17 @@ mod tests {
                         }
                     }
                     cap.lock().expect("capture lock").push(captured_bytes);
-                    let body = b"{}";
+                    let body = if body_len == 2 {
+                        b"{}".to_vec()
+                    } else {
+                        vec![b'x'; body_len]
+                    };
                     let resp = format!(
                         "HTTP/1.1 {status} X\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
                         body.len()
                     );
                     let _ = stream.write_all(resp.as_bytes());
-                    let _ = stream.write_all(body);
+                    let _ = stream.write_all(&body);
                     let _ = stream.flush();
                 }
             });
@@ -1624,6 +1932,57 @@ mod tests {
                 let _ = h.join();
             }
         }
+    }
+
+    #[test]
+    fn an_over_limit_read_is_reported_as_a_size_refusal_not_a_retried_transport_failure() {
+        // #270's oversized-dump fix rests on `is_body_limit` recognising ureq's
+        // BodyExceedsLimit, which ureq only exposes as Display text on an
+        // `Error::Io` - so a ureq bump that rephrases it would silently un-fix the
+        // bug. Nothing else in the suite provokes the condition, so this does: a
+        // REAL over-limit read of a REAL socket response, asserted on the two
+        // behaviours that flip together if the match stops working.
+        //
+        // The limit is passed in rather than using DUMP_MAX_BYTES so the test costs
+        // 4 KiB instead of 640 MiB; it is the same `read_body_limited` the dump
+        // download uses, and the same ureq error.
+        let stub = LoopbackStub::start_with_body_len(vec![200, 200, 200], 4096);
+        let url = format!("{}/api/v2/projects/x/dump/", stub.base);
+        let base = stub.base.clone();
+        let err = with_retry(&base, false, true, Endpoint::DownloadDump, || {
+            let resp = super::agent().get(&url).call()?;
+            super::read_body_limited(resp, 1024)
+        })
+        .expect_err("a body over the ceiling cannot be read");
+
+        // 1. It is a size refusal, naming the ceiling - NOT a transport failure.
+        //    Misclassified, this read "Could not reach SpeleoDB at the configured
+        //    endpoint", pointing the user at their network for a payload-size
+        //    problem the server answered perfectly.
+        match &err {
+            SpeleoDbError::Parse(message) => assert!(
+                message.contains("larger than the 640 MiB"),
+                "the refusal names the ceiling that applied: {message}"
+            ),
+            other => panic!("expected a Parse size refusal, got: {other:?}"),
+        }
+
+        // 2. It did NOT retry. An oversized body is not transient, so retrying only
+        //    re-downloads the whole payload to fail again - three times over, on the
+        //    one response big enough for that to hurt. One served connection is the
+        //    observable proof the non-transient branch was taken, and the stub is
+        //    armed for three so a regression can actually show them.
+        //
+        //    Read WITHOUT joining: the stub is still parked in `accept()` for the two
+        //    connections that must never come, so joining would hang the suite. Every
+        //    attempt `with_retry` makes is captured before it returns, so the count is
+        //    settled by the time we read it.
+        assert_eq!(
+            stub.captured().len(),
+            1,
+            "an over-limit body must be refused on the first read, not re-downloaded"
+        );
+        drop(stub);
     }
 
     #[test]
@@ -1967,6 +2326,225 @@ mod tests {
                 "GET /api/v2/projects/{WIRE_PID}/download/dump/abc1234/ "
             )),
             "at-hash download GETs the dump pinned to the revision SHA: {wire}"
+        );
+    }
+
+    #[test]
+    fn dump_download_gets_its_own_longer_budget() {
+        // #270: `timeout_global` is end-to-end INCLUDING the body read, so a dump
+        // (the whole working tree as a ZIP) on the shared 30 s small-GET budget
+        // fails all three idempotent attempts while a same-size upload succeeds.
+        assert_eq!(
+            super::dump_agent().config().timeouts().global,
+            Some(DUMP_DOWNLOAD_TIMEOUT),
+            "the dump agent must carry the dump budget"
+        );
+        assert_eq!(
+            super::agent().config().timeouts().global,
+            Some(REQUEST_TIMEOUT),
+            "the shared read agent keeps the small-GET budget"
+        );
+        assert!(
+            DUMP_DOWNLOAD_TIMEOUT > REQUEST_TIMEOUT,
+            "the dump budget must be longer than the shared read budget"
+        );
+    }
+
+    #[test]
+    fn both_dump_downloads_use_the_dump_agent() {
+        // The agent a function picks is not observable from its return value, so
+        // guard it at the source: BOTH dump endpoints must build `dump_agent()`. A
+        // future edit that reaches for the bare `agent()` silently reinstates the
+        // 30 s budget on one of them.
+        let src = include_str!("client.rs");
+        for name in [
+            "pub(crate) fn download_dump(",
+            "pub(crate) fn download_dump_at_hash(",
+        ] {
+            let start = src.find(name).expect("dump download fn present");
+            let body = &src[start..];
+            let end = body.find("\n}\n").expect("fn body terminates");
+            let body = &body[..end];
+            assert!(
+                body.contains("dump_agent()"),
+                "{name} must build its agent via dump_agent()"
+            );
+            // Blank out the legitimate calls first, then look for ANY `agent()` left
+            // over. Matching on a leading-space needle instead let two spellings
+            // through: a qualified `client::agent()`, and a rustfmt wrap that puts
+            // `agent()` at the start of an indented continuation line - both of which
+            // reinstate the 30 s budget while the test stays green.
+            let remaining = body.replace("dump_agent()", "");
+            assert!(
+                !remaining.contains("agent()"),
+                "{name} must NOT fall back to the shared 30 s agent()"
+            );
+            assert!(
+                body.contains("read_dump_body(resp)"),
+                "{name} must read its body on the dump ceiling, not the 10 MiB default \
+                 `read_to_vec()` applies via read_status_body"
+            );
+        }
+    }
+
+    #[test]
+    fn dump_download_accepts_a_body_over_ureqs_default_limit() {
+        // The real defect behind the longer dump timeout: `Body::read_to_vec()`
+        // silently caps at ureq's own 10 MiB default, so a dump larger than that
+        // could never be opened, restored or fast-forwarded at ANY timeout - and
+        // the refusal arrived as an io error that classified as "could not reach
+        // the endpoint", for a perfectly healthy 200, after three attempts.
+        //
+        // Serve just over the default and require the whole body to arrive.
+        const SIZE: usize = 10 * 1024 * 1024 + 4096;
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let Ok((mut stream, _)) = listener.accept() else {
+                return;
+            };
+            // Read the request headers, then answer. A GET has no body, so the
+            // first read is the whole request.
+            use std::io::Read as _;
+            let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+            let mut chunk = vec![0u8; 16 * 1024];
+            let _ = stream.read(&mut chunk);
+            let resp =
+                format!("HTTP/1.1 200 OK\r\nContent-Length: {SIZE}\r\nConnection: close\r\n\r\n");
+            let _ = stream.write_all(resp.as_bytes());
+            let _ = stream.write_all(&vec![b'z'; SIZE]);
+            let _ = stream.flush();
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let body = download_dump(&base, "tok", false, WIRE_PID).expect("an 10 MiB+ dump downloads");
+        let _ = handle.join();
+        assert_eq!(
+            body.len(),
+            SIZE,
+            "the whole dump must arrive, not ureq's 10 MiB prefix"
+        );
+        assert!(
+            DUMP_MAX_BYTES > 10 * 1024 * 1024,
+            "the dump ceiling must be above the default it exists to replace"
+        );
+    }
+
+    #[test]
+    fn the_dump_ceiling_is_coherent_with_the_per_entry_ceiling() {
+        // Both directions are load-bearing.
+        //
+        // ABOVE the per-entry cap: the extractable `.stalx` is the whole reason a dump
+        // is downloaded, so the body must be able to carry one at its full allowed size
+        // plus the rest of the archive.
+        //
+        // But NOT far above it: the earlier 2 GiB left ~1.5 GiB of allowed body that
+        // could only ever be downloaded, held in memory and then rejected by the
+        // per-entry cap - a guaranteed-futile multi-gigabyte allocation in an app with
+        // documented WebKitGTK memory-ceiling trouble. The whole body is buffered
+        // (`read_to_vec` is `read_to_end`) and the extract then builds a SECOND buffer
+        // on top of it, so this constant is a peak-RSS budget.
+        const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
+        assert!(
+            DUMP_MAX_BYTES > MAX_ENTRY_BYTES,
+            "the body ceiling must admit a full-size extractable entry"
+        );
+        assert!(
+            DUMP_MAX_BYTES <= 2 * MAX_ENTRY_BYTES,
+            "and must not admit a body the per-entry cap can never yield anything from"
+        );
+    }
+
+    #[test]
+    fn the_body_limit_message_names_the_limit_that_actually_applied() {
+        // `with_retry` is shared by all thirteen endpoints, but only the two dump
+        // downloads read on the dump ceiling; the other eleven use `read_status_body`,
+        // i.e. ureq's own 10 MiB default. Quoting the dump ceiling at a JSON endpoint
+        // told the user their reply had exceeded a limit many times the one it hit.
+        assert_eq!(body_limit_for(Endpoint::DownloadDump), DUMP_MAX_BYTES);
+        assert_eq!(body_limit_for(Endpoint::ListProjects), DEFAULT_MAX_BYTES);
+        assert_eq!(body_limit_for(Endpoint::Upload), DEFAULT_MAX_BYTES);
+
+        // And it is rendered in units a human reads, not as a raw byte count
+        // ("2147483648-byte" was the old message).
+        assert_eq!(human_bytes(DEFAULT_MAX_BYTES), "10 MiB");
+        assert_eq!(human_bytes(DUMP_MAX_BYTES), "640 MiB");
+        assert_eq!(human_bytes(3 * 1024 * 1024 * 1024), "3 GiB");
+        assert_eq!(human_bytes(2048), "2 KiB");
+        assert_eq!(human_bytes(17), "17 bytes");
+    }
+
+    #[test]
+    fn agents_never_follow_a_redirect() {
+        // SECURITY. `tls::enforce` vets the CONFIGURED base URL once per request and
+        // says nothing about where a redirect leads, so with ureq's default of 10
+        // redirects a `302` to `http://<anything>/` was followed in plaintext straight
+        // past the private-network policy that exists to forbid exactly that. Zero
+        // redirects means the 3xx returns as an ordinary status and `status_error` maps
+        // it like any other unexpected response.
+        assert_eq!(
+            super::agent().config().max_redirects(),
+            0,
+            "the shared agent must not follow redirects"
+        );
+        assert_eq!(
+            super::dump_agent().config().max_redirects(),
+            0,
+            "nor the dump agent"
+        );
+        // Credentials were never the exposure here - ureq drops `Authorization` on a
+        // cross-host hop - but pin that too so a config change cannot quietly turn a
+        // redirect into a token leak on top.
+        assert!(
+            matches!(
+                super::agent().config().redirect_auth_headers(),
+                ureq::config::RedirectAuthHeaders::Never
+            ),
+            "auth headers must never ride a redirect"
+        );
+    }
+
+    #[test]
+    fn a_redirect_is_reported_as_a_status_not_followed() {
+        // End-to-end over loopback: the server answers `302` pointing somewhere else.
+        // With redirects disabled the caller sees the 302 itself (a `Status` error),
+        // never a second request to the redirect target.
+        let hits = Arc::new(AtomicUsize::new(0));
+        let listener = TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = Arc::clone(&hits);
+        let handle = std::thread::spawn(move || {
+            use std::io::Read as _;
+            // Two accepts on purpose: if the agent followed the redirect there would be
+            // a SECOND connection, and the count would show it.
+            for _ in 0..2 {
+                let Ok((mut stream, _)) = listener.accept() else {
+                    return;
+                };
+                seen.fetch_add(1, Ordering::SeqCst);
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(250)));
+                let mut chunk = vec![0u8; 8 * 1024];
+                let _ = stream.read(&mut chunk);
+                let _ = stream.write_all(
+                    b"HTTP/1.1 302 Found\r\nLocation: http://example.com/evil\r\n\
+                      Content-Length: 0\r\nConnection: close\r\n\r\n",
+                );
+                let _ = stream.flush();
+            }
+        });
+
+        let base = format!("http://127.0.0.1:{port}");
+        let err = download_dump(&base, "tok", false, WIRE_PID)
+            .expect_err("a 302 must not be followed, and is not a success");
+        assert!(
+            matches!(err, SpeleoDbError::Status { status: 302, .. }),
+            "the redirect must surface as its own status, got {err:?}"
+        );
+        drop(handle);
+        assert_eq!(
+            hits.load(Ordering::SeqCst),
+            1,
+            "exactly one request - the redirect target was never dialed"
         );
     }
 }

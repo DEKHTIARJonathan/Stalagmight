@@ -84,12 +84,22 @@ export default defineConfig({
     // `pnpm test`. Deliberately .ts-only: the standalone *.test.mjs files in
     // scripts/ are plain node self-test scripts (run via lint:*:test), not
     // vitest suites.
+    // e2e/agent/lib/**/*.test.ts: pure-logic unit tests for agent-harness helpers
+    // (e.g. build freshness). Scoped to `lib/` - the helper directory - rather than
+    // to all of e2e/agent, because every SIBLING directory there is runtime code for
+    // a different runner: `replays/` and `scenarios/` drive the app through
+    // mocha/wdio globals, and `mcp/` is the server. An exclude list only covered
+    // `replays/`, so a scenario named *.test.ts would have been vacuumed in here and
+    // failed on missing globals. A new home for vitest suites under e2e/agent is a
+    // deliberate one-line addition to this list.
     include: [
       'src/**/*.{test,spec}.?(c|m)[jt]s?(x)',
       'scripts/**/*.{test,spec}.ts',
+      'e2e/agent/lib/**/*.test.ts',
     ],
     exclude: [
-      '**/e2e/**',
+      '**/e2e/legacy/**',
+      '**/e2e/agent/replays/**',
       '**/e2e-playwright/**',
       '**/node_modules/**',
       '**/dist/**',

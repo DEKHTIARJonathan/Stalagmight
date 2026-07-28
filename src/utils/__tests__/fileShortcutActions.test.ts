@@ -65,10 +65,12 @@ describe('runFileShortcutAction("import_dmp") - read-only-map guard (#243)', () 
     pickAndRouteMock.mockClear();
     useProjectStore.setState({ project: { name: 'X' } as never, isDirty: false });
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
+    // Confirmed-local project - the editable baseline (#270 fail-closed gate).
+    useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   });
   afterEach(() => {
     useUIStore.setState({ appMode: 'survey', geometryMode: 'measured' });
-    useSpeleoStore.setState({ link: null });
+    useSpeleoStore.setState({ link: null, projectLinkKind: 'local' });
   });
 
   it('opens the picker in Survey + measured (the editable baseline)', () => {

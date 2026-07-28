@@ -2632,6 +2632,15 @@ fn speleodb_config_defaults_are_safe() {
         toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"").expect("legacy table loads");
     assert_eq!(sdb.token_fallback, TokenFallback::SessionOnly);
     assert!(!sdb.insecure_http);
+    // And the keyring belief a config from before the account STAMP existed carries:
+    // the flag, with nothing naming whose entry it is about. It has to load - the
+    // stamp is `#[serde(default)]` - and the pair it forms is the one
+    // `keychain_belief_applies_to` reads as "about the persisted email".
+    let sdb: SpeleoDbConfig =
+        toml::from_str("endpoint = \"https://x\"\nemail = \"u@x\"\nkeychain_has_token = true")
+            .expect("a pre-stamp config loads");
+    assert!(sdb.keychain_has_token);
+    assert_eq!(sdb.keychain_token_account, None);
 }
 
 #[test]
@@ -2641,6 +2650,8 @@ fn speleodb_config_round_trips_new_fields() {
     config.speleodb.insecure_http = true;
     config.speleodb.endpoint = Some("http://10.10.0.220:8000".to_string());
     config.speleodb.email = Some("u@x".to_string());
+    config.speleodb.keychain_has_token = true;
+    config.speleodb.keychain_token_account = Some("http://10.10.0.220:8000|u@x".to_string());
 
     let serialized = toml::to_string_pretty(&config).expect("Config should serialize");
     let deserialized: Config = toml::from_str(&serialized).expect("round-trip parse");
@@ -2654,6 +2665,14 @@ fn speleodb_config_round_trips_new_fields() {
         Some("http://10.10.0.220:8000")
     );
     assert_eq!(deserialized.speleodb.email.as_deref(), Some("u@x"));
+    // The keyring belief and the account key it is stamped with round-trip as the
+    // pair they are: a stamp that did not survive a save would leave the belief
+    // reading as an unstamped one, which is scoped by the email alone.
+    assert!(deserialized.speleodb.keychain_has_token);
+    assert_eq!(
+        deserialized.speleodb.keychain_token_account.as_deref(),
+        Some("http://10.10.0.220:8000|u@x")
+    );
 
     // Snake-case wire form: token_fallback serializes as "plaintext".
     assert!(

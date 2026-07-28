@@ -1,5 +1,4 @@
 import { useEffect, useCallback, useState, useMemo, useRef } from 'react';
-import { createPortal } from 'react-dom';
 import { getCurrentWindow } from '@tauri-apps/api/window';
 import { getCurrentWebview, type DragDropEvent } from '@tauri-apps/api/webview';
 import { useProjectStore } from './store/projectStore';
@@ -9,6 +8,7 @@ import { useGasPlanStore, selectIsPlanDirty } from './store/gasPlanStore';
 import { invokeIpc } from './utils/ipc';
 import { extractFilename } from './utils/path';
 import { routeOpenedFile } from './utils/openOrImport';
+import { guardQuit } from './utils/quit';
 import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
@@ -18,9 +18,9 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoCloseDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
-import { ContextMenu } from './components/common';
+import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
 import type { DmpSelectionConfig } from './components/Dialogs/DmpSelectionDialog';
 import type { ZeroDatumConfigResult } from './components/Dialogs/ZeroDatumConfigDialog';
@@ -49,7 +49,6 @@ function App() {
     openDialog,
     initPanels,
     triggerFitToBounds,
-    toast,
     selectionAnnouncement,
   } = useUIStore();
 
@@ -79,6 +78,11 @@ function App() {
   // The store opens it only on prompt-worthy scans (login / first app-open with held
   // locks); routine badge refreshes never do.
   const heldLockPromptOpen = useSpeleoStore((s) => s.heldLockPromptOpen);
+
+  // The credential-storage question is raised by the same event, from the same
+  // place, and so gets the same treatment: an independent overlay, because the
+  // login that raises it is usually made from inside the Settings account panel.
+  const storageChoiceOpen = useSpeleoStore((s) => s.storageChoiceOpen);
 
   // Apply theme from config (resolves auto mode, sets data-theme attribute)
   useTheme();
@@ -129,12 +133,20 @@ function App() {
   // The gas store persists across mode switches now, so a dirty (loaded + diverged)
   // plan stays dirty in any mode - closing loses those edits regardless of the current
   // mode, so the close guard is correct without an appMode check.
+  // The OS window X lands here as `tauri://close-requested`, so this is also the
+  // only seam that can put it through the app's own exit guards (#270): without
+  // `guardQuit` the X destroyed the window whenever neither of the two states
+  // above was set, silently dropping unsaved-to-disk work and unpushed SpeleoDB
+  // edits that the menu Quit has always prompted for. X and Quit now share one
+  // guard.
   const planDirty = useGasPlanStore(selectIsPlanDirty);
   useBeforeUnload(
     isImportInProgress || planDirty,
     isImportInProgress
       ? 'Import is in progress. Discard all import data and close?'
-      : 'You have unsaved changes to this dive plan. Discard and close?'
+      : 'You have unsaved changes to this dive plan. Discard and close?',
+    undefined,
+    guardQuit
   );
 
   useEffect(() => {
@@ -369,7 +381,7 @@ function App() {
         remaining > 0
           ? `Fixed ${fixed} issue${fixed === 1 ? '' : 's'}; ${remaining} need${remaining === 1 ? 's' : ''} manual attention (recompute or remove drifted loop closures, fix non-finite shots). Save to keep the fix.`
           : `Repaired ${fixed} issue${fixed === 1 ? '' : 's'}. Save to keep the fix.`;
-      useUIStore.getState().showToast(message, 'integrity-repair');
+      useUIStore.getState().showToast(message, 'integrity-repair', remaining > 0 ? 'warning' : 'success');
       // Close the dialog only when fully clean. Read the AUTHORITATIVE store state
       // (the same integrityIssues the banner and the dialog render-gate use) rather
       // than the point-in-time `remaining` - a command or undo that interleaved
@@ -384,7 +396,7 @@ function App() {
       // during teardown) rather than reporting a fake no-op success. Surface it and
       // keep the dialog open - integrityIssues is untouched, so the banner/save-block
       // stay correct and the user can retry.
-      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair');
+      useUIStore.getState().showToast('Repair failed - nothing was changed. Please try again.', 'integrity-repair', 'error');
     } finally {
       setRepairingIntegrity(false);
     }
@@ -525,8 +537,12 @@ function App() {
       {activeDialog === 'speleodb-divergence' && <SpeleoDivergenceDialog />}
       {activeDialog === 'speleodb-force-edit' && <SpeleoForceEditDialog />}
       {activeDialog === 'speleodb-restore' && <SpeleoRestoreDialog />}
+      {activeDialog === 'speleodb-revert' && <SpeleoRevertDialog />}
       {activeDialog === 'speleodb-close' && <SpeleoCloseDialog />}
+      {activeDialog === 'speleodb-quit' && <SpeleoQuitDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
+      {activeDialog === 'speleodb-unpushed-local' && <SpeleoUnpushedLocalDialog />}
+      {activeDialog === 'speleodb-project' && <SpeleoDbProjectDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
         <DmpSelectionDialog
@@ -742,21 +758,16 @@ function App() {
           OVER that dialog instead of replacing it, leaving Settings intact. */}
       {heldLockPromptOpen && <HeldLockResumeDialog />}
 
-      {/* Toast notification (via Portal for z-index reliability) */}
-      {toast && createPortal(
-        <div className="fixed inset-0 pointer-events-none z-[99999]">
-          <div className="absolute bottom-6 left-1/2 -translate-x-1/2">
-            <div
-              className="bg-panel text-text-primary px-4 py-2 rounded-lg shadow-lg"
-              role="status"
-              aria-live="polite"
-            >
-              {toast.message}
-            </div>
-          </div>
-        </div>,
-        document.body
-      )}
+      {/* "Where should your API key go?" - raised by a login whose keychain write
+          failed. Also an independent top-layer overlay, and for the same reason:
+          the login is usually made from the Settings account panel, which must
+          survive the question with its other staged edits intact. */}
+      {storageChoiceOpen && <SpeleoStorageChoiceDialog />}
+
+      {/* Toast stack (portals itself for z-index reliability). Mounted
+          unconditionally: its screen-reader live regions must exist before their
+          content changes, or the first toast of a run goes unannounced. */}
+      <ToastStack />
 
       {/* ARIA live region for selection announcements (mounted permanently) */}
       <div

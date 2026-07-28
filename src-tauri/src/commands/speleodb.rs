@@ -1,20 +1,27 @@
-//! IPC command surface for the SpeleoDB read-only spike (#183).
+//! IPC command surface for the SpeleoDB integration (#182 epic).
 //!
 //! Thin wrappers over the `AppState::speleodb_*` orchestration (which lives in
-//! `core::state::speleodb`, over the `crate::speleodb` client primitives).
-//! Errors are flattened to `String` at the IPC boundary - the structured
-//! status→action contract is #186. The auth token is never returned to the
-//! webview (login yields only the email + keychain flag).
+//! `core::state::speleodb`, over the `crate::speleodb` client primitives). The
+//! full surface is here: session (login / logout / session), pull (list / open /
+//! adopt), the lock + edit gate (start-editing / force-edit / done / push /
+//! update / take-remote / the release verbs), link status + unlink, revision
+//! history and restore, and project admin (metadata / publish / collaborators /
+//! teams / delete).
+//!
+//! Errors cross the boundary as the structured [`SpeleoErrorDto`] (#186), which
+//! carries the typed [`SpeleoDbAction`] the frontend branches on - not a
+//! flattened `String`. The auth token is never returned to the webview (login
+//! yields only the email + keychain flag).
 //!
 //! Each command runs its blocking work (HTTP + OS-keychain I/O) off the main
 //! thread via `spawn_blocking`: Tauri executes synchronous commands on the main
 //! thread, so doing the network/keychain round-trips inline would freeze the UI.
-//!
-//! The full `speleodb_*` surface (push / lock / release / create / settings)
-//! lands with later issues; this spike ships only login / list / open / logout.
+
+use std::collections::HashMap;
 
 use tauri::{AppHandle, Manager};
 
+use crate::config::TokenFallback;
 use crate::core::AppState;
 // [Track A] #186/D-B2: commands now return the structured SpeleoErrorDto (carrying
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
@@ -22,10 +29,10 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, UpdateResult,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption,
+    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -41,6 +48,8 @@ async fn run_blocking<T: Send + 'static>(
             message: format!("SpeleoDB task panicked: {e}"),
             action: SpeleoDbAction::Fatal,
             status: None,
+            transport: None,
+            unpushed_local: None,
         })?
 }
 
@@ -90,25 +99,67 @@ pub async fn speleodb_open_project(
     .await
 }
 
+/// Pull a project from SpeleoDB over a local copy that still holds UN-PUSHED
+/// EDITS, destroying them. The "take remote and discard local" branch of the
+/// prompt raised when [`speleodb_open_project`] refuses with
+/// `SpeleoDbAction::UnpushedLocalEdits`; call it with the same arguments the
+/// refused open was given, and only after the user has confirmed the loss.
+///
+/// The other branch, "keep local", calls NO SpeleoDB command: it opens the
+/// `local_path` carried on the refusal through the normal `load_project_full`
+/// flow, so nothing is downloaded and nothing is overwritten.
+///
+/// A separate command rather than a flag on [`speleodb_open_project`], for the
+/// same reason `speleodb_take_remote` is its own verb: the irreversible pull must
+/// be spelled out at the call site.
+#[tauri::command]
+pub async fn speleodb_open_project_discarding_local(
+    app: AppHandle,
+    project_id: String,
+    project_name: String,
+    latest_commit_sha: Option<String>,
+) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        s.speleodb_open_project_discarding_local(project_id, project_name, latest_commit_sha)
+    })
+    .await
+}
+
 /// [#214] Adopt an Ariane (`.tml`-only) project: import its `ariane.tml`, save a
 /// new `.stalx` into the cache, link it, and best-effort flip the server `type`
 /// ariane→other. The frontend calls this (after a user confirm) when
 /// `speleodb_open_project` reported `SpeleoDbAction::Adopt`, then reloads
 /// `local_path` through the normal `open_project` flow (read-only-remote).
+///
+/// `discard_local` waives the un-pushed-edits guard, and the FE may pass `true`
+/// ONLY on the path where the user has already confirmed that loss: the "take the
+/// server copy and discard my local changes" branch of the refused-open prompt,
+/// which lands back here when the project turns out to still be Ariane. That
+/// happens for real - an adopt stamps the cache copy un-pushed, and the server
+/// `type` flip is best-effort, so an adopt without write access leaves a project
+/// that is both dirty locally AND still classified Ariane. Without the waiver the
+/// user confirmed a discard, was handed the adopt confirm, and then hit a guard
+/// refusal they had already answered.
 #[tauri::command]
 pub async fn speleodb_adopt_ariane(
     app: AppHandle,
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    discard_local: Option<bool>,
 ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
+    let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha)
+        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha, discard_local)
     })
     .await
 }
 
-/// Forget the locally stored token and clear the session (no server call).
+/// Forget the locally stored token, clear the session, and clear the persisted
+/// account email (no server call). #270: an `Err` here does NOT mean the logout
+/// failed - the session is always dropped; it means the credential could not be
+/// removed from the OS keychain / plaintext store, so the frontend warns (and can
+/// offer a retry) while treating the user as logged out.
 #[tauri::command]
 pub async fn speleodb_logout(app: AppHandle) -> Result<(), SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_logout).await
@@ -190,6 +241,27 @@ pub async fn speleodb_release_lock(
     run_blocking(app, move |s| s.speleodb_release_lock(project_id)).await
 }
 
+/// Per-project LOCAL state for a set of SpeleoDB projects: whether this machine
+/// has a readable local copy and whether that copy has un-pushed edits. Joins the
+/// local half onto the server-only scans (the held-lock resume prompt, the
+/// GlobalView remote list), so the UI can offer "push and release" rather than a
+/// bare "release" - and can say which listed projects are even present here.
+///
+/// `project_ids` limits the reply to those ids (each still gets a row, reporting
+/// "nothing here" when absent); omitting it reports every project in the local
+/// pull cache plus the open one. Keyed by project id for direct indexing. Purely
+/// local: no token, no network, and an unreadable file costs only its own row.
+#[tauri::command]
+pub async fn speleodb_local_project_states(
+    app: AppHandle,
+    project_ids: Option<Vec<String>>,
+) -> Result<HashMap<String, SpeleoLocalProjectState>, SpeleoErrorDto> {
+    run_blocking(app, move |s| {
+        Ok(s.speleodb_local_project_states(project_ids))
+    })
+    .await
+}
+
 /// [#218] Read a project's revision history for the Project Settings history view:
 /// `GET /projects/{id}/revisions/`. Returns the commit chain projected to
 /// [`SpeleoRevision`] DTOs. Permission-free read; no lock required.
@@ -207,6 +279,12 @@ pub async fn speleodb_get_revisions(
 /// top of the current server HEAD (a git-forward restore; the user pushes to
 /// persist); with `restore == false` it is a read-only View that a later Update
 /// fast-forwards away. Returns the local path for the FE to refresh from.
+///
+/// `discard_local` waives the un-pushed-edits guard, and the FE may pass `true`
+/// ONLY after a second, explicit confirmation naming what is being discarded. It
+/// exists because a restore itself stamps the working copy as un-pushed, so without
+/// it Restore was single-use: restoring a second revision refused over edits the
+/// first restore had just created.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -214,9 +292,11 @@ pub async fn speleodb_restore_revision(
     project_name: String,
     hexsha: String,
     restore: bool,
+    discard_local: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
+    let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(project_id, project_name, hexsha, restore)
+        s.speleodb_restore_revision(project_id, project_name, hexsha, restore, discard_local)
     })
     .await
 }
@@ -238,6 +318,34 @@ pub async fn speleodb_set_exclude_geojson(
 #[tauri::command]
 pub async fn speleodb_session(app: AppHandle) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
     run_blocking(app, AppState::speleodb_session_status).await
+}
+
+/// Record where the API key should live after the keychain failed at login, and
+/// move the held token there. `mode` is the new `token_fallback` preference -
+/// `session_only` or `plaintext` - and answering it also marks the keychain
+/// declined, so nothing touches it again until the next explicit sign-in.
+///
+/// No re-login: the token is already in memory, which is why the question is
+/// worth asking at the moment of failure rather than in Settings later. Returns
+/// the refreshed status, which reports where the key actually landed (a plaintext
+/// write can fail, and then the truthful answer is session-only).
+#[tauri::command]
+pub async fn speleodb_set_token_storage(
+    app: AppHandle,
+    mode: TokenFallback,
+) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_token_storage(mode)).await
+}
+
+/// Give the OS keychain another go (Settings' "Try again"): clear the persisted
+/// refusal and re-store the held token, which now reaches the keychain again.
+/// Safe to press twice - a keychain that is still broken just falls back the way
+/// login does, and the returned status says so.
+#[tauri::command]
+pub async fn speleodb_retry_keychain(
+    app: AppHandle,
+) -> Result<SpeleoSessionStatus, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_retry_keychain).await
 }
 
 /// Report the open project's SpeleoDB link/edit status (#204) so the action shell

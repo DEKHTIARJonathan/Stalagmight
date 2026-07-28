@@ -2,7 +2,7 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import { useSpeleoStore, asPushKind, asDoneKind } from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import type {
@@ -22,7 +22,15 @@ import type {
  */
 export interface SpeleoActions {
   busy: boolean;
-  startEditing: () => Promise<void>;
+  /** Acquire the write lock + reconcile. Resolves `true` only when we actually
+      hold the lock afterwards AND the view is showing it (`editing`, or
+      `fast_forwarded` whose reload landed); `false` on a contended lock, a
+      reported divergence, a reload that was superseded or failed, or a thrown
+      call - all of which already surface their own toast / routing. Callers that
+      hand the shell over on success (the held-lock prompt) MUST check it:
+      treating a refusal as success there dismisses the prompt and discards the
+      remaining locks. */
+  startEditing: () => Promise<boolean>;
   /** #213 (E2): enter optimistic force-edit - edit WITHOUT the write lock (offline,
       or while someone else holds it). Gated on the `allow_force_edit` opt-in (the
       backend refuses otherwise) and behind a big-red destructive confirm; the caller
@@ -50,7 +58,11 @@ export function useSpeleoActions(): SpeleoActions {
   // Shared busy so the status button and the hamburger submenu gate on the same
   // in-flight lock and can't double-issue a verb (fix 12).
   const busy = useSpeleoStore((s) => s.busy);
-  const setBusy = useSpeleoStore((s) => s.setBusy);
+  // Claim/release rather than a bare `setBusy(false)`: a close or a rolled-back
+  // remote open resets the shared flag out of band, and an unowned release in a
+  // verb's `finally` would clear it for whatever started after (#270).
+  const beginBusy = useSpeleoStore((s) => s.beginBusy);
+  const endBusy = useSpeleoStore((s) => s.endBusy);
   const showToast = useUIStore((s) => s.showToast);
   const loadProject = useProjectStore((s) => s.loadProject);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
@@ -63,6 +75,8 @@ export function useSpeleoActions(): SpeleoActions {
   const clearSession = useSpeleoStore((s) => s.clearSession);
   const refreshLinkStatus = useSpeleoStore((s) => s.refreshLinkStatus);
   const raiseNoAnchorBanner = useSpeleoStore((s) => s.raiseNoAnchorBanner);
+  const raisePushFailedBanner = useSpeleoStore((s) => s.raisePushFailedBanner);
+  const clearPushFailedBanner = useSpeleoStore((s) => s.clearPushFailedBanner);
 
   // #200 (D2): a push/unlock of a survey with NO georeferenced zero datum means the
   // server generates no new web-viewer GeoJSON. Surface the non-blocking notice; the
@@ -91,24 +105,28 @@ export function useSpeleoActions(): SpeleoActions {
     }
   }, []);
 
+  /** Toast the failure and return the humanized line, so a caller that also wants a
+      durable surface (#260's push-failure banner) reuses the exact same wording. */
   const handleError = useCallback(
-    (e: unknown, prefixKey: string) => {
+    (e: unknown, prefixKey: string): string => {
       // A dead token collapses the shell to read-only (mirrors the backend gate
       // drop); other errors are transient - surface and let the user retry.
       if (speleoErrorAction(e) === 'ReLogin') clearSession();
-      showToast(humanizeSpeleoError(e, t(prefixKey)), 'speleodb-action-error');
+      const message = humanizeSpeleoError(e, t(prefixKey));
+      showToast(message, 'speleodb-action-error', 'error');
+      return message;
     },
     [clearSession, showToast, t],
   );
 
-  const startEditing = useCallback(async () => {
-    setBusy(true);
+  const startEditing = useCallback(async (): Promise<boolean> => {
+    const busyToken = beginBusy();
     try {
       const result = await invokeIpc<StartEditingResult>('speleodb_start_editing');
       applyStartEditing(result);
       switch (result.kind) {
         case 'editing':
-          showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing');
+          showToast(t('speleodb.editBar.toasts.editing'), 'speleodb-editing', 'success');
           break;
         case 'fast_forwarded':
           // Backend swapped the tree; reload so the view matches. loadProject
@@ -118,7 +136,19 @@ export function useSpeleoActions(): SpeleoActions {
           // the (section_id, station_index)-keyed selection, which the swapped tree may
           // not carry (loadProject's full path clears it; this path bypasses it).
           clearSelection();
-          await loadProject(result.local_path);
+          {
+            // Mirrors `takeRemote`: `loadProject` also answers `success: false`
+            // when a NEWER load superseded this one, so the swapped tree is not
+            // what is on screen. Reporting `true` from there would tell the
+            // held-lock prompt we hold this lock and hand the shell over (it then
+            // discards every remaining lock), and `useRevertRevision` would go
+            // straight on to restore + push against a project the user left.
+            // `refreshProjectState` has no staleness guard of its own and
+            // overwrites project/stations/surveyData wholesale, so it must not run
+            // either.
+            const loaded = await loadProject(result.local_path);
+            if (!loaded.success) return false;
+          }
           await refreshProjectState();
           // Re-scan integrity: the fast-forwarded tree can differ structurally from the
           // one on screen (identity-guarded, fire-and-forget).
@@ -131,31 +161,53 @@ export function useSpeleoActions(): SpeleoActions {
               email: result.email ?? t('speleodb.editBar.someone'),
             }),
             'speleodb-locked-by',
+            'warning',
           );
-          break;
+          // Someone else holds it - we did NOT get the lock.
+          return false;
         case 'divergence_needed':
-          // #198 seam: applyStartEditing recorded the divergence origin.
-          break;
+          // #198 seam: applyStartEditing recorded the divergence origin. The
+          // divergence dialog decides what happens next. `false` means "we are not
+          // editing", NOT "no lock exists": a lock this call TOOK is handed back
+          // before we get here, but one it merely RESUMED is deliberately kept, so
+          // a divergence cannot free a project whose un-pushed work the lock was
+          // guarding. Either way there is no edit session, which is what callers
+          // gate on.
+          return false;
+        default: {
+          // A variant this frontend has not been taught must NOT fall through to
+          // the permissive `return true` below. That answer means "we hold the
+          // lock", and callers act on it destructively: the held-lock prompt
+          // dismisses itself AND discards every remaining lock, with no way to
+          // re-raise it until the next login scan. The `never` binding makes a new
+          // backend variant a COMPILE error here; at runtime it answers "no".
+          const _exhaustive: never = result;
+          void _exhaustive;
+          console.warn('[speleodb] unhandled start-editing result:', result);
+          return false;
+        }
       }
+      return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.startFailed');
+      return false;
     } finally {
       // Reset the poll timer so the next poll is a full interval out - a buffer
       // past the just-issued lock change the server mutex may not yet reflect (1b).
       bumpPoll();
-      setBusy(false);
+      endBusy(busyToken);
     }
-  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyStartEditing, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const forceEdit = useCallback(async (): Promise<boolean> => {
-    setBusy(true);
+    const busyToken = beginBusy();
     try {
       // No result payload: the backend flips the edit gate + force-edit flag.
       // Re-seed the link so `editState → editing` and `forceEditing → true` drive
       // the read-only badge off and the big-red banner on.
       await invokeIpc<null>('speleodb_force_edit');
       await refreshLinkStatus();
-      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit');
+      showToast(t('speleodb.forceEdit.toasts.active'), 'speleodb-force-edit', 'warning');
       return true;
     } catch (e) {
       // Backend refusal (opt-in off / link lost / already lock-held): surface the
@@ -165,12 +217,12 @@ export function useSpeleoActions(): SpeleoActions {
       return false;
     } finally {
       bumpPoll();
-      setBusy(false);
+      endBusy(busyToken);
     }
-  }, [refreshLinkStatus, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [refreshLinkStatus, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const update = useCallback(async () => {
-    setBusy(true);
+    const busyToken = beginBusy();
     try {
       const result = await invokeIpc<UpdateResult>('speleodb_update');
       applyUpdate(result);
@@ -184,7 +236,15 @@ export function useSpeleoActions(): SpeleoActions {
           // state in so Update actually resets the view to the new tip. Clear the stale
           // selection for the same reason as the startEditing arm.
           clearSelection();
-          await loadProject(result.local_path);
+          {
+            // Same staleness stop as the startEditing arm: a superseded (or
+            // failed) reload means the swapped tree is not on screen, so the
+            // unguarded `refreshProjectState` below - which overwrites
+            // project/stations/surveyData wholesale - must not paint this
+            // project's state over whatever the user actually opened.
+            const loaded = await loadProject(result.local_path);
+            if (!loaded.success) break;
+          }
           await refreshProjectState();
           // Re-scan integrity: the fast-forwarded tree can differ structurally from the
           // one on screen (identity-guarded, fire-and-forget).
@@ -198,30 +258,63 @@ export function useSpeleoActions(): SpeleoActions {
       handleError(e, 'speleodb.editBar.toasts.updateFailed');
     } finally {
       bumpPoll();
-      setBusy(false);
+      endBusy(busyToken);
     }
-  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [applyUpdate, loadProject, refreshProjectState, refreshLinkStatus, clearSelection, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   const push = useCallback(
     async (message?: string | null): Promise<PushResult | null> => {
-      setBusy(true);
+      const busyToken = beginBusy();
+      // A fresh attempt supersedes the previous failure banner (#260); a landed
+      // push clears the whole slot via applyPush, and any outcome that leaves the
+      // work on this computer re-raises it - a throw below, or the `not_editing`
+      // arm, which neither lands nor throws.
+      clearPushFailedBanner();
       try {
         const result = await invokeIpc<PushResult>('speleodb_push', { message: message ?? null });
         applyPush(result);
-        if (result.kind === 'pushed') {
-          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed');
+        const kind = asPushKind(result.kind);
+        if (kind === 'pushed') {
+          showToast(t('speleodb.editBar.toasts.pushed'), 'speleodb-pushed', 'success');
           noteNoAnchorIfNeeded();
           await flushToDiskAfterPush();
+        } else if (kind === 'not_editing') {
+          // Nothing was uploaded: the edit gate was already closed (a 401 auto-drop
+          // is the common way in, and the push-failure banner's Retry is the common
+          // way to re-issue from there). A green "Changes pushed to SpeleoDB." here
+          // was a lie that also cost the flush + no-anchor check their meaning, so
+          // say what actually happened and name the way out.
+          showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
+          // ...and keep a DURABLE surface for it. This arm neither lands nor
+          // throws, so nothing else re-raises the failure the attempt started by
+          // clearing - and the toast is gone in 3 s. Since the usual way here is
+          // the banner's own Retry, that left the user staring at the same button
+          // with the error text wiped (inside `SpeleoDoneDialog`, which stays open
+          // on any kind but `released`, it blanked the inline notice too). Re-raise
+          // with what actually happened, carrying their commit message so the next
+          // Retry replays it verbatim.
+          raisePushFailedBanner({
+            message: t('speleodb.editBar.toasts.notEditing'),
+            origin: 'push',
+            pushMessage: message ?? null,
+          });
         }
         // divergence_needed / push_unconfirmed surface via the store (#198/#200 seams);
         // the returned kind lets the dialog stay open to resolve them.
         return result;
       } catch (e) {
-        handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        // Toast (immediate) AND banner (durable): the toast auto-clears after 3 s, so
+        // without the banner a failed upload left no surface at all (#260).
+        const humanized = handleError(e, 'speleodb.editBar.toasts.pushFailed');
+        raisePushFailedBanner({
+          message: humanized,
+          origin: 'push',
+          pushMessage: message ?? null,
+        });
         return null;
       } finally {
         bumpPoll();
-        setBusy(false);
+        endBusy(busyToken);
       }
     },
     [
@@ -229,22 +322,38 @@ export function useSpeleoActions(): SpeleoActions {
       showToast,
       t,
       handleError,
-      setBusy,
+      beginBusy,
+      endBusy,
       bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
+      raisePushFailedBanner,
+      clearPushFailedBanner,
     ],
   );
 
   const done = useCallback(
     async (message?: string | null): Promise<DoneResult | null> => {
-      setBusy(true);
+      const busyToken = beginBusy();
+      clearPushFailedBanner();
+      // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to
+      // upload (releasing a lock taken but never edited against). The remote dirty bit
+      // is the one that means "local edits not yet on the server" - projectStore's
+      // `isDirty` is the unrelated unsaved-to-disk flag - and `done` clears it, so read
+      // it BEFORE the call.
+      const hadUnpushedEdits = useSpeleoStore.getState().link?.hasUnpushedEdits ?? false;
       try {
         const result = await invokeIpc<DoneResult>('speleodb_done', { message: message ?? null });
         applyDone(result);
-        switch (result.kind) {
+        switch (asDoneKind(result.kind)) {
           case 'released':
-            showToast(t('speleodb.editBar.toasts.released'), 'speleodb-released');
+            showToast(
+              hadUnpushedEdits
+                ? t('speleodb.editBar.toasts.released')
+                : t('speleodb.editBar.toasts.releasedNothingToUpload'),
+              'speleodb-released',
+              'success',
+            );
             noteNoAnchorIfNeeded();
             await flushToDiskAfterPush();
             break;
@@ -254,14 +363,35 @@ export function useSpeleoActions(): SpeleoActions {
           case 'divergence_needed':
             // #198 seam: applyDone recorded the divergence origin.
             break;
+          case 'not_editing':
+            // No lock was held, so nothing was uploaded AND nothing was released.
+            // `applyDone` deliberately left the dirty bit alone; callers key off
+            // `kind === 'released'`, so the close/quit dialogs correctly stay open.
+            showToast(t('speleodb.editBar.toasts.notEditing'), 'speleodb-not-editing', 'warning');
+            // See the same arm in `push`: neither landed nor threw, so re-raise the
+            // durable banner this attempt cleared on its way in - otherwise the only
+            // trace of a release that released nothing is a 3 s toast, and the
+            // dialogs that stay open here would show their retry button with no
+            // error text beside it.
+            raisePushFailedBanner({
+              message: t('speleodb.editBar.toasts.notEditing'),
+              origin: 'done',
+              pushMessage: message ?? null,
+            });
+            break;
         }
         return result;
       } catch (e) {
-        handleError(e, 'speleodb.editBar.toasts.doneFailed');
+        const humanized = handleError(e, 'speleodb.editBar.toasts.doneFailed');
+        raisePushFailedBanner({
+          message: humanized,
+          origin: 'done',
+          pushMessage: message ?? null,
+        });
         return null;
       } finally {
         bumpPoll();
-        setBusy(false);
+        endBusy(busyToken);
       }
     },
     [
@@ -269,15 +399,18 @@ export function useSpeleoActions(): SpeleoActions {
       showToast,
       t,
       handleError,
-      setBusy,
+      beginBusy,
+      endBusy,
       bumpPoll,
       noteNoAnchorIfNeeded,
       flushToDiskAfterPush,
+      raisePushFailedBanner,
+      clearPushFailedBanner,
     ],
   );
 
   const takeRemote = useCallback(async (): Promise<boolean> => {
-    setBusy(true);
+    const busyToken = beginBusy();
     try {
       // Backend re-pulls + resets the tree to the server tip and returns the
       // reloaded path; loadProject re-seeds the link status (→ read-only).
@@ -288,16 +421,16 @@ export function useSpeleoActions(): SpeleoActions {
       // the divergence dialog doesn't close over a project the user left.
       const { success } = await loadProject(localPath);
       if (!success) return false;
-      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote');
+      showToast(t('speleodb.editBar.toasts.tookRemote'), 'speleodb-took-remote', 'success');
       return true;
     } catch (e) {
       handleError(e, 'speleodb.editBar.toasts.takeRemoteFailed');
       return false;
     } finally {
       bumpPoll();
-      setBusy(false);
+      endBusy(busyToken);
     }
-  }, [loadProject, showToast, t, handleError, setBusy, bumpPoll]);
+  }, [loadProject, showToast, t, handleError, beginBusy, endBusy, bumpPoll]);
 
   return { busy, startEditing, forceEdit, update, push, done, takeRemote };
 }

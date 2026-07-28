@@ -4,7 +4,7 @@
  *  - cheapSweep: runs after every mutating tool call (goal < ~50 ms of extra
  *    WebDriver traffic). Crash markers (fs only), a React error-boundary probe,
  *    and new error/warn ring lines since an internal cursor.
- *  - fullSweep: cheapSweep plus project-integrity, leftover .stalx.tmp files,
+ *  - fullSweep: cheapSweep plus project-integrity, leftover write-staging files,
  *    a memory-growth check against a session baseline, dialog residue, and a
  *    read-only responsiveness probe (command-lock deadlock detector).
  *
@@ -57,6 +57,37 @@ export function newOracleState(): OracleState {
     reported: new Set(),
     findingCount: 0,
   };
+}
+
+/**
+ * Suffixes of the write-staging files that a crashed/aborted write can strand
+ * beside the project. Every producer of one belongs here:
+ *
+ *  - `.stalx.tmp`        - the atomic save (`core/save.rs`), `<file>.tmp`.
+ *  - `.download.tmp`     - the SpeleoDB dump extract
+ *    (`speleodb/dump.rs::download_temp_path`), which appends to the WHOLE file
+ *    name, so an open remote project stages at `project.stalx.download.tmp`.
+ *    That does not end in `.stalx.tmp`, so matching only the save suffix let a
+ *    leaked download temp pass `check_problems` in silence - and the directory
+ *    it lands in is exactly the one this oracle scans (an open SpeleoDB
+ *    project's path IS `<cache>/speleodb/<uuid>/project.stalx`).
+ *  - `.vacuum.tmp`       - the push snapshot's SQLite compaction
+ *    (`persistence/sqlite/repair.rs::vacuum_temp_path`), which likewise appends to
+ *    the whole file name, so the push stages at `snapshot.stalx.vacuum.tmp` in
+ *    that same directory. Cleaned on every in-process exit from `VACUUM INTO`
+ *    (success renames it away, both failure arms unlink it) and self-healed by the
+ *    next push, so it only survives a crash or kill mid-compaction - which is
+ *    precisely what the adversarial runs provoke, and what this oracle is for.
+ *
+ * Note the app's own recovery scanner (`commands/recovery.rs`) treats ANY trailing
+ * `.tmp` as leftover, so it needs no such list; this narrower allowlist is the
+ * harness's alone, and is the only one that can silently fall behind a producer.
+ */
+const LEFTOVER_TEMP_SUFFIXES = ['.stalx.tmp', '.download.tmp', '.vacuum.tmp'] as const;
+
+/** Whether a directory entry is a leftover write-staging file. */
+export function isLeftoverTempName(name: string): boolean {
+  return LEFTOVER_TEMP_SUFFIXES.some((suffix) => name.endsWith(suffix));
 }
 
 /** Warn lines that are known-benign dev noise; kept tiny and explicit. */
@@ -177,7 +208,8 @@ export async function fullSweep(target: OracleTarget, state: OracleState): Promi
     findings.push({ severity: 'warning', kind: 'integrity-probe-failed', message: String(err) });
   }
 
-  // 5. Leftover atomic-write temp files next to the project.
+  // 5. Leftover write-staging temp files next to the project (atomic save, and
+  //     the SpeleoDB dump extract - see LEFTOVER_TEMP_SUFFIXES).
   try {
     const projectPath = await target.exclusive(async () => {
       const v = (await readStore(target.browser, 'project', 'projectPath')) as { value?: unknown };
@@ -187,7 +219,7 @@ export async function fullSweep(target: OracleTarget, state: OracleState): Promi
       const dir = path.dirname(projectPath);
       let leftovers: string[] = [];
       try {
-        leftovers = fs.readdirSync(dir).filter((n) => n.endsWith('.stalx.tmp'));
+        leftovers = fs.readdirSync(dir).filter(isLeftoverTempName);
       } catch {
         // Directory gone / unreadable.
       }
@@ -195,7 +227,7 @@ export async function fullSweep(target: OracleTarget, state: OracleState): Promi
         findings.push({
           severity: 'error',
           kind: 'leftover-temp',
-          message: `leftover atomic-write temp file(s) beside the project: ${leftovers.join(', ')}`,
+          message: `leftover write-staging temp file(s) beside the project: ${leftovers.join(', ')}`,
           detail: { dir, leftovers },
         });
       }

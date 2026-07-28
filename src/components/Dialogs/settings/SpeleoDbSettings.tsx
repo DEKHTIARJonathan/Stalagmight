@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Toggle } from '../../common/Toggle';
-import { Select } from '../../common/Select';
 import { Button } from '../../common/Button';
 import { SettingsSection } from './SettingsSection';
 import { SettingRow } from './SettingRow';
@@ -10,14 +9,25 @@ import type { SettingsCategoryProps } from './types';
 import {
   isFieldChanged,
   createToggleHandler,
-  createSelectHandler,
   createNumericHandler,
   parseIntRadix10,
 } from './types';
 import { defaultConfig, MIN_POLL_INTERVAL_SECONDS } from '../../../types/config';
-import type { TokenFallback } from '../../../types/ipc.generated';
+import type { KeychainReport, TokenFallback } from '../../../types/ipc.generated';
 import { useSpeleoStore, type PendingLogin } from '../../../store/speleoStore';
 import { humanizeSpeleoError } from '../../../utils/speleoError';
+
+/**
+ * The backend's `KeychainReport` values are snake_case over IPC; the i18n leaves
+ * are camelCase. Mapped explicitly rather than transformed, so a value added on
+ * the Rust side fails the type check here instead of silently rendering a raw key.
+ */
+const KEYCHAIN_STATE_KEYS: Record<KeychainReport, string> = {
+  not_attempted: 'notAttempted',
+  available: 'available',
+  unavailable: 'unavailable',
+  declined: 'declined',
+};
 
 /**
  * SpeleoDB settings category (#205, reworked per feedback A1-A4).
@@ -25,11 +35,21 @@ import { humanizeSpeleoError } from '../../../utils/speleoError';
  * - **Account** (shown first): sign-in/out is **staged** - applied only when the
  *   dialog's Save is pressed (`speleoStore.pendingAuth` + `applyPendingAuth`),
  *   matching the rest of Settings - with a "Log in now" escape hatch to verify
- *   credentials immediately. Shows which server the live session is signed in to.
- * - **Connection** (staged config): endpoint, token storage, insecure HTTP, and
- *   the remote-state poll interval (floor 30s). The **endpoint** is only the
- *   default for FUTURE logins - the live session is pinned to the server it
- *   authenticated against - so changing it does NOT log the user out.
+ *   credentials immediately. Shows which server the live session is signed in to,
+ *   and where the API key is actually being kept.
+ * - **Connection** (staged config): endpoint, insecure HTTP, force-edit, and the
+ *   remote-state poll interval (floor 30s). The **endpoint** is only the default
+ *   for FUTURE logins - the live session is pinned to the server it authenticated
+ *   against - so changing it does NOT log the user out.
+ *
+ * There is deliberately no "Token storage" control here any more. Its two options
+ * read as a choice of where the key is kept, but the backend only ever consulted
+ * `token_fallback` as a fallback *preference* - it takes effect solely when the
+ * keychain fails - so it told a user whose key was safely in the keychain that it
+ * lived in a plaintext file. The real choice is now made at the one moment it
+ * means anything: the login where the keychain actually failed
+ * (`SpeleoStorageChoiceDialog`, which writes this same field). What is left here
+ * is the REPORT of where the key ended up, plus a way to reconsider.
  */
 export function SpeleoDbSettings({
   config,
@@ -47,6 +67,8 @@ export function SpeleoDbSettings({
   const applyPendingAuth = useSpeleoStore((s) => s.applyPendingAuth);
   const setAuthError = useSpeleoStore((s) => s.setAuthError);
   const authError = useSpeleoStore((s) => s.authError);
+  const retryKeychain = useSpeleoStore((s) => s.retryKeychain);
+  const setTokenStorage = useSpeleoStore((s) => s.setTokenStorage);
 
   const speleo = config.speleodb;
   const [loggingIn, setLoggingIn] = useState(false);
@@ -109,6 +131,62 @@ export function SpeleoDbSettings({
     }
   };
 
+  // --- credential storage (item 1) ---
+  // Report-only, and NEVER a probe: on Linux, asking the keyring anything is what
+  // raises the desktop unlock prompt, so this panel renders whatever earlier access
+  // already taught the backend - including "not checked yet", which is an honest
+  // answer rather than a gap to fill in.
+  //
+  // Signed out there is no key to place, so only the keyring line applies.
+  const storedIn = session?.loggedIn
+    ? t(`settings.speleodb.credentials.where.${session.storage ?? 'memory'}`)
+    : null;
+  const keychainState = KEYCHAIN_STATE_KEYS[session?.keychain ?? 'not_attempted'];
+  // Offered only where it can change something: the keychain is being skipped
+  // (declined) or is broken (unavailable), AND there is a token in hand to move
+  // into it. Pressing it when the keychain already works would be a no-op that
+  // costs an unlock prompt.
+  const canRetryKeychain =
+    (session?.loggedIn ?? false) &&
+    (session?.keychain === 'declined' || session?.keychain === 'unavailable');
+  const [retryingKeychain, setRetryingKeychain] = useState(false);
+  // Credential-storage failures get their OWN slot rather than the store's shared
+  // `authError`. That field belongs to the login form: writing a storage message
+  // into it told a user "your credentials failed" when what actually failed was
+  // moving an already-valid key into the keyring, and clearing it on success wiped
+  // a genuine sign-in error they had not read yet.
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const handleRetryKeychain = async () => {
+    setRetryingKeychain(true);
+    try {
+      // The refreshed session is the whole answer - a keychain that is still broken
+      // reports `unavailable` again, so the panel just re-renders the truth.
+      const ok = await retryKeychain();
+      setStorageError(ok ? null : t('settings.speleodb.credentials.retryFailed'));
+    } finally {
+      setRetryingKeychain(false);
+    }
+  };
+
+  // The route back out of a storage choice, without signing out and in again. The
+  // login-time prompt is raised only when the keychain fails DURING that login, so
+  // without this a user who once answered "keep it in a file" had no way to undo
+  // it: the preference persists, and every later fallback silently re-writes the
+  // cleartext file. Offered only while a token is actually held in a non-keychain
+  // tier, which is the only state either direction can change.
+  const [movingToken, setMovingToken] = useState(false);
+  const storageTier = session?.storage ?? 'memory';
+  const canChooseStorage = (session?.loggedIn ?? false) && storageTier !== 'keychain';
+  const handleSetStorage = async (mode: Exclude<TokenFallback, 'unknown'>) => {
+    setMovingToken(true);
+    try {
+      const ok = await setTokenStorage(mode);
+      setStorageError(ok ? null : t('settings.speleodb.credentials.moveFailed'));
+    } finally {
+      setMovingToken(false);
+    }
+  };
+
   // --- connection (staged config) ---
   // The endpoint is just the default server for FUTURE logins; the live session is
   // pinned to the server it authenticated against (shown in the Account panel). So
@@ -116,22 +194,20 @@ export function SpeleoDbSettings({
   // staged config applied on Save.
   const handleEndpointChange = (v: string) =>
     onChange({ speleodb: { ...speleo, endpoint: v.length > 0 ? v : null } });
-  const handleTokenFallbackChange = createSelectHandler(onChange, (v) => ({
-    speleodb: { ...speleo, token_fallback: v as TokenFallback },
-  }));
   const handleInsecureHttpToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, insecure_http: v },
   }));
   const handleAllowForceEditToggle = createToggleHandler(onChange, (v) => ({
     speleodb: { ...speleo, allow_force_edit: v },
   }));
+  const handleDisableKeychainToggle = createToggleHandler(onChange, (v) => ({
+    speleodb: { ...speleo, keychain_disabled: v },
+  }));
   const handlePollIntervalChange = createNumericHandler(
     onChange,
     (n) => ({ speleodb: { ...speleo, poll_interval_seconds: n } }),
     parseIntRadix10,
   );
-
-  const tokenFallbackValue = speleo.token_fallback === 'plaintext' ? 'plaintext' : 'session_only';
 
   return (
     <div
@@ -178,11 +254,6 @@ export function SpeleoDbSettings({
                   })
                 : t('settings.speleodb.account.signedInAs', { email: session.userEmail ?? '' })}
             </p>
-            {!session.keychainBacked && (
-              <p className="text-xs text-warning" data-testid="speleodb-memory-only-warning">
-                {t('settings.speleodb.account.memoryOnly')}
-              </p>
-            )}
             <Button
               onClick={() => setPendingAuth({ kind: 'logout' })}
               data-testid="speleodb-settings-logout"
@@ -265,6 +336,82 @@ export function SpeleoDbSettings({
             </div>
           </div>
         )}
+
+        <div
+          className="mt-4 pt-3 border-t border-border space-y-1"
+          data-testid="speleodb-credential-storage"
+        >
+          <p className="text-sm font-medium text-text-primary">
+            {t('settings.speleodb.credentials.title')}
+          </p>
+          {storedIn && (
+            <p
+              className={`text-xs ${session?.storage === 'keychain' ? 'text-text-secondary' : 'text-warning'}`}
+              data-testid="speleodb-credential-stored-in"
+              // The raw tier / report alongside the prose, so a test can pin WHICH
+              // of the states is being shown without matching on translated copy.
+              data-storage={session?.storage ?? 'memory'}
+            >
+              {t('settings.speleodb.credentials.storedIn', { where: storedIn })}
+            </p>
+          )}
+          <p
+            className="text-xs text-text-secondary"
+            data-testid="speleodb-credential-keyring"
+            data-keychain={session?.keychain ?? 'not_attempted'}
+          >
+            {t('settings.speleodb.credentials.keyring', {
+              state: t(`settings.speleodb.credentials.keychainState.${keychainState}`),
+            })}
+          </p>
+          <p className="text-xs text-text-secondary">
+            {t('settings.speleodb.credentials.keyOnly')}
+          </p>
+          {/* Cleartext on disk is worth saying plainly, every time the panel is
+              open - not only in the one-shot prompt at login that put it there. */}
+          {storageTier === 'plaintext' && (
+            <p
+              className="mt-2 p-2 bg-warning-10 border border-warning-20 rounded text-xs text-warning"
+              data-testid="speleodb-plaintext-warning"
+            >
+              {t('settings.speleodb.credentials.plaintextWarning')}
+            </p>
+          )}
+          {storageError && (
+            <p
+              className="mt-2 p-2 bg-error-10 border border-error-20 rounded text-xs text-error"
+              data-testid="speleodb-credential-storage-error"
+            >
+              {storageError}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2 pt-1">
+            {canRetryKeychain && (
+              <Button
+                onClick={() => void handleRetryKeychain()}
+                disabled={retryingKeychain || movingToken}
+                data-testid="speleodb-credential-retry-keychain"
+              >
+                {retryingKeychain
+                  ? t('settings.speleodb.credentials.retrying')
+                  : t('settings.speleodb.credentials.retry')}
+              </Button>
+            )}
+            {canChooseStorage && (
+              <Button
+                onClick={() =>
+                  void handleSetStorage(storageTier === 'plaintext' ? 'session_only' : 'plaintext')
+                }
+                disabled={retryingKeychain || movingToken}
+                data-testid="speleodb-credential-set-storage"
+              >
+                {storageTier === 'plaintext'
+                  ? t('settings.speleodb.credentials.useSessionOnly')
+                  : t('settings.speleodb.credentials.usePlaintext')}
+              </Button>
+            )}
+          </div>
+        </div>
       </SettingsSection>
 
       <SettingsSection
@@ -289,37 +436,6 @@ export function SpeleoDbSettings({
             data-testid="input-speleodb-endpoint"
           />
         </SettingRow>
-
-        <SettingRow
-          label={t('settings.speleodb.tokenFallback.label')}
-          helpText={t('settings.speleodb.tokenFallback.help')}
-          isChanged={isFieldChanged(changedFields, 'speleodb.token_fallback')}
-          onReset={() =>
-            onChange({ speleodb: { ...speleo, token_fallback: defaultConfig.speleodb.token_fallback } })
-          }
-          isDefault={speleo.token_fallback === defaultConfig.speleodb.token_fallback}
-          data-testid="setting-speleodb-token-fallback"
-        >
-          <Select
-            value={tokenFallbackValue}
-            onChange={handleTokenFallbackChange}
-            options={[
-              { value: 'session_only', label: t('settings.speleodb.tokenFallback.options.sessionOnly') },
-              { value: 'plaintext', label: t('settings.speleodb.tokenFallback.options.plaintext') },
-            ]}
-            className="w-48"
-            aria-label={t('settings.speleodb.tokenFallback.aria')}
-            data-testid="select-speleodb-token-fallback"
-          />
-        </SettingRow>
-        {speleo.token_fallback === 'plaintext' && (
-          <div
-            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
-            data-testid="speleodb-plaintext-warning"
-          >
-            {t('settings.speleodb.tokenFallback.plaintextWarning')}
-          </div>
-        )}
 
         <SettingRow
           label={t('settings.speleodb.insecureHttp.label')}
@@ -399,6 +515,40 @@ export function SpeleoDbSettings({
         {speleo.poll_interval_seconds < MIN_POLL_INTERVAL_SECONDS && (
           <div className="mb-2 text-xs text-error" data-testid="speleodb-poll-interval-error">
             {t('settings.speleodb.pollInterval.tooLow', { min: MIN_POLL_INTERVAL_SECONDS })}
+          </div>
+        )}
+
+        {/* Last, and deliberately a standing instruction rather than an answer to
+            one login's failure: on a headless or permanently-locked box there is no
+            working keyring to offer, and being asked about it on every sign-in is
+            the same nag in a different costume. While this is on nothing goes near
+            the keyring on any path - not a store, not a startup read, not a status
+            probe - and the API key lives wherever the storage choice above says. */}
+        <SettingRow
+          label={t('settings.speleodb.disableKeychain.label')}
+          helpText={t('settings.speleodb.disableKeychain.help')}
+          isChanged={isFieldChanged(changedFields, 'speleodb.keychain_disabled')}
+          onReset={() =>
+            onChange({
+              speleodb: { ...speleo, keychain_disabled: defaultConfig.speleodb.keychain_disabled },
+            })
+          }
+          isDefault={speleo.keychain_disabled === defaultConfig.speleodb.keychain_disabled}
+          data-testid="setting-speleodb-disable-keychain"
+        >
+          <Toggle
+            checked={speleo.keychain_disabled}
+            onChange={handleDisableKeychainToggle}
+            aria-label={t('settings.speleodb.disableKeychain.aria')}
+            data-testid="toggle-speleodb-disable-keychain"
+          />
+        </SettingRow>
+        {speleo.keychain_disabled && (
+          <div
+            className="mb-2 p-3 bg-warning-20 text-warning rounded text-xs"
+            data-testid="speleodb-disable-keychain-warning"
+          >
+            {t('settings.speleodb.disableKeychain.warning')}
           </div>
         )}
       </SettingsSection>

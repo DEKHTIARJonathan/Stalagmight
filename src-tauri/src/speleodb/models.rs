@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
 // [Track A] #186/D-B2: the typed action carried on the IPC error DTO.
-use super::contract::SpeleoDbAction;
+use super::contract::{SpeleoDbAction, TransportCause};
 
 /// Project permission level.
 ///
@@ -120,6 +120,51 @@ impl From<RevisionCommit> for SpeleoRevision {
             message: c.message,
         }
     }
+}
+
+/// What this machine holds LOCALLY for one SpeleoDB project, joined onto the
+/// server-side scans (held locks, the GlobalView project list) that know nothing
+/// about the local cache. Purely local: no token, no network, no server fields.
+///
+/// Reported per project id by `speleodb_local_project_states`. Every field is a
+/// statement about the local copy only, so one unreadable file costs its own row
+/// rather than failing the whole listing - but it says so via [`Self::state_unknown`]
+/// instead of impersonating a clean row.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoLocalProjectState {
+    /// A local `.stalx` for this project exists AND its SpeleoDB link row could be
+    /// read. False when the file is missing, corrupt, or carries no link row. Also
+    /// false when the file is present but unreadable - that row is distinguished by
+    /// [`Self::state_unknown`], which the UI MUST check before treating the row as
+    /// "nothing here".
+    pub has_local_copy: bool,
+    /// The local copy has edits that are not on the server yet
+    /// (`speleo_link.has_unpushed_edits`). Always false without a local copy, and
+    /// meaningless (not "clean") when [`Self::state_unknown`] is set.
+    pub has_unpushed_edits: bool,
+    /// When the local copy was last edited (RFC-3339), when known. `None` for a
+    /// clean copy, an older file that never recorded one, or no local copy.
+    pub last_edit_at: Option<String>,
+    /// This is the project currently open in the app, so the reported state came
+    /// from the live open database rather than a file on disk.
+    pub is_open: bool,
+    /// A local `.stalx` for this project IS present but could not be read, so
+    /// `has_local_copy` / `has_unpushed_edits` state nothing about it - in
+    /// particular NOT that it is free of un-pushed work.
+    ///
+    /// This exists because the listing fails OPEN (one bad file may cost only its
+    /// own row) while the replace guard fails CLOSED on the very same input, and
+    /// without this flag the two disagreed silently. The realistic cause is a hot
+    /// journal left by a kill or power loss - which a read-only connection cannot
+    /// roll back (`SQLITE_READONLY_ROLLBACK`) though a read-write open would - i.e.
+    /// precisely the abandoned session the held-lock prompt is raised over. Offering
+    /// that row the irreversible "Release lock" because it "looks clean" frees the
+    /// project for someone else to push over recoverable work.
+    ///
+    /// The UI must render this as UNKNOWN (and withhold the destructive choices),
+    /// never as clean.
+    pub state_unknown: bool,
 }
 
 /// The active lock ("mutex") on a project, when one is held.
@@ -262,7 +307,80 @@ pub struct SpeleoLoginResult {
     pub endpoint: String,
     /// True when the token was stored in the OS keychain; false means a
     /// session-only in-memory fallback (e.g. headless CI with no secret service).
+    ///
+    /// Kept alongside `storage` rather than replaced by it: this bool answers
+    /// "durable?" for existing callers, while `storage` answers "where?".
     pub keychain_backed: bool,
+    /// Where the API key actually ended up. `keychain_backed` cannot distinguish
+    /// the plaintext file from session-only memory, and the two have very
+    /// different consequences for the user.
+    pub storage: TokenStorage,
+    /// What this login taught us about the OS keychain.
+    pub keychain: KeychainReport,
+    /// The keychain failed during THIS login and the user has not already told us
+    /// where to put the key instead - so the frontend should ask, now, while the
+    /// failure is in context. False when the keychain worked, and false when the
+    /// user has already declined it (we are not re-litigating a settled choice).
+    pub needs_storage_choice: bool,
+}
+
+/// Where the API key is being kept. Mirrors `auth::TokenTier` across the IPC
+/// boundary.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum TokenStorage {
+    /// The OS keychain: survives a restart, encrypted by the platform.
+    Keychain,
+    /// A `0o600` file under the app config dir: survives a restart, but readable
+    /// by anything running as this user.
+    Plaintext,
+    /// This session only: gone when the app closes.
+    Memory,
+}
+
+/// What is known about the OS keychain - strictly what earlier access taught us,
+/// never the result of a probe. Probing a locked keyring is itself what raises a
+/// desktop unlock prompt, so `NotAttempted` is a real answer we show rather than
+/// go looking.
+#[derive(Debug, Clone, Copy, Serialize, TS, PartialEq, Eq)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum KeychainReport {
+    /// Nothing has touched it yet (no login this session, no rehydrate).
+    NotAttempted,
+    /// A read or write succeeded.
+    Available,
+    /// A read or write failed - absent, locked, or refused.
+    Unavailable,
+    /// The user declined it; we are deliberately leaving it alone until they sign
+    /// in again.
+    Declined,
+}
+
+// The storage layer and the IPC surface keep separate enums on purpose, so the
+// tiers can be reworked without breaking the webview contract. These are the two
+// bridges, kept next to the IPC types they produce.
+
+impl From<super::auth::TokenTier> for TokenStorage {
+    fn from(tier: super::auth::TokenTier) -> Self {
+        match tier {
+            super::auth::TokenTier::Keychain => Self::Keychain,
+            super::auth::TokenTier::Plaintext => Self::Plaintext,
+            super::auth::TokenTier::Memory => Self::Memory,
+        }
+    }
+}
+
+impl From<super::auth::KeychainState> for KeychainReport {
+    fn from(state: super::auth::KeychainState) -> Self {
+        match state {
+            super::auth::KeychainState::NotAttempted => Self::NotAttempted,
+            super::auth::KeychainState::Available => Self::Available,
+            super::auth::KeychainState::Unavailable => Self::Unavailable,
+            super::auth::KeychainState::Declined => Self::Declined,
+        }
+    }
 }
 
 /// [#206] The editable SpeleoDB project metadata, returned to the webview by
@@ -426,7 +544,10 @@ pub enum StartEditingResult {
     /// webview should refresh its view from the reloaded `local_path`.
     FastForwarded { local_path: String },
     /// The server diverged from our base AND we hold un-pushed local edits:
-    /// editing is NOT enabled and the freshly-acquired lock was released. The
+    /// editing is NOT enabled. A lock this call FRESHLY acquired was released;
+    /// one it inherited (a resumed session - the held-lock prompt's "Continue
+    /// editing") is deliberately kept, since handing it back would free the
+    /// project while the un-pushed work is still only local. Either way the
     /// user must reconcile (the divergence prompt is #198, next batch).
     DivergenceNeeded,
     /// Someone else holds the write lock; `email` is the holder when known.
@@ -441,7 +562,24 @@ pub enum StartEditingResult {
 pub enum DoneResult {
     /// Edits pushed (or there was nothing to push); the lock was released and the
     /// project is read-only again.
+    ///
+    /// This is the ONLY arm that means "the local work is on the server", so it is
+    /// the only one the frontend may clear its `hasUnpushedEdits` on. See
+    /// [`Self::NotEditing`] for the case that used to be folded in here.
     Released,
+    /// There was no edit session to finish: the backend's edit gate was already
+    /// closed, so no lock was held, nothing was pushed and nothing was released.
+    ///
+    /// Distinct from [`Self::Released`] because the two are NOT interchangeable
+    /// when the project is dirty. The gate can be closed while
+    /// `has_unpushed_edits` is still set - a 401 auto-drop runs `speleodb_forget`,
+    /// which closes the gate but deliberately leaves the dirty bit alone - and
+    /// reporting that as `Released` told the frontend the work had landed, which
+    /// cleared its `hasUnpushedEdits` and disarmed the quit guard over edits that
+    /// were never uploaded. The frontend must leave its dirty state untouched on
+    /// this arm and route the user back through Start editing (re-login first if
+    /// the token is gone).
+    NotEditing,
     /// The server diverged (a stranger commit between our base and the tip):
     /// nothing was pushed, the lock + dirty bit are retained for the user to
     /// reconcile (#198).
@@ -483,6 +621,12 @@ pub struct SpeleoSessionStatus {
     /// False when the token is held in memory only (no OS keychain) - surfaced so
     /// the UI keeps showing the "won't survive a restart" note after a reopen.
     pub keychain_backed: bool,
+    /// Where the API key actually lives, for the Settings credential-storage line.
+    /// `None` when logged out (there is no key to place).
+    pub storage: Option<TokenStorage>,
+    /// What is known about the OS keychain, WITHOUT probing it - see
+    /// [`KeychainReport`].
+    pub keychain: KeychainReport,
 }
 
 /// IPC-facing status of the currently open project's SpeleoDB link, so the
@@ -580,7 +724,15 @@ pub enum RemoteState {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum PushResult {
     /// Edits pushed (or nothing to push); the lock is retained.
+    ///
+    /// The ONLY arm that means "the local work is on the server" - see
+    /// [`DoneResult::Released`] for the same distinction on the release verb.
     Pushed,
+    /// There was no edit session to push from: the backend's edit gate was already
+    /// closed, so no lock was held and nothing was uploaded. See
+    /// [`DoneResult::NotEditing`] - same hazard, same frontend obligation (leave
+    /// the dirty state alone; do NOT treat this as a successful push).
+    NotEditing,
     /// The server diverged: nothing pushed, lock + dirty bit retained to reconcile.
     DivergenceNeeded,
     /// Ambiguous push (no confirmed server commit): dirty bit + lock retained so a
@@ -602,16 +754,52 @@ pub struct SpeleoErrorDto {
     pub message: String,
     pub action: SpeleoDbAction,
     pub status: Option<u16>,
+    /// [#270] Set ONLY for a transport failure, classifying why the server was
+    /// never reached. It is the discriminant the frontend branches on to render a
+    /// translated "could not reach SpeleoDB at <endpoint>" line: `message` still
+    /// carries the raw cause (an OS errno such as "Invalid argument"), which is
+    /// for the log, not for the user. `None` on every non-transport error.
+    pub transport: Option<TransportCause>,
+    /// Set ONLY when a re-pull was REFUSED because the local copy still holds
+    /// edits the server has never seen (`action == UnpushedLocalEdits`). It is
+    /// what the frontend needs to offer the binary choice; `None` on every other
+    /// error, which is what makes it a sound discriminant.
+    pub unpushed_local: Option<UnpushedLocalEdits>,
+}
+
+/// The local work a refused re-pull would have destroyed, carried on
+/// [`SpeleoErrorDto::unpushed_local`] so the frontend can name it and act on it
+/// without a second round-trip.
+///
+/// The two branches the frontend offers, and exactly what each calls:
+///
+/// - **Keep local** - open [`Self::local_path`] through the normal
+///   `load_project_full` open flow. Nothing is downloaded and nothing is
+///   overwritten; the cached copy opens with its un-pushed edits intact.
+/// - **Take remote and discard local** - call
+///   `speleodb_open_project_discarding_local` with the same arguments the refused
+///   `speleodb_open_project` was given. That is the abandoning verb: it performs
+///   the very replace this error refused.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct UnpushedLocalEdits {
+    /// The SpeleoDB project whose local copy holds the un-pushed edits.
+    pub project_id: String,
+    /// The `.stalx` that holds them - the file "keep local" opens.
+    pub local_path: String,
+    /// When it was last edited (RFC-3339), when known. `None` for an older copy
+    /// that never recorded one.
+    pub last_edit_at: Option<String>,
 }
 
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        DoneResult, Permission, Project, PushResult, RemoteState, RevisionCommit, RevisionHistory,
-        SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult, SpeleoOpenResult,
-        SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus, StartEditingResult,
-        UpdateResult, Visibility,
+        DoneResult, KeychainReport, Permission, Project, PushResult, RemoteState, RevisionCommit,
+        RevisionHistory, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
+        SpeleoOpenResult, SpeleoProjectSummary, SpeleoRevision, SpeleoSessionStatus,
+        StartEditingResult, TokenStorage, UpdateResult, Visibility,
     };
 
     #[test]
@@ -623,6 +811,9 @@ mod tests {
             user_email: "u@x".to_owned(),
             endpoint: "https://x/".to_owned(),
             keychain_backed: true,
+            storage: TokenStorage::Keychain,
+            keychain: KeychainReport::Available,
+            needs_storage_choice: false,
         })
         .expect("serialize login result");
         let status = serde_json::to_string(&SpeleoSessionStatus {
@@ -630,6 +821,8 @@ mod tests {
             user_email: Some("u@x".to_owned()),
             endpoint: Some("https://x/".to_owned()),
             keychain_backed: true,
+            storage: Some(TokenStorage::Keychain),
+            keychain: KeychainReport::Available,
         })
         .expect("serialize session status");
         let summary = serde_json::to_string(&SpeleoProjectSummary {
@@ -654,6 +847,8 @@ mod tests {
             message: "SpeleoDB returned HTTP 401: not authenticated".to_owned(),
             action: SpeleoDbAction::ReLogin,
             status: Some(401),
+            transport: None,
+            unpushed_local: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

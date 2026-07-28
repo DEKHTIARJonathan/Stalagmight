@@ -9,8 +9,9 @@ import { ElidedPath, Tooltip, ChevronUpIcon, ChevronDownIcon } from '../common';
 import { useProjectStatFormatters } from './useProjectStatFormatters';
 import type { RecentListItem } from './recentListItems';
 import type { RecentSortField, RecentSortDirection } from './useRecentSort';
-import { SpeleoRecentInfo, resolveSpeleoLock } from './SpeleoLockBadge';
+import { SpeleoRecentInfo, resolveSpeleoLock, unpushedAccentStyle } from './SpeleoLockBadge';
 import type { SpeleoProjectSummary } from '../../types/ipc.generated';
+import type { SpeleoLocalStateMap } from '../../utils/speleoLocalState';
 
 interface SystemTableProps {
   items: RecentListItem[];
@@ -24,6 +25,9 @@ interface SystemTableProps {
   remoteProjects: Record<string, string>;
   /** Current user's email, to tell our own held lock from another's (#201). */
   myEmail: string | null;
+  /** #270: per-project LOCAL state (un-pushed edits), fetched once for the whole
+      list. Empty when the fetch failed - which simply means no row is accented. */
+  localStates?: SpeleoLocalStateMap;
   /** Toggle/apply sorting when a sortable column header is clicked. */
   onSort: (field: RecentSortField) => void;
   onSelect: (filePath: string, ctrlKey: boolean) => void;
@@ -93,6 +97,7 @@ export function SystemTable({
   remoteLocks,
   remoteProjects,
   myEmail,
+  localStates = {},
   onSort,
   onSelect,
   onOpen,
@@ -190,6 +195,7 @@ export function SystemTable({
               remoteLocks,
               myEmail,
               remoteProjects,
+              localStates,
             );
             return (
               <tr
@@ -199,6 +205,7 @@ export function SystemTable({
                 }`}
                 data-testid={`system-row-remote-${item.projectId}`}
                 data-remote="true"
+                data-local-edits={remoteLock.hasLocalEdits ? 'true' : 'false'}
                 role="button"
                 aria-disabled={busy || undefined}
                 tabIndex={0}
@@ -212,7 +219,15 @@ export function SystemTable({
                   }
                 }}
               >
-                <td className={`${cellClass} font-medium`}>{item.summary.name}</td>
+                {/* #270: the yellow leading-edge accent from the card grid. It sits on
+                    the first CELL, not the row: under border-collapse a <tr> generates no
+                    box, so neither its border nor its box-shadow paints. */}
+                <td
+                  className={`${cellClass} font-medium`}
+                  style={unpushedAccentStyle(remoteLock.hasLocalEdits)}
+                >
+                  {item.summary.name}
+                </td>
                 <td className={cellClass}>
                   <SpeleoRecentInfo info={remoteLock} name={item.summary.name} />
                 </td>
@@ -240,7 +255,7 @@ export function SystemTable({
           }
 
           const { project } = item;
-          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects);
+          const lock = resolveSpeleoLock(project, remoteLocks, myEmail, remoteProjects, localStates);
           const isSelected =
             multiSelectedIds.has(item.filePath) || selectedProjectId === item.filePath;
 
@@ -251,6 +266,7 @@ export function SystemTable({
                 isSelected ? 'bg-accent-10' : 'hover:bg-panel'
               }`}
               data-testid={`system-row-${item.filePath}`}
+              data-local-edits={lock.hasLocalEdits ? 'true' : 'false'}
               role="button"
               tabIndex={0}
               aria-pressed={isSelected}
@@ -264,7 +280,10 @@ export function SystemTable({
                 }
               }}
             >
-              <td className={`${cellClass} font-medium`}>
+              <td
+                className={`${cellClass} font-medium`}
+                style={unpushedAccentStyle(lock.hasLocalEdits)}
+              >
                 <span>{project.name}</span>
                 {project.location && (
                   <span className="text-text-secondary"> · {project.location}</span>

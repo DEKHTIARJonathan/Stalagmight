@@ -20,7 +20,13 @@ import ExportPreview from '../Dialogs/ExportPreview';
 import { useExportStore } from '../../store/exportStore';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
-import { PANEL_SIZE_BOUNDS, DETAIL_REVEAL_AUTOCLOSE_MS } from './layoutConstants';
+import {
+  PANEL_SIZE_BOUNDS,
+  DETAIL_REVEAL_AUTOCLOSE_MS,
+  MAP_MIN_WIDTH,
+  MAP_MIN_HEIGHT,
+} from './layoutConstants';
+import { useSidePanelSqueeze, useDataPanelSqueeze, resolveResize } from './sidePanelSqueeze';
 import { ChevronDownIcon, ChevronLeftIcon, ChevronRightIcon, ChevronUpIcon } from '../common/icons';
 import { usePanelReveal } from './usePanelReveal';
 import { Dock, BAR } from './Dock';
@@ -146,31 +152,149 @@ export default function SingleSystemView() {
     savePanelSizes: s.savePanelSizes,
   })));
 
+  // The Data panel's overlay is portaled to this Main element so it can span the
+  // full width (past the center column's side insets). It stops at a pinned-open
+  // side panel's edge; otherwise it fills to the window edge when the Data panel
+  // is open (covering the gap left by a compressed side bar), or sits between the
+  // closed bars (BAR inset) when the Data panel is itself closed. It is also the
+  // element the side-panel squeeze measures (its width IS the row that has to fit
+  // both panels plus the map).
+  const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
+
+  // #260: viewport-driven squeeze. Which panels currently reflow the map is read
+  // straight from the PERSISTED mode/open (a hover-floating panel overlays the map
+  // and costs no layout width), so this is computable before the reveal hooks run
+  // and there is no circular dependency between "am I collapsed" and "am I open".
+  const sectionsPinnedOpen = useUIStore((s) => s.sectionsPanelMode === 'pin' && s.sectionsPanelOpen);
+  const detailPinnedOpen = useUIStore((s) => s.detailPanelMode === 'pin' && s.detailPanelOpen);
+  // Sections is survey-only; Plan/Export don't render it at all, so it costs
+  // nothing there (not even an opener bar).
+  const sectionsPresent = appMode === 'survey';
+  const squeezeSections = useMemo(
+    () => ({
+      width: sectionsPanelWidth,
+      min: PANEL_SIZE_BOUNDS.sections.min,
+      present: sectionsPresent,
+      pinnedOpen: sectionsPinnedOpen,
+    }),
+    [sectionsPanelWidth, sectionsPresent, sectionsPinnedOpen],
+  );
+  const squeezeDetail = useMemo(
+    () => ({
+      width: detailPanelWidth,
+      min: PANEL_SIZE_BOUNDS.detail.min,
+      present: true,
+      pinnedOpen: detailPinnedOpen,
+    }),
+    [detailPanelWidth, detailPinnedOpen],
+  );
+  const squeeze = useSidePanelSqueeze(mainEl, {
+    mapMinWidth: MAP_MIN_WIDTH,
+    barWidth: BAR,
+    sections: squeezeSections,
+    detail: squeezeDetail,
+  });
+  // Display-only widths: these feed the Docks' rendered size, NEVER the store or
+  // savePanelSizes (see sidePanelSqueeze).
+  const sectionsDisplayWidth = squeeze.sections.width;
+  const detailDisplayWidth = squeeze.detail.width;
+
+  // The same squeeze on the VERTICAL axis (#260). The original fix covered only
+  // the width, but `dataTableHeight` has the identical shape: persisted in pixels
+  // up to 500, against a Main box that shrinks with the UI zoom, with a
+  // `flex-shrink-0` spacer that beats the `flex-1` map wrapper outright - so at
+  // 250% zoom (Main ~330 CSS px) the map collapsed to 0px, both side opener bars
+  // got height-0 overlays, and the Data tab was clipped above Main's top, leaving
+  // no way to close the panel again without zooming back out.
+  const dataPinnedOpen = useUIStore((s) => s.dataTableMode === 'pin' && s.dataTableOpen);
+  const dataSqueeze = useDataPanelSqueeze(mainEl, {
+    height: dataTableHeight,
+    min: PANEL_SIZE_BOUNDS['data-table'].min,
+    mapMinHeight: MAP_MIN_HEIGHT,
+    // Fullscreen is a deliberate, explicit "cover everything" state, so it is
+    // exempt: there is no map row to protect while it is on.
+    pinnedOpen: dataPinnedOpen && !dataTableFullScreen,
+  });
+  // Display-only height, used everywhere `dataTableHeight` fed layout: the Dock's
+  // own size AND the two side Docks' `closedBottomInset`, which were both passing
+  // the unclamped persisted value.
+  const dataDisplayHeight = dataSqueeze.height;
+
   // Two-mode (hover/pin) reveal state for each panel. The store holds the
   // persisted mode/open; these hooks add transient hover visibility + handlers.
-  const sectionsReveal = usePanelReveal('sections');
-  const detailReveal = usePanelReveal('detail');
-  const dataReveal = usePanelReveal('data-table');
+  // `forcedClosed` layers the transient viewport collapse on top without touching
+  // either persisted field.
+  const sectionsReveal = usePanelReveal('sections', { forcedClosed: squeeze.sections.collapsed });
+  const detailReveal = usePanelReveal('detail', { forcedClosed: squeeze.detail.collapsed });
+  const dataReveal = usePanelReveal('data-table', { forcedClosed: dataSqueeze.collapsed });
+
+  // #260: a drag on a SQUEEZED panel is measured against the squeezed rendering,
+  // so a size above the clamp is unreachable and must not be persisted - see
+  // `resolveResize`, which states the rule next to the display-only one it is the
+  // other half of. It CLAMPS rather than refusing: the drag mutates its own inputs,
+  // so a shrink-then-grow could end on an unreachable number and a refusal there
+  // discarded the reachable part of the same drag too.
+  //
+  // Read through a ref rather than deps: these props feed useResizeHandle, which
+  // re-binds its listeners whenever their identity changes, and the display size
+  // moves ~60x/s during an unsqueezed drag.
+  const squeezeRef = useRef({
+    sections: { display: 0, user: 0 },
+    detail: { display: 0, user: 0 },
+    data: { display: 0, user: 0 },
+  });
+  squeezeRef.current = {
+    sections: { display: sectionsDisplayWidth, user: sectionsPanelWidth },
+    detail: { display: detailDisplayWidth, user: detailPanelWidth },
+    data: { display: dataDisplayHeight, user: dataTableHeight },
+  };
+  /** The size to write for `size`, clamped to what this drag could reach on screen. */
+  const resolveSize = useCallback((axis: 'sections' | 'detail' | 'data', size: number) => {
+    const { display, user } = squeezeRef.current[axis];
+    return resolveResize(display, user, size);
+  }, []);
 
   // Stable onResizeEnd handlers per Dock so handleProps identity stays stable
   // through a drag (these props feed useResizeHandle, which re-binds listeners
   // when they change). Inline arrows would be re-created every render - including
   // the ~60×/s store-width updates during the drag itself.
+  const applySectionsWidth = useCallback(
+    (size: number) => {
+      setSectionsPanelWidth(resolveSize('sections', size));
+    },
+    [resolveSize, setSectionsPanelWidth],
+  );
+  const applyDetailWidth = useCallback(
+    (size: number) => {
+      setDetailPanelWidth(resolveSize('detail', size));
+    },
+    [resolveSize, setDetailPanelWidth],
+  );
+  const applyDataHeight = useCallback(
+    (size: number) => {
+      setDataTableHeight(resolveSize('data', size));
+    },
+    [resolveSize, setDataTableHeight],
+  );
   const handleSectionsResizeEnd = useCallback(
-    (size: number) => savePanelSizes('sections', size),
-    [savePanelSizes],
+    (size: number) => {
+      savePanelSizes('sections', resolveSize('sections', size));
+    },
+    [resolveSize, savePanelSizes],
   );
   const handleDetailResizeEnd = useCallback(
-    (size: number) => savePanelSizes('detail', size),
-    [savePanelSizes],
+    (size: number) => {
+      savePanelSizes('detail', resolveSize('detail', size));
+    },
+    [resolveSize, savePanelSizes],
   );
   // Don't persist the temporary focus-mode height (#50): exit restores the prior
   // height only in memory, so a focus-time drag must not leak to config.
   const handleDataResizeEnd = useCallback(
     (size: number) => {
-      if (focusedSectionId === null) savePanelSizes('data-table', size);
+      if (focusedSectionId === null) savePanelSizes('data-table', resolveSize('data', size));
     },
-    [savePanelSizes, focusedSectionId],
+    [resolveSize, savePanelSizes, focusedSectionId],
   );
 
   // Programmatic Details reveal (jump-to-warning from the data table). The store
@@ -189,12 +313,6 @@ export default function SingleSystemView() {
     scheduleDetailClose(DETAIL_REVEAL_AUTOCLOSE_MS);
   }, [detailRevealNonce, revealDetail, scheduleDetailClose]);
 
-  // The Data panel's overlay is portaled to this Main element so it can span the
-  // full width (past the center column's side insets). It stops at a pinned-open
-  // side panel's edge; otherwise it fills to the window edge when the Data panel
-  // is open (covering the gap left by a compressed side bar), or sits between the
-  // closed bars (BAR inset) when the Data panel is itself closed.
-  const [mainEl, setMainEl] = useState<HTMLDivElement | null>(null);
   // Which panel (if any) is being resized - at most one at a time, so a single
   // enum replaces three parallel booleans. Drives each panel's edge that follows a
   // sibling so it can track live (no transition lag): the side bars follow the Data
@@ -223,16 +341,22 @@ export default function SingleSystemView() {
   // is neither a panel nor a closed bar on the left to stop at - the bottom panel must reach the
   // window edge. `sectionsReveal.isOpen` still reports the PERSISTED survey-mode state, which is
   // exactly why Plan's cylinders bar used to sit indented by a panel that was not there (#298).
+  // Inside Survey it is the display width, i.e. the width each Dock is actually RENDERING at in
+  // its current state - squeezed while it reflows the map, and the user's own width (capped at
+  // Main, never the raw persisted value) while it floats over it - so the Data overlay stops at
+  // the panel edge the user can see rather than at a width nothing on screen has. Note a
+  // viewport-collapsed panel still reports that same width: it is what the panel renders at if
+  // the user floats it open, and while it is NOT open neither branch below reads it.
   const dataOverlayLeft =
     appMode !== 'survey'
       ? 0
       : sectionsReveal.isOpen
-        ? sectionsPanelWidth
+        ? sectionsDisplayWidth
         : dataReveal.isOpen
           ? 0
           : BAR;
   const dataOverlayRight = detailReveal.isOpen
-    ? detailPanelWidth
+    ? detailDisplayWidth
     : dataReveal.isOpen
       ? 0
       : BAR;
@@ -558,10 +682,13 @@ export default function SingleSystemView() {
         <Dock
           reveal={sectionsReveal}
           edge="left"
-          size={sectionsPanelWidth}
+          // Display width: squeezed down when the viewport can't afford the user's
+          // own width without starving the map (#260). The store keeps the user's
+          // value, so zooming back out restores it.
+          size={sectionsDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.sections.min}
           maxSize={PANEL_SIZE_BOUNDS.sections.max}
-          onResize={setSectionsPanelWidth}
+          onResize={applySectionsWidth}
           onResizeEnd={handleSectionsResizeEnd}
           label={panelLabels.name.sections}
           openArrow={CHEVRON_RIGHT}
@@ -572,7 +699,7 @@ export default function SingleSystemView() {
           // When the Data panel is open (pinned OR hover-floating), compress this
           // bar (if minimized) so it stops at the Data panel's top instead of
           // running alongside it.
-          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
           onResizingChange={onSectionsResizing}
         >
@@ -611,10 +738,10 @@ export default function SingleSystemView() {
           <Dock
             reveal={dataReveal}
             edge="bottom"
-            size={dataTableHeight}
+            size={dataDisplayHeight}
             minSize={PANEL_SIZE_BOUNDS['data-table'].min}
             maxSize={PANEL_SIZE_BOUNDS['data-table'].max}
-            onResize={setDataTableHeight}
+            onResize={applyDataHeight}
             onResizeEnd={handleDataResizeEnd}
             label={panelLabels.name.data}
             openArrow={CHEVRON_UP}
@@ -642,10 +769,11 @@ export default function SingleSystemView() {
         <Dock
           reveal={detailReveal}
           edge="right"
-          size={detailPanelWidth}
+          // See the Sections Dock: display-only squeeze, never persisted.
+          size={detailDisplayWidth}
           minSize={PANEL_SIZE_BOUNDS.detail.min}
           maxSize={PANEL_SIZE_BOUNDS.detail.max}
-          onResize={setDetailPanelWidth}
+          onResize={applyDetailWidth}
           onResizeEnd={handleDetailResizeEnd}
           label={panelLabels.name.detail}
           openArrow={CHEVRON_LEFT}
@@ -653,7 +781,7 @@ export default function SingleSystemView() {
           testId="detail"
           tabLabels={panelLabels.detail}
           tabTop={DETAILS_TAB_TOP}
-          closedBottomInset={dataReveal.isOpen ? dataTableHeight : 0}
+          closedBottomInset={dataReveal.isOpen ? dataDisplayHeight : 0}
           suspendSiblingTransition={dataResizing}
           onResizingChange={onDetailResizing}
         >

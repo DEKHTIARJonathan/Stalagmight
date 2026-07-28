@@ -17,13 +17,14 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvProfile, ExportConfig,
-    GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin, ImportConfig, LengthUnit,
-    LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig, MapDebugConfig, MapSnapConfig,
-    OverlapMode, PanelsConfig, PlacementSuggestionConfig, ProviderCacheConfig, ReservePreset,
-    ReserveProfile, SectionColorsConfig, ShortcutFeedback, ShortcutsConfig, ShotConfig,
-    SpeleoDbConfig, StationConfig, SyntacticHighlightLevel, SyntacticHighlightPreset,
-    SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig, ValidationConfig,
+    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig,
+    DpvProfile, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
+    ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
+    MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
+    ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,
+    ShortcutsConfig, ShotConfig, SpeleoDbConfig, StationConfig, SyntacticHighlightLevel,
+    SyntacticHighlightPreset, SyntacticHighlightingConfig, ThemeMode, TokenFallback, UnitsConfig,
+    ValidationConfig,
 };
 use stalagmight_lib::core::command::{
     CommandResult, CommentHolder, IntegrityCheckResult, IntegrityRepairResult, ValidationWarning,
@@ -67,11 +68,12 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, Permission, PushResult, RemoteState, SpeleoAdoptResult, SpeleoCollaborator,
-    SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLoginResult,
-    SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary,
-    SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant,
-    SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult, Visibility,
+    DoneResult, KeychainReport, Permission, PushResult, RemoteState, SpeleoAdoptResult,
+    SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction, SpeleoErrorDto, SpeleoLinkStatus,
+    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
+    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
+    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -306,9 +308,12 @@ fn main() {
     export::<ColorTheme>(&out_dir);
     export::<SpeleoDbConfig>(&out_dir);
     export::<TokenFallback>(&out_dir);
+    export::<ConfigSaveReport>(&out_dir);
     // SpeleoDB IPC DTOs (#183; #186/D-B2 added SpeleoDbAction + SpeleoErrorDto)
     export::<Permission>(&out_dir);
     export::<SpeleoProjectSummary>(&out_dir);
+    export::<TokenStorage>(&out_dir);
+    export::<KeychainReport>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
     // #214 adopt-Ariane result (import + link + type-flip outcome)
@@ -318,9 +323,18 @@ fn main() {
     export::<SpeleoSessionStatus>(&out_dir);
     export::<SpeleoDbAction>(&out_dir);
     export::<SpeleoErrorDto>(&out_dir);
+    // #270: why a transport call never reached the server, so the FE can render a
+    // translated line instead of a raw OS errno.
+    export::<TransportCause>(&out_dir);
+    // The un-pushed local work a refused re-pull would have destroyed, carried on
+    // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
+    export::<UnpushedLocalEdits>(&out_dir);
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
     export::<RemoteState>(&out_dir);
+    // Per-project LOCAL state (cached copy + un-pushed edits) for the held-lock /
+    // GlobalView project joins
+    export::<SpeleoLocalProjectState>(&out_dir);
     // SpeleoDB single-writer hand-off DTOs (#194/#197) + push-without-unlock (T2d)
     export::<StartEditingResult>(&out_dir);
     export::<DoneResult>(&out_dir);
@@ -517,8 +531,11 @@ fn main() {
         "ColorTheme",
         "SpeleoDbConfig",
         "TokenFallback",
+        "ConfigSaveReport",
         "Permission",
         "SpeleoProjectSummary",
+        "TokenStorage",
+        "KeychainReport",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
         "SpeleoAdoptResult",
@@ -526,8 +543,11 @@ fn main() {
         "SpeleoSessionStatus",
         "SpeleoDbAction",
         "SpeleoErrorDto",
+        "TransportCause",
+        "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",
+        "SpeleoLocalProjectState",
         "StartEditingResult",
         "DoneResult",
         "UpdateResult",

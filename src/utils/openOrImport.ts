@@ -30,6 +30,7 @@ import { getErrorMessage } from './ipc';
 import { extractFilename } from './path';
 import { openOrImportFilters, IMPORTABLE_EXTENSIONS } from './fileDialogs';
 import { clearProjectActionSource } from './telemetry';
+import { needsSpeleoHandBackPrompt } from './quit';
 
 /**
  * Error shown when a new-project-only import (GPX / Ariane / Compass) is
@@ -108,7 +109,21 @@ export async function routeOpenedFile(path: string, errorTitle = 'Open Failed'):
       // to the unsaved-changes dialog (it loads on discard) instead of clobbering
       // it. Centralized here so EVERY .stalx-open path (Ctrl+O, drag-drop, the
       // unified Open/Import button) shares the guard, not just the menu item.
-      if (store.project && store.isDirty) {
+      //
+      // #270: this is one of the four ways to leave an open project, and it used to
+      // gate on the DISK-dirty bit alone - so a remote project saved to disk with a
+      // held lock or with edits SpeleoDB has never seen was swapped out with no
+      // notice, while closing the same project prompted. Ordered SpeleoDB-first for
+      // the same reason `guardQuit` is: the SpeleoDB prompt carries its own "save
+      // changes locally" checkbox and so subsumes the disk one, while the reverse
+      // order would let "Discard Changes" walk straight past the lock and the
+      // unpushed edits. The prompt carries the chosen path and performs the open
+      // itself once the SpeleoDB side is resolved, so the user's Ctrl+O is not
+      // silently swallowed by the prompt it raised.
+      if (store.project && needsSpeleoHandBackPrompt(useSpeleoStore.getState().link)) {
+        ui.openDialog('speleodb-close', { pendingOpenPath: path });
+        handedOff = true;
+      } else if (store.project && store.isDirty) {
         ui.openDialog('unsaved-changes', { pendingOpenPath: path });
         handedOff = true;
       } else {

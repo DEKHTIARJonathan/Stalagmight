@@ -73,7 +73,7 @@ describe('SpeleoForceEditDialog (#213)', () => {
     );
     await waitFor(() => expect(refreshLinkStatusMock).toHaveBeenCalled());
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
-    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-force-edit');
+    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-force-edit', 'warning');
   });
 
   it('keeps the dialog open and toasts when force-edit is refused', async () => {
@@ -88,7 +88,7 @@ describe('SpeleoForceEditDialog (#213)', () => {
     await waitFor(() =>
       expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_force_edit')).toBe(true),
     );
-    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error');
+    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-action-error', 'error');
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 

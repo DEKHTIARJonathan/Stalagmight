@@ -1,6 +1,6 @@
 use tauri::State;
 
-use crate::config::Config;
+use crate::config::{Config, ConfigSaveReport};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -13,13 +13,20 @@ pub(crate) fn get_config_impl(state: &AppState) -> Config {
     state.get_config()
 }
 
-/// Update the configuration
+/// Update the configuration.
+///
+/// The [`ConfigSaveReport`] is the whole answer, not decoration: a save that wrote
+/// every setting can still have failed to evict the API key from the OS keyring it
+/// was just told to stop using, and `Ok(())` reported that as unqualified success.
 #[tauri::command]
-pub fn update_config(state: State<AppState>, config: Config) -> Result<(), String> {
+pub fn update_config(state: State<AppState>, config: Config) -> Result<ConfigSaveReport, String> {
     update_config_impl(state.inner(), config)
 }
 
-pub(crate) fn update_config_impl(state: &AppState, config: Config) -> Result<(), String> {
+pub(crate) fn update_config_impl(
+    state: &AppState,
+    config: Config,
+) -> Result<ConfigSaveReport, String> {
     state.update_config(config).map_err(|e| e.to_string())
 }
 
@@ -104,7 +111,10 @@ pub(crate) fn update_data_table_view_impl(
     if let Some(hidden) = station_hidden_columns {
         config.panels.data_table_station_hidden_columns = hidden;
     }
-    state.update_config(config).map_err(|e| e.to_string())
+    state
+        .update_config(config)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 pub(crate) fn update_panel_sizes_impl(
@@ -123,7 +133,10 @@ pub(crate) fn update_panel_sizes_impl(
     if let Some(h) = data_table_height {
         config.panels.data_table_height = h;
     }
-    state.update_config(config).map_err(|e| e.to_string())
+    state
+        .update_config(config)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Update per-panel reveal layout (open state + hover/pin mode) in configuration
@@ -188,7 +201,10 @@ pub(crate) fn update_panel_layout_impl(
         validate(&mode)?;
         config.panels.data_table_mode = mode;
     }
-    state.update_config(config).map_err(|e| e.to_string())
+    state
+        .update_config(config)
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 /// Load all display settings from the current project database

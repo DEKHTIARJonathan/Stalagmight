@@ -11,23 +11,89 @@ export function SpeleoBadgedIcon({
   badge,
   badgeColor,
   size = 20,
+  tint,
 }: {
-  badge: ReactNode;
-  badgeColor: string;
+  /**
+   * Omit for the bare mark. "No badge" is a real state, not an absence: an
+   * unlocked SpeleoDB project is the resting case, and a resting case should not
+   * be decorated. Expressing it here keeps callers on one code path instead of
+   * special-casing a bare `SpeleoDbLogo`.
+   */
+  badge?: ReactNode;
+  badgeColor?: string | undefined;
   size?: number;
+  /** Recolour the MARK itself (#270: yellow while there are un-pushed local edits). */
+  tint?: string | undefined;
 }) {
   return (
     <span className="relative inline-flex">
-      <SpeleoDbLogo size={size} />
+      <SpeleoDbLogo size={size} tint={tint} />
       {/* The disc is the panel BACKGROUND colour (like the DisplayMenu badge-bg,
           fill: var(--cc-panel)) so it knocks the icon out around the badge - a
           cutout, not a coloured circle. */}
-      <span
-        className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor}`}
-      >
-        {badge}
-      </span>
+      {badge != null && (
+        <span
+          className={`absolute -bottom-1 -right-1 flex items-center justify-center rounded-full bg-panel p-[1px] ${badgeColor ?? ''}`}
+          data-testid="speleo-badged-icon-badge"
+        >
+          {badge}
+        </span>
+      )}
     </span>
+  );
+}
+
+/**
+ * Filled "open on the web" glyph: a window with an arrow breaking out of it.
+ *
+ * Deliberately tighter than `ExternalLinkIcon`, which is drawn for a 20-unit menu
+ * slot: at badge scale its thin open box and separate arrow bars collapse into
+ * mush. This compresses the frame, knocks its interior out in the panel colour
+ * rather than outlining it, and haloes the arrow the way `EditNoLockGlyph` haloes
+ * its "!", so the two shapes stay legible at 9px.
+ */
+export function ExternalLinkGlyph({ size = 9 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* Window, as a solid block with its interior knocked out. */}
+      <path d="M1 6h9v9H1z" />
+      <path d="M2.6 7.6h5.8v5.8H2.6z" style={{ fill: 'var(--cc-panel)' }} />
+      {/* Arrow breaking out top-right, haloed so it reads clear of the frame. */}
+      <g
+        style={{ stroke: 'var(--cc-panel)' }}
+        strokeWidth={1.4}
+        strokeLinejoin="round"
+        paintOrder="stroke"
+      >
+        <path d="M9 1h6v6h-2V4.4L8.4 9 7 7.6 11.6 3H9z" />
+      </g>
+    </svg>
+  );
+}
+
+/**
+ * Filled pen glyph: we hold the SpeleoDB write lock and may edit.
+ *
+ * Deliberately a DIAGONAL body, because the family's other two writing glyphs -
+ * `CrossedPencilGlyph` (read-only access) and `EditNoLockGlyph` (force-edit) -
+ * are both vertical pencils. Differing on axis as well as adornment means "you
+ * may write" separates from them before colour is read at all, which matters at
+ * badge scale and for anyone who cannot rely on the green.
+ *
+ * Solid, never stroked: WebKit fattens strokes under the app's setZoom UI scale,
+ * and Chromium/Playwright will not show you. The ferrule band is a
+ * panel-coloured knockout, the same trick `CrossedPencilGlyph` uses for its slash.
+ */
+export function PenGlyph({ size = 11 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+      {/* barrel, running top-right to bottom-left */}
+      <path d="M10.6 1.4l2.6 2.6-7.4 7.4-2.6-2.6z" />
+      {/* nib, tapering to the writing tip */}
+      <path d="M3.2 8.8l2.6 2.6-4 2z" />
+      {/* ferrule band, knocked out in the panel colour */}
+      <path d="M8.8 3.2l2.6 2.6-0.7 0.7-2.6-2.6z" style={{ fill: 'var(--cc-panel)' }} />
+    </svg>
   );
 }
 
@@ -99,7 +165,7 @@ export function ExclamationGlyph({ size = 11 }: { size?: number }) {
 }
 
 /**
- * "Edit without lock" glyph (#213): a pencil + exclamation in a single
+ * "Edit without the write lock" glyph (#213): a pencil + exclamation in a single
  * badge-sized box (so it takes no more space than the other badges), entirely in
  * `currentColor`. The exclamation carries a panel-coloured border (painted under
  * its fill) so it reads as separate from the pencil.

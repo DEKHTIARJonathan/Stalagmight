@@ -51,7 +51,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
     // (a) anti-"vanishing shots": a rejected edit re-syncs to backend truth.
     expect(refreshProjectState).toHaveBeenCalled();
     // (b) one friendly read-only toast.
-    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
   });
 
   it('re-syncs but does NOT toast on a non-read-only failure (dialogs own inline errors)', async () => {
@@ -85,7 +85,7 @@ describe('projectStore executeCommand failure handling (#191 read-only gate)', (
 
     // executeUndoRedo must match executeCommand: friendly notice under the shared
     // 'edit-disabled' dedup key, never the raw coded string under the undo toastId.
-    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled');
+    expect(showToast).toHaveBeenCalledWith(READ_ONLY_EDIT_NOTICE, 'edit-disabled', 'warning');
     expect(showToast).not.toHaveBeenCalledWith(
       expect.stringContaining(EDIT_DISABLED),
       expect.anything()

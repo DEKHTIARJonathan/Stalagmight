@@ -463,7 +463,7 @@ export function useKeyboardShortcuts() {
         if (isNonInteractiveTool(currentToolA)) return;
         // GUARD: Block select all when stations are hidden
         if (!showStations) {
-          showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden');
+          showToast("Enable 'Stations' in Display menu to select all", 'stations-hidden', 'warning');
           return;
         }
         if (stations.length > 0) {

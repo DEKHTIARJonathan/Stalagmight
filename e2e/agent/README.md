@@ -30,7 +30,8 @@ pnpm typecheck:agent    # typecheck just the agent code
 
 - `session.ts` - AppSession: build check, isolated profile, tauri-driver, the
   `remote()` attach, hook verification, command mutex, crash detection, teardown.
-- `lib/build.ts` - build freshness + `pnpm tauri build --debug` with VITE_E2E=1.
+- `lib/build.ts` - build freshness (source mtimes + the E2E build stamp beside
+  the binary) + `pnpm tauri build --debug` with VITE_E2E=1.
 - `lib/procs.ts` - port probing + scoped (comm-verified) process reaping.
 - `lib/recorder.ts` - per-session `.agent-artifacts/sessions/<id>/` + actions.jsonl.
 - `lib/waiters.ts` - app-ready / ui-idle / map-idle waiters (browser-parameterized).
