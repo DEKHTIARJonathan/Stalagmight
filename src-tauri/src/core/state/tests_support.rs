@@ -33,7 +33,7 @@ impl AppState {
 /// this count source-level facts about the orchestration, and the orchestration is
 /// spread across the family - a scan that stops seeing a file stops guarding it, and
 /// an absence assertion goes on passing while it does.
-fn speleodb_prod_sources() -> [(&'static str, &'static str); 7] {
+fn speleodb_prod_sources() -> [(&'static str, &'static str); 8] {
     [
         ("speleodb.rs", include_str!("speleodb.rs")),
         ("speleodb_admin.rs", include_str!("speleodb_admin.rs")),
@@ -51,6 +51,7 @@ fn speleodb_prod_sources() -> [(&'static str, &'static str); 7] {
             include_str!("speleodb_lock_release.rs"),
         ),
         ("speleodb_logout.rs", include_str!("speleodb_logout.rs")),
+        ("speleodb_project.rs", include_str!("speleodb_project.rs")),
     ]
     .map(|(name, src)| (name, src.split("#[cfg(test)]").next().unwrap_or(src)))
 }
