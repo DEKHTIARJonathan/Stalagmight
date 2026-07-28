@@ -1858,9 +1858,11 @@ mod tests {
         *state.project.lock().unwrap() = Some(project.clone());
         let persisted = state.to_persisted(&snapshot).unwrap();
 
-        // Delete the shot backing way point 1 (station 3 = the boundary after shot index 2): that
-        // anchor can no longer resolve, but the shots on either side keep their own uuids, so way
-        // points 0 and 2 are unaffected.
+        // Make way point 1's anchor unplaceable. Since #24 an anchor stores the PAIR of shots it
+        // sits between and survives losing either one, so both of station 3's neighbours (shot
+        // indices 2 and 3) have to go - the shape `resolve_anchor` reports as `(None, None)`.
+        // Way points 0 and 2 keep at least one of their own neighbours and still place.
+        project.sections[0].shots.remove(3);
         project.sections[0].shots.remove(2);
         *state.project.lock().unwrap() = Some(project);
         let (resolved, stale) = state.resolve_persisted(persisted).unwrap();

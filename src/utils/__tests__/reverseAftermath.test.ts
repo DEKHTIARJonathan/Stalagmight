@@ -320,6 +320,7 @@ describe('applyReverseAftermath and the loaded-plan baseline', () => {
       gas_config: store.gasConfig,
       stage_drop_overrides: [],
       marked_points: [],
+      segments: store.segments,
     });
 
     applyReverseAftermath(counts);
@@ -340,6 +341,7 @@ describe('applyReverseAftermath and the loaded-plan baseline', () => {
       gas_config: store.gasConfig,
       stage_drop_overrides: [],
       marked_points: [],
+      segments: store.segments,
     });
 
     applyReverseAftermath(counts);
