@@ -13,7 +13,12 @@
     "strictNullChecks": true,
     "noImplicitAny": true,
 
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    // Type-check only. Without this, a bare `tsc -p tsconfig.playwright.json`
+    // emits a .js next to every .ts in the program - including the src/ files
+    // the specs import - and litters the tree with hundreds of untracked files.
+    // tsconfig.json and tsconfig.agent.json both set it for the same reason.
+    "noEmit": true
   },
   "include": ["e2e-playwright/**/*", "playwright.config.ts"]
 }
