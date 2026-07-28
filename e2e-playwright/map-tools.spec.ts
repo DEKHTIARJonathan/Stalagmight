@@ -132,15 +132,19 @@ test.describe('Map Tools', () => {
       // The app should remain functional
       await expect(canvas).toBeVisible();
 
-      // Ctrl+click. NB this does not reach multi-select: `CTRL_PAN_TOOLS`
-      // includes 'select', so MapCanvas's mousedown-capture handler claims
-      // ctrl+left for pan and preventDefaults it. What this covers is that
-      // entering ctrl-pan leaves the app intact. Multi-select toggling is
-      // covered where the tool is not pan-claimed.
-      // (`page.mouse.click` takes no `modifiers` option, hence the down/up.)
-      await page.keyboard.down('ControlOrMeta');
-      await page.mouse.click(centerX + 50, centerY);
-      await page.keyboard.up('ControlOrMeta');
+      // Modifier+click. Use `locator.click({ modifiers })`, not
+      // `page.mouse.click` (which has no `modifiers` option) and not a
+      // keyboard.down/up pair around it: `ControlOrMeta` resolves to Meta on
+      // macOS, and holding literal Control there makes Chromium emit
+      // contextmenu with no click event at all, so the interaction would stop
+      // reaching the app on the one platform this suite is run on by hand.
+      // NB this still does not reach multi-select: CTRL_PAN_TOOLS includes
+      // 'select' (MapCanvas.tsx:60), so the mousedown-capture handler claims
+      // ctrl+left for pan. What it covers is that the app survives that path.
+      await canvas.click({
+        modifiers: ['ControlOrMeta'],
+        position: { x: canvasBox.width / 2 + 50, y: canvasBox.height / 2 },
+      });
       await waitForMapIdle(page);
 
       // The app should remain functional
