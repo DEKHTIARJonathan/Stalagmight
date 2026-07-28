@@ -253,6 +253,19 @@ fn lock_held_by_me(holder: Option<&str>, me: Option<&str>) -> bool {
     matches!((holder, me), (Some(h), Some(m)) if h.eq_ignore_ascii_case(m))
 }
 
+/// Is this failure the local-edits refusal - i.e. does it say there is un-pushed
+/// work behind the lock an unwind is about to hand back?
+///
+/// [`AppState::guard_local_edits`] is the sole producer, and it raises this for BOTH
+/// of its refusals: a copy it read and found dirty, and a copy present-but-unreadable
+/// (where a read-write open might still recover a hot journal, so it fails closed).
+/// Both mean the same thing to a lock decision - work that exists only here may be
+/// behind that mutex - so both keep it. See `speleodb_start_editing`'s unwind, whose
+/// pre-acquire flag cannot see a copy other than the open project's.
+fn is_local_edits_refusal(err: &SpeleoDbError) -> bool {
+    matches!(err, SpeleoDbError::WouldDiscardLocalEdits { .. })
+}
+
 /// [Track A] #186/D-B2: map a non-endpoint (local / session) `SpeleoDbError` to
 /// the IPC `SpeleoErrorDto`. Local errors always fail closed to `Fatal`
 /// regardless of endpoint, so the endpoint passed to [`dto_for_error`] is
@@ -1701,13 +1714,16 @@ impl AppState {
         //
         // - `Ok(None)` (unheld) is the only answer that proves the unheld -> ours
         //   transition, so it alone may mint an authorship record. A lock this call
-        //   demonstrably took is also ours to hand back on the way out.
+        //   demonstrably took is also ours to hand back on the way out - unless the
+        //   unwind itself turns up local work behind it (the closure below).
         // - `Ok(Some(_))` is a lock the account ALREADY held: the acquire below is a
         //   server-side no-op, we INHERITED it, and no unwind here may hand it back.
         // - `Err` is neither. Provenance is unknown, so no record (as above), and the
         //   keep-or-release question is settled by what a release would COST rather
         //   than by who took the lock - see `keep_lock_on_unwind` below, which is
-        //   exactly that decision and NOT a claim about inheritance.
+        //   that cost as the pre-acquire evidence can price it, and NOT a claim about
+        //   inheritance. It is one of the two keep rules, not the whole decision: what
+        //   a failure turns up afterwards is the other.
         //
         // `acquired_here` stays keyed on `Ok(None)` alone: it licenses the authorship
         // shortcut, and only a mutex the server said was free proves we earned it.
@@ -1723,14 +1739,16 @@ impl AppState {
             // Already ours -> inherited: no record, and never hand it back.
             Ok(Some(_)) => (false, true),
             // Unknown -> no record either way, and keep the lock only when there is
-            // un-pushed work behind it to protect (see the closure below).
+            // un-pushed work behind it to protect - as far as the OPEN project's link
+            // can tell, which is not the only copy there is (see the closure below).
             Err(_) => (false, link.has_unpushed_edits),
         };
 
         // The unwind shared by every arm below that walks away WITHOUT an edit
-        // session: hand the lock back, UNLESS `keep_lock_on_unwind` says the lock is
-        // worth more here than the tidy-up is - either because we know we inherited it,
-        // or because we do not know and there are un-pushed edits behind it.
+        // session: hand the lock back, UNLESS one of TWO rules says the lock is worth
+        // more here than the tidy-up is. `keep_lock_on_unwind` is the first - we know
+        // we inherited it, or we do not know and there are un-pushed edits behind it -
+        // and the failure being unwound is the second (`failure`, further down).
         //
         // Releasing a lock we merely INHERITED is the held-lock prompt's "Continue
         // editing" surrendering the very mutex it exists to protect: a stranded
@@ -1765,15 +1783,26 @@ impl AppState {
         // record is dropped by RELEASING (in `speleodb_release_best_effort`), and a
         // release we declined to make ends no claim. `acquired_here` is false on both
         // skip paths, so this call mints nothing either - record and lock stay in step.
-        let release_unless_kept = || {
-            if !keep_lock_on_unwind {
-                self.speleodb_release_best_effort(
-                    &endpoint,
-                    &token,
-                    insecure_http,
-                    &link.project_id,
-                );
+        //
+        // `failure` is the SECOND keep rule, and the reason this takes the error at
+        // all. `keep_lock_on_unwind` is decided BEFORE the acquire and reads the OPEN
+        // project's link, so it cannot see un-pushed work in a copy that is not the
+        // open one - and there can be: Save-As carries the `speleo_link` row forward,
+        // so P can be open (and clean) from outside the cache while the CACHE copy of
+        // P still holds edits, which is the file every re-pull here overwrites.
+        // `is_local_edits_refusal` is that copy answering for itself: the guard has
+        // just read it and found work (or found it unreadable, which fails closed the
+        // same way), so the mutex we are about to hand back may be the one holding the
+        // project for exactly that work. It is decided per-FAILURE rather than
+        // per-probe because it is knowledge that only exists after the acquire.
+        //
+        // Only that one failure keeps. Everything else answers as before, so a corrupt
+        // dump with nothing local at stake still hands back a lock we took.
+        let release_unless_kept = |failure: Option<&SpeleoDbError>| {
+            if keep_lock_on_unwind || failure.is_some_and(is_local_edits_refusal) {
+                return;
             }
+            self.speleodb_release_best_effort(&endpoint, &token, insecure_http, &link.project_id);
         };
 
         // Acquire the lock. A 400 is the server's "someone else holds it" signal;
@@ -1808,7 +1837,10 @@ impl AppState {
                 // the probe GET fail tends to fail this GET too. So this is the site
                 // that decides how much a blanket answer would cost - a dirty copy
                 // keeps the lock that is guarding it, a clean one still hands it back.
-                release_unless_kept();
+                // The failure is handed over for the same reason the arm below hands
+                // its own over, though nothing this GET can fail with is the local-edits
+                // refusal: the unwind asks about the failure it is unwinding, always.
+                release_unless_kept(Some(&e));
                 return Err(dto_for_error(Endpoint::GetProject, &e));
             }
         };
@@ -1852,12 +1884,14 @@ impl AppState {
                 // BECAUSE the copy turned out to hold un-pushed edits, which is the one
                 // case where releasing an INHERITED lock does abandon them.
                 //
-                // Known residual: `Protect` reads the copy at the cache path (and fails
-                // closed when it cannot be read), so it can refuse over dirt the OPEN
-                // project's link does not carry. `keep_lock_on_unwind` was decided from
-                // that link before the acquire, so on the unknown-probe path this site
-                // still releases there. Inherited locks are unaffected (they are kept
-                // outright); no pre-acquire flag can see a second local copy.
+                // So the FAILURE decides too, not just the pre-acquire probe: `Protect`
+                // reads the copy at the CACHE path (and fails closed when it cannot be
+                // read), which is not necessarily the open project's file, so it can
+                // refuse over un-pushed work the open link does not carry - and the FF
+                // verdict is reached only over a CLEAN open link, so on this arm the
+                // pre-acquire flag keeps the lock for an inherited one and nothing
+                // else. Handing the refusal to `release_unless_kept` is what lets the
+                // cache copy speak for itself; every other failure releases as before.
                 let local_path = match self.speleodb_fast_forward(
                     &endpoint,
                     &token,
@@ -1868,7 +1902,7 @@ impl AppState {
                 ) {
                     Ok(p) => p,
                     Err(e) => {
-                        release_unless_kept();
+                        release_unless_kept(Some(&e));
                         return Err(local_dto(e));
                     }
                 };
@@ -1901,7 +1935,9 @@ impl AppState {
             // work. `Take remote` / `Save as unmanaged` reconcile from there exactly as
             // before - neither needs the lock released first.
             ReconcileVerdict::Diverged => {
-                release_unless_kept();
+                // `None`: a verdict, not a failure - there is nothing here that has
+                // read a local copy, so the pre-acquire flag is the whole answer.
+                release_unless_kept(None);
                 Ok(StartEditingResult::DivergenceNeeded)
             }
         }
@@ -2794,8 +2830,10 @@ impl AppState {
     ///
     /// "TOOK" is load-bearing: `speleodb_start_editing` routes its abort arms through
     /// `release_unless_kept`, which skips this entirely for a lock the account already
-    /// held before that call - and for one whose provenance its pre-acquire probe could
-    /// not establish over a project with un-pushed edits (see there).
+    /// held before that call, for one whose provenance its pre-acquire probe could not
+    /// establish over a project with un-pushed edits, and for any lock whose unwind is
+    /// the local-edits refusal - the pull cache answering that IT holds work the open
+    /// project's link never carried (see there).
     pub(super) fn speleodb_release_best_effort(
         &self,
         endpoint: &str,
@@ -3582,11 +3620,11 @@ impl AppState {
 mod tests {
     use super::{
         auth_error_drops_token, build_create_body, build_patch_body, classify_dump_entry,
-        clear_snapshot_dirty, coord_json, head_with_empty_retry, local_dto, lock_held_by_me,
-        resolve_endpoint, restore_display_settings, reverify_due, revision_swap_base,
-        validate_hexsha, validate_project_id, visibility_label, whoami_indicates_dead_token,
-        Endpoint, PushOutcome, SpeleoDbSession, SpeleoProjectMetadataPatch, SpeleoPublishParams,
-        Visibility, REVERIFY_INTERVAL_SECS,
+        clear_snapshot_dirty, coord_json, head_with_empty_retry, is_local_edits_refusal, local_dto,
+        lock_held_by_me, resolve_endpoint, restore_display_settings, reverify_due,
+        revision_swap_base, validate_hexsha, validate_project_id, visibility_label,
+        whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
+        SpeleoProjectMetadataPatch, SpeleoPublishParams, Visibility, REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::preserved_display_settings;
     use crate::models::{Project, SpeleoLink};
@@ -5448,6 +5486,11 @@ mod tests {
     /// [`SAME_ACCOUNT_HOLDER_BODY`]'s diverged history with the mutex FREE, so the
     /// pre-acquire probe reads "unheld" and the lock Start editing takes really is
     /// its own to hand back.
+    ///
+    /// "Diverged" is a property of the COPY, not of this history: the same tip one
+    /// commit past BASE fences to FastForward over a clean fixture, which is how
+    /// `a_freshly_taken_lock_is_still_released_when_the_fast_forward_fails` reaches
+    /// the other arm.
     const FREE_MUTEX_DIVERGED_BODY: &str = r#"{
         "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
         "commits":[{"id":"def456","parent_ids":["abc123"],"author_email":"u@x"},
@@ -5974,6 +6017,143 @@ mod tests {
                 .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
             "with nothing un-pushed behind it, a lock of unknown provenance is still \
              handed back rather than left lingering; saw {seen:?}"
+        );
+    }
+
+    #[test]
+    fn a_freshly_taken_lock_is_still_released_when_the_fast_forward_fails() {
+        // DO-NOT-REGRESS (passes before the local-edits keep rule as well as after):
+        // the fast-forward arm's OTHER unwind, and the line the keep rule must not
+        // cross. A lock this call demonstrably took, over a copy with nothing local at
+        // stake, is still handed back when the fast-forward blows up - leaving it held
+        // would strand the project for every other editor over an edit session that
+        // never started.
+        //
+        // Also the reach test for that arm: `FREE_MUTEX_DIVERGED_BODY`'s history over
+        // a CLEAN fixture fences to FastForward rather than Diverged (dirty is the only
+        // difference), and the stub answers the dump download with JSON, so the
+        // fast-forward fails inside `Dump::open` - a corrupt-dump failure, not the
+        // local-edits refusal. So the arm really does run to its unwind here, and the
+        // release below is that unwind's doing.
+        let (base, _listener, seen) = recording_stub(FREE_MUTEX_DIVERGED_BODY);
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        state
+            .speleodb_start_editing()
+            .expect_err("a JSON body cannot be opened as a dump");
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/download/dump/"))),
+            "precondition: the flow reached the fast-forward arm and tried the download, \
+             so the release below is that arm's unwind; saw {seen:?}"
+        );
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "a lock taken by THIS call, unwound over a failure with no local work at \
+             stake, must still be handed back; saw {seen:?}"
+        );
+    }
+
+    #[test]
+    fn only_the_local_edits_refusal_makes_an_unwind_keep_the_lock() {
+        // What the fast-forward unwind keys on, fed the REAL errors rather than a
+        // hand-built variant: both of `guard_local_edits`' refusals must keep the lock,
+        // and a corrupt dump must not.
+        //
+        // The unreadable case matters as much as the dirty one. The guard cannot rule
+        // out un-pushed work in a file it could not read (a hot journal a read-write
+        // open would have rolled back, a transient `SQLITE_BUSY`), so it fails closed
+        // with the same error - and a lock decision reading that as "nothing to
+        // protect" would free the project for the next writer over exactly the work the
+        // guard refused to overwrite.
+        let temp = TempDir::new().expect("temp dir");
+        let state = AppState::new().expect("state");
+
+        let dirty = temp.path().join("dirty.stalx");
+        seed_linked_stalx(&dirty, GUARD_ID, true);
+        let refused = state
+            .guard_local_edits(GUARD_ID, &dirty)
+            .expect_err("un-pushed edits veto the replace");
+        assert!(
+            is_local_edits_refusal(&refused),
+            "the refusal over un-pushed work is what keeps the lock, got {refused:?}"
+        );
+
+        let unreadable = temp.path().join("unreadable.stalx");
+        std::fs::write(&unreadable, b"not a sqlite database at all").expect("write junk");
+        let unknown = state
+            .guard_local_edits(GUARD_ID, &unreadable)
+            .expect_err("an unreadable copy is not a clean one");
+        assert!(
+            is_local_edits_refusal(&unknown),
+            "a copy that could not be read fails closed to the same keep, got {unknown:?}"
+        );
+
+        let corrupt = crate::speleodb::dump::Dump::open(b"{\"not\":\"a zip\"}")
+            .err()
+            .expect("a JSON body is not a ZIP");
+        assert!(
+            !is_local_edits_refusal(&corrupt),
+            "a corrupt dump has nothing local at stake, so a lock we took is still \
+             handed back, got {corrupt:?}"
+        );
+    }
+
+    #[test]
+    fn the_fast_forward_unwind_decides_on_the_failure_it_is_unwinding() {
+        // The site the two tests above meet at. `keep_lock_on_unwind` is computed
+        // BEFORE the acquire from the OPEN project's link, and the fast-forward verdict
+        // is only reached over a CLEAN one - so on this arm that flag keeps the lock for
+        // an inherited one and nothing else, while `Protect` refuses over the copy at
+        // the CACHE path, which need not be the open file at all (Save-As carries the
+        // `speleo_link` row forward, so P can be open and clean while the cache copy of
+        // P holds un-pushed work). Releasing there frees the server mutex that is
+        // holding the project for edits that exist nowhere else.
+        //
+        // Structural because the arm cannot reach that refusal in a unit test: the
+        // guard runs inside the re-pull, past `speleodb_cache_path`, which resolves an
+        // app cache dir only the env-gated live tests initialise - and initialising it
+        // here would latch the process-wide `OnceLock` for every other test in the
+        // binary. The sibling above reaches the arm behaviourally and pins the release
+        // half; this pins which failures skip it.
+        let start_editing = prod_source()
+            .split_once("fn speleodb_start_editing")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_start_editing body precedes the next method");
+        let fast_forward = start_editing
+            .split_once("ReconcileVerdict::FastForward => {")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("ReconcileVerdict::Diverged").next())
+            .expect("the fast-forward arm precedes the divergence arm");
+
+        assert!(
+            fast_forward.contains("LocalEditsPolicy::Protect"),
+            "precondition: this is the arm whose re-pull can refuse over local edits"
+        );
+        assert!(
+            fast_forward.contains("release_unless_kept("),
+            "the unwind must stay wired: a failed fast-forward that keeps the lock \
+             unconditionally strands every project whose dump merely failed to parse"
+        );
+        assert!(
+            fast_forward.contains("release_unless_kept(Some(&e));"),
+            "and must hand the failure over - the refusal is the only evidence that \
+             the copy being overwritten holds work the open project's link never did"
+        );
+        assert!(
+            !fast_forward.contains("release_unless_kept();")
+                && !fast_forward.contains("release_unless_kept(None)"),
+            "releasing without consulting the failure is the defect itself"
+        );
+        assert!(
+            start_editing.contains("failure.is_some_and(is_local_edits_refusal)"),
+            "and the unwind must act on it: passing the failure in and ignoring it \
+             releases just the same"
         );
     }
 
