@@ -217,6 +217,98 @@ describe('HeldLockResumeDialog local-edit join (#270)', () => {
     expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
   });
 
+  it('refuses to open over a project whose only outstanding thing is our write lock', async () => {
+    // The sibling above sets BOTH halves of `needsSpeleoHandBackPrompt` at once, so it
+    // passes just as well against a guard that only looked at `hasUnpushedEdits`. This
+    // is the OTHER disjunct on its own: everything is saved and everything is pushed,
+    // and the single thing the open project still owes is the write lock we hold on it.
+    // `loadProject` closes it backend-side, which drops that lock without handing it
+    // back - the very outcome this prompt exists to resolve, done silently to a second
+    // project. `holdsWriteLock` is why the shared predicate has two terms.
+    useProjectStore.setState({
+      project: { file_path: '/other/open.stalx' } as never,
+      isDirty: false,
+    });
+    useSpeleoStore.setState({
+      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: false } as never,
+    });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() => expect(showToast).toHaveBeenCalled());
+    expect(showToast.mock.calls[0]?.[1]).toBe('speleodb-continue-editing-unpushed');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(false);
+    expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(true);
+    expect(useSpeleoStore.getState().heldLocks).toHaveLength(2);
+  });
+
+  // DO-NOT-REGRESS. The hand-back guard must stay INSIDE the same-project branch.
+  // This prompt exists to rescue stranded locks, and the row that reaches
+  // `continueEditing` is offered Continue INSTEAD of Release precisely because the
+  // project has un-pushed edits - so when the lock being resumed is the one on screen,
+  // `needsSpeleoHandBackPrompt` is true BY CONSTRUCTION (we hold that lock, and the
+  // work is what withheld Release). Hoisting the guard above the `openPath !== path`
+  // test therefore does not protect anything: it refuses every resume of the open
+  // project, permanently, on the strength of the very facts that made the row
+  // rescuable. Nothing is being replaced here - `loadProject` is not even called -
+  // so there is nothing to hand back. Same exemption `openRemote` makes for
+  // re-opening the project already on screen.
+  it('still resumes the lock on the OPEN project, which by definition owes SpeleoDB work', async () => {
+    useProjectStore.setState({ project: { file_path: '/cache/dirty.stalx' } as never });
+    useSpeleoStore.setState({
+      link: { editState: 'editing', forceEditing: false, hasUnpushedEdits: true } as never,
+    });
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    wireIpc({
+      [DIRTY]: local({ unpushed: true, open: true }),
+      [CLEAN]: local({ unpushed: false }),
+    });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    // Neither refusal fired: this is the resume, not a project switch.
+    expect(
+      showToast.mock.calls.some(
+        (c) =>
+          c[1] === 'speleodb-continue-editing-unpushed' || c[1] === 'speleodb-continue-editing-dirty',
+      ),
+    ).toBe(false);
+    await waitFor(() => expect(useSpeleoStore.getState().heldLockPromptOpen).toBe(false));
+  });
+
+  // DO-NOT-REGRESS. The guard reads what the open project OWES, not merely that one is
+  // open: a different project that is saved, pushed and holds no lock is safe to swap
+  // out, and refusing it would break the ordinary resume this prompt is for.
+  it('opens over a different project that owes nothing', async () => {
+    useProjectStore.setState({
+      project: { file_path: '/other/open.stalx' } as never,
+      isDirty: false,
+    });
+    useSpeleoStore.setState({
+      link: { editState: 'read-only', forceEditing: false, hasUnpushedEdits: false } as never,
+    });
+    wireIpc({ [DIRTY]: local({ unpushed: true }), [CLEAN]: local({ unpushed: false }) });
+    render(<HeldLockResumeDialog />);
+
+    await userEvent.click(await screen.findByTestId(`speleodb-held-lock-continue-${DIRTY}`));
+
+    await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/dirty.stalx'));
+    await waitFor(() =>
+      expect(invokeIpcMock.mock.calls.some((c) => c[0] === 'speleodb_start_editing')).toBe(true),
+    );
+  });
+
   it('offers no bulk release at all', async () => {
     // Removed deliberately, not overlooked. The server verb is all-or-nothing and
     // this prompt is exactly where locks sitting over un-pushed work surface, so a
