@@ -60,8 +60,8 @@ fn default_recalc_hold_stage1_bar() -> f64 {
     70.0
 }
 
-fn default_dpv_range_reserve_fraction() -> f64 {
-    0.2
+pub(super) fn default_dpv_range_reserve_fraction() -> f64 {
+    0.1
 }
 
 /// Display units for gas: metric (bar / litres) or imperial (psi / cuft).

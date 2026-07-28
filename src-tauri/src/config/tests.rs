@@ -170,7 +170,10 @@ fn test_gas_config_normalize_guards_the_dpv_range_reserve() {
     for bad in [-0.1, f64::NAN] {
         let mut config = rig(bad);
         config.normalize();
-        assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.2);
+        assert_eq!(
+            config.dpv.unwrap().range_reserve_fraction,
+            default_dpv_range_reserve_fraction()
+        );
     }
     // At/above 1.0 the cap would be zero and every scootered station would read unreachable with
     // no explanation. That is useless rather than dangerous, so it caps instead of resetting.

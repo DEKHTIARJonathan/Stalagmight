@@ -13,12 +13,12 @@ import { ChevronRightIcon } from '../../common/icons';
 import { formatGasLength } from '../../../utils/formatGas';
 
 /**
- * Mirrors `default_dpv_range_reserve_fraction()` in `src-tauri/src/config/gas.rs` (0.2).
+ * Mirrors `default_dpv_range_reserve_fraction()` in `src-tauri/src/config/gas.rs` (0.1).
  * `GasConfig.dpv` defaults to `None` (`defaultConfig.gas.dpv` is `null`), so there is no live
  * rig to read the fraction off of; the optional-chain keeps this correct if a default rig is
- * ever introduced, and the `?? 0.2` fallback is the only place the constant is duplicated.
+ * ever introduced, and the `?? 0.1` fallback is the only place the constant is duplicated.
  */
-const DEFAULT_DPV_RANGE_RESERVE_FRACTION = defaultConfig.gas.dpv?.range_reserve_fraction ?? 0.2;
+const DEFAULT_DPV_RANGE_RESERVE_FRACTION = defaultConfig.gas.dpv?.range_reserve_fraction ?? 0.1;
 
 /**
  * A sensible starting rig for the "enable" toggle. There is no backend default to seed from
@@ -27,8 +27,8 @@ const DEFAULT_DPV_RANGE_RESERVE_FRACTION = defaultConfig.gas.dpv?.range_reserve_
  */
 function makeDefaultDpvRig(): DpvRig {
   return {
-    primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
-    backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+    primary: { speed_m_per_min: 45, burn_minutes: 60, label: null },
+    backup: { speed_m_per_min: 45, burn_minutes: 45, label: null },
     range_reserve_fraction: DEFAULT_DPV_RANGE_RESERVE_FRACTION,
   };
 }
