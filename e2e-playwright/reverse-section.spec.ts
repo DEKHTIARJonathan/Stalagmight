@@ -747,21 +747,26 @@ test.describe('Reverse Section', () => {
 
     await page.evaluate((id) => {
       const ui = (window as any).__E2E_TEST__.uiStore.getState();
-      ui.selectShot?.({ section_id: id, shot_id: 0 });
-      ui.setMergeStations?.({ section_id: id, station_index: 0 }, null);
+      ui.setSelection({ type: 'section', sectionId: id });
+      ui.setMergeStationA({ section_id: id, station_index: 0 });
     }, sectionId);
+
+    // Precondition: both are actually set, so the assertions below cannot pass vacuously.
+    const before = await page.evaluate(() => {
+      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      return { selection: ui.selection, mergeStationA: ui.mergeStationA };
+    });
+    expect(before.selection).not.toBeNull();
+    expect(before.mergeStationA).not.toBeNull();
 
     await reverseFromSectionMenu(page, sectionId);
 
-    const cleared = await page.evaluate(() => {
+    const after = await page.evaluate(() => {
       const ui = (window as any).__E2E_TEST__.uiStore.getState();
-      return {
-        selection: ui.selectedShot ?? ui.selection ?? null,
-        merge: ui.mergeStationA ?? ui.mergeStations ?? null,
-      };
+      return { selection: ui.selection, mergeStationA: ui.mergeStationA };
     });
-    expect(cleared.selection).toBeNull();
-    expect(cleared.merge).toBeNull();
+    expect(after.selection).toBeNull();
+    expect(after.mergeStationA).toBeNull();
   });
 
   test('moves the distance-gradient origin with the section too', async ({ page }) => {
