@@ -188,6 +188,21 @@ struct PlanAnchor {
     /// no reverse had been recorded against their sections either.
     #[serde(default)]
     parity: bool,
+    /// `length.to_bits()` of the sole neighbouring shot, recorded only for a TERMINAL station.
+    ///
+    /// Turns the one case the pair genuinely cannot survive - splitting that shot - into a
+    /// VISIBLE stale reference instead of a silent one-station error. The split keeps the
+    /// original UUID on the shortened tail, so afterwards no shot in the file has this station
+    /// as an endpoint and nothing can name it; the length necessarily changed, which is what
+    /// gives us a detector.
+    ///
+    /// Read only when the resolved side is no longer at an end of the section - so a plain
+    /// prepend or append, which leaves the shot's length alone, keeps resolving exactly as
+    /// before, and a reverse is untouched (length is invariant, and `parity` handles the side).
+    /// The one false positive is editing this shot's length AND extending that same end before
+    /// the plan is next loaded, which yields a "re-pin this" warning rather than a wrong route.
+    #[serde(default)]
+    terminal_shot_length_bits: Option<u64>,
 }
 
 impl PlanAnchor {
@@ -223,6 +238,13 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
     if after.is_some() && b.is_none() {
         return None;
     }
+    // A terminal station has exactly one neighbour; record its length so a later split of that
+    // shot is detectable (see `terminal_shot_length_bits`). An interior station is placed by the
+    // pair and needs no such guard; a shot-less section has no neighbour at all.
+    let terminal_shot_length_bits = match (before, after) {
+        (Some(shot), None) | (None, Some(shot)) => Some(shot.length.to_bits()),
+        _ => None,
+    };
     Some(StoredAnchor::Pair(PlanAnchor {
         section_id: r.section_id,
         a,
@@ -230,6 +252,7 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
         // `a` is the shot BEFORE the station, so the station is on its "after" side.
         after_a: true,
         parity: section.reverse_parity,
+        terminal_shot_length_bits,
     }))
 }
 
@@ -294,7 +317,27 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
         // Neither neighbour survives: nothing left to anchor on.
         (None, None) => return None,
     };
-    (index <= n).then(|| StationRef::new(anchor.section_id, index as u32))
+    if index > n {
+        return None;
+    }
+    // Fail SAFE on the one shape the pair cannot survive. If a terminal anchor's station is no
+    // longer at an end of the section, the section was extended past it OR its shot was split -
+    // and only the split changes that shot's length. A split leaves nothing in the file naming
+    // this station, so resolving would silently land on the split point; report it stale
+    // instead and let the UI ask for a re-pin.
+    if let Some(saved_bits) = anchor.terminal_shot_length_bits {
+        let still_terminal = index == 0 || index == n;
+        if !still_terminal {
+            let moved = pa
+                .or(pb)
+                .and_then(|p| section.shots.get(p))
+                .is_none_or(|shot| shot.length.to_bits() != saved_bits);
+            if moved {
+                return None;
+            }
+        }
+    }
+    Some(StationRef::new(anchor.section_id, index as u32))
 }
 
 /// What a `.plnx` row can hold for one station.
@@ -1037,16 +1080,16 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
-    /// KNOWN LIMITATION, pinned so it is a decision on record rather than a surprise.
+    /// Splitting the shot a terminal anchor names must FAIL SAFE, not guess.
     ///
-    /// Splitting the shot a terminal anchor names gives the new half a fresh UUID and keeps the
-    /// old one on the tail, so afterwards NO shot in the file has that station as an endpoint -
-    /// there is nothing left to anchor to. The anchored shot now has neighbours on both sides,
-    /// which the stored `None` says is impossible, and the case resolves as though no reverse
-    /// occurred. The error is one station, and splitting an end shot of a section a saved plan
-    /// pins is rare.
+    /// The split keeps the original UUID on the shortened tail, so afterwards no shot in the
+    /// file has that station as an endpoint - nothing can name it, and any answer would be a
+    /// guess that silently lands on the split point. The recorded length is what detects it:
+    /// the tail is necessarily shorter, and the station is no longer at an end of the section.
+    /// The reference is reported STALE so the UI can ask for a re-pin, which is a warning the
+    /// diver can act on rather than a route quietly re-priced against the wrong station.
     #[test]
-    fn splitting_the_anchored_end_shot_is_off_by_one_known_limitation() {
+    fn splitting_the_anchored_end_shot_reports_stale_rather_than_guessing() {
         let (mut project, sec) = project_n_shots(2);
         let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
 
@@ -1056,10 +1099,32 @@ mod tests {
         let mut stale = 0;
         assert_eq!(
             from_anchor(&project, &start, &mut stale),
-            Some(StationRef::new(sec, 1)),
-            "documented limitation: the entrance is still station 0, and this lands on the split point"
+            None,
+            "the station cannot be named after the split, so it must not be guessed"
         );
-        assert_eq!(stale, 0, "it resolves - it is simply one station out");
+        assert_eq!(stale, 1, "and the caller is told, so the UI can warn");
+    }
+
+    /// The guard must not fire on an ordinary extension: a prepend leaves the anchored shot's
+    /// length alone, so the anchor keeps resolving even though its station is no longer
+    /// terminal. Without the length check this shape would be indistinguishable from a split.
+    #[test]
+    fn extending_past_a_terminal_anchor_does_not_make_it_stale() {
+        let (mut project, sec) = project_n_shots(2);
+        let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
+
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project
+            .insert_shot_before(sec, first, make_shot(), None, None)
+            .unwrap();
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 1)),
+            "the shot was not split, so the station is still nameable"
+        );
+        assert_eq!(stale, 0);
     }
 
     /// A shot-less section is one station and no shots - what a GPX waypoint imports as. It has
