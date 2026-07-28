@@ -75,8 +75,13 @@ export const CLOSURE_ADJUSTED_ALLOWLIST = {
   // mutation gate.
   'src/store/geometrySelectors.ts': 2,
   // The canonical definition of isMapReadOnly, plus two settings-value
-  // sanitizers (validating/loading a persisted enum) - not mutation gates.
-  'src/store/uiStore.ts': 3,
+  // sanitizers (validating/loading a persisted enum), plus
+  // showsClosureAdjustedNotice - which decides whether to DRAW the
+  // closure-adjusted badge, not whether an edit may proceed. It is deliberately
+  // narrower than isMapReadOnly (Survey only, and only when the SpeleoDB badge
+  // is not already explaining the read-only state), so it cannot be expressed as
+  // that predicate. None are mutation gates.
+  'src/store/uiStore.ts': 4,
   // The import-blocked error message picks one of several strings depending on
   // which read-only cause is active (closure-adjusted vs Plan/Export vs a
   // locked remote project); the actual guard is isEditingBlockedNow(), this

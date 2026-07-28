@@ -65,6 +65,42 @@ export function isMapReadOnly(state: Pick<UIStore, 'geometryMode' | 'appMode'>):
   return state.geometryMode === 'closureAdjusted' || state.appMode !== 'survey';
 }
 
+/**
+ * Whether the map shows the "closure-adjusted, so read-only" notice - a narrower
+ * question than [`isMapReadOnly`], which is why it is its own predicate: the map can
+ * be read-only without this badge earning its space.
+ *
+ * Survey ONLY (#299): Plan and Export are read-only workspaces outright, so the
+ * badge announces nothing new there and is noise over the fit-to-view button.
+ * `showClosureComputing` is deliberately NOT gated this way - the solve still runs
+ * in Plan/Export, where it is the only progress signal - so hiding the notice here
+ * does not hide progress there.
+ *
+ * And only when nothing else already explains the read-only state, which inside
+ * Survey means the project is otherwise editable: the exact complement of the
+ * SpeleoDB badge, which occupies the same corner, so the two are mutually exclusive
+ * by construction rather than by luck. `speleoReadOnly` is the right predicate for
+ * that half rather than `holdsWriteLock`, because a force-editor genuinely CAN edit
+ * - the SpeleoDB badge is already hidden for them, which makes the closure view the
+ * only thing blocking their edits, and exactly when the notice earns its space.
+ *
+ * Both rules have been got wrong in opposite directions, so both are pinned by a
+ * truth table in `uiStore.isMapReadOnly.test.ts`.
+ */
+export function showsClosureAdjustedNotice(args: {
+  geometryMode: GeometryMode;
+  appMode: AppMode;
+  placementMode: boolean;
+  speleoReadOnly: boolean;
+}): boolean {
+  return (
+    args.geometryMode === 'closureAdjusted' &&
+    !args.placementMode &&
+    args.appMode === 'survey' &&
+    !args.speleoReadOnly
+  );
+}
+
 export type DmpImportWizardPhase = 'init' | 'suggesting' | 'manual_placing' | 'placing' | 'done';
 
 export type DetailPanelTab = 'details' | 'warnings';
