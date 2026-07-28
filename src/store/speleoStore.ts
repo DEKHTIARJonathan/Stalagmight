@@ -202,6 +202,24 @@ export interface SpeleoLinkSnapshot {
 interface SpeleoStore {
   /** Backend session, or `null` before the first `setSession`/`refreshSession`. */
   session: SpeleoSession | null;
+  /**
+   * Which session this IS, as a counter bumped on every identity change - a login
+   * (`setSessionFromLogin`) or an ending (`clearSession`). Deliberately NOT bumped
+   * by `setSession`/`refreshSession`, which only re-read the session already held.
+   *
+   * For staleness guards on long IPC calls that outlive the account they were made
+   * for. Neither of the two things already on `session` can do that job:
+   * `userEmail` cannot tell a re-login as the same account from the original
+   * session (a different token, its own storage outcome), and the object identity
+   * changes on every benign refresh - a project load or reopening Settings both
+   * call `refreshSession`, so an identity check would read those as an account
+   * change and suppress a guard that should have fired.
+   *
+   * State rather than a module-scoped counter like `busySeq`/`linkStatusSeq`,
+   * because the reader is a COMPONENT (`SpeleoStorageChoiceDialog`), not the store
+   * itself. Nothing renders it.
+   */
+  sessionGeneration: number;
   /** The open project's link/edit state, or `null` when it is local / none open. */
   link: SpeleoLinkState | null;
   /**
@@ -573,6 +591,7 @@ const disownBusy = (): void => {
 
 export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   session: null,
+  sessionGeneration: 0,
   link: null,
   // Pessimistic until a project open resolves it: an unresolved gate is closed.
   projectLinkKind: 'unknown',
@@ -902,7 +921,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   closeHeldLockPrompt: () => set({ heldLockPromptOpen: false }),
 
   setSessionFromLogin: (r) =>
-    set({
+    set((state) => ({
       session: {
         loggedIn: true,
         userEmail: r.user_email,
@@ -911,7 +930,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         storage: r.storage,
         keychain: r.keychain,
       },
-    }),
+      // A login is a NEW session even when it is the same account: a different
+      // token, with its own storage outcome. Work still in flight for the previous
+      // one must not act on this one.
+      sessionGeneration: state.sessionGeneration + 1,
+    })),
 
   // A logout / dead-token drop can't act on the remote project anymore - the
   // backend drops its edit gate AND releases the lock on the same event - so fully
@@ -924,6 +947,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   clearSession: () =>
     set((state) => ({
       session: null,
+      // The session ended, so nothing still in flight for it may act on whatever
+      // signs in next (see `sessionGeneration`).
+      sessionGeneration: state.sessionGeneration + 1,
       link: state.link
         ? {
             ...state.link,

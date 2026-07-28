@@ -304,6 +304,103 @@ describe('SpeleoStorageChoiceDialog - a dismissal cannot escape the retry', () =
     expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
   });
 
+  /**
+   * A login landing while the move is still wedged, exactly as `applyPendingAuth`
+   * performs one: a fresh session whose own keychain write SUCCEEDED, so it raises
+   * no prompt of its own and its key is already settled.
+   */
+  const signInAs = (email: string) =>
+    useSpeleoStore.getState().setSessionFromLogin({
+      user_email: email,
+      endpoint: 'https://sdb.example',
+      keychain_backed: true,
+      storage: 'keychain',
+      keychain: 'available',
+      needs_storage_choice: false,
+    });
+
+  it('does not re-raise over the account that signed in while the move was wedged', async () => {
+    // The dismissal is what opens this window: it leaves the Settings panel
+    // underneath usable, and nothing on that panel is gated on this move (it takes
+    // no store `busy`, and the dialog's own `busy` left with the unmount). So the
+    // user can sign out and in as somebody else while the keyring stays wedged -
+    // and there is no timeout anywhere on that path to bound the wait.
+    //
+    // Re-raising there asks the PREVIOUS account's question over the new one. The
+    // new account's key reached the keychain; answering would move it out into
+    // memory or a plaintext file and record a refusal that account never made.
+    const move = deferStorageMove();
+    render(<Host />);
+
+    await userEvent.click(screen.getByTestId('speleodb-storage-choice-session'));
+    await waitFor(() => expect(storageCalls()).toHaveLength(1));
+    fireEvent.keyDown(screen.getByTestId('speleodb-storage-choice-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(prompt()).not.toBeInTheDocument());
+
+    // Sign out, then in as somebody else - both through the real store verbs, so
+    // this pins the actual login/logout transitions rather than the bookkeeping.
+    useSpeleoStore.getState().clearSession();
+    signInAs('other@x');
+
+    move.fail({ message: 'not signed in' });
+
+    // The failure is still REPORTED - it just no longer hijacks the new session.
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    expect(prompt()).not.toBeInTheDocument();
+    expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
+  });
+
+  it('does not re-raise after a re-login as the SAME account', async () => {
+    // Same email, different session: a new token with its own storage outcome,
+    // which this login already settled. An email comparison could not tell this
+    // from the original session still being live, which is why the guard is a
+    // generation.
+    const move = deferStorageMove();
+    render(<Host />);
+
+    await userEvent.click(screen.getByTestId('speleodb-storage-choice-session'));
+    await waitFor(() => expect(storageCalls()).toHaveLength(1));
+    fireEvent.keyDown(screen.getByTestId('speleodb-storage-choice-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(prompt()).not.toBeInTheDocument());
+
+    useSpeleoStore.getState().clearSession();
+    signInAs(LOGGED_IN.userEmail);
+
+    move.fail({ message: 'not signed in' });
+
+    await waitFor(() => expect(showToastMock).toHaveBeenCalled());
+    expect(prompt()).not.toBeInTheDocument();
+    expect(useSpeleoStore.getState().storageChoiceOpen).toBe(false);
+  });
+
+  it('DO NOT REGRESS: a refreshed but unchanged session still gets its retry', async () => {
+    // The other side of the guard, and the reason it is a generation rather than the
+    // `session` object: `refreshSession` re-reads the SAME session on a project load
+    // and whenever the Settings panel mounts, allocating a new object each time. A
+    // guard that compared identities would read that as an account change and swallow
+    // the retry the test above pins - the round-12 bug, back with a subtler cause.
+    const move = deferStorageMove();
+    render(<Host />);
+
+    await userEvent.click(screen.getByTestId('speleodb-storage-choice-session'));
+    await waitFor(() => expect(storageCalls()).toHaveLength(1));
+    fireEvent.keyDown(screen.getByTestId('speleodb-storage-choice-dialog'), { key: 'Escape' });
+    await waitFor(() => expect(prompt()).not.toBeInTheDocument());
+
+    useSpeleoStore.getState().setSession({
+      logged_in: true,
+      user_email: LOGGED_IN.userEmail,
+      endpoint: LOGGED_IN.endpoint,
+      keychain_backed: false,
+      storage: 'memory',
+      keychain: 'unavailable',
+    });
+
+    move.fail({ message: 'not signed in' });
+
+    await waitFor(() => expect(prompt()).toBeInTheDocument());
+  });
+
   it('DO NOT REGRESS: the options stay disabled while a move is in flight', async () => {
     // The disabled buttons are what make an in-flight move visible at all. If they
     // stop being disabled the dismissal routes are no longer the only way to

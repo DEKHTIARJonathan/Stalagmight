@@ -43,7 +43,9 @@ const STORAGE_FOR: Record<'session_only' | 'plaintext', TokenStorage> = {
  * the dismissal routes stay live while the move is in flight (see there for why
  * they must), so a failure re-raises this overlay instead of assuming it is still
  * mounted. The invariant is that a choice the user actually made never ends up both
- * unsettled and un-asked.
+ * unsettled and un-asked - for the session that made it, which is why the re-raise
+ * is gated on that session still being the live one rather than on someone being
+ * signed in.
  */
 export default function SpeleoStorageChoiceDialog() {
   const { t } = useTranslation();
@@ -55,6 +57,10 @@ export default function SpeleoStorageChoiceDialog() {
   const [busy, setBusy] = useState(false);
 
   const choose = async (mode: 'session_only' | 'plaintext') => {
+    // WHICH session is being asked about, read before the await because that is the
+    // only moment it is certainly still the live one. The re-raise below is the only
+    // consumer; see there for why "some session is logged in" is not the same question.
+    const askedFor = useSpeleoStore.getState().sessionGeneration;
     setBusy(true);
     try {
       // On failure the prompt STAYS OPEN. Closing it would look like the choice
@@ -85,12 +91,29 @@ export default function SpeleoStorageChoiceDialog() {
         // defended against here is merely an unsettled preference, which is not worth
         // that. So dismissal always works, and the retry is what comes back.
         //
-        // Only while a session still holds a key. `clearSession` shuts this overlay on
-        // purpose when the session ends underneath it, and that same ending is one of
-        // the things that makes the move fail (the backend refuses when no token is
-        // held) - re-raising there would ask where to put a key that no longer exists.
-        // Same staleness guard `scanLocksOnOpen` applies before re-raising its prompt.
-        if (useSpeleoStore.getState().session?.loggedIn === true) {
+        // Only for the session that ASKED, and only while it is still the live one.
+        // Same staleness guard `scanLocksOnOpen` applies before re-raising its prompt,
+        // and it is needed here for a sharper reason: the dismissal above leaves the
+        // Settings panel underneath fully usable while this move is still wedged, so
+        // the user can sign out and sign back in - as another account, or as the same
+        // one - long before the failure arrives. Both leave a session that is logged
+        // in, and re-raising over it would offer the previous account's unanswered
+        // question about a key that is now settled: answering it moves the NEW
+        // session's token out of the keychain it just reached, and records a refusal
+        // nobody made for it.
+        //
+        // A re-login as the same account is a different session too - a different
+        // token, with its own storage outcome - which is why this is a generation and
+        // not an email comparison.
+        //
+        // `loggedIn` is still checked alongside it: a session can also end via a
+        // `speleodb_session` refresh reporting logged-out, which does not bump the
+        // generation. `clearSession` shuts this overlay on purpose when the session
+        // ends underneath it, and that same ending is one of the things that makes the
+        // move fail (the backend refuses when no token is held) - re-raising there
+        // would ask where to put a key that no longer exists.
+        const live = useSpeleoStore.getState();
+        if (live.session?.loggedIn === true && live.sessionGeneration === askedFor) {
           useSpeleoStore.setState({ storageChoiceOpen: true });
         }
         return;
