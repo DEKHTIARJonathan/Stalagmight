@@ -856,7 +856,18 @@ test.describe('Reverse Section', () => {
       (window as any).__E2E_TEST__.projectStore.setState({ isDirty: false })
     );
 
-    await reverseFromSectionMenu(page, sectionId);
+    // The dialog now REFUSES rather than submitting a no-op: with nothing that would
+    // actually change, Confirm is disabled, so the user is not offered an action that
+    // would close the dialog and fire a completed-reverse event having done nothing.
+    await page.evaluate((id) => {
+      (window as any).__E2E_TEST__.uiStore
+        .getState()
+        .openDialog('reverse-section', { sectionIds: [id] });
+    }, sectionId);
+    await expect(page.getByTestId('reverse-section-dialog')).toBeVisible();
+    await expect(page.getByTestId('reverse-confirm')).toBeDisabled();
+
+    await page.evaluate(() => (window as any).__E2E_TEST__.uiStore.getState().closeDialog());
 
     expect(
       await page.evaluate(
