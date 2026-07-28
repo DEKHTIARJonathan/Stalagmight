@@ -428,6 +428,15 @@ impl SpeleoDbSession {
         if !keychain_has_token {
             self.token_store.set_keychain_declined(true);
         }
+        // The same flag, read the other way round and for a different question. A
+        // `true` here is a PREVIOUS login's successful keychain store, which is the
+        // one thing that separates a keyring that is merely locked this launch from
+        // a box that has no secret service at all - both fail every op and both
+        // record `Unavailable`. Without it, turning the keyring off over a locked
+        // keyring reported the entry emptied and cleared this very flag, sending the
+        // next launch past a live bearer token that is still in there. See
+        // `TokenStore::unreadable_keychain_may_hold`.
+        self.token_store.note_keychain_has_token(keychain_has_token);
 
         let (Some(endpoint), Some(email)) = (resolved_endpoint, config_email) else {
             // No persisted account → stay logged-out (no keychain probe).

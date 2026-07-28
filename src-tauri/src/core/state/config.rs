@@ -121,7 +121,10 @@ impl AppState {
             // recoverable direction (the next launch opens the keyring, finds
             // nothing, and asks for a sign-in); saving first would leave the file
             // saying "off" over an entry that survived.
-            match self.speleodb_disable_keychain(config.speleodb.token_fallback) {
+            match self.speleodb_disable_keychain(
+                config.speleodb.token_fallback,
+                config.speleodb.keychain_has_token,
+            ) {
                 KeychainEviction::Emptied => config.speleodb.keychain_has_token = false,
                 // Nothing was checked, so nothing is claimed and nothing is said.
                 KeychainEviction::NotAttempted => {}
@@ -235,8 +238,23 @@ impl AppState {
     /// `TokenStore::evict_from_keychain` owns the line between them, with the same
     /// three-way probe `TokenStore::clear` and the session-only sweep use - a
     /// missing entry is already `Ok`, and a keychain this session has learned is
-    /// unusable cannot have stranded anything.
-    fn speleodb_disable_keychain(&self, fallback: TokenFallback) -> KeychainEviction {
+    /// unusable AND has no record of holding anything of ours cannot have stranded
+    /// anything.
+    ///
+    /// `keychain_has_token` is handed down for that last clause, not to gate the
+    /// eviction (see above - it is not trusted in the `false` direction). A keyring
+    /// that is merely LOCKED fails every op exactly like a box with no secret
+    /// service, so both record `Unavailable`; a previous login's successful store is
+    /// the only thing that tells them apart, and without it the locked keyring - the
+    /// likeliest reason anyone reaches for this switch - was reported emptied over a
+    /// live bearer token. The live store learns it at rehydrate, but a session
+    /// established by a login this run never rehydrates, so the value is re-asserted
+    /// here where the config already has it.
+    fn speleodb_disable_keychain(
+        &self,
+        fallback: TokenFallback,
+        keychain_has_token: bool,
+    ) -> KeychainEviction {
         // Seeds `endpoint` / `email` from config when the session is still cold -
         // Settings is reachable without having touched SpeleoDB this run, and
         // without an account there is no key to evict by. Called with NO lock held:
@@ -248,6 +266,12 @@ impl AppState {
             .speleodb
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Evidence only, and only ever raised: `false` here means "the config has no
+        // record", never "the keyring is empty", so it leaves whatever this session
+        // has learned first-hand alone.
+        session
+            .token_store
+            .note_keychain_has_token(keychain_has_token);
         let (Some(endpoint), Some(email)) = (session.endpoint.clone(), session.email.clone())
         else {
             session.token_store.set_keychain_disabled(true);
@@ -533,30 +557,35 @@ mod tests {
 
     #[test]
     fn a_keychainless_box_turns_the_keyring_off_without_a_false_alarm() {
-        // The configuration this switch EXISTS for - its help text says so:
-        // headless Linux with no secret service, where every keychain op dies at
-        // `Entry::new` before it can be asked about the entry, so the delete fails
-        // and nothing can have been stranded. Warning on every raw delete failure
-        // would fire here, on the most common path there is for this toggle, and a
-        // warning that always fires is one the user learns to ignore.
+        // DO NOT REGRESS. The configuration this switch EXISTS for - its help text
+        // says so: headless Linux with no secret service, where every keychain op
+        // dies at `Entry::new` before it can be asked about the entry, so the delete
+        // fails and nothing can have been stranded. Warning on every raw delete
+        // failure would fire here, on the most common path there is for this toggle,
+        // and a warning that always fires is one the user learns to ignore.
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
                 let mut session = state.speleodb.lock().expect("session");
                 // A login this session that the keychain refused: THAT is what
-                // records `Unavailable`, and it is the only evidence separating a
-                // keychain-less box from a keyring that has gone quiet.
-                assert_eq!(
-                    session.token_store.store(EP, EMAIL, "tok", false),
-                    TokenTier::Memory
-                );
+                // records `Unavailable`, and it is half the evidence separating a
+                // keychain-less box from a keyring that has merely gone quiet.
+                let tier = session.token_store.store(EP, EMAIL, "tok", false);
+                assert_eq!(tier, TokenTier::Memory);
                 assert_eq!(
                     session.token_store.keychain_state(),
                     KeychainState::Unavailable
                 );
                 drop(session);
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
+                // The other half, written by the SAME call the login makes and with
+                // the same argument, rather than hand-set: a keychain-less box cannot
+                // reach `keychain_has_token = true`, because the only writers of
+                // `true` pass `tier == TokenTier::Keychain` and this tier never is.
+                // Hand-setting it here would have been a state production cannot
+                // produce, and would have made this test demand silence over the one
+                // piece of evidence that a credential really is stranded.
+                state.speleodb_persist_keychain_has_token(tier == TokenTier::Keychain);
+                assert!(!state.get_config().speleodb.keychain_has_token);
             }
 
             let report = state
@@ -570,6 +599,48 @@ mod tests {
             assert!(
                 !state.get_config().speleodb.keychain_has_token,
                 "and the next launch has no reason to open a keyring that holds nothing"
+            );
+        });
+    }
+
+    #[test]
+    fn a_locked_keyring_that_a_previous_login_filled_is_not_reported_as_emptied() {
+        // The other side of the line the test above draws, and the case with the
+        // strongest evidence of a stranded credential there is. A previous launch's
+        // login DID put a token in the keyring and recorded it; this launch the
+        // keyring is locked, so the startup rehydrate read fails and records
+        // `Unavailable` - the identical verdict a box with no secret service records.
+        // Reading that verdict alone as "nothing can be in there" made the eviction
+        // report success over a live bearer token and clear the one flag that would
+        // have sent a later launch looking for it.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(FailingSecretStore));
+            {
+                // What the previous launch's successful keychain store persisted.
+                state.speleodb_persist_keychain_has_token(true);
+                let mut session = state.speleodb.lock().expect("session");
+                // Which `SpeleoDbSession::rehydrate` mirrors into the live store
+                // before wiring the load that the locked keyring then refuses.
+                session.token_store.note_keychain_has_token(true);
+                assert_eq!(session.token_store.load(EP, EMAIL), None);
+                assert_eq!(
+                    session.token_store.keychain_state(),
+                    KeychainState::Unavailable
+                );
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("the settings still save - the residue is reported, not refused");
+
+            assert!(
+                report.keychain_residue.is_some(),
+                "a keyring we know took a token and now will not answer has not proved it is empty"
+            );
+            assert!(
+                state.get_config().speleodb.keychain_has_token,
+                "and the belief must not be cleared over an entry that may still be in there - \
+                 clearing it sends the next launch straight past it"
             );
         });
     }
