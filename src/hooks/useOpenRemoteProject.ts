@@ -204,10 +204,23 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * BOTH entry points that issue a project-replacing command of their own -
    * `openRemote` and `adoptRemote` - never in the tail they share.
    *
-   * `keepLocalCopy` / `takeRemoteDiscardingLocal` are the two that deliberately do
-   * NOT re-run it: they are the ANSWER to the prompt a guarded `openRemote` raised,
-   * reached without leaving that flow, and refusing "keep the local copy" would shut
-   * the only door out of a refused open. `adoptRemote` is not like them - see there.
+   * The refused-open prompt's two branches run it too, for the reason `adoptRemote`
+   * does. They are the ANSWER to the prompt a guarded `openRemote` raised - but that
+   * prompt is about the TARGET's cached copy, and this asks about the project on
+   * SCREEN, which the answer says nothing about. The prompt is also a user
+   * interaction of unbounded length: `SpeleoUnpushedLocalDialog` sits there while
+   * `SpeleoStatusButton`'s poll (30 s to a user-configurable 24 h) keeps calling
+   * `refreshLinkStatus`, whose `seedFromStatus` rewrites the very `link` this reads -
+   * so the open project can acquire un-pushed work, or have its lock resolved,
+   * between the check and the load that replaces it. Nothing shuts the door out of an
+   * un-pushed cache copy, because the case that needs that door is the one where the
+   * target IS the open project, and that is exactly what the same-project exemption
+   * below lets through.
+   *
+   * `keepLocalCopy` is the one partial exception, and only when the path it opens is
+   * the one already on screen: it issues no command and `loadProject` short-circuits
+   * on ALREADY_OPEN, so it replaces nothing and there is nothing to guard - see
+   * there.
    *
    * It REFUSES rather than raising the shared hand-back prompt, the way
    * `HeldLockResumeDialog`'s Continue-editing row does. `speleodb-close` replays what
@@ -318,13 +331,36 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * The other half - seeding NOTHING when the refusal names the already-open
    * project - is the tail's own job now, since every route into it can name the
    * open project (see `finishOpen`'s `alreadyOpen`).
+   *
+   * Guarded, but only when it would REPLACE something. The local copy it opens is
+   * the TARGET's, so whenever that is a different project this ends in a
+   * `loadProject` that closes the one on screen backend-side - and the answer the
+   * user gave was about the target's cached copy, not about the work in that
+   * project. Between the refusal and this click the status poll can have marked the
+   * open project un-pushed or resolved its lock, so the guard has to be re-read here
+   * rather than inherited from the `openRemote` that raised the prompt.
    */
   const keepLocalCopy = useCallback(
-    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> =>
-      finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
+    async (summary: SpeleoProjectSummary, localPath: string): Promise<OpenRemoteOutcome> => {
+      // Opening the path already on screen replaces NOTHING: this branch issues no
+      // SpeleoDB command, and `loadProject` short-circuits on ALREADY_OPEN - it flips
+      // the view and re-resolves the link, and never re-reads the file, so no unsaved
+      // in-memory survey is dropped and no cache `.stalx` is overwritten. Refusing it
+      // would raise "save your changes first" over an action that cannot lose them.
+      // Decided by PATH, the same comparison `finishOpen` makes for the same reason
+      // (`alreadyOpen`) - and unlike the id-based exemption inside the guard, it does
+      // not depend on a status poll having landed to record `remoteProjectId`.
+      const replacesOpenProject =
+        (useProjectStore.getState().project?.file_path ?? null) !== localPath;
+      if (replacesOpenProject) {
+        const refusal = handBackRefusal(summary);
+        if (refusal) return { status: 'error', message: refusal, reLogin: false };
+      }
+      return finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
         hasUnpushedEdits: true,
-      }),
-    [finishOpen],
+      });
+    },
+    [finishOpen, handBackRefusal],
   );
 
   /**
@@ -334,6 +370,28 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    */
   const takeRemoteDiscardingLocal = useCallback(
     async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+      /**
+       * [#270] The same entry guard, re-evaluated HERE - the discarding open is a
+       * second project-replacing command, not a continuation of the first one, and
+       * the answer it carries is about the TARGET's cached copy, never about the
+       * project on screen.
+       *
+       * The `openRemote` that raised the prompt ran the guard, but the prompt is a
+       * user interaction of unbounded length and `SpeleoStatusButton`'s poll (30 s to
+       * a user-configurable 24 h) keeps rewriting the link the guard reads while it is
+       * up. Same gap the adopt route had, same fix; every other hand-back exit
+       * evaluates its guard immediately before the destructive step.
+       *
+       * Both halves apply even when the target IS the open project. The hand-back
+       * half is exempt there (that is the door this whole branch exists to open, over
+       * a cache copy that is un-pushed BY DEFINITION), but the disk-dirty half is not:
+       * the command routes through `replace_cache_stalx_abandoning`, which closes the
+       * live project WITHOUT saving and renames the fresh dump over its `.stalx`, so
+       * unsaved in-memory survey goes with it. Nothing is stranded by refusing - the
+       * user saves and presses it again.
+       */
+      const refusal = handBackRefusal(summary);
+      if (refusal) return { status: 'error', message: refusal, reLogin: false };
       let result: SpeleoOpenResult;
       try {
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
@@ -361,7 +419,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       }
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, t],
+    [finishOpen, handBackRefusal, t],
   );
 
   const adoptRemote = useCallback(

@@ -492,15 +492,163 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
-    it('does not re-ask on the branches reached THROUGH a guarded open', async () => {
-      // `keepLocalCopy` / `takeRemoteDiscardingLocal` are the ANSWER to the prompt an
-      // already-guarded `openRemote` raised, reached without leaving that flow, so a
-      // second refusal there would block a decision the user has just made - and
-      // refusing the keep-local branch would shut the only door out of a refused
-      // open. Driven with the open project as dirty as the cases above.
-      anotherOpen(openLink({ hasUnpushedEdits: true }), true);
+    /**
+     * [#270] The refused-open prompt's two branches are project-replacing exits of
+     * their own, and they ran no guard - only whatever the `openRemote` that raised
+     * the prompt had concluded, which by then is stale by an unbounded amount.
+     * `SpeleoUnpushedLocalDialog` sits on screen for as long as the user takes to
+     * decide, while `SpeleoStatusButton`'s interval keeps calling `refreshLinkStatus`
+     * for the project underneath (30 s to a user-configurable 24 h) and its
+     * `seedFromStatus` rewrites `link` wholesale - `hasUnpushedEdits`, `editState`,
+     * `lockHolder`. So the project on screen can acquire un-pushed work, or have its
+     * lock resolved, between the check and the load that closes it backend-side.
+     *
+     * The answer the user gave is no waiver: it is about the TARGET's cached copy,
+     * not about the work in the project being swapped out. (This replaces a case that
+     * asserted the opposite - "does not re-ask on the branches reached THROUGH a
+     * guarded open" - which pinned the swap-away of an un-pushed, disk-dirty p9 as
+     * correct. The half of its intent that IS correct is kept below: the same-project
+     * routes must stay open.)
+     */
+    it('refuses keep-local when the open project goes unpushed while the prompt is up', async () => {
+      // The real sequence rather than a synthetic one: the open IS guarded and the
+      // project on screen is clean, so the backend's un-pushed refusal raises the
+      // prompt; the status poll then lands and marks that project un-pushed while the
+      // user is still reading it.
+      invokeIpcMock.mockImplementation((cmd: string) =>
+        cmd === 'speleodb_open_project'
+          ? Promise.reject({
+              message: 'refused',
+              action: 'UnpushedLocalEdits',
+              status: null,
+              unpushed_local: {
+                project_id: 'p1',
+                local_path: '/cache/p1.stalx',
+                last_edit_at: null,
+              },
+            })
+          : Promise.resolve(null),
+      );
+      anotherOpen(openLink());
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'unpushed_local' });
+
+      useSpeleoStore.setState({ link: openLink({ hasUnpushedEdits: true }) });
+
+      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+      expect(outcome.status).toBe('error');
+      // Not a dead token - there is nothing to re-login for.
+      if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+      // The load is what closes p9 backend-side, so it must not have run.
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses keep-local over unsaved-to-disk changes in the project being swapped out', async () => {
+      // Keeping the TARGET's local copy still ends in a `loadProject` for a different
+      // file, which replaces the open project and drops its unsaved in-memory survey.
+      useProjectStore.setState({
+        project: { file_path: '/cave/local.stalx' } as never,
+        isDirty: true,
+      });
+      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+      expect(outcome.status).toBe('error');
+      if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('keep-local still opens the path already on screen - that call replaces nothing', async () => {
+      // Do-not-regress (passes before the guard was added too). This branch issues no
+      // SpeleoDB command, and `loadProject` short-circuits on ALREADY_OPEN for its own
+      // path - it flips the view and re-resolves the link, never re-reading the file -
+      // so neither half of the guard has anything to protect, and a disk-dirty refusal
+      // would raise "save your changes first" over an action that cannot lose them.
+      // Driven with `remoteProjectId` deliberately UNSET: the skip is decided by path,
+      // so it holds in the window before the first status poll records the open
+      // project's id, where the guard's own id-based exemption does not.
+      useProjectStore.setState({
+        project: { file_path: '/cache/p1.stalx' } as never,
+        isDirty: true,
+      });
+      useSpeleoStore.setState({
+        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
+        remoteProjectId: null,
+      });
       expect(await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx')).toEqual({ status: 'opened' });
       expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    });
+
+    /** The discarding re-open SUCCEEDS, so an unguarded branch runs all the way to the load. */
+    const takeRemoteSucceeds = () => {
+      invokeIpcMock.mockImplementation((cmd: string) =>
+        cmd === 'speleodb_open_project_discarding_local'
+          ? Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false })
+          : Promise.resolve(null),
+      );
+    };
+
+    it('refuses the take-remote when the open project goes unpushed while the prompt is up', async () => {
+      takeRemoteSucceeds();
+      anotherOpen(openLink({ hasUnpushedEdits: true }));
+      const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+      expect(outcome.status).toBe('error');
+      if (outcome.status === 'error') expect(outcome.reLogin).toBe(false);
+      // Nothing pulled, nothing seeded, nothing loaded.
+      expect(invokeIpcMock).not.toHaveBeenCalledWith(
+        'speleodb_open_project_discarding_local',
+        expect.anything(),
+      );
+      expect(setLinkOnOpenMock).not.toHaveBeenCalled();
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+
+    it('refuses the take-remote while we still hold the write lock on the open project', async () => {
+      takeRemoteSucceeds();
+      anotherOpen(openLink({ editState: 'editing' }));
+      const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+      expect(outcome.status).toBe('error');
+      expect(invokeIpcMock).not.toHaveBeenCalledWith(
+        'speleodb_open_project_discarding_local',
+        expect.anything(),
+      );
+    });
+
+    it('still takes the server copy for the already-open project over its OWN un-pushed cache copy', async () => {
+      // Do-not-regress (passes before the guard was added too), and the load-bearing
+      // half of the case this block replaced: the hand-back exemption is the door this
+      // branch exists to open, over a cache copy that is un-pushed BY DEFINITION - that
+      // is why the prompt was up. Refusing here would shut the only way out of it.
+      takeRemoteSucceeds();
+      useProjectStore.setState({
+        project: { file_path: '/cache/p1.stalx' } as never,
+        isDirty: false,
+      });
+      useSpeleoStore.setState({
+        link: openLink({ hasUnpushedEdits: true, editState: 'editing' }),
+        remoteProjectId: 'p1',
+      });
+      expect(await hook().takeRemoteDiscardingLocal(SUMMARY)).toEqual({ status: 'opened' });
+      expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    });
+
+    it('still refuses the take-remote for the open project over unsaved-to-disk edits', async () => {
+      // Disk-dirty is NOT part of that exemption here either:
+      // `speleodb_open_project_discarding_local` routes through
+      // `replace_cache_stalx_abandoning`, which closes the live project WITHOUT saving
+      // and renames the fresh dump over its `.stalx`. Nothing is stranded by refusing -
+      // the user saves and presses it again.
+      takeRemoteSucceeds();
+      useProjectStore.setState({
+        project: { file_path: '/cache/p1.stalx' } as never,
+        isDirty: true,
+      });
+      useSpeleoStore.setState({ link: openLink(), remoteProjectId: 'p1' });
+      const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+      expect(outcome.status).toBe('error');
+      if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
+      expect(invokeIpcMock).not.toHaveBeenCalledWith(
+        'speleodb_open_project_discarding_local',
+        expect.anything(),
+      );
+      expect(loadProjectMock).not.toHaveBeenCalled();
     });
 
     /**
