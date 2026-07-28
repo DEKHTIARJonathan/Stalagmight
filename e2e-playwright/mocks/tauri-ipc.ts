@@ -1601,6 +1601,72 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               return idx >= 0 ? gas_to_reach[idx] : null;
             });
+            // Round-trip dive profile (#299). Same standing as the metrics above: a shape-correct
+            // stand-in over the linear e2e seed, not the engine's tie-aware, asymmetrically-priced
+            // walk. It does honour the one property the UI is asserted on - the exit leg is swum at
+            // `swim_speed_m_per_min` while the way in uses the survey speed when one is set - so a
+            // spec can tell the two axes apart. The exact math is pinned by the Rust tests.
+            const inSpeed = gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min ?? 10;
+            const outSpeed = gasConfig.swim_speed_m_per_min ?? 10;
+            const routeGasAt = (r: { section_id: number; station_index: number }) => {
+              const idx = stations.findIndex(
+                (s) =>
+                  s.station_ref.section_id === r.section_id &&
+                  s.station_ref.station_index === r.station_index,
+              );
+              return idx >= 0 ? (gas_to_reach[idx] ?? 0) : 0;
+            };
+            const outboundProfile = routeRefsOrdered.map((r, i) => ({
+              route_index: i,
+              station_ref: r,
+              distance_m: cumDist[i] ?? 0,
+              depth_m: routePts[i]?.z ?? 0,
+              gas_l: routeGasAt(r),
+              elapsed_min: (cumDist[i] ?? 0) / inSpeed,
+              outbound: true,
+            }));
+            const turnPoint = outboundProfile[outboundProfile.length - 1];
+            const totalOut = turnPoint?.distance_m ?? 0;
+            const route_profile = [...outboundProfile];
+            if (turnPoint) {
+              let gas = turnPoint.gas_l;
+              let elapsed = turnPoint.elapsed_min;
+              for (let i = outboundProfile.length - 2; i >= 0; i -= 1) {
+                const seg = outboundProfile[i + 1].distance_m - outboundProfile[i].distance_m;
+                elapsed += seg / outSpeed;
+                // Re-swim the leg's outbound cost, scaled by the speed ratio: faster out means less
+                // time at depth, hence less gas. Enough for the UI, not the engine's real pricing.
+                gas +=
+                  (outboundProfile[i + 1].gas_l - outboundProfile[i].gas_l) * (inSpeed / outSpeed);
+                route_profile.push({
+                  ...outboundProfile[i],
+                  distance_m: totalOut + (totalOut - outboundProfile[i].distance_m),
+                  gas_l: gas,
+                  elapsed_min: elapsed,
+                  outbound: false,
+                });
+              }
+            }
+            // ⚠ Mock-only shortcut: a REF lookup, which is exactly the ambiguity the real engine's
+            // route indices exist to remove (a way-point route revisits stations, and `findIndex`
+            // matches the first pass). Adequate here because the seeded e2e cave is linear, so no
+            // station appears twice - but do not read this as a model of the backend.
+            // NOT filtered: the real engine maps `drop_indices` straight through, so this array is
+            // always the same length as `stage_drop_refs` / `stage_drop_over_reserve`, and the
+            // consumer indexes all three positionally. Dropping a miss would shift every later
+            // entry and silently pin an over-reserve flag to the wrong stage. A miss surfaces as a
+            // visibly wrong -1 instead, which is the direction a mock should fail in.
+            const stage_drop_route_indices = stage_drop_refs.map((d) =>
+              routeRefsOrdered.findIndex(
+                (r) => r.section_id === d.section_id && r.station_index === d.station_index,
+              ),
+            );
+            const waypoint_route_indices = waypointArgs.map((w) => {
+              const j = routeRefsOrdered.findIndex(
+                (r) => r.section_id === w.section_id && r.station_index === w.station_index,
+              );
+              return j >= 0 ? j : null;
+            });
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1621,6 +1687,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route_max_depth_m,
               route_avg_depth_m,
               waypoint_gas_litres,
+              route_profile,
+              stage_drop_route_indices,
+              waypoint_route_indices,
             };
           }
 
@@ -3370,6 +3439,26 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'export_json':
             console.log('[Mock IPC] export_json called with:', args);
             return { success: true, path: args?.path };
+
+          // Dive-profile export (#299). Records the call so a spec can assert the plan INPUTS
+          // reached the backend - the real command recomputes the reach field from them rather
+          // than trusting a client-held one, so sending them is the contract under test.
+          case 'export_dive_profile': {
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[]) ?? [];
+            calls.push({ path: args?.path, format: args?.format, request: args?.request });
+            win.__MOCK_DIVE_PROFILE_EXPORTS__ = calls;
+            return undefined;
+          }
+
+          case 'render_dive_profile_text':
+            return [
+              'Mock Cave - planned dive profile',
+              'Planned penetration profile from Stalagmight. NOT a decompression schedule.',
+              '',
+              '   Dist(m)   Depth(m)   Runtime      Gas(L)  Leg',
+              '       0.0        0.0      0:00           0  in',
+            ].join('\n');
 
           case 'preview_svg_export': {
             // Stick-map preview lives in the same backend command pipeline; the

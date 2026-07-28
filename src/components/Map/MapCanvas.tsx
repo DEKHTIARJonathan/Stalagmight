@@ -4138,8 +4138,10 @@ function MapCanvas() {
         </div>
       )}
 
-      {/* Closure-adjusted read-only banner (+ "computing" while solving) */}
-      {geometryMode === 'closureAdjusted' && !placementMode && (
+      {/* Closure-adjusted read-only banner (+ "computing" while solving). Survey only: Plan and
+          Export are read-only workspaces outright, so the badge is noise there - same gate the
+          SpeleoDB read-only banner above already uses. */}
+      {geometryMode === 'closureAdjusted' && !placementMode && appMode === 'survey' && (
         <div
           className="absolute top-2 left-2 bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
           data-testid="geometry-readonly-banner"

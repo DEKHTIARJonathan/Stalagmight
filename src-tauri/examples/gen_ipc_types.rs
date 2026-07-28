@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
 use stalagmight_lib::commands::cache::{CacheStats, ProviderStats, TileFetchStatsResponse};
+use stalagmight_lib::commands::export::DiveProfileRequest;
 use stalagmight_lib::commands::history::{FieldChange, PreviewData, UndoHistoryItem};
 use stalagmight_lib::commands::memory::{MemoryStats, ProcessMemory};
 use stalagmight_lib::commands::project::ProjectState;
@@ -48,8 +49,8 @@ use stalagmight_lib::models::{
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
     ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, Project,
-    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RulerEndpoint,
-    Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
+    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
     ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire,
     StationPair, StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
     ZeroDatumWire,
@@ -134,6 +135,8 @@ fn main() {
     export::<DivePlanMeta>(&out_dir);
     export::<DivePlan>(&out_dir);
     export::<RouteLeg>(&out_dir);
+    export::<RouteProfilePoint>(&out_dir);
+    export::<DiveProfileRequest>(&out_dir);
     export::<RulerEndpoint>(&out_dir);
     export::<PathShot>(&out_dir);
     export::<AlongLineResult>(&out_dir);
@@ -376,6 +379,8 @@ fn main() {
         "DivePlanMeta",
         "DivePlan",
         "RouteLeg",
+        "RouteProfilePoint",
+        "DiveProfileRequest",
         "RulerEndpoint",
         "PathShot",
         "AlongLineResult",

@@ -42,7 +42,10 @@ mod relationships;
 mod stats;
 
 pub use classify::ClassifyScope;
-pub use gas::{CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, TankMaterial, Team};
+pub use gas::{
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, RouteLeg, RouteProfilePoint, TankMaterial,
+    Team,
+};
 pub use integrity::{IntegrityViolation, ViolationSeverity};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 

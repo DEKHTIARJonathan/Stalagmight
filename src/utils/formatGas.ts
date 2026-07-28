@@ -112,6 +112,21 @@ export function rmvFromDisplay(value: number, units: GasUnits): number {
   return units === 'imperial' ? value / CUFT_PER_LITRE : value;
 }
 
+/**
+ * Canonical length (m) → the number shown in the selected unit (m or ft). The numeric sibling of
+ * `formatGasLength`, for callers that need the display VALUE rather than a formatted string -
+ * profile axis ticks are chosen at round numbers in the diver's own unit (every 50 ft, not every
+ * 15.24 m) and then mapped back to metres to be positioned.
+ */
+export function lengthToDisplay(metres: number, units: GasUnits): number {
+  return units === 'imperial' ? metres * FEET_PER_METRE : metres;
+}
+
+/** A length in the selected unit (m or ft) → canonical metres. */
+export function lengthFromDisplay(value: number, units: GasUnits): number {
+  return units === 'imperial' ? value / FEET_PER_METRE : value;
+}
+
 /** Canonical speed (m/min) → the number shown in the selected unit (m/min or ft/min). */
 export function speedToDisplay(mPerMin: number, units: GasUnits): number {
   return units === 'imperial' ? mPerMin * FEET_PER_METRE : mPerMin;

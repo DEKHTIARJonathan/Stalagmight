@@ -2322,9 +2322,33 @@
       "profile": "Profile"
     },
     "profile": {
-      "title": "Anticipated dive profile",
-      "subtitle": "Depth · time · gas along the planned route",
-      "comingSoon": "Export to Subsurface - coming soon"
+      "subtitle": "Depth against distance or runtime, out to the turn and back. No decompression is modelled.",
+      "noRoute": "No route to plot. Set an origin, and an endpoint the plan can actually reach.",
+      "axisLabel": "Profile x axis",
+      "axis": {
+        "distance": "Distance",
+        "time": "Time"
+      },
+      "units": {
+        "minutes": "min"
+      },
+      "marker": {
+        "turn": "Turn",
+        "stage": "Stage {{n}}",
+        "waypoint": "WP {{n}}"
+      },
+      "export": {
+        "copy": "Export text",
+        "copied": "Copied",
+        "copyHint": "Copy the profile to the clipboard as plain text, for a slate or another planner.",
+        "xml": "Export XML",
+        "xmlHint": "Write a Subsurface-importable XML profile. Not a decompression schedule.",
+        "xmlFilter": "Subsurface XML",
+        "written": "Dive profile exported",
+        "failed": "Dive profile export failed",
+        "clipboardUnavailable": "Copy failed - clipboard unavailable"
+      },
+      "aria": "Dive profile: max depth {{depth}}, {{distance}} penetration, about {{runtime}} minutes round trip."
     }
   },
   "exportPanel": {
