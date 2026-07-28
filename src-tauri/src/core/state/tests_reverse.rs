@@ -1650,3 +1650,67 @@ fn undo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
          still report it"
     );
 }
+
+/// A reverse of a shot-less section must be a TRUE no-op in the backend, not merely harmless in
+/// the UI (#24).
+///
+/// `Project::reverse_section` returns `true` on `shot_count == 0` without touching a field, and
+/// the dialog filters such sections out - but the dialog is not a guard. The batch path, the raw
+/// IPC command and the agent harness all reach `execute` directly, and a GPX waypoint imports as
+/// exactly this kind of section. Falling through cost the whole redo branch and stamped
+/// `has_unpushed_edits`, proliferating a phantom edit to SpeleoDB for an operation that changed
+/// nothing.
+#[test]
+fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
+    let (state, real) = state_with_section();
+    let empty = state
+        .execute(Command::CreateSection {
+            name: Some("Waypoint".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#ff0000".to_string(),
+            direction: None,
+            shots: Vec::new(),
+        })
+        .section_id
+        .unwrap();
+
+    // Give the redo stack something to lose: a real edit, then undo it.
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id: real,
+                swap_left_right: false,
+            })
+            .success
+    );
+    assert!(state.undo().success);
+    let redo_before = state.undo_stack.lock().unwrap().redo_len();
+    assert_eq!(redo_before, 1, "fixture: there is a redo branch to protect");
+
+    // The no-op, by both routes that skip the dialog's filter.
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id: empty,
+                swap_left_right: false,
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::Batch {
+                commands: vec![Command::ReverseSection {
+                    section_id: empty,
+                    swap_left_right: false,
+                }],
+            })
+            .success
+    );
+
+    assert_eq!(
+        state.undo_stack.lock().unwrap().redo_len(),
+        redo_before,
+        "a provable no-op must not consume the redo branch"
+    );
+}

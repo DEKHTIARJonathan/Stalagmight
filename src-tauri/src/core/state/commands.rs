@@ -4,9 +4,9 @@ use crate::core::CommentHolder;
 use crate::core::{
     Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
 };
-use crate::models::{Project, SectionData, ViolationSeverity};
+use crate::models::{Project, SectionData, SectionId, ViolationSeverity};
 #[cfg(test)]
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates};
+use crate::models::{ShotData, ShotId, ShotUpdates};
 
 /// The integrity-relevant capabilities of a [`Command`], declared in ONE place
 /// ([`AppState::command_integrity`]). The `execute()` epilogue reads these flags
@@ -78,6 +78,51 @@ impl AppState {
             | RepairIntegrity
             | UpdateProjectSettings => false,
         }
+    }
+
+    /// The sections a command reverses, WITHOUT the parity reduction
+    /// `Command::reversed_section_ids` applies - `None` when the command is not purely
+    /// reverses. Parity reduction is right for the settle step (which asks "what moved?") and
+    /// wrong here, where a `[A, A]` batch must still be recognised as touching A.
+    fn reverse_only_sections(cmd: &Command) -> Option<Vec<SectionId>> {
+        match cmd {
+            Command::ReverseSection { section_id, .. } => Some(vec![*section_id]),
+            Command::Batch { commands } => {
+                let mut out = Vec::with_capacity(commands.len());
+                for c in commands {
+                    match c {
+                        Command::ReverseSection { section_id, .. } => out.push(*section_id),
+                        // Anything else in the batch can change something.
+                        _ => return None,
+                    }
+                }
+                (!out.is_empty()).then_some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this command is a reverse (or a batch of reverses) whose every named section has
+    /// no shots - i.e. provably a no-op, so it must not consume the redo branch or dirty a
+    /// remote project. A missing section counts as "nothing to change" for the same reason.
+    fn is_provable_reverse_noop(&self, cmd: &Command) -> bool {
+        let Some(sections) = Self::reverse_only_sections(cmd) else {
+            return false;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return false;
+        };
+        // A MISSING section is not a no-op - it is an error, and must still fall through so the
+        // command fails. Only a section that exists and has no shots is provably inert.
+        sections.iter().all(|sid| {
+            project
+                .get_section(*sid)
+                .is_some_and(|s| s.shots.is_empty())
+        })
     }
 
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
@@ -473,6 +518,23 @@ impl AppState {
             if let Err(f) = self.speleodb_verify_lock_if_expired() {
                 return f;
             }
+        }
+        // A reverse of a section that has no shots provably changes nothing (#24):
+        // `Project::reverse_section` returns `true` on `shot_count == 0` without touching a
+        // single field. Returning here - BEFORE the cache invalidation, the undo/redo epilogue
+        // and the dirty flip - is what makes that a true no-op. Previously it fell through,
+        // cleared the whole redo branch and stamped `has_unpushed_edits`, proliferating a
+        // phantom edit to SpeleoDB for an operation with no effect.
+        //
+        // Guarded in the BACKEND rather than trusting the dialog's filter: the batch path, the
+        // raw IPC command and the agent harness all reach this function without passing through
+        // that filter, and shot-less sections are real (a GPX waypoint imports as one).
+        if self.is_provable_reverse_noop(&cmd) {
+            tracing::debug!(
+                command = %cmd.description(),
+                "Reverse of shot-less section(s) changes nothing; skipping undo, redo-clear and dirty flip"
+            );
+            return CommandResult::success();
         }
         // Any mutation invalidates the derived closure-adjusted view.
         self.invalidate_adjusted_cache();

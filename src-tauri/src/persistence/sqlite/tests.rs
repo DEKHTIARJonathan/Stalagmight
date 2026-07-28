@@ -212,8 +212,42 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
             [],
         )
         .unwrap();
-    assert!(db.shot_uuid_is_persisted("persisted-uuid").unwrap());
-    assert!(!db.shot_uuid_is_persisted("transient-uuid").unwrap());
+    assert!(db.shot_uuid_is_persisted(0, "persisted-uuid").unwrap());
+    assert!(!db.shot_uuid_is_persisted(0, "transient-uuid").unwrap());
+}
+
+/// The check is SECTION-SCOPED, because `ensure_unique_shot_uuids` only de-dups within a
+/// section - two sections can legitimately hold the same shot UUID.
+///
+/// Unscoped, the query answers "persisted" for section 1 because section 0's copy is on disk,
+/// and the caller then keys an ignore by a UUID that is still in-memory-only for the section it
+/// belongs to. The next open mints a different one and the suppression is orphaned - exactly
+/// what this guard exists to prevent (issue #57).
+#[test]
+fn shot_uuid_is_persisted_does_not_answer_for_another_section() {
+    let db = Database::in_memory().unwrap();
+    for section_id in [0, 1] {
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (?1, '#abcdef', '2026-01-01T00:00:00Z')",
+                [section_id],
+            )
+            .unwrap();
+    }
+    // The SHARED uuid is on disk for section 0 only; section 1's copy is still in memory.
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (1, 0, 0, 0, 0, 1, 0, 0, 'shared-uuid')",
+            [],
+        )
+        .unwrap();
+
+    assert!(db.shot_uuid_is_persisted(0, "shared-uuid").unwrap());
+    assert!(
+        !db.shot_uuid_is_persisted(1, "shared-uuid").unwrap(),
+        "another section's copy must not count as persisted for this one"
+    );
 }
 
 #[test]

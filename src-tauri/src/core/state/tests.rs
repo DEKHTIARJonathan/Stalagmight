@@ -21452,12 +21452,19 @@ fn a_no_undo_data_command_still_clears_the_redo_branch() {
     );
 }
 
-/// The accepted cost of making the redo clear unconditional, pinned so it cannot
-/// regress silently: a shot-less `ReverseSection` is a provable no-op, and it now
-/// drops the redo branch too. "A successful forward command invalidates redo"
-/// outranks preserving redo across a no-op.
+/// A shot-less `ReverseSection` must NOT drop the redo branch (#24).
+///
+/// "A successful forward command invalidates redo" is the right rule for a command that did
+/// something - including `UnmergeStations` on an unmerged station, which reconciles derived
+/// state (see the test above). A reverse of a section with no shots is different in kind:
+/// `Project::reverse_section` returns `true` without touching a field, so there is no state for
+/// the redo branch to have diverged from. Dropping it - and stamping `has_unpushed_edits`, which
+/// proliferates a phantom edit to SpeleoDB - was pure loss.
+///
+/// Guarded in the backend, not the dialog: the batch path, the raw IPC command and the agent
+/// harness all reach `execute` without passing the dialog's filter.
 #[test]
-fn a_shotless_reverse_also_clears_the_redo_branch() {
+fn a_shotless_reverse_leaves_the_redo_branch_intact() {
     let state = AppState::new().unwrap();
     state.execute(Command::CreateProject {
         name: "No-op Reverse".to_string(),
@@ -21494,8 +21501,8 @@ fn a_shotless_reverse_also_clears_the_redo_branch() {
     assert!(reversed.success, "reverse failed: {:?}", reversed.error);
 
     assert!(
-        !state.can_redo(),
-        "the redo branch must be dropped by any successful forward command"
+        state.can_redo(),
+        "a provable no-op must leave the redo branch alone"
     );
 }
 
