@@ -7,7 +7,8 @@
  * anchor-relative-mercator + screen-px-offset primitive via `composeAnchorMatrix`.
  *
  * INDEPENDENCE: this layer fails on its own. A compile/link failure or a GL error
- * self-disables JUST the labels (the controller restores the stock label layer),
+ * self-disables JUST the labels (the controller removes the dead layer and emits
+ * a fatal - there is no stock fallback to restore),
  * leaving the geometry custom layer untouched - the design's "the two custom
  * layers can fail independently" (§8).
  *

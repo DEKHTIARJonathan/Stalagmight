@@ -19,7 +19,8 @@ to Rust every 60 seconds.
 
 **Backend** (`src-tauri/src/telemetry.rs`): Aggregates counts per session, flushes
 to the configured telemetry endpoint every 60 seconds. Buffers to
-`~/.local/share/stalagmight/Stalagmight/telemetry-buffer/*.json` when offline.
+`<app-local-data-dir>/telemetry-buffer/*.json` when offline (the per-app data
+dir - see the path tables in [configuration.md](configuration.md)).
 
 **Feature-gated**: All Rust telemetry is behind `#[cfg(feature = "telemetry")]`.
 When disabled, all methods are zero-cost no-ops eliminated by the compiler.

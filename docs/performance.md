@@ -179,7 +179,8 @@ Build with:
 cargo build --profile profiling --manifest-path src-tauri/Cargo.toml
 ```
 
-The binary is at `~/.cargo_build/profiling/stalagmight`.
+The binary is at `src-tauri/target/profiling/stalagmight` (setting `CARGO_TARGET_DIR`
+moves it to `$CARGO_TARGET_DIR/profiling/`).
 
 ### Recording with perf
 

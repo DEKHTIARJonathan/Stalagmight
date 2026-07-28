@@ -16,6 +16,7 @@
 //   - the private cloud-build provider + its env-var prefix + the SSH-key alias
 //     + the private build host's rsync target.
 //   - the private planning/coordination doc + tool filenames.
+//   - the maintainer's private cave-repo path segment (`~/src/cave/...`).
 //   - the private issue-tracker references.
 //
 // WHERE IT RUNS - its own workflow (.github/workflows/leak-scan.yml) with NO
@@ -98,6 +99,17 @@ export const RULES = [
     // Substring-matched on purpose (catches them inside paths); each is distinctive.
     re: /personaldocs|workingnotes|stalagmight-inflight|stalagmight-project-notes|coord_board|ns-CLAUDE|stag-private|nico_sm_prioritized|\bnuc-i5\b/gi,
     why: 'reference to a private/personal coordination doc or tool path - never published.',
+  },
+  {
+    id: 'private-cave-path',
+    // The maintainer's local cave-repo tree (`~/src/cave/...`, `/home/x/src/cave/...`,
+    // `...\src\cave\...`). Path-anchored by construction: the `src`/`cave` separator IS
+    // the path context, so prose about a cave and paths like `src/cavern.ts` or
+    // `src/caves/` do NOT fire. No home-prefix is required - a home-joined relative
+    // form (`join("src/cave/data/...")`) leaks the same tree.
+    re: /(?<![A-Za-z0-9_])src[/\\]cave(?![A-Za-z0-9_])/gi,
+    why: 'personal cave-repo path (`~/src/cave/...`) - a maintainer-local checkout that no '
+      + 'contributor has. Describe the dataset/checkout instead of naming the home path.',
   },
   {
     id: 'private-tracker',

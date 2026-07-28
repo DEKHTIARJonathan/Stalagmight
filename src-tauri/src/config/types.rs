@@ -1008,8 +1008,10 @@ pub struct ValidationConfig {
     pub warn_shot_length_max: f64,
     pub warn_depth_change_per_shot_max: f64,
     pub warn_azimuth_deviation_max: f64,
-    /// Threshold for azimuth in/out difference warning (degrees).
-    /// If abs(diff - 180) > threshold, show warning.
+    /// Threshold for azimuth in/out difference warning (degrees). Both readings
+    /// are forward azimuths, so they should be similar: warn when they differ by
+    /// more than this after 360-degree wraparound normalisation (see
+    /// `core::validation`).
     #[serde(default = "default_azimuth_diff_threshold")]
     pub azimuth_diff_threshold: f64,
     /// Threshold for pitch in/out difference warning (degrees) - compares the

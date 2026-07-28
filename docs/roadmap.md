@@ -27,7 +27,7 @@
 
 | Task | Status | Description |
 |------|--------|-------------|
-| 09 | Done | GPS input with all format support |
+| 09 | Done | GPS input with all format support (MGRS / What3words validate but do not convert - needs a library / API) |
 | 10 | Done | Per-section adjustment dialog |
 | 11 | Done | Interactive map placement mode |
 | 12 | Done | Live SVG preview in Import Dialog |

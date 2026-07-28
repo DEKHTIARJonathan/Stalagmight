@@ -1,6 +1,6 @@
 # DMP Import Wizard
 
-The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from DistoX DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
+The DMP import wizard (`DmpNewImportDialog`) is the primary UI for importing cave survey data from mNemo DMP files. It uses a connection-wizard pattern: the backend pre-computes placement suggestions, the user confirms or adjusts each one, and a batch import executes at the end.
 
 ## Wizard Phases
 
@@ -252,7 +252,7 @@ The `execute_import_sections` function in `src-tauri/src/core/state/commands.rs`
 
 ## Tests
 
-Unit tests for the pure context-geometry functions live in `src/utils/__tests__/segmentContext.test.ts` (28 tests). Run with:
+Unit tests for the pure context-geometry functions live in `src/utils/__tests__/segmentContext.test.ts`. Run with:
 
 ```bash
 pnpm vitest run src/utils/__tests__/segmentContext.test.ts

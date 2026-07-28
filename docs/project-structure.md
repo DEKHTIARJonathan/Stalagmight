@@ -12,7 +12,8 @@
 | Database | SQLite (rusqlite) |
 | Styling | Tailwind CSS |
 | Logging | tracing + tracing-appender |
-| E2E Testing | Playwright (mocked IPC), WebdriverIO (full app) |
+| E2E Testing | Playwright (mocked IPC, the CI tier), WebdriverIO (full app: the quarantined `e2e/legacy` suite + the `e2e/agent` harness) |
+| Unit / Component Testing | Vitest (+ Testing Library) |
 | Backend Testing | Rust built-in tests (`cargo test`) |
 
 ## Directory Tree
@@ -26,10 +27,13 @@ stalagmight/
 │   │   ├── commands/             # Tauri IPC command handlers
 │   │   ├── core/                 # Business logic (command, state, undo)
 │   │   ├── models/               # Data structures
-│   │   ├── parsers/              # DMP file parser (versions 2-5)
+│   │   ├── parsers/              # Import parsers: dmp (mNemo, versions 2-5),
+│   │   │                         #   tml (Ariane), compass, gpx, walls/
 │   │   ├── persistence/          # SQLite operations
 │   │   ├── cache/                # Tile caching (SQLite-based)
 │   │   ├── export/               # CSV, JSON, image export
+│   │   ├── speleodb/             # SpeleoDB integration (auth, dump, sync)
+│   │   ├── telemetry/            # Anonymous counters + event registry
 │   │   ├── config/               # Configuration with defaults
 │   │   └── logging/              # Tracing setup
 │   ├── capabilities/             # Tauri 2.x permissions
@@ -58,9 +62,9 @@ stalagmight/
 │   │   │       ├── ThemePreviewCard.tsx     # Mini app mockup preview cards
 │   │   │       ├── AdvancedSettings.tsx     # Placement suggestion constants
 │   │   │       └── ...
-│   │   └── common/               # Button, Panel, Table
+│   │   └── common/               # Button, Panel, Select, SpreadsheetGrid
 │   ├── theme/                    # Color theme system
-│   │   └── tokens.ts                 # 9 color theme token definitions
+│   │   └── tokens.ts                 # 10 color theme token definitions
 │   ├── store/                    # Zustand stores
 │   │   ├── projectStore.ts           # Project state
 │   │   ├── uiStore.ts                # UI state (incl. resolvedTheme)
@@ -73,12 +77,13 @@ stalagmight/
 │   │   ├── dialogStack.ts            # Nested dialog stack manager
 │   └── types/                    # TypeScript type definitions
 │
-├── e2e/                          # WebdriverIO E2E tests (full Tauri app)
-│   ├── specs/                    # Test specifications
+├── e2e/                          # Full-app tests + harnesses (real Tauri app)
+│   ├── agent/                    # LLM-agent harness (MCP + WebdriverIO)
 │   ├── fixtures/                 # Test data (DMP files)
-│   └── helpers/                  # Test utilities
+│   ├── legacy/                   # Quarantined WebdriverIO suite (on-demand)
+│   └── lib/                      # Shared helpers
 │
-├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 67 spec files)
+├── e2e-playwright/               # Playwright E2E tests (mocked IPC, 100+ spec files)
 │   ├── mocks/                    # Tauri IPC mocks
 │   │   └── tauri-ipc.ts          # Mock command handlers
 │   ├── fixtures/                 # Test data
@@ -87,26 +92,17 @@ stalagmight/
 │   ├── theme.spec.ts             # Color theme switching tests
 │   ├── settings-shortcuts.spec.ts # Shortcut configuration tests
 │   ├── ui-components.spec.ts     # UI interaction tests
-│   └── ...                       # 60+ additional spec files
+│   └── ...                       # the rest of the spec files
+│
+├── scripts/                      # Dev + CI scripts: the lint gates, dev.sh,
+│                                 #   release.sh, mac build, replay generators
 │
 ├── docs/                         # Documentation
 │   ├── SPEC.md                   # Full specification document
 │   ├── TESTING.md                # Testing guide
 │   ├── architecture.md           # System design
 │   ├── project-structure.md      # This file
-│   ├── configuration.md          # Config options
-│   ├── roadmap.md                # v1.0 features
-│   ├── saving.md                 # Save pipeline & auto-save
-│   ├── undo-redo.md              # Undo/redo system details
-│   ├── performance.md            # Algorithm choices & profiling
-│   ├── ipc-typegen.md            # IPC type generation
-│   ├── dmp-import.md             # DMP import format details
-│   ├── ariane-import.md          # Ariane import format
-│   ├── ariane-export.md          # Ariane export format
-│   ├── closures.md               # Loop closure system
-│   ├── move-tools.md             # Move station/segment tools
-│   ├── releasing.md              # Release process
-│   └── style-guide.md            # UI style guide
+│   └── ...                       # every page indexed in docs/README.md
 │
-└── CLAUDE.md                     # Agent instructions (minimal)
+└── CLAUDE.md                     # Agent instructions (AGENTS.md symlinks to it)
 ```
