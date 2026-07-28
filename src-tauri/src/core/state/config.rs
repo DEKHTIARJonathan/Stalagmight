@@ -23,6 +23,21 @@ enum KeychainEviction {
     MayRemain(String),
 }
 
+/// Everything [`AppState::speleodb_disable_keychain`] settled, which is TWO
+/// questions rather than one: what became of the entry the keyring already held,
+/// and where the key this session is still holding landed once the keyring was
+/// closed to it. Either half can strand a readable credential on the machine, and
+/// only the first half was ever reported.
+struct KeychainOff {
+    /// What the eviction of the keyring entry established.
+    evicted: KeychainEviction,
+    /// A persistent copy that survived the session-only sweep, carrying the reason
+    /// for the parenthetical in the warning. `None` whenever nothing landed
+    /// session-only, nothing survived, or [`Self::evicted`] is already telling the
+    /// user about the same credential in more specific words.
+    persistent_residue: Option<String>,
+}
+
 impl AppState {
     /// Get config
     ///
@@ -121,10 +136,14 @@ impl AppState {
             // recoverable direction (the next launch opens the keyring, finds
             // nothing, and asks for a sign-in); saving first would leave the file
             // saying "off" over an entry that survived.
-            match self.speleodb_disable_keychain(
+            let KeychainOff {
+                evicted,
+                persistent_residue,
+            } = self.speleodb_disable_keychain(
                 config.speleodb.token_fallback,
                 config.speleodb.keychain_has_token,
-            ) {
+            );
+            match evicted {
                 KeychainEviction::Emptied => config.speleodb.keychain_has_token = false,
                 // Nothing was checked, so nothing is claimed and nothing is said.
                 KeychainEviction::NotAttempted => {}
@@ -153,6 +172,17 @@ impl AppState {
                     report.keychain_residue = Some(reason);
                 }
             }
+            // The OTHER half of the same move, and it goes wrong the same way. The
+            // key was re-landed on the session-only tier, which is a promise about
+            // disk - nothing persists - and a copy survived the sweep that was
+            // supposed to make it true. The settings then save `token_fallback =
+            // session_only` over a `0o600` file that `TokenStore::load` reads back
+            // with no keyring, no unlock and no flag to get past, so the next launch
+            // signs the user in from a credential the saved configuration says is
+            // not there. Reported, not refused, for the reasons the eviction arm
+            // above gives: the move has already happened, and abandoning the rest of
+            // the user's settings over it helps nobody.
+            report.persistent_residue = persistent_residue;
         } else {
             let mut session = self
                 .speleodb
@@ -224,7 +254,8 @@ impl AppState {
     /// The cost of being wrong the other way is one delete against a keyring that
     /// holds nothing, which is `Ok` (a missing entry maps to success).
     ///
-    /// Reports which of [`KeychainEviction`]'s three outcomes the delete reached.
+    /// Reports which of [`KeychainEviction`]'s three outcomes the delete reached,
+    /// AND whether the re-landing that follows it left a persistent copy behind.
     /// A refused delete does NOT answer `Emptied`: the entry may well still be
     /// there, so the caller leaves `keychain_has_token` set (a later re-enable
     /// should still know the keyring is worth looking in) and tells the user.
@@ -254,7 +285,7 @@ impl AppState {
         &self,
         fallback: TokenFallback,
         keychain_has_token: bool,
-    ) -> KeychainEviction {
+    ) -> KeychainOff {
         // Seeds `endpoint` / `email` from config when the session is still cold -
         // Settings is reachable without having touched SpeleoDB this run, and
         // without an account there is no key to evict by. Called with NO lock held:
@@ -281,8 +312,12 @@ impl AppState {
             );
             // We verified nothing, so we claim nothing: leave the recorded belief
             // alone rather than assert an emptiness we did not check. And say
-            // nothing to the user - there was no credential here to strand.
-            return KeychainEviction::NotAttempted;
+            // nothing to the user - there was no credential here to strand, and no
+            // account key to sweep one by either.
+            return KeychainOff {
+                evicted: KeychainEviction::NotAttempted,
+                persistent_residue: None,
+            };
         };
 
         let evicted = match session.token_store.evict_from_keychain(&endpoint, &email) {
@@ -294,7 +329,7 @@ impl AppState {
         // whatever tier the closed gate allows (the `token_fallback` preference
         // still decides between a `0o600` file and session-only memory).
         //
-        // A survivor of the session-only sweep is LOGGED here rather than failing
+        // A survivor of the session-only sweep is REPORTED here rather than failing
         // the settings save, unlike `speleodb_move_token` which refuses on it. The
         // two verbs make different promises: answering the storage prompt with "this
         // session only" IS the promise that nothing persists, so a surviving copy
@@ -303,23 +338,57 @@ impl AppState {
         // instead is `token_fallback`, which this save did not change. Failing here
         // would also abandon the rest of the user's settings over a residue, having
         // already emptied the keyring.
-        match session
-            .token_store
-            .restore(&endpoint, &email, fallback == TokenFallback::Plaintext)
-        {
-            Ok(landed) => tracing::info!(
-                ?landed,
-                emptied = matches!(evicted, KeychainEviction::Emptied),
-                "OS keyring turned off; the SpeleoDB key was moved out of it"
-            ),
-            Err(e) => tracing::warn!(
-                error = %e,
-                emptied = matches!(evicted, KeychainEviction::Emptied),
-                "OS keyring turned off, but an older copy of the SpeleoDB key could not be \
-                 removed from this machine"
-            ),
+        //
+        // It is not swallowed either, which is what it was. `Err` from `restore` is
+        // narrow by construction: the key DID land session-only, and a persistent
+        // tier's delete failed over a store that has NOT been proven empty
+        // (`sweep_tier` returns `Ok` for a delete the tier accepted, for a probe that
+        // answered `Ok(None)`, and for the keychain-less box that cannot have held
+        // anything). So it means one thing - a readable copy may still be on this
+        // machine - and logging it left the save reporting unqualified success over
+        // exactly that.
+        let residue = match session.token_store.restore(
+            &endpoint,
+            &email,
+            fallback == TokenFallback::Plaintext,
+        ) {
+            Ok(landed) => {
+                tracing::info!(
+                    ?landed,
+                    emptied = matches!(evicted, KeychainEviction::Emptied),
+                    "OS keyring turned off; the SpeleoDB key was moved out of it"
+                );
+                None
+            }
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    emptied = matches!(evicted, KeychainEviction::Emptied),
+                    "OS keyring turned off, but an older copy of the SpeleoDB key could not be \
+                     removed from this machine"
+                );
+                Some(e.to_string())
+            }
+        };
+        // Said ONCE per credential, not twice. A keyring that refused the eviction
+        // refuses the sweep's second delete against that same entry, and
+        // `TokenStore::sweep_persistent_tiers` returns the keychain's error ahead of
+        // the plaintext one - so on the `MayRemain` path this string IS the failure
+        // the eviction has already reported, in words that additionally name the
+        // keyring and tell the user where to look. Nothing is lost by dropping it:
+        // even when a plaintext file stranded too, the sweep has already discarded
+        // that error in favour of the keychain's, so there was never a second reason
+        // to show. A second, vaguer warning about the same key is the false alarm
+        // this file's three-way probes exist to avoid.
+        let persistent_residue = if matches!(evicted, KeychainEviction::MayRemain(_)) {
+            None
+        } else {
+            residue
+        };
+        KeychainOff {
+            evicted,
+            persistent_residue,
         }
-        evicted
     }
 
     /// Reload config from disk without saving
@@ -405,15 +474,47 @@ mod tests {
         }
     }
 
+    /// A plaintext tier that hands its file back but will not delete it - the
+    /// read-only token directory, or the file another process is holding open.
+    /// [`DeleteRefusingStore`]'s sibling, kept separate rather than generalised
+    /// because the reason the user is shown has to name the right part of their
+    /// machine, and because this one delegates to a REAL [`PlaintextStore`] so a
+    /// second handle on the same tempdir can see what survived.
+    struct DeleteRefusingPlaintext(PlaintextStore);
+
+    impl SecretStore for DeleteRefusingPlaintext {
+        fn kind(&self) -> &'static str {
+            "plaintext"
+        }
+        fn store(&self, key: &str, token: &str) -> Result<(), SecretStoreError> {
+            self.0.store(key, token)
+        }
+        fn load(&self, key: &str) -> Result<Option<String>, SecretStoreError> {
+            self.0.load(key)
+        }
+        fn delete(&self, _: &str) -> Result<(), SecretStoreError> {
+            Err(SecretStoreError::for_test("the token file is read-only"))
+        }
+    }
+
     /// A state whose session is signed in over the injected keychain backend.
     /// `endpoint` is seeded, which short-circuits `speleodb_ensure_rehydrated`, so
     /// nothing in these tests reaches a real keyring.
     fn signed_in_over(keychain: Box<dyn SecretStore>) -> AppState {
+        signed_in_over_tiers(keychain, None)
+    }
+
+    /// [`signed_in_over`] with the plaintext tier wired too - production's default
+    /// shape, and the one the session-only sweep has two stores to answer for.
+    fn signed_in_over_tiers(
+        keychain: Box<dyn SecretStore>,
+        plaintext: Option<Box<dyn SecretStore>>,
+    ) -> AppState {
         let state = AppState::new().expect("state");
         let mut session = state.speleodb.lock().expect("session");
         session.endpoint = Some(EP.to_owned());
         session.email = Some(EMAIL.to_owned());
-        session.token_store = TokenStore::from_stores(keychain, None);
+        session.token_store = TokenStore::from_stores(keychain, plaintext);
         drop(session);
         state
     }
@@ -522,6 +623,175 @@ mod tests {
             assert!(
                 saved.speleodb.keychain_has_token,
                 "the recorded belief must not claim a removal that did not happen"
+            );
+        });
+    }
+
+    #[test]
+    fn turning_the_keyring_off_reports_a_plaintext_copy_the_sweep_could_not_remove() {
+        // The OTHER half of the same move, and it reached the log and nowhere else.
+        // Turning the keyring off re-lands the key at whatever tier the closed gate
+        // allows; under the default `session_only` preference that is memory, and
+        // the sweep that MAKES that landing true has to remove the `0o600` file an
+        // earlier storage choice left behind. When it cannot, the settings still
+        // saved `token_fallback = session_only` - so the configuration claims the
+        // key is gone when the app closes while `TokenStore::load` reads that file
+        // straight back on the next launch (no keyring, no unlock and no flag in the
+        // way) and signs the user in from a credential the save said was not there.
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let state = signed_in_over_tiers(
+                Box::new(InMemoryStore::new()),
+                Some(Box::new(DeleteRefusingPlaintext(PlaintextStore::new(
+                    dir.path().to_path_buf(),
+                )))),
+            );
+            // The older copy: a previous `token_fallback = plaintext` choice wrote
+            // it, and nothing has removed it since (the self-heal only runs on a
+            // keychain store that succeeds, and it fails against this tier too).
+            let probe = PlaintextStore::new(dir.path().to_path_buf());
+            probe.store(&account_key(EP, EMAIL), "tok").unwrap();
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                // A working login this run, so the key is in hand to be re-landed.
+                assert_eq!(
+                    session.token_store.store(EP, EMAIL, "tok", false),
+                    TokenTier::Keychain
+                );
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("the settings still save - the residue is reported, not refused");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "the keyring gave its entry up, so there is nothing to say about the keyring"
+            );
+            let residue = report.persistent_residue.expect(
+                "a copy the sweep could not remove is what signs the user back in next launch",
+            );
+            assert!(
+                residue.contains("read-only"),
+                "the reason belongs in the warning so it is actionable: {residue}"
+            );
+            assert_eq!(
+                probe.load(&account_key(EP, EMAIL)).unwrap(),
+                Some("tok".to_owned()),
+                "the premise of the warning: the copy really did survive the sweep"
+            );
+            assert_eq!(
+                state.get_config().speleodb.token_fallback,
+                TokenFallback::SessionOnly,
+                "and the saved configuration is the thing the survivor contradicts"
+            );
+        });
+    }
+
+    #[test]
+    fn a_plaintext_copy_the_sweep_removed_raises_no_alarm() {
+        // DO NOT REGRESS. The ordinary path for anyone who ever answered the storage
+        // prompt with "write it to a file": the sweep deletes that file and PROVES it
+        // gone, so there is nothing left to sign them back in and nothing to say.
+        // Warning on every sweep that had a file to remove would fire here, which is
+        // most of the times this switch is thrown on a box that has used the escape
+        // hatch - and a warning that fires on the ordinary path is one the user
+        // learns to ignore.
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let state = signed_in_over_tiers(
+                Box::new(InMemoryStore::new()),
+                Some(Box::new(PlaintextStore::new(dir.path().to_path_buf()))),
+            );
+            let probe = PlaintextStore::new(dir.path().to_path_buf());
+            probe.store(&account_key(EP, EMAIL), "tok").unwrap();
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                assert_eq!(
+                    session.token_store.store(EP, EMAIL, "tok", false),
+                    TokenTier::Keychain
+                );
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert_eq!(
+                report.persistent_residue, None,
+                "a copy that is provably gone has stranded nothing to warn about"
+            );
+            assert_eq!(report.keychain_residue, None);
+            assert_eq!(
+                probe.load(&account_key(EP, EMAIL)).unwrap(),
+                None,
+                "the premise of the silence: the sweep really did remove it"
+            );
+        });
+    }
+
+    #[test]
+    fn a_cold_session_turns_the_keyring_off_without_a_false_alarm() {
+        // DO NOT REGRESS. The launch after a "this session only" answer: the account
+        // is still in the config (it is the rehydrate seed) but the token is not - it
+        // was never persisted, which is exactly what the user asked for. There is
+        // nothing to re-land, so nothing is swept and nothing can have survived.
+        // `restore` says so with `Ok(None)`, and reading that as unsettled would warn
+        // every signed-out user who turns the switch on about a credential this
+        // machine does not have.
+        crate::test_helpers::with_isolated_config(|| {
+            let dir = tempfile::tempdir().expect("tempdir");
+            let state = signed_in_over_tiers(
+                Box::new(InMemoryStore::new()),
+                Some(Box::new(DeleteRefusingPlaintext(PlaintextStore::new(
+                    dir.path().to_path_buf(),
+                )))),
+            );
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("settings saved");
+
+            assert_eq!(
+                report.persistent_residue, None,
+                "no key was moved, so no copy of one can have been left behind"
+            );
+            assert_eq!(report.keychain_residue, None);
+        });
+    }
+
+    #[test]
+    fn a_keyring_that_refused_the_eviction_is_not_reported_twice() {
+        // DO NOT REGRESS. The sweep re-attempts the delete the eviction just lost
+        // against the SAME entry, and loses it the same way - and
+        // `sweep_persistent_tiers` returns the keychain's error ahead of the
+        // plaintext one, so the second report would be the first one again with the
+        // keyring's name taken out of it. One credential, one warning: the more
+        // specific one, which tells the user where to go look.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = signed_in_over(Box::new(DeleteRefusingStore(InMemoryStore::new())));
+            {
+                let mut session = state.speleodb.lock().expect("session");
+                assert_eq!(
+                    session.token_store.store(EP, EMAIL, "tok", false),
+                    TokenTier::Keychain
+                );
+                drop(session);
+                let mut config = state.config.lock().expect("config");
+                config.speleodb.keychain_has_token = true;
+            }
+
+            let report = state
+                .update_config(settings_save(&state, true))
+                .expect("the settings still save - the residue is reported, not refused");
+
+            assert!(
+                report.keychain_residue.is_some(),
+                "the keyring refused, and that is the report worth making"
+            );
+            assert_eq!(
+                report.persistent_residue, None,
+                "saying it twice, the second time more vaguely, is the false alarm"
             );
         });
     }

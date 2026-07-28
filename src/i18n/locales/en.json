@@ -644,7 +644,8 @@
       "help": "Stops Stalagmight touching the system keyring entirely. Turn this on if your keyring is locked or unavailable and you do not want to be asked about it again.",
       "aria": "Never use the OS keychain",
       "warning": "Your API key will not be stored in the OS keychain. It will be kept wherever the credential-storage setting above says - which may mean signing in again each time Stalagmight starts.",
-      "evictionFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer's keychain ({{reason}}), so it may sign you back in the next time you open the app."
+      "evictionFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer's keychain ({{reason}}), so it may sign you back in the next time you open the app.",
+      "sweepFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer ({{reason}}), so it may sign you back in the next time you open the app."
     },
     "allowForceEdit": {
         "label": "Allow editing without the write lock",

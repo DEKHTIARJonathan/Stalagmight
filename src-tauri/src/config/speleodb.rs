@@ -120,11 +120,16 @@ pub struct SpeleoDbConfig {
 /// What a settings save has to tell the user beyond "it was written".
 ///
 /// Saving settings is normally a yes/no, which is why the one thing it can half-do
-/// went unreported: turning [`SpeleoDbConfig::keychain_disabled`] on EVICTS the
-/// entry an earlier login left in the OS keyring, and a locked or read-only keyring
-/// can refuse that delete. The save still succeeds - deliberately, see
+/// went unreported: turning [`SpeleoDbConfig::keychain_disabled`] on MOVES the API
+/// key off the keyring, and either half of that move can fail over settings that
+/// were nevertheless written. The save still succeeds - deliberately, see
 /// `AppState::update_config` - so an `Err` would be a lie in the other direction,
 /// and the frontend needs a third answer to render.
+///
+/// Both fields answer the same user-facing question ("could a copy of my key still
+/// be on this machine?") and both stay `None` unless it may genuinely be yes. They
+/// are kept apart because only one of them knows WHICH store stranded it, and the
+/// wording that sends a user to their keyring is wrong about a `0o600` file.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize, TS)]
 pub struct ConfigSaveReport {
     /// Set when the OS keyring was turned off but the API key it already held
@@ -134,6 +139,21 @@ pub struct ConfigSaveReport {
     /// ignore - which costs them the case where it is real.
     #[serde(default)]
     pub keychain_residue: Option<String>,
+    /// Set when the same save re-landed the key on the SESSION-ONLY tier but a
+    /// persistent copy of it survived the sweep that was supposed to make that
+    /// landing true - a plaintext file left by an earlier storage choice, or a
+    /// keyring that stopped answering between the eviction and the sweep. The
+    /// consequence is the one `keychain_residue` describes (the next launch reads
+    /// the survivor back and signs the user in), and the same `None` discipline
+    /// applies: a tier proven empty, or one that never held anything, says nothing.
+    ///
+    /// Separate from `keychain_residue` because WHICH tier stranded it is not
+    /// knowable here - `TokenStore::sweep_persistent_tiers` collapses both into one
+    /// error - so the copy this drives must stay tier-neutral. It is left `None`
+    /// when `keychain_residue` is already set, which is the case where the two would
+    /// be the same failure said twice.
+    #[serde(default)]
+    pub persistent_residue: Option<String>,
 }
 
 /// Floor for [`SpeleoDbConfig::poll_interval_seconds`]. Enforced both in the

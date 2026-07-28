@@ -602,6 +602,25 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             'warning',
           );
       }
+      // The other half of that same move: the key is re-landed wherever the closed
+      // gate allows, which under the default "this session only" preference is
+      // memory - and the sweep that makes that true has to remove any copy an
+      // earlier storage choice wrote to disk. When it cannot, the saved settings say
+      // the key is gone when the app closes while the next launch reads the survivor
+      // straight back and signs the user in. Deliberately does not name the keyring:
+      // the backend cannot tell which store stranded it, and it is mutually
+      // exclusive with the message above, which can.
+      if (report?.persistent_residue) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('settings.speleodb.disableKeychain.sweepFailed', {
+              reason: report.persistent_residue,
+            }),
+            'speleodb-token-residue',
+            'warning',
+          );
+      }
       // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
       await get().loadConfig();
       // The closure-adjustment sigmas feed the adjusted solve, so a settings change
