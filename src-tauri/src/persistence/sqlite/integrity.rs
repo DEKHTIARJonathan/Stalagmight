@@ -144,6 +144,8 @@ impl Database {
                 direction TEXT NOT NULL DEFAULT 'in',
                 quality REAL NOT NULL DEFAULT 1.0,
                 reverse_parity INTEGER NOT NULL DEFAULT 0,
+                gauge_shot_uuid TEXT,
+                gauge_neighbour_uuid TEXT,
                 created_at TEXT NOT NULL
             );
 
@@ -252,8 +254,8 @@ impl Database {
             // name, which makes the result an UNSAVEABLE project: loading still works (the
             // read path falls back to a literal for an absent column) and only the next save
             // fails, long after the migration that caused it.
-            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, created_at)
-             SELECT id, name, surveyor, date, color, direction, quality, reverse_parity, created_at FROM sections_old",
+            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, created_at)
+             SELECT id, name, surveyor, date, color, direction, quality, reverse_parity, gauge_shot_uuid, gauge_neighbour_uuid, created_at FROM sections_old",
             [],
         )?;
 

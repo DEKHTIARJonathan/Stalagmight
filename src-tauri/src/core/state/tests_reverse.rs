@@ -1714,3 +1714,111 @@ fn reversing_a_shotless_section_leaves_redo_and_the_dirty_bit_alone() {
         "a provable no-op must not consume the redo branch"
     );
 }
+
+/// R3: the gauge must survive a save and reload, not just a reverse in memory.
+///
+/// `reverse_parity` and the captured gauge pair are the sole inputs to
+/// `default_anchor_for_component`, which pins a station at its MEASURED coordinates for a
+/// datum-less component. Losing either on the way to disk moves that pin on the next open,
+/// translating the whole component - and mutation testing showed the read and write paths were
+/// entirely unpinned: hardcoding either to a default passed the whole suite.
+#[test]
+fn the_gauge_survives_a_save_and_reload() {
+    let temp = tempfile::TempDir::new().unwrap();
+    let path = temp.path().join("gauge.stalx");
+    let (state, section_id) = state_with_section();
+
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::SaveProject {
+                path: Some(path.clone()),
+                is_autosave: false,
+            })
+            .success
+    );
+
+    let in_memory = {
+        let guard = state.project.lock().unwrap();
+        let project = guard.as_ref().unwrap();
+        let section = project.get_section(section_id).unwrap();
+        (
+            section.reverse_parity,
+            section.gauge_shot_uuid.clone(),
+            project.adjustment_anchor_for_tests(section_id),
+        )
+    };
+    assert!(in_memory.0, "the reverse recorded its parity");
+    assert!(in_memory.1.is_some(), "the save captured the gauge pair");
+
+    // Reopen from disk and compare.
+    let reopened = AppState::new().unwrap();
+    assert!(reopened.execute(Command::OpenProject { path }).success);
+    let after = {
+        let guard = reopened.project.lock().unwrap();
+        let project = guard.as_ref().unwrap();
+        let section = project.get_section(section_id).unwrap();
+        (
+            section.reverse_parity,
+            section.gauge_shot_uuid.clone(),
+            project.adjustment_anchor_for_tests(section_id),
+        )
+    };
+    assert_eq!(after.0, in_memory.0, "reverse_parity must round-trip");
+    assert_eq!(after.1, in_memory.1, "the gauge pair must round-trip");
+    assert_eq!(
+        after.2, in_memory.2,
+        "and the gauge must therefore land on the same station after a reopen"
+    );
+}
+
+/// The import toggle and an in-app reverse must agree about the section's orientation (#24).
+///
+/// `reverse_parity` is documented as flipping whenever a section's shot order is reversed, and
+/// the import path reverses the shots with the same shared transform - so leaving the flag false
+/// there made two geometrically identical projects disagree about which side of a shot a
+/// terminal plan anchor sits on, and about which end the least-squares gauge pins.
+#[test]
+fn importing_with_the_reverse_toggle_records_the_orientation() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Import reverse".to_string(),
+        location: None,
+    });
+
+    let result = state.execute_import_sections(
+        vec![ImportSectionConfig {
+            section_index: 0,
+            name: Some("Imported".to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            quality: 1.0,
+            shots: vec![shot(0.0, 10.0, 0.0, 2.0), shot(90.0, 5.0, 2.0, 2.0)],
+            placement: ImportPlacement::Origin,
+            station_comments: Vec::new(),
+            reverse: true,
+        }],
+        Vec::new(),
+        None,
+        Vec::new(),
+        Vec::new(),
+        VirtualShotMode::Auto,
+    );
+    assert!(result.success, "import failed: {:?}", result.error);
+
+    let project = state.get_project_state().unwrap();
+    let section = project.sections.first().unwrap();
+    assert!(
+        section.reverse_parity,
+        "an import that reversed the shots must record it, like Project::reverse_section does"
+    );
+}

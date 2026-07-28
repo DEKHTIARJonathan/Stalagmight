@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::models::{ClosureRef, ClosureStrategy, Coordinates, SectionId, Station, StationRef};
+use crate::models::{
+    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef,
+};
 
 use super::Project;
 
@@ -335,12 +337,89 @@ impl Project {
             .iter()
             .filter(|s| component.contains(&s.id))
             .min_by_key(|s| s.id)?;
-        let index = if section.reverse_parity {
-            section.shots.len()
-        } else {
-            0
-        };
+        let index = Self::gauge_index(section);
         Some(StationRef::new(section.id, index as u32))
+    }
+
+    /// Where the gauge sits in `section` right now.
+    ///
+    /// Prefers the captured pair (see [`Section::gauge_shot_uuid`]): the station is the end of
+    /// that shot facing AWAY from its recorded neighbour, worked out from their current
+    /// positions. Neither moves relative to the other when the section is extended, and a
+    /// reverse carries both, so the same junction is named throughout.
+    ///
+    /// Falls back to the index rule for a section whose pair was never captured (nothing has
+    /// been saved yet) or whose recorded shots are gone. That fallback is what an
+    /// already-existing project uses until its first save, and it deliberately reproduces the
+    /// legacy answer - station 0 - so upgrading moves nobody.
+    fn gauge_index(section: &Section) -> usize {
+        let position_of = |uuid: &Option<String>| -> Option<usize> {
+            let uuid = uuid.as_deref()?;
+            section
+                .shots
+                .iter()
+                .position(|s| s.uuid.as_deref() == Some(uuid))
+        };
+        match (
+            position_of(&section.gauge_shot_uuid),
+            position_of(&section.gauge_neighbour_uuid),
+        ) {
+            // The neighbour is behind the gauge shot, so the gauge station is in front of it.
+            (Some(px), Some(py)) if py < px => px + 1,
+            (Some(px), Some(_)) => px,
+            // Captured shot survives but its neighbour does not: take its free end if it still
+            // has one, else fall through.
+            (Some(px), None) if px == 0 => 0,
+            (Some(px), None) if px + 1 == section.shots.len() => section.shots.len(),
+            _ => {
+                if section.reverse_parity {
+                    section.shots.len()
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// Capture the gauge pair for every section that does not have one, so the choice becomes
+    /// durable instead of being re-derived from an index on each solve. Called on save, where
+    /// the project is already mutable.
+    ///
+    /// Records the pair that names the gauge station the section has RIGHT NOW, so capturing
+    /// never moves it - an existing project is pinned to exactly the station it was already
+    /// using.
+    pub fn capture_missing_gauge_anchors(&mut self) {
+        for section in &mut self.sections {
+            if section.gauge_shot_uuid.is_some() || section.shots.is_empty() {
+                continue;
+            }
+            let last = section.shots.len() - 1;
+            let gauge = if section.reverse_parity {
+                section.shots.len()
+            } else {
+                0
+            };
+            // The shot the gauge station touches, and the one beyond it that gives it a side.
+            let (x, y) = if gauge == 0 {
+                (0usize, 1usize)
+            } else {
+                (last, last.wrapping_sub(1))
+            };
+            section.gauge_shot_uuid = section.shots.get(x).and_then(|s| s.uuid.clone());
+            section.gauge_neighbour_uuid = if x == y {
+                None
+            } else {
+                section.shots.get(y).and_then(|s| s.uuid.clone())
+            };
+        }
+    }
+
+    /// The gauge station `section_id`'s component would use, for tests that need to assert it
+    /// survives a save/reload rather than only a reverse in memory.
+    #[cfg(test)]
+    pub(crate) fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
+        let component = self.get_connected_section_ids(section_id);
+        self.default_anchor_for_component(&component)
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.
@@ -1021,6 +1100,52 @@ mod tests {
             (one, 0),
             "the gauge must stay where it has always been: station 0 of the lowest-id section"
         );
+    }
+
+    /// THE reviewer's case: appending to an already-reversed section must not move the gauge.
+    ///
+    /// The old rule was "station 0, or `shots.len()` when reversed" - stable across the reverse
+    /// itself, but `len` grows on the next append and walks the pin onto the newly created far
+    /// station, translating the whole adjusted component by the adjustment residual. The
+    /// captured pair is immune: neither shot moves relative to the other when the section is
+    /// extended.
+    #[test]
+    fn appending_to_a_reversed_section_does_not_move_the_gauge() {
+        let mut project = Project::new("append".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+        // Capture happens on save; do it directly here.
+        project.capture_missing_gauge_anchors();
+        assert_eq!(anchor_index(&project, s), 0);
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 3, "station 0 is now station 3");
+
+        // Extending the passage must not disturb it.
+        project.add_shot(s, shot(270.0, 10.0)).unwrap();
+        assert_eq!(
+            anchor_index(&project, s),
+            3,
+            "the gauge must stay on the same physical station when the section grows"
+        );
+    }
+
+    /// A project that has never been saved has no captured pair, and must keep using the legacy
+    /// station-0 answer - capturing is what makes it durable, not what chooses it.
+    #[test]
+    fn an_uncaptured_section_still_uses_the_legacy_gauge() {
+        let mut project = Project::new("legacy".to_string(), None);
+        let s = add_section(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+        project.ensure_shot_uuids();
+        assert!(project.sections[0].gauge_shot_uuid.is_none());
+        assert_eq!(anchor_index(&project, s), 0);
+
+        // Capturing records exactly the station already in use.
+        project.capture_missing_gauge_anchors();
+        assert_eq!(anchor_index(&project, s), 0);
     }
 
     /// ...and it follows that physical station through a reverse, rather than staying on the

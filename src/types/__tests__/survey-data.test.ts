@@ -39,7 +39,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
       direction: 'in',
       quality: 1.0,
       next_shot_id: 103,
-      reverse_parity: false,
+      reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [
         {
           id: 101,
@@ -88,7 +88,7 @@ function fixture(): { sections: Section[]; stations: Station[] } {
       direction: 'out',
       quality: 0.5,
       next_shot_id: 202,
-      reverse_parity: false,
+      reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [
         {
           id: 201,

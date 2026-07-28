@@ -77,6 +77,27 @@ pub struct Section {
     /// keeps the original choice: `false` means station 0, as every existing project has it.
     #[serde(default)]
     pub reverse_parity: bool,
+    /// The least-squares gauge station for this section, as the pair of shots that identify it:
+    /// the station is the end of `gauge_shot_uuid` FACING AWAY FROM `gauge_neighbour_uuid`
+    /// (#24). `None` until the first save captures it.
+    ///
+    /// The gauge fixes the otherwise-free absolute translation of a datum-less component by
+    /// pinning one station at its measured coordinates, so it has to name the SAME physical
+    /// station for the life of the project - if it moves, the whole component translates by the
+    /// adjustment residual and Plan/Export coordinates jump.
+    ///
+    /// An index cannot do that. "Station 0, or `shots.len()` when the section is reversed" is
+    /// stable across the reverse itself but not across what comes next: appending to a reversed
+    /// section grows `len` and walks the gauge onto the newly created far station. A pair is
+    /// immune - neither shot moves relative to the other when the section is extended at either
+    /// end, and a reverse carries both together, so "away from the neighbour" names the same
+    /// junction throughout.
+    #[serde(default)]
+    pub gauge_shot_uuid: Option<String>,
+    /// The shot on the far side of [`Self::gauge_shot_uuid`], giving the gauge station its
+    /// direction. `None` for a single-shot section, which has no second shot to face away from.
+    #[serde(default)]
+    pub gauge_neighbour_uuid: Option<String>,
 }
 
 /// Data for creating a new section
@@ -278,6 +299,8 @@ impl Section {
             shots: Vec::new(),
             next_shot_id: id * FEATURE_ID_STRIDE,
             reverse_parity: false,
+            gauge_shot_uuid: None,
+            gauge_neighbour_uuid: None,
         };
 
         for shot_data in data.shots {

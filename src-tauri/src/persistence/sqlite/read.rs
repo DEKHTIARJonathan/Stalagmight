@@ -275,15 +275,30 @@ impl Database {
                 .map(|c| c > 0)
                 .unwrap_or(false);
 
+            let has_gauge_columns: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='gauge_shot_uuid'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
             let quality_expr = if has_quality_column { "quality" } else { "1.0" };
             let parity_expr = if has_reverse_parity_column {
                 "reverse_parity"
             } else {
                 "0"
             };
+            let (gauge_expr, gauge_nb_expr) = if has_gauge_columns {
+                ("gauge_shot_uuid", "gauge_neighbour_uuid")
+            } else {
+                ("NULL", "NULL")
+            };
             let mut stmt = self.conn.prepare(&format!(
-                "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr} \
-                 FROM sections ORDER BY id"
+                "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr}, \
+                 {gauge_expr}, {gauge_nb_expr} FROM sections ORDER BY id"
             ))?;
 
             let mut section_rows = Vec::new();
@@ -297,6 +312,8 @@ impl Database {
                     row.get::<_, Option<String>>(5)?,
                     row.get::<_, f64>(6)?,
                     row.get::<_, i64>(7)? != 0,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, Option<String>>(9)?,
                 ))
             })?;
             for row in rows {
@@ -316,6 +333,8 @@ impl Database {
                     direction_str,
                     quality_raw,
                     reverse_parity,
+                    gauge_shot_uuid,
+                    gauge_neighbour_uuid,
                 ) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
@@ -339,6 +358,8 @@ impl Database {
 
                 let mut section = Section::new(id, section_data);
                 section.reverse_parity = reverse_parity;
+                section.gauge_shot_uuid = gauge_shot_uuid;
+                section.gauge_neighbour_uuid = gauge_neighbour_uuid;
                 section_by_id.insert(id, sections.len());
                 next_section_id = next_section_id.max(id + 1);
                 sections.push(section);

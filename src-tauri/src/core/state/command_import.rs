@@ -634,6 +634,22 @@ impl AppState {
                 return CommandResult::failure("Section created but no ID returned".to_string());
             };
 
+            // The shots were reversed before the section existed, so record that on the section
+            // itself (#24). `reverse_parity` is documented as flipping whenever a section's
+            // shot order is reversed, and the plan-anchor resolution reads it to decide which
+            // side of a shot a terminal station sits on - leaving it false here would make two
+            // geometrically identical projects ("import then reverse" vs "import with the
+            // toggle") disagree about that, and about which end the least-squares gauge pins.
+            if config.reverse {
+                if let Ok(mut guard) = self.project.lock() {
+                    if let Some(section) =
+                        guard.as_mut().and_then(|p| p.get_section_mut(section_id))
+                    {
+                        section.reverse_parity = !section.reverse_parity;
+                    }
+                }
+            }
+
             created_ids.insert(config.section_index, section_id);
             all_section_ids.push(section_id);
             all_warnings.extend(create_result.warnings);
