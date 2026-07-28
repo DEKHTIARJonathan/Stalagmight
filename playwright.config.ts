@@ -1,7 +1,33 @@
 import { defineConfig, devices } from '@playwright/test';
 
 const coverageEnabled = process.env.E2E_COVERAGE === '1';
-const devServerCommand = coverageEnabled ? 'VITE_COVERAGE=1 pnpm dev' : 'pnpm dev';
+
+// Serve a built bundle instead of the Vite dev server (#295). In dev mode Vite
+// serves the app's own source unbundled - one request per module, 346 of them
+// per page load - so every test's `goto` re-pays that cost, and it scales ~9x
+// under parallel workers because N workers hammer a single Node process. A
+// build collapses those into a handful of static assets. Measured on an M1:
+// contended per-test setup 5.74s -> 2.65s (-54%), @smoke wall-clock 81s -> 38s
+// (-53%), all 83 @smoke tests green either way with no spec changes.
+//
+// VITE_E2E=1 keeps the window.__E2E_TEST__ store hooks the specs drive - main.tsx
+// gates them on DEV || MODE === 'test' || VITE_E2E === '1', so a plain production
+// build would strip them and every store-seeded spec would fail.
+//
+// Default: built bundle in CI (where the win is), dev server locally so the
+// interactive loop keeps HMR. PW_PROD_SERVER=1/0 forces either way.
+const prodServer =
+  process.env.PW_PROD_SERVER === '1' ||
+  (process.env.PW_PROD_SERVER !== '0' && !!process.env.CI);
+
+// vite-plugin-istanbul already sets forceBuildInstrument, so coverage works on
+// the built bundle too - it just needs VITE_COVERAGE at build time, not serve time.
+const buildEnv = coverageEnabled ? 'VITE_COVERAGE=1 VITE_E2E=1' : 'VITE_E2E=1';
+const devServerCommand = prodServer
+  ? `${buildEnv} pnpm exec vite build && pnpm exec vite preview --port 1420 --strictPort`
+  : coverageEnabled
+    ? 'VITE_COVERAGE=1 pnpm dev'
+    : 'pnpm dev';
 
 // Retries: CI gets 2; locally 1, so a single timing blip under load (e.g. the
 // pre-push @smoke gate on a 1-worker headless VM) doesn't abort an otherwise-
@@ -93,8 +119,13 @@ export default defineConfig({
   webServer: {
     command: devServerCommand,
     url: 'http://localhost:1420',
-    reuseExistingServer: !process.env.CI && !coverageEnabled,
-    timeout: 120000, // 2 minutes to start dev server
+    // Never reuse a server in the built-bundle mode: an already-running dev
+    // server on 1420 would be silently reused and the run would test unbundled
+    // source instead of the bundle it was asked for.
+    reuseExistingServer: !process.env.CI && !coverageEnabled && !prodServer,
+    // The built-bundle mode has to run `vite build` first, so it needs more
+    // headroom than a dev-server boot on a 2-core runner.
+    timeout: prodServer ? 300000 : 120000,
   },
 
   // Test timeout
