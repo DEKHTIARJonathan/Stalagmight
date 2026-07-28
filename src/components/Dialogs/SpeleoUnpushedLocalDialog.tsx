@@ -42,6 +42,13 @@ export default function SpeleoUnpushedLocalDialog() {
   // hand-off the browser dialog makes).
   const { keepLocalCopy, takeRemoteDiscardingLocal, adoptRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
+    // [#258] The discarding open can hit an ambiguous dump too - it is in fact the
+    // only route that reaches one with un-pushed edits - and an Ariane pick there
+    // still needs its confirmation.
+    onAdoptAfterPick: () => {
+      setPendingAdopt(true);
+      setBusy(false);
+    },
   });
 
   const [busy, setBusy] = useState(false);
@@ -107,6 +114,12 @@ export default function SpeleoUnpushedLocalDialog() {
       // confirmed carries into the adopt itself (see `adoptRemote` below), so it is
       // asked once, not twice.
       setPendingAdopt(true);
+      setBusy(false);
+    } else if (outcome.status === 'ambiguous') {
+      // [#258] The hook raised the file picker over this prompt, which stays mounted
+      // underneath. Releasing `busy` is not cosmetic here: it gates `onClose` and
+      // every button, so holding it while the user cancels the picker left this
+      // dialog with no way out at all.
       setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);

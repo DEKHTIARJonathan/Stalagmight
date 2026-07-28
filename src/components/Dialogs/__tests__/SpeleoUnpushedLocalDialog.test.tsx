@@ -123,6 +123,38 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
   });
 
+  it('DO NOT REGRESS: releases the prompt when the picker takes over (#258)', async () => {
+    // `busy` gates `onClose` AND every button here, so holding it across the picker
+    // left this dialog with no way out at all once the user cancelled - on the one
+    // route that reaches an ambiguous dump with un-pushed edits, where backing out
+    // matters most.
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_open_project_discarding_local'
+        ? Promise.reject({
+            message: 'more than one',
+            action: 'Ambiguous',
+            status: null,
+            dump_candidates: [
+              { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+              { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+            ],
+          })
+        : Promise.resolve(undefined),
+    );
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+
+    await waitFor(() =>
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true),
+    );
+    // Cancelling the picker must leave a usable dialog behind it.
+    useSpeleoStore.getState().closeDumpPicker();
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-unpushed-local-keep')).not.toBeDisabled(),
+    );
+  });
+
   it('keeps the prompt open and shows why when the discarding open fails', async () => {
     invokeIpcMock.mockImplementation((cmd: string) =>
       cmd === 'speleodb_open_project_discarding_local'

@@ -165,7 +165,11 @@ export default function GlobalView() {
   // shared flow. Errors surface as toasts; an Ariane (.tml-only) project routes to the
   // shared adopt confirm (rendered inline below). No onBeforeLoad: GlobalView is not a
   // dialog, so loadProject's LoadingState takes over the view directly.
-  const { openRemote, adoptRemote } = useOpenRemoteProject();
+  const { openRemote, adoptRemote } = useOpenRemoteProject({
+    // [#258] See OpenFromSpeleoDbDialog: an Ariane entry chosen in the picker still
+    // has to reach its confirmation, and the retry answers to nobody.
+    onAdoptAfterPick: (summary) => setPendingAdopt(summary),
+  });
   const [remoteBusy, setRemoteBusy] = useState(false);
   const [pendingAdopt, setPendingAdopt] = useState<SpeleoProjectSummary | null>(null);
   // Synchronous re-entrancy guard: `remoteBusy` state only reflects on the next render,

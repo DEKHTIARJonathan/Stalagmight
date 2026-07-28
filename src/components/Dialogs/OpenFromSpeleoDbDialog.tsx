@@ -35,6 +35,13 @@ export default function OpenFromSpeleoDbDialog() {
   const { openRemote, adoptRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
     cancelReturnsTo: 'open-from-speleodb',
+    // [#258] The picker's retry resolved to an Ariane project, so show the same
+    // confirm a first-attempt `adopt` would have. The retry runs from the picker,
+    // so its outcome never comes back through `handleOpen`.
+    onAdoptAfterPick: (project) => {
+      setPendingAdopt(project);
+      setBusy(false);
+    },
   });
 
   // Start in 'checking' so the session probe settles before the first paint

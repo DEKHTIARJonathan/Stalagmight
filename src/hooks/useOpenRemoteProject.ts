@@ -73,6 +73,21 @@ interface UseOpenRemoteProjectOpts {
    * cancelling correctly just returns to the view underneath.
    */
   cancelReturnsTo?: string;
+  /**
+   * [#258] Show the adopt confirm for a project the user reached through the file
+   * picker.
+   *
+   * The picker's retry runs from the DIALOG, so its outcome goes to nobody: the
+   * host called `openRemote` once, got `ambiguous`, and is no longer waiting. When
+   * the entry chosen turns out to be an `ariane.tml`, the retry comes back `adopt` -
+   * and without this the flow ended right there, silently: picker closed, no
+   * confirmation, `speleodb_adopt_ariane` never called.
+   *
+   * Only `adopt` needs the hand-back. `opened` is done, `error` is thrown so the
+   * picker reports it, `ambiguous` re-raises the picker with fresh candidates, and
+   * the refused-open prompt is raised by this hook itself.
+   */
+  onAdoptAfterPick?: (summary: SpeleoProjectSummary, discardLocal: boolean) => void;
 }
 
 /**
@@ -84,6 +99,7 @@ interface UseOpenRemoteProjectOpts {
  * (beyond the shared toasts), so each host renders errors/adopt-confirm its own way.
  */
 export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
+  const { onAdoptAfterPick } = opts;
   const { t } = useTranslation();
   const { onBeforeLoad, cancelReturnsTo } = opts;
   const showToast = useUIStore((s) => s.showToast);
@@ -427,6 +443,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
             // dialog: rethrow so the store leaves the picker open and the host
             // surfaces the message, exactly as the first attempt would have.
             if (retried?.status === 'error') throw new Error(retried.message);
+            // The pick was an `ariane.tml`: the backend refuses to extract it and
+            // routes to adoption, which needs its confirmation shown. Nobody is
+            // awaiting this call, so hand it back explicitly.
+            if (retried?.status === 'adopt') onAdoptAfterPick?.(summary, false);
           });
           return { status: 'ambiguous' };
         }
@@ -461,6 +481,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       handBackRefusalAfterPull,
       openDialog,
       openDumpPicker,
+      onAdoptAfterPick,
       cancelReturnsTo,
       t,
     ],
@@ -589,6 +610,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           openDumpPicker(candidates, 'stalx', async (entryPath) => {
             const retried = await takeRemoteRef.current?.(summary, { entryPath });
             if (retried?.status === 'error') throw new Error(retried.message);
+            // The pick was an `ariane.tml`: the backend refuses to extract it and
+            // routes to adoption, which needs its confirmation shown. Nobody is
+            // awaiting this call, so hand it back explicitly.
+            if (retried?.status === 'adopt') onAdoptAfterPick?.(summary, true);
           });
           return { status: 'ambiguous' };
         }
@@ -605,7 +630,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDumpPicker, t],
+    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDumpPicker, onAdoptAfterPick, t],
   );
 
   const adoptRemote = useCallback(

@@ -72,7 +72,8 @@ beforeEach(() => {
   useUIStore.setState({ showToast: vi.fn(), openDialog: vi.fn() });
 });
 
-const hook = () => renderHook(() => useOpenRemoteProject()).result.current;
+const hook = (opts: Parameters<typeof useOpenRemoteProject>[0] = {}) =>
+  renderHook(() => useOpenRemoteProject(opts)).result.current;
 
 describe('useOpenRemoteProject (#218)', () => {
   it('opens a project: seeds the link, loads, and reports opened', async () => {
@@ -132,6 +133,37 @@ describe('useOpenRemoteProject (#218)', () => {
     await useSpeleoStore.getState().resolveDumpPicker('backup/old.stalx');
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
     expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+  });
+
+  it('hands an Ariane pick back for confirmation instead of ending silently (#258)', async () => {
+    // The backend refuses to EXTRACT a chosen `.tml` and routes to adoption, so the
+    // retry comes back `adopt`. Nobody is awaiting that call - the host asked once,
+    // got `ambiguous`, and stopped listening - so without an explicit hand-back the
+    // picker just closed: no confirmation, and `speleodb_adopt_ariane` never called.
+    const candidates = [
+      { entry_path: 'ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'misc/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_open_project') {
+        if (args?.entryPath === 'misc/ariane.tml')
+          return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+        });
+      }
+      return Promise.resolve(null);
+    });
+    const onAdoptAfterPick = vi.fn();
+
+    const outcome = await hook({ onAdoptAfterPick }).openRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'ambiguous' });
+
+    await useSpeleoStore.getState().resolveDumpPicker('misc/ariane.tml');
+    expect(onAdoptAfterPick).toHaveBeenCalledWith(SUMMARY, false);
   });
 
   it('raises the picker from the CONFIRMED-DISCARD open too (#258)', async () => {

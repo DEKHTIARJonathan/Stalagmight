@@ -926,7 +926,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // tree moved while the dialog was open), and that re-raise has already
       // replaced the candidate list - closing here would throw it away.
       if (!get().dumpPickerBusy) return;
+      // Both halves, in this order, exactly as `uiStore.openDialog` does for a
+      // chained dialog. `trackDialogComplete` only SETS a module-global marker and
+      // `checkDialogCancel` is what consumes it - so completing without consuming
+      // left the marker standing, and the next picker's cancel was read as this
+      // one's completion and emitted no cancel event.
       trackDialogComplete(DUMP_PICKER_DIALOG);
+      checkDialogCancel(DUMP_PICKER_DIALOG);
       restoreDwellUnderOverlay();
       set({
         dumpPickerOpen: false,
@@ -1097,6 +1103,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // with a modal whose every dismissal route is disabled, by the very reset that
     // was meant to tidy up after the session.
     const abandonedPicker = get().dumpPickerCancel;
+    // A session-loss teardown is still a dismissal without an answer, so it owes the
+    // same telemetry any other dismissal does - otherwise the cancel goes unrecorded
+    // and dwell stays attributed to a picker that is no longer on screen.
+    if (get().dumpPickerOpen) {
+      checkDialogCancel(DUMP_PICKER_DIALOG);
+      restoreDwellUnderOverlay();
+    }
     set((state) => ({
       session: null,
       // The session ended, so nothing still in flight for it may act on whatever
