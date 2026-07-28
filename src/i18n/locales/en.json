@@ -3085,6 +3085,7 @@
       "title": "SpeleoDB project",
       "open": "SpeleoDB project settings",
       "notRemote": "This project is not linked to SpeleoDB.",
+      "projectChanged": "Closed the SpeleoDB project window - another project was opened, so any details you had not saved were discarded.",
       "tabs": {
         "general": "General",
         "collaborators": "Collaborators",

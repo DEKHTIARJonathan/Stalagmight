@@ -1,4 +1,4 @@
-import { useId, useState } from 'react';
+import { useEffect, useId, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { DialogWrapper } from './DialogWrapper';
 import { SpeleoDbGeneralTab } from './settings/SpeleoDbGeneralTab';
@@ -7,6 +7,7 @@ import { SpeleoAdminTab } from './settings/SpeleoAdminTab';
 import { SpeleoRevisionHistory } from './settings/SpeleoRevisionHistory';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
+import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { useSpeleoProjectMetadata } from '../../hooks/useSpeleoProjectMetadata';
 
@@ -29,6 +30,7 @@ function isTab(value: unknown): value is SpeleoProjectTab {
 export function SpeleoDbProjectDialog() {
   const { t } = useTranslation();
   const closeDialog = useUIStore((s) => s.closeDialog);
+  const showToast = useUIStore((s) => s.showToast);
   const initialTab = useUIStore((s) => s.dialogData.tab);
   // A project can unlink from another surface while this sits open (the delete flow
   // closes the dialog itself), which leaves every tab with nothing to administer.
@@ -38,11 +40,59 @@ export function SpeleoDbProjectDialog() {
   const isRemote = useSpeleoStore((s) => s.link !== null);
   const metadata = useSpeleoProjectMetadata();
 
+  // WHICH project this dialog is about. Everything in it - the loaded metadata form,
+  // the roster, the revision list, the admin actions - describes the project that was
+  // open when it mounted, but not one of the server verbs behind them carries a
+  // project id: `speleodb_patch_project`, `speleodb_delete_project`,
+  // `speleodb_release_current_lock` and the collaborator/revision calls are each
+  // addressed backend-side via `speleodb_validated_link()`, i.e. to whatever project
+  // is open NOW.
+  //
+  // Nothing used to reconcile the two. `loadProject` leaves `activeDialog` alone, so
+  // this dialog survives a project switch, and `syncProjectLink` hands a
+  // remote -> remote switch a fresh NON-null link - so `isRemote` never flips and the
+  // `link !== null`-keyed load effect in `useSpeleoProjectMetadata` never re-runs.
+  // The General tab kept project A's values on screen while Save PATCHed project B,
+  // overwriting ANOTHER project's server metadata with A's. Reachable today: the
+  // held-lock prompt is an independent overlay (App.tsx, outside the `activeDialog`
+  // slot) whose "Continue editing" calls `loadProject` for a DIFFERENT project, and
+  // the login scan that raises it is fire-and-forget - so it can land over this
+  // dialog rather than over the Settings dialog the login was made from.
+  //
+  // The binding is the open FILE PATH, not `remoteProjectId`: the path is committed
+  // in the same synchronous `set()` as the project itself, whereas `remoteProjectId`
+  // is nulled by the switch and only re-seeded by the next status poll - it reads
+  // "unchanged" for exactly the window this guard exists to cover.
+  const openPath = useProjectStore((s) => s.project?.file_path ?? null);
+  const boundPath = useRef(openPath);
+  const projectChanged = boundPath.current !== openPath;
+
   const [tab, setTab] = useState<SpeleoProjectTab>(isTab(initialTab) ? initialTab : 'general');
 
   const panelIdBase = useId();
   const tabId = (tk: SpeleoProjectTab) => `${panelIdBase}-tab-${tk}`;
   const panelId = (tk: SpeleoProjectTab) => `${panelIdBase}-panel-${tk}`;
+
+  useEffect(() => {
+    if (!projectChanged) return;
+    // Close rather than re-seed. Every tab is stale, not just General, so one rule
+    // settles all four at once; and silently re-seeding the form would throw away
+    // whatever the user had typed with no notice - the very loss this dialog wires
+    // `isDirty` into DialogWrapper to prevent. Those edits cannot be rescued either
+    // way (they are edits to a project that is no longer open, and nothing here can
+    // still address it), so say what happened instead of leaving a form that looks
+    // live but would land on someone else's project.
+    closeDialog();
+    showToast(
+      t('speleodb.projectDialog.projectChanged'),
+      'speleodb-project-dialog-stale',
+      'warning',
+    );
+  }, [projectChanged, closeDialog, showToast, t]);
+
+  // The effect above runs after this render commits, so refuse to paint the form (and
+  // with it Save, and every other tab's server verb) for the one frame in between.
+  if (projectChanged) return null;
 
   return (
     <DialogWrapper
