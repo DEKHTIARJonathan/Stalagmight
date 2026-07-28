@@ -44,8 +44,16 @@ literally, so `pnpm test:ui -- --reporter=json` runs
 positional test filter: "No tests found", exit in about a second. Use
 `pnpm exec playwright test <flags>`.
 
-Playwright auto-starts the Vite dev server on `:1420` via the `webServer` config
-and reuses an already-running one locally. If you run more than one clone of
+Playwright starts its own server on `:1420` via the `webServer` config. Which
+server depends on where you are: **locally the Vite dev server**, so the
+interactive loop keeps HMR, and **in CI a built bundle** behind `vite preview`,
+because serving the app unbundled costs one request per module on every `goto`
+and that dominates per-test setup under parallel workers. `PW_PROD_SERVER=1`
+forces the built bundle locally, `PW_PROD_SERVER=0` forces the dev server in CI.
+The build sets `VITE_E2E=1`, which is what keeps the `window.__E2E_TEST__` store
+hooks the specs drive - a plain production build strips them.
+
+Locally it reuses an already-running server. If you run more than one clone of
 this repo, that reuse will silently point the suite at the *other* clone's
 server, so you test the wrong code with no error. Do not kill theirs: start your
 own on a free port (`pnpm exec vite --port 1421`) and run against a config whose

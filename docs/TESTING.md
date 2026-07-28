@@ -101,11 +101,11 @@ Three workflows gate `master`:
 - **`e2e-smoke.yml` (`smoke`)** - in order: `pnpm lint:e2e-parallel` (the
   Playwright parallel-safety scanner), `pnpm typecheck:playwright`,
   `pnpm test:mock-contract`, `pnpm lint:pw-timing:test`, then the `@smoke`
-  subset, Chromium-only against the Vite dev server. All four checks run before
-  the browser install, so a cheap failure never pays for Chromium. Any of the
-  five can fail the job. The typecheck and mock-contract steps live here rather
-  than in `check` because `check` path-ignores `e2e-playwright/**` - the very
-  changes they guard.
+  subset, Chromium-only against a built bundle served by `vite preview`. All
+  four checks run before the browser install, so a cheap failure never pays for
+  Chromium. Any of the five can fail the job. The typecheck and mock-contract
+  steps live here rather than in `check` because `check` path-ignores
+  `e2e-playwright/**` - the very changes they guard.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
   tracked tree. It is the one workflow with **no** `paths-ignore`, because
   `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where a leak or
