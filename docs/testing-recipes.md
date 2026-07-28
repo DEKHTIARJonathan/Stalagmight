@@ -117,9 +117,14 @@ Requires Node 22. See [Agent Harness](agent-harness.md).
 ### Typecheck
 
 ```bash
-pnpm tsc --noEmit         # the app + specs
+pnpm tsc --noEmit         # src/ only - tsconfig.json includes nothing else
 pnpm typecheck:agent      # e2e/agent + e2e/lib (tsconfig.agent.json)
 ```
+
+Note what that leaves out: `e2e-playwright/` and `e2e/legacy/` are **not**
+type-checked by either command or by CI. `tsconfig.playwright.json` and
+`tsconfig.e2e.json` exist but no script and no workflow step runs them, so a
+type error in a spec surfaces only when the spec runs.
 
 The agent harness runs under `tsx`, which transpiles without type-checking, and
 it is exercised on demand only, so `typecheck:agent` (a CI `check` step) is the
@@ -191,7 +196,8 @@ e2e-playwright/
 ├── helpers/app.ts          # shared setup + waiters (import from here)
 ├── mocks/tauri-ipc.ts      # the mocked Tauri IPC backend
 ├── fixtures/coverage.ts    # the test fixture every spec imports `test` from
-├── fixtures/*.dmp          # binary fixtures a spec can hand to the mock
+├── fixtures/*.dmp          # binary survey files. Nothing reads them: the mock
+│                           #   fabricates data and never parses a file
 └── <feature>.spec.ts
 ```
 
@@ -462,7 +468,7 @@ The mock exposes `window.__MOCK_*` hooks - recorded call arrays
 (`__MOCK_MOVE_CALLS__`, `__MOCK_EXECUTE_BATCH_CALLS__`,
 `__MOCK_CREATE_SHOT_CALLS__`, `__MOCK_SPLIT_SHOT_CALLS__`, ...), setters that
 force a scenario (`__MOCK_SET_GEOMETRY_ERROR__`, `__MOCK_SET_INTEGRITY_ISSUES__`,
-`__MOCK_SET_CONNECTIVITY__`, `__MOCK_IPC_OVERRIDES__`, ...), and matching
+`__MOCK_CONNECTIVITY_RESULT__`, `__MOCK_IPC_OVERRIDES__`, ...), and matching
 resets. Grep the mock for `__MOCK_` for the current list; follow the existing
 naming when you add one.
 
@@ -744,8 +750,9 @@ await page.keyboard.press('Shift+Tab');
 await expect(last).toBeFocused();
 ```
 
-Initial focus priority: `[data-autofocus]` > `input` > `[data-primary-action]` >
-first non-close button > the close X. So a dialog with a text field focuses the
+Initial focus priority: `[data-autofocus]` > the first enabled `input`,
+`textarea` or `select` (hidden, checkbox and radio inputs excluded) >
+`[data-primary-action]` > first non-close button > the close X. So a dialog with a text field focuses the
 field, and a confirmation dialog focuses its primary action:
 
 ```typescript

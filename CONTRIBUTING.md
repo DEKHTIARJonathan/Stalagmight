@@ -102,6 +102,7 @@ pnpm typecheck:agent                                               # agent-harne
 pnpm exec vitest run                                               # vitest unit + component (plain "pnpm test" watches and never exits)
 pnpm test:ui                                                       # Playwright (needs a display)
 pnpm lint:e2e-parallel                                             # Playwright parallel-safety (a CI gate)
+pnpm lint:pw-timing:test                                           # Playwright timing-reporter fixtures (a CI gate)
 pnpm lint:rust-file-size                                           # Rust file-size ratchet (a CI gate)
 pnpm lint:ts-file-size                                             # TS file-size ratchet (a CI gate)
 pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only gating tripwire (a CI gate)

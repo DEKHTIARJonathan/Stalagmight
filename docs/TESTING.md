@@ -66,7 +66,7 @@ work:
 
 | Tier | What | When it runs |
 |------|------|--------------|
-| **Smoke** | tests tagged `@smoke` (count them with `--grep @smoke`) | `e2e-smoke.yml` on every PR/push that its `paths-ignore` does not skip, and the pre-push checklist |
+| **Smoke** | tests tagged `@smoke` (count them with `--grep @smoke`) | `e2e-smoke.yml`, on every PR/push its `paths-ignore` does not skip |
 | **Full** | the entire Playwright suite | `nightly-e2e.yml`, 07:00 UTC daily, skipped when nothing merged in the last 2 days |
 
 - **Tag `@smoke` only if the test covers a critical path *and* is reliable.**

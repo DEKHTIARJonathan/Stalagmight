@@ -2177,7 +2177,7 @@ See [project-structure.md](project-structure.md) for the directory tree.
 
 There are no versioned roadmap buckets. Queued and in-flight work lives in the
 GitHub issue tracker - currently slate-photo OCR import (#274), the release
-pipeline (#323 to #326), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
+pipeline (#323 to #325), and continuing SpeleoDB work. [roadmap.md](roadmap.md) is the
 historical record of the v1.0 phases, all of which shipped (one caveat: GPS
 entry validates but does not convert MGRS and What3words - see 2.7).
 

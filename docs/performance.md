@@ -235,8 +235,10 @@ separate layers with their own draws.
 
 Consequences worth exploiting:
 
-- Show/hide toggles for shots, stations, reference legs, and jumps are shader
-  uniforms. They cost a flag flip plus `triggerRepaint`, never a rebuild.
+- Show/hide toggles never rebuild: they cost a flag flip plus `triggerRepaint`.
+  Shots and stations skip their draw call outright (`if (this.drawShots)`,
+  `if (this.drawStations)`); reference legs and jumps stay in the buffers and are
+  discarded in the shader (`u_hide_reference`, `u_hide_jump`).
 - Selection, hover, dimming, and drag-hide are per-vertex float flags with their
   own re-upload paths, so they do not disturb colors and colors do not disturb
   them.
@@ -327,6 +329,7 @@ moves are rAF-batched, so only the latest event is processed per frame.
 ### How to profile the frontend
 
 **Dev stats overlay** (`src/components/Map/MapDevStats.tsx`, toggled from the
+app menu - `display-toggle-showDevStats` in `useProjectMenuItems.tsx`, not the
 Display menu) is the primary tool and the only view inside a custom layer, since
 MapLibre's own instrumentation cannot see in. It wraps `drawArrays` /
 `drawElements` on the context to count draw calls and triangles per frame, and
