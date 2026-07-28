@@ -1822,3 +1822,64 @@ fn importing_with_the_reverse_toggle_records_the_orientation() {
         "an import that reversed the shots must record it, like Project::reverse_section does"
     );
 }
+
+/// `redo_to`'s partial-failure branch is the twin of the `undo_to` case above, and had no test:
+/// a half-applied redo would leave the frontend's pins mirrored with nothing on the wire to
+/// mirror them by.
+#[test]
+fn redo_to_reports_the_reverses_it_already_applied_when_a_later_step_fails() {
+    let (state, section_id) = state_with_section();
+
+    // Two undoable steps, both undone, so there is a redo range to walk.
+    assert!(
+        state
+            .execute(Command::ReverseSection {
+                section_id,
+                swap_left_right: false,
+            })
+            .success
+    );
+    assert!(
+        state
+            .execute(Command::UpdateSectionMetadata {
+                section_id,
+                updates: SectionUpdates {
+                    name: Some(Some("Renamed".to_string())),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+
+    // Poison the SECOND redo step so step 1 (the reverse) applies and step 2 fails. The redo
+    // stack hands back the most recently undone entry first, so the reverse is on top and the
+    // metadata edit is underneath.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        let first = stack.pop_redo().unwrap();
+        let second = stack.pop_redo().unwrap();
+        stack.push_redo(crate::core::UndoEntry {
+            command: second.command,
+            // Redo REPLAYS forward state rather than restoring previous values, so a poisoned
+            // `values_json` would not touch it - the snapshot it re-applies is what has to be
+            // unparseable.
+            undo_data: UndoData::ProjectSnapshotPair {
+                before: "{}".to_string(),
+                after: "not-valid-json".to_string(),
+            },
+            timestamp: second.timestamp,
+        });
+        stack.push_redo(first);
+    }
+
+    let result = state.redo_to(1);
+    assert!(!result.success, "step 2 must fail: {:?}", result.error);
+    assert_eq!(
+        result.reversed_sections,
+        Some(vec![reversed_entry(section_id, 3)]),
+        "step 1 re-applied the reverse and is not rolled back, so the failure must still \
+         report it - otherwise the frontend mirrors nothing while the backend has renumbered"
+    );
+}

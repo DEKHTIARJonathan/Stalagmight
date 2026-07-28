@@ -65,8 +65,11 @@ export interface ReverseTransform {
  * The transform ONE reverse of a section with `shotCount` shots applies:
  * station `i` becomes station `shotCount - i`.
  *
- * This is what the Reverse dialog's forward path installs. It knows the sections
- * it submitted and their counts outright, so it never has to compose anything.
+ * TEST FIXTURE ONLY - no production caller. The dialog deliberately does NOT use it:
+ * a count read when the dialog rendered can be stale by the time the reverse takes
+ * the backend's command lock, so every production path composes
+ * `CommandResult.reversed_sections` instead (see `composeReverseTransforms`).
+ * Kept because it expresses one reverse's transform readably in assertions.
  */
 export function singleReverseTransform(shotCount: number): ReverseTransform {
   return { shift: shotCount, sign: -1, maxIndex: shotCount };
@@ -249,10 +252,11 @@ export function composeReverseTransforms(
  * Re-point (or drop) every frontend-held positional ref after the sections in
  * `transforms` were renumbered.
  *
- * Shared by the Reverse dialog (which builds its own `singleReverseTransform`
- * map from the sections it submitted) and by undo/redo (which composes the
- * backend's per-step log), so the forward action and the flip back cannot drift
- * apart.
+ * Applied by the store, from `CommandResult.reversed_sections`, on EVERY route -
+ * `executeCommand` for a forward reverse and `executeUndoRedo` for the flip back -
+ * immediately after the refresh each belongs to. Keeping both in one place is what
+ * stops a forward mirror landing after a concurrent undo has already mirrored the
+ * pins back, which would re-apply the shift onto restored numbering.
  *
  * An all-identity map returns immediately instead of running an identity mirror.
  * That is not an optimisation: the four clears below are destructive, and a range

@@ -309,28 +309,21 @@ impl Project {
     /// residual - breaking the reverse's "every station keeps its position"
     /// guarantee exactly where closure-adjusted geometry is forced (Plan/Export).
     ///
-    /// So the pick is made only from data a reverse carries with the record:
+    /// So the station is named the way the plan anchors name one: by the SHOTS it sits
+    /// between, not by an index. The pair is captured once - on the first save that sees the
+    /// section - and travels with the records, so it is unaffected by a reverse, which carries
+    /// both shots together, and by the section being extended at either end, which moves
+    /// neither relative to the other. Capturing records the station the section is ALREADY
+    /// using, so it never moves anybody's coordinates.
     ///
-    /// 1. **Section**: prefer one with two or more shots, then the lowest id.
-    ///    [`Self::station_reverse_identity`]'s UUID pair is injective on such a
-    ///    section, so the anchor is exactly reverse-invariant there with no
-    ///    tie-break at all; only `N <= 1` can tie. A reverse leaves the shot count
-    ///    alone, so the preference is itself invariant.
-    /// 2. **Station**: the smallest [`Self::station_reverse_identity`] within it,
-    ///    then the lowest index as a last resort.
+    /// **Residual.** A single-shot section has no second shot to face away from, so its side
+    /// comes from [`Section::reverse_parity`] instead - exact, because a reverse is the only
+    /// thing that swaps such a section's two ends. Losing the captured neighbour degrades to
+    /// the same rule, and losing the captured shot outright falls back to the legacy index,
+    /// which is the pre-capture behaviour.
     ///
-    /// **Residual, not a total guarantee.** A component in which *every* section
-    /// has at most one shot, and whose chosen section has the same incidence,
-    /// depth and `|pitch|` signature at both of its ends, still ties on every
-    /// field and still falls through to the index - so a reverse still flips it
-    /// and still translates the adjusted component. A datum-less component only
-    /// reaches this solve because it carries an eligible closure, and the closure
-    /// and the merge that ties the loop usually land on opposite ends, which
-    /// separates them - but that is a tendency, not a guarantee. This is a
-    /// narrower hole than before, not a closed one, and no invariant is claimed.
-    ///
-    /// UUIDs, merges, closures, depths and pitches all persist, so the choice is
-    /// reproducible across reloads.
+    /// The captured pair and the parity flag both persist, so the choice is reproducible
+    /// across reloads.
     fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
         let section = self
             .sections
@@ -1229,13 +1222,16 @@ mod tests {
         );
     }
 
-    /// The residual case the incidence multiset cannot reach: a lone 1-shot
-    /// section with no merge and no closure on either end. Its two stations are
-    /// still told apart, because a reverse swaps `depth_in`/`depth_out`
-    /// bit-exactly rather than recomputing them, so the depth beside a station
-    /// travels with it.
+    /// A lone one-shot section with no merge and no closure: its two ends are told apart by the
+    /// section's ORIENTATION, which a reverse flips.
+    ///
+    /// The rationale this test used to give - that the ends are distinguished because a reverse
+    /// swaps `depth_in`/`depth_out` bit-exactly - described a picker that no longer exists. The
+    /// current one never reads depth, so the fixture's depths were inert and the assertion held
+    /// for any one-shot section rather than for the reason stated. Kept because the CASE still
+    /// matters; the reason is now the parity flag.
     #[test]
-    fn anchor_identity_survives_a_reverse_for_a_depth_distinguished_one_shot_section() {
+    fn a_lone_one_shot_sections_gauge_follows_its_orientation() {
         let mut project = Project::new("depth".to_string(), None);
         let s = add_section(
             &mut project,

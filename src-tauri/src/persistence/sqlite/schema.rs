@@ -846,6 +846,29 @@ impl Database {
     ///   collaborator's unmerged edits with no prompt. See
     ///   [`crate::models::Project::invalidate_collab_baseline`] for the runtime policy,
     ///   which empties the baseline and deliberately keeps the sha for the same reason.
+    /// * **`section_offsets`.** These are the one derived value that a corrected bearing
+    ///   really can leave inconsistent, and they are still left alone - deliberately, not by
+    ///   omission. An offset is an ACCUMULATED translation: `adjust_section_offset` adds or
+    ///   subtracts a shot's displacement each time a shot is inserted at or removed from a
+    ///   section's head, so what is stored is the running sum of past edits, not a function of
+    ///   the current shots. A compensation banked under the antipodal bearing cannot be
+    ///   recomputed from the file - only replaying the edit history would do it, and that
+    ///   history is not kept.
+    ///
+    ///   The affected population is the intersection of two already-rare conditions: the
+    ///   section must have held an out-of-range azimuth PAIR (see Reachability) *and* have had
+    ///   a shot inserted or removed at its head. For such a section the migration still fixes
+    ///   what matters - the SHAPE, i.e. the direction its shots walk - while its absolute
+    ///   placement can be out by up to twice the affected shot's horizontal vector. That is a
+    ///   visible displacement the user can correct by moving the section, not a silent
+    ///   corruption of measured values.
+    ///
+    ///   The alternatives are worse. Zeroing offsets would move every section that has one,
+    ///   including the overwhelming majority whose azimuths were always in range and whose
+    ///   placement is correct today; recomputing them is impossible for the reason above. So
+    ///   the rule is: correct the readings, leave the accumulated translation, and accept a
+    ///   recoverable misplacement in a rare intersection rather than a certain one everywhere.
+    ///   Pinned by `migration_v14_leaves_section_offsets_untouched`.
     pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<()> {
         let mut stmt = conn.prepare(
             "SELECT id, section_id, azimuth_in, azimuth_out

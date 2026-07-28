@@ -93,6 +93,74 @@ fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
     );
 }
 
+/// The v14 azimuth migration must leave `section_offsets` exactly as it found them.
+///
+/// An offset is an accumulated translation from past head insert/remove edits, not a function
+/// of the current shots, so one banked under the old antipodal bearing cannot be recomputed -
+/// only replaying the edit history would do it. Zeroing them instead would move every section
+/// that has one, including the overwhelming majority whose azimuths were always in range. The
+/// decision is to correct the readings and leave the translation; this pins it so a later
+/// "tidy-up" cannot quietly start rewriting placements.
+#[test]
+fn migration_v14_leaves_section_offsets_untouched() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v13.stalx");
+
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2020-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        // An out-of-range PAIR - the shape the migration exists for.
+        db.conn
+            .execute(
+                "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out) \
+                 VALUES (1, 0, 0, 0.0, -600.0, 10.0, 0.0, 0.0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (0, 12.5, -7.25)",
+                [],
+            )
+            .unwrap();
+        // Back-date so the migration actually runs on the next open.
+        db.conn.execute("PRAGMA user_version = 13", []).unwrap();
+    }
+
+    let db = Database::open(&path).unwrap();
+
+    let (x, y): (f64, f64) = db
+        .conn
+        .query_row(
+            "SELECT offset_x, offset_y FROM section_offsets WHERE section_id = 0",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (x, y),
+        (12.5, -7.25),
+        "the accumulated translation must survive the migration verbatim"
+    );
+
+    // ...while the readings it exists for WERE corrected, so this is not a vacuous assertion.
+    let (az_in, az_out): (f64, f64) = db
+        .conn
+        .query_row(
+            "SELECT azimuth_in, azimuth_out FROM shots WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(az_in, 0.0);
+    assert_eq!(az_out, 120.0, "-600 normalises into [0, 360)");
+}
+
 #[test]
 fn load_project_validation_returns_none_when_table_absent() {
     // A legacy .stalx predating `project_settings`, opened read-only (which does

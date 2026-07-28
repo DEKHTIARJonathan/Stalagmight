@@ -207,8 +207,30 @@ struct PlanAnchor {
 
 impl PlanAnchor {
     /// Position of a neighbour in the section as it stands now.
-    fn position_of(section: &crate::models::Section, uuid: &Option<String>) -> Option<usize> {
+    /// Position of a neighbour in the section as it stands now.
+    ///
+    /// Takes the project's shot-UUID index first, the way `Project::resolve_key` does, and only
+    /// falls back to a scan when the index is cold or stale. Without it every anchor cost a full
+    /// pass per neighbour - two per station - and a hand-edited `.plnx` full of UUIDs that match
+    /// nothing would scan the whole section every time.
+    fn position_of(
+        project: &Project,
+        section: &crate::models::Section,
+        uuid: &Option<String>,
+    ) -> Option<usize> {
         let uuid = uuid.as_deref()?;
+        if let Some(&i) = project.shot_uuid_index.get(&(section.id, uuid.to_string())) {
+            // Re-check before trusting it, exactly as `Project::resolve_key` does: a stale
+            // entry then costs only the scan below and can never resolve to the wrong shot.
+            if section
+                .shots
+                .get(i as usize)
+                .and_then(|sh| sh.uuid.as_deref())
+                == Some(uuid)
+            {
+                return Some(i as usize);
+            }
+        }
         section
             .shots
             .iter()
@@ -287,8 +309,8 @@ fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Opt
 fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
     let section = project.get_section(anchor.section_id)?;
     let n = section.shots.len();
-    let pa = PlanAnchor::position_of(section, &anchor.a);
-    let pb = PlanAnchor::position_of(section, &anchor.b);
+    let pa = PlanAnchor::position_of(project, section, &anchor.a);
+    let pb = PlanAnchor::position_of(project, section, &anchor.b);
     // A reverse since this anchor was written flips what "after" means.
     let flipped = anchor.parity != section.reverse_parity;
     let index = match (pa, pb) {
@@ -655,9 +677,15 @@ impl AppState {
             p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
             &mut stale,
         );
+        // Capped on the way IN like the way points and marked points, and for the same reason:
+        // the threat is a hand-edited `.plnx`, which by definition never crosses the write
+        // path. One entry per stage cylinder is the real bound (`gas.rs` already truncates the
+        // engine side to the plan's cylinder count), so anything past the way-point cap is
+        // doctored data, and each entry costs a station lookup on every load.
         let stage_drop_overrides = p
             .stage_drop_overrides
             .into_iter()
+            .take(MAX_WAYPOINTS)
             .map(|k| from_anchor_opt(project, k, &mut stale))
             .collect();
         let marked_points = p

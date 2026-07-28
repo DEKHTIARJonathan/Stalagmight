@@ -297,10 +297,14 @@ pub struct CommandResult {
     ///   consumer must COMPOSE the entries into a single transform and apply that
     ///   once; replaying the mirror per entry is wrong.
     ///
-    /// Composition is required because NEITHER side's mirror is an involution.
-    /// The backend's `.plnx` re-key is the cyclic shift `j -> (j - 1) mod (N + 1)`
-    /// (see `state::dive_plan::mirror_key_after_reverse`) - self-inverse only for
-    /// `N <= 1`; what is an involution is the PAIR (reverse, re-key). The
+    /// Composition is required because the FRONTEND's mirror is not an involution: it is
+    /// `i -> N - i` CLAMPED into range (`utils/reverseAftermath`), and a clamp is lossy, so
+    /// replaying it per entry does not undo itself. The counts can also differ between entries
+    /// - a `CreateShot` undone between two reverses of one section changes `N` - which is
+    /// exactly the case neither "cancel the repeat" nor "replay the mirror twice" gets right.
+    ///
+    /// The sibling `.plnx` needs none of this: its plans name a station by the shots it sits
+    /// BETWEEN, so a reverse does not move them at all (see `state::dive_plan`).
     /// frontend's is `i -> N - i` CLAMPED into range, self-inverse only for an
     /// in-range index. That asymmetry is exactly why the producer resolves parity
     /// here instead of leaving repeats for the consumer to cancel.

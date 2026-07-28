@@ -1061,7 +1061,8 @@ next door, since the anchoring shot travelled with its record. Nothing counts as
 stale, so `stale_ref_count` stays 0 and the panel shows no warning while the
 route, and with it the gas plan, has quietly been re-priced against a different
 pair of stations. Every other edit leaves an unresolvable ref that fails loudly.
-So the command layer re-points the sidecar's keys off the post-reverse project
+the sidecar needs no re-pointing at all: a saved dive plan names a station by the
+shots it sits BETWEEN, and a reverse does not change what a station sits between.
 (a key resolving to station `j` moves to `j - 1`; `SectionStart` moves to `N`),
 which is its own inverse and therefore runs unchanged on an undo or redo. It is
 best-effort: a missing, foreign or unwritable `.plnx` is logged and skipped
@@ -1078,7 +1079,7 @@ longer matches it: undo does not un-write the sibling `.tml`, so rewinding that
 provenance would report a phantom collaborator edit and apply it at a pre-reverse
 `shot_index`.
 
-`CommandResult.reversed_section_ids` names the sections a command renumbered -
+`CommandResult.reversed_sections` names the sections a command renumbered -
 on the forward reverse, on a batch of them, and on an undo or redo of either
 (undoing a reverse re-reverses the numbering). A reverse keeps every station's
 world position, so there is nothing in the geometry for a consumer to diff; the

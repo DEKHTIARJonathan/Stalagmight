@@ -20583,6 +20583,11 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute:MoveSegment",
     "execute:MoveSection",
     "execute:Batch",
+    // ReverseSection renumbers stations and is newly reachable from three menus (#24), so it
+    // is exactly the shape the geometry probes above exist for. Both the bare command and the
+    // Batch wrapper the multi-select path uses.
+    "execute:ReverseSection",
+    "execute:Batch:ReverseSection",
     "execute:MoveComment",
     "execute:ApplyCollabChanges",
     // history entrypoints
@@ -20616,7 +20621,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        25,
+        27,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -20650,6 +20655,22 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute(Command::MoveStation {
                 station_ref: StationRef::new(sid, 1),
                 offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        assert_disabled(
+            "execute:ReverseSection",
+            &state.execute(Command::ReverseSection {
+                section_id: sid,
+                swap_left_right: false,
+            }),
+        );
+        assert_disabled(
+            "execute:Batch:ReverseSection",
+            &state.execute(Command::Batch {
+                commands: vec![Command::ReverseSection {
+                    section_id: sid,
+                    swap_left_right: false,
+                }],
             }),
         );
         assert_disabled(

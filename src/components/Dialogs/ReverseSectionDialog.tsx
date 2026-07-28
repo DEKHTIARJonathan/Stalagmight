@@ -35,12 +35,19 @@ export default function ReverseSectionDialog() {
     .map((id) => project?.sections.find((s) => s.id === id))
     .filter((s): s is NonNullable<typeof s> => s !== undefined);
   const hasMissing = sections.length < sectionIds.length;
+  // The sections this dialog would ACTUALLY renumber. A shot-less section is a single station
+  // and reverses to itself, so the backend treats it as a no-op - counting it in the title, the
+  // confirm label or the enabled state would promise work that will not happen, and selecting
+  // only such sections would enable Confirm, fire a completed-reverse telemetry event and close
+  // the dialog having done nothing.
+  const changing = sections.filter((s) => s.shots.length > 0);
+  const changingCount = changing.length;
 
-  const isMulti = sections.length > 1;
-  const title = isMulti ? `Reverse ${sections.length} Sections` : 'Reverse Section';
+  const isMulti = changingCount > 1;
+  const title = isMulti ? `Reverse ${changingCount} Sections` : 'Reverse Section';
 
   const handleConfirm = async () => {
-    if (isSubmitting || sections.length === 0 || hasMissing) return;
+    if (isSubmitting || changingCount === 0 || hasMissing) return;
 
     // Read-only self-check at confirm time: a reverse has NO server backstop for
     // the local closure-adjusted / Plan / Export case (see useEditingBlocked's
@@ -56,7 +63,6 @@ export default function ReverseSectionDialog() {
     // backend deliberately changes nothing (and does not even touch the project).
     // Sending it anyway would mark the project dirty - and cost an Undo - for an
     // action that provably did nothing.
-    const changing = sections.filter((s) => s.shots.length > 0);
     if (changing.length === 0) {
       trackDialogComplete('reverse-section');
       closeDialog();
@@ -114,7 +120,7 @@ export default function ReverseSectionDialog() {
       <div className="space-y-4">
         <p className="text-text-secondary">
           {isMulti
-            ? `Renumber ${sections.length} sections end-to-end, so each section's last station becomes station 0.`
+            ? `Renumber ${changingCount} sections end-to-end, so each section's last station becomes station 0.`
             : 'Renumber this section end-to-end, so the last station becomes station 0.'}
         </p>
 
@@ -184,11 +190,11 @@ export default function ReverseSectionDialog() {
           <Button
             variant="primary"
             onClick={handleConfirm}
-            disabled={isSubmitting || sections.length === 0 || hasMissing}
+            disabled={isSubmitting || changingCount === 0 || hasMissing}
             data-primary-action=""
             data-testid="reverse-confirm"
           >
-            {isMulti ? `Reverse ${sections.length} Sections` : 'Reverse'}
+            {isMulti ? `Reverse ${changingCount} Sections` : 'Reverse'}
           </Button>
         </div>
       </div>
