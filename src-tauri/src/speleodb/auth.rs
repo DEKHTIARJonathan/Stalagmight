@@ -469,20 +469,39 @@ impl TokenStore {
     /// `Available`: saving ANY unrelated setting re-applies `keychain_disabled`,
     /// which reset the credential line to "not attempted" and took the Settings
     /// "Try again" button with it until the user signed in again.
+    ///
+    /// Turning the keychain OFF resets nothing either. Declining is a POLICY, not
+    /// something learned about the machine, and [`Self::keychain_state`] reports it
+    /// as one without needing the field; overwriting the field with `Declined` threw
+    /// away the evidence instead, and two callers need it. The session-only answer
+    /// is GIVEN by setting this flag, so by the time [`Self::sweep_persistent_tiers`]
+    /// runs, the `Unavailable` that the failed login write had just recorded was
+    /// always gone - and with it the only thing separating a keychain-less box,
+    /// where nothing can have been stranded, from a keyring that worked minutes ago
+    /// and has since stopped answering, where a live bearer token may be sitting.
     fn refresh_keychain_state(&mut self) {
-        self.keychain_state = if self.keychain_off() {
-            KeychainState::Declined
-        } else {
+        if !self.keychain_off() {
             // Re-enabling makes what we previously learned stale: an "Unavailable"
             // from before the user fixed their keyring would otherwise be reported
             // forever. Say we do not know, and let the next real access answer.
-            KeychainState::NotAttempted
-        };
+            self.keychain_state = KeychainState::NotAttempted;
+        }
     }
 
     /// What we know about the keychain, for the Settings credential-storage line.
     /// Reporting only - this never triggers keychain access.
+    ///
+    /// A keychain that is off reports `Declined` whatever the last real access
+    /// taught us: "you chose otherwise, and here is how to change your mind" is what
+    /// the user needs there, not a verdict on a keyring we have stopped using. The
+    /// verdict itself is kept rather than overwritten (see
+    /// [`Self::refresh_keychain_state`]) because the sweep asks a different question
+    /// of it - whether anything of ours could still be in there - and the user's
+    /// preference does not answer that one.
     pub(crate) fn keychain_state(&self) -> KeychainState {
+        if self.keychain_off() {
+            return KeychainState::Declined;
+        }
         self.keychain_state
     }
 
@@ -653,11 +672,31 @@ impl TokenStore {
     /// Every tier is swept even when an earlier one fails, mirroring [`Self::clear`];
     /// the first survivor is the one reported.
     fn sweep_persistent_tiers(&self, key: &str) -> Result<(), SecretStoreError> {
-        let keychain = sweep_tier(self.keychain.as_ref(), key);
+        // The two tiers differ in what an UNREADABLE store proves, so they answer
+        // [`sweep_tier`]'s third outcome differently.
+        //
+        // A keyring reports absence BY FAILING: on a box with no secret service
+        // every op dies at `Entry::new` before it can be asked about the entry. So
+        // an `Err` there is only a survivor when this session has some reason to
+        // think the keyring works - `unreadable_keychain_may_hold`, the same
+        // discrimination `clear` makes, with the same accepted blind spot for a
+        // keyring that was already locked when this session's login ran.
+        //
+        // The plaintext tier reports absence as `Ok`: a missing file - and a missing
+        // directory with it - is `Ok(None)` on the probe and `Ok(())` on the delete.
+        // An `Err` from it is therefore never "there is nothing here"; it is a
+        // `0o600` file holding a live token that we could neither read nor remove,
+        // and `load` needs no keyring, no unlock and no flag to hand it back on the
+        // next launch.
+        let keychain = sweep_tier(
+            self.keychain.as_ref(),
+            key,
+            self.unreadable_keychain_may_hold(),
+        );
         let plaintext = self
             .plaintext
             .as_ref()
-            .map_or(Ok(()), |p| sweep_tier(p.as_ref(), key));
+            .map_or(Ok(()), |p| sweep_tier(p.as_ref(), key, true));
         keychain.and(plaintext)
     }
 
@@ -735,8 +774,9 @@ impl TokenStore {
     /// keychain that no longer holds anything.
     ///
     /// The delete is a real keychain access, so its outcome is recorded; the
-    /// disable that follows overwrites that with `Declined`, which is the honest
-    /// answer from then on. Reports the failure so the caller can leave
+    /// disable that follows makes `Declined` the answer [`Self::keychain_state`]
+    /// reports from then on, which is the honest one to show, while the recorded
+    /// outcome stays behind it for the sweep. Reports the failure so the caller can leave
     /// `keychain_has_token` set rather than record a removal that did not happen.
     pub(crate) fn evict_from_keychain(
         &mut self,
@@ -778,8 +818,22 @@ impl TokenStore {
     fn keychain_may_hold(&self, account_key: &str) -> bool {
         match self.keychain.load(account_key) {
             Ok(entry) => entry.is_some(),
-            Err(_) => self.keychain_state != KeychainState::Unavailable,
+            Err(_) => self.unreadable_keychain_may_hold(),
         }
+    }
+
+    /// Whether a keychain that will not answer may nevertheless be holding
+    /// something of ours - the `Err` half of [`Self::keychain_may_hold`], hoisted
+    /// out because [`Self::sweep_persistent_tiers`] has to ask exactly the same
+    /// question after its own delete fails, and answering it differently in the two
+    /// places is how one of them ends up promising something the other knows is not
+    /// true.
+    ///
+    /// Reads the recorded verdict, not [`Self::keychain_state`]: the reported answer
+    /// is `Declined` for as long as the user has the keychain off, and the sweep
+    /// runs with it off by construction.
+    fn unreadable_keychain_may_hold(&self) -> bool {
+        self.keychain_state != KeychainState::Unavailable
     }
 
     /// Forget the token from **every** tier (keychain + plaintext + memory),

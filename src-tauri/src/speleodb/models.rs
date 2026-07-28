@@ -544,7 +544,10 @@ pub enum StartEditingResult {
     /// webview should refresh its view from the reloaded `local_path`.
     FastForwarded { local_path: String },
     /// The server diverged from our base AND we hold un-pushed local edits:
-    /// editing is NOT enabled and the freshly-acquired lock was released. The
+    /// editing is NOT enabled. A lock this call FRESHLY acquired was released;
+    /// one it inherited (a resumed session - the held-lock prompt's "Continue
+    /// editing") is deliberately kept, since handing it back would free the
+    /// project while the un-pushed work is still only local. Either way the
     /// user must reconcile (the divergence prompt is #198, next batch).
     DivergenceNeeded,
     /// Someone else holds the write lock; `email` is the holder when known.
