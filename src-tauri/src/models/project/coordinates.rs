@@ -367,10 +367,15 @@ impl Project {
             // The neighbour is behind the gauge shot, so the gauge station is in front of it.
             (Some(px), Some(py)) if py < px => px + 1,
             (Some(px), Some(_)) => px,
-            // Captured shot survives but its neighbour does not: take its free end if it still
-            // has one, else fall through.
-            (Some(px), None) if px == 0 => 0,
-            (Some(px), None) if px + 1 == section.shots.len() => section.shots.len(),
+            // The captured shot survives but has no recorded neighbour - a single-shot section,
+            // or one whose neighbour was deleted. Position cannot decide the side: for a
+            // one-shot section BOTH ends touch that shot, and reversing it swaps them while
+            // leaving the shot at position 0. Read the side off the orientation instead, the
+            // way the plan anchors do. `reverse_parity` is false when the pair was captured
+            // (capture happens on save, and a save records the same parity), so a section that
+            // has been reversed an odd number of times since is on the far side.
+            (Some(px), None) if section.reverse_parity => px + 1,
+            (Some(px), None) => px,
             _ => {
                 if section.reverse_parity {
                     section.shots.len()
@@ -1131,6 +1136,34 @@ mod tests {
             3,
             "the gauge must stay on the same physical station when the section grows"
         );
+    }
+
+    /// A ONE-SHOT section has no gauge neighbour, so position cannot decide the side: both of
+    /// its ends touch the same single shot, and reversing swaps them while leaving that shot at
+    /// position 0. Reading the side off the orientation is what keeps the gauge on its physical
+    /// station - reachable whenever a one-shot, lowest-id section is wired into a closure
+    /// component.
+    #[test]
+    fn the_gauge_of_a_one_shot_section_follows_a_reverse() {
+        let mut project = Project::new("one shot".to_string(), None);
+        let s = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        project.ensure_shot_uuids();
+        project.capture_missing_gauge_anchors();
+        assert!(
+            project.sections[0].gauge_neighbour_uuid.is_none(),
+            "fixture: a one-shot section has no neighbour to face away from"
+        );
+        assert_eq!(anchor_index(&project, s), 0);
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(
+            anchor_index(&project, s),
+            1,
+            "the original gauge station is now station 1, and the gauge must follow it"
+        );
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 0, "and back again");
     }
 
     /// A project that has never been saved has no captured pair, and must keep using the legacy

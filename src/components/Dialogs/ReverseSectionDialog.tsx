@@ -4,21 +4,9 @@ import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { applyReverseAftermath, composeReverseTransforms } from '../../utils/reverseAftermath';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
-/**
- * Stable identity for the project this dialog is acting on, following the
- * `projectIdentityKey` pattern in `useMapTools`. Deliberately WITHOUT
- * `modified_at`: the reverse itself bumps that, so including it would make the
- * check fail on every success.
- */
-function projectKeyOf(
-  project: { created_at?: string; file_path?: string | null } | null | undefined
-): string {
-  return `${project?.created_at ?? ''}|${project?.file_path ?? ''}`;
-}
 
 /**
  * Confirm dialog for reversing one or more sections end-to-end (#24).
@@ -83,7 +71,6 @@ export default function ReverseSectionDialog() {
     // trackDialogComplete. `dialogData` is a fresh object per openDialog call, so
     // reference identity distinguishes even a re-opened Reverse dialog.
     const dialogKey = dialogData;
-    const projectKey = projectKeyOf(project);
     try {
       // Reversing a multi-selection is one user action, so it goes through a
       // batch: the backend rolls the whole thing back if any section fails, and
@@ -106,26 +93,12 @@ export default function ReverseSectionDialog() {
         setIsSubmitting(false);
         return;
       }
-      // The backend mirrors everything it owns; these are the frontend's own
-      // POSITIONAL refs, which a reverse leaves in-range but pointing at the
-      // opposite physical station. See utils/reverseAftermath. Applied even when
-      // the dialog is already gone - the reverse landed either way - but not
-      // across a project switch, whose refs belong to a different project.
-      //
-      // The counts come off the WIRE, not from the sections this dialog rendered
-      // against. Those were read when the dialog opened; another queued edit can
-      // insert or delete a shot before this reverse takes the backend's command
-      // lock, and the backend then mirrors against a count the dialog never saw.
-      // Mirroring the frontend's own refs with the stale count would walk gas-plan
-      // pins and the distance-gradient origin onto the wrong station - silently,
-      // since every index involved stays in range. `reversed_sections` is the
-      // count that was actually in force, per step.
-      const store = useProjectStore.getState();
-      if (projectKeyOf(store.project) === projectKey) {
-        applyReverseAftermath(
-          composeReverseTransforms(result.reversed_sections, store.project?.sections ?? [])
-        );
-      }
+      // The aftermath - mirroring the frontend's own positional refs - is applied by
+      // `executeCommand`/`executeUndoRedo` in the store, immediately after the refresh it
+      // belongs to. Doing it here instead meant a continuation that outlives the dialog
+      // (Escape closes without cancelling the in-flight command) could land AFTER a
+      // concurrent undo had already mirrored the pins back, re-applying the forward shift
+      // onto restored numbering - in range, and silent.
 
       if (useUIStore.getState().dialogData !== dialogKey) return;
       trackDialogComplete('reverse-section');

@@ -441,6 +441,23 @@ function isPartialMultiStepFailure(error: string | null): boolean {
  */
 const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
 
+/**
+ * Whether the project changed identity between issuing a command and its reply (#24).
+ *
+ * `created_at` alone: it is immutable for the life of a project, whereas `file_path` changes on
+ * a first save or a Save As - keying on that made the guard reject replies that were perfectly
+ * valid and silently leave the frontend's positional refs on the wrong physical station.
+ *
+ * A missing value on either side is NOT a switch. Before the first refresh the store may hold
+ * no project at all, and a closed project resolves to no sections, which the transform builder
+ * already reduces to a no-op. Only two DIFFERENT identities mean the reply belongs to a project
+ * that is no longer open - and because section ids are small per-project integers, those entries
+ * would otherwise match sections in whatever is now open.
+ */
+function projectSwitched(before: string | null, after: string | null): boolean {
+  return before !== null && after !== null && before !== after;
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async (
@@ -448,10 +465,27 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> }
   ): Promise<CommandResult> => {
+    // #24: captured BEFORE the await so a project SWITCH mid-flight is detectable. Only
+    // `created_at` - it is immutable for the life of a project, whereas `file_path` changes on
+    // a first save or Save As, which would make the guard reject a reply that is perfectly
+    // valid and silently leave the frontend's positional refs on the wrong physical station.
+    const requestProjectKey = get().project?.created_at ?? null;
     try {
       const result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         await get().refreshProjectState();
+        // The frontend's own POSITIONAL refs (gas-plan pins, the loaded-plan baseline, the
+        // distance-gradient origin) are mirrored HERE rather than by the caller, so a reverse
+        // and an undo can never interleave: both routes now apply their aftermath in the same
+        // place, in completion order, immediately after the refresh they belong to. A dialog
+        // continuation doing it later could land AFTER a concurrent undo had already mirrored
+        // the pins back, re-applying the forward shift onto restored numbering - silently,
+        // since every index stays in range.
+        if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+          applyReverseAftermath(
+            composeReverseTransforms(result.reversed_sections, get().project?.sections ?? [])
+          );
+        }
         set({ isDirty: true });
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
@@ -507,6 +541,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     checkPartialFailure: boolean,
   ): Promise<CommandResult> => {
     let result: CommandResult;
+    // Captured before the await - see `executeCommand` for why this is `created_at` alone.
+    const requestProjectKey = get().project?.created_at ?? null;
     // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
     // every positional StationRef the frontend holds - the gas-plan pins, the
     // distance-gradient origin - keeps its index and starts naming the OPPOSITE
@@ -553,14 +589,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
+      // #24: same project-switch guard as executeCommand. Section ids are small per-project
+      // integers, so entries from the OUTGOING project would otherwise match sections in
+      // whatever is now open and mirror that project's pins instead.
       // The per-step counts come off the wire; the REFRESHED project supplies only
       // the range to clamp into, which is the numbering the pins now have to fit.
       // A multi-step undo_to can walk past a CreateShot, so the post-range count
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
-      applyReverseAftermath(
-        composeReverseTransforms(reversedSections, get().project?.sections ?? [])
-      );
+      if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+        applyReverseAftermath(
+          composeReverseTransforms(reversedSections, get().project?.sections ?? [])
+        );
+      }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
       // station an offset anchored on - so re-check integrity, otherwise the
