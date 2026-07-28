@@ -2487,21 +2487,35 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               ? (JSON.parse(JSON.stringify(currentProject)) as typeof currentProject)
               : null;
             const commentsBefore = { ...mockStationComments };
+            // #24: entries accumulate ACROSS sub-commands, in step order and with repeats -
+            // each carries the shot count in force at its own step, which is what lets the
+            // frontend compose rather than replay. A batch reversing the same section twice
+            // must therefore emit two entries, not one.
+            const reversedSections: Array<{ section_id: number; shot_count: number }> = [];
             for (const command of commands) {
-              let result: { success?: boolean; error?: string } | undefined;
+              let result:
+                | {
+                    success?: boolean;
+                    error?: string;
+                    reversed_sections?: Array<{ section_id: number; shot_count: number }>;
+                  }
+                | undefined;
               if (command?.type === 'update_shot') {
                 result = mockHandler('update_shot', {
                   sectionId: command.section_id,
                   shotId: command.shot_id,
                   updates: command.updates,
-                }) as { success?: boolean; error?: string } | undefined;
+                }) as typeof result;
               } else if (command?.type === 'reverse_section') {
                 // Multi-section reverse (#24) is batched so it is atomic and
                 // costs one undo, so the batch has to replay it too.
                 result = mockHandler('reverse_section', {
                   sectionId: command.section_id,
                   swapLeftRight: command.swap_left_right,
-                }) as { success?: boolean; error?: string } | undefined;
+                }) as typeof result;
+                if (result?.reversed_sections) {
+                  reversedSections.push(...result.reversed_sections);
+                }
               }
               if (result && result.success === false) {
                 if (currentProject && projectBefore) {
@@ -2514,7 +2528,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 return result;
               }
             }
-            return { success: true };
+            return {
+              success: true,
+              ...(reversedSections.length > 0 ? { reversed_sections: reversedSections } : {}),
+            };
           }
 
           case 'check_merge_connectivity': {
@@ -3944,7 +3961,21 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               mockStationComments[key] = text;
             }
 
-            return { success: true, section_id: sectionId };
+            // #24: the frontend's own POSITIONAL refs (gas-plan pins, the loaded-plan
+            // baseline, the distance-gradient origin) are mirrored off this field, not
+            // inferred from geometry - a reverse keeps every station's world position, so
+            // a position diff reports nothing. Omitting it here made the whole forward
+            // aftermath a silent no-op under the mock while the specs asserted the mirror.
+            // Matches the backend: `{section_id, shot_count}` with the count IN FORCE at
+            // this step, and a shot-less section is DROPPED (nothing was renumbered, and
+            // it is the divisor for the frontend's mirror).
+            return {
+              success: true,
+              section_id: sectionId,
+              ...(shotCount > 0
+                ? { reversed_sections: [{ section_id: sectionId, shot_count: shotCount }] }
+                : {}),
+            };
           }
 
           case 'create_shot': {
