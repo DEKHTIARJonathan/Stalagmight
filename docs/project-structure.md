@@ -62,7 +62,7 @@ stalagmight/
 │   │   │       ├── ThemePreviewCard.tsx     # Mini app mockup preview cards
 │   │   │       ├── AdvancedSettings.tsx     # Placement suggestion constants
 │   │   │       └── ...
-│   │   └── common/               # Button, Panel, Select, SpreadsheetGrid
+│   │   └── common/               # Shared primitives (see below)
 │   ├── theme/                    # Color theme system
 │   │   └── tokens.ts                 # 10 color theme token definitions
 │   ├── store/                    # Zustand stores
@@ -106,3 +106,14 @@ stalagmight/
 │
 └── CLAUDE.md                     # Agent instructions (AGENTS.md symlinks to it)
 ```
+
+## Shared UI primitives
+
+`src/components/common/` holds the shared primitives - about 28 of them, among
+which: `Button` / `IconButton`, `Panel` / `ResizablePanel`, `Select`, `Toggle`,
+`DatePicker`, `Tooltip` / `HelpTooltip`, `ToastStack`, `ElidedPath`,
+`ContextMenu`, the icon set in `icons.tsx`, and `SpreadsheetGrid` - the in-house,
+library-free survey data grid (documented in `SpreadsheetGrid/README.md`;
+`react-datasheet-grid` is not a dependency). Shot editing inside dialogs uses
+`ShotTableEditor` instead. For which primitive to reach for and how it should
+look, see [style-guide.md](style-guide.md).

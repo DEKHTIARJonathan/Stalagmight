@@ -2440,7 +2440,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'check_merge_connectivity': {
             // Mock connectivity check
             // Default: not connected but merge allowed (opens merge dialog)
-            // Tests can override via __MOCK_SET_CONNECTIVITY__
+            // Tests can override via __MOCK_CONNECTIVITY_RESULT__
             console.log('[Mock IPC] check_merge_connectivity called with:', args);
             const mockConnectivity = (window as unknown as Record<string, unknown>).__MOCK_CONNECTIVITY_RESULT__ as {
               connected: boolean;

@@ -4,7 +4,7 @@
 // That is safe ONLY because every spec keeps its backend state per-page on
 // `window.*` (mocked IPC) - no spec binds a port, writes a fixed disk path, or
 // shares a server / global. This scanner fails the build if a spec introduces a
-// pattern that would break that invariant. See docs/TESTING.md.
+// pattern that would break that invariant. See docs/testing-recipes.md.
 //
 // Runs in the `smoke` job (e2e-smoke.yml) - the only CI job that runs the
 // Playwright tier on `e2e-playwright/**` changes. `check` (the home of the
@@ -156,7 +156,7 @@ function main() {
   }
   console.error(
     'The mocked Playwright tier runs fullyParallel at multiple workers; all state must\n' +
-      'stay per-page (window.*). See docs/TESTING.md → "Parallel-safety invariant".\n',
+      'stay per-page (window.*). See docs/testing-recipes.md, "Parallel-safety invariant".\n',
   );
   return 1;
 }

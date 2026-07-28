@@ -1357,7 +1357,7 @@ export default class SurveyLayer {
     this.callbacks.onEmptyClick?.(e);
   }
 
-  // Convert "sectionId:index" string ID to numeric featureId for setFeatureState
+  // Convert "sectionId:index" string ID to the numeric featureId the renderer keys on
   private parseFeatureId(id: string | null): number | null {
     if (!id) return null;
     const [sectionId, index] = id.split(':').map(Number);
@@ -1698,7 +1698,7 @@ export default class SurveyLayer {
   /**
    * Apply the gas route highlight (#233): the picked penetration route drawn over the survey -
    * swum legs at full opacity, jump legs faded (#243). Has its own GeoJSON source (survives
-   * `setData()`); the legs are stored so `applyFeaturesToSources` re-pushes them after a feature
+   * `setData()`); the legs are stored so `flushUpdate` re-pushes them after a feature
    * rebuild. `[]` clears it.
    */
   setGasRoute(legs: RouteLeg[]): void {
@@ -2003,7 +2003,7 @@ export default class SurveyLayer {
   }
 
   // Set snapped station (called from outside for snap indicator)
-  // Uses setFeatureState for instant GPU-side update (same mechanism as hover).
+  // Pushes a per-vertex attribute update for an instant GPU-side change (same mechanism as hover).
   setSnappedStation(ref: StationRef | null) {
     const newId = ref ? `${ref.section_id}:${ref.station_index}` : null;
     if (this.snappedStationId === newId) return;
@@ -2451,7 +2451,7 @@ export default class SurveyLayer {
   /**
    * Set individual feature-level immovable state for move_station / move_shot tools.
    * Uses setPaintProperty with data-driven expressions to dim immovable features.
-   * Unlike setAnchoredSections (which uses setFeatureState), this approach is reliable
+   * Unlike setAnchoredSections (which re-tessellates dim flags), this approach is reliable
    * on initial tool activation because it doesn't depend on feature tiling state.
    */
   setImmovableFeatures(stationIds: Set<number>, shotIds: Set<number>): void {

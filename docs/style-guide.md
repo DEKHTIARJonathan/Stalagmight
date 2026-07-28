@@ -35,7 +35,9 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Common header spacing: `px-3 py-2` with `border-b border-border`.
 
 ## Tables and Lists
-- Use `Table` for read-only lists and `EditableTable` for inline editing.
+- Use `SpreadsheetGrid` for tabular survey data, read-only or editable (the
+  in-house grid; see `src/components/common/SpreadsheetGrid/README.md`).
+  `ShotTableEditor` is the shot table embedded in dialogs.
 - Selection uses a persistent indicator (`selected-cell-indicator`) and a `bg-accent-20` row tint.
 - Hover states should be lighter (`bg-accent-10`) than selection.
 

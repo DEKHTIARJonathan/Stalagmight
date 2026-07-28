@@ -99,14 +99,15 @@ Run the same checks CI runs. All of these must pass:
 ```bash
 pnpm tsc --noEmit                                                  # TypeScript
 pnpm typecheck:agent                                               # agent-harness typecheck (a CI gate)
-CI=true pnpm test                                                 # vitest unit + component (CI=true runs once, not watch)
+pnpm exec vitest run                                               # vitest unit + component (plain "pnpm test" watches and never exits)
 pnpm test:ui                                                       # Playwright (needs a display)
 pnpm lint:e2e-parallel                                             # Playwright parallel-safety (a CI gate)
+pnpm lint:pw-timing:test                                           # Playwright timing-reporter fixtures (a CI gate)
 pnpm lint:rust-file-size                                           # Rust file-size ratchet (a CI gate)
 pnpm lint:ts-file-size                                             # TS file-size ratchet (a CI gate)
-pnpm lint:readonly-gates                                           # read-only gating tripwire (a CI gate)
+pnpm lint:readonly-gates:test && pnpm lint:readonly-gates          # read-only gating tripwire (a CI gate)
 pnpm lint:private-leaks                                            # no internal/personal refs in the public tree (a CI gate)
-pnpm lint:no-em-dash                                               # ASCII hyphens only, no Unicode dashes (a CI gate)
+pnpm lint:no-em-dash:test && pnpm lint:no-em-dash                  # ASCII hyphens only, no Unicode dashes (a CI gate)
 cargo fmt --manifest-path src-tauri/Cargo.toml --check             # Rust formatting
 TELEMETRY_ENDPOINT=http://localhost/dummy \
   cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets   # deny-level lints
@@ -125,8 +126,9 @@ Notes:
   to fix formatting; clear all clippy warnings. The lint policy is documented in
   [docs/linting.md](docs/linting.md).
 - **Tests:** cover the adversarial case (boundaries, duplicate IDs, legacy
-  inputs), not just the happy path. Parsers have golden fixtures. Details in
-  [docs/TESTING.md](docs/TESTING.md).
+  inputs), not just the happy path. Parsers have golden fixtures. Which tier to
+  write in: [docs/TESTING.md](docs/TESTING.md); fixtures and patterns:
+  [docs/testing-recipes.md](docs/testing-recipes.md).
 
 ## Pull request guidelines
 

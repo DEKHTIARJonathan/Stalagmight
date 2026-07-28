@@ -448,7 +448,7 @@ export class SurveyCustomLayer implements CustomLayerInterface {
    * frames; after MAX_CHECKED_FRAMES clean frames it stops calling getError()
    * (a synchronous GPU pipeline stall) and trusts the layer. The first clean
    * frame logs ungated; any error self-disables the layer and notifies the
-   * controller so it can restore the stock survey layers.
+   * controller, which tears it down for good - there is no stock fallback.
    */
   private checkFrameError(gl: WebGL2RenderingContext, data: CustomRenderData): void {
     if (this.checkedFrames >= MAX_CHECKED_FRAMES) return;

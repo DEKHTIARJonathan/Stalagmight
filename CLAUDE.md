@@ -68,6 +68,7 @@ pnpm typecheck:agent                                      # agent-harness typech
 pnpm exec vitest run                                      # vitest unit + component (CI check-job gate; plain "pnpm test" watches and never exits locally)
 pnpm test:ui
 pnpm lint:e2e-parallel                                    # Playwright parallel-safety (CI smoke-job gate)
+pnpm lint:pw-timing:test                                  # Playwright timing-reporter fixtures (CI smoke-job gate)
 pnpm lint:rust-file-size                                  # Rust file-size ratchet (CI check-job gate)
 pnpm lint:ts-file-size                                     # TS file-size ratchet (CI check-job gate)
 pnpm lint:private-leaks                                   # no internal/personal refs in the public tree (CI leak-scan gate)
@@ -159,7 +160,8 @@ Update `CHANGELOG.md` every time a new version is tagged.
 |----------|----------|
 | [Docs index](docs/README.md) | Every page under `docs/`, grouped, with a contributor reading order |
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
-| [Testing Guide](docs/TESTING.md) | Test commands, Playwright/WebdriverIO/Rust patterns, UI testability requirements |
+| [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
+| [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/WebdriverIO/Rust/vitest patterns, mock conventions, troubleshooting |
 | [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
 | [Architecture](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |
@@ -172,7 +174,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
-| [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
+| [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
 | [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22. |
@@ -188,5 +190,4 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Releasing](docs/releasing.md) | Changelog -> tag -> release: `scripts/release.sh`, the CI workflows, where version numbers live |
 | [UI style guide](docs/style-guide.md) | Design tokens, typography, buttons, panels, tables, forms, accessibility |
 | [macOS pan/zoom lockup](docs/debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit |
-| [Touch support](docs/touch-support.md) | Pointer events and long-press handling for tablets. Dated - a rewrite is queued |
-| [UI component inventory](docs/ui-component-inventory.md) | Reusable components and where they live. Dated - being reworked |
+| [Touch support](docs/touch-support.md) | What touch/pointer support exists, the long-press paths, and the verified gaps |

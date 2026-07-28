@@ -6,8 +6,8 @@ A self-contained, **library-free**, Excel-like editing grid for issue #61.
 > (Excel / Google Sheets) and commodity algorithms only. No third-party grid
 > library source was read or referenced.
 
-It is **not yet wired into the app** - it's a standalone, reusable element to be
-integrated into `DataTable` later.
+It backs the survey data table (`DataTable.tsx`) and the raw table view
+(`RawTableView.tsx`).
 
 ## Features
 

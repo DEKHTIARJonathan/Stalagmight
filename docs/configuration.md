@@ -331,14 +331,12 @@ The following shortcuts are reserved and cannot be reassigned:
 | `Tab` / `Enter` | UI navigation |
 | `Ctrl+A` | Select all stations |
 | `Ctrl+,` (`Cmd+,` on macOS) | Open Settings |
+| `?` | Keyboard shortcuts overlay |
 
-Two more sets of keys are global but not enforced as reserved - the shortcut
-editor will let you record them anyway:
-
-- `?` opens the keyboard shortcuts overlay. The global handler intercepts it
-  before configurable shortcuts run, so an action bound to `?` never fires.
-- `Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset. The
-  UI-zoom handler still fires alongside whatever you bound.
+`Ctrl+=` / `Ctrl+-` / `Ctrl+0` zoom the interface in / out / reset. The Settings
+dialog lists them as reserved, but that is display only - `RESERVED_CTRL_KEYS`
+holds just `A` and `,`, so the editor will let you bind them to an action and
+the UI-zoom handler still fires alongside it.
 
 ### Shortcut Feedback
 
