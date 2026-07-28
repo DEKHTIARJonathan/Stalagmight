@@ -159,7 +159,8 @@ Update `CHANGELOG.md` every time a new version is tagged.
 |----------|----------|
 | [Docs index](docs/README.md) | Every page under `docs/`, grouped, with a contributor reading order |
 | [SPEC.md](docs/SPEC.md) | **Full specification** - data model, UI design, workflows, file formats, validation rules |
-| [Testing Guide](docs/TESTING.md) | Test commands, Playwright/WebdriverIO/Rust patterns, UI testability requirements |
+| [Testing Guide](docs/TESTING.md) | Which tier a test belongs in, and the UI testability requirements |
+| [Testing Recipes](docs/testing-recipes.md) | Commands per tier, Playwright/WebdriverIO/Rust/vitest patterns, mock conventions, troubleshooting |
 | [Linting & Format Policy](docs/linting.md) | Rust clippy/rustfmt CI gates, the anti-AI-slop policy, the per-test-module `#[expect]` idiom, considered-but-deferred lints |
 | [Architecture](docs/architecture.md) | State flow, command pattern, key files, Rust patterns |
 | [Project Structure](docs/project-structure.md) | Directory tree, tech stack |

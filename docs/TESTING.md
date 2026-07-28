@@ -1,671 +1,150 @@
-# Stalagmight Testing Guide
+# Testing Guide
 
-This document describes the testing infrastructure, conventions, and best practices for Stalagmight.
+How the test tiers relate, which one a given test belongs in, and the contract a
+UI component has to satisfy to be testable at all.
 
-## Testing Philosophy
+**Looking for a command or a pattern?** See
+[Testing Recipes](testing-recipes.md) - exact commands per tier, per-framework
+patterns, mock/fixture conventions, and the known traps.
 
-**Tests are mandatory for all features.** A feature is not complete until it has appropriate test coverage. Tests serve as:
+A feature is not complete until it has coverage at the right tier. Picking the
+wrong tier is the most common source of rework here, so start with the tier
+model below.
 
-1. **Documentation**: Tests describe expected behavior
-2. **Regression prevention**: Catch bugs before they reach users
-3. **Refactoring safety net**: Confidently modify code knowing tests will catch breaks
-4. **Design feedback**: Hard-to-test code often indicates design issues
+## The tiers
 
-## Test Infrastructure
-
-Stalagmight uses a multi-layered testing approach. Beyond speed, note the
-**mocked-IPC vs. real-backend** axis: every *frontend* tier (Vitest unit/
-component, Playwright, smoke) mocks the Tauri backend. The real backend - actual
-file I/O, Recent Projects, the save/import persistence pipeline - is exercised by
-the **Rust command-layer tests** (`src-tauri/src/commands/command_tests.rs`), which
-run in the CI-gated `check` job against real `TempDir` files with no display or
-Tauri build. The on-demand WDIO suite is the only tier that drives the **real Tauri
-app** end-to-end (webview + Rust), but it runs nowhere automatically.
-
-| Layer | Framework | Env | Purpose | Speed |
-|-------|-----------|-----|---------|-------|
+| Tier | Framework | Environment | Covers | Speed |
+|------|-----------|-------------|--------|-------|
 | Unit (logic) | Vitest | `node` | Stores, utils, selectors (`*.test.ts`) | Fast |
-| Component | Vitest + Testing Library | `jsdom` | Render React components, assert handlers/wiring (`*.test.tsx`) | Fast |
-| Playwright E2E | Playwright | mocked IPC | UI flows (`e2e-playwright/`) | Fast |
-| WebdriverIO E2E | WebdriverIO + tauri-driver | real Tauri app | Full real-app tests (`e2e/legacy/`, **on-demand only**) | Slow (real backend) |
-| Backend Unit | Rust `#[test]` | - | Rust logic tests | Fast |
-| Agent harness | MCP + WebdriverIO | real Tauri app | LLM-agent-driven exploration, stress scenarios, bug repro (`e2e/agent/`, **on-demand**, Node 22) | Slow (real backend) |
-
-The Vitest unit + component tiers are gated in CI (the `check` job) as of #107;
-the Playwright smoke/nightly split and the WDIO quarantine to `e2e/legacy/`
-landed in #103.
-
-## Test Tiers (smoke vs nightly)
-
-To keep flaky, timing-sensitive tests from blocking everyday work (issue #23),
-the Playwright suite is split into two tiers:
-
-| Tier | What | When it runs | Command |
-|------|------|--------------|---------|
-| **Smoke** | ~85 critical-path tests tagged `@smoke` | manual pre-push checklist + `e2e-smoke.yml` on every PR/push | `pnpm test:ui:smoke` |
-| **Nightly / full** | the entire Playwright suite | `nightly-e2e.yml` on a schedule (+ `workflow_dispatch`) | `pnpm test:ui` |
-| **On-demand** | WebdriverIO real-app suite | manual only | `./scripts/wdio.sh` |
-| **On-demand** | Agent harness (MCP + WDIO, real app) - see [Agent Harness](agent-harness.md) | manual only, Node 22 | `pnpm agent:smoke` / `pnpm agent:scenarios` |
-
-Guidelines:
-
-- **Tag a test `@smoke`** only if it covers a critical path *and* is reliable.
-  Append ` @smoke` to the test title: `test('does X @smoke', ...)`.
-- **Don't sleep.** Hard `page.waitForTimeout()` is the #1 flake source. Prefer
-  the helpers (`waitForActiveTool`, `waitForMapReady`, `waitForMapIdle`,
-  `waitForZoomChange`) or web-first assertions / `expect.poll`. See "Wait
-  Strategies" below.
-- **Retries:** `playwright.config.ts` retries failed tests twice in CI and once
-  locally (so a single blip doesn't abort a push). Override with `PW_RETRIES`
-  (e.g. `PW_RETRIES=0` to fail fast while debugging a flake).
-- A test that is valuable but timing-sensitive belongs in the nightly tier
-  (untagged), not the smoke tier.
-
-## Quick Start
-
-```bash
-# Run Vitest unit + component tests (watch mode; `vitest run` for a single pass)
-pnpm test
-
-# Run Playwright tests (recommended for development)
-pnpm test:ui
-
-# Run with visible browser (debugging)
-pnpm test:ui:headed
-
-# Run backend tests
-cargo test --manifest-path src-tauri/Cargo.toml
-
-# Run all tests (Vitest then Playwright; CI=1 keeps the Vitest half from watching)
-CI=1 pnpm test:all
-```
-
-## Coverage (Optional)
-
-```bash
-# Unit test coverage (writes reports to docs/coverage)
-pnpm vitest run --coverage
-
-# E2E coverage (instruments the app for Playwright or WDIO)
-pnpm coverage:ui
-pnpm coverage:e2e
-
-# Merge raw E2E coverage and generate reports under docs/coverage
-pnpm coverage:merge
-```
-
-## Required Tests by Feature Type
-
-| Feature Type | Required Tests |
-|--------------|----------------|
-| New UI component/dialog | Component test (`*.test.tsx`: render + assert handlers/wiring) + Playwright E2E for the full flow |
-| Frontend logic (stores, utils, selectors) | Vitest unit test (`*.test.ts`) |
-| New Tauri IPC command | Rust unit tests + Playwright E2E tests |
-| Backend logic (parsers, models) | Rust unit tests |
-| User workflow (multi-step) | Playwright E2E tests |
-| Bug fix | Regression test at the lowest tier that can catch it (unit/component before E2E) |
-
-## Vitest Unit & Component Tests
-
-Vitest runs all `src/**/*.{test,spec}.{ts,tsx}` files and is gated in CI (#107).
-Tiering is by **file extension** (see `vite.config.ts` → `environmentMatchGlobs`):
-
-| Extension | Environment | Use for |
-|-----------|-------------|---------|
-| `*.{test,spec}.ts` | `node` | Pure logic - stores, utils, selectors, formatters. No DOM. |
-| `*.{test,spec}.tsx` | `jsdom` | Rendering a React component with Testing Library. |
-
-`src/test/setup.ts` registers jest-dom matchers and auto-unmounts React trees
-between tests. The DOM libraries load lazily behind a `document` guard, so the
-`node` logic tests pay no DOM cost.
-
-### Writing a component test
-
-Render the real component, then assert on accessible roles and that handlers
-fire - prefer this over an E2E test when the behavior is component-local
-("completing X calls Y", "dialog renders Z on state W"). The full cross-view
-flow still belongs in Playwright.
-
-```tsx
-import { describe, it, expect, vi } from 'vitest';
-import { render, screen } from '@testing-library/react';
-import userEvent from '@testing-library/user-event';
-import { Button } from './Button';
-
-it('fires onClick when activated', async () => {
-  const onClick = vi.fn();
-  render(<Button onClick={onClick}>Import</Button>);
-  await userEvent.click(screen.getByRole('button', { name: 'Import' }));
-  expect(onClick).toHaveBeenCalledTimes(1);
-});
-```
-
-See `src/components/common/Button.test.tsx` for the harness smoke. Components
-that depend on Zustand stores or `react-i18next` need those mocked/provided;
-keep first component tests on leaf components to avoid heavy setup.
-
-> **Why this tier exists:** before #107 there was no way to render a component
-> in a unit test (0 `render()` calls), so UI-wiring bugs like #92 (import
-> completion never triggered a save) shipped on manual verification alone. The
-> component tier mocks IPC, so the **real-backend** persistence path (file on
-> disk + Recent Projects) is owned separately by the Rust command-layer tests
-> `test_import_sections_persists_deferred_new_project` (success path) and
-> `test_import_sections_deferred_save_failure_warns_no_phantom` (failed save →
-> warning, no phantom) in `src-tauri/src/commands/command_tests.rs` (#112).
-
-## Playwright E2E Tests
-
-Located in `e2e-playwright/`. These tests run against the Vite dev server with mocked Tauri IPC calls.
-
-### Directory Structure
-
-```
-e2e-playwright/
-├── mocks/
-│   └── tauri-ipc.ts       # Mock Tauri IPC command handlers
-├── fixtures/              # Test data files
-├── project-crud.spec.ts   # Project CRUD operation tests
-├── ui-components.spec.ts  # UI interaction tests
-├── theme.spec.ts          # Color theme switching tests
-├── settings-shortcuts.spec.ts  # Shortcut configuration tests
-├── dmp-import.spec.ts     # DMP import dialog tests
-├── debug.spec.ts          # Debugging helper test
-└── ...                    # 100+ spec files total
-```
-
-### Configuration
-
-See `playwright.config.ts` for settings:
-- Runs against `http://localhost:1420` (Vite dev server)
-- Auto-starts dev server via `webServer` config
-- Uses Chromium browser
-- Generates traces, screenshots, and videos on failure
-
-### Parallel-safety invariant
-
-This tier runs with `fullyParallel: true` at multiple workers (`workers: '100%'`
-on CI). That is safe **only** because of the mocked-IPC architecture, not any
-per-test discipline:
-
-- IPC is mocked **per page** (`mocks/tauri-ipc.ts`); all backend state lives on
-  `window.*` inside each isolated browser context.
-- The single shared `webServer` (Vite, `:1420`) is **stateless** - it serves the
-  bundle only.
-- The one real disk write (`fixtures/coverage.ts`) is uniquely named per
-  `test + workerIndex` and gated behind `E2E_COVERAGE=1`.
-
-So a spec must **never** introduce shared state that survives across pages/workers:
-no `createServer(`/`.listen(` (a test binding its own port), no fixed-path
-`writeFileSync`/`writeFile`/`copyFileSync`, no hardcoded `localhost:<port>` other
-than `:1420`, and no forced serial mode (`test.describe.serial(...)` or
-`test.describe.configure({ mode: 'serial' })`). On a 2-core runner at multiple
-workers, that kind of bad hygiene surfaces as flake.
-
-**Enforcement:** `pnpm lint:e2e-parallel` (`scripts/check-e2e-parallel-safe.mjs`)
-fails on any of the patterns above. It runs in the **`smoke` CI job** - the only
-job that runs the Playwright tier on `e2e-playwright/**` changes (the `check` job
-path-ignores them, so a gate there would be a no-op for an e2e-playwright-only
-change). Run it locally before pushing. `fixtures/coverage.ts` is the one
-allow-listed write; a genuinely necessary exception goes in the `ALLOW` list in
-that script with a written reason. The scanner is a line-based tripwire for the
-common, accidental regression - not a parser; it intentionally does not inspect
-`page.screenshot({path})` (framework I/O) or the root `playwright.config.ts`.
-
-### Writing Playwright Tests
-
-#### Basic Test Structure
-
-```typescript
-import { test, expect } from '@playwright/test';
-import { setupMockedPage } from './helpers/app';
-
-test.describe('Feature Name', () => {
-  test.beforeEach(async ({ page }) => {
-    // Setup mocks + app bootstrap before each test
-    await setupMockedPage(page);
-  });
-
-  test('should do something', async ({ page }) => {
-    // Test implementation
-    await page.click('button:has-text("Click Me")');
-    await expect(page.locator('.result')).toBeVisible();
-  });
-});
-```
-
-#### Common Patterns
-
-**Creating a project (required for most tests):**
-```typescript
-import { setupMockedPage, createProject, waitForMapReady } from './helpers/app';
-
-test.beforeEach(async ({ page }) => {
-  await setupMockedPage(page);
-});
-
-// In test:
-await createProject(page, 'Test Project');
-await waitForMapReady(page);
-```
-
-**Opening dialogs:**
-```typescript
-// Via keyboard shortcut (opens DmpSelectionDialog, Step 1 of DMP import flow)
-await page.keyboard.press('Control+i');
-await page.waitForSelector('[data-testid="dmp-selection-dialog"]');
-
-// Via store (opens ImportDialog for section creation)
-await page.evaluate(() => {
-  (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
-});
-await page.waitForSelector('[data-testid="import-section-dialog"]');
-```
-
-> **Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of DMP import), NOT `ImportDialog` (manual section creation). The flow then continues to zero-datum selection/config (when needed) and `DmpNewImportDialog`.
-
-**Closing dialogs:**
-```typescript
-// Via Cancel button
-const dialog = page.locator('[data-testid="new-project-dialog"]');
-await dialog.locator('[data-testid="new-project-cancel-button"]').click();
-
-// Via Escape - DialogWrapper closes the topmost dialog
-await page.keyboard.press('Escape');
-```
-
-**Interacting with canvas:**
-```typescript
-import { waitForMapReady, waitForMapIdle } from './helpers/app';
-
-await waitForMapReady(page);
-const mapCanvas = page.locator('[data-testid="map-canvas"]');
-await expect(mapCanvas).toBeVisible();
-
-// Click on canvas
-await mapCanvas.click();
-
-// Drag on canvas
-const box = await mapCanvas.boundingBox();
-if (box) {
-  await page.mouse.move(box.x + 100, box.y + 100);
-  await page.mouse.down();
-  await page.mouse.move(box.x + 200, box.y + 200);
-  await page.mouse.up();
-  await waitForMapIdle(page);
-}
-```
-
-### Updating Tauri IPC Mocks
-
-When adding new Tauri commands, update `e2e-playwright/mocks/tauri-ipc.ts`.
-
-#### Mock Structure
-
-The mock intercepts `__TAURI_INTERNALS__.invoke()` and returns mock data:
-
-```typescript
-case 'your_new_command': {
-  const param = args?.param_name as string;
-  // Return mock response matching Rust return type
-  return { success: true, data: mockData };
-}
-```
-
-#### Important Mock Fields
-
-When mocking project state, ensure all required fields are present:
-
-```typescript
-// Project must have all these fields
-const project = {
-  id: 1,
-  name: 'Test Project',
-  location: null,
-  created_at: new Date().toISOString(),
-  modified_at: new Date().toISOString(),
-  file_path: null,
-  sections: [],
-  station_merges: [],
-  zero_datums: [],
-  loop_closures: [],  // Don't forget this!
-  section_offsets: {},
-};
-
-// Stats must have all these fields
-const stats = {
-  section_count: 0,
-  shot_count: 0,
-  total_length: 0,
-  min_depth: 0,
-  max_depth: 0,
-  station_count: 0,
-  loop_count: 0,
-  penetration_distance: 0,
-};
-
-// Config must match src/types/config.ts structure
-const config = {
-  general: { ... },
-  units: { ... },
-  display: { default_background: '#1a1a2e', ... },  // Required!
-  section_colors: { ... },
-  map: { ... },
-  validation: { ... },
-  export: { ... },
-  logging: { ... },
-  shortcuts: { ... },
-  snap: { ... },
-  panels: { ... },
-};
-```
-
-### Debugging Failed Tests
-
-1. **Run in headed mode**: `pnpm test:ui:headed`
-2. **Use debug test**: Run `e2e-playwright/debug.spec.ts` to see console logs
-3. **Check artifacts**: Failed tests generate screenshots and videos in `test-results/`
-4. **Add console logging in mocks**: Add `console.log()` in mock handlers
-
-## WebdriverIO E2E Tests
-
-Located in `e2e/legacy/`, quarantined and on-demand only (see
-[`e2e/legacy/README.md`](../e2e/legacy/README.md)). These tests run against the
-full Tauri application.
-
-### Requirements
-
-- Linux or Windows (macOS not supported by tauri-driver)
-- tauri-driver installed: `cargo install tauri-driver`
-- Display server (X11/Wayland) or `xvfb` for headless environments
-
-### Directory Structure
-
-The top-level `e2e/` tree holds the real-app tiers plus the fixtures they share
-with the Rust tests:
-
-```
-e2e/
-├── agent/                 # LLM-agent harness (MCP + WDIO) - see docs/agent-harness.md
-├── fixtures/              # .dmp/.tml/.tmlu/.stalx test data (Rust tests read these too)
-│   ├── test_v2.dmp
-│   ├── test_v5.dmp
-│   └── test_v5_buggy_EOS.dmp
-├── lib/                   # shared plumbing (env, display detection, fractal gen)
-└── legacy/                # the quarantined WebdriverIO suite
-    ├── specs/
-    │   ├── project-lifecycle.spec.ts
-    │   ├── project-persistence.spec.ts
-    │   ├── map-interactions.spec.ts
-    │   ├── multi-section-workflows.spec.ts
-    │   └── ...            # tml import/export, map rendering, depth gradient
-    ├── helpers/
-    │   └── app.ts
-    └── README.md
-```
-
-### Dialog Reference
-
-Stalagmight has two different import flows that serve different purposes:
-
-| Dialog Component | `activeDialog` Value | Opened By | Test File | Stats Feature |
-|------------------|---------------------|-----------|-----------|---------------|
-| `DmpSelectionDialog` | `'dmp-selection'` | `Ctrl+I` keyboard shortcut | `import-dmp-dialog.spec.ts` | Selection stats (shot count, total length, depth range) |
-| `ZeroDatumSelectionDialog` / `ZeroDatumConfigDialog` | `'zero-datum-selection'` / `'zero-datum-config'` | Continue from selection when no project zero datum exists | `import-dmp-dialog.spec.ts` | Zero datum section selection and coordinates |
-| `DmpNewImportDialog` | `'dmp-import-new'` | Continue from selection (or zero datum config) | `import-dmp-dialog.spec.ts` | Suggested connections, segment placement, metadata editing |
-| `ImportDialog` | `'import'` | SectionsPanel "+" button, E2E store | `import-section-dialog.spec.ts` | N/A |
-
-**Important**: The `Ctrl+I` shortcut opens `DmpSelectionDialog` (Step 1), not `ImportDialog`. Tests that need to verify section name input should use `ImportDialog` via the store.
-
-**Stats Testing Notes:**
-- Step 1 stats update when sections are checked/unchecked - verify `[data-testid="selection-stats"]` content changes
-- Use `aria-label` attribute for accessibility testing - contains full descriptive text
-
-### Dialog Close Behaviors
-
-| Method | Works? | Notes |
-|--------|--------|-------|
-| Cancel/Close button | Yes | Recommended for tests |
-| Backdrop click | Yes | Calls onClose |
-| Escape key | Yes | `DialogWrapper` (`handleKeyDown`) closes the **topmost** dialog; `src/utils/dialogStack.ts` marks the ones underneath `inert` |
-
-**Note**: two Escape edge cases worth knowing when a test looks flaky. Escape is a
-no-op while a dropdown is open (`[data-dropdown-open]`) so the dropdown closes
-first, and on a dirty dialog (`isDirty`) it opens the discard confirmation rather
-than closing outright - a second Escape dismisses that confirmation and leaves the
-dialog open.
-
-### Opening Dialogs in E2E Tests
-
-**Recommended**: Use the E2E store for reliable dialog opening:
-
-```typescript
-await browser.execute(() => {
-  (window as any).__E2E_TEST__.uiStore.getState().openDialog('import');
-});
-```
-
-**Note**: `Ctrl+I` opens `DmpSelectionDialog` (Step 1 of .dmp import), NOT the generic `ImportDialog` (manual section creation).
-
-### Configuration
-
-See `wdio.conf.ts`. Key settings:
-- Auto-builds debug Tauri app before tests
-- Starts tauri-driver on base port 4444 (workers use base + index)
-- 30-second timeout for app startup
-- Parallel execution enabled by default (maxInstances = min(4, CPU count))
-- Per-worker config/data/cache isolation under a temp directory (auto-cleaned)
-- Worker ports derived from base ports (4444 / base+1000) + worker index
-- Base ports configurable via `WDIO_BASE_PORT` and `WDIO_BASE_NATIVE_PORT`
-- Set `WDIO_MAX_INSTANCES=1` to force serial execution
-
-### Running WebdriverIO Tests
-
-**Recommended: Use the comprehensive test runner script:**
-
-```bash
-# Run all tests (auto-detects display, ensures fresh build)
-./scripts/wdio.sh
-
-# Run a specific spec file
-./scripts/wdio.sh --spec e2e/legacy/specs/ctrl-drag-pan-movement.spec.ts
-
-# Force rebuild before tests
-./scripts/wdio.sh --rebuild
-
-# Force headless mode (uses xvfb)
-./scripts/wdio.sh --headless
-
-# Skip build checks (use with caution - can cause stale binary issues)
-./scripts/wdio.sh --skip-build
-
-# Combine options: skip build and run single spec
-./scripts/wdio.sh --skip-build --spec e2e/legacy/specs/map-interactions.spec.ts
-```
-
-The `wdio.sh` script automatically handles:
-- Platform verification (Linux/Windows only)
-- tauri-driver installation check
-- Display detection (uses xvfb automatically if headless)
-- Port cleanup (kills stale tauri-driver/stalagmight processes)
-- Build freshness checks (rebuilds if source is newer than binary)
-- Proper argument passing to wdio (uses `npx wdio` directly)
-
-**Manual run (not recommended):**
-
-```bash
-# Standard run (builds app first)
-pnpm test:e2e
-
-# Headless Linux (no display server)
-xvfb-run -a pnpm test:e2e
-
-# Skip rebuild if binary already exists
-SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
-
-# Run with N parallel workers
-WDIO_MAX_INSTANCES=4 xvfb-run -a pnpm test:e2e
-
-# Run a single spec file (must use npx wdio directly, not pnpm test:e2e)
-SKIP_BUILD=1 npx wdio run wdio.conf.ts --spec e2e/legacy/specs/ctrl-drag-pan-movement.spec.ts
-```
-
-> **Note**: When running a single spec file manually, you must use `npx wdio run wdio.conf.ts --spec <file>` directly. The `pnpm test:e2e -- --spec <file>` syntax does not properly pass the `--spec` flag.
-
-#### Binary Path Configuration
-
-The test runner looks for the Tauri binary at `$CARGO_TARGET_DIR/debug/stalagmight`. By default, `wdio.conf.ts` expects `~/.cargo_build/debug/stalagmight`.
-
-If your project builds to a different location (e.g., the standard `src-tauri/target/`), set `CARGO_TARGET_DIR`:
-
-```bash
-# If binary is at src-tauri/target/debug/stalagmight
-CARGO_TARGET_DIR=./src-tauri/target xvfb-run -a pnpm test:e2e
-
-# Combined with skip build
-CARGO_TARGET_DIR=./src-tauri/target SKIP_BUILD=1 xvfb-run -a pnpm test:e2e
-```
-
-## Backend Rust Tests
-
-Located alongside source code in `src-tauri/src/`.
-
-### Running Rust Tests
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml              # All tests
-cargo test --manifest-path src-tauri/Cargo.toml parser       # Tests matching "parser"
-cargo test --manifest-path src-tauri/Cargo.toml -- --nocapture  # Show println! output
-```
-
-### Writing Rust Tests
-
-```rust
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_function_name() {
-        let input = create_test_input();
-        let result = function_under_test(input);
-        assert_eq!(result, expected_output);
-    }
-
-    #[test]
-    fn test_error_case() {
-        let result = function_that_can_fail(invalid_input);
-        assert!(result.is_err());
-    }
-}
-```
-
-### Testing Database Operations
-
-Use in-memory SQLite for fast tests:
-
-```rust
-#[test]
-fn test_database_operation() {
-    let db = Database::open_in_memory().unwrap();
-    // Run test operations
-}
-```
-
-### Testing Parsers
-
-Use test fixtures in `e2e/fixtures/`:
-
-```rust
-#[test]
-fn test_parse_dmp_v5() {
-    let data = include_bytes!("../../e2e/fixtures/test_v5.dmp");
-    let result = parse_dmp(data);
-    assert!(result.is_ok());
-    let sections = result.unwrap();
-    assert!(!sections.is_empty());
-}
-```
-
-## Test Fixtures
-
-### DMP Files
-
-Located in `e2e/fixtures/`:
-
-| File | Description |
-|------|-------------|
-| `test_v2.dmp` | Valid DMP version 2 file |
-| `test_v5.dmp` | Valid DMP version 5 file |
-| `test_v5_buggy_EOS.dmp` | DMP v5 with edge case EOS handling |
-
-### Creating Test Fixtures
-
-1. Use real data from mNemo device (anonymized if needed)
-2. Create synthetic data for edge cases
-3. Document the fixture's purpose in this file
-
-## Best Practices
-
-### Test Naming
-
-Use descriptive names that explain what's being tested:
-
-```typescript
-// Good
-test('should display error when project name is empty', ...)
-test('should close dialog when Cancel button is clicked', ...)
-
-// Bad
-test('test1', ...)
-test('error test', ...)
-```
-
-### Test Independence
-
-Each test should:
-- Set up its own state
-- Not depend on other tests
-- Clean up after itself
-
-### Assertions
-
-Be specific in assertions:
-
-```typescript
-// Good - specific assertion
-await expect(page.locator('h1')).toHaveText('Stalagmight');
-
-// Bad - generic assertion
-expect(true).toBeTruthy();
-```
-
-### Wait Strategies
-
-Prefer explicit waits over timeouts:
-
-```typescript
-// Good - wait for map readiness
-await waitForMapReady(page);
-await waitForMapIdle(page);
-
-// Avoid - arbitrary timeout
-// await page.waitForTimeout(1000);
-```
-
-### Error Messages
-
-Include context in error assertions:
-
-```typescript
-await expect(page.locator('.error-message'))
-  .toHaveText('Project name is required', { timeout: 3000 });
-```
-
-## UI Component Testability Requirements
-
-All UI components must include proper attributes for tests to locate elements reliably.
-
-### Dialog Components (MANDATORY)
+| Component | Vitest + Testing Library | `jsdom` | Render a React component, assert handlers/wiring (`*.test.tsx`) | Fast |
+| Playwright E2E | Playwright | Chromium, **mocked IPC** | UI flows across views (`e2e-playwright/`) | Fast |
+| Backend | Rust `#[test]` | native | Rust logic, and the **real** file I/O / persistence paths (`src-tauri/src/`) | Fast |
+| WebdriverIO E2E | WebdriverIO + tauri-driver / tauri-wd | **real Tauri app** | Real webview + real backend (`e2e/legacy/`, on-demand only) | Slow |
+| Agent harness | MCP + WebdriverIO | **real Tauri app** | LLM-agent exploration, stress scenarios, bug repro (`e2e/agent/`, on-demand) - see [Agent Harness](agent-harness.md) | Slow |
+
+### The axis that actually matters: mocked IPC vs. real backend
+
+Every *frontend* tier - Vitest unit, Vitest component, and all of Playwright -
+mocks the Tauri backend. Nothing they assert proves a file was written, a
+project was reopened, or a parser accepted a byte.
+
+The real backend is covered by the **Rust tests**, which run in CI against real
+`TempDir` files and need no display and no Tauri build. The command-layer tests
+in `src-tauri/src/commands/command_tests.rs` are where the save/import
+persistence pipeline is pinned.
+
+The WebdriverIO suite is the only tier that drives the real webview *and* the
+real backend together, and it runs in no automated gate. Do not rely on it to
+catch anything.
+
+**Consequence:** if your change can fail on disk, in a parser, or across an app
+restart, a Playwright test cannot cover it. Write a Rust test.
+
+### Choosing a tier
+
+| What you changed | Where the test goes |
+|------------------|---------------------|
+| Frontend logic (store, util, selector) | Vitest unit test (`*.test.ts`) |
+| New UI component or dialog | Component test (`*.test.tsx`) for render + handler wiring, **plus** a Playwright spec for the flow that reaches it |
+| A behavior that spans views, panels, or the map | Playwright spec |
+| New Tauri IPC command | Rust unit tests for the logic, **plus** a mock handler in `e2e-playwright/mocks/tauri-ipc.ts` (a vitest tripwire fails until you add one - see recipes) |
+| Backend logic (parser, model, solver) | Rust unit tests |
+| Anything touching disk, persistence, or app restart | Rust command-layer test - no frontend tier can see it |
+| Bug fix | Regression test at the **lowest** tier that can catch it. Prefer unit/component over E2E |
+
+Component-local behavior ("clicking X calls Y", "dialog renders Z in state W")
+belongs in a component test, not a Playwright spec: it runs in milliseconds
+instead of seconds, and it fails with a stack trace instead of a screenshot.
+Reach for Playwright when the assertion needs the real router, the real map, or
+two panels talking to each other.
+
+## Smoke vs. full (Playwright only)
+
+The Playwright suite is split so timing-sensitive specs cannot block everyday
+work:
+
+| Tier | What | When it runs |
+|------|------|--------------|
+| **Smoke** | tests tagged `@smoke` (~85 today) | `e2e-smoke.yml` on every PR/push, and the pre-push checklist |
+| **Full** | the entire Playwright suite | `nightly-e2e.yml`, 07:00 UTC daily, skipped when nothing merged in the last 2 days |
+
+- **Tag `@smoke` only if the test covers a critical path *and* is reliable.**
+  Append the tag to the test title: `test('does X @smoke', ...)`. Selection is
+  `playwright test --grep @smoke`; the convention here is to tag individual
+  tests, not `describe` blocks, so the tagged set stays explicit.
+- A valuable but timing-sensitive test stays **untagged**. It still runs
+  nightly.
+- **Do not sleep.** A hard `page.waitForTimeout()` is the single biggest flake
+  source. Use the shared waiters in `e2e-playwright/helpers/app.ts`, or
+  web-first assertions / `expect.poll`.
+- Retries are configured in `playwright.config.ts` (2 in CI, 1 locally), so one
+  blip does not abort a push. `PW_RETRIES=0` to fail fast while hunting a flake.
+
+The WebdriverIO suite and the agent harness are **on-demand only** and are in no
+tier above. See [`e2e/legacy/README.md`](../e2e/legacy/README.md) for what is
+still worth running there.
+
+## What CI gates
+
+The authoritative list of commands to run before pushing is the **Pre-Push
+Checklist in [`CLAUDE.md`](../CLAUDE.md)** - it is kept in sync with the
+workflows, and is not repeated here.
+
+Three workflows gate `master`:
+
+- **`ci.yml` (`check`)** - the Rust and TypeScript gate: `cargo fmt --check`,
+  `cargo clippy` at deny level, `cargo test --features telemetry`, `tsc`, the
+  agent-harness typecheck, the Vitest suite, and the file-size / read-only-gating
+  tripwires. Each tripwire runs its own `:test` fixture first, so the rule itself
+  is pinned.
+- **`e2e-smoke.yml` (`smoke`)** - `pnpm lint:e2e-parallel` (the Playwright
+  parallel-safety scanner) followed by the `@smoke` subset, Chromium-only against
+  the Vite dev server.
+- **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
+  tracked tree. It is the one workflow with **no** `paths-ignore`, because
+  `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where a leak or
+  a Unicode dash lands.
+
+`check` and `smoke` use blocklist-style `paths-ignore`, so a new or unlisted path
+defaults to *running*. Two edges are load-bearing and must not be widened:
+
+- `check` must **not** ignore all of `e2e/**`. Rust tests read
+  `e2e/fixtures/*.dmp`, so a fixture edit has to run `check`. Only
+  `e2e/legacy/**` is safe to drop.
+- `check` must **not** ignore `e2e/agent/**`. `pnpm typecheck:agent` is the
+  harness's only automated gate.
+
+The full Playwright suite runs nightly, not on every change. The WebdriverIO
+suite runs in no workflow at all.
+
+## Test conventions
+
+- **Name the behavior, not the number.** `should display error when project name
+  is empty`, not `test1`.
+- **Each test sets up its own state** and depends on no other test. Playwright
+  runs `fullyParallel` at multiple workers; a spec that leaks shared state (its
+  own server, a fixed-path disk write, forced serial mode) fails
+  `pnpm lint:e2e-parallel`. See the recipes for the full rule set.
+- **Assert something specific.** `await expect(page.locator('h1')).toHaveText('Stalagmight')`,
+  not `expect(true).toBeTruthy()`.
+- **Wait for a condition, never for a duration.**
+- **Put context in the assertion** so a failure message is readable on its own.
+
+## UI component testability requirements
+
+Tests locate elements through `data-testid` and ARIA. A component that ships
+without them is untestable at the E2E tier, so these are requirements, not
+suggestions.
+
+### Checklist for a new component
+
+- [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
+- [ ] Dialog titles have an `id` referenced by the dialog's `aria-labelledby`
+- [ ] Primary buttons have `data-testid`
+- [ ] Form inputs have `data-testid`
+- [ ] Icon-only buttons have `aria-label`
+
+### Dialogs (mandatory shape)
 
 ```tsx
 <div
@@ -678,841 +157,52 @@ All UI components must include proper attributes for tests to locate elements re
 </div>
 ```
 
-**Why**: E2E tests target stable `data-testid` attributes, while `role="dialog"` and ARIA attributes are required for accessibility.
+`data-testid` is what E2E targets; the ARIA attributes are what screen readers
+and the focus trap need. Both are required.
 
-### Test Identifiers (`data-testid`)
+### `data-testid` naming
 
-| Element Type | Convention | Example |
+| Element type | Convention | Example |
 |--------------|------------|---------|
-| Main views | `<view>-view` | `data-testid="global-view"` |
-| Buttons | `<action>-button` | `data-testid="new-project-button"` |
-| Dialogs | `<name>-dialog` | `data-testid="new-project-dialog"` |
-| Form inputs | `<field>-input` | `data-testid="project-name-input"` |
-| Statistics | `stats-<metric>` | `data-testid="stats-total-length"` |
-| Selection stats (Step 1) | `selection-stats`, `stats-<metric>` | `data-testid="selection-stats"`, `data-testid="stats-shot-count"`, `data-testid="stats-total-length"`, `data-testid="stats-depth-range"` |
-| Section stats (Step 2) | `section-stats`, `section-stats-<metric>` | `data-testid="section-stats"`, `data-testid="section-stats-shot-count"`, `data-testid="section-stats-total-length"`, `data-testid="section-stats-depth-range"` |
-| Detail panel links | `<type>-<sectionId>-<position>-link` | `data-testid="station-2-5-link"`, `data-testid="shot-2-3-link"` |
-| Section links | `section-<sectionId>-link` | `data-testid="section-2-link"` |
-| Center buttons | `center-<type>-button` | `data-testid="center-station-button"`, `data-testid="center-shot-button"`, `data-testid="center-section-button"` |
-| Detail panel | `detail-panel` | `data-testid="detail-panel"` |
-| Station detail | `station-detail` | `data-testid="station-detail"` |
-| Shot detail | `shot-detail` | `data-testid="shot-detail"` |
-| Section detail | `section-detail` | `data-testid="section-detail"` |
+| Main views | `<view>-view` | `global-view` |
+| Buttons | `<action>-button` | `new-project-button` |
+| Dialogs | `<name>-dialog` | `new-project-dialog` |
+| Form inputs | `<field>-input` | `project-name-input` |
+| Statistics | `stats-<metric>` | `stats-total-length` |
+| Detail panel links | `<type>-<sectionId>-<position>-link` | `station-2-5-link`, `shot-2-3-link` |
+| Section links | `section-<sectionId>-link` | `section-2-link` |
+| Center-map buttons | `center-<type>-button` | `center-station-button` |
+| Detail views | `<type>-detail` | `station-detail`, `section-detail` |
 
-### ARIA Attributes Quick Reference
+Keep an id stable once a test uses it. Renaming one is a breaking change to the
+suite.
 
-| Attribute | Use Case |
-|-----------|----------|
+### ARIA
+
+| Attribute | Use for |
+|-----------|---------|
 | `role="dialog"` | Modal dialogs (required) |
 | `aria-modal="true"` | Dialogs that block interaction |
-| `aria-labelledby` | Connect dialog to its title |
-| `aria-label` | Icon-only buttons |
+| `aria-labelledby` | Connecting a dialog to its title |
+| `aria-label` | Icon-only buttons, and any container whose meaning is visual (stats, links, center buttons) |
 | `aria-expanded` | Collapsible panels |
-| `aria-label` (stats) | Statistics containers for screen readers |
+| `aria-disabled="true"` | A control that renders but cannot be activated (e.g. a link to a missing target) |
 
-#### Statistics ARIA Labels
+Containers whose meaning is carried by layout - stats blocks, detail-panel
+links, center buttons - carry a descriptive `aria-label` spelling out the value
+("Center map on station 2:5"). Tests read those labels, so they double as a
+stable assertion surface.
 
-The selection and section stats containers use descriptive `aria-label` attributes for accessibility:
+### Selector priority
 
-**Selection Stats (Step 1):**
-```
-aria-label="Selection statistics: 70 shots, 281.8m total length, depth range 2.1-15.4m"
-```
+1. `data-testid` - most reliable
+2. `role` + `aria-*`
+3. Semantic elements (`button:has-text("New Project")`)
+4. CSS classes - least reliable, avoid
 
-**Section Stats (Step 2):**
-```
-aria-label="Section statistics: 42 shots, 187.3m total length, depth range 3.2-17.8m"
-```
+## Coverage
 
-When no depth data is available, the label shows "--" for depth range:
-```
-aria-label="Selection statistics: 5 shots, 42.3m total length, depth range --"
-```
-
-#### Detail Link ARIA Labels
-
-Detail panel hyperlinks use descriptive `aria-label` attributes for screen readers:
-
-```
-aria-label="Select station 2:5"
-aria-label="Select shot 2:3"
-aria-label="Select section 2: Main Line"
-```
-
-Missing targets additionally have `aria-disabled="true"` and show a warning indicator.
-
-#### Center Button ARIA Labels
-
-Center buttons use dynamic `aria-label` attributes based on the element type and ID:
-
-```
-aria-label="Center map on station 2:5"
-aria-label="Center map on shot 2:3"
-aria-label="Center map on section 2: Main Line"
-```
-
-#### ARIA Live Region Testing
-
-The application uses an ARIA live region to announce selection changes triggered by Detail Panel hyperlinks and Data Table shot selection. The live region is at the App component root level (always mounted).
-
-**Testing ARIA Live Announcements:**
-
-```typescript
-// Use the dedicated selection announcer ID (not a generic role selector, which would
-// also match the toast stack's live regions)
-const liveRegion = page.locator('#selection-announcer');
-
-// Verify the live region is attached (it's visually hidden with sr-only)
-await expect(liveRegion).toBeAttached();
-
-// Click a detail link and verify announcement
-await page.click('[data-testid="station-2-5-link"]');
-
-// Check the live region content (may require small delay for state update)
-await expect(liveRegion).toHaveText('Selected station 2:5');
-```
-
-**Notes:**
-- The live region has `id="selection-announcer"` for unambiguous selection
-- Uses `role="status"`, `aria-live="polite"`, and `aria-atomic="true"`
-- Announcements triggered by: Detail Panel hyperlinks, Data Table shot selection
-- Map clicks do not trigger announcements
-- The region is visually hidden with the `sr-only` class
-
-### Selector Priority
-
-1. `data-testid` - Most reliable: `[data-testid="new-project-button"]`
-2. `role` + `aria-*` - Accessibility: `[role="dialog"]`
-3. Semantic elements: `button:has-text("New Project")`
-4. CSS classes - Least reliable
-
-### Checklist for New UI Components
-
-- [ ] Dialogs have `role="dialog"` and `aria-modal="true"`
-- [ ] Dialog titles have `id` referenced by `aria-labelledby`
-- [ ] Primary buttons have `data-testid`
-- [ ] Form inputs have `data-testid`
-- [ ] Icon-only buttons have `aria-label`
-
-## Testing Dropdown Components
-
-### Undo/Redo History Dropdown
-
-The `UndoHistoryDropdown` component uses hover-triggered display with ARIA menu patterns.
-
-#### Test Identifiers
-
-| Element | data-testid | Notes |
-|---------|-------------|-------|
-| Undo button | `toolbar-undo-button` | Main trigger button |
-| Redo button | `toolbar-redo-button` | Main trigger button |
-| Undo dropdown | `toolbar-undo-button-dropdown` | Container with `role="menu"` |
-| Redo dropdown | `toolbar-redo-button-dropdown` | Container with `role="menu"` |
-| Undo item | `toolbar-undo-button-item-{index}` | Index matches item.index from stack |
-| Redo item | `toolbar-redo-button-item-{index}` | Index matches item.index from stack |
-| Detail preview | `detail-preview-popup` | Shows on item hover |
-| Undo chevron | `undo-chevron` | Visible when stack not empty |
-| Redo chevron | `redo-chevron` | Visible when stack not empty |
-| Loading indicator | `toolbar-undo-button-loading` / `toolbar-redo-button-loading` | Spinner shown during action processing |
-| Aria-live announcer | `toolbar-undo-button-announcement` / `toolbar-redo-button-announcement` | Screen reader announcement of remaining actions |
-| Error dialog | `error-dialog` | Shown on action failure |
-| Error stack trace | `error-dialog-stack-trace` | Scrollable `<pre>` block with exception stack |
-| Error copy button | `error-dialog-copy-btn` | States: "Copy to clipboard" / "Copied!" / "Failed" |
-
-#### Hover Trigger Testing
-
-The dropdown opens after a 300ms delay on hover. Tests should account for this:
-
-```typescript
-// Trigger hover and wait for dropdown
-await page.hover('[data-testid="toolbar-undo-button"]');
-await page.waitForSelector('[data-testid="toolbar-undo-button-dropdown"]', { timeout: 500 });
-
-// Verify dropdown is visible
-await expect(page.locator('[role="menu"]')).toBeVisible();
-```
-
-#### Keyboard Navigation Testing
-
-```typescript
-// Focus button and press Arrow Down to open
-await page.focus('[data-testid="toolbar-undo-button"]');
-await page.keyboard.press('ArrowDown');
-
-// Wait for aria-activedescendant to be set (may be async)
-await page.waitForFunction(() => {
-  const dropdown = document.querySelector('[role="menu"]');
-  return dropdown && dropdown.getAttribute('aria-activedescendant');
-});
-
-// Navigate and select
-await page.keyboard.press('ArrowDown');  // Move to second item
-await page.keyboard.press('Enter');       // Select
-```
-
-**Important**: The component sets `aria-activedescendant` in a `setTimeout(0)` callback after keyboard open. Always wait for this attribute before asserting on keyboard navigation state.
-
-#### Close Behavior Testing
-
-The dropdown stays open on button click and Ctrl+Z/Y (refreshes its items). It closes on item click, Enter key selection, mouse leave, Escape, click outside, and empty stack.
-
-Test close paths:
-
-```typescript
-// 1. Escape key
-await page.keyboard.press('Escape');
-await expect(page.locator('[role="menu"]')).not.toBeVisible();
-
-// 2. Click outside (mousedown)
-await page.click('body', { position: { x: 10, y: 10 } });
-
-// 3. Mouse leave (100ms buffer)
-await page.hover('[data-testid="map-canvas"]');
-await page.waitForTimeout(150);
-
-// 4. Item click closes dropdown
-await page.click('[data-testid="toolbar-undo-button-item-0"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
-
-// 5. Enter key on navigated item closes dropdown
-await page.keyboard.press('Enter');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
-```
-
-Test stay-open behavior (dropdown must be open first via hover or keyboard):
-
-```typescript
-// Open dropdown first
-await page.hover('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
-
-// Button click keeps dropdown open and shows loading indicator
-await page.click('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-loading')).toBeVisible();
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
-
-// Ctrl+Z keeps dropdown open and refreshes (ensure focus is NOT in a text input)
-await page.keyboard.press('Control+z');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible();
-```
-
-Test empty stack auto-close (dropdown must be open first):
-
-```typescript
-// Open dropdown, then update mock to return empty stack after next action
-await page.hover('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
-// ... modify mock to return empty stack on next get_undo_stack ...
-await page.click('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).not.toBeVisible();
-```
-
-Test aria-live announcement (dropdown must be open first):
-
-```typescript
-// Open dropdown, then trigger action
-await page.hover('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
-await page.click('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-announcement'))
-  .toContainText('actions remaining');
-```
-
-Test item selection via keyboard closes dropdown:
-
-```typescript
-// Open via keyboard, navigate, then trigger action
-await page.focus('[data-testid="toolbar-undo-button"]');
-await page.keyboard.press('ArrowDown');
-const dropdown = page.getByTestId('toolbar-undo-button-dropdown');
-await expect(dropdown).toBeVisible();
-await page.keyboard.press('End'); // Navigate to last item
-await page.keyboard.press('Enter'); // Select item and close dropdown
-await expect(dropdown).not.toBeVisible();
-```
-
-Test error dialog on failure (dropdown must be open first):
-
-```typescript
-// Open dropdown, then modify mock to return failure
-await page.hover('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible({ timeout: 1000 });
-// ... modify mock so undo returns { success: false, error: 'Stack corrupted' } ...
-await page.click('[data-testid="toolbar-undo-button"]');
-await expect(page.getByTestId('error-dialog')).toBeVisible();
-await expect(page.getByTestId('toolbar-undo-button-dropdown')).toBeVisible(); // stays open
-```
-
-#### Detail Preview Testing
-
-The preview popup appears on item hover without delay:
-
-```typescript
-// Hover an item to show preview
-const item = page.locator('[data-testid="toolbar-undo-button-item-0"]');
-await item.hover();
-
-// Preview should appear immediately (no delay)
-await expect(page.locator('[data-testid="detail-preview-popup"]')).toBeVisible();
-
-// Verify preview content
-await expect(page.locator('.detail-preview-popup')).toContainText('length');
-```
-
-#### Mock Requirements
-
-When testing with mocked IPC, ensure `get_undo_stack` and `get_redo_stack` return the correct structure:
-
-```typescript
-case 'get_undo_stack': {
-  return [
-    {
-      index: 0,
-      description: 'Create section "Main Line"',
-      timestamp: new Date().toISOString(),
-      commandType: 'create_section',
-      previewData: {
-        changes: [{ field: 'name', oldValue: '', newValue: 'Main Line' }],
-        additionalChanges: 0,
-      },
-    },
-    // ... more items
-  ];
-}
-```
-
-### Testing Select Dropdowns (Portal)
-
-The `Select` component renders its dropdown listbox via `createPortal` to `document.body` with `position: fixed`. This means the listbox is **not** inside the Select component's container in the DOM - it's a sibling of `<div id="root">`.
-
-#### Key Rules
-
-1. **Do NOT use `.absolute` class to locate the dropdown.** The portaled listbox has no `.absolute` class. Use `page.getByRole('listbox')` or the `aria-controls` ID from the trigger button.
-2. **Do NOT scope options under the Select container.** `selectContainer.locator('[role="option"]')` will find nothing because the options are in `document.body`.
-3. **Use `document.elementFromPoint()` to verify z-order** in stacking context tests. `toBeVisible()` alone cannot detect if an element is behind a sticky header.
-
-#### Locating the Dropdown
-
-```typescript
-// Open the dropdown
-const sectionSelect = page.getByTestId('data-table-section-select');
-const trigger = sectionSelect.locator('button').first();
-await trigger.click();
-
-// Wait for aria-controls (React may need a render cycle), then locate via ID
-await expect(trigger).toHaveAttribute('aria-controls', /.+/);
-const listboxId = await trigger.getAttribute('aria-controls');
-// Use attribute selector -- React useId() produces IDs with colons that break #id selectors
-const listbox = page.locator(`[id="${listboxId}"]`);
-
-// Locate options within the listbox
-await listbox.locator('[role="option"]:has-text("Main Passage")').click();
-```
-
-**Prefer `aria-controls`-based lookup** over `page.getByRole('listbox')` when other listboxes may be present on the page (e.g. the sections panel listbox).
-
-#### Z-Order Verification
-
-```typescript
-// Use elementFromPoint to prove dropdown is above sticky header
-const optionBox = await firstOption.boundingBox();
-const isTopmost = await page.evaluate(({ x, y }) => {
-  const el = document.elementFromPoint(x, y);
-  return el?.closest('[role="listbox"]') !== null;
-}, { x: optionBox.x + optionBox.width / 2, y: optionBox.y + optionBox.height / 2 });
-expect(isTopmost).toBe(true);
-```
-
-#### Scroll Behavior
-
-- **External scroll** (window, table container) **closes** the dropdown.
-- **Internal scroll** (scrolling through options inside the listbox, or `scrollIntoView` from keyboard navigation) does **not** close the dropdown.
-
-#### Keyboard Navigation
-
-`aria-activedescendant` is set synchronously from React state - no `setTimeout` workaround is needed for assertions.
-
-```typescript
-const trigger = sectionSelect.locator('button').first();
-await trigger.focus();
-await page.keyboard.press('Enter');  // Opens dropdown
-await page.keyboard.press('ArrowDown');  // Navigates
-await page.keyboard.press('Enter');  // Selects
-await page.keyboard.press('Escape');  // Closes
-```
-
-#### Select Hover Callback Testing
-
-The `Select` component accepts an `onOptionHover` callback that fires when options are highlighted via mouse or keyboard. DataTable uses this to set `hoveredSectionId` in uiStore, which drives map highlighting.
-
-**Verifying `onOptionHover` fires via store state:**
-
-```typescript
-// Get hoveredSectionId from uiStore
-async function getHoveredSectionId(page: Page): Promise<number | null> {
-  return page.evaluate(() => {
-    const stores = (window as unknown as {
-      __E2E_TEST__?: {
-        uiStore: { getState: () => { hoveredSectionId: number | null } };
-      };
-    }).__E2E_TEST__;
-    return stores?.uiStore.getState().hoveredSectionId ?? null;
-  });
-}
-```
-
-**Polling for hover state changes:**
-
-```typescript
-// Use expect.poll for async state verification
-await expect.poll(
-  async () => {
-    const id = await getHoveredSectionId(page);
-    return id === expectedSectionId;
-  },
-  { timeout: 5000 },
-).toBe(true);
-```
-
-**Playwright `hover()` reliability note:** `page.hover()` works reliably for Select option elements. If hover is unreliable for other components, fall back to `triggerMouseHover()` which dispatches bubbling `mouseover` (see `detail-link-hover.spec.ts:272-282`).
-
-**Close-path verification pattern:** All 8 Select close paths (handleSelect, outside-click, Escape, Tab, trigger-toggle-to-close, component unmount, external scroll, window resize) fire `onOptionHover(null)`. Tests verify each by opening the dropdown, hovering an option to set `hoveredSectionId`, triggering the close path, then polling for `hoveredSectionId === null`. The unmount path is tested by collapsing the DataTable (`Ctrl+3`) while the dropdown is open.
-
-## Testing Detail Panel
-
-The Detail Panel provides navigation hyperlinks and center buttons for survey elements.
-
-### Test Identifiers
-
-| Element | data-testid | Notes |
-|---------|-------------|-------|
-| Detail panel container | `detail-panel` | Main panel container |
-| Station detail view | `station-detail` | Shown when station selected |
-| Shot detail view | `shot-detail` | Shown when shot selected |
-| Section detail view | `section-detail` | Shown when section selected |
-| Station link | `station-{sectionId}-{position}-link` | Position is 0-indexed |
-| Shot link | `shot-{sectionId}-{position}-link` | Position is 1-indexed |
-| Section link | `section-{sectionId}-link` | No position for sections |
-| Center station button | `center-station-button` | In station detail header |
-| Center shot button | `center-shot-button` | In shot detail header |
-| Center section button | `center-section-button` | In section detail header |
-
-### Hyperlink Testing
-
-```typescript
-// Click a station link to change selection
-await page.click('[data-testid="station-2-5-link"]');
-
-// Verify selection changed (detail panel updates)
-await expect(page.locator('[data-testid="station-detail"]')).toBeVisible();
-
-// Verify ARIA announcement was made (use dedicated ID, not generic role selector)
-const liveRegion = page.locator('#selection-announcer');
-await expect(liveRegion).toHaveText('Selected station 2:5');
-```
-
-### Center Button Testing
-
-**Playwright:**
-
-```typescript
-// Click center button to pan/zoom map
-await page.click('[data-testid="center-station-button"]');
-
-// Wait for map animation to complete
-await waitForMapIdle(page);
-
-// Verify map centered on element (check map state)
-const center = await page.evaluate(() => {
-  return (window as any).__stalagmight_map__?.getCenter();
-});
-// Assert center is near expected coordinates
-```
-
-**Important**: When testing map centering, first pan the map away from the target element before clicking the center button. Otherwise the test may pass/fail depending on initial map position.
-
-**Playwright example:**
-
-```typescript
-// First pan map off-target to ensure center button actually moves the view
-await page.evaluate(() => {
-  const map = (window as any).__stalagmight_map__;
-  if (map) {
-    const center = map.getCenter();
-    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
-  }
-});
-await waitForMapIdle(page);
-
-// Now click center button and verify map moves back
-await page.click('[data-testid="center-station-button"]');
-await waitForMapIdle(page);
-```
-
-**WebdriverIO example:**
-
-```typescript
-// First pan map off-target to ensure center button actually moves the view
-await browser.execute(() => {
-  const map = (window as any).__stalagmight_map__;
-  if (map) {
-    const center = map.getCenter();
-    map.setCenter([center.lng + 0.001, center.lat + 0.001]);
-  }
-});
-await waitForMapIdle();
-
-// Now click center button and verify map moves back
-await $('[data-testid="center-station-button"]').click();
-await waitForMapIdle();
-```
-
-### Missing Target Testing
-
-Links to missing targets show a warning indicator and are non-clickable:
-
-```typescript
-// Missing target links have aria-disabled
-const missingLink = page.locator('[data-testid="station-2-99-link"]');
-await expect(missingLink).toHaveAttribute('aria-disabled', 'true');
-
-// Clicking does not change selection
-await missingLink.click();
-// Verify selection did not change
-```
-
-## Export Testing
-
-### SVG/PNG Export Scaling
-
-The export system uses pixel-stable sizing to ensure consistent element appearance regardless of survey extent. Tests verify that SVG element sizes scale correctly.
-
-#### Key Scaling Formula
-
-```rust
-let px = |pixels: f64| -> f64 { pixels / scale };
-```
-
-where `scale = TARGET_SIZE / max(width, height)` with `TARGET_SIZE = 800px`.
-
-#### Verifying Element Sizes
-
-To verify an element has the correct pixel size, multiply its viewBox value by the scale factor:
-
-```rust
-// Scale for 100m survey with 20m padding = 140m total
-let scale = 800.0 / 140.0; // ≈ 5.714
-
-// Station radius in viewBox units
-let r = 0.525; // from SVG
-
-// Verify: r * scale ≈ 3px (target station radius)
-assert!((r * scale - 3.0).abs() < 0.1);
-```
-
-#### Target Element Sizes
-
-| Element | Target Pixels | Test Pattern |
-|---------|---------------|--------------|
-| Station radius | 3px | `r="..."` attribute |
-| Shot stroke-width | 2px | CSS `.shot { stroke-width: ... }` |
-| Grid stroke-width | 0.5px | `class="grid" ... stroke-width="..."` |
-| Reference shot dash | 4px | `stroke-dasharray="X,Y"` |
-| Reference shot gap | 2px | `stroke-dasharray="X,Y"` |
-| Label font-size | 10px | CSS `.label { font-size: ... }` |
-| Section-name font-size | 12px | CSS `.section-name { font-size: ... }` |
-
-#### Running Export Tests
-
-```bash
-# Run all Rust export tests
-cargo test --manifest-path src-tauri/Cargo.toml export
-
-# Run scaling regression tests specifically
-cargo test --manifest-path src-tauri/Cargo.toml scaling_regression
-
-# Run visual regression tests
-cargo test --manifest-path src-tauri/Cargo.toml scaling_consistent
-```
-
-#### PNG DPI Scaling Tests
-
-PNG exports scale dimensions based on DPI:
-
-```
-pixel_dimensions = svg_dimensions * (dpi / 72)
-```
-
-Tests verify that PNG dimensions match expected values at 72, 150, 300, and 600 DPI.
-
-## Global View Testing
-
-The Global View has several testable features for survey geometry rendering.
-
-### Test Identifiers
-
-| Element | data-testid | Notes |
-|---------|-------------|-------|
-| Map container | `globalview-map` | Main map container |
-| View mode toggle | `view-mode-toggle` | Survey/markers toggle button |
-| System marker | `system-marker-{filePath}` | Marker element for each system |
-| Search input | `globalview-search-input` | Search filter input |
-| Search clear button | `globalview-search-clear` | Clear search button |
-
-### View Mode Toggle Testing
-
-```typescript
-// Toggle between survey and markers mode
-await page.click('[data-testid="view-mode-toggle"]');
-
-// Verify mode change persists to localStorage
-const mode = await page.evaluate(() => localStorage.getItem('globalViewMode'));
-expect(mode).toBe('markers');
-```
-
-### Map Position Persistence Testing
-
-```typescript
-// Pan the map and verify state is saved
-const mapCanvas = page.locator('[data-testid="globalview-map"] canvas');
-await mapCanvas.hover();
-await page.mouse.down();
-await page.mouse.move(100, 100, { steps: 5 });
-await page.mouse.up();
-
-// Wait for moveend event to fire
-await page.waitForTimeout(100);
-
-// Verify localStorage was updated
-const mapState = await page.evaluate(() => localStorage.getItem('globalViewMapState'));
-expect(mapState).not.toBeNull();
-const parsed = JSON.parse(mapState!);
-expect(parsed).toHaveProperty('center');
-expect(parsed).toHaveProperty('zoom');
-```
-
-### Geometry Loading State Testing
-
-```typescript
-// Mock get_survey_geometry to control loading states
-// In tauri-ipc.ts:
-case 'get_survey_geometry': {
-  const filePath = args?.file_path as string;
-  // Return mock geometry or simulate error
-  if (filePath.includes('error')) {
-    throw new Error('Failed to load geometry');
-  }
-  return {
-    file_path: filePath,
-    name: 'Test System',
-    total_length: 100.0,
-    station_count: 10,
-    gps_origin: [-81.78, 24.55],
-    shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], kind: 'Normal' }],
-    stations: [[-81.78, 24.55], [-81.77, 24.56]],
-  };
-}
-```
-
-### Multi-Select Testing
-
-```typescript
-// Ctrl+click to multi-select systems
-await page.click('[data-testid="system-marker-system1.stalx"]');
-await page.click('[data-testid="system-marker-system2.stalx"]', { modifiers: ['Control'] });
-
-// Verify multiple systems are selected in store
-const selected = await page.evaluate(() => {
-  return (window as any).__E2E_TEST__.globalViewStore.getState().selectedSystemIds;
-});
-expect(selected).toHaveLength(2);
-```
-
-### Context Menu Testing
-
-```typescript
-// Right-click to open context menu
-await page.click('[data-testid="system-marker-system1.stalx"]', { button: 'right' });
-await expect(page.locator('[data-testid="context-menu"]')).toBeVisible();
-```
-
-### Search Filter Testing
-
-```typescript
-// Type in search to filter systems
-await page.fill('[data-testid="globalview-search-input"]', 'sistema');
-
-// Verify non-matching systems are dimmed (via filter expression)
-// This requires checking MapLibre layer paint properties
-
-// Clear search with button
-await page.click('[data-testid="globalview-search-clear"]');
-await expect(page.locator('[data-testid="globalview-search-input"]')).toHaveValue('');
-```
-
-## Color Theme Testing
-
-Theme tests are in `e2e-playwright/theme.spec.ts`. They verify:
-
-- Theme switching between all 10 color themes (dark, light, cave, dracula, one_dark, solarized_light, catppuccin_latte, nord, catppuccin_mocha, kaleido_eink - which also force-disables CSS transitions for e-ink)
-- Day/night palette independence
-- Auto mode follows OS `prefers-color-scheme`
-- CSS custom properties (`--cc-*`) are applied correctly
-- Theme preview cards in Settings > Appearance render without errors
-- Grid overlay picks up theme-aware colors
-
-## Keyboard Shortcuts Overlay Testing
-
-The `?` key opens `KeyboardShortcutsDialog`. Tests verify:
-
-- Dialog opens on `?` key press and closes on Escape
-- Search/filter functionality narrows displayed shortcuts
-- All shortcut categories (Tools, Edit, View, Panels, File) are rendered
-- "Customize" button navigates to Settings > Shortcuts
-- Reserved shortcuts section is displayed
-
-## Focus Management Test Patterns
-
-### Focus Trap Testing
-
-Dialogs use `useFocusTrap` to constrain Tab/Shift+Tab within the dialog boundary.
-
-```typescript
-// Open a dialog
-await page.click('[data-testid="new-project-button"]');
-const dialog = page.locator('[data-testid="new-project-dialog"]');
-await expect(dialog).toBeVisible();
-
-// Tab through all focusable elements - focus should wrap
-const firstFocusable = dialog.locator('input, button, select, textarea, [tabindex]').first();
-const lastFocusable = dialog.locator('input, button, select, textarea, [tabindex]').last();
-
-await lastFocusable.focus();
-await page.keyboard.press('Tab');
-// Focus should wrap to first focusable element
-await expect(firstFocusable).toBeFocused();
-
-await firstFocusable.focus();
-await page.keyboard.press('Shift+Tab');
-// Focus should wrap to last focusable element
-await expect(lastFocusable).toBeFocused();
-```
-
-### Initial Focus Heuristic Testing
-
-The dialog initial focus follows a priority order: `[data-autofocus]` > `input` > `[data-primary-action]` > first non-close button > close X button.
-
-```typescript
-// Dialog with an input field - input should receive focus
-await page.click('[data-testid="new-project-button"]');
-const input = page.locator('[data-testid="new-project-name-input"]');
-await expect(input).toBeFocused();
-
-// Dialog without input but with data-primary-action - that button gets focus
-// (e.g., confirmation dialogs)
-```
-
-### Return Focus Testing
-
-When a dialog closes, focus returns to the element that triggered it.
-
-```typescript
-const trigger = page.locator('[data-testid="new-project-button"]');
-await trigger.click();
-await expect(page.locator('[data-testid="new-project-dialog"]')).toBeVisible();
-
-// Close the dialog
-await page.keyboard.press('Escape');
-await expect(page.locator('[data-testid="new-project-dialog"]')).not.toBeVisible();
-
-// Focus should return to the trigger
-await expect(trigger).toBeFocused();
-```
-
-### Escape Key Closes Dialog
-
-```typescript
-await page.click('[data-testid="new-project-button"]');
-await expect(page.locator('[data-testid="new-project-dialog"]')).toBeVisible();
-
-await page.keyboard.press('Escape');
-await expect(page.locator('[data-testid="new-project-dialog"]')).not.toBeVisible();
-```
-
-### Nested Dialog Focus
-
-When a nested dialog opens on top of another, only the topmost dialog traps focus. The `dialogStack` utility manages layer ordering.
-
-```typescript
-// Open parent dialog
-await page.click('[data-testid="settings-button"]');
-await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
-
-// Open nested confirmation dialog
-await page.click('[data-testid="reset-category-defaults"]');
-await expect(page.locator('[data-testid="reset-confirm-dialog"]')).toBeVisible();
-
-// Escape closes only the topmost dialog
-await page.keyboard.press('Escape');
-await expect(page.locator('[data-testid="reset-confirm-dialog"]')).not.toBeVisible();
-await expect(page.locator('[data-testid="settings-dialog"]')).toBeVisible();
-```
-
-## Troubleshooting
-
-### Playwright Tests Failing
-
-1. **Check mock completeness**: Ensure all IPC commands are mocked
-2. **Check selectors**: Use `[role="dialog"]` for dialogs, `[data-testid="..."]` for elements
-3. **Check field types**: Ensure mock returns match TypeScript types
-4. **Run debug test**: Use `debug.spec.ts` to see console errors
-
-### WebdriverIO Tests Failing
-
-1. **"No such file or directory" for stalagmight binary**: Set `CARGO_TARGET_DIR` to point to where your binary was built (e.g., `CARGO_TARGET_DIR=./src-tauri/target`)
-2. **"No display available" or display errors**: Use `xvfb-run -a` to provide a virtual display, or use `./scripts/wdio.sh` which auto-detects
-3. **Port 4444 already in use**: A previous tauri-driver is still running. Kill it with `pkill tauri-driver`, or use `./scripts/wdio.sh` which handles this automatically
-4. **Check tauri-driver**: Must be installed (`cargo install tauri-driver`)
-5. **Check build**: App must be built with `--debug --no-bundle`
-6. **Check platform**: Only Linux/Windows supported (not macOS)
-7. **Check ARIA attributes**: Dialogs must have `role="dialog"`
-8. **"Application did not load" with "Could not connect to localhost" in page source**: The binary has stale/incorrectly embedded frontend assets. This happens when using `SKIP_BUILD=1` with an outdated binary. Solution:
-   - Use `./scripts/wdio.sh` (recommended) - it checks build freshness automatically
-   - Or rebuild manually: `pnpm tauri build --debug --no-bundle`
-   - Verify binary timestamp is after latest source file changes
-
-### Rust Tests Failing
-
-1. **Check test isolation**: Tests shouldn't share mutable state
-2. **Check async**: Use `#[tokio::test]` for async tests
-3. **Check file paths**: Use `include_bytes!` for relative paths
-
-## CI Integration
-
-Three GitHub Actions gate pushes/PRs to `master` (check and smoke skip docs-only
-changes via `paths-ignore`; leak-scan runs on everything):
-
-1. **`ci.yml` (`check`)** - the historical merge gate, and no longer just tests:
-   `cargo fmt --check`, `pnpm tsc --noEmit`, `pnpm typecheck:agent` (the agent
-   harness's only automated gate), the Rust + TS file-size ratchets
-   (`lint:rust-file-size`, `lint:ts-file-size`), the read-only gating tripwire
-   (`lint:readonly-gates`), `pnpm test` (Vitest unit + component, since #107),
-   `cargo test --manifest-path src-tauri/Cargo.toml --features telemetry`, and
-   `cargo clippy` at deny level. (Note: `--features telemetry` is required -
-   a plain `cargo test` filters out the `registry_covers_all_*` tests, and
-   `build.rs` requires `TELEMETRY_ENDPOINT` under that feature.) Each ratchet/
-   tripwire runs its own `:test` fixture first, so the rule itself is pinned.
-2. **`e2e-smoke.yml` (`smoke`)** - the fast Playwright `@smoke` subset
-   (`pnpm test:ui:smoke`), Chromium-only against the Vite dev server, preceded by
-   `pnpm lint:e2e-parallel`.
-3. **`leak-scan.yml`** - `pnpm lint:private-leaks` + `pnpm lint:no-em-dash` over
-   the whole tracked tree. It is the one workflow with **no** `paths-ignore`,
-   because `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where
-   a leak or a Unicode dash lands.
-
-The **full** Playwright suite runs on a schedule via **`nightly-e2e.yml`**
-(`pnpm test:ui`), not on every change. The WebdriverIO suite (`e2e/legacy/`) is
-**not** run by any workflow - it is on-demand only (see
-[`e2e/legacy/README.md`](../e2e/legacy/README.md)).
-
-See "Test Tiers (smoke vs nightly)" above for the rationale.
+`pnpm vitest run --coverage` for the unit/component tiers; `pnpm coverage:ui` /
+`pnpm coverage:e2e` instrument the app for the E2E tiers, and
+`pnpm coverage:merge` combines the raw output. All reports land in
+`docs/coverage/`. Exact commands are in the [recipes](testing-recipes.md).

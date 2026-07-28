@@ -3,7 +3,7 @@
 # wdio.sh - Comprehensive WebdriverIO E2E Test Runner for Stalagmight
 #
 # This script handles all the common issues that can cause WebdriverIO tests to fail:
-# - Platform verification (Linux/Windows only)
+# - Platform verification (Linux, Windows, and macOS via tauri-wd)
 # - tauri-driver installation check
 # - Display detection (headed vs headless with xvfb)
 # - Port cleanup (kills stale tauri-driver/stalagmight processes)

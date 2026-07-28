@@ -65,7 +65,8 @@ in determines how you write it, and picking wrong is the most common rework.
 
 | Doc | Contents |
 |-----|----------|
-| [TESTING.md](TESTING.md) | Test tiers and conventions across Rust, Playwright, WebdriverIO and vitest, plus the UI testability rules. |
+| [TESTING.md](TESTING.md) | The tier model and how to pick one, plus the contract a UI component has to satisfy to be testable. Read before your first PR. |
+| [testing-recipes.md](testing-recipes.md) | Lookup reference: exact commands per tier, per-framework patterns, mock and fixture conventions, troubleshooting. |
 | [collab-stress-testing.md](collab-stress-testing.md) | Invariants, scenario matrix, adversarial inputs and the fuzz/soak harness for the collab round-trip. |
 | [speleodb-dev-testing.md](speleodb-dev-testing.md) | Testing the SpeleoDB client against a real server: env setup, env-gated live tests, the verified v2 API contract. |
 | [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Node 22. |

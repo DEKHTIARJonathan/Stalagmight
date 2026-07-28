@@ -61,9 +61,9 @@ relevant spec here before a release:
 ## What's duplicated by Playwright (redundant - low priority to maintain)
 
 UI/interaction specs whose behavior is already covered, faster, by
-`e2e-playwright/`: `back-button`, `map-controls-styling`, `map-integration`,
+`e2e-playwright/`: `map-controls-styling`, `map-integration`,
 `map-interactions`, `multi-section-workflows`, `depth-gradient`,
-`reference-shots-filter`, `project-lifecycle`, `import-dmp-dialog`.
+`reference-shots-filter`, `project-lifecycle`.
 
 (The duplicated specs that were also **failing on `master`** - `keyboard-shortcuts`,
 `zoom-tool`, `satellite-display`, `detail-panel-center`, `section-highlighting-a11y`,
