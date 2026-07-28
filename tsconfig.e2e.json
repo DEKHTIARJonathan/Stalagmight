@@ -14,7 +14,9 @@
     "noImplicitAny": true,
 
     "skipLibCheck": true,
-    "types": ["mocha", "node"]
+    "types": ["mocha", "node"],
+    // Type-check only - see the note in tsconfig.playwright.json.
+    "noEmit": true
   },
   "include": ["e2e/**/*", "wdio.conf.ts"]
 }

@@ -40,6 +40,8 @@
     "test:all": "pnpm test && pnpm test:ui",
     "release": "./scripts/release.sh",
     "typecheck:agent": "tsc -p tsconfig.agent.json",
+    "typecheck:playwright": "tsc -p tsconfig.playwright.json --noEmit",
+    "test:mock-contract": "vitest run src/test/__tests__/mockContract.test.ts",
     "agent:smoke": "tsx e2e/agent/smoke.ts",
     "agent:scenarios": "tsx e2e/agent/scenarios-smoke.ts",
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
