@@ -28,6 +28,7 @@ mod speleodb_local_state;
 mod speleodb_lock_release;
 mod speleodb_logout;
 mod speleodb_project;
+mod speleodb_pull;
 mod speleodb_revisions;
 mod undo;
 mod undo_capture;

@@ -11,8 +11,9 @@
 //! away. Both replace the cache `.stalx` and reload the project - a View is not
 //! ephemeral, only reversible.
 
-use super::speleodb::{classify_dump_entry, local_dto, validate_project_id};
+use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
+use super::speleodb_pull::classify_dump_entry;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
