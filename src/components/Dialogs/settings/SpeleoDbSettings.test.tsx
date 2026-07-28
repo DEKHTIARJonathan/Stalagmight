@@ -112,6 +112,38 @@ describe('SpeleoDbSettings credential storage', () => {
     ).not.toBeInTheDocument();
   });
 
+  it('DO NOT REGRESS: hides the retry when the keychain is switched OFF in settings', () => {
+    // The switch is a standing policy; the retry verb revokes a DECLINE and cannot
+    // bypass it. It used to be reported as `declined`, so the button appeared and
+    // pressing it did nothing - and the frontend could not tell, because the retry
+    // resolves true for any non-throwing response.
+    seed(signedIn({ storage: 'plaintext', keychain: 'disabled' }));
+    renderPanel();
+
+    expect(
+      screen.queryByTestId('speleodb-credential-retry-keychain'),
+    ).not.toBeInTheDocument();
+  });
+
+  it('DO NOT REGRESS: offers the retry after the keychain is switched back on', () => {
+    // Re-enabling leaves the key where the disable put it, and resets the state to
+    // `not_attempted` - which the old state allowlist hid, so there was no honest way
+    // to move the key back into the keyring short of signing out and in again.
+    seed(signedIn({ storage: 'plaintext', keychain: 'not_attempted' }));
+    renderPanel();
+
+    expect(screen.getByTestId('speleodb-credential-retry-keychain')).toBeInTheDocument();
+  });
+
+  it.each(['declined', 'unavailable'] as const)(
+    'still offers the retry for a %s keychain holding the key elsewhere',
+    (keychain) => {
+      seed(signedIn({ storage: 'plaintext', keychain }));
+      renderPanel();
+      expect(screen.getByTestId('speleodb-credential-retry-keychain')).toBeInTheDocument();
+    },
+  );
+
   it('names the plaintext file - not "memory only" - when the user opted out', () => {
     // The bug this replaced: the old single warning said "kept in memory only (no
     // keychain)" for the plaintext tier too, telling someone whose key is in a file
@@ -122,8 +154,10 @@ describe('SpeleoDbSettings credential storage', () => {
     const where = screen.getByTestId('speleodb-credential-stored-in');
     expect(where).toHaveAttribute('data-storage', 'plaintext');
     expect(where.textContent).toContain('plaintext file');
+    // Reworded: the old line said "you chose otherwise when signing in", which was
+    // false for a choice made here in Settings.
     expect(screen.getByTestId('speleodb-credential-keyring').textContent).toContain(
-      'you chose otherwise',
+      'you chose to keep the key elsewhere',
     );
     expect(screen.getByTestId('speleodb-credential-retry-keychain')).toBeInTheDocument();
   });

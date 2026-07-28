@@ -356,6 +356,10 @@ pub enum KeychainReport {
     /// The user declined it; we are deliberately leaving it alone until they sign
     /// in again.
     Declined,
+    /// Switched off in Settings. Reported apart from [`Self::Declined`] because the
+    /// retry verb revokes a decline but cannot bypass this, so a frontend that
+    /// cannot tell them apart offers a control that does nothing.
+    Disabled,
 }
 
 // The storage layer and the IPC surface keep separate enums on purpose, so the
@@ -379,6 +383,7 @@ impl From<super::auth::KeychainState> for KeychainReport {
             super::auth::KeychainState::Available => Self::Available,
             super::auth::KeychainState::Unavailable => Self::Unavailable,
             super::auth::KeychainState::Declined => Self::Declined,
+            super::auth::KeychainState::Disabled => Self::Disabled,
         }
     }
 }

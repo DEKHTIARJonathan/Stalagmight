@@ -683,7 +683,8 @@
           "notAttempted": "not checked yet",
           "available": "available",
           "unavailable": "not working on this computer",
-          "declined": "not in use - you chose otherwise when signing in"
+          "declined": "not in use - you chose to keep the key elsewhere",
+        "disabled": "switched off in these settings"
         },
         "retry": "Try again",
         "retrying": "Trying…",
