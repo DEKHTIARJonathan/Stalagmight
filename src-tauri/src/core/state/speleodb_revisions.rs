@@ -13,7 +13,6 @@
 
 use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
-use super::speleodb_pull::resolve_dump_entry;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
@@ -169,7 +168,12 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive (identical to the pull path).
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry = resolve_dump_entry(&mut dump, entry_path.as_deref()).map_err(local_dto)?;
+        // [#258] Consults the session's existing answer, so a user who resolved the
+        // ambiguity when they OPENED the project - before any lock existed - is not
+        // asked again here, where asking costs a lock round trip.
+        let entry = self
+            .speleodb_resolve_entry_remembering(&project_id, &mut dump, entry_path.as_deref())
+            .map_err(local_dto)?;
         self.speleodb_remember_dump_entry(&project_id, &entry);
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;

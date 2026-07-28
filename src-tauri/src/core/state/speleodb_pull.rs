@@ -98,6 +98,32 @@ pub(super) fn resolve_dump_entry(
 }
 
 impl AppState {
+    /// [#258] Which entry of this dump to use, consulting - and then updating - the
+    /// choice this session has already made for `project_id`.
+    ///
+    /// Every path that classifies a dump goes through here, so that recalling and
+    /// remembering cannot drift apart. They did once: restore recorded the user's
+    /// answer but never consulted it, so someone who had already answered at open
+    /// time - before any lock existed - was asked again by the revert, which by then
+    /// had taken the write lock and had to hand it back to ask.
+    ///
+    /// An explicit `chosen` always wins; otherwise the remembered entry is offered.
+    /// Neither is trusted: both are checked for membership against the archive being
+    /// extracted, so a name that made sense for the tip's tree simply falls through
+    /// to the ambiguity when a revision's tree does not contain it.
+    pub(super) fn speleodb_resolve_entry_remembering(
+        &self,
+        project_id: &str,
+        dump: &mut dump::Dump<'_>,
+        chosen: Option<&str>,
+    ) -> Result<String, SpeleoDbError> {
+        let recalled = self.speleodb_recalled_dump_entry(project_id);
+        let candidate = chosen.or(recalled.as_deref());
+        let entry = resolve_dump_entry(dump, candidate)?;
+        self.speleodb_remember_dump_entry(project_id, &entry);
+        Ok(entry)
+    }
+
     /// List the projects visible to the logged-in user, as display summaries.
     pub(crate) fn speleodb_list_projects(
         &self,
@@ -220,11 +246,9 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry = resolve_dump_entry(&mut dump, entry_path.as_deref()).map_err(local_dto)?;
-        // [#258] Remember the resolved entry for THIS session so the fast-forward
-        // verbs (Start editing / Update / Take remote), which carry no entryPath of
-        // their own, do not re-raise the picker on every action.
-        self.speleodb_remember_dump_entry(&project_id, &entry);
+        let entry = self
+            .speleodb_resolve_entry_remembering(&project_id, &mut dump, entry_path.as_deref())
+            .map_err(local_dto)?;
 
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -
@@ -598,10 +622,9 @@ impl AppState {
             client::download_dump(endpoint, token, insecure_http, project_id),
         )?;
         let mut dump = dump::Dump::open(&zip)?;
-        // [#258] No `entryPath` reaches this verb, so honour a choice the user
-        // already made this session; a miss still fails closed rather than guessing.
-        let recalled = self.speleodb_recalled_dump_entry(project_id);
-        let entry = resolve_dump_entry(&mut dump, recalled.as_deref())?;
+        // [#258] No `entryPath` reaches this verb - it honours whatever the session
+        // already settled, and a miss still fails closed rather than guessing.
+        let entry = self.speleodb_resolve_entry_remembering(project_id, &mut dump, None)?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset
@@ -666,6 +689,7 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{classify_dump_entry, resolve_dump_entry, UnopenableDump};
+    use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::speleodb::dump::Dump;
     use crate::speleodb::SpeleoDbError;
 
@@ -715,6 +739,34 @@ mod tests {
                 "`{hostile}` must be refused and the archive's real candidates re-offered"
             );
         }
+    }
+
+    #[test]
+    fn every_classify_site_goes_through_the_remembering_resolver() {
+        // [#258] Structural, like the guard-order tripwire above, and for the same
+        // reason: the behaviour needs an `AppState`, whose construction latches the
+        // process-wide app dirs into every other test in this binary.
+        //
+        // What it protects: the ambiguity is normally settled when the project is
+        // OPENED, which takes no lock. Restore must CONSULT that answer, not merely
+        // record it - it did only the latter once, so the revert composite asked
+        // again while holding the write lock and had to hand it back to do so. A new
+        // classify site that reaches for the bare resolver would silently reintroduce
+        // that, since the bare one still works and just forgets.
+        // Family-wide, not this file: the restore site lives in `speleodb_revisions`,
+        // and a scan that cannot see it is a tripwire that cannot guard it.
+        assert_eq!(
+            speleodb_prod_matches("resolve_dump_entry(", &[]),
+            2,
+            "resolve_dump_entry must have exactly one definition and one caller - the \
+             remembering wrapper. A direct call skips both the recall and the record."
+        );
+        assert_eq!(
+            speleodb_prod_matches("speleodb_resolve_entry_remembering(", &[]),
+            4,
+            "expected one definition plus the three classify sites (pull, fast-forward, \
+             restore); a change here means a site was added or one stopped remembering"
+        );
     }
 
     #[test]
