@@ -172,7 +172,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Roadmap](docs/roadmap.md) | v1.0 phases, PRDs, backend changes |
 | [Telemetry](docs/telemetry.md) | Event reference, source tracking, adding telemetry to new features |
 | [IPC Type Generation](docs/ipc-typegen.md) | How IPC TS types are generated and updated |
-| [Performance](docs/performance.md) | Algorithm choices, profiling guide, optimization history |
+| [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
 | [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22. |
@@ -188,4 +188,4 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Releasing](docs/releasing.md) | Changelog -> tag -> release: `scripts/release.sh`, the CI workflows, where version numbers live |
 | [UI style guide](docs/style-guide.md) | Design tokens, typography, buttons, panels, tables, forms, accessibility |
 | [macOS pan/zoom lockup](docs/debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit |
-| [Touch support](docs/touch-support.md) | Pointer events and long-press handling for tablets. Dated - a rewrite is queued |
+| [Touch support](docs/touch-support.md) | What touch/pointer support exists, the long-press paths, and the verified gaps |

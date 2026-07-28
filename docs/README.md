@@ -51,7 +51,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [collaboration.md](collaboration.md) | Ariane collab mode: the sibling `.tml`, save-both, reconcile on open, shot matching tiers. |
 | [telemetry.md](telemetry.md) | Opt-in anonymous counters: the event registry, source tracking, and how to add events for a new feature. |
 | [style-guide.md](style-guide.md) | UI conventions: design tokens, typography, buttons, panels, tables, forms, accessibility. |
-| [touch-support.md](touch-support.md) | Pointer events and long-press handling for tablets. Dated - written as a change log against its original PR; a rewrite is queued. |
+| [touch-support.md](touch-support.md) | What touch and pointer support exists, the long-press paths, and the verified gaps. |
 
 ## Import and formats
 
@@ -71,7 +71,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Node 22. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |
 | [linting.md](linting.md) | The `cargo fmt` + clippy CI gates, the anti-AI-slop lint policy, the per-test-module `#[expect]` idiom, deferred lints. |
-| [performance.md](performance.md) | Algorithmic choices and their costs (closure solver, frozen-shot detection, geometry reconcile), how to profile. The frontend/MapLibre section predates the custom renderer - see [map-renderer.md](map-renderer.md). |
+| [performance.md](performance.md) | Where the time goes and how to measure it: the closure solver, frozen-shot detection, geometry reconcile, and the WebGL renderer's per-frame vs per-data-change cost. |
 
 ## Platform and ops
 

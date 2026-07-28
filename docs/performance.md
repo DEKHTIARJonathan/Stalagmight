@@ -1,7 +1,7 @@
 # Performance
 
 This document covers key algorithmic decisions and their performance
-characteristics, for both the Rust backend and the MapLibre frontend.
+characteristics, for both the Rust backend and the WebGL frontend.
 
 ## Loop Closure Adjustment - Sparse PCG Solver
 
@@ -213,123 +213,146 @@ and lack of inlining/SIMD. Always use the `profiling` profile.
 
 ---
 
-## Frontend - MapLibre Rendering Performance
+## Frontend - Survey Rendering Performance
 
-**Files:** `src/components/Map/SurveyLayer.tsx`, `src/components/Map/MapCanvas.tsx`
+The survey is drawn by custom WebGL2 layers (MapLibre `CustomLayerInterface`)
+under `src/components/Map/surveyLayer/customRender/`, not by MapLibre style
+layers. There is no stock-layer fallback: if a custom layer cannot start or
+self-disables mid-render, it is removed and the failure latches for the session.
 
-### Feature interaction pipeline
+[`map-renderer.md`](map-renderer.md) owns the internals - tessellation, shaders,
+the anchor-relative coordinate scheme, colors, labels, hit-testing, failure
+paths. This section is only about where the time goes and how to measure it.
 
-SurveyLayer manages visual feedback (hover, selection, snap indicators) for
-survey stations and shots rendered on a MapLibre GL map. On large surveys
-(2000+ stations), naive approaches cause visible lag. The patterns below keep
-all interactions at 60fps.
+### Per frame vs per data change
 
-### Pattern 1: `queryRenderedFeatures` for spatial queries
+**Per frame** the geometry layer (`customRender/surveyCustomLayer.ts`,
+`render()`) composes the anchor matrix in float64, sets blend state, and issues
+**two `drawElements` calls** - one for every shot, one for every station -
+regardless of survey size. No CPU-side geometry work, no per-feature iteration,
+no expression evaluation. Labels, the measure-path tint, and the drag ghost are
+separate layers with their own draws.
 
-**Never** iterate all stations/shots to find what's near the cursor. MapLibre
-maintains a GPU-backed spatial index over rendered features.
+Consequences worth exploiting:
 
-```typescript
-// BAD - O(N) per mousemove
-for (const station of allStations) {
-  const screenPos = map.project(metersToMapCoords(station, gpsOrigin));
-  if (distance(screenPos, cursor) < threshold) { ... }
-}
+- Show/hide toggles for shots, stations, reference legs, and jumps are shader
+  uniforms. They cost a flag flip plus `triggerRepaint`, never a rebuild.
+- Selection, hover, dimming, and drag-hide are per-vertex float flags with their
+  own re-upload paths, so they do not disturb colors and colors do not disturb
+  them.
+- The one extra per-frame call is `gl.getError()` after the draws, and only for
+  the first 5 frames (`MAX_CHECKED_FRAMES`) - a `getError` is a synchronous
+  pipeline stall, so the layer stops asking once it has drawn cleanly.
 
-// GOOD - O(log N) via spatial index
-const bbox = [[x - t, y - t], [x + t, y + t]];
-const features = map.queryRenderedFeatures(bbox, { layers: [hitboxLayer] });
-const nearest = resolveNearestStation(map, event, features, threshold);
-```
+**Per data change** `SurveyLayer.flushUpdate` runs synchronously in the same
+frame: no worker, no tile cut. It rebuilds the hit index (a fresh
+`SurveyGeometryIndex`, never mutated in place), syncs the geometry and label
+controllers, and re-publishes the small stock overlays. `SurveyCustomController
+.sync` then picks the cheapest of three tiers - incremental, color-only, full
+build - with the gates in `customRender/incremental.ts`.
 
-The hitbox layer (`survey-stations-hitbox`) carries `sectionId`/`stationIndex`
-properties. `resolveNearestStation()` in `surveyLayer/hitTest.ts` handles
-tie-breaking by screen distance when multiple features fall in the bbox.
+### What is expensive
 
-### Pattern 2: `setFeatureState` for visual updates
+**A full rebuild** reprojects every station, tessellates every shot, resolves
+every color, packs, and uploads. The two fast paths exist to avoid it, so the
+question that matters is what makes them bail. From `incremental.ts`:
 
-**Never** use `setFilter` to toggle feature visibility on mousemove. `setFilter`
-re-evaluates the filter expression across **all** features in the layer.
-`setFeatureState` is an instant per-feature GPU-side update.
+| Trigger | Why the fast paths cannot bound it |
+|---|---|
+| Structural edit (insert / delete / merge / split / reorder, and their undos) | vertex slots move, so a per-section re-emit lands in the wrong range |
+| An edit that moves the survey bbox extent | the mercator anchor shifts, so every anchor-relative position changes |
+| GPS-origin change | same, via reprojection |
+| Issue-severity coloring active | severity arrays are recomputed per flush and severity is non-local |
+| Move-comment tint active | per-feature comment ownership is not tracked by the diff |
+| More than half the sections dirty | many `bufferSubData` calls lose to one rebuild (`incremental.ts:197`) |
 
-```typescript
-// BAD - O(N) filter re-evaluation
-map.setFilter(highlightLayer, ['in', idExpr, ['literal', activeIds]]);
+Everything else takes a fast path: an edit that leaves the SoA layout byte-stable
+re-emits only the dirty sections' vertex ranges, and a pure global recolor
+(analytical overlay enter/exit or recompute, theme swap, depth toggle)
+re-resolves and re-uploads only the four color buffers, skipping reprojection and
+tessellation entirely.
 
-// GOOD - O(1) per feature
-map.setFeatureState({ source, id: prevFeatureId }, { snapped: false });
-map.setFeatureState({ source, id: newFeatureId }, { snapped: true });
-```
+**Label builds** (`customRender/labelController.ts`) do glyph shaping plus a
+zoom-ladder greedy declutter, which is the heaviest CPU pass in the renderer.
+They are scoped to a padded viewport and emit a slack zoom window, and they
+rebuild on camera settle (`moveend` / `zoomend`, coalesced and deferred off the
+render stack) only when that padded viewport is exited or the slack runs out. A
+modest zoom-in inside the slack window needs no rebuild.
 
-The layer paint uses `feature-state` expressions for opacity:
+**Hit-testing** runs per pointer move through
+`SurveyLayer.hitCandidateSections`, since `queryRenderedFeatures` returns nothing
+from a custom layer. `surveyLayer/geometryIndex.ts` caches projected section
+AABBs against a camera snapshot, so a static hover reprojects once per camera
+rather than once per probe. Every camera change invalidates that cache.
 
-```typescript
-'circle-opacity': ['case', ['boolean', ['feature-state', 'snapped'], false], 1, 0]
-```
+**React re-renders** of `MapCanvas` are still the reason cursor-tracking feedback
+does not go through the store. Update the layer directly, keep a ref
+(`snappedStationRef`) for the hot-path comparison, and defer the Zustand write
+with `startTransition` so click handlers still see the right state.
 
-All interactive visual states (hover, selected, snapped, anchored) use this
-pattern. Feature IDs are encoded as `sectionId * FEATURE_ID_STRIDE + index`.
+### The `setData` / `setFeatureState` trap
 
-### Pattern 3: Disable paint transitions
+MapLibre's `setData()` drops **all** `setFeatureState` on that source. When the
+survey rode vector-tile sources, the distance overlay re-applied its per-feature
+state from the per-hover visual-state update; that is a measured frame-rate
+collapse, fixed in `88ec311d` ("perf(map): stop reapplying distance feature-state
+on hover", #34).
 
-MapLibre applies **300ms default transitions** to paint properties when features
-enter or exit a filtered/visible state. For interactive feedback (hover, snap),
-this creates visible lag. Disable transitions on interactive layers:
+The current design removes the hazard rather than managing it. There is **no
+`setFeatureState` call left anywhere in `src/`**: survey geometry carries hover,
+selection, and dimming as per-vertex attributes, and the few surviving stock
+GeoJSON overlays (the interact overlay, the gas route, loop closures) carry their
+gradient value as a feature *property* - `['get', 'dist']` / `['get', 'gasReach']`
+through the same ramp expressions the bulk layers used
+(`utils/distanceGradient.ts`, `utils/gasReach.ts`), so a `setData` cannot wipe
+it. Several comments still say `setFeatureState`; they are stale.
 
-```typescript
-'circle-opacity-transition': { duration: 0, delay: 0 },
-'circle-stroke-opacity-transition': { duration: 0, delay: 0 },
-```
+The rule that survives, and that any new overlay must follow:
 
-This applies to all layers that respond to mousemove - station hover, shot
-hover, station highlight/snap, etc.
+- **Re-push per-item overlay state in the post-rebuild tail of `flushUpdate`**,
+  which is exactly what it does - invalidate `lastInteractKey`, refresh the
+  interact overlay, re-apply its paint inputs, and re-push the stored gas-route
+  legs.
+- **Never recompute it per hover.** The per-hover path (`updateVisualState` ->
+  `refreshInteractOverlay`) is deliberately bounded: a handful of features, and
+  short-circuited when the composed state key is unchanged.
+- If you reintroduce `setFeatureState` on any source, both halves of that rule
+  apply again verbatim.
 
-### Pattern 4: RAF batching for mousemove
+Two stock-layer patterns also still hold. Paint transitions must be zeroed on
+interactive layers (`'circle-opacity-transition': { duration: 0, delay: 0 }`) -
+MapLibre's 300 ms default transition reads as lag on hover feedback. And pointer
+moves are rAF-batched, so only the latest event is processed per frame.
 
-Mouse events fire faster than the browser can paint frames. Batch snap detection
-into `requestAnimationFrame` callbacks so only the latest cursor position is
-processed per frame:
+### How to profile the frontend
 
-```typescript
-pendingPosition.current = { x, y };
-if (rafId.current === null) {
-  rafId.current = requestAnimationFrame(() => {
-    rafId.current = null;
-    const pos = pendingPosition.current;
-    pendingPosition.current = null;
-    checkSnapToStation(pos.x, pos.y);
-  });
-}
-```
+**Dev stats overlay** (`src/components/Map/MapDevStats.tsx`, toggled from the
+Display menu) is the primary tool and the only view inside a custom layer, since
+MapLibre's own instrumentation cannot see in. It wraps `drawArrays` /
+`drawElements` on the context to count draw calls and triangles per frame, and
+shows FPS and frame time, last-zoom average FPS and worst frame, layer and source
+counts, WebGL renderer and limits, and tile-cache stats. Its per-source feature
+counts call `querySourceFeatures`, which is expensive, so they are collected on
+`idle` with a 500 ms throttle and never on `render`.
 
-SurveyLayer's hover handler uses the same pattern internally.
+**Dev-only build timings.** `controller.ts` logs `[customRender] build` with
+elapsed ms, shot-segment and station counts, and buffer megabytes;
+`labelController.ts` logs `[customRender] label build` with the same plus
+per-phase splits. Both go through `utils/debugLog.ts`, which compiles to a no-op
+unless `import.meta.env.DEV` - so they appear under `./scripts/dev.sh` and not in
+a packaged build. Use these rather than a stopwatch: they attribute a slow edit to
+a specific tier and give the buffer size that drove it.
 
-### Pattern 5: Direct SurveyLayer updates, deferred React state
+**Ungated lifecycle logs.** `[customRender] enabled`, `first frame drawn OK`, and
+the self-disable warnings are plain `console.info` / `console.warn` on purpose,
+so a production build stays diagnosable.
 
-Zustand state updates trigger synchronous React re-renders. On a large
-component like MapCanvas (~2700 lines), this takes ~15ms - enough to block the
-current frame's paint and cause a visible stutter.
+**Other gates.** Hit-detection tracing is config-gated
+(`debug.map.log_hit_detection`); the macOS pan/zoom toolkit is gated on
+`VITE_DEBUG_MACOS_LOCKUP`. Both are documented in
+[`debug-gates.md`](debug-gates.md).
 
-For visual feedback that must track the cursor at frame rate:
-
-1. **Update SurveyLayer directly** (bypasses React entirely)
-2. **Use a ref** (`snappedStationRef`) for hot-path comparison
-3. **Defer the Zustand update** via `startTransition()` so click handlers still
-   get the correct state
-
-```typescript
-// Direct visual update - instant
-surveyLayerRef.current.setSnappedStation(nearestStation);
-// Deferred store update - doesn't block paint
-startTransition(() => setSnappedStation(nearestStation));
-```
-
-### Summary of snap indicator pipeline
-
-| Step | Mechanism | Complexity |
-|------|-----------|------------|
-| Mouse event | RAF-batched | 1 per frame |
-| Spatial query | `queryRenderedFeatures` | O(log N) |
-| Nearest station | `resolveNearestStation` | O(k) where k = features in bbox |
-| Visual update | `setFeatureState` | O(1) |
-| React state | `startTransition` | Deferred |
+**`src/hooks/useFpsMonitor.ts` is not running.** It implements a rolling
+`requestAnimationFrame` average with hysteresis thresholds, but it has no
+consumer; the live FPS readout is `MapDevStats`' own loop. Do not wire adaptive
+work to it without wiring the hook up first.

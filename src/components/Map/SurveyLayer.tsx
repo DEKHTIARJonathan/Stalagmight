@@ -1698,7 +1698,7 @@ export default class SurveyLayer {
   /**
    * Apply the gas route highlight (#233): the picked penetration route drawn over the survey -
    * swum legs at full opacity, jump legs faded (#243). Has its own GeoJSON source (survives
-   * `setData()`); the legs are stored so `applyFeaturesToSources` re-pushes them after a feature
+   * `setData()`); the legs are stored so `flushUpdate` re-pushes them after a feature
    * rebuild. `[]` clears it.
    */
   setGasRoute(legs: RouteLeg[]): void {

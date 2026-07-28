@@ -12,7 +12,7 @@ export const MEASURE_TINT = '#22d3ee';
 
 /**
  * Map the along-line path shots (from the `get_along_line_distance` IPC) to their
- * globally-unique MapLibre feature ids, for `setFeatureState`-based tinting.
+ * globally-unique MapLibre feature ids, for along-line tinting.
  * Reuses the one canonical `encodeFeatureId` formula so it never drifts from
  * feature construction or the distance-gradient overlay.
  */
