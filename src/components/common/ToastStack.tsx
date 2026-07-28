@@ -152,10 +152,20 @@ export function usePrefersReducedMotion(): boolean {
     if (!mq) return;
     const onChange = () => setReduced(mq.matches);
     onChange();
-    // Safari <14 only has the deprecated addListener; guard rather than assume.
     if (typeof mq.addEventListener === 'function') {
       mq.addEventListener('change', onChange);
       return () => mq.removeEventListener('change', onChange);
+    }
+    // Old WebKit (Safari <14, and the WKWebView the macOS build runs in) exposes
+    // only the deprecated pair, so SUBSCRIBE through it rather than just guarding
+    // against it: falling through to no listener at all left the start-up reading
+    // frozen, and toggling Reduce Motion while the app was running changed nothing
+    // until a reload. Chromium has both, so this gap is invisible to the browser
+    // tests and only ever showed on the shipped mac build.
+    const legacy = mq as Partial<Pick<MediaQueryList, 'addListener' | 'removeListener'>>;
+    if (typeof legacy.addListener === 'function') {
+      legacy.addListener(onChange);
+      return () => legacy.removeListener?.(onChange);
     }
     return undefined;
   }, [query]);
@@ -215,34 +225,52 @@ function useViewportHeight(): number {
   return height;
 }
 
+/** One line of a screen-reader live region. */
+interface Announcement {
+  /** `id:revision` - unique per announcement, so a refresh in place re-keys. */
+  key: string;
+  message: string;
+}
+
 /**
- * The text one screen-reader live region should carry.
+ * The lines one screen-reader live region should carry.
  *
  * LATCHED, not derived from the current stack. A live region announces whenever
- * its text CHANGES, so publishing "the newest message" re-read the PREVIOUS toast
- * every time the newest one expired: remove the newest, the one before it becomes
- * newest, the region's text changes, and assistive tech reads a message the user
- * was already told about - on every natural expiry, which for an info toast is
- * every five seconds.
+ * its content CHANGES, so publishing "the newest message" re-read the PREVIOUS
+ * toast every time the newest one expired: remove the newest, the one before it
+ * becomes newest, the region's text changes, and assistive tech reads a message
+ * the user was already told about - on every natural expiry, which for an info
+ * toast is every five seconds.
  *
- * So the text only moves FORWARD: it updates when a toast id/revision this hook
- * has not announced yet becomes the newest, and holds otherwise. A refresh in
+ * So the content only moves FORWARD: it is replaced by EVERY (id, revision) this
+ * hook has not announced yet, oldest first, and holds otherwise. A refresh in
  * place (same id, bumped revision) is a new event and does announce - the message
  * can have changed. The latch is cleared once the stack empties, so an identical
- * message pushed later is still a text CHANGE and therefore still announced.
+ * message pushed later is still a change and therefore still announced.
+ *
+ * A QUEUE rather than "the newest item", because a render can bring in more than
+ * one: two `showToast` calls in one event handler are a single React update, so
+ * the first toast is never the newest in any render - and it never becomes the
+ * newest later either, since same-kind toasts share a lifetime and a batch starts
+ * their clocks together, so they expire on the same tick and the stack goes
+ * straight from two to none. Sampling the newest dropped that message entirely.
+ *
+ * Each line is rendered as its own node, so a burst reads as separate messages in
+ * the order they happened rather than as one run-on string.
  */
-function useLiveRegionMessage(items: readonly ToastItem[]): string {
+function useLiveRegionMessages(items: readonly ToastItem[]): readonly Announcement[] {
   /** id -> the revision of that toast this region has already announced. */
   const announced = useRef(new Map<number, number>());
-  const [message, setMessage] = useState('');
-  const newest = items[items.length - 1];
-  // No dependency list: the decision is about the newest item's (id, revision),
-  // which is cheap to re-check, and setting the same string re-renders nothing.
+  const [lines, setLines] = useState<readonly Announcement[]>([]);
+  // No dependency list: the decision is about each item's (id, revision), which
+  // is cheap to re-check, and the two writes below both bail out when nothing has
+  // moved - the empty case deliberately re-uses the previous array rather than a
+  // fresh one, which would be a new reference every pass and so a re-render loop.
   useEffect(() => {
     const seen = announced.current;
-    if (!newest) {
+    if (items.length === 0) {
       seen.clear();
-      setMessage('');
+      setLines((prev) => (prev.length === 0 ? prev : []));
       return;
     }
     // Forget ids that have left, so the map cannot grow for the session's life.
@@ -250,11 +278,13 @@ function useLiveRegionMessage(items: readonly ToastItem[]): string {
     for (const id of [...seen.keys()]) {
       if (!items.some((item) => item.id === id)) seen.delete(id);
     }
-    if (seen.get(newest.id) === newest.revision) return;
-    seen.set(newest.id, newest.revision);
-    setMessage(newest.message);
+    // Oldest-first, matching the stack's own order.
+    const unseen = items.filter((item) => seen.get(item.id) !== item.revision);
+    if (unseen.length === 0) return;
+    for (const item of unseen) seen.set(item.id, item.revision);
+    setLines(unseen.map((item) => ({ key: `${item.id}:${item.revision}`, message: item.message })));
   });
-  return message;
+  return lines;
 }
 
 /** Per-toast clock bookkeeping, keyed by toast id. */
@@ -645,8 +675,8 @@ export function ToastStack() {
 
   const urgent = toasts.filter((item) => isUrgent(item.kind));
   const polite = toasts.filter((item) => !isUrgent(item.kind));
-  const politeMessage = useLiveRegionMessage(polite);
-  const urgentMessage = useLiveRegionMessage(urgent);
+  const politeMessages = useLiveRegionMessages(polite);
+  const urgentMessages = useLiveRegionMessages(urgent);
 
   return createPortal(
     <div className="fixed inset-0 pointer-events-none z-[99999]">
@@ -655,16 +685,24 @@ export function ToastStack() {
         split off from presentation: two permanently-mounted screen-reader regions
         carry the text (polite for info/success, assertive for error/warning),
         while the visible stack below marks its message `aria-hidden` so nothing is
-        read twice. Each region carries the newest message it has not yet
-        announced and HOLDS it (see useLiveRegionMessage) - reading the newest
-        message straight off the stack re-announced the previous one on every
-        removal.
+        read twice. Each region carries every message it has not yet announced and
+        HOLDS them (see useLiveRegionMessages) - reading the newest message
+        straight off the stack re-announced the previous one on every removal, and
+        lost every message but the last of a batch.
+
+        One node per message, not one joined string: the regions are not atomic,
+        so a burst arriving in a single update is read as the separate messages it
+        is, in the order they happened.
       */}
       <div className="sr-only" role="status" aria-live="polite">
-        {politeMessage}
+        {politeMessages.map((line) => (
+          <div key={line.key}>{line.message}</div>
+        ))}
       </div>
       <div className="sr-only" role="alert" aria-live="assertive">
-        {urgentMessage}
+        {urgentMessages.map((line) => (
+          <div key={line.key}>{line.message}</div>
+        ))}
       </div>
 
       {hasToasts && (

@@ -146,9 +146,59 @@ function stubReducedMotion(reduce: boolean) {
   );
 }
 
-function push(message: string, key: string, kind?: 'info' | 'success' | 'warning' | 'error') {
+/**
+ * A `MediaQueryList` as the OLD WebKit the macOS build can run in exposes it:
+ * the deprecated `addListener` / `removeListener` pair and no
+ * `addEventListener` at all. `stubReducedMotion` above offers both, so it can
+ * never catch a fallback that forgets to subscribe.
+ *
+ * Returns handles to flip the preference (fanning the change out to whoever
+ * subscribed) and to count live subscriptions, so cleanup is checkable.
+ */
+function stubLegacyReducedMotion(reduce: boolean) {
+  const listeners = new Set<(event: MediaQueryListEvent) => void>();
+  const mq = {
+    matches: reduce,
+    media: '(prefers-reduced-motion: reduce)',
+    onchange: null,
+    addListener: (fn: (event: MediaQueryListEvent) => void) => {
+      listeners.add(fn);
+    },
+    removeListener: (fn: (event: MediaQueryListEvent) => void) => {
+      listeners.delete(fn);
+    },
+    dispatchEvent: () => false,
+  };
+  vi.stubGlobal('matchMedia', vi.fn(() => mq));
+  return {
+    listenerCount: () => listeners.size,
+    set(next: boolean) {
+      act(() => {
+        mq.matches = next;
+        for (const fn of [...listeners]) fn({ matches: next } as MediaQueryListEvent);
+      });
+    },
+  };
+}
+
+type Kind = 'info' | 'success' | 'warning' | 'error';
+
+function push(message: string, key: string, kind?: Kind) {
   act(() => {
     useUIStore.getState().showToast(message, key, kind);
+  });
+}
+
+/**
+ * Push several toasts inside ONE React batch, the way a single event handler (or
+ * one synchronous run of store code) does: React 18 coalesces the store writes,
+ * so the stack's very next render already carries all of them and there is no
+ * intermediate render holding only the first.
+ */
+function pushBatch(...entries: Array<[message: string, key: string, kind?: Kind]>) {
+  act(() => {
+    const { showToast } = useUIStore.getState();
+    for (const [message, key, kind] of entries) showToast(message, key, kind);
   });
 }
 
@@ -1024,6 +1074,63 @@ describe('ToastStack - accessibility', () => {
     push('working harder', 'job');
     expect(screen.getByRole('status')).toHaveTextContent('working harder');
   });
+
+  it('announces BOTH toasts of a batch, oldest first', () => {
+    // Two showToast calls in one event handler are ONE React update, so the
+    // stack's next render already carries both. Reading only the newest item
+    // announced the second and dropped the first: it is not the newest in that
+    // render, and it never becomes the newest in a later one either, so nothing
+    // downstream ever picks it up.
+    render(<ToastStack />);
+    pushBatch(['saved the section', 'a'], ['recomputed the loops', 'b']);
+
+    expect(toasts()).toHaveLength(2);
+    const text = screen.getByRole('status').textContent ?? '';
+    expect(text).toContain('saved the section');
+    expect(text).toContain('recomputed the loops');
+    // Announced in the order they happened, not newest-first.
+    expect(text.indexOf('saved the section')).toBeLessThan(text.indexOf('recomputed the loops'));
+  });
+
+  it('keeps the two regions apart when one batch fills both', () => {
+    // A batch is split by urgency before it is queued, so neither region can pick
+    // up the other's messages - polite stays polite, assertive stays assertive.
+    render(<ToastStack />);
+    pushBatch(
+      ['a quiet note', 'a', 'info'],
+      ['something broke', 'b', 'error'],
+      ['and another note', 'c', 'success'],
+    );
+
+    const polite = screen.getByRole('status').textContent ?? '';
+    const assertive = screen.getByRole('alert').textContent ?? '';
+    expect(polite).toContain('a quiet note');
+    expect(polite).toContain('and another note');
+    expect(polite).not.toContain('something broke');
+    expect(assertive).toBe('something broke');
+  });
+
+  it('announces the older of a batch even though both expire on the same tick', () => {
+    // Same kind means the same lifetime, and a batch starts both clocks together,
+    // so the stack goes straight from two toasts to none. There is no render in
+    // which the older one is the newest, so under a newest-only rule it is never
+    // announced AT ALL - not merely announced late. This records every text the
+    // region ever carries across the whole life of the pair.
+    render(<ToastStack />);
+    const everSaid = new Set<string>();
+    const record = () => everSaid.add(screen.getByRole('status').textContent ?? '');
+
+    pushBatch(['older of the pair', 'a'], ['newer of the pair', 'b']);
+    record();
+    for (let i = 0; i < 140; i += 1) {
+      advance(50);
+      record();
+    }
+
+    expect(toasts()).toHaveLength(0);
+    expect([...everSaid].some((said) => said.includes('older of the pair'))).toBe(true);
+    expect([...everSaid].some((said) => said.includes('newer of the pair'))).toBe(true);
+  });
 });
 
 describe('ToastStack - prefers-reduced-motion', () => {
@@ -1063,6 +1170,42 @@ describe('ToastStack - prefers-reduced-motion', () => {
       within(toastFor('newer')!).getByRole('button').click();
     });
     expect(offsetOf('newer')).toBe('translateY(0px)');
+  });
+
+  it('reads the preference through the legacy MediaQueryList API', () => {
+    // Old WebKit exposes no addEventListener on a MediaQueryList at all. The
+    // start-up read has always worked here; this pins that it still does once the
+    // subscription below is wired through the deprecated pair.
+    stubLegacyReducedMotion(true);
+    render(<ToastStack />);
+    push('no motion please', 'k');
+
+    expect(toastFor('no motion please')?.className).not.toContain('transition-');
+  });
+
+  it('follows a live Reduce Motion change through the legacy addListener API', () => {
+    // The macOS build runs in a WKWebView, and older WebKit has only the
+    // deprecated addListener/removeListener pair. The compatibility branch used to
+    // fall straight through to NO subscription, so flipping Reduce Motion while
+    // the app was running left the animations as they were until a reload - a
+    // WebKit-only gap that Chromium (and so Playwright) cannot see.
+    const mq = stubLegacyReducedMotion(false);
+    const view = render(<ToastStack />);
+    push('moving toast', 'k');
+
+    expect(mq.listenerCount()).toBe(1);
+    expect(toastFor('moving toast')?.className).toContain('transition-');
+
+    mq.set(true);
+    expect(toastFor('moving toast')?.className).not.toContain('transition-');
+
+    // And back again, so this is a live subscription rather than a one-way latch.
+    mq.set(false);
+    expect(toastFor('moving toast')?.className).toContain('transition-');
+
+    // Unsubscribed on unmount, through the matching legacy remover.
+    view.unmount();
+    expect(mq.listenerCount()).toBe(0);
   });
 
   it('keeps the fitted capacity - reduced motion is about movement, not count', () => {
