@@ -279,3 +279,58 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(useGasPlanStore.getState().origin).toEqual(ref(3));
   });
 });
+
+describe('frontend mutation ordering (#24)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useGasPlanStore.getState().reset();
+    useProjectStore.setState({ project: null });
+  });
+
+  it('applies aftermath in ISSUE order when two operations overlap', async () => {
+    // The transforms do not commute when the counts differ: reverse at N, a shot-count edit,
+    // reverse at N+1. `executeCommand` and `executeUndoRedo` are separate async chains, each
+    // awaiting its own IPC call and its own refresh, so without a shared queue the SECOND
+    // operation can finish first and its aftermath lands before the first one's - walking the
+    // pins onto a different station, in range and silent.
+    const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
+    useGasPlanStore.setState({ origin: ref(1) });
+
+    // The FIRST call resolves slowly, the second immediately - so completion order would be
+    // reversed if nothing serialised them.
+    let releaseFirst: (() => void) | undefined;
+    const firstHeld = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let call = 0;
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      if (command === 'get_project_state') {
+        return { project: projectWith(stations), stations, stats: null, frozen_shots: [] };
+      }
+      if (command === 'can_undo' || command === 'can_redo') return false;
+      if (command === 'get_project_warnings') return [];
+      if (command === 'check_project_integrity') return { violations: [] };
+      // Both mutations report a reverse, at DIFFERENT counts.
+      call += 1;
+      const shot_count = call === 1 ? 7 : 6;
+      if (call === 1) await firstHeld;
+      return {
+        success: true,
+        warnings: [],
+        error: null,
+        section_ids: [],
+        reversed_sections: [{ section_id: SECTION, shot_count }],
+      };
+    });
+
+    const store = useProjectStore.getState();
+    const first = store.reverseSection(SECTION, false);
+    const second = store.reverseSection(SECTION, false);
+    releaseFirst?.();
+    await Promise.all([first, second]);
+
+    // Composed in issue order: i -> 7 - i then i -> 6 - i, i.e. 1 -> 6 -> 0.
+    // The reverse order would give 1 -> 5 -> 2, a different station.
+    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+  });
+});

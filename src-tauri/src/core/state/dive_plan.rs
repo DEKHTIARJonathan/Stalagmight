@@ -291,13 +291,12 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
 ///    section", which reads the same after a reverse as after a delete-then-append and so was
 ///    wrong for one of them whichever way it guessed.
 ///
-/// KNOWN LIMITATION, accepted deliberately: splitting the shot a terminal anchor names. The
-/// split gives the new half a fresh UUID and keeps the old one on the tail, so afterwards no
-/// shot in the file has that station as an endpoint - nothing is left to anchor to, and the
-/// stored side lands on the split point instead. Such an anchor's shot now has neighbours on
-/// BOTH sides, which the stored `None` says is impossible; that case is resolved as though no
-/// reverse occurred. Splitting an end shot of a section a saved plan pins is rare, and the
-/// error is one station.
+/// Splitting the shot a terminal anchor names FAILS SAFE rather than guessing. The split gives
+/// the new half a fresh UUID and keeps the old one on the shortened tail, so afterwards no shot
+/// in the file has that station as an endpoint - nothing is left to anchor to, and any answer
+/// would silently land on the split point. `terminal_shot_length_bits` detects it (the tail is
+/// necessarily shorter, and the station is no longer at an end of the section) and the reference
+/// is reported STALE, so the UI can ask the diver to re-pin it.
 fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Option<StationRef> {
     let resolved = resolve_stored(project, anchor);
     if resolved.is_none() {

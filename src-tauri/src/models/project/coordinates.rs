@@ -364,9 +364,14 @@ impl Project {
             // or one whose neighbour was deleted. Position cannot decide the side: for a
             // one-shot section BOTH ends touch that shot, and reversing it swaps them while
             // leaving the shot at position 0. Read the side off the orientation instead, the
-            // way the plan anchors do. `reverse_parity` is false when the pair was captured
-            // (capture happens on save, and a save records the same parity), so a section that
-            // has been reversed an odd number of times since is on the far side.
+            // way the plan anchors do.
+            //
+            // The CURRENT parity is sufficient, and not because capture always happens with it
+            // false - it can just as well capture a section that is already reversed. It works
+            // because capture picks the shot the parity rule already names (parity false takes
+            // `shots[0]`, parity true takes the last), so the pair and the flag agree at
+            // capture; and a reverse moves that shot to the opposite end AND flips the flag,
+            // so they keep agreeing however many times it happens.
             (Some(px), None) if section.reverse_parity => px + 1,
             (Some(px), None) => px,
             _ => {

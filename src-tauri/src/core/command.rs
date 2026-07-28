@@ -305,9 +305,6 @@ pub struct CommandResult {
     ///
     /// The sibling `.plnx` needs none of this: its plans name a station by the shots it sits
     /// BETWEEN, so a reverse does not move them at all (see `state::dive_plan`).
-    /// frontend's is `i -> N - i` CLAMPED into range, self-inverse only for an
-    /// in-range index. That asymmetry is exactly why the producer resolves parity
-    /// here instead of leaving repeats for the consumer to cancel.
     ///
     /// Same wire contract as `section_ids` above - `skip_serializing_if` + `default`, so
     /// the key is simply absent for every command that reversed nothing and an older

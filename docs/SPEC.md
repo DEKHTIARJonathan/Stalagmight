@@ -1054,19 +1054,24 @@ points, stage-drop overrides) and the UI's selection are positional
 side so the plan stays on the physical stations the diver picked; selection and
 merge staging are cleared.
 
-Pins inside a *saved* `.plnx` **are** rewritten, because that staleness is not
-like any other survey edit's. A plan persists its pins as `StationKey` anchors,
-and after a reverse an `AfterShot(uuid)` anchor still *resolves* - to the station
-next door, since the anchoring shot travelled with its record. Nothing counts as
-stale, so `stale_ref_count` stays 0 and the panel shows no warning while the
-route, and with it the gas plan, has quietly been re-priced against a different
-pair of stations. Every other edit leaves an unresolvable ref that fails loudly.
-the sidecar needs no re-pointing at all: a saved dive plan names a station by the
-shots it sits BETWEEN, and a reverse does not change what a station sits between.
-(a key resolving to station `j` moves to `j - 1`; `SectionStart` moves to `N`),
-which is its own inverse and therefore runs unchanged on an undo or redo. It is
-best-effort: a missing, foreign or unwritable `.plnx` is logged and skipped
-rather than failing the survey edit.
+Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
+station by its position. It records the two shots a station sits BETWEEN, and a
+reverse does not change what a station sits between - the same pair still names
+the same junction whichever way the section is walked.
+
+That matters because the old `AfterShot(uuid)` form failed silently: after a
+reverse such an anchor still *resolved*, to the station next door, since the
+anchoring shot travelled with its record. Nothing counted as stale, so
+`stale_ref_count` stayed 0 and the panel showed no warning while the route - and
+with it the gas plan - had quietly been re-priced against a different pair of
+stations. Every other survey edit leaves an unresolvable ref that fails loudly.
+
+A station at the END of a section has only one neighbouring shot, so its side
+comes from the section's recorded orientation (`reverse_parity`) instead. The one
+case that cannot be tracked is splitting that shot: the split keeps the original
+UUID on the shortened tail, so afterwards no shot in the file has that station as
+an endpoint. That is detected via the neighbour's recorded length and reported as
+a stale ref for the diver to re-pin, rather than guessed at.
 
 Two other stores outside `Project` are settled the same way. Position-keyed
 (`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because

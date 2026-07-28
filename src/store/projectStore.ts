@@ -458,9 +458,43 @@ function projectSwitched(before: string | null, after: string | null): boolean {
   return before !== null && after !== null && before !== after;
 }
 
+/**
+ * Serialises frontend mutations, so their aftermath applies in ISSUE order (#24).
+ *
+ * `executeCommand` and `executeUndoRedo` are otherwise independent async chains: each awaits
+ * its own IPC call and then its own `refreshProjectState`, so two overlapping operations can
+ * finish in the opposite order to the one they were issued in. Their reverse aftermaths do NOT
+ * commute when the counts differ - reverse at N, a shot-count edit, reverse at N+1 - so applying
+ * them out of order walks the gas-plan pins and the distance-gradient origin onto a different
+ * station, in range and silent.
+ *
+ * The backend already serialises on `command_lock`, so this costs no real concurrency: it makes
+ * the frontend's completion order match the order the backend applied things in.
+ *
+ * Each entry runs whether or not its predecessor succeeded - a failed command must not wedge
+ * every later one - and the chain deliberately holds no result, so a rejected promise cannot
+ * escape into the next link.
+ */
+let mutationChain: Promise<void> = Promise.resolve();
+
+function runSerialized<T>(work: () => Promise<T>): Promise<T> {
+  const result = mutationChain.then(work, work);
+  mutationChain = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async (
+    command: string,
+    args: Record<string, unknown> | undefined,
+    meta: { purpose: string; fields?: Record<string, unknown> }
+  ): Promise<CommandResult> => runSerialized(() => executeCommandInner(command, args, meta));
+
+  const executeCommandInner = async (
     command: string,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> }
@@ -534,6 +568,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   /** Shared helper for undo/redo operations: invoke, toast on failure, always refresh. */
   const executeUndoRedo = async (
+    command: string,
+    args: Record<string, unknown> | undefined,
+    meta: { purpose: string; fields?: Record<string, unknown> },
+    toastId: string,
+    checkPartialFailure: boolean,
+  ): Promise<CommandResult> =>
+    runSerialized(() =>
+      executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure)
+    );
+
+  const executeUndoRedoInner = async (
     command: string,
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> },
