@@ -1102,8 +1102,8 @@ mod live_tests {
 
     /// F2 (#212) negative: a `PUT upload/auto/` by a writer who does **not** hold
     /// the project mutex is rejected with HTTP **403**. The upload view is gated by
-    /// `[SDB_WriteAccess, UserOwnsProjectMutex]` (verified in `~/src/cave/SpeleoDB`
-    /// `api/v2/views/file.py` + `permissions.py`): the superuser has write access,
+    /// `[SDB_WriteAccess, UserOwnsProjectMutex]` (verified in the SpeleoDB server
+    /// source, `api/v2/views/file.py` + `permissions.py`): the superuser has write access,
     /// so `SDB_WriteAccess` passes, but with no `active_mutex` held
     /// `UserOwnsProjectMutex.has_object_permission` returns `False` → DRF 403. This
     /// is the server half of the client's "hold the lock before you push" contract

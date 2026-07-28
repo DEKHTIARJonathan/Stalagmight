@@ -19977,7 +19977,7 @@ fn test_apply_collab_changes_preserves_native_data_and_is_undoable() {
 // ============================================================================
 //
 // Run with:
-//   STALAGMIGHT_PROFILE_TML=/home/user/src/cave/data/koox_baal/synthetic/93.tml \
+//   STALAGMIGHT_PROFILE_TML=/path/to/large-project.tml \
 //     cargo test --release --manifest-path src-tauri/Cargo.toml --lib \
 //     state::tests::profile_tml_import_full -- --nocapture --ignored
 //

@@ -29,9 +29,10 @@ import {
 
 /**
  * Notified when the layer disables itself mid-render (a GL error surfaced by
- * the first-frames `gl.getError()` probe). The controller uses this to restore
- * stock-layer visibility so the survey never ends up blank. Fired from inside
- * MapLibre's render pass, so the controller must defer any style mutation.
+ * the first-frames `gl.getError()` probe). The controller removes the dead
+ * layer and latches fatal - there is no stock fallback to restore. Fired from
+ * inside MapLibre's render pass, so the controller must defer any style
+ * mutation.
  */
 export type SelfDisableCallback = (reason: string) => void;
 

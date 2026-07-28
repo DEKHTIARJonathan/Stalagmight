@@ -64,6 +64,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.execute_gpx_import",
     "command.execute_tml_import",
     "command.export_csv",
+    "command.export_dive_profile",
     "command.export_image",
     "command.export_json",
     "command.export_salvageable_data",
@@ -109,6 +110,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.remove_from_recent_projects",
     "command.remove_loop_closure",
     "command.remove_zero_datum",
+    "command.render_dive_profile_text",
     // Retained for telemetry-ID stability; the command was removed (#57). See REMOVED_COMMANDS.
     "command.resolve_all_warnings",
     "command.resolve_warning",
@@ -929,7 +931,9 @@ mod tests {
         //   + 2 credential-storage commands (the login-time "where should the key
         //       go?" answer and the Settings keychain retry):
         //       command.speleodb_{set_token_storage,retry_keychain} = 681.
-        assert_eq!(EVENT_NAMES.len(), 681);
+        //   + 2 dive-profile export commands (#299):
+        //       command.{export_dive_profile,render_dive_profile_text} = 683.
+        assert_eq!(EVENT_NAMES.len(), 683);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

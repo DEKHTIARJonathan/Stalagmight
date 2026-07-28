@@ -1,5 +1,47 @@
 import { invokeIpc } from './ipc';
-import type { DivePlan, DivePlanMeta, DivePlanSnapshot } from '../types/ipc.generated';
+import type {
+  DivePlan,
+  DivePlanMeta,
+  DivePlanSnapshot,
+  DiveProfileRequest,
+} from '../types/ipc.generated';
+
+/**
+ * `DiveProfileRequest` is the plan-input tuple `compute_gas_reach_field` takes, and it is GENERATED
+ * from the Rust struct rather than hand-declared here - a rename on either side would otherwise
+ * compile clean on both and fail only at runtime, as a serde error.
+ *
+ * The backend recomputes the reach field from these rather than accepting the one the UI is
+ * holding: an exported profile is a document the diver may act on later, so it has to be what the
+ * engine says now. Every plan edit nulls the cached field, so a client-supplied one could easily be
+ * a route the diver has already changed.
+ */
+export type { DiveProfileRequest };
+
+/** Wire values the backend's `ProfileFormat::from_wire` accepts. */
+export type DiveProfileFormat = 'subsurface-xml' | 'text';
+
+/** Write the planned dive profile to `path`. Rejects when the plan has no route. */
+export function exportDiveProfile(
+  path: string,
+  format: DiveProfileFormat,
+  request: DiveProfileRequest
+): Promise<void> {
+  return invokeIpc<void>(
+    'export_dive_profile',
+    { path, format, request },
+    { purpose: 'export the planned dive profile', fields: { format } }
+  );
+}
+
+/** Render the profile as text without writing it, for the clipboard. */
+export function renderDiveProfileText(request: DiveProfileRequest): Promise<string> {
+  return invokeIpc<string>(
+    'render_dive_profile_text',
+    { request },
+    { purpose: 'copy the planned dive profile' }
+  );
+}
 
 /**
  * Typed wrappers for the dive-plan (`.plnx`) IPC commands (#244). The backend

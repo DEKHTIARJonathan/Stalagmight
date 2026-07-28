@@ -86,10 +86,10 @@ Ariane has one azimuth field per shot (`Azimut` / `AZ`). Stalagmight duplicates 
 |-----------|------|------|
 | Parser | `src-tauri/src/parsers/tml.rs` | XML parsing, section linearization, unit conversion |
 | Import command | `src-tauri/src/commands/import.rs` | IPC handler, deduplication, undo support |
-| Import dialog | `src/components/ImportDialog/` | UI for section selection and placement |
+| Import dialog | `src/components/Dialogs/TmlImportDialog.tsx` | UI for section selection and placement |
 
 ## Limitations
 
 - Ariane's shape/cross-section geometry (`Shape`/`SH` elements) is not imported
-- The `Inclination` field is parsed but not currently used in survey computation (Stalagmight uses depth-based geometry)
+- The `Inclination` field is parsed and normalised to Stalagmight's positive-down pitch on import (`parsers::tml::inclination_to_pitch`), but station coordinates stay depth-based, so pitch never feeds the geometry - see [docs/inclination.md](inclination.md), which is canonical for the sign convention
 - Only the first GPS coordinate found in the file is used as the project origin

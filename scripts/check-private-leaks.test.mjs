@@ -93,6 +93,21 @@ test('private-doc-or-tool fires on each coordination doc / tool marker', () => {
   }
 });
 
+// --- private-cave-path: must fire / must not ----------------------------------
+
+test('private-cave-path fires on the maintainer cave-repo tree, in every path form', () => {
+  assert.ok(firedIds('cp -r ~/src/cave/data/collab_test_data /tmp/x').has('private-cave-path'));
+  assert.ok(firedIds('checked against /home/user/src/cave/SpeleoDB').has('private-cave-path'));
+  assert.ok(firedIds('PathBuf::from(home).join("src/cave/data/qr")').has('private-cave-path'));
+  assert.ok(firedIds('C:\\dev\\src\\cave\\data').has('private-cave-path'));
+});
+
+test('private-cave-path does NOT fire without the path segment boundary', () => {
+  // `cave` must be a whole path segment: a longer segment or plain prose is fine.
+  assert.equal(firedIds('the src/cavern.ts parser reads src/caves/ fixtures').size, 0);
+  assert.equal(firedIds('this cave survey lives under src/parsers').size, 0);
+});
+
 // --- private-tracker ----------------------------------------------------------
 
 test('private-tracker fires on the Plane references but not bare "plane"', () => {

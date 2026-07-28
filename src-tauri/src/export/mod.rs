@@ -1,10 +1,12 @@
 pub mod csv;
 mod depth_colors;
+pub mod dive_profile;
 pub mod image;
 pub mod json;
 pub mod tml;
 
 pub use csv::*;
+pub use dive_profile::*;
 pub use image::*;
 pub use json::*;
 pub use tml::*;

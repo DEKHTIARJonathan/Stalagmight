@@ -404,6 +404,106 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-readout-avg-depth"]')).toBeVisible();
   });
 
+  test('Profile tab draws the planned dive profile and switches axis (#299)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+
+    // Entering Plan resolves a route, so the chart has something to draw - not the empty pane.
+    const svg = page.locator('[data-testid="plan-profile-svg"]');
+    await expect(svg).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="plan-profile-empty"]')).toHaveCount(0);
+    await expect(svg).toHaveAttribute('data-axis', 'distance');
+
+    // A real polyline, and the turnaround is marked. Asserted on the path DATA, not just presence:
+    // a chart whose projection divided by a zero span would still render an <svg> element, just an
+    // empty or NaN-filled one. (The mock hardcodes station z = 0, so the profile here is flat by
+    // construction - the depth math itself is pinned in the Rust tests.)
+    const d = await page.locator('[data-testid="plan-profile-line"]').getAttribute('d');
+    expect(d).toBeTruthy();
+    expect(d).not.toContain('NaN');
+    expect((d ?? '').match(/[ML]/g)?.length ?? 0).toBeGreaterThan(1);
+    await expect(page.locator('[data-testid="plan-profile-marker-turn"]')).toBeVisible();
+
+    // The axis toggle is a real re-projection, and it is reflected in aria-pressed for a11y.
+    await page.locator('[data-testid="plan-profile-axis-time"]').click();
+    await expect(svg).toHaveAttribute('data-axis', 'time');
+    await expect(page.locator('[data-testid="plan-profile-axis-time"]')).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+    const timePath = await page.locator('[data-testid="plan-profile-line"]').getAttribute('d');
+    expect(timePath).not.toContain('NaN');
+
+    // Switching tabs away and back keeps the chart (the tab state is local + transient).
+    await page.locator('[data-testid="plan-tab-cylinders"]').click();
+    await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+    await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
+  });
+
+  test('Profile exports carry the plan inputs, not a client-held field (#299)', async ({ page }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-profile"]').click();
+    await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible({ timeout: 3000 });
+
+    // Copy renders server-side and lands on the clipboard.
+    await page.context().grantPermissions(['clipboard-read', 'clipboard-write']);
+    const copy = page.locator('[data-testid="plan-profile-copy"]');
+    await expect(copy).toBeEnabled();
+    await copy.click();
+    // What this proves is the WIRING - button to IPC to clipboard - and nothing more. The text
+    // itself comes from the mock, so asserting the disclaimer here would pass even if the real
+    // renderer dropped it; `both_formats_say_this_is_not_a_deco_schedule` (Rust) is that guard.
+    // Asserted on the table header the mock and the renderer both emit.
+    const clipboard = await page.evaluate(() => navigator.clipboard.readText());
+    expect(clipboard).toContain('Dist(m)');
+    // The "Copied" badge self-clears after 2 s, which is INSIDE Playwright's 5 s poll window - a
+    // slow machine could start polling after it has gone and then burn the full timeout. Bound the
+    // wait below the badge's own lifetime so a miss reports promptly instead of flaking late.
+    await expect(copy).toContainText('Copied', { timeout: 1500 });
+
+    // The XML export sends the plan INPUTS - the backend recomputes the reach field from them
+    // rather than trusting whatever the UI is holding, so a request missing them would silently
+    // export a route the diver has already changed. The mock's save dialog returns a path.
+    await page.locator('[data-testid="plan-profile-export-xml"]').click();
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              ((window as unknown as Record<string, unknown>)
+                .__MOCK_DIVE_PROFILE_EXPORTS__ as unknown[] | undefined)?.length ?? 0,
+          ),
+        { timeout: 5000 },
+      )
+      .toBe(1);
+    const sent = await page.evaluate(
+      () =>
+        (
+          (window as unknown as Record<string, unknown>).__MOCK_DIVE_PROFILE_EXPORTS__ as Array<{
+            path: string;
+            format: string;
+            request: Record<string, unknown>;
+          }>
+        )[0],
+    );
+    expect(sent.format).toBe('subsurface-xml');
+    expect(sent.path.endsWith('.xml')).toBe(true);
+    // The whole input tuple, not just the endpoints.
+    expect(Object.keys(sent.request).sort()).toEqual([
+      'cylinders',
+      'diver',
+      'endpoint',
+      'gas_config',
+      'origin',
+      'stage_drop_overrides',
+      'waypoints',
+    ]);
+    expect(Array.isArray(sent.request.cylinders)).toBe(true);
+  });
+
   test('Plan swim speed persists to the saved config @smoke', async ({ page }) => {
     await enterMode(page, 'plan');
     const swim = page.locator('[data-testid="gas-swim-speed-input"]');
@@ -1066,9 +1166,10 @@ test.describe('Gas planning', () => {
       (window as unknown as E2EWindow).__E2E_TEST__?.uiStore.getState().setActiveTool('merge'),
     );
     await expect.poll(() => activeTool(page), { timeout: 2000 }).toBe('select');
-    // Profile tab is a stub.
+    // Profile tab renders the dive-profile chart (#299), not the old stub.
     await page.locator('[data-testid="plan-tab-profile"]').click();
-    await expect(page.locator('[data-testid="plan-profile-stub"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plan-profile"]')).toBeVisible();
+    await expect(page.locator('[data-testid="plan-profile-axis-distance"]')).toBeVisible();
 
     // Export: panel hosts the real export controls (no longer a stub), no gas/plan tables.
     await enterMode(page, 'export');

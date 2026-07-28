@@ -262,6 +262,8 @@ export function GasPlanPanel() {
   // way-point chain itself is unflyable the engine still returns the committed chain so the diver
   // can see where the plan broke, but there is no turnaround, so labelling that partial line
   // "Distance to turnaround" would report a confident number for a dive that cannot be made.
+  // `route` is a list of LEGS (`route_legs` builds it with `windows(2)`), not of stations, so `> 0`
+  // already means "at least one leg" - a degenerate single-station route has zero of them.
   const hasRoute = (reachField?.route.length ?? 0) > 0 && reachField?.final_turn_ref != null;
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;

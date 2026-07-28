@@ -32,11 +32,12 @@ A failure = any one of these breaks:
 
 ```bash
 ./scripts/dev.sh                                   # dev build (handles cleanup)
-cp -r ~/src/cave/data/collab_test_data /tmp/collab_stress   # scratch copy
+cp -r <collab-test-data> /tmp/collab_stress        # scratch copy
 ```
 
-The test data has a real Naharon resurvey `.stalx`, **7 progressive `.tml`
-versions** (a real Ariane edit history), and the source `.dmp`s.
+`<collab-test-data>` is a private, maintainer-held dataset (not in the repo): a
+real Naharon resurvey `.stalx`, **7 progressive `.tml` versions** (a real Ariane
+edit history), and the source `.dmp`s.
 
 Hand-edit the (zipped) sibling `.tml`:
 
@@ -150,7 +151,7 @@ UUID/ID/branch/datum output. Skips silently when the corpus is absent (so CI sta
 green).
 
 ```bash
-COLLAB_CORPUS_DIR=~/src/cave/data/collab_test_data \
+COLLAB_CORPUS_DIR=<collab-test-data> \
   cargo test --manifest-path src-tauri/Cargo.toml reconcile_fuzz::corpus_replay -- --nocapture
 ```
 

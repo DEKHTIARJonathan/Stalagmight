@@ -4,8 +4,8 @@ How the SpeleoDB client (`src-tauri/src/speleodb/`) is tested against a **real**
 SpeleoDB server, and how to design future multi-account / permission /
 collaboration tests against the dev box.
 
-The SpeleoDB server source lives at `~/src/cave/SpeleoDB` - the API contract notes
-below were verified against it, not against the (sometimes stale) GitHub issue text.
+The API contract notes below were verified against a local checkout of the SpeleoDB
+server source, not against the (sometimes stale) GitHub issue text.
 
 ## The dev box
 
@@ -119,7 +119,7 @@ cargo test --manifest-path src-tauri/Cargo.toml --features telemetry \
 
 ## Verified API contract (for writing more tests)
 
-Checked against `~/src/cave/SpeleoDB`; these override the stale issue text:
+Checked against the SpeleoDB server source; these override the stale issue text:
 
 - **Base path `/api/v2/`** (`api_router.py`); v1 is a deprecated alias. v2 responses
   are **bare** JSON (the `DRFWrapResponseMiddleware` only wraps `/api/v1/`).
@@ -178,7 +178,7 @@ that against the live box. Three `#[ignore]` tests live in `speleodb::live_tests
   project (0/0 START) and records that no new render is generated (the D2 path).
 - `live_open1_bare_tml_mime_outcome` - resolves OPEN-1 (below).
 
-Key server facts these depend on (checked against `~/src/cave/SpeleoDB`):
+Key server facts these depend on (checked against the SpeleoDB server source):
 
 - **A 200 upload does NOT prove a render.** `survey_to_geojson` runs best-effort
   *after* the commit; `api/v2/views/file.py` catches `NoKnownAnchorError` /

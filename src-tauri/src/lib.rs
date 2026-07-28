@@ -1407,6 +1407,8 @@ pub fn run() {
             commands::export::export_tml,
             commands::export::export_image,
             commands::export::preview_svg_export,
+            commands::export::export_dive_profile,
+            commands::export::render_dive_profile_text,
             // Collaboration mode
             commands::collab::set_collab_enabled,
             commands::collab::set_collab_enabled_for_path,
