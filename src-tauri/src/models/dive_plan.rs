@@ -14,7 +14,7 @@ use crate::models::{Cylinder, Diver, StationRef};
 /// Payload schema version stamped into every saved snapshot. Bump only on a
 /// breaking change to `DivePlanSnapshot`; additive changes need no bump because
 /// unknown fields are ignored and missing fields default (serde, config-style).
-pub const DIVE_PLAN_SCHEMA_VERSION: u32 = 1;
+pub const DIVE_PLAN_SCHEMA_VERSION: u32 = 2;
 
 /// A missing diver (only reachable from a malformed or truncated blob) defaults to
 /// the canonical 20 L/min rather than a zero RMV the engine would reject.

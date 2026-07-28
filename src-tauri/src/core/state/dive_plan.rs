@@ -113,11 +113,11 @@ fn default_persisted_diver() -> Diver {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedDivePlanSnapshot {
     #[serde(default)]
-    origin: Option<StationKey>,
+    origin: Option<StoredAnchor>,
     #[serde(default)]
-    endpoint: Option<StationKey>,
+    endpoint: Option<StoredAnchor>,
     #[serde(default)]
-    waypoints: Vec<StationKey>,
+    waypoints: Vec<StoredAnchor>,
     #[serde(default = "default_persisted_diver")]
     diver: Diver,
     #[serde(default)]
@@ -125,7 +125,7 @@ struct PersistedDivePlanSnapshot {
     #[serde(default)]
     gas_config: GasConfig,
     #[serde(default)]
-    stage_drop_overrides: Vec<Option<StationKey>>,
+    stage_drop_overrides: Vec<Option<StoredAnchor>>,
     #[serde(default)]
     marked_points: Vec<PersistedMarkedPoint>,
 }
@@ -133,121 +133,196 @@ struct PersistedDivePlanSnapshot {
 /// On-disk form of a [`MarkedPoint`] (#298): the annotated station as a stable anchor.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct PersistedMarkedPoint {
-    station: StationKey,
+    station: StoredAnchor,
     #[serde(default)]
     label: Option<String>,
 }
 
-/// Canonicalize a positional ref to a stable key against `project`. A ref that does not
-/// resolve at save time (already invalid) drops to `None` rather than persisting a
-/// positional value that would silently rebind after an edit.
-fn to_key(project: &Project, r: Option<StationRef>) -> Option<StationKey> {
-    r.and_then(|sr| project.key_for_ref(sr))
+/// A station identified by the shots it SITS BETWEEN, rather than by its position or by which
+/// side of one shot it is on (#24).
+///
+/// This is the sidecar's own storage form. The project's internal cross-references keep using
+/// [`StationKey`] - they are rewritten in place by the edits that move them, which a file
+/// outside the project cannot be.
+///
+/// The point is that a station's neighbours do not care which way you walk the section. Station
+/// `i` sits between `shots[i-1]` and `shots[i]`; reverse the section and it sits between the
+/// same two shots, so the same record still names it. `AfterShot(uuid)` cannot say that: "after"
+/// is defined by traversal order, so a reverse silently slides it onto the neighbouring station
+/// while it carries on resolving.
+///
+/// `a`/`b` are the two neighbours as they stood at save time, `None` for the free end of a
+/// terminal station. They are NOT ordered - resolution derives the side from the current
+/// positions, so it reads the same after a reverse.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+struct PlanAnchor {
+    section_id: crate::models::SectionId,
+    #[serde(default)]
+    a: Option<String>,
+    #[serde(default)]
+    b: Option<String>,
+    /// Fallback only: was this station on the "after `a`" side when it was saved?
+    ///
+    /// Consulted when the pair can no longer place the station on its own - `a`'s partner was
+    /// deleted, or `a` stopped being terminal because the section was extended past it. A
+    /// reverse invalidates this bit, so the residual inaccuracy is "reverse AND then extend or
+    /// delete at that exact end", plus a single-shot section, whose two ends touch the same one
+    /// shot and so are genuinely indistinguishable. Accepted: single-shot sections are
+    /// vanishingly rare and reverses are not routine.
+    #[serde(default)]
+    after_a: bool,
 }
 
-/// Resolve a stored key back to a positional ref; a dangling anchor (its shot deleted)
-/// increments `stale` and yields `None`.
-fn from_key(project: &Project, k: Option<StationKey>, stale: &mut u32) -> Option<StationRef> {
-    let key = k?;
-    let resolved = project.resolve_key(&key);
+impl PlanAnchor {
+    /// Position of a neighbour in the section as it stands now.
+    fn position_of(section: &crate::models::Section, uuid: &Option<String>) -> Option<usize> {
+        let uuid = uuid.as_deref()?;
+        section
+            .shots
+            .iter()
+            .position(|s| s.uuid.as_deref() == Some(uuid))
+    }
+}
+
+/// Describe the station at `r` by its neighbouring shots.
+fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
+    let r = r?;
+    let section = project.get_section(r.section_id)?;
+    let i = r.station_index as usize;
+    if i > section.shots.len() {
+        return None;
+    }
+    // Station `i` is bounded by the shot before it and the shot after it; either is absent at
+    // the ends of the section.
+    let before = i.checked_sub(1).and_then(|p| section.shots.get(p));
+    let after = section.shots.get(i);
+    // A station whose only neighbours have no UUID cannot be described at all - the same
+    // condition under which `key_for_ref` returns None today.
+    if before.is_none() && after.is_none() {
+        return None;
+    }
+    let a = before.and_then(|s| s.uuid.clone());
+    let b = after.and_then(|s| s.uuid.clone());
+    if before.is_some() && a.is_none() {
+        return None;
+    }
+    if after.is_some() && b.is_none() {
+        return None;
+    }
+    Some(StoredAnchor::Pair(PlanAnchor {
+        section_id: r.section_id,
+        a,
+        b,
+        // `a` is the shot BEFORE the station, so the station is on its "after" side.
+        after_a: true,
+    }))
+}
+
+/// Place a stored anchor against the project as it stands now.
+///
+/// Order of preference, most trustworthy first:
+///
+/// 1. Both neighbours still present - take the end of `a` that FACES `b`. Derived from current
+///    positions, so it survives a reverse, and it survives shots being inserted between them
+///    (including a split, which inserts a new head before the original): the station is still
+///    the one on `a`'s `b`-ward side.
+/// 2. One neighbour present and the other recorded as a free end - if that shot is still at the
+///    end of the section, take the free end. Reverse-safe: which end is free is read from the
+///    current order, not the stored one.
+/// 3. Otherwise fall back to `after_a`, which is only wrong if the section was ALSO reversed.
+fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Option<StationRef> {
+    let resolved = resolve_stored(project, anchor);
     if resolved.is_none() {
         *stale += 1;
     }
     resolved
 }
 
-/// Resolve a stored LIST of keys, DROPPING any that no longer anchor (each counted into
+fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> {
+    let section = project.get_section(anchor.section_id)?;
+    let n = section.shots.len();
+    let pa = PlanAnchor::position_of(section, &anchor.a);
+    let pb = PlanAnchor::position_of(section, &anchor.b);
+    let index = match (pa, pb) {
+        // (1) Both present: the station is the end of `a` that faces `b`.
+        (Some(pa), Some(pb)) if pa < pb => pa + 1,
+        (Some(pa), Some(_)) => pa,
+        // (2) One present, the other was a free end at save time and this shot still sits at an
+        //     end of the section. `n > 1` keeps the genuinely ambiguous single-shot section out
+        //     of this arm - there both ends touch the same shot.
+        (Some(p), None) if anchor.b.is_none() && n > 1 && p == 0 => 0,
+        (Some(p), None) if anchor.b.is_none() && n > 1 && p == n - 1 => n,
+        (None, Some(p)) if anchor.a.is_none() && n > 1 && p == 0 => 0,
+        (None, Some(p)) if anchor.a.is_none() && n > 1 && p == n - 1 => n,
+        // (3) Ambiguous - the partner is gone, the section grew past this end, or it is a
+        //     single-shot section. Fall back to the saved side.
+        (Some(p), _) => {
+            if anchor.after_a {
+                p + 1
+            } else {
+                p
+            }
+        }
+        (None, Some(p)) => {
+            if anchor.after_a {
+                p
+            } else {
+                p + 1
+            }
+        }
+        // Neither neighbour survives: nothing left to anchor on.
+        (None, None) => return None,
+    };
+    (index <= n).then(|| StationRef::new(anchor.section_id, index as u32))
+}
+
+/// What a `.plnx` row can hold for one station.
+///
+/// Plans written before #24 store a [`StationKey`] - `{section_id, anchor}`. Those are still
+/// read, and still resolve exactly as they always did (including the reverse blind spot), so
+/// upgrading cannot lose anyone's route. They are rewritten in the pair form the next time the
+/// user saves that plan, which is also when they stop being vulnerable to it.
+///
+/// `Legacy` is listed FIRST deliberately: `StationKey` REQUIRES an `anchor` or `station_index`
+/// field, so only a pre-#24 blob can match it and a pair-form blob falls through. Reversing the
+/// order would make `PlanAnchor` - whose fields all default - swallow legacy rows and quietly
+/// blank every reference in them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(untagged)]
+enum StoredAnchor {
+    Legacy(StationKey),
+    Pair(PlanAnchor),
+}
+
+/// Place a stored station, whichever form it was written in.
+fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef> {
+    match stored {
+        StoredAnchor::Pair(anchor) => resolve_anchor(project, anchor),
+        StoredAnchor::Legacy(key) => project.resolve_key(key),
+    }
+}
+
+/// Resolve a stored anchor; an unplaceable one increments `stale` and yields `None`.
+fn from_anchor_opt(
+    project: &Project,
+    anchor: Option<StoredAnchor>,
+    stale: &mut u32,
+) -> Option<StationRef> {
+    let anchor = anchor?;
+    from_anchor(project, &anchor, stale)
+}
+
+/// Resolve a stored LIST of anchors, DROPPING any that no longer place (each counted into
 /// `stale`). Used for the way points and marked points (#298), where - unlike the single
-/// optional origin/endpoint - there is no "null it out" slot: a dangling entry simply
-/// leaves the list, and the UI warns off `stale_ref_count`. Dropping is also what keeps a
-/// loaded plan safe to compute: the engine treats an unresolvable way point as a hard stall,
-/// so carrying a dead one through would blank the whole field on load.
-fn from_keys(project: &Project, keys: Vec<StationKey>, stale: &mut u32) -> Vec<StationRef> {
-    keys.into_iter()
-        .filter_map(|k| from_key(project, Some(k), stale))
+/// optional origin/endpoint - there is no "null it out" slot: a dangling entry simply leaves the
+/// list, and the UI warns off `stale_ref_count`. Dropping is also what keeps a loaded plan safe
+/// to compute: the engine treats an unresolvable way point as a hard stall, so carrying a dead
+/// one through would blank the whole field on load.
+fn from_anchors(project: &Project, anchors: Vec<StoredAnchor>, stale: &mut u32) -> Vec<StationRef> {
+    anchors
+        .into_iter()
+        .filter_map(|a| from_anchor(project, &a, stale))
         .collect()
-}
-
-/// Mirror one stored key of a section whose numbering was JUST reversed, so it keeps naming
-/// the same PHYSICAL station. `None` when the key belongs to another section, no longer
-/// resolves, or cannot be re-keyed - the caller then leaves it alone.
-///
-/// A `StationKey` survives a reverse in the sense that it still resolves, which is exactly why
-/// this is needed: it resolves to the station NEXT DOOR. Station `i` becomes station `N - i`,
-/// while `AfterShot(u)` follows its record, which moved from position `p` to `N - 1 - p`. So a
-/// key that named station `j` before the reverse resolves to `j' = N - j + 1` after it (and
-/// `SectionStart` stays at 0 while its physical station became `N`). Undoing that:
-///
-/// ```text
-///   j' == 0  ->  N          (SectionStart, whose physical station is now the far end)
-///   j'  > 0  ->  j' - 1
-/// ```
-///
-/// The rule reads the POST-reverse project only. It is NOT an involution: it is the cyclic
-/// shift `j -> (j - 1) mod (N + 1)`, self-inverse only for `N <= 1`. What IS an involution is
-/// the PAIR (reverse, re-key) - which is why the same call fixes up an undo/redo of a reverse
-/// (each pass runs against a freshly re-reversed numbering), and equally why it must never be
-/// replayed twice against ONE project state: two passes over an unchanged numbering walk every
-/// key two stations along. `Command::reversed_section_ids` parity-reduces for exactly that
-/// reason, so the caller can never hand this function the same section twice.
-fn mirror_key_after_reverse(
-    project: &Project,
-    section_id: crate::models::SectionId,
-    key: &StationKey,
-) -> Option<StationKey> {
-    if key.section_id != section_id {
-        return None;
-    }
-    let shot_count = project.get_section(section_id)?.shots.len() as u32;
-    let resolved = project.resolve_key(key)?;
-    let mirrored = if resolved.station_index == 0 {
-        shot_count
-    } else {
-        resolved.station_index - 1
-    };
-    project.key_for_ref(StationRef::new(section_id, mirrored))
-}
-
-/// Apply [`mirror_key_after_reverse`] in place; `true` when the key moved.
-fn mirror_in_place(
-    project: &Project,
-    section_id: crate::models::SectionId,
-    key: &mut StationKey,
-) -> bool {
-    match mirror_key_after_reverse(project, section_id, key) {
-        Some(next) => {
-            *key = next;
-            true
-        }
-        None => false,
-    }
-}
-
-/// Mirror every station key a persisted plan holds in `section_id`. Returns how many moved.
-fn mirror_persisted(
-    project: &Project,
-    section_id: crate::models::SectionId,
-    p: &mut PersistedDivePlanSnapshot,
-) -> u32 {
-    let mut moved = 0u32;
-    let mut apply = |key: &mut StationKey| {
-        if mirror_in_place(project, section_id, key) {
-            moved += 1;
-        }
-    };
-    for key in p.origin.iter_mut().chain(p.endpoint.iter_mut()) {
-        apply(key);
-    }
-    for key in &mut p.waypoints {
-        apply(key);
-    }
-    for key in p.stage_drop_overrides.iter_mut().flatten() {
-        apply(key);
-    }
-    for m in &mut p.marked_points {
-        apply(&mut m.station);
-    }
-    moved
 }
 
 /// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
@@ -425,136 +500,6 @@ impl AppState {
         Ok(())
     }
 
-    /// Re-point every saved plan's station keys after `section_ids` had their numbering
-    /// reversed, so a plan keeps naming the same PHYSICAL stations.
-    ///
-    /// This is the one cross-reference store the reverse cannot reach on its own.
-    /// `Project::for_each_station_ref` enumerates merges, closures, zero datums, station
-    /// offsets and station comments; a plan's origin/endpoint/way points/stage drops/marked
-    /// points live OUTSIDE the project, in the sibling `.plnx`. And unlike every other edit,
-    /// the failure is SILENT: an `AfterShot(uuid)` key still resolves after a reverse, just to
-    /// the station next door, so `stale_ref_count` stays 0 and the panel shows no warning while
-    /// the route - and with it the gas plan - has quietly been re-priced against a different
-    /// pair of stations.
-    ///
-    /// Best-effort by design: a `.plnx` that is missing, foreign, unreadable or unwritable is
-    /// logged and skipped. The survey edit itself has already committed and must not be failed
-    /// or rolled back over a sidecar, and the user's next explicit plan save rewrites the file
-    /// from the live (correct) refs anyway.
-    ///
-    /// `section_ids` is applied IN ORDER and must name each section AT MOST ONCE. The mirror is
-    /// a cyclic shift, not an involution (see [`mirror_key_after_reverse`]), so a repeated id
-    /// would walk every key of that section two stations along a numbering that never moved.
-    /// The producer, `Command::reversed_section_ids`, parity-reduces its `Batch` arm so a
-    /// repeat cannot reach here; never replay an entry.
-    pub(super) fn remap_dive_plans_for_reversed_sections(
-        &self,
-        section_ids: &[crate::models::SectionId],
-    ) {
-        if section_ids.is_empty() {
-            return;
-        }
-        // Resolve the sidecar path BEFORE taking the project lock: `plnx_context` takes it too,
-        // and the mutex is not reentrant.
-        let Ok(ctx) = self.plnx_context() else {
-            return;
-        };
-        if !ctx.path.exists() {
-            return;
-        }
-        match probe_ownership(&ctx) {
-            Ok(Ownership::Owned | Ownership::Fresh) => {}
-            Ok(Ownership::Foreign) => return,
-            Err(e) => {
-                tracing::warn!(
-                    reason = %e,
-                    purpose = "re-point dive plans after a section reverse",
-                    "Could not read the dive-plan file's identity; leaving it untouched"
-                );
-                return;
-            }
-        }
-        let store = match PlnxStore::open(&ctx.path) {
-            Ok(s) => s,
-            Err(e) => {
-                tracing::warn!(
-                    reason = %e,
-                    purpose = "re-point dive plans after a section reverse",
-                    "Could not open the dive-plan file; saved plans may now point at the mirrored stations"
-                );
-                return;
-            }
-        };
-        let rows = match store.list() {
-            Ok(r) => r,
-            Err(e) => {
-                tracing::warn!(
-                    reason = %e,
-                    purpose = "re-point dive plans after a section reverse",
-                    "Could not list saved dive plans"
-                );
-                return;
-            }
-        };
-        let guard = match self.project.lock() {
-            Ok(g) => g,
-            Err(poisoned) => poisoned.into_inner(),
-        };
-        let Some(project) = guard.as_ref() else {
-            return;
-        };
-        for meta in rows {
-            let Ok(Some(row)) = store.get(meta.id) else {
-                continue;
-            };
-            let mut persisted: PersistedDivePlanSnapshot =
-                match serde_json::from_str(&row.snapshot_json) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::warn!(
-                            plan_id = meta.id,
-                            reason = %e,
-                            purpose = "re-point dive plans after a section reverse",
-                            "Could not parse a saved dive plan; leaving it as-is"
-                        );
-                        continue;
-                    }
-                };
-            let moved: u32 = section_ids
-                .iter()
-                .map(|sid| mirror_persisted(project, *sid, &mut persisted))
-                .sum();
-            if moved == 0 {
-                continue;
-            }
-            let Ok(json) = serde_json::to_string(&persisted) else {
-                continue;
-            };
-            // Keep `updated_at`: the plan still names the same physical stations, so this is
-            // not a user edit and must not look like one in the plan list.
-            if let Err(e) = store.update(
-                meta.id,
-                &meta.name,
-                &meta.updated_at,
-                DIVE_PLAN_SCHEMA_VERSION as i32,
-                &json,
-            ) {
-                tracing::warn!(
-                    plan_id = meta.id,
-                    reason = %e,
-                    purpose = "re-point dive plans after a section reverse",
-                    "Could not rewrite a saved dive plan; it now points at the mirrored stations"
-                );
-                continue;
-            }
-            tracing::info!(
-                plan_id = meta.id,
-                moved,
-                "Re-pointed a saved dive plan after a section reverse"
-            );
-        }
-    }
-
     /// Canonicalize an IPC snapshot's positional refs to stable keys against the open
     /// project (for on-disk persistence).
     fn to_persisted(&self, snap: &DivePlanSnapshot) -> Result<PersistedDivePlanSnapshot, String> {
@@ -581,7 +526,7 @@ impl AppState {
             .waypoints
             .iter()
             .map(|w| {
-                to_key(project, Some(*w)).ok_or_else(|| {
+                to_anchor(project, Some(*w)).ok_or_else(|| {
                     "A way point in this plan no longer exists in the survey. Remove it from the \
                      route and save again."
                         .to_string()
@@ -592,7 +537,7 @@ impl AppState {
             .marked_points
             .iter()
             .map(|m| {
-                to_key(project, Some(m.station))
+                to_anchor(project, Some(m.station))
                     .map(|station| PersistedMarkedPoint {
                         station,
                         label: m.label.clone(),
@@ -605,8 +550,8 @@ impl AppState {
             })
             .collect::<Result<Vec<_>, _>>()?;
         Ok(PersistedDivePlanSnapshot {
-            origin: to_key(project, snap.origin),
-            endpoint: to_key(project, snap.endpoint),
+            origin: to_anchor(project, snap.origin),
+            endpoint: to_anchor(project, snap.endpoint),
             waypoints,
             diver: snap.diver.clone(),
             cylinders: snap.cylinders.clone(),
@@ -614,7 +559,7 @@ impl AppState {
             stage_drop_overrides: snap
                 .stage_drop_overrides
                 .iter()
-                .map(|o| to_key(project, *o))
+                .map(|o| to_anchor(project, *o))
                 .collect(),
             marked_points,
         })
@@ -634,14 +579,14 @@ impl AppState {
             return Err("No project open.".to_string());
         };
         let mut stale = 0u32;
-        let origin = from_key(project, p.origin, &mut stale);
-        let endpoint = from_key(project, p.endpoint, &mut stale);
+        let origin = from_anchor_opt(project, p.origin, &mut stale);
+        let endpoint = from_anchor_opt(project, p.endpoint, &mut stale);
         // The caps are re-applied HERE, not only on save: the threat they exist for is a
         // hand-edited `.plnx`, which by definition never crosses the write path. Every way point
         // costs the engine a full extra Dijkstra and every marked point a DOM node plus a station
         // lookup, so an unbounded list from a doctored file would be a compute amplifier on every
         // recompute. Truncating (rather than refusing the load) keeps the rest of the plan usable.
-        let waypoints = from_keys(
+        let waypoints = from_anchors(
             project,
             p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
             &mut stale,
@@ -649,14 +594,14 @@ impl AppState {
         let stage_drop_overrides = p
             .stage_drop_overrides
             .into_iter()
-            .map(|k| from_key(project, k, &mut stale))
+            .map(|k| from_anchor_opt(project, k, &mut stale))
             .collect();
         let marked_points = p
             .marked_points
             .into_iter()
             .take(MAX_MARKED_POINTS)
             .filter_map(|m| {
-                from_key(project, Some(m.station), &mut stale).map(|station| MarkedPoint {
+                from_anchor(project, &m.station, &mut stale).map(|station| MarkedPoint {
                     station,
                     // Same reasoning as the list caps: the save path rejects an over-long label,
                     // but a doctored file bypasses it entirely, so truncate on the way in.
@@ -686,7 +631,7 @@ mod tests {
         reason = "tests build from known-valid literals; a failed unwrap should fail the test"
     )]
     use super::*;
-    use crate::models::{SectionData, ShotData, StationAnchor};
+    use crate::models::{SectionData, ShotData};
     use tempfile::TempDir;
 
     fn make_shot() -> ShotData {
@@ -878,16 +823,22 @@ mod tests {
     }
 
     #[test]
-    fn to_key_uses_stable_anchors_not_positional_index() {
+    fn an_anchor_records_the_shots_a_station_sits_between() {
         let (project, sec) = project_3_shots();
-        // An interior station canonicalizes to AfterShot(uuid) - the stable form - never Index.
-        let key = to_key(&project, Some(StationRef::new(sec, 2))).unwrap();
-        assert!(matches!(key.anchor, StationAnchor::AfterShot(_)));
-        // Station 0 is the section start.
-        let key0 = to_key(&project, Some(StationRef::new(sec, 0))).unwrap();
-        assert!(matches!(key0.anchor, StationAnchor::SectionStart));
-        // A ref into a non-existent section can't be anchored → None (dropped, not positional).
-        assert!(to_key(&project, Some(StationRef::new(sec + 99, 1))).is_none());
+        // An interior station is bounded on both sides.
+        let pair = |r| match to_anchor(&project, Some(r)) {
+            Some(StoredAnchor::Pair(p)) => Some(p),
+            _ => None,
+        };
+        let mid = pair(StationRef::new(sec, 2)).expect("an interior station anchors as a pair");
+        assert!(mid.a.is_some() && mid.b.is_some());
+        // The ends have one neighbour and one free side.
+        let start = pair(StationRef::new(sec, 0)).expect("pair anchor");
+        assert!(start.a.is_none() && start.b.is_some());
+        let end = pair(StationRef::new(sec, 3)).expect("pair anchor");
+        assert!(end.a.is_some() && end.b.is_none());
+        // A ref into a non-existent section cannot be anchored.
+        assert!(to_anchor(&project, Some(StationRef::new(sec + 99, 1))).is_none());
     }
 
     #[test]
@@ -895,13 +846,120 @@ mod tests {
         let (project, sec) = project_3_shots();
         let mut stale = 0;
         for idx in 0..=3 {
-            let key = to_key(&project, Some(StationRef::new(sec, idx)));
+            let anchor = to_anchor(&project, Some(StationRef::new(sec, idx)));
             assert_eq!(
-                from_key(&project, key, &mut stale),
+                from_anchor_opt(&project, anchor, &mut stale),
                 Some(StationRef::new(sec, idx))
             );
         }
         assert_eq!(stale, 0);
+    }
+
+    /// THE point of the pair form (#24): a reverse renumbers every station in the section, and
+    /// every stored reference must come back naming the SAME physical station - because it does
+    /// not name a position or a side, it names the two shots the station sits between, and a
+    /// reverse does not change what a station sits between.
+    #[test]
+    fn every_anchor_survives_a_reverse() {
+        let (mut project, sec) = project_3_shots();
+        let anchors: Vec<_> = (0..=3)
+            .map(|i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap())
+            .collect();
+
+        assert!(project.reverse_section(sec, false));
+
+        let mut stale = 0;
+        // Station i becomes station N - i, and each anchor must follow it there.
+        for (i, anchor) in anchors.iter().enumerate() {
+            assert_eq!(
+                from_anchor(&project, anchor, &mut stale),
+                Some(StationRef::new(sec, 3 - i as u32)),
+                "anchor for station {i} must name the same physical station after the reverse"
+            );
+        }
+        assert_eq!(stale, 0, "nothing dangles - the shots all still exist");
+    }
+
+    /// Extending a passage is routine, and must not disturb a saved route. The far end of the
+    /// section stops being terminal, so this exercises the pair falling back to the saved side.
+    #[test]
+    fn anchors_survive_a_shot_appended_to_the_end() {
+        let (mut project, sec) = project_3_shots();
+        let end = to_anchor(&project, Some(StationRef::new(sec, 3))).unwrap();
+        let mid = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+
+        project.add_shot(sec, make_shot()).unwrap();
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 3)),
+            "the old far end is still station 3; the section simply continues past it"
+        );
+        assert_eq!(
+            from_anchor(&project, &mid, &mut stale),
+            Some(StationRef::new(sec, 2))
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// Splitting a shot inserts a new head before it, so an interior anchor's two neighbours
+    /// stop being adjacent. It must still name the same junction - resolution takes the end of
+    /// one neighbour that FACES the other, which does not require them to touch.
+    #[test]
+    fn an_interior_anchor_survives_a_split_between_its_neighbours() {
+        let (mut project, sec) = project_3_shots();
+        let mid = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+        let shot_id = project.get_section(sec).unwrap().shots[1].id;
+
+        let before = project.get_section(sec).unwrap().shots.len();
+        project.split_shot_at_distance(sec, shot_id, 0.5).unwrap();
+        assert_eq!(project.get_section(sec).unwrap().shots.len(), before + 1);
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &mid, &mut stale),
+            Some(StationRef::new(sec, 3)),
+            "the junction moved one index along because a shot was inserted before it"
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// A single-shot section has two ends and both touch the same one shot, so nothing
+    /// intrinsic tells them apart. The saved side is used, and a reverse flips it - accepted
+    /// and documented, because such sections are vanishingly rare and reverses are not routine.
+    #[test]
+    fn a_single_shot_section_falls_back_to_the_saved_side() {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: vec![make_shot()],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+
+        let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
+        let end = to_anchor(&project, Some(StationRef::new(sec, 1))).unwrap();
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 0))
+        );
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 1))
+        );
+        assert_eq!(stale, 0);
+
+        // The accepted inaccuracy: after a reverse the two ends swap and the saved side cannot
+        // tell. Asserted so the limitation is a decision on record, not a surprise.
+        assert!(project.reverse_section(sec, false));
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 0)),
+            "documented limitation: a one-shot section cannot distinguish its ends"
+        );
     }
 
     #[test]
@@ -910,11 +968,11 @@ mod tests {
         // edit, not silently rebind to whatever is now at the old index.
         let (mut project, sec) = project_3_shots();
         // Station 2 = the boundary after shot index 1.
-        let key = to_key(&project, Some(StationRef::new(sec, 2))).expect("stable key");
+        let key = to_anchor(&project, Some(StationRef::new(sec, 2))).expect("stable anchor");
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
         project.sections[0].shots.remove(0);
         let mut stale = 0;
-        let resolved = from_key(&project, Some(key), &mut stale);
+        let resolved = from_anchor(&project, &key, &mut stale);
         assert_eq!(stale, 0);
         // Follows the station to its new index - NOT the old positional index 2.
         assert_eq!(resolved, Some(StationRef::new(sec, 1)));
@@ -923,10 +981,10 @@ mod tests {
     #[test]
     fn dangling_key_after_a_section_delete_is_nulled_and_counted() {
         let (mut project, sec) = project_3_shots();
-        let key = to_key(&project, Some(StationRef::new(sec, 2))).expect("stable key");
+        let key = to_anchor(&project, Some(StationRef::new(sec, 2))).expect("stable anchor");
         project.sections.clear(); // the whole section (and its anchoring shot) is gone
         let mut stale = 0;
-        assert_eq!(from_key(&project, Some(key), &mut stale), None);
+        assert_eq!(from_anchor(&project, &key, &mut stale), None);
         assert_eq!(stale, 1);
     }
 
@@ -934,7 +992,7 @@ mod tests {
     fn from_key_leaves_none_refs_untouched_and_uncounted() {
         let (project, _sec) = project_3_shots();
         let mut stale = 0;
-        assert_eq!(from_key(&project, None, &mut stale), None);
+        assert_eq!(from_anchor_opt(&project, None, &mut stale), None);
         assert_eq!(stale, 0);
     }
 
@@ -975,21 +1033,29 @@ mod tests {
         *state.project.lock().unwrap() = Some(project);
         let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
 
-        assert_eq!(stale, 0);
+        // The plan's ORIGIN was the section's first station, and deleting the first shot deletes
+        // that station outright - so it is correctly reported gone rather than quietly re-bound.
+        // The old `SectionStart` form could not say that: it resolved to index 0 whatever now
+        // sat there, silently moving the dive's start one station down the passage. Exactly the
+        // rebinding this test's own premise calls out.
+        assert_eq!(stale, 1, "the origin's station no longer exists");
+        assert_eq!(snapshot.origin, None);
         assert_eq!(snapshot.waypoints, vec![StationRef::new(sec, 1)]);
         assert_eq!(snapshot.marked_points.len(), 1);
         assert_eq!(snapshot.marked_points[0].station, StationRef::new(sec, 1));
         assert_eq!(snapshot.marked_points[0].label.as_deref(), Some("photo"));
     }
 
-    /// The reverse renumbers station `i` to `N - i`, but a plan's `AfterShot(uuid)` key
-    /// still RESOLVES afterwards - to the station NEXT DOOR, because the anchoring shot
-    /// travelled with its record. That makes this the one survey edit whose damage is
-    /// silent: `from_key` never increments `stale`, so `stale_ref_count` stays 0 and the
-    /// panel shows no warning while the route (and with it the gas plan) has quietly been
-    /// re-priced against different stations.
+    /// The reverse renumbers every station, and a plan saved beforehand must come back naming
+    /// exactly the stations the user picked (#24).
+    ///
+    /// Under the old `AfterShot(uuid)` form this was the one survey edit whose damage was
+    /// silent: the key still resolved, onto the station next door, so `stale_ref_count` stayed 0
+    /// and nothing warned while the route - and the gas plan derived from it - had been re-priced
+    /// against different stations. An anchor that names the shots a station sits BETWEEN has
+    /// nothing to go wrong: a reverse does not change what a station sits between.
     #[test]
-    fn a_reverse_re_points_a_saved_plan_and_the_mirror_puts_it_back() {
+    fn a_reverse_leaves_a_saved_plan_pointing_at_the_same_stations() {
         let (mut project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
         *state.project.lock().unwrap() = Some(project.clone());
@@ -1000,30 +1066,15 @@ mod tests {
         assert!(project.reverse_section(sec, false));
         *state.project.lock().unwrap() = Some(project);
 
-        // Left alone, every key still resolves - onto the wrong physical station.
-        let (drifted, stale) = state.resolve_persisted(persisted.clone()).unwrap();
-        assert_eq!(
-            stale, 0,
-            "nothing reports stale - that is what makes it silent"
-        );
-        assert_eq!(drifted.origin, Some(StationRef::new(sec, 0)));
-        assert_eq!(drifted.endpoint, Some(StationRef::new(sec, 1)));
-        assert_eq!(drifted.waypoints, vec![StationRef::new(sec, 2)]);
-
-        // Mirrored, each key names the physical station it always did: the entrance
-        // (station 0) is now station 3, the far end is now station 0, and the way
-        // point / marked point moved from 2 to 1.
-        let mut mirrored = persisted;
-        let guard = state.project.lock().unwrap();
-        let moved = mirror_persisted(guard.as_ref().unwrap(), sec, &mut mirrored);
-        drop(guard);
-        assert_eq!(moved, 4, "origin + endpoint + way point + marked point");
-        let (snapshot, stale) = state.resolve_persisted(mirrored).unwrap();
+        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
+        // The plan was saved with origin 0, endpoint 3, way point 2 and a marked point at 2.
+        // Those physical stations are now numbered 3, 0, 1 and 1.
         assert_eq!(snapshot.origin, Some(StationRef::new(sec, 3)));
         assert_eq!(snapshot.endpoint, Some(StationRef::new(sec, 0)));
         assert_eq!(snapshot.waypoints, vec![StationRef::new(sec, 1)]);
         assert_eq!(snapshot.marked_points[0].station, StationRef::new(sec, 1));
+        assert_eq!(snapshot.marked_points[0].label.as_deref(), Some("photo"));
     }
 
     /// End to end through the real `.plnx`: the command path has to reach the sidecar,
@@ -1156,7 +1207,7 @@ mod tests {
         let (project, sec) = project_3_shots();
         let state = AppState::new().unwrap();
         *state.project.lock().unwrap() = Some(project.clone());
-        let key = to_key(&project, Some(StationRef::new(sec, 2))).unwrap();
+        let key = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
 
         let persisted = PersistedDivePlanSnapshot {
             origin: None,
@@ -1207,6 +1258,54 @@ mod tests {
         let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
         assert!(persisted.waypoints.is_empty());
         assert!(persisted.marked_points.is_empty());
+    }
+
+    /// A `.plnx` written before #24 stores `{section_id, anchor}` and must keep working. The
+    /// pair form's fields all default, so without the untagged ordering it would swallow a
+    /// legacy row and silently blank every reference in it - the whole plan, on upgrade.
+    #[test]
+    fn a_legacy_station_key_blob_still_resolves() {
+        let (project, sec) = project_3_shots();
+        let uuid = project.get_section(sec).unwrap().shots[1]
+            .uuid
+            .clone()
+            .unwrap();
+        // Exactly the shape the old writer produced.
+        let json = serde_json::json!({
+            "origin": { "section_id": sec, "anchor": "SectionStart" },
+            "endpoint": { "section_id": sec, "anchor": { "AfterShot": uuid } },
+            "waypoints": [],
+            "diver": { "rmv_l_per_min": 20.0, "label": null },
+            "cylinders": [],
+            "gas_config": serde_json::to_value(GasConfig::default()).unwrap(),
+            "stage_drop_overrides": [],
+            "marked_points": []
+        })
+        .to_string();
+
+        let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
+        assert!(
+            matches!(persisted.origin, Some(StoredAnchor::Legacy(_))),
+            "a legacy row must be recognised as legacy, not silently read as an empty pair"
+        );
+
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+        assert_eq!(stale, 0, "an upgrade must not strand anyone's route");
+        assert_eq!(snapshot.origin, Some(StationRef::new(sec, 0)));
+        assert_eq!(snapshot.endpoint, Some(StationRef::new(sec, 2)));
+    }
+
+    /// A pair-form row must NOT be mistaken for a legacy one.
+    #[test]
+    fn a_pair_anchor_round_trips_through_json() {
+        let (project, sec) = project_3_shots();
+        let anchor = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+        let json = serde_json::to_string(&anchor).unwrap();
+        let back: StoredAnchor = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, anchor);
+        assert!(matches!(back, StoredAnchor::Pair(_)));
     }
 
     #[test]

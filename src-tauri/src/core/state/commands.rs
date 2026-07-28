@@ -722,22 +722,19 @@ impl AppState {
     /// (a forward `ReverseSection`, a batch of them, or an undo/redo of either - all
     /// re-reverse the numbering).
     ///
-    /// Neither fix-up below is its own inverse, so both are driven off the
-    /// PARITY-REDUCED list `Command::reversed_section_ids` returns, and each named
-    /// section is fixed up exactly once. The `.plnx` re-key is the cyclic shift
-    /// `j -> (j - 1) mod (N + 1)` and the warning re-pin rebuilds its map from the
-    /// CURRENT project; what makes undo/redo safe is the intervening re-reverse,
-    /// not any self-inverse property of these calls.
+    /// The warning re-pin is driven off the PARITY-REDUCED list
+    /// `Command::reversed_section_ids` returns, and each named section is fixed up exactly
+    /// once; it rebuilds its map from the CURRENT project, so what makes undo/redo safe is the
+    /// intervening re-reverse, not any self-inverse property of the call.
     ///
-    /// Two things live outside `Project` and so are out of reach of
-    /// `reverse_section`'s own cross-reference rewrite, which walks
-    /// `for_each_station_ref` (merges, closures, zero datums, station offsets,
-    /// station comments):
+    /// `resolved_warnings` rows still keyed by position are out of reach of
+    /// `reverse_section`'s own cross-reference rewrite (which walks `for_each_station_ref`:
+    /// merges, closures, zero datums, station offsets, station comments), because the reverse
+    /// detached their `shot_id` from its record.
     ///
-    /// * the sibling `.plnx`'s saved dive plans, whose station keys still RESOLVE
-    ///   after a reverse - onto the station next door, silently;
-    /// * `resolved_warnings` rows that are still keyed by position, whose `shot_id`
-    ///   the reverse detached from its record.
+    /// The sibling `.plnx` needs nothing here (#24). Its plans identify a station by the shots
+    /// it sits BETWEEN, and a reverse does not change what a station sits between - so there is
+    /// no re-pointing to do, and no window in which the two files could disagree.
     ///
     /// It also reports the sections on the result, each with the shot count now in
     /// force. A reverse keeps every station's world position, so there is nothing
@@ -757,7 +754,6 @@ impl AppState {
         if reversed.is_empty() {
             return result;
         }
-        self.remap_dive_plans_for_reversed_sections(&reversed);
         self.pin_position_keyed_warnings_after_reverse(&reversed);
         // One project lock for the whole list; both fix-ups above take (and
         // release) it themselves, and the mutex is not reentrant.
