@@ -94,6 +94,66 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
 
+  it('raises the file picker when the dump holds more than one openable file (#258)', async () => {
+    // The refusal must NOT come back as `error`: nothing failed, the app simply has
+    // no basis to choose. It reports `ambiguous` so the host clears its busy flag
+    // without toasting a dead end, and the picker is raised from HERE so all three
+    // hosts of this hook get the choice.
+    const candidates = [
+      { entry_path: 'misc/project.stalx', size_bytes: 4096, modified: null, is_canonical: true },
+      { entry_path: 'backup/old.stalx', size_bytes: 2048, modified: null, is_canonical: false },
+    ];
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_open_project') {
+        // The retry carries the chosen entry, and only the retry succeeds - which is
+        // what proves the picker's callback re-invokes the real open rather than
+        // some parallel path.
+        if (args?.entryPath === 'backup/old.stalx')
+          return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'ambiguous' });
+    const picker = useSpeleoStore.getState();
+    expect(picker.dumpPickerOpen).toBe(true);
+    expect(picker.dumpPickerCandidates).toEqual(candidates);
+    expect(picker.dumpPickerKind).toBe('stalx');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+
+    // Answering it opens the chosen file.
+    await useSpeleoStore.getState().resolveDumpPicker('backup/old.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+  });
+
+  it('does not raise the picker when the rejection carries no candidates (#258)', async () => {
+    // The fast-forward verbs produce `Ambiguous` with nothing to act on, because
+    // they have no way to send a choice back. Those must fall through to the
+    // ordinary error path, whose message names the remedy - an empty picker would
+    // be a dead end with extra steps.
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: [],
+        });
+      return Promise.resolve(null);
+    });
+    const outcome = await hook().openRemote(SUMMARY);
+    expect(outcome.status).toBe('error');
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+  });
+
   it('routes an Ariane (.tml-only) project to adopt', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_open_project')
