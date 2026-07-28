@@ -24,26 +24,22 @@ use super::AppState;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 impl AppState {
-    /// Persist the authoritative account email - never the token - so a later
-    /// silent rehydrate can key the keychain lookup by (endpoint, email) after a
-    /// restart. The email is only known once login resolves it, so it can't ride
-    /// the Settings config the way the endpoint does.
+    /// Record whether the OS keychain is believed to hold a token, and FOR WHOM,
+    /// **without touching the persisted account email**.
     ///
-    /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
-    /// Settings field owned by the config-staging flow, persisted only when the
-    /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
-    /// effect meant a "Log in now" test - or any login - leaked the endpoint into
-    /// the saved config behind the dialog's back, surviving a Cancel/Undo, and
-    /// also risked leaking the `DEV_SPELEODB_URL` dev box. Best-effort; a failure
-    /// is logged, not fatal.
-    pub(super) fn speleodb_persist_email(&self, email: &str) {
-        // Login side: genuinely best-effort. A config that could not be written just
-        // means the next launch will not silently rehydrate - the safe direction.
-        let _ = self.speleodb_write_config_email(Some(email.to_owned()));
-    }
-
-    /// Record whether the OS keychain is believed to hold a token for the persisted
-    /// account.
+    /// `held_for` is the whole belief in one value: `Some(account_key(endpoint,
+    /// email))` when an entry is believed to exist for that account, `None` for no
+    /// belief at all. One argument rather than a flag and a name, so no caller can
+    /// hand the two config fields values that disagree - the incoherent pair is not
+    /// expressible from here.
+    ///
+    /// For the two callers that change what we believe and nothing else: the 401
+    /// auto-drop, and the storage-choice move (the login-time prompt's answer and
+    /// the Settings "Try again"). LOGIN and LOGOUT do not come through here - they
+    /// change the account too, and the account and the belief stamped with it have
+    /// to land in ONE save (see [`Self::speleodb_write_account_record`]). Neither
+    /// does the startup write-back, which lowers under a compare-and-set
+    /// ([`Self::speleodb_lower_keychain_belief_after_proof`]).
     ///
     /// This is what lets startup skip the keyring entirely: the next launch reads
     /// this instead of opening the keychain to find out, which on Linux is the
@@ -53,22 +49,23 @@ impl AppState {
     /// thing that tells them apart - so the two meanings have to be the SAME fact,
     /// and they are: what the keyring holds.
     ///
-    /// `has_token` therefore comes from `TokenStore::keychain_has_token`, which
-    /// raises on evidence and falls only on proof (a delete the keyring accepted, a
-    /// probe or read that answered `Ok(None)`). It is NOT "where this session's
-    /// store landed": a login the keyring refuses falls back to memory or plaintext
-    /// WITHOUT removing an entry an earlier login left there, so deriving it that
-    /// way wrote `false` over a live bearer token's only record - after which the
-    /// next launch skipped the keyring and turning the keyring off reported the
+    /// Whether an entry exists therefore comes from `TokenStore::keychain_has_token`,
+    /// which raises on evidence and falls only on proof (a delete the keyring
+    /// accepted, a probe or read that answered `Ok(None)`). It is NOT "where this
+    /// session's store landed": a login the keyring refuses falls back to memory or
+    /// plaintext WITHOUT removing an entry an earlier login left there, so deriving
+    /// it that way wrote `false` over a live bearer token's only record - after which
+    /// the next launch skipped the keyring and turning the keyring off reported the
     /// failed eviction as an empty one.
     ///
-    /// The two DESTRUCTIVE callers pass a literal `false` instead, and are the
-    /// deliberate exceptions, for reasons of their own rather than one shared one:
-    /// logout below also clears the persisted account email, which is the rehydrate
-    /// seed, so nothing is left that could key an entry by it; the 401 auto-drop
-    /// (`AppState::speleodb_forget`) leaves the seed, but the credential it just
-    /// swept is one the server has already rejected - re-finding a dead token costs
-    /// a launch-time unlock prompt and buys nothing. See both call sites.
+    /// The DESTRUCTIVE callers pass `None` instead of what the store believes, and
+    /// are the deliberate exceptions, for reasons of their own rather than one shared
+    /// one. The 401 auto-drop (`AppState::speleodb_forget`) is the one that comes
+    /// through here: it leaves the rehydrate seed, but the credential it just swept is
+    /// one the server has already rejected - re-finding a dead token costs a
+    /// launch-time unlock prompt and buys nothing. Logout's `None` goes through the
+    /// account writer, because it clears the seed in the same breath, so nothing is
+    /// left that could key an entry by it. See both call sites.
     ///
     /// Best-effort like its siblings: a lost write costs at most one prompt, or one
     /// sign-in. Best-effort is not write-ONCE, though - the value is PUT BACK when
@@ -79,22 +76,112 @@ impl AppState {
     /// config file a backup sweep has open) permanent until the next launch. What
     /// that costs here is not a re-asked prompt but a lost RECORD: the launch after
     /// it reads `false` off disk and skips a keyring entry that really exists.
-    pub(super) fn speleodb_persist_keychain_has_token(&self, has_token: bool) {
+    pub(super) fn speleodb_persist_keychain_belief(&self, held_for: Option<String>) {
         let mut config = self
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        if config.speleodb.keychain_has_token == has_token {
+        // Compared as the PAIR, so a belief that keeps its answer but changes whose
+        // account it is about is still a write. Guarding on the bool alone let the
+        // stamp go stale under it, which is the same "no name on it" state this
+        // field exists to end.
+        if config.speleodb.keychain_has_token == held_for.is_some()
+            && config.speleodb.keychain_token_account == held_for
+        {
             return;
         }
-        let previous = config.speleodb.keychain_has_token;
-        config.speleodb.keychain_has_token = has_token;
+        let previous = (
+            config.speleodb.keychain_has_token,
+            config.speleodb.keychain_token_account.clone(),
+        );
+        config.speleodb.keychain_has_token = held_for.is_some();
+        config.speleodb.keychain_token_account.clone_from(&held_for);
         if let Err(e) = config.save() {
-            config.speleodb.keychain_has_token = previous;
+            config.speleodb.keychain_has_token = previous.0;
+            config.speleodb.keychain_token_account = previous.1;
             tracing::warn!(
                 error = %e,
-                has_token,
+                has_token = held_for.is_some(),
                 "failed to persist whether the OS keychain holds a SpeleoDB token"
+            );
+        }
+    }
+
+    /// Lower a belief the startup rehydrate just DISPROVED - but only if the fact it
+    /// read is still the fact on disk, and only if nothing has since raised the
+    /// belief for real.
+    ///
+    /// `read` is the `[speleodb]` config block `AppState::speleodb_ensure_rehydrated`
+    /// took its snapshot from. That snapshot is stale by the time we get here on
+    /// purpose: rehydration releases the SESSION lock before writing, because the
+    /// writer takes the CONFIG lock and the documented order is config-then-session.
+    /// SpeleoDB commands run concurrently on `spawn_blocking` threads and the read
+    /// that produced the proof can sit on a desktop unlock prompt, so "a login
+    /// lands in that window" is not a thought experiment. An unconditional write
+    /// then overwrote a fact newer than the one it was correcting, and the launch
+    /// after that skipped a keyring entry the login had genuinely just put there -
+    /// reporting the user signed out with their token still in the keyring, and a
+    /// `clear` that would no longer sweep it.
+    ///
+    /// So this is a compare-and-set, on TWO things, because either alone has a hole:
+    ///
+    /// - The persisted pair (account, belief) must still be the one we read. This is
+    ///   what catches a login as SOMEBODY ELSE: it writes its own account and its own
+    ///   belief, and lowering over that would strand the new account's entry.
+    /// - The LIVE store must still believe nothing. This is what catches a login as
+    ///   the SAME account, which the value comparison cannot see: it re-asserts the
+    ///   config's own `true`, so a successful keychain write leaves the persisted
+    ///   pair byte-identical to the snapshot while the keyring now really does hold
+    ///   an entry. `TokenStore::keychain_has_token` is the authoritative copy, and it
+    ///   was raised by that write.
+    ///
+    /// The session lock is taken INSIDE the config lock, which is the documented
+    /// order rather than an exception to it, and it is what makes this atomic: a
+    /// login cannot persist anything while we hold the config lock, and cannot raise
+    /// the store's belief while we hold the session lock. A login that finishes
+    /// storing between the two writes back its `true` after ours, which is the
+    /// correct outcome. Safe to nest here specifically because the only caller
+    /// already acquires the session lock twice on its own, so no caller of it can be
+    /// holding one.
+    ///
+    /// A poisoned session lock declines to write. "Could not tell" must not collapse
+    /// into either answer, and of the two available it collapses into keeping the
+    /// belief: one unlock prompt, self-corrected by the read it pays for, against
+    /// stranding a token.
+    pub(super) fn speleodb_lower_keychain_belief_after_proof(
+        &self,
+        read: &crate::config::SpeleoDbConfig,
+    ) {
+        let mut config = self
+            .config
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if config.speleodb.email != read.email
+            || config.speleodb.keychain_has_token != read.keychain_has_token
+            || config.speleodb.keychain_token_account != read.keychain_token_account
+        {
+            return; // written since we read it; that write knows something we don't
+        }
+        let Ok(session) = self.speleodb.lock() else {
+            return;
+        };
+        let raised_since = session.token_store.keychain_has_token();
+        drop(session);
+        if raised_since {
+            return;
+        }
+        config.speleodb.keychain_has_token = false;
+        config.speleodb.keychain_token_account = None;
+        // NOT put back on a failed save, unlike the writer above, and for the reason
+        // that one gives for putting it back: there is no later call in this process
+        // whose guard the leftover value could short-circuit (rehydration runs once).
+        // What it does instead is give the correction a second chance to reach disk
+        // on the next config save of any kind - and the value left standing is one a
+        // keychain read PROVED, so it is honest in memory whatever the file says.
+        if let Err(e) = config.save() {
+            tracing::warn!(
+                error = %e,
+                "failed to persist that the OS keychain no longer holds a SpeleoDB token"
             );
         }
     }
@@ -115,7 +202,7 @@ impl AppState {
     /// brought the launch-time unlock prompt straight back (#259).
     ///
     /// The value is PUT BACK on a failed save, for the reason spelled out on
-    /// [`Self::speleodb_persist_keychain_has_token`]: the early return here compares
+    /// [`Self::speleodb_persist_keychain_belief`]: the early return here compares
     /// against the in-memory value, so a mutation left standing over a file that
     /// never took it turns every later call with the same answer into a no-op. A
     /// keychain that starts working again would then never get its `false` to disk,
@@ -140,22 +227,46 @@ impl AppState {
         }
     }
 
-    /// Write (or clear, with `None`) the persisted account email. `None` is the
-    /// logout half (#270): the email is the *rehydrate seed* - leaving it behind
-    /// means a keychain entry that outlived a failed logout delete is found again
-    /// by `speleodb_ensure_rehydrated` on the next launch, silently
-    /// re-authenticating a user who asked to log out. The endpoint is deliberately
-    /// left alone (a Settings preference, see above).
+    /// Write - in ONE save - the persisted account email and the keyring belief
+    /// stamped with it. The two writes LOGIN and LOGOUT used to make separately.
+    ///
+    /// The email is the *rehydrate seed*: `speleodb_ensure_rehydrated` keys the
+    /// credential lookup by it, which is why `None` (the logout half, #270) matters -
+    /// leaving it behind means a keychain entry that outlived a failed logout delete
+    /// is found again on the next launch, silently re-authenticating a user who asked
+    /// to log out.
+    ///
+    /// The **endpoint is deliberately NOT persisted here**: it is a user-facing
+    /// Settings field owned by the config-staging flow, persisted only when the
+    /// Settings dialog's Save runs (`updateConfig`). Writing it as a login side
+    /// effect meant a "Log in now" test - or any login - leaked the endpoint into the
+    /// saved config behind the dialog's back, surviving a Cancel/Undo, and also
+    /// risked leaking the `DEV_SPELEODB_URL` dev box. `held_for` carries the endpoint
+    /// INSIDE the belief's stamp, which is a different thing: nothing ever reads it
+    /// as an endpoint, it cannot decide where the app connects, and the string is a
+    /// copy of the name the OS keyring already stores the entry under.
+    ///
+    /// ONE save because the pair is only meaningful together. Written apart, a switch
+    /// from account A - whose `true` is on disk - to account B whose keychain write
+    /// fails saved B's email first, and if the belief save then failed, or the
+    /// process exited between the two, disk kept the mismatched `(B, A's true)`
+    /// forever. The next launch read A's evidence as B's, opened the keyring for an
+    /// account it holds nothing for, and warned about a residue nothing keyed by B
+    /// can remove - the exact pair of symptoms the stamp exists to prevent, recreated
+    /// by writing the stamp and the thing it stamps at two different moments.
     ///
     /// Returns the reason the write did not land, so LOGOUT can report it. A
-    /// silently-skipped clear is the whole hazard here: the caller was told logout
-    /// succeeded while the seed that re-authenticates them is still on disk.
+    /// silently-skipped clear is the whole hazard there: the caller was told logout
+    /// succeeded while the seed that re-authenticates them is still on disk. LOGIN
+    /// drops it - genuinely best-effort, since a config that could not be written
+    /// just means the next launch will not silently rehydrate, the safe direction.
     ///
     /// No repeated-value guard, deliberately, so nothing here needs the roll-back its
-    /// two guarded siblings above make on a failed save: every call re-attempts the
+    /// guarded siblings above make on a failed save: every call re-attempts the
     /// write, which is what makes the next one a real retry rather than a no-op. The
-    /// value applied over a file that refused it is the SAFE direction besides - an
-    /// in-memory seed this process will not rehydrate from.
+    /// values applied over a file that refused them are the SAFE direction besides -
+    /// an in-memory seed this process will not rehydrate from, alongside a belief
+    /// this session established first-hand.
     ///
     /// A POISONED config mutex is recovered (`into_inner`) rather than treated as
     /// "cannot write", exactly as the save pipeline does with the project lock
@@ -163,14 +274,20 @@ impl AppState {
     /// thread panicked mid-mutation, which is a reason to be careful with what is
     /// in there - not a reason to leave a live rehydrate seed behind. Skipping was
     /// the unsafe direction.
-    fn speleodb_write_config_email(&self, email: Option<String>) -> Result<(), String> {
+    pub(super) fn speleodb_write_account_record(
+        &self,
+        email: Option<String>,
+        held_for: Option<String>,
+    ) -> Result<(), String> {
         let mut config = self
             .config
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         config.speleodb.email = email;
+        config.speleodb.keychain_has_token = held_for.is_some();
+        config.speleodb.keychain_token_account = held_for;
         config.save().map_err(|e| {
-            tracing::warn!(error = %e, "failed to persist the SpeleoDB account email to config");
+            tracing::warn!(error = %e, "failed to persist the SpeleoDB account record to config");
             e.to_string()
         })
     }
@@ -208,11 +325,13 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .forget_reporting();
-        let seed_cleared = self.speleodb_write_config_email(None);
-        // Whether the sweep reported a failure or not, this session no longer has a
-        // keychain entry it can claim. Recording `false` is the safe direction: a
-        // surviving entry costs a sign-in, never a silent re-authentication.
-        self.speleodb_persist_keychain_has_token(false);
+        // ONE save for both halves. Whether the sweep reported a failure or not, this
+        // session no longer has a keychain entry it can claim, and recording no belief
+        // is the safe direction: a surviving entry costs a sign-in, never a silent
+        // re-authentication. Written WITH the seed clear rather than after it, so a
+        // process that dies mid-logout cannot leave the departed account's `true`
+        // standing over an empty seed - or, worse, over the NEXT account's email.
+        let seed_cleared = self.speleodb_write_account_record(None, None);
         logout_residue_error(cleared.err().map(|e| e.to_string()), seed_cleared.err())
     }
 
@@ -334,7 +453,11 @@ mod tests {
             let squatted = squat_the_config_file();
             let state = AppState::new().expect("state");
 
-            state.speleodb_persist_keychain_has_token(true);
+            let held = Some(crate::speleodb::auth::account_key(
+                "https://sdb.example",
+                "u@x",
+            ));
+            state.speleodb_persist_keychain_belief(held.clone());
             assert!(
                 !state.get_config().speleodb.keychain_has_token,
                 "the value goes back when the save fails, or the retry below is a no-op"
@@ -342,15 +465,17 @@ mod tests {
 
             // The retry, on a machine where whatever blocked the write has cleared.
             std::fs::remove_dir(&squatted).expect("unblock the config file");
-            state.speleodb_persist_keychain_has_token(true);
+            state.speleodb_persist_keychain_belief(held.clone());
 
+            let saved = crate::config::Config::load().expect("read the config back off disk");
             assert!(
-                crate::config::Config::load()
-                    .expect("read the config back off disk")
-                    .speleodb
-                    .keychain_has_token,
+                saved.speleodb.keychain_has_token,
                 "the retry has to re-attempt the disk write, not short-circuit on the \
                  value the failed attempt left behind"
+            );
+            assert_eq!(
+                saved.speleodb.keychain_token_account, held,
+                "and the belief lands with the account it is about, not on its own"
             );
         });
     }

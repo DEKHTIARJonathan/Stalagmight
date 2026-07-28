@@ -5,6 +5,8 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
+use crate::speleodb::auth::account_key;
+
 /// Opt-in fallback tier for the SpeleoDB token when no OS keychain is available.
 ///
 /// [Track C] (#188, D-188): the user-facing surface is **two-valued**
@@ -83,7 +85,8 @@ pub struct SpeleoDbConfig {
     /// turned the OS keychain off, with logout reporting a clean sign-out over it.
     #[serde(default)]
     pub keychain_disabled: bool,
-    /// Whether we believe the OS keychain currently holds a token for `email`.
+    /// Whether we believe the OS keychain currently holds a token for the account
+    /// named by `keychain_token_account`.
     ///
     /// Recorded when a store succeeds and cleared when the entry is deleted (or a
     /// store lands on another tier), so startup can decide whether the keychain is
@@ -93,8 +96,39 @@ pub struct SpeleoDbConfig {
     /// nothing to find. A stale `true` costs one prompt and self-corrects on the
     /// miss; a stale `false` means a rehydratable session is not restored until
     /// the user signs in again, which is the safe direction.
+    ///
+    /// NEVER read on its own - ask [`Self::keychain_belief_applies_to`], which
+    /// pairs it with the stamp below. A belief with nobody's name on it is the
+    /// pre-upgrade shape, not a claim about whoever happens to be signing in.
     #[serde(default)]
     pub keychain_has_token: bool,
+    /// WHOSE entry [`Self::keychain_has_token`] is about: the
+    /// `account_key(endpoint, email)` the credential itself is keyed by.
+    ///
+    /// One field holding the composed key rather than an endpoint and an email
+    /// side by side, and built by the SAME function the keyring entry is named
+    /// with, so the stamp and the credential key cannot disagree - not about
+    /// trailing slashes, not about a `:443`, not about case. Comparing a
+    /// re-composed pair would put a second copy of that normalization here to
+    /// drift from.
+    ///
+    /// The email alone is not enough, which is what this exists to fix. A keyring
+    /// entry is keyed by endpoint AND email, so the same person signing in to a
+    /// second server (a dev box, a migrated host) has a different entry there and
+    /// usually none at all; inheriting the first server's `true` opened the keyring
+    /// for an account it holds nothing for, and - if the keyring was locked, so
+    /// neither the clear nor the store could correct it - re-asserted and persisted
+    /// that `true` under the new server, after which turning the keyring off warned
+    /// about a residue no operation under the new endpoint can find or remove.
+    ///
+    /// `None` means one of two things, and they are told apart by
+    /// `keychain_has_token`. With it `false`, there is simply no belief - the pair
+    /// every writer since the stamp landed writes together. With it `true`, this is
+    /// a config written BEFORE the stamp existed: see
+    /// [`Self::keychain_belief_applies_to`] for how that one is read, and why it is
+    /// not read as "nobody's".
+    #[serde(default)]
+    pub keychain_token_account: Option<String>,
     /// [Track C] (#187/D-B10/D-B19): allow an `http://` endpoint to a PUBLIC host.
     /// Off by default. Relaxes ONLY the public-http scheme block in
     /// `speleodb::tls::enforce` (Track A #187) - NEVER TLS cert verification
@@ -173,6 +207,7 @@ impl Default for SpeleoDbConfig {
             keychain_declined: false,
             keychain_disabled: false,
             keychain_has_token: false,
+            keychain_token_account: None,
             insecure_http: false,
             allow_force_edit: false,
             poll_interval_seconds: default_poll_interval_seconds(),
@@ -181,6 +216,40 @@ impl Default for SpeleoDbConfig {
 }
 
 impl SpeleoDbConfig {
+    /// Whether the recorded keyring belief is a fact about THIS account - the one
+    /// question anybody should ask [`Self::keychain_has_token`].
+    ///
+    /// `endpoint` and `email` must be the pair the credential would be keyed by,
+    /// exactly as they reach `TokenStore` (trimmed; the endpoint resolved through
+    /// login's precedence, so a `DEV_SPELEODB_URL` run asks about the dev box's
+    /// entry and not the production one).
+    ///
+    /// An UNSTAMPED `true` - a config written before the stamp existed - is read
+    /// as a belief about the persisted `email`, which is the strongest scoping
+    /// that config could express: the flag and the email were written by the same
+    /// login. It could instead be read as nobody's and dropped, and that is the
+    /// tempting answer because it is the strict one; it is also the dangerous one.
+    /// The two ways of being wrong are not symmetric. A belief wrongly KEPT costs
+    /// one unlock prompt, and the read it buys is the very thing that disproves it
+    /// (`TokenStore::load`'s `Ok(None)`, written back by
+    /// `speleodb_ensure_rehydrated`), so it self-corrects on the next launch. A
+    /// belief wrongly DROPPED strands a real token: startup stops opening the
+    /// keyring, so the user is signed out with a working credential sitting in it,
+    /// `TokenStore::clear` stops sweeping it, and turning the keyring off reports
+    /// "nothing was in there" over it. Every upgraded user with a keychain login
+    /// would take that on their first launch, to spare the rare same-email-new-
+    /// server switch one prompt. So the unstamped belief is kept, and it is
+    /// self-limiting: the first write from any belief writer stamps it.
+    pub(crate) fn keychain_belief_applies_to(&self, endpoint: &str, email: &str) -> bool {
+        if !self.keychain_has_token {
+            return false;
+        }
+        match self.keychain_token_account.as_deref() {
+            Some(stamp) => stamp == account_key(endpoint, email),
+            None => self.email.as_deref().map(str::trim) == Some(email),
+        }
+    }
+
     /// [Track C] (#188): coerce the `#[serde(other)]` sentinel back to the safe
     /// default, and clamp the poll interval up to the floor. Mirrors
     /// `AppearanceConfig::normalize`; wired into `Config::normalize`.

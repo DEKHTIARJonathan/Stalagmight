@@ -25,7 +25,7 @@
 use super::speleodb::local_dto;
 use super::AppState;
 use crate::config::TokenFallback;
-use crate::speleodb::auth::TokenTier;
+use crate::speleodb::auth::{account_key, TokenTier};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoSessionStatus};
 
 impl AppState {
@@ -180,9 +180,15 @@ impl AppState {
                 // BEFORE the session lock is released, and persisted after: the
                 // config lock is taken inside the writer, and the documented order is
                 // config-then-session.
+                //
+                // Stamped with the account this move was keyed by, so the record can
+                // never be read as one about a different account (or the same address
+                // on a different server) later.
                 let has_token = session.token_store.keychain_has_token();
                 drop(session);
-                self.speleodb_persist_keychain_has_token(has_token);
+                self.speleodb_persist_keychain_belief(
+                    has_token.then(|| account_key(&endpoint, &email)),
+                );
                 Ok(tier)
             }
             // Nothing was settled, by either route, so the live flag goes back the
@@ -385,10 +391,11 @@ mod tests {
     }
 
     /// Tell the live store what a previous launch's successful keychain login
-    /// recorded, exactly as `SpeleoDbSession::rehydrate` mirrors it in from
-    /// `config.speleodb.keychain_has_token`. Both halves are set, because both are
-    /// read: the store's copy answers the sweeps, the config's is what the next
-    /// launch and the Settings keyring switch see.
+    /// recorded, exactly as `SpeleoDbSession::rehydrate` mirrors in the persisted
+    /// belief. Both halves are set, because both are read: the store's copy answers
+    /// the sweeps, the config's is what the next launch and the Settings keyring
+    /// switch see. The persisted half is stamped with the account it is about, the
+    /// way every writer of it stamps it.
     fn a_previous_login_filled_the_keyring(state: &AppState) {
         state
             .speleodb
@@ -396,7 +403,7 @@ mod tests {
             .expect("session")
             .token_store
             .note_keychain_has_token(true);
-        state.speleodb_persist_keychain_has_token(true);
+        state.speleodb_persist_keychain_belief(Some(account_key(EP, EMAIL)));
     }
 
     /// Whether the config still records a keyring entry for this account.

@@ -364,12 +364,19 @@ pub(crate) struct TokenStore {
     /// What keychain access we have already made taught us. See [`KeychainState`].
     keychain_state: KeychainState,
     /// A keychain entry for the persisted account is BELIEVED TO EXIST: mirrored
-    /// from `config.speleodb.keychain_has_token` when the session rehydrates (and
-    /// again at login, which never rehydrates), and set the moment a keychain write
-    /// or read of ours proves an entry is in there.
+    /// from the persisted belief when the session rehydrates (and again at login,
+    /// which never rehydrates), and set the moment a keychain write or read of ours
+    /// proves an entry is in there.
     ///
-    /// This is the AUTHORITATIVE copy, and the config flag is written back FROM it
-    /// ([`Self::keychain_has_token`] is read by `speleodb_persist_keychain_has_token`'s
+    /// The mirror is account-scoped on the way IN: `config.speleodb` records both the
+    /// belief and the `account_key` it is about, and only a belief stamped with the
+    /// account this store is being keyed by reaches this field
+    /// (`SpeleoDbConfig::keychain_belief_applies_to`). This field itself carries no
+    /// account, which is why [`Self::forget_keychain_belief`] exists: the store
+    /// outlives the account it recorded it for.
+    ///
+    /// This is the AUTHORITATIVE copy, and the config belief is written back FROM it
+    /// ([`Self::keychain_has_token`] is read by `speleodb_persist_keychain_belief`'s
     /// callers). It used to be the other way round for the two login-shaped writers,
     /// which recomputed the persisted flag as `tier == TokenTier::Keychain` - "where
     /// THIS store landed", not "what the keyring holds". Those are different
@@ -455,7 +462,8 @@ impl TokenStore {
     }
 
     /// Record the persisted "the keyring holds a token for us" belief (from
-    /// `config.speleodb.keychain_has_token`), which only the config layer has.
+    /// `config.speleodb`, already scoped to this account by the caller), which only
+    /// the config layer has.
     ///
     /// `note_`, not `set_`, for the same reason as [`Self::note_keychain`]: this
     /// takes EVIDENCE, and evidence only accumulates here.
@@ -581,8 +589,9 @@ impl TokenStore {
     /// for what `true` and `false` each mean (positive evidence, and the absence of
     /// it - never "proven empty" unless something proved it).
     ///
-    /// Read by the config layer so `config.speleodb.keychain_has_token` MIRRORS this
-    /// field instead of being recomputed from the tier a store happened to land on.
+    /// Read by the config layer so the persisted belief MIRRORS this field (under the
+    /// account key it is stamped with) instead of being recomputed from the tier a
+    /// store happened to land on.
     /// The two answer different questions, and the second one is not the question
     /// anybody asks the config: a login whose keychain write fails lands on memory
     /// while an entry an EARLIER login put in the keyring is still sitting there, so
@@ -851,7 +860,9 @@ impl TokenStore {
                 // because `AppState::speleodb_ensure_rehydrated` reads this field
                 // back out and persists the drop right after the rehydrate that made
                 // this read; without that, the next launch re-reads the stale `true`
-                // and repeats the prompt.
+                // and repeats the prompt. It persists it as a compare-and-set, so a
+                // login that raised the belief for real between the read and the write
+                // is not overwritten by this proof, which is older than it.
                 Ok(None) => {
                     self.note_keychain(true);
                     self.keychain_has_token = false;

@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::{AppState, VirtualShotMode};
-use crate::speleodb::auth::{SecretStoreError, TokenStore, TokenTier};
+use crate::speleodb::auth::{account_key, SecretStoreError, TokenStore, TokenTier};
 use crate::speleodb::client;
 // [Track A] #186/D-B2: typed Endpoint + map_status + SpeleoDbError→SpeleoErrorDto
 // conversion. [Integration] map_status/SpeleoDbAction also drive Track C's C5
@@ -409,6 +409,11 @@ impl SpeleoDbSession {
     /// Idempotent: marks `rehydrate_attempted` so a failed/empty load doesn't
     /// re-hit the keychain every call, and short-circuits if a session is already
     /// established this run.
+    ///
+    /// `keychain_has_token` is the persisted belief ALREADY SCOPED to
+    /// `(resolved_endpoint, config_email)` by the caller
+    /// (`SpeleoDbConfig::keychain_belief_applies_to`) - never the raw config flag,
+    /// which says nothing about whose entry it is until it is paired with the stamp.
     fn rehydrate(
         &mut self,
         resolved_endpoint: Option<String>,
@@ -583,7 +588,7 @@ impl AppState {
     /// It makes exactly ONE config write, and only in one direction: the
     /// keychain-belief write-back at the end, when the rehydrate read PROVED the
     /// keyring holds nothing for this account. See there for why it cannot be left
-    /// to the live store alone.
+    /// to the live store alone, and why it is a compare-and-set rather than a write.
     pub(super) fn speleodb_ensure_rehydrated(&self) {
         // Cheap idempotency check first: if rehydration already ran (or a session
         // is live), skip the config read entirely.
@@ -596,30 +601,37 @@ impl AppState {
         }
 
         let resolved_endpoint = self.speleodb_resolve_endpoint(None);
-        let (config_email, keychain_declined, keychain_disabled, keychain_has_token) = self
+        // The whole block, not four fields: the write-back below compares what it is
+        // about to overwrite against exactly what was read here, so the snapshot has
+        // to BE the read.
+        let persisted = self
             .config
             .lock()
             .ok()
-            .map_or((None, false, false, false), |c| {
-                (
-                    c.speleodb.email.clone(),
-                    c.speleodb.keychain_declined,
-                    c.speleodb.keychain_disabled,
-                    c.speleodb.keychain_has_token,
-                )
-            });
+            .map_or_else(Default::default, |c| c.speleodb.clone());
+        // Whether the recorded belief is a fact about the account this rehydrate is
+        // going to key the keychain read by - the endpoint as well as the email, since
+        // that is what the entry is keyed by. Signing in to a second server with the
+        // same address used to inherit the first server's record here.
+        let believed = match (resolved_endpoint.as_deref(), persisted.email.as_deref()) {
+            (Some(endpoint), Some(email)) => {
+                persisted.keychain_belief_applies_to(endpoint.trim(), email.trim())
+            }
+            // No account to key an entry by, so nothing recorded can be about one.
+            _ => false,
+        };
 
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
         session.rehydrate(
             resolved_endpoint,
-            config_email,
-            keychain_declined,
-            keychain_disabled,
-            keychain_has_token,
+            persisted.email.clone(),
+            persisted.keychain_declined,
+            persisted.keychain_disabled,
+            believed,
         );
-        let believed = session.token_store.keychain_has_token();
+        let disproved = !session.token_store.keychain_has_token();
         // Released before the write-back: the writer takes the config lock, and the
         // documented order is config-then-session.
         drop(session);
@@ -638,11 +650,14 @@ impl AppState {
         // is the one place that already holds both halves: it read the persisted
         // belief to hand to `rehydrate`, and it owns the lock order.
         //
-        // ONLY a lowering, and only from a value actually read off the config. A
-        // failed config read hands `false` down, and re-persisting that would record
-        // a removal nothing observed - the exact mistake the flag was fixed for.
-        if keychain_has_token && !believed {
-            self.speleodb_persist_keychain_has_token(false);
+        // ONLY a lowering, and only from a belief actually read off the config and
+        // found to be about THIS account. A failed config read hands `false` down, and
+        // re-persisting that would record a removal nothing observed - the exact
+        // mistake the flag was fixed for. And only under the compare-and-set the
+        // writer makes against `persisted`: the lock was released above, so a login
+        // can have landed a NEWER fact in between.
+        if believed && disproved {
+            self.speleodb_lower_keychain_belief_after_proof(&persisted);
         }
     }
 
@@ -1033,15 +1048,15 @@ impl AppState {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.forget();
         }
-        // A literal `false`, not the token store's belief, and one of the two places
-        // that is deliberate (see `speleodb_persist_keychain_has_token`). The sweep
+        // No belief at all, not the token store's, and one of the two places that is
+        // deliberate (see `speleodb_persist_keychain_belief`). The sweep
         // above may well have failed against a locked keyring, so an entry can
         // survive - but the token in it is the one the server just rejected, and the
         // seed that would find it is still on disk. Opening the keyring on the next
         // launch to recover a dead token is a desktop unlock prompt spent on nothing;
         // the next successful login overwrites the entry anyway (this path sets no
         // refusal flag, so `store` still reaches the keyring).
-        self.speleodb_persist_keychain_has_token(false);
+        self.speleodb_persist_keychain_belief(None);
     }
 
     /// Disambiguate a resource/write **403** (D-B4 + the live-verified DRF 401→403
@@ -1083,10 +1098,10 @@ impl AppState {
         whoami_indicates_dead_token(&client::fetch_user_email(&endpoint, &token, insecure_http))
     }
 
-    // The account-email persistence pair (`speleodb_persist_email` /
-    // `speleodb_write_config_email`) lives in `speleodb_logout`: the email is the
-    // rehydrate SEED, so clearing it is a logout obligation and its failure is part
-    // of logout's report. `speleodb_login` only writes it.
+    // The account-record writer (`speleodb_write_account_record` - the email and the
+    // keyring belief stamped with it, in one save) lives in `speleodb_logout`: the
+    // email is the rehydrate SEED, so clearing it is a logout obligation and its
+    // failure is part of logout's report. `speleodb_login` only writes it.
 
     /// Log in: exchange email+password for a token (or accept a pasted `token`),
     /// store it backend-side, and record the session. The token never crosses
@@ -1153,14 +1168,12 @@ impl AppState {
                     c.speleodb.keychain_declined,
                     c.speleodb.keychain_disabled,
                     c.speleodb.token_fallback == crate::config::TokenFallback::Plaintext,
-                    // Scoped to the account the flag is ABOUT. `keychain_has_token`
-                    // and `speleodb.email` are written by the same login, so the
-                    // email is what the belief is stamped with; a keyring entry is
-                    // keyed by (endpoint, email), so a different account's entry is
-                    // not even reachable under this one's key. See the re-assert
-                    // below for what carrying it across would claim.
-                    c.speleodb.keychain_has_token
-                        && c.speleodb.email.as_deref() == Some(email.as_str()),
+                    // Scoped to the account the belief is ABOUT - by the same
+                    // (endpoint, email) the keyring entry itself is keyed by, so a
+                    // different account's entry, on this server or another one, is not
+                    // even reachable under this login's key. See the re-assert below
+                    // for what carrying it across would claim.
+                    c.speleodb.keychain_belief_applies_to(&endpoint, &email),
                 )
             })
             .unwrap_or((false, false, false, false));
@@ -1194,15 +1207,16 @@ impl AppState {
             // only ever raised.
             //
             // Evidence about THIS account only - see where `config_has_token` is
-            // read. Signing in as somebody else used to import the previous account's
-            // record into a store about to be keyed by the new one: the write below
-            // fails against a locked keyring without lowering it, and the new email
-            // and the old account's `true` were then persisted together, so every
-            // later launch opened the keyring for the new account and the keyring
-            // switch reported a residue for a credential that is not theirs and that
-            // no operation keyed by them can find or remove. Worse on the warm path:
-            // the `switching` sweep above may have just PROVED the old entry gone,
-            // and re-asserting raised the belief back over that proof.
+            // read. Signing in as somebody else, or as the same person on a second
+            // server, used to import the previous account's record into a store about
+            // to be keyed by the new one: the write below fails against a locked
+            // keyring without lowering it, and the new email and the old account's
+            // `true` were then persisted together, so every later launch opened the
+            // keyring for the new account and the keyring switch reported a residue
+            // for a credential that is not theirs and that no operation keyed by them
+            // can find or remove. Worse on the warm path: the `switching` sweep above
+            // may have just PROVED the old entry gone, and re-asserting raised the
+            // belief back over that proof.
             //
             // What this does NOT do is rescue the old account's entry. Once the email
             // on disk moves, nothing can key an operation by the old one anyway (the
@@ -1227,7 +1241,33 @@ impl AppState {
             )
         };
 
-        self.speleodb_persist_email(&email);
+        // ONE save for the account and what the keyring is believed to hold FOR it.
+        //
+        // The belief is read off the token store, NOT computed as `tier ==
+        // TokenTier::Keychain`. The landing tier answers "where did this login's key
+        // go", which is a different question and the wrong one: when an earlier login
+        // stored to the keyring and the keyring is merely LOCKED today, this login
+        // falls back to memory or plaintext WITHOUT removing that entry, so recording
+        // "nothing" here erased the only record that it exists. What that record buys
+        // is the discrimination in `TokenStore::unreadable_keychain_may_hold` - a
+        // locked keyring and a box with no secret service both fail every op and both
+        // record `Unavailable` - so losing it meant the next launch skipped the
+        // keyring, and turning the keyring off classified the failed eviction and its
+        // failed probe as "nothing was in there" and reported success over a live
+        // bearer token. The store's own field raises on a keychain write/read that
+        // proved an entry is there and falls only on a delete or probe that proved one
+        // is not, which is exactly the rule this needs. No belief here therefore still
+        // means the keychain-less box (nothing ever landed) and still keeps its
+        // startup skip.
+        //
+        // Stamped with the SAME `account_key` the entry is stored under, and written
+        // in the same save as the email it is about: written apart, a crash - or just
+        // a failed second save - left this account's email standing over the previous
+        // account's `true`, which the next launch read as this one's.
+        let _ = self.speleodb_write_account_record(
+            Some(email.clone()),
+            has_token.then(|| account_key(&endpoint, &email)),
+        );
         // Clear the persisted refusal ONLY once the keychain has actually taken the
         // key. The in-session flag above lets this login retry a keychain the user
         // previously refused, but writing `false` to disk unconditionally REVOKED
@@ -1240,26 +1280,6 @@ impl AppState {
         if tier == TokenTier::Keychain {
             self.speleodb_persist_keychain_declined(false);
         }
-        // Record what the KEYRING is believed to hold, so the next launch can decide
-        // whether it is worth opening without opening it.
-        //
-        // Read off the token store, NOT computed as `tier == TokenTier::Keychain`.
-        // The landing tier answers "where did this login's key go", which is a
-        // different question and the wrong one: when an earlier login stored to the
-        // keyring and the keyring is merely LOCKED today, this login falls back to
-        // memory or plaintext WITHOUT removing that entry, so writing `false` here
-        // erased the only record that it exists. What that record buys is the
-        // discrimination in `TokenStore::unreadable_keychain_may_hold` - a locked
-        // keyring and a box with no secret service both fail every op and both record
-        // `Unavailable` - so losing it meant the next launch skipped the keyring, and
-        // turning the keyring off classified the failed eviction and its failed probe
-        // as "nothing was in there" and reported success over a live bearer token.
-        //
-        // The store's own field raises on a keychain write/read that proved an entry
-        // is there and falls only on a delete or probe that proved one is not, which
-        // is exactly the rule this flag needs. `false` here therefore still means the
-        // keychain-less box (nothing ever landed) and still keeps its startup skip.
-        self.speleodb_persist_keychain_has_token(has_token);
 
         let keychain = KeychainReport::from(keychain_state);
         Ok(SpeleoLoginResult {
@@ -3765,7 +3785,7 @@ mod tests {
     use crate::core::state::speleodb_cache::preserved_display_settings;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
-    use crate::speleodb::auth::{InMemoryStore, SecretStore, TokenStore};
+    use crate::speleodb::auth::{account_key, InMemoryStore, SecretStore, TokenStore};
     use crate::speleodb::{
         DoneResult, KeychainReport, PushResult, RemoteState, SpeleoDbError, TransportCause,
     };
@@ -6783,7 +6803,9 @@ mod tests {
         // surviving keychain entry silently re-authenticate on the next launch.
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
-            state.speleodb_persist_email("u@x");
+            state
+                .speleodb_write_account_record(Some("u@x".to_owned()), None)
+                .expect("seed the persisted account");
             *state.speleodb.lock().expect("session lock") =
                 authed_session_with(Box::new(InMemoryStore::new()));
 
@@ -6804,7 +6826,9 @@ mod tests {
         // user logged in.
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
-            state.speleodb_persist_email("u@x");
+            state
+                .speleodb_write_account_record(Some("u@x".to_owned()), None)
+                .expect("seed the persisted account");
             *state.speleodb.lock().expect("session lock") =
                 authed_session_with(Box::new(FailingDeleteStore::new()));
 
@@ -6848,7 +6872,9 @@ mod tests {
         // pipeline does with the project lock.
         crate::test_helpers::with_isolated_config(|| {
             let state = AppState::new().expect("state");
-            state.speleodb_persist_email("u@x");
+            state
+                .speleodb_write_account_record(Some("u@x".to_owned()), None)
+                .expect("seed the persisted account");
             *state.speleodb.lock().expect("session lock") =
                 authed_session_with(Box::new(InMemoryStore::new()));
 
@@ -6977,10 +7003,16 @@ mod tests {
                 // here or the restart below has no account key to evict by.
                 let mut config = state.config.lock().expect("config lock");
                 config.speleodb.endpoint = Some(base.clone());
-                config.speleodb.email = Some("u@x".to_owned());
-                config.speleodb.keychain_has_token = true;
-                config.save().expect("seed the previous launch's config");
+                config.save().expect("seed the previous launch's endpoint");
             }
+            // The account and the belief stamped with it, through the writer that
+            // login uses.
+            state
+                .speleodb_write_account_record(
+                    Some("u@x".to_owned()),
+                    Some(account_key(&base, "u@x")),
+                )
+                .expect("seed the previous launch's record");
             lock_the_keyring(&state);
             // Today's startup: the rehydrate read fails, recording `Unavailable` - the
             // verdict a keychain-less box records too.
@@ -7051,10 +7083,14 @@ mod tests {
                 // and an account to key the startup read by.
                 let mut config = state.config.lock().expect("config lock");
                 config.speleodb.endpoint = Some("https://sdb.example".to_owned());
-                config.speleodb.email = Some("u@x".to_owned());
-                config.speleodb.keychain_has_token = true;
-                config.save().expect("seed the previous launch's config");
+                config.save().expect("seed the previous launch's endpoint");
             }
+            state
+                .speleodb_write_account_record(
+                    Some("u@x".to_owned()),
+                    Some(account_key("https://sdb.example", "u@x")),
+                )
+                .expect("seed the previous launch's record");
             empty_the_keyring(&state);
 
             // The startup rehydrate: no network, and the keyring answers empty.
@@ -7106,10 +7142,14 @@ mod tests {
                 // config records it.
                 let mut config = state.config.lock().expect("config lock");
                 config.speleodb.endpoint = Some(base.clone());
-                config.speleodb.email = Some("old@x".to_owned());
-                config.speleodb.keychain_has_token = true;
-                config.save().expect("seed the previous account's config");
+                config.save().expect("seed the previous account's endpoint");
             }
+            state
+                .speleodb_write_account_record(
+                    Some("old@x".to_owned()),
+                    Some(account_key(&base, "old@x")),
+                )
+                .expect("seed the previous account's record");
             lock_the_keyring(&state);
             // Today's startup, as the previous account: the read fails, so the belief
             // it mirrored in stands - about `old@x`.
@@ -7149,6 +7189,331 @@ mod tests {
                 report.keychain_residue, None,
                 "warning this account about a credential of somebody else's - one its \
                  own eviction could never have removed - is the false alarm"
+            );
+        });
+    }
+
+    #[test]
+    fn the_same_address_on_a_second_server_does_not_inherit_the_first_ones_record() {
+        // The account switch nobody thinks of as one: the SAME person signing in to a
+        // second server (a dev box, a migrated host, a club's own instance). A keyring
+        // entry is keyed by `account_key(endpoint, email)`, so the first server's entry
+        // is not reachable under the second's key and there is usually none there at
+        // all - but the recorded belief used to be scoped by the EMAIL alone, so it was
+        // inherited whole.
+        //
+        // With the keyring locked during the switch - the case where it matters,
+        // because then nothing can correct it - the clear and the store both fail, so
+        // the first server's `true` was re-asserted and persisted under the second
+        // server's account. Every later launch opened the keyring for an entry that is
+        // not there, and turning the keyring off warned about a residue no operation
+        // keyed by the new endpoint can find or remove.
+        crate::test_helpers::with_isolated_config(|| {
+            const FIRST: &str = "https://sdb.example";
+            let (second, _listener) = always_answering_stub(r#"{"email":"u@x"}"#);
+            let state = AppState::new().expect("state");
+            {
+                // The FIRST server is the persisted Settings endpoint, so the startup
+                // below keys by it.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some(FIRST.to_owned());
+                config.save().expect("seed the previous launch's endpoint");
+            }
+            // And what the login on that server left: the account, and the belief
+            // stamped with the key its entry is stored under.
+            state
+                .speleodb_write_account_record(
+                    Some("u@x".to_owned()),
+                    Some(account_key(FIRST, "u@x")),
+                )
+                .expect("seed the first server's record");
+            lock_the_keyring(&state);
+            // Today's startup, still pointed at the first server: the read fails, so
+            // the belief it mirrored in stands - about the entry on THAT server.
+            state.speleodb_session_status().expect("status");
+
+            // The same person, signing in to the second server.
+            let result = state
+                .speleodb_login(Some(second), None, None, Some("tok-2".to_owned()))
+                .expect("the paste login succeeds; only the keychain write fails");
+
+            assert_eq!(
+                result.storage,
+                crate::speleodb::TokenStorage::Memory,
+                "the locked keyring refused the write, so the key is session-only"
+            );
+            assert_eq!(
+                state.get_config().speleodb.email.as_deref(),
+                Some("u@x"),
+                "premise: the address is the same one - the EMAIL alone cannot tell \
+                 these two accounts apart"
+            );
+            assert!(
+                !state.get_config().speleodb.keychain_has_token,
+                "and what the first server's keyring holds is not a record about the \
+                 second one - the two are keyed apart by endpoint as well as email"
+            );
+
+            // The next launch, on the same keyring that still will not answer.
+            let restarted = AppState::new().expect("restarted state");
+            lock_the_keyring(&restarted);
+            let mut settings = restarted.get_config();
+            settings.speleodb.keychain_disabled = true;
+            let report = restarted
+                .update_config(settings)
+                .expect("the settings still save");
+
+            assert_eq!(
+                report.keychain_residue, None,
+                "warning about a credential on another server - one this account's own \
+                 eviction could never have removed - is the false alarm"
+            );
+        });
+    }
+
+    #[test]
+    fn a_belief_written_before_the_stamp_existed_is_kept_for_the_account_it_names() {
+        // The upgrade path. Every config written before the belief carried an account
+        // key has the flag and no stamp, and the reading rule for that pair decides
+        // what happens on the first launch after the update.
+        //
+        // It is read as a belief about the persisted email, which is the strongest
+        // scoping that config could express - the flag and the email were written by
+        // the same login. Reading it as nobody's would be the strict answer and the
+        // dangerous one: it would strand a real token on every upgraded user with a
+        // keychain login (startup stops opening the keyring, `clear` stops sweeping it,
+        // and turning the keyring off reports "nothing was in there" over it) to spare
+        // the rare same-address-second-server case one unlock prompt. Being wrong the
+        // other way costs that one prompt, and the read it pays for is what disproves
+        // the belief and writes the correction back.
+        crate::test_helpers::with_isolated_config(|| {
+            const EP: &str = "https://sdb.example";
+            let state = AppState::new().expect("state");
+            {
+                // A config from before the stamp: the flag, the account email, and
+                // nothing naming the two together.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some(EP.to_owned());
+                config.speleodb.email = Some("u@x".to_owned());
+                config.speleodb.keychain_has_token = true;
+                assert_eq!(config.speleodb.keychain_token_account, None);
+                config.save().expect("seed the pre-upgrade config");
+            }
+            lock_the_keyring(&state);
+            state.speleodb_session_status().expect("status");
+
+            assert!(
+                state
+                    .speleodb
+                    .lock()
+                    .expect("session lock")
+                    .token_store
+                    .keychain_has_token(),
+                "the unstamped belief still names this account, so it is mirrored in - \
+                 dropping it here is what strands the token on the upgrade launch"
+            );
+            let mut settings = state.get_config();
+            settings.speleodb.keychain_disabled = true;
+            let report = state.update_config(settings).expect("the settings save");
+            assert!(
+                report.keychain_residue.is_some(),
+                "and the user is still warned about the entry the locked keyring would \
+                 not give up, which is the whole point of keeping it"
+            );
+
+            // Kept for the account it names, and only that one.
+            let pre_upgrade = crate::config::SpeleoDbConfig {
+                email: Some("u@x".to_owned()),
+                keychain_has_token: true,
+                keychain_token_account: None,
+                ..Default::default()
+            };
+            assert!(pre_upgrade.keychain_belief_applies_to(EP, "u@x"));
+            assert!(
+                !pre_upgrade.keychain_belief_applies_to(EP, "someone@else"),
+                "an unstamped belief is still scoped - it is the endpoint it cannot \
+                 speak for, not the account entirely"
+            );
+        });
+    }
+
+    #[test]
+    fn a_newer_logins_record_survives_the_rehydrate_write_back() {
+        // DO NOT REGRESS. `speleodb_ensure_rehydrated` releases the SESSION lock before
+        // it writes the proof back, deliberately: the writer takes the CONFIG lock and
+        // the documented order is config-then-session. SpeleoDB commands run
+        // concurrently on `spawn_blocking` threads, and the keychain read that produced
+        // the proof can sit on a desktop unlock prompt for as long as the user leaves
+        // it there, so a whole login fits in that window.
+        //
+        // Writing unconditionally then overwrote a fact newer than the one being
+        // corrected, and the launch after that skipped a keyring entry the login had
+        // genuinely just put there: signed out, with the token still in the keyring and
+        // a `clear` that would no longer sweep it.
+        //
+        // The window is driven DIRECTLY here rather than raced: the interleaving needs
+        // the login to land between the session-lock release and the config write, and
+        // there is no hook to hold it there, so a genuine thread would be timing-
+        // dependent. What is exercised is the compare-and-set itself, with the config
+        // and the live store in exactly the state that login would have left them.
+        crate::test_helpers::with_isolated_config(|| {
+            const EP: &str = "https://sdb.example";
+            let state = AppState::new().expect("state");
+            state
+                .speleodb_write_account_record(Some("a@x".to_owned()), Some(account_key(EP, "a@x")))
+                .expect("what the previous launch recorded");
+            // The snapshot the rehydrate read, and the proof it got back: the keyring
+            // answered `Ok(None)` for a@x, so the live store lowered its belief and the
+            // write-back is armed.
+            let read = state.get_config().speleodb;
+            empty_the_keyring(&state);
+
+            // The login that lands in the window - as SOMEBODY ELSE, over a keyring
+            // that takes the key: it records its own account and its own belief. The
+            // live store is left believing nothing on purpose, which is the harder
+            // half: `SpeleoDbSession::forget_reporting` drops the store's belief the
+            // moment an account leaves the session, so between one login and the next
+            // account switch the persisted record and the live store genuinely
+            // disagree. What has to hold this write back there is the persisted pair,
+            // not the store.
+            state
+                .speleodb_write_account_record(Some("b@x".to_owned()), Some(account_key(EP, "b@x")))
+                .expect("the newer login's record");
+
+            state.speleodb_lower_keychain_belief_after_proof(&read);
+
+            let after = state.get_config().speleodb;
+            assert_eq!(
+                after.email.as_deref(),
+                Some("b@x"),
+                "premise: the newer login is the one on disk"
+            );
+            assert!(
+                after.keychain_has_token,
+                "a proof about the PREVIOUS account must not lower a belief the newer \
+                 login raised - the next launch would skip the entry it just stored"
+            );
+            assert_eq!(
+                after.keychain_token_account,
+                Some(account_key(EP, "b@x")),
+                "and the record left standing is the newer login's, whole"
+            );
+        });
+    }
+
+    #[test]
+    fn a_relogin_that_refilled_the_keyring_survives_the_rehydrate_write_back() {
+        // The half of that window a value comparison cannot see. When the login in the
+        // window is the SAME account, it re-asserts the config's own belief, so a
+        // successful keychain write leaves the persisted record byte-identical to the
+        // snapshot the rehydrate read - while the keyring now really does hold an entry
+        // that was not there when the read proved it absent.
+        //
+        // `TokenStore::keychain_has_token` is the authoritative copy and that write
+        // raised it, so the write-back asks it before lowering. Driven directly for the
+        // reason the sibling test above gives.
+        crate::test_helpers::with_isolated_config(|| {
+            const EP: &str = "https://sdb.example";
+            let state = AppState::new().expect("state");
+            state
+                .speleodb_write_account_record(Some("a@x".to_owned()), Some(account_key(EP, "a@x")))
+                .expect("what the previous launch recorded");
+            let read = state.get_config().speleodb;
+            empty_the_keyring(&state);
+
+            // The same account, signing in again over a keyring that takes the key.
+            // Nothing about the persisted record changes; the keyring's contents do.
+            state
+                .speleodb
+                .lock()
+                .expect("session lock")
+                .token_store
+                .note_keychain_has_token(true);
+            assert_eq!(
+                state.get_config().speleodb.keychain_token_account,
+                read.keychain_token_account,
+                "premise: the persisted record is untouched, so comparing it to the \
+                 snapshot cannot tell that anything happened"
+            );
+
+            state.speleodb_lower_keychain_belief_after_proof(&read);
+
+            assert!(
+                state.get_config().speleodb.keychain_has_token,
+                "the keyring holds an entry again, and a proof that predates it must \
+                 not be written over the login that put it there"
+            );
+        });
+    }
+
+    #[test]
+    fn the_account_and_the_belief_stamped_with_it_land_in_one_save() {
+        // A login writes two facts that are only meaningful together: WHO is signed in,
+        // and what the keyring is believed to hold FOR them. Written as two saves, the
+        // email landed first, and a belief save that then failed - or a process that
+        // exited between them - left the new account's email standing over the previous
+        // account's `true`. Nothing ever repairs that pair: the next launch reads the
+        // old account's evidence as the new one's, opens the keyring for an entry that
+        // is not there, and warns about a residue nothing keyed by them can remove.
+        //
+        // Failure is injected by squatting the config FILE's path with a DIRECTORY, so
+        // no save can land however it is spelled. The pair the process is left running
+        // on is what this asserts: with one save it is coherent whether the save landed
+        // or not; with two, the half that succeeded (or the half that rolled back)
+        // leaves them describing different accounts.
+        crate::test_helpers::with_isolated_config(|| {
+            let squatted = crate::test_helpers::config_path_override()
+                .expect("the override is active")
+                .join("config.toml");
+            std::fs::create_dir_all(&squatted).expect("squat the config file path");
+
+            let (base, _listener) = always_answering_stub(r#"{"email":"new@x"}"#);
+            let state = AppState::new().expect("state");
+            {
+                // The previous account's record, seeded coherently by hand because the
+                // squat is already in place and no writer can reach the disk.
+                let mut config = state.config.lock().expect("config lock");
+                config.speleodb.endpoint = Some(base.clone());
+                config.speleodb.email = Some("old@x".to_owned());
+                config.speleodb.keychain_has_token = true;
+                config.speleodb.keychain_token_account = Some(account_key(&base, "old@x"));
+            }
+            lock_the_keyring(&state);
+            state.speleodb_session_status().expect("status");
+
+            state
+                .speleodb_login(Some(base.clone()), None, None, Some("tok-new".to_owned()))
+                .expect("the paste login succeeds; only the keychain write and the save fail");
+
+            let pair = state.get_config().speleodb;
+            assert_eq!(
+                pair.email.as_deref(),
+                Some("new@x"),
+                "premise: the account this process is running as has moved"
+            );
+            assert!(
+                !pair.keychain_has_token
+                    || pair.keychain_belief_applies_to(&base, pair.email.as_deref().unwrap_or("")),
+                "a recorded belief has to be about the recorded account, whichever half \
+                 of the write failed: email {:?} against stamp {:?}",
+                pair.email,
+                pair.keychain_token_account
+            );
+
+            // And the record that did NOT move, because nothing could be written, is
+            // the previous account's - coherent in its own right rather than half of
+            // each.
+            std::fs::remove_dir(&squatted).expect("unblock the config file");
+            let on_disk = crate::config::Config::load()
+                .expect("read the config back off disk")
+                .speleodb;
+            assert!(
+                !on_disk.keychain_has_token
+                    || on_disk
+                        .keychain_belief_applies_to(&base, on_disk.email.as_deref().unwrap_or("")),
+                "the pair on disk is coherent too: email {:?} against stamp {:?}",
+                on_disk.email,
+                on_disk.keychain_token_account
             );
         });
     }
@@ -7206,10 +7571,7 @@ mod tests {
         let email = "u@x";
         let keychain = InMemoryStore::new();
         keychain
-            .store(
-                &crate::speleodb::auth::account_key(endpoint, email),
-                "kc-tok",
-            )
+            .store(&account_key(endpoint, email), "kc-tok")
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
@@ -7243,10 +7605,7 @@ mod tests {
         let email = "u@x";
         let keychain = InMemoryStore::new();
         keychain
-            .store(
-                &crate::speleodb::auth::account_key(endpoint, email),
-                "kc-tok",
-            )
+            .store(&account_key(endpoint, email), "kc-tok")
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
@@ -7284,7 +7643,7 @@ mod tests {
         // that it was never opened.
         let keychain = InMemoryStore::new();
         keychain
-            .store(&crate::speleodb::auth::account_key(endpoint, email), "tok")
+            .store(&account_key(endpoint, email), "tok")
             .expect("seed keychain");
 
         let mut session = fresh_session_with_stores(Box::new(keychain), None);
@@ -7348,10 +7707,7 @@ mod tests {
         // Now seed the SAME keychain store (shared via the Arc) with a usable
         // token for this account. A naive re-probe would find it and log in.
         keychain
-            .store(
-                &crate::speleodb::auth::account_key(endpoint, email),
-                "kc-tok",
-            )
+            .store(&account_key(endpoint, email), "kc-tok")
             .expect("seed keychain after the latch is set");
 
         // Second rehydrate, this time WITH the account: the latch short-circuits

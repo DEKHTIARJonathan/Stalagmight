@@ -110,7 +110,17 @@ impl AppState {
             // Backend-owned for the same reason: it records what the keychain
             // actually holds, which only the credential paths know. `keychain_disabled`
             // is deliberately NOT in this list - that one IS a Settings toggle.
+            //
+            // Both halves of the belief, always together. Restoring the flag while
+            // letting the form's (absent) stamp land would turn a stamped belief back
+            // into an unstamped one on every settings save - which is read as "scoped
+            // by the email alone", the exact same-address-different-server hole the
+            // stamp closes, re-opened by a save that changed nothing.
             config.speleodb.keychain_has_token = existing.speleodb.keychain_has_token;
+            config
+                .speleodb
+                .keychain_token_account
+                .clone_from(&existing.speleodb.keychain_token_account);
             (
                 existing.speleodb.keychain_disabled,
                 existing.cache.tile_cache_enabled,
@@ -139,12 +149,14 @@ impl AppState {
             let KeychainOff {
                 evicted,
                 persistent_residue,
-            } = self.speleodb_disable_keychain(
-                config.speleodb.token_fallback,
-                config.speleodb.keychain_has_token,
-            );
+            } = self.speleodb_disable_keychain(&config.speleodb);
             match evicted {
-                KeychainEviction::Emptied => config.speleodb.keychain_has_token = false,
+                // Both halves, in the save this function is already making: a belief
+                // and the account it names are only ever written together.
+                KeychainEviction::Emptied => {
+                    config.speleodb.keychain_has_token = false;
+                    config.speleodb.keychain_token_account = None;
+                }
                 // Nothing was checked, so nothing is claimed and nothing is said.
                 KeychainEviction::NotAttempted => {}
                 // REPORTED, not refused, and the settings still save. The
@@ -272,20 +284,24 @@ impl AppState {
     /// unusable AND has no record of holding anything of ours cannot have stranded
     /// anything.
     ///
-    /// `keychain_has_token` is handed down for that last clause, not to gate the
-    /// eviction (see above - it is not trusted in the `false` direction). A keyring
-    /// that is merely LOCKED fails every op exactly like a box with no secret
+    /// The persisted belief is handed down for that last clause, not to gate the
+    /// eviction (see above - it is not trusted in the "no belief" direction). A
+    /// keyring that is merely LOCKED fails every op exactly like a box with no secret
     /// service, so both record `Unavailable`; a previous login's successful store is
     /// the only thing that tells them apart, and without it the locked keyring - the
     /// likeliest reason anyone reaches for this switch - was reported emptied over a
     /// live bearer token. The live store learns it at rehydrate, but a session
     /// established by a login this run never rehydrates, so the value is re-asserted
     /// here where the config already has it.
-    fn speleodb_disable_keychain(
-        &self,
-        fallback: TokenFallback,
-        keychain_has_token: bool,
-    ) -> KeychainOff {
+    ///
+    /// The whole `[speleodb]` block rather than the flag, because the flag alone does
+    /// not say WHOSE entry it is about: it is re-asserted only once the session's
+    /// account is known, and only if the belief is stamped with that account (see
+    /// `SpeleoDbConfig::keychain_belief_applies_to`). Re-asserting it unscoped told
+    /// this session that a second server's - or a previous user's - entry was one of
+    /// ours, which is a residue warning nothing keyed by the signed-in account could
+    /// ever act on.
+    fn speleodb_disable_keychain(&self, speleodb: &crate::config::SpeleoDbConfig) -> KeychainOff {
         // Seeds `endpoint` / `email` from config when the session is still cold -
         // Settings is reachable without having touched SpeleoDB this run, and
         // without an account there is no key to evict by. Called with NO lock held:
@@ -297,12 +313,6 @@ impl AppState {
             .speleodb
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        // Evidence only, and only ever raised: `false` here means "the config has no
-        // record", never "the keyring is empty", so it leaves whatever this session
-        // has learned first-hand alone.
-        session
-            .token_store
-            .note_keychain_has_token(keychain_has_token);
         let (Some(endpoint), Some(email)) = (session.endpoint.clone(), session.email.clone())
         else {
             session.token_store.set_keychain_disabled(true);
@@ -320,6 +330,14 @@ impl AppState {
             };
         };
 
+        // Evidence only, and only ever raised: a belief that is absent - or stamped
+        // with somebody else - means "the config has no record about THIS account",
+        // never "the keyring is empty", so it leaves whatever this session has learned
+        // first-hand alone. Asked here rather than before the account check above,
+        // because the account is what makes the question answerable.
+        session
+            .token_store
+            .note_keychain_has_token(speleodb.keychain_belief_applies_to(&endpoint, &email));
         let evicted = match session.token_store.evict_from_keychain(&endpoint, &email) {
             Ok(()) => KeychainEviction::Emptied,
             Err(e) => KeychainEviction::MayRemain(e.to_string()),
@@ -350,7 +368,7 @@ impl AppState {
         let residue = match session.token_store.restore(
             &endpoint,
             &email,
-            fallback == TokenFallback::Plaintext,
+            speleodb.token_fallback == TokenFallback::Plaintext,
         ) {
             Ok(landed) => {
                 tracing::info!(
@@ -552,9 +570,12 @@ mod tests {
                     TokenTier::Keychain
                 );
                 drop(session);
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
             }
+            // What that login persists, through the writer it uses: the account and
+            // the belief stamped with it, in one record.
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), Some(account_key(EP, EMAIL)))
+                .expect("what the earlier login persisted");
             let probe = PlaintextStore::new(dir.path().to_path_buf());
             assert!(probe.load(&account_key(EP, EMAIL)).unwrap().is_some());
 
@@ -600,9 +621,12 @@ mod tests {
                     TokenTier::Keychain
                 );
                 drop(session);
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
             }
+            // What that login persists, through the writer it uses: the account and
+            // the belief stamped with it, in one record.
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), Some(account_key(EP, EMAIL)))
+                .expect("what the earlier login persisted");
 
             let report = state
                 .update_config(settings_save(&state, true))
@@ -777,9 +801,12 @@ mod tests {
                     TokenTier::Keychain
                 );
                 drop(session);
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
             }
+            // What that login persists, through the writer it uses: the account and
+            // the belief stamped with it, in one record.
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), Some(account_key(EP, EMAIL)))
+                .expect("what the earlier login persisted");
 
             let report = state
                 .update_config(settings_save(&state, true))
@@ -805,10 +832,14 @@ mod tests {
         // session-only sweep draw.
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
-            {
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
-            }
+            // Through the writer that earlier login would have used, rather than
+            // hand-setting the flag: the belief and the account it is ABOUT are one
+            // record, and a belief with nobody's name on it is not a state a login can
+            // leave behind (it is what a config written before the stamp existed looks
+            // like, which is a different case with its own test).
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), Some(account_key(EP, EMAIL)))
+                .expect("what the earlier login persisted");
 
             let report = state
                 .update_config(settings_save(&state, true))
@@ -855,7 +886,7 @@ mod tests {
                 // piece of evidence that a credential really is stranded.
                 let believed = session.token_store.keychain_has_token();
                 drop(session);
-                state.speleodb_persist_keychain_has_token(believed);
+                state.speleodb_persist_keychain_belief(believed.then(|| account_key(EP, EMAIL)));
                 assert!(!state.get_config().speleodb.keychain_has_token);
             }
 
@@ -887,8 +918,9 @@ mod tests {
         crate::test_helpers::with_isolated_config(|| {
             let state = signed_in_over(Box::new(FailingSecretStore));
             {
-                // What the previous launch's successful keychain store persisted.
-                state.speleodb_persist_keychain_has_token(true);
+                // What the previous launch's successful keychain store persisted,
+                // stamped with the account it is about.
+                state.speleodb_persist_keychain_belief(Some(account_key(EP, EMAIL)));
                 let mut session = state.speleodb.lock().expect("session");
                 // Which `SpeleoDbSession::rehydrate` mirrors into the live store
                 // before wiring the load that the locked keyring then refuses.
@@ -984,9 +1016,12 @@ mod tests {
                 let mut session = state.speleodb.lock().expect("session");
                 session.email = None;
                 drop(session);
-                let mut config = state.config.lock().expect("config");
-                config.speleodb.keychain_has_token = true;
             }
+            // A recorded belief, in the shape a real login leaves it - the point being
+            // that no SESSION account means no key to evict by, whatever is recorded.
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), Some(account_key(EP, EMAIL)))
+                .expect("what the earlier login persisted");
 
             let report = state
                 .update_config(settings_save(&state, true))
@@ -1042,6 +1077,7 @@ mod tests {
                 config.speleodb.token_fallback = TokenFallback::Plaintext;
                 config.speleodb.keychain_declined = true;
                 config.speleodb.keychain_has_token = true;
+                config.speleodb.keychain_token_account = Some(account_key(EP, EMAIL));
                 config.speleodb.keychain_disabled = true;
             }
 
@@ -1055,6 +1091,13 @@ mod tests {
             assert_eq!(saved.speleodb.token_fallback, TokenFallback::Plaintext);
             assert!(saved.speleodb.keychain_declined);
             assert!(saved.speleodb.keychain_has_token);
+            assert_eq!(
+                saved.speleodb.keychain_token_account,
+                Some(account_key(EP, EMAIL)),
+                "and the belief keeps the account it is about: put back WITHOUT its stamp \
+                 it reads as an unstamped one, which is scoped by the email alone - the \
+                 same-address-different-server hole, re-opened by a save that changed nothing"
+            );
             assert!(
                 !saved.speleodb.keychain_disabled,
                 "the switch itself IS the form's to set, in both directions"
@@ -1076,7 +1119,9 @@ mod tests {
             // The form's copy, taken before the inline login resolved the account.
             let staged = state.get_config();
             assert_eq!(staged.speleodb.email, None);
-            state.speleodb_persist_email(EMAIL);
+            state
+                .speleodb_write_account_record(Some(EMAIL.to_owned()), None)
+                .expect("the inline login persists the account");
 
             state.update_config(staged).expect("settings saved");
 
