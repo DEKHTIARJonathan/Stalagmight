@@ -2,4 +2,4 @@
 import type { Shot } from "./Shot";
 import type { SurveyDirection } from "./SurveyDirection";
 
-export interface Section { id: number, name: string | null, surveyor: string | null, date: string | null, color: string, direction: SurveyDirection, quality: number, shots: Array<Shot>, next_shot_id: number, }
+export interface Section { id: number, name: string | null, surveyor: string | null, date: string | null, color: string, direction: SurveyDirection, quality: number, shots: Array<Shot>, next_shot_id: number, reverse_parity: boolean, }

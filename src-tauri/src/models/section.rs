@@ -66,6 +66,17 @@ pub struct Section {
     pub shots: Vec<Shot>,
     /// Next shot ID to assign
     pub next_shot_id: ShotId,
+    /// Flips every time this section's shot order is REVERSED (#24). Not a count and not
+    /// meaningful on its own - only whether it still matches what something else recorded.
+    ///
+    /// Exists so the least-squares gauge can stay on one PHYSICAL station. That gauge has
+    /// always been "station 0 of the lowest-id section in the component", and a reverse turns
+    /// station 0 into station N - pinning the opposite end, which translates the whole adjusted
+    /// component and breaks the reverse's "every station keeps its position" guarantee exactly
+    /// where closure-adjusted geometry is forced (Plan/Export). Reading the end off this flag
+    /// keeps the original choice: `false` means station 0, as every existing project has it.
+    #[serde(default)]
+    pub reverse_parity: bool,
 }
 
 /// Data for creating a new section
@@ -266,6 +277,7 @@ impl Section {
             },
             shots: Vec::new(),
             next_shot_id: id * FEATURE_ID_STRIDE,
+            reverse_parity: false,
         };
 
         for shot_data in data.shots {

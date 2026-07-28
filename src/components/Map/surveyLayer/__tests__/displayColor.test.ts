@@ -48,12 +48,12 @@ function fixture(): { sections: Section[]; stations: Station[] } {
   const sections: Section[] = [
     {
       id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
-      direction: 'in', quality: 1, next_shot_id: 10,
+      direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false,
       shots: [shot(101, 0, -4, 8), shot(102, -4, -10, 12)],
     },
     {
       id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00',
-      direction: 'in', quality: 1, next_shot_id: 10,
+      direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false,
       shots: [shot(201, -2, -2, 6)],
     },
   ];

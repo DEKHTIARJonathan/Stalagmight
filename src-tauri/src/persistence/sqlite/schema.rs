@@ -69,6 +69,28 @@ impl Database {
             tracing::info!("Added direction column to sections table");
         }
 
+        // Add reverse_parity to sections if absent (#24). Flips on every section reverse; the
+        // least-squares gauge reads it to keep pinning the same physical station. Default 0 is
+        // exactly right for an existing file - it means "station 0", which is where the gauge
+        // already is, so upgrading moves nobody's coordinates.
+        let has_reverse_parity_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_reverse_parity_column {
+            self.conn.execute(
+                "ALTER TABLE sections ADD COLUMN reverse_parity INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            tracing::info!("Added reverse_parity column to sections table");
+        }
+
         // Add quality column to sections table if it doesn't exist (added for weighted adjustments)
         let has_quality_column: bool = self
             .conn
@@ -1201,6 +1223,7 @@ impl Database {
                 color TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'in',
                 quality REAL NOT NULL DEFAULT 1.0,
+                reverse_parity INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 

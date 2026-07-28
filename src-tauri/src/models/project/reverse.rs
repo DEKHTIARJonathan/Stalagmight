@@ -388,6 +388,13 @@ impl Project {
         // shot - drop the baseline so the reconcile is deferred, not misapplied.
         self.invalidate_collab_baseline();
 
+        // Flip the orientation marker (#24). Recorded HERE, at the mutation, so no caller can
+        // reverse a section without it: the least-squares gauge reads it to stay on the same
+        // physical station instead of jumping to the far end of the component.
+        if let Some(section) = self.get_section_mut(section_id) {
+            section.reverse_parity = !section.reverse_parity;
+        }
+
         self.touch();
         true
     }

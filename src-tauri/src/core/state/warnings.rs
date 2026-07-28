@@ -262,6 +262,21 @@ impl AppState {
         let Some(db) = db_guard.as_ref() else {
             return;
         };
+        // Only pin onto a UUID the FILE already holds. A pre-v6 project, or any shot whose UUID
+        // was minted in memory and not yet saved, would otherwise get that transient value
+        // written into the persisted warning row - and if the reverse is discarded, or the app
+        // exits before the next save, the following load mints a DIFFERENT UUID and the ignore
+        // is orphaned onto a shot that no longer exists (issue #57 / Codex). Those shots simply
+        // keep their position-keyed rows, which the save carry-over re-keys once the UUIDs are
+        // durable. A failed lookup is treated as "not persisted": skipping a pin costs an ignore
+        // migrating to the mirrored shot, writing a bad one costs it outright.
+        let live: std::collections::HashMap<(u32, u32), String> = live
+            .into_iter()
+            .filter(|(_, uuid)| db.shot_uuid_is_persisted(uuid).unwrap_or(false))
+            .collect();
+        if live.is_empty() {
+            return;
+        }
         match db.backfill_resolved_warning_uuids(&live) {
             Ok(0) => {}
             Ok(n) => tracing::info!(

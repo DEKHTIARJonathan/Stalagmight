@@ -262,54 +262,61 @@ impl Database {
                 .map(|c| c > 0)
                 .unwrap_or(false);
 
-            let mut stmt = if has_quality_column {
-                self.conn.prepare(
-                    "SELECT id, name, surveyor, date, color, direction, quality FROM sections ORDER BY id",
-                )?
+            // #24: `reverse_parity` is added by the schema migration, but a read-only open skips
+            // that, so tolerate its absence the same way `quality` is tolerated. Both fall back
+            // to a literal in the SELECT rather than a second pair of branches.
+            let has_reverse_parity_column: bool = self
+                .conn
+                .query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+
+            let quality_expr = if has_quality_column { "quality" } else { "1.0" };
+            let parity_expr = if has_reverse_parity_column {
+                "reverse_parity"
             } else {
-                self.conn.prepare(
-                    "SELECT id, name, surveyor, date, color, direction FROM sections ORDER BY id",
-                )?
+                "0"
             };
+            let mut stmt = self.conn.prepare(&format!(
+                "SELECT id, name, surveyor, date, color, direction, {quality_expr}, {parity_expr} \
+                 FROM sections ORDER BY id"
+            ))?;
 
             let mut section_rows = Vec::new();
-            if has_quality_column {
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, u32>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        row.get::<_, f64>(6)?,
-                    ))
-                })?;
-                for row in rows {
-                    section_rows.push(row?);
-                }
-            } else {
-                let rows = stmt.query_map([], |row| {
-                    Ok((
-                        row.get::<_, u32>(0)?,
-                        row.get::<_, Option<String>>(1)?,
-                        row.get::<_, Option<String>>(2)?,
-                        row.get::<_, Option<String>>(3)?,
-                        row.get::<_, String>(4)?,
-                        row.get::<_, Option<String>>(5)?,
-                        1.0,
-                    ))
-                })?;
-                for row in rows {
-                    section_rows.push(row?);
-                }
+            let rows = stmt.query_map([], |row| {
+                Ok((
+                    row.get::<_, u32>(0)?,
+                    row.get::<_, Option<String>>(1)?,
+                    row.get::<_, Option<String>>(2)?,
+                    row.get::<_, Option<String>>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, Option<String>>(5)?,
+                    row.get::<_, f64>(6)?,
+                    row.get::<_, i64>(7)? != 0,
+                ))
+            })?;
+            for row in rows {
+                section_rows.push(row?);
             }
 
             // Build the empty sections first so we can address them by
             // ID when partitioning the bulk shot stream below.
             let mut section_by_id: HashMap<u32, usize> = HashMap::with_capacity(section_rows.len());
             for section_row in section_rows {
-                let (id, name, surveyor, date_str, color, direction_str, quality_raw) = section_row;
+                let (
+                    id,
+                    name,
+                    surveyor,
+                    date_str,
+                    color,
+                    direction_str,
+                    quality_raw,
+                    reverse_parity,
+                ) = section_row;
                 let date = date_str.and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok());
                 let direction = direction_str
                     .and_then(|s| s.parse::<SurveyDirection>().ok())
@@ -330,7 +337,8 @@ impl Database {
                     shots: Vec::new(),
                 };
 
-                let section = Section::new(id, section_data);
+                let mut section = Section::new(id, section_data);
+                section.reverse_parity = reverse_parity;
                 section_by_id.insert(id, sections.len());
                 next_section_id = next_section_id.max(id + 1);
                 sections.push(section);

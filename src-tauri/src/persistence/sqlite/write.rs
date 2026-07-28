@@ -68,7 +68,7 @@ impl Database {
         // Save sections and shots
         for section in &project.sections {
             tx.execute(
-                "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
                 params![
                     section.id,
                     section.name,
@@ -77,6 +77,7 @@ impl Database {
                     section.color,
                     section.direction.to_string(),
                     section.quality,
+                    i64::from(section.reverse_parity),
                     Utc::now().to_rfc3339()
                 ],
             )?;

@@ -4,7 +4,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { isEditingBlockedNow } from '../../hooks/useEditingBlocked';
 import { getErrorMessage } from '../../utils/ipc';
 import { trackDialogComplete } from '../../utils/telemetry';
-import { applyReverseAftermath, singleReverseTransform } from '../../utils/reverseAftermath';
+import { applyReverseAftermath, composeReverseTransforms } from '../../utils/reverseAftermath';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -111,19 +111,19 @@ export default function ReverseSectionDialog() {
       // opposite physical station. See utils/reverseAftermath. Applied even when
       // the dialog is already gone - the reverse landed either way - but not
       // across a project switch, whose refs belong to a different project.
-      // Keyed off the sections this dialog submitted rather than the result's
-      // `reversed_sections`: the call is synchronous and all-or-nothing, so on
-      // success the two lists are the same, and unlike undo/redo - which replays a
-      // history entry the frontend never saw - there is nothing here to discover.
-      // Deliberately NOT consuming the wire field, which is why nothing here has
-      // to compose: this is exactly one reverse per section against a count read
-      // from the very project state the user confirmed against, so each section's
-      // transform is a plain `i -> N - i`. The composing path exists for undo/redo
-      // only, where a range can hold several reverses of one section at DIFFERENT
-      // counts.
-      if (projectKeyOf(useProjectStore.getState().project) === projectKey) {
+      //
+      // The counts come off the WIRE, not from the sections this dialog rendered
+      // against. Those were read when the dialog opened; another queued edit can
+      // insert or delete a shot before this reverse takes the backend's command
+      // lock, and the backend then mirrors against a count the dialog never saw.
+      // Mirroring the frontend's own refs with the stale count would walk gas-plan
+      // pins and the distance-gradient origin onto the wrong station - silently,
+      // since every index involved stays in range. `reversed_sections` is the
+      // count that was actually in force, per step.
+      const store = useProjectStore.getState();
+      if (projectKeyOf(store.project) === projectKey) {
         applyReverseAftermath(
-          new Map(changing.map((s) => [s.id, singleReverseTransform(s.shots.length)] as const))
+          composeReverseTransforms(result.reversed_sections, store.project?.sections ?? [])
         );
       }
 

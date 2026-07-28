@@ -73,6 +73,7 @@ function fixture(stations: Station[]): { data: ReturnType<typeof surveyDataFromL
     direction: 'in',
     quality: 1,
     next_shot_id: 0,
+    reverse_parity: false,
     shots: [],
   }));
   return { data: surveyDataFromLegacy(sections, stations) };

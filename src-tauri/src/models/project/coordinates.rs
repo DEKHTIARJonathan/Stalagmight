@@ -2,35 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::models::{
-    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef,
-};
+use crate::models::{ClosureRef, ClosureStrategy, Coordinates, SectionId, Station, StationRef};
 
 use super::Project;
-
-/// One merge or loop closure incident on a station: its kind and the section its
-/// far end lives in. Building block of the incidence part of
-/// [`Project::station_reverse_identity`].
-type Incidence = (&'static str, SectionId);
-
-/// Every station of one section mapped to its sorted [`Incidence`] multiset,
-/// keyed by station index. Built once per section by
-/// [`Project::station_incidence`].
-type SectionIncidence = HashMap<u32, Vec<Incidence>>;
-
-/// The incidence signature of a station that no merge or closure touches.
-const NO_INCIDENCE: &[Incidence] = &[];
-
-/// Sort key of one station under [`Project::station_reverse_identity`]: the
-/// neighbouring shots' UUIDs, then the incidence multiset, then the neighbouring
-/// depths, then the neighbouring `|pitch|`es - each field sorted so it does not
-/// depend on which way the section is numbered.
-type AnchorKey<'a> = (
-    (Option<&'a str>, Option<&'a str>),
-    &'a [Incidence],
-    [Option<u64>; 2],
-    [Option<u64>; 2],
-);
 
 impl Project {
     /// Get all stations colocated with the given station (via merges and aligned closures).
@@ -312,129 +286,6 @@ impl Project {
     pub fn compute_station_coordinates(&self) -> Vec<Station> {
         self.compute_station_coordinates_with_progress(None)
     }
-
-    /// The merges and loop closures incident on each station of `section_id`, as
-    /// a sorted multiset of `(kind, partner section)` pairs per station index.
-    ///
-    /// Built from `station_merges` and `loop_closures` **only**. Both are
-    /// mirrored onto the physical station by a reverse (its write pass rewrites
-    /// every stored [`StationKey`](crate::models::StationKey) through
-    /// `map_station_refs`), so the signature travels with the station rather than
-    /// with the index - which is what makes it usable inside
-    /// [`Self::station_reverse_identity`]. `station_offsets`, `station_comments`
-    /// and `zero_datums` are mirrored just the same, but they are deliberately
-    /// left out: a datum-less component has no zero datum by construction, and
-    /// folding in the cosmetic two would let typing a station comment re-pick the
-    /// component's gauge and shift the adjusted view.
-    ///
-    /// The partner's station INDEX is left out for the same reason the pick can't
-    /// use an index at all: it is stable under a reverse of `section_id` but not
-    /// under a reverse of the partner's own section, and the identity has to be
-    /// invariant under every reverse, not just this one. The partner's section id
-    /// survives all of them.
-    fn station_incidence(&self, section_id: SectionId) -> SectionIncidence {
-        let merges = self
-            .station_merges
-            .iter()
-            .map(|m| ("merge", &m.station_a, &m.station_b));
-        let closures = self
-            .loop_closures
-            .iter()
-            .map(|c| ("closure", &c.station_a, &c.station_b));
-
-        let mut out: SectionIncidence = HashMap::new();
-        for (kind, key_a, key_b) in merges.chain(closures) {
-            let (Some(a), Some(b)) = (self.resolve_key(key_a), self.resolve_key(key_b)) else {
-                continue;
-            };
-            if a.section_id == section_id {
-                out.entry(a.station_index)
-                    .or_default()
-                    .push((kind, b.section_id));
-            }
-            if b.section_id == section_id {
-                out.entry(b.station_index)
-                    .or_default()
-                    .push((kind, a.section_id));
-            }
-        }
-        // Canonical order, so the key does not depend on the order the merges and
-        // closures happen to sit in on the project.
-        for incidences in out.values_mut() {
-            incidences.sort_unstable();
-        }
-        out
-    }
-
-    /// Reverse-invariant identity of station `idx` inside one section, used to
-    /// pick a gauge anchor that stays on the same PHYSICAL station when the
-    /// section is reversed.
-    ///
-    /// A station is the boundary between shots `idx - 1` and `idx`. A reverse
-    /// sends station `i` to `shots.len() - i` and keeps each record's identity
-    /// with the record, so the mirrored station has exactly the same two
-    /// neighbouring shots with their sides swapped. Every field below is
-    /// therefore built from the two neighbours and sorted, which makes it
-    /// side-agnostic and so identical before and after:
-    ///
-    /// 1. **Shot UUIDs.** `None` marks a missing neighbour (a section end) or a
-    ///    shot minted before UUIDs existed; `None` sorts first, so an end station
-    ///    outranks an interior one and the anchor stays at an end of the section.
-    ///    For a section with **two or more** shots this pair is already
-    ///    injective (the two ends give `(None, u_0)` and `(None, u_{N-1})`, and
-    ///    any two interior stations share at most one UUID), so nothing below is
-    ///    ever consulted there. The rest exists for `N <= 1`, and is appended
-    ///    afterwards precisely so it cannot move an anchor on a longer section.
-    /// 2. **Incidence multiset** (see [`Self::station_incidence`]) - the merges
-    ///    and closures hanging off the station, which a reverse mirrors onto the
-    ///    physical station.
-    /// 3. **Depths**, as raw `f64::to_bits`. Invariant because `reverse_shots`
-    ///    swaps `depth_in`/`depth_out` with `mem::swap` - bit-exact, no
-    ///    arithmetic - so the reading beside a station travels with it.
-    /// 4. **`|pitch|`**, as raw `f64::to_bits`. `reverse_shots` negates and
-    ///    re-associates pitch, and clearing the sign bit after flipping it is the
-    ///    same as clearing it, so the magnitude is bit-exact too.
-    ///
-    /// The bit patterns order NaN and negative values in no physically meaningful
-    /// way; that is fine, this is a deterministic tie-break and not a
-    /// measurement comparison.
-    fn station_reverse_identity<'a>(
-        section: &'a Section,
-        incidence: &'a SectionIncidence,
-        idx: usize,
-    ) -> AnchorKey<'a> {
-        let before = idx.checked_sub(1).and_then(|i| section.shots.get(i));
-        let after = section.shots.get(idx);
-
-        let (b_uuid, a_uuid) = (
-            before.and_then(|s| s.uuid.as_deref()),
-            after.and_then(|s| s.uuid.as_deref()),
-        );
-        let uuids = if b_uuid <= a_uuid {
-            (b_uuid, a_uuid)
-        } else {
-            (a_uuid, b_uuid)
-        };
-
-        let neighbours = incidence
-            .get(&(idx as u32))
-            .map_or(NO_INCIDENCE, Vec::as_slice);
-
-        let mut depths = [
-            before.map(|s| s.depth_out.to_bits()),
-            after.map(|s| s.depth_in.to_bits()),
-        ];
-        depths.sort_unstable();
-
-        let mut pitches = [
-            before.and_then(|s| s.pitch_out).map(|p| p.abs().to_bits()),
-            after.and_then(|s| s.pitch_in).map(|p| p.abs().to_bits()),
-        ];
-        pitches.sort_unstable();
-
-        (uuids, neighbours, depths, pitches)
-    }
-
     /// Pick a deterministic anchor station for a component that has no zero datum.
     ///
     /// The anchor is two things at once, and only the first is a pure gauge:
@@ -483,13 +334,12 @@ impl Project {
             .sections
             .iter()
             .filter(|s| component.contains(&s.id))
-            .min_by_key(|s| (s.shots.len() < 2, s.id))?;
-        let incidence = self.station_incidence(section.id);
-        let index = (0..=section.shots.len()).min_by(|&a, &b| {
-            Self::station_reverse_identity(section, &incidence, a)
-                .cmp(&Self::station_reverse_identity(section, &incidence, b))
-                .then(a.cmp(&b))
-        })?;
+            .min_by_key(|s| s.id)?;
+        let index = if section.reverse_parity {
+            section.shots.len()
+        } else {
+            0
+        };
         Some(StationRef::new(section.id, index as u32))
     }
 
@@ -1139,12 +989,16 @@ mod tests {
         }
     }
 
-    /// A section with two or more shots separates its stations by shot UUID with
-    /// no tie-break at all, so the anchor prefers one even when a shorter section
-    /// owns the lower id. Shot count survives a reverse unchanged, so preferring
-    /// on it cannot itself flip the anchor.
+    /// UPGRADE REGRESSION: an existing project's gauge must not move.
+    ///
+    /// The gauge has always been "station 0 of the lowest-id section in the component", and the
+    /// solve pins that station at its measured coordinates - so re-picking it on anything
+    /// derived from current data (shot counts, UUID ordering, incidence) would shift Plan and
+    /// Export output the moment someone upgraded, with no reverse performed, no action taken
+    /// and nothing reported. `reverse_parity` is `false` on every file that predates it, which
+    /// is what makes this hold.
     #[test]
-    fn anchor_prefers_a_multi_shot_section() {
+    fn the_gauge_of_an_untouched_project_is_the_legacy_one() {
         let mut project = Project::new("mixed".to_string(), None);
         let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
         let three = add_section(
@@ -1163,9 +1017,33 @@ mod tests {
         let anchor = project.default_anchor_for_component(&component).unwrap();
 
         assert_eq!(
-            anchor.section_id, three,
-            "the anchor must come from the section whose identity is injective"
+            (anchor.section_id, anchor.station_index),
+            (one, 0),
+            "the gauge must stay where it has always been: station 0 of the lowest-id section"
         );
+    }
+
+    /// ...and it follows that physical station through a reverse, rather than staying on the
+    /// index. Station 0 becomes station N, and the parity marker is what says so.
+    #[test]
+    fn the_gauge_follows_its_physical_station_through_a_reverse() {
+        let mut project = Project::new("one section".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+
+        assert_eq!(anchor_index(&project, s), 0);
+        assert!(project.reverse_section(s, false));
+        assert_eq!(
+            anchor_index(&project, s),
+            3,
+            "station 0 is now station 3, and the gauge must be there - not on the new station 0"
+        );
+        // Reversing back returns it, because parity is a flip and not a count.
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 0);
     }
 
     /// Due north end to end: `sin(0.0)` is exactly 0 but `sin(180.0)` is
