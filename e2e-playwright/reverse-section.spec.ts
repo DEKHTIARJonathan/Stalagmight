@@ -704,6 +704,66 @@ test.describe('Reverse Section', () => {
     expect(pins.endpoint).toEqual({ section_id: sectionId, station_index: 2 });
   });
 
+  test('moves the loaded-plan baseline with the pins, so the plan stays clean', async ({
+    page,
+  }) => {
+    // The baseline holds the same POSITIONAL refs as the live pins. Mirroring one without the
+    // other makes selectIsPlanDirty compare two different numberings and report a plan the
+    // diver never edited as unsaved - nagging a save, or blocking a plan switch, over a route
+    // that is still the same physical route.
+    const [sectionId] = await setup(page);
+
+    await page.evaluate((id) => {
+      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      const origin = { section_id: id, station_index: 0 };
+      gas.setOrigin(origin);
+      gas.applyLoadedPlan(1, {
+        origin,
+        endpoint: null,
+        waypoints: [],
+        diver: gas.diver,
+        cylinders: gas.cylinders,
+        gas_config: gas.gasConfig,
+        stage_drop_overrides: [],
+        marked_points: [],
+      });
+    }, sectionId);
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    const after = await page.evaluate(() => {
+      const gas = (window as any).__E2E_TEST__.gasPlanStore.getState();
+      return { origin: gas.origin, baseline: gas.loadedPlanBaseline?.origin ?? null };
+    });
+    expect(after.origin).toEqual({ section_id: sectionId, station_index: 3 });
+    expect(after.baseline).toEqual({ section_id: sectionId, station_index: 3 });
+  });
+
+  test('clears the selection and any half-staged merge', async ({ page }) => {
+    // Unlike the pins there is no "same place" for a highlight or a half-picked merge: a
+    // staged operation that silently retargets the far end is worse than one the user has to
+    // restart, so these are CLEARED rather than mirrored.
+    const [sectionId] = await setup(page);
+
+    await page.evaluate((id) => {
+      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      ui.selectShot?.({ section_id: id, shot_id: 0 });
+      ui.setMergeStations?.({ section_id: id, station_index: 0 }, null);
+    }, sectionId);
+
+    await reverseFromSectionMenu(page, sectionId);
+
+    const cleared = await page.evaluate(() => {
+      const ui = (window as any).__E2E_TEST__.uiStore.getState();
+      return {
+        selection: ui.selectedShot ?? ui.selection ?? null,
+        merge: ui.mergeStationA ?? ui.mergeStations ?? null,
+      };
+    });
+    expect(cleared.selection).toBeNull();
+    expect(cleared.merge).toBeNull();
+  });
+
   test('moves the distance-gradient origin with the section too', async ({ page }) => {
     // Same positional-ref hazard as the plan pins, and the origin's only other
     // reset is a project switch - so without this the penetration ramp silently
