@@ -26,7 +26,7 @@ pub use model::{
     TankMaterial, Team,
 };
 use physics::{deliverable_gas, edge_gas, edge_gas_basis};
-use scooter::{resolve_segments, scooter_drop_index, scooter_range_limit};
+use scooter::{resolve_segments, scooter_drop_index, scooter_range_limit, ResolvedSegment};
 
 impl Project {
     /// Single-diver open-circuit reachability field (PRD §4/§5.1, the Phase-1 headline).
@@ -739,7 +739,7 @@ fn waypoint_walk(
     lens: &[Vec<(usize, f64)>],
     roots: &[usize],
     waypoints: &[Option<usize>],
-    segments: &[PlanSegment],
+    segments: &[ResolvedSegment],
     in_rmv: f64,
     degenerate: bool,
 ) -> WaypointWalk {
@@ -759,12 +759,13 @@ fn waypoint_walk(
         };
     }
     // Leg `k` is flown on segment `k`. `resolve_segments` guarantees one segment per leg with a
-    // finite positive speed, but fall back defensively rather than dividing by a missing entry.
+    // finite positive speed, so a missing entry is a bug rather than an input - but if one ever
+    // appears, price the leg at INFINITY (nothing beyond it is reachable) rather than at a speed of
+    // infinity, which would scale the leg's whole cost to ZERO and hand back free penetration.
     let leg_scales = |k: usize| {
-        let seg = segments.get(k).copied().unwrap_or(PlanSegment {
-            speed_m_per_min: f64::INFINITY,
-            on_scooter: false,
-        });
+        let Some(seg) = segments.get(k).copied() else {
+            return (f64::INFINITY, [0.0, f64::INFINITY]);
+        };
         let speed = seg.speed_m_per_min;
         // [scootered metres, minutes] per metre of line on this segment.
         let riders = [f64::from(u8::from(seg.on_scooter)), 1.0 / speed];

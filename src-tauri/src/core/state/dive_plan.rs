@@ -460,6 +460,12 @@ fn from_anchors_with_survival(
 /// direction - the merged segment can only ever cost MORE gas or LESS scooter range than either
 /// half implied on its own, never less of either (the safe direction, section 6).
 ///
+/// "Slower" is decided on the EFFECTIVE speeds, which is why `plan_speed` is a parameter: a span
+/// with no speed of its own inherits the plan's, and comparing `None` against a number without
+/// resolving it first would pick the wrong half in one direction or the other. When the inheriting
+/// half wins (or ties) the merged span keeps its `None`, so a span the diver never edited still
+/// follows the plan speed afterwards rather than being frozen at whatever it happened to be.
+///
 /// `survived[j]` reports whether way point `j` (0-indexed into the pre-drop list) resolved - the
 /// mask [`from_keys_with_survival`] returns. A length mismatch against `segments` is only
 /// reachable via a hand-edited `.plnx` (the trusted write path always saves
@@ -469,7 +475,13 @@ fn from_anchors_with_survival(
 fn merge_segments_for_surviving_waypoints(
     segments: Vec<PlanSegment>,
     survived: &[bool],
+    plan_speed: f64,
 ) -> Vec<PlanSegment> {
+    let effective = |s: &PlanSegment| {
+        s.speed_m_per_min
+            .filter(|v| v.is_finite() && *v > 0.0)
+            .unwrap_or(plan_speed)
+    };
     let last_index = segments.len().saturating_sub(1);
     let mut merged = Vec::new();
     let mut pending: Option<PlanSegment> = None;
@@ -477,7 +489,13 @@ fn merge_segments_for_surviving_waypoints(
         pending = Some(match pending {
             None => seg,
             Some(prev) => PlanSegment {
-                speed_m_per_min: prev.speed_m_per_min.min(seg.speed_m_per_min),
+                // Tie goes to `prev`, so an inherited span survives a merge with an explicit span
+                // set to the very same speed.
+                speed_m_per_min: if effective(&seg) < effective(&prev) {
+                    seg.speed_m_per_min
+                } else {
+                    prev.speed_m_per_min
+                },
                 on_scooter: prev.on_scooter && seg.on_scooter,
             },
         });
@@ -767,9 +785,14 @@ impl AppState {
         // the survival mask above BEFORE anything about waypoints changes shape - see
         // `merge_segments_for_surviving_waypoints`. Same reasoning as the other caps: truncate
         // rather than refuse, since the threat is a hand-edited file the write path never produced.
+        let plan_speed = p
+            .gas_config
+            .survey_speed_m_per_min
+            .unwrap_or(p.gas_config.swim_speed_m_per_min);
         let segments = merge_segments_for_surviving_waypoints(
             p.segments.into_iter().take(MAX_SEGMENTS).collect(),
             &waypoints_survived,
+            plan_speed,
         );
         // Capped on the way IN like the way points and marked points, and for the same reason:
         // the threat is a hand-edited `.plnx`, which by definition never crosses the write
@@ -1769,11 +1792,11 @@ mod tests {
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.segments = vec![
             PlanSegment {
-                speed_m_per_min: 12.0,
+                speed_m_per_min: Some(12.0),
                 on_scooter: true,
             },
             PlanSegment {
-                speed_m_per_min: 20.0,
+                speed_m_per_min: Some(20.0),
                 on_scooter: false,
             },
         ];
@@ -1814,19 +1837,19 @@ mod tests {
             marked_points: Vec::new(),
             segments: vec![
                 PlanSegment {
-                    speed_m_per_min: 20.0,
+                    speed_m_per_min: Some(20.0),
                     on_scooter: true,
                 }, // origin -> waypoint 0
                 PlanSegment {
-                    speed_m_per_min: 8.0,
+                    speed_m_per_min: Some(8.0),
                     on_scooter: true,
                 }, // waypoint 0 -> waypoint 1 (merges away)
                 PlanSegment {
-                    speed_m_per_min: 15.0,
+                    speed_m_per_min: Some(15.0),
                     on_scooter: false,
                 }, // waypoint 1 -> waypoint 2 (merges away)
                 PlanSegment {
-                    speed_m_per_min: 30.0,
+                    speed_m_per_min: Some(30.0),
                     on_scooter: true,
                 }, // waypoint 2 -> endpoint
             ],
@@ -1848,7 +1871,7 @@ mod tests {
         assert_eq!(
             resolved.segments[0],
             PlanSegment {
-                speed_m_per_min: 20.0,
+                speed_m_per_min: Some(20.0),
                 on_scooter: true,
             },
             "the untouched leading segment must pass through unchanged"
@@ -1856,7 +1879,7 @@ mod tests {
         assert_eq!(
             resolved.segments[1],
             PlanSegment {
-                speed_m_per_min: 8.0,
+                speed_m_per_min: Some(8.0),
                 on_scooter: false,
             },
             "the merged span must take the SLOWER speed and require BOTH halves scootered"
@@ -1864,7 +1887,7 @@ mod tests {
         assert_eq!(
             resolved.segments[2],
             PlanSegment {
-                speed_m_per_min: 30.0,
+                speed_m_per_min: Some(30.0),
                 on_scooter: true,
             },
             "the untouched trailing segment must pass through unchanged"
@@ -1887,7 +1910,7 @@ mod tests {
         let mut snapshot = snapshot_with_route_points(sec);
         snapshot.segments = vec![
             PlanSegment {
-                speed_m_per_min: 5.0,
+                speed_m_per_min: Some(5.0),
                 on_scooter: false,
             };
             MAX_SEGMENTS + 25
@@ -1900,7 +1923,7 @@ mod tests {
         let mut doctored = persisted;
         doctored.segments = vec![
             PlanSegment {
-                speed_m_per_min: 5.0,
+                speed_m_per_min: Some(5.0),
                 on_scooter: false,
             };
             MAX_SEGMENTS + 25

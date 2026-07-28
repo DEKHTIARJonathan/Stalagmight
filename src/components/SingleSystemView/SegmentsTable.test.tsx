@@ -70,6 +70,26 @@ describe('SegmentsTable', () => {
     expect(screen.queryByTestId('segment-row-0')).not.toHaveTextContent('Entrance');
   });
 
+  it('shows the plan speed on a span the diver has not given one, without writing it into the plan', () => {
+    // #317: a fresh span carries `speed_m_per_min: null` = "fly this at the plan's speed", so the
+    // field has to render that speed while the STORE keeps the null - otherwise the diver's
+    // configured swim / survey speed would stop reaching the engine the moment Plan mode opened.
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: null },
+    });
+    render(<SegmentsTable />);
+    expect(screen.getByTestId('segment-speed-0')).toHaveValue(23);
+    expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
+  });
+
+  it('prefers the survey speed over the swim speed for an unset span, as the engine does', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: 7 },
+    });
+    render(<SegmentsTable />);
+    expect(screen.getByTestId('segment-speed-0')).toHaveValue(7);
+  });
+
   it('committing a speed edit updates the store and nulls the cached reach field', async () => {
     const user = userEvent.setup();
     useGasPlanStore.setState({ reachField: fakeField() });

@@ -1778,7 +1778,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // below is inert, so the 31 existing gas specs - all calibrated against the fixed
             // 1500 L budget and `|x| * 20` field - are untouched.
             const segmentArgs = (args?.segments ?? []) as Array<{
-              speed_m_per_min?: number;
+              speed_m_per_min?: number | null;
               on_scooter?: boolean;
             }>;
             const rig = gasConfig.dpv ?? null;
@@ -1809,7 +1809,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 const b = routePts[i];
                 const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
                 const s = segmentArgs[segmentAtLeg(i - 1)];
-                const speed = s?.speed_m_per_min && s.speed_m_per_min > 0 ? s.speed_m_per_min : 10;
+                // A span with no speed of its own is flown at the PLAN's speed, not a hardcoded
+                // one - mirroring `resolve_segments` (gas/scooter.rs). Getting this wrong is how
+                // the real engine once stopped honouring the configured swim speed entirely.
+                const speed = s?.speed_m_per_min && s.speed_m_per_min > 0 ? s.speed_m_per_min : inSpeed;
                 minutes += seg / speed;
                 if (rig && s?.on_scooter) scooter_distance_m += seg;
               }

@@ -17,8 +17,8 @@ use stalagmight_lib::commands::survey_geometry::{
 };
 use stalagmight_lib::config::{
     AngleUnit, AppearanceConfig, CacheConfig, ClosureAdjustmentConfig, ColorTheme, Config,
-    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig,
-    DpvRig, DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
+    ConfigSaveReport, DebugConfig, DecimalPrecision, DepthGradientConfig, DisplayConfig, DpvRig,
+    DpvUnit, ExportConfig, GasConfig, GasUnits, GeneralConfig, GlobalViewConfig, GpsOrigin,
     ImportConfig, LengthUnit, LoggingConfig, MapAnimationConfig, MapConfig, MapControlsConfig,
     MapDebugConfig, MapSnapConfig, OverlapMode, PanelsConfig, PlacementSuggestionConfig,
     ProviderCacheConfig, ReservePreset, ReserveProfile, SectionColorsConfig, ShortcutFeedback,

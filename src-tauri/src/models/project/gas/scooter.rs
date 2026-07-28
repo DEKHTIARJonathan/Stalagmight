@@ -7,17 +7,33 @@ use crate::config::DpvRig;
 
 use super::model::PlanSegment;
 
-/// Normalise the diver's segment list to exactly one entry per route span.
+/// One route span with its speed already decided - what the engine actually walks.
+///
+/// Distinct from [`PlanSegment`] on purpose. A `PlanSegment` carries `Option<f64>`, where `None`
+/// means "fly this span at the plan's speed"; by the time the graph is weighted that choice must
+/// already be made, and a type that cannot represent "undecided" is what stops the resolution step
+/// from being skipped again.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct ResolvedSegment {
+    pub(super) speed_m_per_min: f64,
+    pub(super) on_scooter: bool,
+}
+
+/// Normalise the diver's segment list to exactly one entry per route span, with a concrete speed.
 ///
 /// A plan has `waypoint_count + 1` spans (origin → W0 → … → open-field tail). The stored list can
 /// disagree - a hand-edited `.plnx`, or a stale plan loaded after way points were added or removed
-/// in Survey - so this is the single place that reconciles it. Missing entries take the default
-/// speed and no scooter, which is **exactly the pre-#317 behaviour**: with an empty list every span
-/// is priced at the config speed, so the whole feature is inert until a segment is edited.
+/// in Survey - so this is the single place that reconciles it.
 ///
-/// A non-finite or non-positive speed also falls back to the default rather than being rejected:
-/// it would otherwise divide into the edge cost and poison the field with `+Inf`/`NaN`, and the
-/// config boundary guards the default for exactly that reason.
+/// `default_speed` is the plan's own speed (`survey_speed` falling back to `swim_speed`). A span
+/// takes it whenever the diver has not set one: a missing entry, an explicit `None`, or a stored
+/// number that is non-finite or non-positive. The last case falls back rather than being rejected
+/// because it would otherwise divide into the edge cost and poison the field with `+Inf`/`NaN`.
+///
+/// ⚠ An all-`None` list must therefore reproduce the pre-#317 field EXACTLY, and that is not a nice
+/// property but the contract: the frontend sends a full-length list from the moment Plan mode
+/// opens, so if `None` did not inherit, the Swim-speed field and Settings > Gas would silently stop
+/// affecting anything (`plan_speed_reaches_the_engine_through_a_full_length_segment_list` pins it).
 ///
 /// `has_rig` gates `on_scooter`. Without a rig there is no range to spend and no drop to derive, so
 /// a leftover flag would report a scootered distance the plan cannot be held to. The segment's
@@ -27,13 +43,13 @@ pub(super) fn resolve_segments(
     waypoint_count: usize,
     default_speed: f64,
     has_rig: bool,
-) -> Vec<PlanSegment> {
+) -> Vec<ResolvedSegment> {
     (0..=waypoint_count)
         .map(|k| {
             let seg = segments.get(k);
-            PlanSegment {
+            ResolvedSegment {
                 speed_m_per_min: seg
-                    .map(|s| s.speed_m_per_min)
+                    .and_then(|s| s.speed_m_per_min)
                     .filter(|s| s.is_finite() && *s > 0.0)
                     .unwrap_or(default_speed),
                 on_scooter: has_rig && seg.is_some_and(|s| s.on_scooter),
@@ -50,7 +66,7 @@ pub(super) fn resolve_segments(
 ///
 /// The returned index is both the segment index and the way-point index, since segment `k` ends at
 /// way point `k` for every `k` but the tail.
-pub(super) fn scooter_drop_index(segments: &[PlanSegment]) -> Option<usize> {
+pub(super) fn scooter_drop_index(segments: &[ResolvedSegment]) -> Option<usize> {
     let last = segments.iter().rposition(|s| s.on_scooter)?;
     (last + 1 < segments.len()).then_some(last)
 }
@@ -80,6 +96,20 @@ mod tests {
 
     fn seg(speed: f64, on_scooter: bool) -> PlanSegment {
         PlanSegment {
+            speed_m_per_min: Some(speed),
+            on_scooter,
+        }
+    }
+
+    fn inherit(on_scooter: bool) -> PlanSegment {
+        PlanSegment {
+            speed_m_per_min: None,
+            on_scooter,
+        }
+    }
+
+    fn resolved(speed: f64, on_scooter: bool) -> ResolvedSegment {
+        ResolvedSegment {
             speed_m_per_min: speed,
             on_scooter,
         }
@@ -91,6 +121,21 @@ mod tests {
         assert_eq!(out.len(), 3);
         assert!(out.iter().all(|s| s.speed_m_per_min == 10.0));
         assert!(out.iter().all(|s| !s.on_scooter));
+    }
+
+    #[test]
+    fn a_full_length_list_of_unset_speeds_is_the_same_as_no_list_at_all() {
+        // THE regression this file exists to prevent. The frontend always sends one entry per span,
+        // so if these two disagreed the diver's configured speed would be unreachable in practice
+        // while every test that passes `&[]` stayed green.
+        let unset = resolve_segments(
+            &[inherit(false), inherit(false), inherit(false)],
+            2,
+            17.0,
+            true,
+        );
+        assert_eq!(unset, resolve_segments(&[], 2, 17.0, true));
+        assert!(unset.iter().all(|s| s.speed_m_per_min == 17.0));
     }
 
     #[test]
@@ -120,6 +165,24 @@ mod tests {
     }
 
     #[test]
+    fn an_edited_span_keeps_its_speed_while_its_neighbours_inherit() {
+        let out = resolve_segments(
+            &[inherit(false), seg(55.0, false), inherit(false)],
+            2,
+            12.0,
+            true,
+        );
+        assert_eq!(
+            out,
+            vec![
+                resolved(12.0, false),
+                resolved(55.0, false),
+                resolved(12.0, false)
+            ]
+        );
+    }
+
+    #[test]
     fn without_a_rig_the_scooter_flag_is_dropped_but_the_speed_is_kept() {
         let out = resolve_segments(&[seg(55.0, true)], 0, 10.0, false);
         assert_eq!(out[0].speed_m_per_min, 55.0);
@@ -130,21 +193,29 @@ mod tests {
     fn the_drop_is_the_boundary_after_the_last_scootered_segment() {
         // scooter, scooter, swim -> parked at way point 1 (the end of segment 1).
         assert_eq!(
-            scooter_drop_index(&[seg(55.0, true), seg(55.0, true), seg(10.0, false)]),
+            scooter_drop_index(&[
+                resolved(55.0, true),
+                resolved(55.0, true),
+                resolved(10.0, false)
+            ]),
             Some(1)
         );
         // A tow: swimming in the middle, back on the scooter after, so the units travel on.
         assert_eq!(
-            scooter_drop_index(&[seg(55.0, true), seg(10.0, false), seg(55.0, true)]),
+            scooter_drop_index(&[
+                resolved(55.0, true),
+                resolved(10.0, false),
+                resolved(55.0, true)
+            ]),
             None
         );
         // Carried to the turnaround - the last span is scootered, so its boundary is the turn.
         assert_eq!(
-            scooter_drop_index(&[seg(55.0, true), seg(55.0, true)]),
+            scooter_drop_index(&[resolved(55.0, true), resolved(55.0, true)]),
             None
         );
         // Never on a scooter at all.
-        assert_eq!(scooter_drop_index(&[seg(10.0, false)]), None);
+        assert_eq!(scooter_drop_index(&[resolved(10.0, false)]), None);
     }
 
     #[test]

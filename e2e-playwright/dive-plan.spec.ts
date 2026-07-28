@@ -28,7 +28,7 @@ const sectionSeeds: SectionSeed[] = [
 
 type PlanMetaLite = { id: number; name: string };
 type StationRefLite = { section_id: number; station_index: number };
-type PlanSegmentLite = { speed_m_per_min: number; on_scooter: boolean };
+type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
 
 type E2EWindow = {
   __E2E_TEST__?: {

@@ -192,9 +192,16 @@ pub struct Team {
 /// two scooter segments is just a tow.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
 pub struct PlanSegment {
-    /// Travel speed on this span (m/min). Gas is `rmv x ata(avg_depth) x length / speed`, so this
-    /// is the only per-segment quantity the reach field needs.
-    pub speed_m_per_min: f64,
+    /// Travel speed on this span (m/min), or `None` to fly it at the plan's own speed
+    /// (`survey_speed_m_per_min` falling back to `swim_speed_m_per_min`). Gas is
+    /// `rmv x ata(avg_depth) x length / speed`, so this is the only per-segment quantity the reach
+    /// field needs.
+    ///
+    /// ⚠ **`None` is load-bearing, not a convenience.** The frontend always sends a full-length
+    /// list, so a plain `f64` here would mean every span always carries an explicit number and the
+    /// diver's configured swim / survey speed could never reach the engine again - which is exactly
+    /// what shipped and had to be fixed. Only a span the diver has actually edited holds a number.
+    pub speed_m_per_min: Option<f64>,
     /// Whether this span is flown under scooter power, and so spends the rig's usable range.
     pub on_scooter: bool,
 }

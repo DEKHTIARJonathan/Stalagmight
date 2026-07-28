@@ -143,7 +143,7 @@ mod tests {
         // A bare pin carries no label - the field defaults rather than failing the parse.
         assert!(snap.marked_points[1].label.is_none());
         assert_eq!(snap.segments.len(), 2);
-        assert_eq!(snap.segments[0].speed_m_per_min, 10.0);
+        assert_eq!(snap.segments[0].speed_m_per_min, Some(10.0));
         assert!(snap.segments[0].on_scooter);
         assert!(!snap.segments[1].on_scooter);
         // Re-serialize and reload: the round trip is lossless for the known fields.

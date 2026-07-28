@@ -1,6 +1,6 @@
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
-import { useGasPlanStore } from '../../store/gasPlanStore';
+import { planSpeed, useGasPlanStore } from '../../store/gasPlanStore';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import { formatStationId } from '../../utils/formatters';
 import { speedFromDisplay, speedToDisplay } from '../../utils/formatGas';
@@ -46,6 +46,10 @@ export function SegmentsTable() {
   // drops `on_scooter` entirely without a rig, so a checked-but-inert box would be a lie.
   const hasRig = gasConfig.dpv != null;
   const dropRef = reachField?.scooter_drop_ref ?? null;
+  // A span with no speed of its own is flown at the plan's speed, so that is what its field shows.
+  // Typing in the field sets an explicit speed for that span only; the rest keep following the
+  // Swim-speed field above and Settings > Gas.
+  const inherited = planSpeed(gasConfig);
 
   // Every boundary the panel can NAME, in visit order: before segment 0 (the origin, or the
   // entrance default), each way point in between, and after the last segment (the chosen
@@ -97,7 +101,7 @@ export function SegmentsTable() {
                 <td className="py-1 pr-3">
                   <div className="flex items-center gap-1">
                     <PositiveNumberField
-                      value={speedToDisplay(seg.speed_m_per_min, units)}
+                      value={speedToDisplay(seg.speed_m_per_min ?? inherited, units)}
                       onCommit={(n) => setSpeed(idx, speedFromDisplay(n, units))}
                       step={units === 'imperial' ? 5 : 1}
                       displayPrecision={1}
@@ -117,7 +121,7 @@ export function SegmentsTable() {
                 <td className="py-1 pr-3">
                   <input
                     type="checkbox"
-                    checked={seg.on_scooter}
+                    checked={hasRig && seg.on_scooter}
                     disabled={!hasRig}
                     onChange={(e) => setScooter(idx, e.target.checked)}
                     title={hasRig ? undefined : t('gasPanel.segments.noRigHint')}

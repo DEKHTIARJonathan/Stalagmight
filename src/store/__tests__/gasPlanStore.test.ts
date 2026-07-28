@@ -232,6 +232,19 @@ describe('gasPlanStore segments (#317)', () => {
     expect(useGasPlanStore.getState().segments).toHaveLength(1);
   });
 
+  it('seeds every fresh span with NO speed of its own, so the configured speed still reaches the engine', () => {
+    // ⚠ #317 regression guard, the store half. Seeding a number here - even the correct one -
+    // permanently overrides Settings > Gas and the panel's Swim-speed field, because the panel
+    // sends a full-length list on every compute and `resolve_segments` only falls back to the
+    // plan speed for spans that carry `null`. The Rust twin is
+    // `the_plan_speed_still_reaches_the_engine_through_a_full_length_segment_list` (gas/tests.rs).
+    expect(useGasPlanStore.getState().segments).toEqual([{ speed_m_per_min: null, on_scooter: false }]);
+    useGasPlanStore.getState().addWaypoint(a);
+    expect(
+      useGasPlanStore.getState().segments.every((s) => s.speed_m_per_min === null)
+    ).toBe(true);
+  });
+
   it('stays length-synced (segments.length === waypoints.length + 1) through add/remove/move', () => {
     useGasPlanStore.getState().addWaypoint(a);
     expect(useGasPlanStore.getState().segments).toHaveLength(2);
@@ -280,6 +293,37 @@ describe('gasPlanStore segments (#317)', () => {
       { speed_m_per_min: 8, on_scooter: false },
       { speed_m_per_min: 30, on_scooter: true },
     ]);
+  });
+
+  it('removeWaypoint merges on the EFFECTIVE speeds, so an inheriting span is not treated as infinitely fast', () => {
+    // A span with no speed of its own flies at the plan speed (10 by default here), which is
+    // SLOWER than the 30 next to it - so the merged span must keep inheriting rather than
+    // adopting 30. Comparing the raw `null` against a number would pick the wrong half and
+    // understate the gas the merged span costs.
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: null, on_scooter: false },
+      { speed_m_per_min: 30, on_scooter: false },
+      { speed_m_per_min: 30, on_scooter: false },
+    ]);
+    useGasPlanStore.getState().removeWaypoint(0);
+    expect(useGasPlanStore.getState().segments[0]).toEqual({
+      speed_m_per_min: null,
+      on_scooter: false,
+    });
+
+    // And the other direction: an explicit speed SLOWER than the plan speed wins over an
+    // inheriting neighbour.
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: null, on_scooter: false },
+      { speed_m_per_min: 4, on_scooter: false },
+    ]);
+    useGasPlanStore.getState().removeWaypoint(0);
+    expect(useGasPlanStore.getState().segments[0]).toEqual({
+      speed_m_per_min: 4,
+      on_scooter: false,
+    });
   });
 
   it('setSegments nulls reachField and clears stageDropOverrides (a gas input, like setCylinders)', () => {

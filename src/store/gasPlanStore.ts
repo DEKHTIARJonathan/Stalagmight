@@ -54,10 +54,39 @@ function defaultCylinders(): Cylinder[] {
   return al80 ? [cylinderFromPreset(al80), cylinderFromPreset(al80)] : [];
 }
 
-/** A fresh span's default pace/propulsion (#317): the configured swim speed, no scooter -
- *  the same assumption the engine already made about every leg before segments existed. */
+/**
+ * A fresh span's default pace/propulsion (#317): no speed of its own, no scooter.
+ *
+ * ⚠ `speed_m_per_min: null` is load-bearing. The panel sends one segment per span from the moment
+ * Plan mode opens, so seeding a NUMBER here (even the right one) permanently overrides the diver's
+ * configured swim / survey speed - the engine would never see it again, and the Swim-speed field
+ * would look live while changing nothing. `null` means "fly this span at the plan's speed"; only a
+ * span the diver actually edits gets a number.
+ */
 function defaultSegment(): PlanSegment {
-  return { speed_m_per_min: defaultConfig.gas.swim_speed_m_per_min, on_scooter: false };
+  return { speed_m_per_min: null, on_scooter: false };
+}
+
+/** The speed a span with no speed of its own is flown at - what the engine resolves `null` to. */
+export function planSpeed(gasConfig: GasConfig): number {
+  return gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min;
+}
+
+/**
+ * Collapse two spans into one when the way point between them goes away.
+ *
+ * Mirrors `merge_segments_for_surviving_waypoints` (core/state/dive_plan.rs), including its tie
+ * rule: the SLOWER effective speed wins, and a tie keeps `before`, so a span that was inheriting
+ * the plan speed keeps inheriting it. Either half taken alone would understate the gas the merged
+ * span actually costs.
+ */
+function mergeSegments(before: PlanSegment, after: PlanSegment, speed: number): PlanSegment {
+  const effective = (s: PlanSegment) => s.speed_m_per_min ?? speed;
+  return {
+    speed_m_per_min:
+      effective(after) < effective(before) ? after.speed_m_per_min : before.speed_m_per_min,
+    on_scooter: before.on_scooter && after.on_scooter,
+  };
 }
 
 interface GasPlanState {
@@ -292,10 +321,7 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
       const after = s.segments[index + 1];
       const merged: PlanSegment =
         before && after
-          ? {
-              speed_m_per_min: Math.min(before.speed_m_per_min, after.speed_m_per_min),
-              on_scooter: before.on_scooter && after.on_scooter,
-            }
+          ? mergeSegments(before, after, planSpeed(s.gasConfig))
           : (before ?? after ?? defaultSegment());
       return {
         waypoints: s.waypoints.filter((_w, i) => i !== index),

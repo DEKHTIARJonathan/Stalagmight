@@ -287,7 +287,7 @@ async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite |
   });
 }
 
-type PlanSegmentLite = { speed_m_per_min: number; on_scooter: boolean };
+type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
 
 /** The `segments` argument the LAST compute_gas_reach_field call was invoked with (#317) - the
  *  wiring guard for the Segments table: a table that only re-rendered itself would leave this
@@ -1487,8 +1487,20 @@ test.describe('Gas planning', () => {
     await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
     await page.locator('[data-testid="plan-tab-segments"]').click();
     const speed = page.locator('[data-testid="segment-speed-0"]');
-    // Seeded from the default swim speed (10 m/min, metric).
+    // Shows the plan's own speed (the default swim speed, 10 m/min metric) without adopting it.
     await expect(speed).toHaveValue(/^10(\.0)?$/);
+    // ...and the request carries NO speed for that span, so the engine applies the configured one.
+    // Sending a number here - even the right one - is exactly what disabled the swim-speed setting
+    // in the first pass, while every screen assertion above still passed.
+    await expect
+      .poll(
+        async () => {
+          const segs = await lastGasReachSegments(page);
+          return segs.length === 0 ? 'no-compute-yet' : segs[0].speed_m_per_min;
+        },
+        { timeout: 3000 }
+      )
+      .toBeNull();
 
     await speed.fill('23');
     await speed.blur();

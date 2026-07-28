@@ -3920,9 +3920,85 @@ fn rig_covering(range_m: f64) -> DpvRig {
 
 fn seg(speed_m_per_min: f64, on_scooter: bool) -> PlanSegment {
     PlanSegment {
-        speed_m_per_min,
+        speed_m_per_min: Some(speed_m_per_min),
         on_scooter,
     }
+}
+
+/// A span the diver has not given a speed of its own - it flies at the plan's speed. This is what
+/// the frontend sends for every unedited span, so it is the shape most engine tests should use.
+fn inherit_seg(on_scooter: bool) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: None,
+        on_scooter,
+    }
+}
+
+#[test]
+fn the_plan_speed_still_reaches_the_engine_through_a_full_length_segment_list() {
+    // ⚠ THE #317 REGRESSION GUARD. Segments shipped with `speed_m_per_min: f64`, and the panel
+    // sends one entry per span from the moment Plan mode opens - so every span always carried an
+    // explicit number and the diver's configured survey / swim speed stopped reaching the engine
+    // entirely. Settings > Gas and the panel's own Swim-speed field went dead while still looking
+    // live, because changing them nulls `reachField` and the refetch comes back IDENTICAL.
+    //
+    // Every engine test at the time passed `&[]`, which selects the "no segments" branch that
+    // production never sends - so the whole suite stayed green over a disabled feature. This test
+    // exists to be the one that sends what the frontend actually sends.
+    //
+    // survey_speed 5 against the swim default 10 doubles the in-leg gas: station 1 costs 300 L at
+    // 10 m/min and 600 L at 5. Any regression that ignores the config speed reads 300.
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let config = GasConfig {
+        survey_speed_m_per_min: Some(5.0),
+        ..GasConfig::default()
+    };
+
+    // What the frontend sends for a plan with one way point and nothing edited: TWO spans, both
+    // inheriting. (The way point itself is what makes the list longer than one entry.)
+    let waypoint = StationRef::new(sec, 1);
+    let sent = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[waypoint],
+        &[inherit_seg(false), inherit_seg(false)],
+        &diver,
+        &[big.clone()],
+        &config,
+        &[],
+    );
+    assert!(
+        (field_gas(&sent, StationRef::new(sec, 1)) - 600.0).abs() < 1e-6,
+        "the configured survey speed did not reach the engine: station 1 cost {} L, expected 600",
+        field_gas(&sent, StationRef::new(sec, 1))
+    );
+
+    // And an all-inheriting list is byte-for-byte the empty-list field, which is what makes every
+    // `&[]` test in this file meaningful for the shape production sends.
+    let empty = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[waypoint],
+        &[],
+        &diver,
+        &[big],
+        &config,
+        &[],
+    );
+    assert_eq!(sent.gas_to_reach, empty.gas_to_reach);
+    assert_eq!(sent.reachable, empty.reachable);
+    assert_eq!(sent.route_runtime_min, empty.route_runtime_min);
 }
 
 /// A trunk of 3 shots (100 m each, descending 0 -> 30 m) with a 1-shot side branch whose station 0
