@@ -1696,26 +1696,41 @@ impl AppState {
         // same fail direction as today, over a window of milliseconds rather than a
         // whole process lifetime.
         //
-        // THREE states, not two, because the two questions the probe answers fail safe
-        // in opposite directions. `Ok(None)` (unheld) is the only answer that proves
-        // the unheld -> ours transition, so it alone may mint an authorship record.
-        // `Ok(Some(_))` is a lock the account ALREADY held - the acquire below is a
-        // no-op and we INHERITED it, which is what `release_if_ours` must not hand
-        // back. `Err` is neither: unknown provenance, so no record (as above) but
-        // still a release (see there).
-        let (acquired_here, inherited_lock) = match self.speleodb_lock_holder_checked(
+        // THREE probe states, not two, because the two questions the probe answers
+        // fail safe in opposite directions - and only the FIRST is about authorship:
+        //
+        // - `Ok(None)` (unheld) is the only answer that proves the unheld -> ours
+        //   transition, so it alone may mint an authorship record. A lock this call
+        //   demonstrably took is also ours to hand back on the way out.
+        // - `Ok(Some(_))` is a lock the account ALREADY held: the acquire below is a
+        //   server-side no-op, we INHERITED it, and no unwind here may hand it back.
+        // - `Err` is neither. Provenance is unknown, so no record (as above), and the
+        //   keep-or-release question is settled by what a release would COST rather
+        //   than by who took the lock - see `keep_lock_on_unwind` below, which is
+        //   exactly that decision and NOT a claim about inheritance.
+        //
+        // `acquired_here` stays keyed on `Ok(None)` alone: it licenses the authorship
+        // shortcut, and only a mutex the server said was free proves we earned it.
+        let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
             &endpoint,
             &token,
             insecure_http,
             &link.project_id,
         ) {
+            // Unheld -> this call took it: record the acquisition, hand it back if we
+            // walk away.
             Ok(None) => (true, false),
+            // Already ours -> inherited: no record, and never hand it back.
             Ok(Some(_)) => (false, true),
-            Err(_) => (false, false),
+            // Unknown -> no record either way, and keep the lock only when there is
+            // un-pushed work behind it to protect (see the closure below).
+            Err(_) => (false, link.has_unpushed_edits),
         };
 
         // The unwind shared by every arm below that walks away WITHOUT an edit
-        // session: hand the lock back - but only when this call is what took it.
+        // session: hand the lock back, UNLESS `keep_lock_on_unwind` says the lock is
+        // worth more here than the tidy-up is - either because we know we inherited it,
+        // or because we do not know and there are un-pushed edits behind it.
         //
         // Releasing a lock we merely INHERITED is the held-lock prompt's "Continue
         // editing" surrendering the very mutex it exists to protect: a stranded
@@ -1729,17 +1744,29 @@ impl AppState {
         // recoverable (the next login's scan re-raises this very prompt, and the server
         // mutex times out on its own), un-pushed work behind a freed lock is not.
         //
-        // A FAILED probe releases - `Err` is not `inherited_lock` - because there we do
-        // not know that we inherited anything, and stranding a lock we may well have
-        // just taken is the worse half of that trade. That is also exactly today's
-        // behaviour on the network-blip path, so the fix adds no new stranding.
+        // A FAILED probe cannot decide this by provenance - it does not know any - so
+        // it decides by consequence, and the two blanket answers are both wrong:
+        //
+        // - Blanket RELEASE (what this used to do) re-opens the very hole above. A
+        //   `get_project` that blips while the acquire succeeds over a lock the
+        //   ACCOUNT already held reads as "not inherited", and the first unwind then
+        //   frees the project for the next writer while the un-pushed work is still
+        //   only on this machine.
+        // - Blanket KEEP strands a lock we may well have just taken over a copy with
+        //   nothing to protect, for nothing - recoverable only via the next login's
+        //   held-lock prompt or the server-side timeout.
+        //
+        // So the unknown case keys on whether there IS anything to protect
+        // (`Err(_) => link.has_unpushed_edits`), which is the same asymmetry
+        // `speleodb_lock_release_params` already encodes: never silently release a
+        // lock whose project still holds edits the server has not seen.
         //
         // Nothing touches the acquisition record on the skip path, deliberately: the
         // record is dropped by RELEASING (in `speleodb_release_best_effort`), and a
-        // release we declined to make ends no claim. `acquired_here` is false here, so
-        // this call mints nothing either - the record and the lock stay in step.
-        let release_if_ours = || {
-            if !inherited_lock {
+        // release we declined to make ends no claim. `acquired_here` is false on both
+        // skip paths, so this call mints nothing either - record and lock stay in step.
+        let release_unless_kept = || {
+            if !keep_lock_on_unwind {
                 self.speleodb_release_best_effort(
                     &endpoint,
                     &token,
@@ -1777,7 +1804,11 @@ impl AppState {
         }) {
             Ok(v) => v,
             Err(e) => {
-                release_if_ours();
+                // The likeliest place an unknown-provenance probe lands: whatever made
+                // the probe GET fail tends to fail this GET too. So this is the site
+                // that decides how much a blanket answer would cost - a dirty copy
+                // keeps the lock that is guarding it, a clean one still hands it back.
+                release_unless_kept();
                 return Err(dto_for_error(Endpoint::GetProject, &e));
             }
         };
@@ -1814,12 +1845,19 @@ impl AppState {
                 // A failure here (e.g. a corrupt re-pulled dump) leaves us holding
                 // the lock with a closed project - release it before surfacing the
                 // error so it isn't stranded (mirrors the divergence arm), and on the
-                // same terms: only a lock this call took. This arm looks like the one
-                // safe place to release regardless, since the FF verdict implies a
-                // CLEAN copy with nothing un-pushed to strand - but the failure it is
-                // unwinding includes `Protect` refusing precisely BECAUSE the copy
-                // turned out dirty, which is the one case where releasing an inherited
-                // lock does abandon un-pushed work. The invariant holds everywhere.
+                // same terms: `release_unless_kept`, never a bare release. This arm
+                // looks like the one safe place to release regardless, since the FF
+                // verdict is reached only with `link.has_unpushed_edits == false` -
+                // but the failure it is unwinding includes `Protect` refusing precisely
+                // BECAUSE the copy turned out to hold un-pushed edits, which is the one
+                // case where releasing an INHERITED lock does abandon them.
+                //
+                // Known residual: `Protect` reads the copy at the cache path (and fails
+                // closed when it cannot be read), so it can refuse over dirt the OPEN
+                // project's link does not carry. `keep_lock_on_unwind` was decided from
+                // that link before the acquire, so on the unknown-probe path this site
+                // still releases there. Inherited locks are unaffected (they are kept
+                // outright); no pre-acquire flag can see a second local copy.
                 let local_path = match self.speleodb_fast_forward(
                     &endpoint,
                     &token,
@@ -1830,7 +1868,7 @@ impl AppState {
                 ) {
                     Ok(p) => p,
                     Err(e) => {
-                        release_if_ours();
+                        release_unless_kept();
                         return Err(local_dto(e));
                     }
                 };
@@ -1854,13 +1892,16 @@ impl AppState {
             // surface the divergence prompt - never overwrite, never a hard error
             // (#193 b2). The edit gate stays disabled.
             //
-            // A lock we INHERITED is kept instead (see `release_if_ours`), and the
-            // result is the same either way: the user gets the divergence prompt over
-            // a read-only project, now still holding the mutex that was guarding their
-            // un-pushed work. `Take remote` / `Save as unmanaged` reconcile from there
-            // exactly as before - neither needs the lock released first.
+            // A lock we INHERITED is kept instead - as is one whose provenance the
+            // probe could not establish over a copy with un-pushed edits, which is the
+            // shape this arm sees most (a dirty copy is what makes the fence say
+            // Diverged in the first place); see `release_unless_kept`. The result is
+            // the same either way: the user gets the divergence prompt over a read-only
+            // project, now still holding the mutex that was guarding their un-pushed
+            // work. `Take remote` / `Save as unmanaged` reconcile from there exactly as
+            // before - neither needs the lock released first.
             ReconcileVerdict::Diverged => {
-                release_if_ours();
+                release_unless_kept();
                 Ok(StartEditingResult::DivergenceNeeded)
             }
         }
@@ -2752,8 +2793,9 @@ impl AppState {
     /// proceed (divergence / anomaly). A failure is logged, never surfaced.
     ///
     /// "TOOK" is load-bearing: `speleodb_start_editing` routes its abort arms through
-    /// `release_if_ours`, which skips this entirely for a lock the account already
-    /// held before that call (see there).
+    /// `release_unless_kept`, which skips this entirely for a lock the account already
+    /// held before that call - and for one whose provenance its pre-acquire probe could
+    /// not establish over a project with un-pushed edits (see there).
     pub(super) fn speleodb_release_best_effort(
         &self,
         endpoint: &str,
@@ -5778,6 +5820,161 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}"), listener, seen)
+    }
+
+    /// [`recording_stub`] that FAILS the bare project GET - `speleodb_start_editing`'s
+    /// pre-acquire lock probe - with a 503, while answering every other call (acquire,
+    /// revisions, release) normally. The unknown-provenance path, which no uniform stub
+    /// can produce: `always_answering_stub` answers the probe as happily as the rest.
+    ///
+    /// Keyed on the PATH rather than on "the first request", because `get_project` is
+    /// idempotent and retries: refusing only the first attempt would let attempt 2
+    /// succeed and the probe would come back `Ok` after all. A 503 on every attempt is
+    /// a transient server failure that outlives our retry budget, which is exactly the
+    /// `Err` the probe reports. The probe is the only call in this flow that GETs
+    /// `projects/{id}/` with no further suffix (`revisions/`, `acquire/` and `release/`
+    /// all carry one), so the path pins it precisely.
+    fn stub_failing_the_lock_probe(
+        body: &'static str,
+    ) -> (
+        String,
+        std::net::TcpListener,
+        std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+    ) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let accept_on = listener.try_clone().expect("clone listener");
+        let log = std::sync::Arc::clone(&seen);
+        std::thread::spawn(move || {
+            let probe_path = format!("/projects/{REMOTE_ID}/");
+            while let Ok((mut stream, _)) = accept_on.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut req = Vec::new();
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    req.extend_from_slice(&chunk[..n]);
+                }
+                let text = String::from_utf8_lossy(&req).into_owned();
+                let line = text.lines().next().unwrap_or_default().to_owned();
+                if let Ok(mut lines) = log.lock() {
+                    lines.push(line.clone());
+                }
+                let is_probe = line.starts_with("GET ")
+                    && line
+                        .split_whitespace()
+                        .nth(1)
+                        .is_some_and(|path| path.ends_with(&probe_path));
+                let resp = if is_probe {
+                    "HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\
+                     Connection: close\r\n\r\n"
+                        .to_owned()
+                } else {
+                    format!(
+                        "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                         Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                        body.len()
+                    )
+                };
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener, seen)
+    }
+
+    #[test]
+    fn an_unreadable_probe_over_unpushed_edits_keeps_the_lock() {
+        // The third probe state, and the one neither test above covers: the pre-acquire
+        // GET fails while the acquire itself succeeds. Provenance is then UNKNOWN - the
+        // acquire's 200 is equally the no-op of re-taking a lock this account already
+        // holds - so reading it as "not inherited" and releasing on the way out frees
+        // the project for the next writer while the un-pushed work is still only on
+        // this machine. That is the same loss `resuming_an_inherited_lock_over_a_
+        // diverged_tip_never_hands_it_back` prevents, reached through a network blip
+        // instead of a successful probe.
+        //
+        // So the unknown case is decided by what a release would COST: with un-pushed
+        // edits behind the lock, it is not handed back. Asserted by CONTRADICTION on
+        // the wire, with the acquire asserted POSITIVELY from the same log so this
+        // cannot pass by a flow that never left the process.
+        let (base, _listener, seen) = stub_failing_the_lock_probe(SAME_ACCOUNT_HOLDER_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        let result = state.speleodb_start_editing().expect("start editing");
+        assert!(
+            matches!(result, StartEditingResult::DivergenceNeeded),
+            "a moved tip over un-pushed work still routes to the divergence prompt, \
+             got {result:?}"
+        );
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/acquire/"))),
+            "precondition: the probe failed but the acquire still ran against the stub, \
+             so the absence below is about the release and not about a flow that never \
+             left the process; saw {seen:?}"
+        );
+        assert!(
+            !seen
+                .iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "a lock whose provenance we could not read must not be handed back over \
+             un-pushed work: it may be the very lock guarding it; saw {seen:?}"
+        );
+        assert!(
+            state.speleodb_open_link().expect("link").has_unpushed_edits,
+            "and the un-pushed work the kept lock is protecting is untouched"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "keeping the lock is NOT a claim to have taken it - a failed probe still \
+             mints no authorship record"
+        );
+    }
+
+    /// A history whose tip is unrelated to our recorded BASE (`abc123` is absent, so it
+    /// is not an ancestor of the tip): [`sync::reconcile_verdict`] fails closed to
+    /// Diverged even over a CLEAN copy, which is the one way a unit test can reach an
+    /// unwind arm with nothing un-pushed to protect.
+    const CLEAN_DIVERGED_BODY: &str = r#"{
+        "id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+        "commits":[{"id":"zzz999","parent_ids":[],"author_email":"u@x"}]}"#;
+
+    #[test]
+    fn an_unreadable_probe_over_a_clean_copy_still_releases_the_lock() {
+        // The other half of the unknown-probe rule, and the reason it is not a blanket
+        // "keep on unknown": with NOTHING un-pushed there is no work to strand, and a
+        // lock this call may well have just taken would be left held over an edit
+        // session that never started - recoverable only through the next login's
+        // held-lock prompt or the server's own timeout.
+        //
+        // Same failing probe as the test above, same divergence routing; only the dirty
+        // bit differs, which is exactly the input the rule keys on.
+        let (base, _listener, seen) = stub_failing_the_lock_probe(CLEAN_DIVERGED_BODY);
+        let (_temp, state) = remote_fixture_with_dirty_bit(false);
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        let result = state.speleodb_start_editing().expect("start editing");
+        assert!(
+            matches!(result, StartEditingResult::DivergenceNeeded),
+            "an unrelated tip fails closed to the divergence prompt even when clean, \
+             got {result:?}"
+        );
+
+        let seen = seen.lock().expect("request log").clone();
+        assert!(
+            seen.iter()
+                .any(|r| r.contains(&format!("/projects/{REMOTE_ID}/release/"))),
+            "with nothing un-pushed behind it, a lock of unknown provenance is still \
+             handed back rather than left lingering; saw {seen:?}"
+        );
     }
 
     /// A loopback stub that only COUNTS connections, for asserting that a request
