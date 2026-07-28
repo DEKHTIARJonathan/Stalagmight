@@ -175,6 +175,7 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
       origin: s.origin,
       endpoint: s.endpoint,
       waypoints: s.waypoints,
+      segments: s.segments,
       diver: s.diver,
       cylinders: s.cylinders,
       gas_config: s.gasConfig,
