@@ -193,14 +193,11 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
         return None;
     }
     // Station `i` is bounded by the shot before it and the shot after it; either is absent at
-    // the ends of the section.
+    // the ends of the section. A SHOT-LESS section - a GPX waypoint imports as exactly one, a
+    // single station with no shots at all - has neither, and that is not an error: `None` on
+    // both sides is a complete description of "the only station this section has".
     let before = i.checked_sub(1).and_then(|p| section.shots.get(p));
     let after = section.shots.get(i);
-    // A station whose only neighbours have no UUID cannot be described at all - the same
-    // condition under which `key_for_ref` returns None today.
-    if before.is_none() && after.is_none() {
-        return None;
-    }
     let a = before.and_then(|s| s.uuid.clone());
     let b = after.and_then(|s| s.uuid.clone());
     if before.is_some() && a.is_none() {
@@ -270,6 +267,10 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
                 p + 1
             }
         }
+        // Recorded with no neighbours at all: a shot-less section's single station, which needs
+        // none. Distinguished from "both neighbours were DELETED" by the stored anchor rather
+        // than by the lookup, since a missing uuid and a missing shot both come back as `None`.
+        (None, None) if anchor.a.is_none() && anchor.b.is_none() => 0,
         // Neither neighbour survives: nothing left to anchor on.
         (None, None) => return None,
     };
@@ -923,6 +924,73 @@ mod tests {
             "the junction moved one index along because a shot was inserted before it"
         );
         assert_eq!(stale, 0);
+    }
+
+    /// A shot-less section is one station and no shots - what a GPX waypoint imports as. It has
+    /// no neighbours to be named by, and that is a complete description rather than a failure.
+    ///
+    /// The old `SectionKey::SectionStart` form persisted it fine, so anchoring it as
+    /// unresolvable would have meant a plan SILENTLY dropping an origin or endpoint on a
+    /// waypoint, and outright refusing a way point or marked point on one - losing data purely
+    /// by being saved after an upgrade.
+    #[test]
+    fn a_shot_less_section_anchors_its_only_station() {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: Vec::new(),
+                ..Default::default()
+            })
+            .id;
+
+        let anchor = to_anchor(&project, Some(StationRef::new(sec, 0)))
+            .expect("a waypoint's only station must be anchorable");
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &anchor, &mut stale),
+            Some(StationRef::new(sec, 0))
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// ...and it round-trips through a whole persisted plan, which is the path that used to
+    /// drop it: the origin/endpoint null out silently and a way point on it is REFUSED.
+    #[test]
+    fn a_plan_on_a_shot_less_section_round_trips() {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: Vec::new(),
+                ..Default::default()
+            })
+            .id;
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let only = StationRef::new(sec, 0);
+        let snapshot = DivePlanSnapshot {
+            origin: Some(only),
+            endpoint: Some(only),
+            waypoints: vec![only],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: vec![MarkedPoint {
+                station: only,
+                label: Some("wp".to_string()),
+            }],
+        };
+
+        let persisted = state
+            .to_persisted(&snapshot)
+            .expect("a way point on a shot-less section must not be refused");
+        let (back, stale) = state.resolve_persisted(persisted).unwrap();
+        assert_eq!(stale, 0);
+        assert_eq!(back.origin, Some(only));
+        assert_eq!(back.endpoint, Some(only));
+        assert_eq!(back.waypoints, vec![only]);
+        assert_eq!(back.marked_points[0].station, only);
     }
 
     /// A single-shot section has two ends and both touch the same one shot, so nothing

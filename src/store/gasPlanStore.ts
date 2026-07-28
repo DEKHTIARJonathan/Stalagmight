@@ -122,13 +122,16 @@ interface GasPlanState {
    * pins (see `utils/reverseAftermath`); this only installs them, and blanks the
    * cached field the way every other route-input setter does.
    */
-  applyReversedPins: (pins: {
-    origin: StationRef | null;
-    endpoint: StationRef | null;
-    waypoints: StationRef[];
-    markedPoints: MarkedPoint[];
-    stageDropOverrides: (StationRef | null)[];
-  }) => void;
+  applyReversedPins: (
+    pins: {
+      origin: StationRef | null;
+      endpoint: StationRef | null;
+      waypoints: StationRef[];
+      markedPoints: MarkedPoint[];
+      stageDropOverrides: (StationRef | null)[];
+    },
+    baseline: DivePlanSnapshot | null
+  ) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -208,7 +211,18 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // off-route and hide the stage-drop entries (or offer them on a station that
   // is no longer on the route - the unsafe direction). Blank, not mirrored: the
   // field's refs are re-derived by the refetch this same set() triggers.
-  applyReversedPins: (pins) => set({ ...pins, reachField: null, lastReachField: null }),
+  applyReversedPins: (pins, baseline) =>
+    set({
+      ...pins,
+      reachField: null,
+      lastReachField: null,
+      // The saved-plan baseline is mirrored WITH the pins. It is positional too, so leaving it
+      // behind would make `selectIsPlanDirty` compare mirrored pins against pre-reverse indices
+      // and report a plan the diver never edited as unsaved - nagging a save, or blocking a plan
+      // switch, over a route that is still the same physical route. Nothing needs re-saving: the
+      // `.plnx` names stations by the shots they sit between, so a reverse does not move them.
+      ...(baseline === null ? {} : { loadedPlanBaseline: baseline }),
+    }),
 
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),

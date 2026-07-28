@@ -7,7 +7,7 @@
  * with no error - so every assertion here compares against a mirrored index, and
  * every fixture uses a station index that differs from its mirror.
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import {
   applyTransform,
   composeReverseTransforms,
@@ -19,6 +19,8 @@ import {
   type PlanPins,
   type ReverseTransform,
 } from '../reverseAftermath';
+import { applyReverseAftermath } from '../reverseAftermath';
+import { useGasPlanStore } from '../../store/gasPlanStore';
 import type { Section } from '../../types/project';
 
 const REVERSED = 7;
@@ -287,5 +289,61 @@ describe('composeReverseTransforms', () => {
     expect(
       composeReverseTransforms([entry(REVERSED, 7)], [section(REVERSED, 0)]).size
     ).toBe(0);
+  });
+});
+
+describe('applyReverseAftermath and the loaded-plan baseline', () => {
+  beforeEach(() => {
+    useGasPlanStore.setState({
+      origin: ref(REVERSED, 2),
+      endpoint: null,
+      waypoints: [],
+      markedPoints: [],
+      stageDropOverrides: [],
+      loadedPlanId: 1,
+      loadedPlanBaseline: null,
+    });
+  });
+
+  it('mirrors the saved-plan baseline alongside the pins', () => {
+    // The baseline holds the same POSITIONAL refs as the live pins. Mirroring one without the
+    // other makes selectIsPlanDirty compare two different numberings and call a plan the diver
+    // never touched unsaved - nagging a save, or blocking a plan switch, over a route that is
+    // still the same physical route.
+    const store = useGasPlanStore.getState();
+    store.applyLoadedPlan(1, {
+      origin: ref(REVERSED, 2),
+      endpoint: null,
+      waypoints: [],
+      diver: store.diver,
+      cylinders: store.cylinders,
+      gas_config: store.gasConfig,
+      stage_drop_overrides: [],
+      marked_points: [],
+    });
+
+    applyReverseAftermath(counts);
+
+    const after = useGasPlanStore.getState();
+    expect(after.origin).toEqual(ref(REVERSED, 5));
+    expect(after.loadedPlanBaseline?.origin).toEqual(ref(REVERSED, 5));
+  });
+
+  it('leaves a baseline in an untouched section alone', () => {
+    const store = useGasPlanStore.getState();
+    store.applyLoadedPlan(1, {
+      origin: ref(UNTOUCHED, 2),
+      endpoint: null,
+      waypoints: [],
+      diver: store.diver,
+      cylinders: store.cylinders,
+      gas_config: store.gasConfig,
+      stage_drop_overrides: [],
+      marked_points: [],
+    });
+
+    applyReverseAftermath(counts);
+
+    expect(useGasPlanStore.getState().loadedPlanBaseline?.origin).toEqual(ref(UNTOUCHED, 2));
   });
 });

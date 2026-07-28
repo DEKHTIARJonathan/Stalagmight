@@ -37,6 +37,7 @@
  */
 import type { Section, SectionId, StationRef } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { DivePlanSnapshot } from '../types/ipc.generated';
 import { useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
 
@@ -160,6 +161,29 @@ export function mirrorPlanPins(
   };
 }
 
+/** The pin subset of a persisted snapshot, in `PlanPins` (camelCase) shape. */
+function planPinsOfSnapshot(snapshot: DivePlanSnapshot): PlanPins {
+  return {
+    origin: snapshot.origin,
+    endpoint: snapshot.endpoint,
+    waypoints: snapshot.waypoints,
+    markedPoints: snapshot.marked_points,
+    stageDropOverrides: snapshot.stage_drop_overrides,
+  };
+}
+
+/** `snapshot` with its pins replaced; the gas inputs are untouched. */
+function snapshotWithPins(snapshot: DivePlanSnapshot, pins: PlanPins): DivePlanSnapshot {
+  return {
+    ...snapshot,
+    origin: pins.origin,
+    endpoint: pins.endpoint,
+    waypoints: pins.waypoints,
+    marked_points: pins.markedPoints,
+    stage_drop_overrides: pins.stageDropOverrides,
+  };
+}
+
 /** True when any pin sits in a section this operation actually renumbered. */
 export function planPinsAffected(
   pins: PlanPins,
@@ -239,10 +263,19 @@ export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransfor
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
   const plan = useGasPlanStore.getState();
-  if (planPinsAffected(plan, transforms)) {
+  const baseline = plan.loadedPlanBaseline;
+  // The saved-plan baseline holds the same positional refs as the live pins, so it has to move
+  // with them or `selectIsPlanDirty` compares the two against different numberings and calls an
+  // untouched plan unsaved. Mirrored independently of the pins: a loaded plan can have a pin in
+  // a reversed section even when the CURRENT pins have been edited away from it.
+  const mirroredBaseline =
+    baseline !== null && planPinsAffected(planPinsOfSnapshot(baseline), transforms)
+      ? snapshotWithPins(baseline, mirrorPlanPins(planPinsOfSnapshot(baseline), transforms))
+      : null;
+  if (planPinsAffected(plan, transforms) || mirroredBaseline !== null) {
     // Mirrored, not cleared: the diver picked these stations, and the point of a
     // reverse is that the physical cave did not move.
-    plan.applyReversedPins(mirrorPlanPins(plan, transforms));
+    plan.applyReversedPins(mirrorPlanPins(plan, transforms), mirroredBaseline);
   }
 
   const ui = useUIStore.getState();
