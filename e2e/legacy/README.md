@@ -35,8 +35,9 @@ pnpm test:e2e
 ```
 
 Requirements: `tauri-driver` (Linux/Windows) or `tauri-wd` (macOS), a display or
-`xvfb`, and a debug build (`pnpm tauri build --debug --no-bundle`). See
-[../../docs/TESTING.md](../../docs/TESTING.md).
+`xvfb`, and a debug build (`pnpm tauri build --debug --no-bundle`). See the
+WebdriverIO section of
+[../../docs/testing-recipes.md](../../docs/testing-recipes.md).
 
 ## What's worth running (unique backend coverage)
 
@@ -86,9 +87,9 @@ orphan-connection dialogs.
 
 | Helper | What it really does | Where the import *UI* is covered |
 |--------|---------------------|----------------------------------|
-| `importDmpViaStore(path)` | Parses `.dmp` (real backend) → `createSection` per section | `import-dmp-dialog.spec.ts`; Playwright `dmp-import` |
+| `importDmpViaStore(path)` | Parses `.dmp` (real backend) → `createSection` per section | Playwright `dmp-import` |
 | `importTmlViaStore(path)` | Real `executeTmlImport`, no dialog | `tml-import-integration.spec.ts` (`openTmlImportWithFile` → dialog confirm) |
-| `createSectionViaStore(data)` | `createSection` directly, no dialog | `import-section-dialog.spec.ts`; Playwright |
+| `createSectionViaStore(data)` | `createSection` directly, no dialog | Playwright `import-section-dialog` |
 
 To assert the import *experience*, drive the wizard instead
 (`openDmpImportWithFile` + `placeAllSectionsInDmpWizard`), or write a Playwright /

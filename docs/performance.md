@@ -305,14 +305,14 @@ GeoJSON overlays (the interact overlay, the gas route, loop closures) carry thei
 gradient value as a feature *property* - `['get', 'dist']` / `['get', 'gasReach']`
 through the same ramp expressions the bulk layers used
 (`utils/distanceGradient.ts`, `utils/gasReach.ts`), so a `setData` cannot wipe
-it. Several comments still say `setFeatureState`; they are stale.
+it.
 
 The rule that survives, and that any new overlay must follow:
 
-- **Re-push per-item overlay state in the post-rebuild tail of `flushUpdate`**,
-  which is exactly what it does - invalidate `lastInteractKey`, refresh the
-  interact overlay, re-apply its paint inputs, and re-push the stored gas-route
-  legs.
+- **Re-push per-item overlay state in the post-rebuild tail of `flushUpdate`.**
+  Today that tail invalidates `lastInteractKey`, refreshes the interact overlay,
+  re-applies its paint inputs, and re-pushes the stored gas-route legs; a new
+  overlay joins that list.
 - **Never recompute it per hover.** The per-hover path (`updateVisualState` ->
   `refreshInteractOverlay`) is deliberately bounded: a handful of features, and
   short-circuited when the composed state key is unchanged.

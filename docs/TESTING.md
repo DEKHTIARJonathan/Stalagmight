@@ -15,9 +15,9 @@ model below.
 
 | Tier | Framework | Environment | Covers | Speed |
 |------|-----------|-------------|--------|-------|
-| Unit (logic) | Vitest | `node` | Stores, utils, selectors (`*.test.ts`) | Fast |
-| Component | Vitest + Testing Library | `jsdom` | Render a React component, assert handlers/wiring (`*.test.tsx`) | Fast |
-| Playwright E2E | Playwright | Chromium, **mocked IPC** | UI flows across views (`e2e-playwright/`) | Fast |
+| Unit (logic) | Vitest | `node` | Stores, utils, selectors (`*.test.ts`) | Milliseconds |
+| Component | Vitest + Testing Library | `jsdom` | Render a React component, assert handlers/wiring (`*.test.tsx`) | Milliseconds |
+| Playwright E2E | Playwright | Chromium, **mocked IPC** | UI flows across views (`e2e-playwright/`) | Seconds per test; full suite ~15 min |
 | Backend | Rust `#[test]` | native | Rust logic, and the **real** file I/O / persistence paths (`src-tauri/src/`) | Fast |
 | WebdriverIO E2E | WebdriverIO + tauri-driver / tauri-wd | **real Tauri app** | Real webview + real backend (`e2e/legacy/`, on-demand only) | Slow |
 | Agent harness | MCP + WebdriverIO | **real Tauri app** | LLM-agent exploration, stress scenarios, bug repro (`e2e/agent/`, on-demand) - see [Agent Harness](agent-harness.md) | Slow |
@@ -33,9 +33,10 @@ The real backend is covered by the **Rust tests**, which run in CI against real
 in `src-tauri/src/commands/command_tests.rs` are where the save/import
 persistence pipeline is pinned.
 
-The WebdriverIO suite is the only tier that drives the real webview *and* the
-real backend together, and it runs in no automated gate. Do not rely on it to
-catch anything.
+Only two things drive the real webview *and* the real backend together: the
+WebdriverIO suite and the agent harness (which is WebdriverIO underneath, see
+[agent-harness.md](agent-harness.md)). Neither runs in an automated gate. Do not
+rely on either to catch anything.
 
 **Consequence:** if your change can fail on disk, in a parser, or across an app
 restart, a Playwright test cannot cover it. Write a Rust test.
@@ -65,7 +66,7 @@ work:
 
 | Tier | What | When it runs |
 |------|------|--------------|
-| **Smoke** | tests tagged `@smoke` (~85 today) | `e2e-smoke.yml` on every PR/push, and the pre-push checklist |
+| **Smoke** | tests tagged `@smoke` (count them with `--grep @smoke`) | `e2e-smoke.yml` on every PR/push that its `paths-ignore` does not skip, and the pre-push checklist |
 | **Full** | the entire Playwright suite | `nightly-e2e.yml`, 07:00 UTC daily, skipped when nothing merged in the last 2 days |
 
 - **Tag `@smoke` only if the test covers a critical path *and* is reliable.**
@@ -98,8 +99,9 @@ Three workflows gate `master`:
   tripwires. Each tripwire runs its own `:test` fixture first, so the rule itself
   is pinned.
 - **`e2e-smoke.yml` (`smoke`)** - `pnpm lint:e2e-parallel` (the Playwright
-  parallel-safety scanner) followed by the `@smoke` subset, Chromium-only against
-  the Vite dev server.
+  parallel-safety scanner), then `pnpm lint:pw-timing:test`, then the `@smoke`
+  subset, Chromium-only against the Vite dev server. Any of the three can fail
+  the job.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
   tracked tree. It is the one workflow with **no** `paths-ignore`, because
   `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where a leak or
@@ -202,7 +204,6 @@ stable assertion surface.
 
 ## Coverage
 
-`pnpm vitest run --coverage` for the unit/component tiers; `pnpm coverage:ui` /
-`pnpm coverage:e2e` instrument the app for the E2E tiers, and
-`pnpm coverage:merge` combines the raw output. All reports land in
-`docs/coverage/`. Exact commands are in the [recipes](testing-recipes.md).
+Every tier can be instrumented, and the raw output merges into one report under
+`docs/coverage/` (gitignored). The commands are in the
+[recipes](testing-recipes.md#coverage).

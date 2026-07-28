@@ -22,6 +22,7 @@ It is not built, run, or tested in CI.
 | `src/components/GlobalView/GlobalViewMap.tsx` | per-marker listeners (~:979) | Long-press a project marker -> marker context menu |
 | `src/components/Map/MapCanvas.tsx` | `touchAction` memo (~:3772), `handlePointerDown` (~:3904) | Gesture ownership and the pan-tool bypass |
 | `src/components/SingleSystemView/useResizeHandle.ts` | `useResizeHandle` | Pointer-capture drag for every resize handle |
+| `src/components/common/Panel.tsx`, `src/components/SingleSystemView/Dock.tsx` | `touchAction: 'none'` on the handle (`Panel.tsx:134`, `Dock.tsx:404`) | Stops the browser claiming the drag as a scroll. Without it the pointer-capture drag above never gets move events on touch |
 | `src/components/Map/PlacementOverlay.tsx` | ~:229 | Renders a Cancel button when `navigator.maxTouchPoints > 0` |
 | `src/components/SingleSystemView/Toolbar.tsx` | `lastPointerTypeRef` (~:593, ~:708) | Tap-vs-hover behavior for tool buttons and flyouts |
 | `src/index.css` | `@media (pointer: coarse)` (~:1333) | Widens `.resize-handle-h` / `.resize-handle-v` by 12px |
@@ -73,7 +74,7 @@ the feel means editing all four sites.
 onPointerCancel }` to spread onto an element, and hands the callback the press
 position plus `e.currentTarget`. On fire it sets a flag and the next
 `onPointerUp` calls `preventDefault()` + `stopPropagation()` on the React
-synthetic event. Note that the Pointer Events spec suppresses compatibility
+synthetic event. The Pointer Events spec suppresses compatibility
 mouse events via `preventDefault()` on `pointerdown`, not `pointerup`, so
 whether the trailing tap is actually swallowed is unverified.
 
@@ -90,17 +91,18 @@ allowlist (`MapCanvas.tsx:3772`): `none` for every tool except `pan`, and `none`
 whenever placement mode is active. `pan` gets `manipulation` so MapLibre's own
 touch pan and pinch-zoom run. `handlePointerDown` reinforces this with an early
 return for `pointerType === 'touch' && activeTool === 'pan'`
-(`MapCanvas.tsx:3913`). The same tool list is repeated for `dragPan.disable()`
-at `MapCanvas.tsx:2750` and `:3749`. **Adding a `ToolType` means updating all
-three lists**, or the new tool silently keeps browser gesture handling.
+(`MapCanvas.tsx:3913`). The same tool list is repeated at both
+`dragPan.disable()` sites in `MapCanvas.tsx` (grep `dragPan.disable`).
+**Adding a `ToolType` means updating all three lists**, or the new tool silently
+keeps browser gesture handling.
 
 **MapLibre handlers.** `dragRotate` and `touchPitch` are disabled at map
 construction (`MapCanvas.tsx:1734-1735`); `boxZoom` too. `touchZoomRotate` is
 left at its default, which includes two-finger rotation - see Gaps.
 
 **Custom WebGL renderer.** Touch needs nothing renderer-specific. The survey is
-drawn by the custom WebGL layer, which hides the stock MapLibre layers, so
-hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
+drawn by the custom WebGL layer, and the stock bulk layers were deleted rather
+than hidden, so hit-testing does not use `queryRenderedFeatures`; it goes through the SoA
 geometry index (`SurveyLayer.hitCandidateSections`, `resolveStationAt` /
 `resolveShotAt`, documented at `SurveyLayer.tsx:1201`). Long-press hit-testing
 calls the same `handleContextMenu` as right-click, so it inherits that path for
@@ -133,8 +135,6 @@ keyboard. Applied across `ShotTableEditor`, `EditShotDialog`,
 
 ## Gaps and known-broken cases
 
-Everything here is verified against the current code.
-
 - **No test coverage of any kind.** There is no unit test for `useLongPress`,
   no Playwright project with `hasTouch`/a mobile device profile
   (`playwright.config.ts:79` runs Desktop Chrome only), and no touch cases in
@@ -144,8 +144,9 @@ Everything here is verified against the current code.
   passes `e.currentTarget` (`useLongPress.ts:50`), the handlers are spread on
   `<tbody>` (`ShotTableEditor.tsx:472`), and the callback does
   `target.closest('tr')` (`ShotTableEditor.tsx:329`), which returns `null` from a
-  `<tbody>`. It needs `e.target`. `SectionsPanel` is unaffected because it
-  attaches per-row and ignores the target argument.
+  `<tbody>`. It needs `e.target` - the rows already carry the `data-row-index`
+  the callback reads (`ShotTableEditor.tsx:494`). `SectionsPanel` is unaffected
+  because it attaches per-row and ignores the target argument. Filed as #338.
 - **Map long-press does not suppress the following tap.** The canvas listeners
   never `preventDefault()`, so after the 500 ms menu opens, lifting the finger
   still produces a MapLibre `click` that runs the active tool's action

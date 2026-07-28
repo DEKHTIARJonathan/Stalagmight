@@ -204,7 +204,8 @@ export function estimateGeometryBytes(geometry: SurveyGeometry): number {
 /**
  * Estimate retained bytes for a single GeoJSON Feature with the rough
  * property shape we use (LineString + ~9 props, or Point + ~7 props).
- * Calibrated empirically - see docs/performance.md.
+ * Calibrated empirically against heap snapshots; re-measure if the property
+ * shape changes.
  */
 export function estimateFeatureBytes(kind: FeatureSourceKind): number {
   switch (kind) {

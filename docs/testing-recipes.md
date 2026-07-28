@@ -47,7 +47,9 @@ positional test filter: "No tests found", exit in about a second. Use
 Playwright auto-starts the Vite dev server on `:1420` via the `webServer` config
 and reuses an already-running one locally. If you run more than one clone of
 this repo, that reuse will silently point the suite at the *other* clone's
-server - start an isolated server on another port instead of killing theirs.
+server, so you test the wrong code with no error. Do not kill theirs: start your
+own on a free port (`pnpm exec vite --port 1421`) and run against a config whose
+`baseURL` and `webServer.url` point at it.
 
 ### Rust
 
@@ -90,6 +92,8 @@ Flags combine, e.g. `./scripts/wdio.sh --skip-build --spec e2e/legacy/specs/proj
 detection (xvfb when headless), port cleanup of stale drivers, and build
 freshness. Prefer it over the raw commands.
 
+The raw equivalents, for when you need to bypass the wrapper:
+
 ```bash
 pnpm test:e2e                                    # builds, then runs
 xvfb-run -a pnpm test:e2e                        # headless Linux
@@ -124,7 +128,7 @@ only thing standing between it and silent rot.
 ### Coverage
 
 ```bash
-pnpm vitest run --coverage   # unit + component -> docs/coverage/
+pnpm exec vitest run --coverage   # unit + component -> docs/coverage/
 pnpm coverage:ui             # instrument the app, run Playwright
 pnpm coverage:e2e            # instrument the app, run WebdriverIO
 pnpm coverage:merge          # merge raw E2E output into docs/coverage/
@@ -175,13 +179,8 @@ it('fires onClick when activated', async () => {
 that read Zustand stores or `react-i18next` need those mocked or provided; keep
 early component tests on leaf components to avoid heavy setup.
 
-This tier mocks IPC. The **real-backend** persistence path - a file on disk plus
-the Recent Projects entry - is owned by the Rust command-layer tests
-`test_import_sections_persists_deferred_new_project` (success),
-`test_import_sections_deferred_save_failure_warns_no_phantom` (failed save
-warns, leaves no phantom recent entry) and
-`test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak`
-in `src-tauri/src/commands/command_tests.rs`.
+This tier mocks IPC - persistence is owned by the Rust tier, see
+[Rust patterns](#rust-patterns).
 
 ## Playwright patterns
 
@@ -199,9 +198,9 @@ e2e-playwright/
 `playwright.config.ts`: Chromium only, `fullyParallel`, base URL
 `http://localhost:1420`, 30 s test timeout, 5 s expect timeout, retries 2 in CI
 and 1 locally (`PW_RETRIES` overrides), workers `100%` in CI (`PW_WORKERS`
-overrides, and must be a number or a percentage *string* - a bare numeric string
-is rejected). Traces on first retry, screenshots and video on failure, all under
-`test-results/`.
+overrides; a bare integer and a percentage string both work, because the config
+coerces the integer form itself - raw Playwright would reject it, #132). Traces
+on first retry, screenshots and video on failure, all under `test-results/`.
 
 ### Basic structure
 
@@ -481,8 +480,8 @@ math in a Rust unit test.
 
 ```typescript
 // A geometry command that fails, to exercise the error path
-case 'get_survey_geometry': {
-  const filePath = args?.file_path as string;
+case 'get_survey_geometry_for_file': {
+  const filePath = args?.path as string;
   if (filePath.includes('error')) throw new Error('Failed to load geometry');
   return {
     shots: [{ from: [-81.78, 24.55], to: [-81.77, 24.56], kind: 'Normal', section_id: 1 }],
@@ -505,13 +504,11 @@ case 'get_undo_stack': {
 }
 ```
 
-Note that mocked specs run with a **non-null `gpsOrigin`**: the mock's
-`get_config` returns a `satellite_gps_origin`, and `MapCanvas` falls back to it
-when the project has no zero datum (the default seed adds none). Station
-coordinates therefore go through the ENU transform, not a linear
-degrees-to-meters approximation.
+Mocked specs run with a non-null `gpsOrigin`, which changes how station
+coordinates are computed - see the canvas-interaction section above before
+asserting on any distance or offset.
 
-## Component recipes
+## Per-component Playwright recipes
 
 ### Undo/redo history dropdown
 
@@ -786,6 +783,7 @@ await expect(page.getByTestId('settings-dialog')).toBeVisible();
 | Survey/markers toggle | `view-mode-toggle` |
 | Per-system marker | `system-marker-{filePath}` |
 | Search input / clear | `globalview-search-input`, `globalview-search-clear` |
+| Right-click menu on a project | `project-context-menu` |
 
 State persists to `localStorage`: `globalViewMode` (`'survey'` / `'markers'`)
 and `globalViewMapState` (an object with `center` and `zoom`, written on
@@ -811,21 +809,23 @@ await expect(page.getByTestId('globalview-search-input')).toHaveValue('');
 
 ### Themes
 
-`e2e-playwright/theme.spec.ts` covers all ten themes (`dark`, `light`, `cave`,
-`dracula`, `one_dark`, `solarized_light`, `catppuccin_latte`, `nord`,
-`catppuccin_mocha`, `kaleido_eink`), day/night palette independence, auto mode
-following the OS `prefers-color-scheme`, the `--cc-*` custom properties, the
-Settings > Appearance preview cards, and theme-aware grid overlay colors.
-`kaleido_eink` additionally force-disables CSS transitions and animations, so a
-spec that waits on a transition will behave differently under it.
+`e2e-playwright/theme.spec.ts` covers three of the ten themes: default dark
+(`@smoke`), switching to light through Settings (`@smoke`), and CSS variable
+resolution for dark, light and cave. It also covers immediate apply, revert on
+cancel, persistence across a dialog reopen, and the station circle colors.
+
+The other seven themes, day/night palette independence, and auto mode following
+the OS `prefers-color-scheme` have **no e2e coverage** - no spec references them.
+
+One app fact worth knowing when you add coverage: `kaleido_eink` force-disables
+CSS transitions and animations (`src/index.css`), so a spec that waits on a
+transition behaves differently under it.
 
 ### Keyboard shortcuts overlay
 
-`?` opens `KeyboardShortcutsDialog`. Covered: open on `?` and close on Escape,
-search/filter narrowing the list, all five categories rendering (`file`,
-`tools`, `edit`, `view`, `panels` - the order in
-`src/utils/shortcutCategories.ts`), the "Customize" button routing to
-Settings > Shortcuts, and the reserved-shortcuts section.
+`?` opens `KeyboardShortcutsDialog`. Two rules matter when you touch it: the
+category order is defined in `src/utils/shortcutCategories.ts`, so a spec
+asserting order reads it from there rather than hardcoding a list.
 
 Shortcut-recorder specs (`e2e-playwright/settings-shortcuts.spec.ts`) target
 rows by `shortcut-primary-<action>`. Removing an action means repointing those
@@ -903,6 +903,13 @@ Do not squat the final `.stalx` path: with `path=None` and no open database,
 `save_project` swaps in `next_available_project_path` and the save succeeds
 under a new name.
 
+The three tests that own this path, all in
+`src-tauri/src/commands/command_tests.rs`:
+`test_import_sections_persists_deferred_new_project` (success),
+`test_import_sections_deferred_save_failure_warns_no_phantom` (a failed save
+warns and leaves no phantom recent-projects entry), and
+`test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak`.
+
 ### Registering a new mutation entry point
 
 `MUTATION_ENTRYPOINTS` in `src-tauri/src/core/state/tests.rs` is a
@@ -919,6 +926,9 @@ ledger updated when you change the count. The `registry_covers_all_*` coverage
 tests run **only** under `--features telemetry`. `registry_covers_all_tools`
 parses `src/store/uiStore.ts` to diff `ToolType` against the registry, so a
 retired tool needs a `RETIRED_TOOLS` entry.
+
+[telemetry.md](telemetry.md) owns this contract in full, including every named
+coverage test. Treat it as authoritative if the two ever disagree.
 
 ## Export testing
 

@@ -33,7 +33,7 @@ rather than restating it, because a copy here rots silently.
 19. [Beyond the Current Scope](#19-beyond-the-current-scope)
 - [Appendix A: Keyboard Shortcuts](#appendix-a-keyboard-shortcuts)
 - [Appendix B: Validation Rules](#appendix-b-validation-rules)
-- [Appendix C: Color Palette](#appendix-c-color-palette)
+- [Appendix C: Color Themes](#appendix-c-color-themes)
 
 ---
 
@@ -72,7 +72,8 @@ Stalagmight is a desktop application for processing underwater cave survey data.
 - Ariane collaboration mode ([collaboration.md](collaboration.md))
 - SpeleoDB integration - remote project hand-off; still under active development
 - SQLite project storage, undo/redo with persistence
-- Android tablets and touch input ([touch-support.md](touch-support.md))
+- An Android tablet build, sideload-only and not in CI, with partial touch
+  support ([touch-support.md](touch-support.md))
 
 **Not built:**
 - 3D visualization
@@ -107,8 +108,10 @@ Desktop platforms have equal priority:
 - Windows
 - macOS
 
-Android tablets are also supported; touch input runs alongside the unchanged
-mouse/keyboard controls ([touch-support.md](touch-support.md)).
+There is also an Android tablet build, but it is sideload-only and no CI job
+builds or exercises it. Touch input runs alongside the unchanged mouse/keyboard
+controls, and is partial and untested - see
+[touch-support.md](touch-support.md) before relying on a gesture.
 
 ### 2.4 Accessibility
 - **WCAG 2.1 AA compliance**
@@ -151,7 +154,8 @@ so both return an explanatory error pointing at the offline formats
 - Playwright E2E against mocked IPC: a fast `@smoke` tier on pushes that can affect it (the workflow's `paths-ignore` skips docs-only, Rust-only, and legacy-suite-only changes), the full suite nightly
 - The WebdriverIO suite drives the real Tauri app but is quarantined under `e2e/legacy/` and runs on demand only
 
-See [TESTING.md](TESTING.md) for the tiers and their commands.
+See [TESTING.md](TESTING.md) for the tiers and which one a test belongs in, and
+[testing-recipes.md](testing-recipes.md) for the commands.
 
 ### 2.9 Settings
 - Global settings in the Settings dialog, plus a per-project subset (project name,
