@@ -15,13 +15,35 @@ import type {
   TokenStorage,
   UpdateResult,
 } from '../types/ipc.generated';
-import { invokeIpc } from '../utils/ipc';
+import { invokeIpc, getErrorMessage } from '../utils/ipc';
+import {
+  trackAction,
+  setDwellState,
+  checkDialogCancel,
+  trackDialogComplete,
+} from '../utils/telemetry';
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
+import { useUIStore } from './uiStore';
 
 /** [#258] Which ambiguity the picker is resolving. Both share the mechanics and
     differ only in the verb the user is offered. */
 export type DumpPickerKind = 'stalx' | 'ariane';
+
+/** Telemetry key for the picker overlay. Must match the registry entry. */
+const DUMP_PICKER_DIALOG = 'speleodb-dump-picker';
+
+/**
+ * Hand dwell back after the picker closes.
+ *
+ * Not `tool.<activeTool>` the way `uiStore.closeDialog` does it: this overlay
+ * layers OVER other dialogs, so when one is still open underneath, dwell belongs to
+ * it and not to the map tool nobody has returned to yet.
+ */
+function restoreDwellUnderOverlay(): void {
+  const ui = useUIStore.getState();
+  setDwellState(ui.activeDialog ? `dialog.${ui.activeDialog}` : `tool.${ui.activeTool}`);
+}
 
 /**
  * Shared SpeleoDB frontend state (#204/#203/#205). Holds the backend **session**
@@ -372,6 +394,11 @@ interface SpeleoStore {
   dumpPickerKind: DumpPickerKind;
   /** A resolve is in flight, so the dialog must not be dismissed out from under it. */
   dumpPickerBusy: boolean;
+  /** Why the last confirmation failed, rendered inside the picker. The retry runs
+      from the DIALOG, not from a host, so a rejection has nowhere else to surface -
+      it used to escape as an unhandled rejection and leave the picker open saying
+      nothing. */
+  dumpPickerError: string | null;
   /** Raise the picker for `candidates`, replaying `retry` with the chosen entry. */
   openDumpPicker: (
     candidates: SpeleoDumpCandidate[],
@@ -849,20 +876,32 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   dumpPickerCandidates: [],
   dumpPickerKind: 'stalx',
   dumpPickerBusy: false,
+  dumpPickerError: null,
   dumpPickerRetry: null,
   dumpPickerCancel: null,
 
-  openDumpPicker: (candidates, kind, retry, onCancel) =>
+  openDumpPicker: (candidates, kind, retry, onCancel) => {
+    // The lifecycle `uiStore.openDialog` runs, done by hand because this overlay
+    // deliberately does not take the `activeDialog` slot - and skipping it left the
+    // four registered picker events dead, so incidence and cancel counts stayed zero
+    // while dwell went on being attributed to whatever surface is underneath.
+    trackAction(`dialog.${DUMP_PICKER_DIALOG}`);
+    setDwellState(`dialog.${DUMP_PICKER_DIALOG}`);
     set({
       dumpPickerOpen: true,
       dumpPickerCandidates: candidates,
       dumpPickerKind: kind,
       dumpPickerBusy: false,
+      dumpPickerError: null,
       dumpPickerRetry: retry,
       dumpPickerCancel: onCancel ?? null,
-    }),
+    });
+  },
 
   closeDumpPicker: () => {
+    // Dismissed without answering - the cancel half of the same lifecycle.
+    checkDialogCancel(DUMP_PICKER_DIALOG);
+    restoreDwellUnderOverlay();
     const onCancel = get().dumpPickerCancel;
     // Clear FIRST, then notify: a handler that re-raises the picker must not have
     // its new state wiped by this same call.
@@ -870,6 +909,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       dumpPickerOpen: false,
       dumpPickerCandidates: [],
       dumpPickerBusy: false,
+      dumpPickerError: null,
       dumpPickerRetry: null,
       dumpPickerCancel: null,
     });
@@ -879,19 +919,31 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   resolveDumpPicker: async (entryPath) => {
     const retry = get().dumpPickerRetry;
     if (!retry) return;
-    set({ dumpPickerBusy: true });
+    set({ dumpPickerBusy: true, dumpPickerError: null });
     try {
       await retry(entryPath);
       // Only close on success. A failed retry may itself be a FRESH ambiguity (the
       // tree moved while the dialog was open), and that re-raise has already
       // replaced the candidate list - closing here would throw it away.
       if (!get().dumpPickerBusy) return;
+      trackDialogComplete(DUMP_PICKER_DIALOG);
+      restoreDwellUnderOverlay();
       set({
         dumpPickerOpen: false,
         dumpPickerCandidates: [],
         dumpPickerRetry: null,
         dumpPickerCancel: null,
       });
+    } catch (e) {
+      // The retry runs from the DIALOG, so its rejection has nowhere else to go: the
+      // caller invokes this with `void` and no host receives an outcome. Left
+      // unhandled it became an unhandled rejection and the picker sat there open,
+      // saying nothing about why confirming did not work.
+      // `getErrorMessage`, not `humanizeSpeleoError`: `utils/speleoError` imports
+      // this module, so reaching for it here would close an import cycle. The
+      // picker's message is the raw reason, which is what a user staring at a
+      // failed confirmation needs.
+      set({ dumpPickerError: getErrorMessage(e) });
     } finally {
       set({ dumpPickerBusy: false });
     }

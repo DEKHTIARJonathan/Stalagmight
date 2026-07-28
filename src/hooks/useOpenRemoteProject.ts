@@ -100,6 +100,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const openRemoteRef = useRef<
     ((s: SpeleoProjectSummary, o?: { entryPath?: string }) => Promise<OpenRemoteOutcome>) | null
   >(null);
+  /** The same replay seam for the discarding open, which has its own retry. */
+  const takeRemoteRef = useRef<
+    ((s: SpeleoProjectSummary, o?: { entryPath?: string }) => Promise<OpenRemoteOutcome>) | null
+  >(null);
 
   // Shared tail: a pull (open or adopt) produced a local .stalx - seed the link
   // optimistically from the summary permission, then load. Roll the seed back if the
@@ -529,7 +533,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * the arguments it was given, then runs the same post-open follow-up.
    */
   const takeRemoteDiscardingLocal = useCallback(
-    async (summary: SpeleoProjectSummary): Promise<OpenRemoteOutcome> => {
+    async (
+      summary: SpeleoProjectSummary,
+      opts?: { entryPath?: string },
+    ): Promise<OpenRemoteOutcome> => {
       /**
        * [#270] The same entry guard, re-evaluated HERE - the discarding open is a
        * second project-replacing command, not a continuation of the first one, and
@@ -558,6 +565,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           projectId: summary.id,
           projectName: summary.name,
           latestCommitSha: summary.latest_commit_sha ?? null,
+          entryPath: opts?.entryPath ?? null,
         });
       } catch (e) {
         // #214/#270: the same Ariane route `openRemote` has. It is not hypothetical
@@ -571,6 +579,19 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // but the confirmation carries forward, so the adopt it leads to does not
         // re-ask.
         if (speleoErrorAction(e) === 'Adopt') return { status: 'adopt', discardLocal: true };
+        // [#258] This is the ONLY route that reaches an ambiguous dump with un-pushed
+        // local edits: the guard runs before the download, so a protected open is
+        // refused before anything is ever classified. Without the picker here, a user
+        // who had just confirmed discarding their local copy met a flat error and had
+        // nowhere to go - on the one path where backing out costs the most.
+        const candidates = dumpCandidates(e);
+        if (candidates) {
+          openDumpPicker(candidates, 'stalx', async (entryPath) => {
+            const retried = await takeRemoteRef.current?.(summary, { entryPath });
+            if (retried?.status === 'error') throw new Error(retried.message);
+          });
+          return { status: 'ambiguous' };
+        }
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.openFailed')),
@@ -584,7 +605,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, handBackRefusalAfterPull, t],
+    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDumpPicker, t],
   );
 
   const adoptRemote = useCallback(
@@ -686,7 +707,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
 
   useEffect(() => {
     openRemoteRef.current = openRemote;
-  }, [openRemote]);
+    takeRemoteRef.current = takeRemoteDiscardingLocal;
+  }, [openRemote, takeRemoteDiscardingLocal]);
 
   return { openRemote, adoptRemote, keepLocalCopy, takeRemoteDiscardingLocal };
 }

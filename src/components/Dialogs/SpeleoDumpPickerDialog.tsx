@@ -79,6 +79,7 @@ export default function SpeleoDumpPickerDialog() {
   const candidates = useSpeleoStore((s) => s.dumpPickerCandidates);
   const kind = useSpeleoStore((s) => s.dumpPickerKind);
   const busy = useSpeleoStore((s) => s.dumpPickerBusy);
+  const error = useSpeleoStore((s) => s.dumpPickerError);
   const resolveDumpPicker = useSpeleoStore((s) => s.resolveDumpPicker);
   // Close this OVERLAY only - the shared `closeDialog` would take the SpeleoDB
   // browser underneath with it.
@@ -186,6 +187,15 @@ export default function SpeleoDumpPickerDialog() {
             ))}
           </div>
         </div>
+
+        {/* The retry runs from HERE, not from a host, so this is the only place its
+            failure can be seen. Without it a rejected confirmation left the dialog
+            open and silent. */}
+        {error && (
+          <p className="text-error" role="alert" data-testid="speleodb-dump-picker-error">
+            {error}
+          </p>
+        )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           {/* Disabled alongside `onClose` above, not merely alongside the confirm:

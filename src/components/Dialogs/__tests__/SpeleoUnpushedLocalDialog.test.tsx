@@ -116,6 +116,8 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
         projectId: 'p1',
         projectName: 'Cenote Azul',
         latestCommitSha: 'abc123',
+        // [#258] No chosen entry on a first attempt.
+        entryPath: null,
       });
     });
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));

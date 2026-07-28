@@ -134,6 +134,40 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
   });
 
+  it('raises the picker from the CONFIRMED-DISCARD open too (#258)', async () => {
+    // The only route that reaches an ambiguous dump with un-pushed local edits: the
+    // guard runs before the download, so a protected open is refused before anything
+    // is classified. Without this the user met a flat error immediately after
+    // confirming they wanted their local copy discarded - the worst moment to dead-end.
+    const candidates = [
+      { entry_path: 'misc/a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'misc/b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_open_project_discarding_local') {
+        if (args?.entryPath === 'misc/b.stalx')
+          return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().takeRemoteDiscardingLocal(SUMMARY);
+    expect(outcome).toEqual({ status: 'ambiguous' });
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+    expect(loadProjectMock).not.toHaveBeenCalled();
+
+    // And the retry replays THIS verb, not the protected one - replaying the
+    // protected open would be refused all over again by the guard.
+    await useSpeleoStore.getState().resolveDumpPicker('misc/b.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+  });
+
   it('does not raise the picker when the rejection carries no candidates (#258)', async () => {
     // The fast-forward verbs produce `Ambiguous` with nothing to act on, because
     // they have no way to send a choice back. Those must fall through to the
@@ -353,7 +387,14 @@ describe('useOpenRemoteProject (#218)', () => {
     const call = invokeIpcMock.mock.calls.find(
       (c) => c[0] === 'speleodb_open_project_discarding_local',
     );
-    expect(call?.[1]).toEqual({ projectId: 'p1', projectName: 'Cave A', latestCommitSha: 'abc123' });
+    expect(call?.[1]).toEqual({
+      projectId: 'p1',
+      projectName: 'Cave A',
+      latestCommitSha: 'abc123',
+      // [#258] No chosen entry on a first attempt - this route can hit an ambiguous
+      // dump too, and sends the pick only on the picker's retry.
+      entryPath: null,
+    });
     // The shared post-open tail ran, exactly as it does for a plain open.
     expect(setLinkOnOpenMock).toHaveBeenCalledWith({
       permission: 'READ_AND_WRITE',

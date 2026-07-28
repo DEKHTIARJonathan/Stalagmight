@@ -3,7 +3,13 @@ import { useSpeleoStore, PUSH_FAILURE_DIALOGS } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
-vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+vi.mock('../../utils/ipc', () => ({
+  invokeIpc: invokeIpcMock,
+  // The store reports a failed picker retry through this, so the mock has to carry
+  // it or the error path throws inside the very catch that exists to report.
+  getErrorMessage: (e: unknown, fallback?: string) =>
+    (e as { message?: string })?.message ?? fallback ?? 'error',
+}));
 
 /** A logged-in session so `scanLocksOnOpen` skips the `refreshSession` prelude. */
 const loggedInAs = (email: string) =>
@@ -970,5 +976,45 @@ describe('speleoStore', () => {
         expect(PUSH_FAILURE_DIALOGS).toContain(id);
       },
     );
+  });
+});
+
+describe('speleoStore - the dump picker reports its own failures (#258)', () => {
+  it('keeps the picker open and records why, instead of rejecting into nothing', async () => {
+    // The retry runs from the DIALOG - its caller invokes this with `void` and no
+    // host receives an outcome - so a throw used to escape as an unhandled rejection
+    // and leave the picker sitting there saying nothing about why confirming failed.
+    const candidates = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    useSpeleoStore
+      .getState()
+      .openDumpPicker(candidates, 'stalx', async () => {
+        throw new Error('the session expired while you were choosing');
+      });
+
+    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+
+    const s = useSpeleoStore.getState();
+    expect(s.dumpPickerOpen).toBe(true);
+    expect(s.dumpPickerBusy).toBe(false);
+    expect(s.dumpPickerError).toContain('the session expired');
+    // The candidates survive, so the user can simply answer again.
+    expect(s.dumpPickerCandidates).toEqual(candidates);
+  });
+
+  it('clears a previous failure when the next attempt starts', async () => {
+    const candidates = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
+    useSpeleoStore.setState({ dumpPickerError: 'stale' });
+
+    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
+
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+    expect(useSpeleoStore.getState().dumpPickerError).toBeNull();
   });
 });
