@@ -303,11 +303,15 @@ async function pollForMarginsSettled(
     .toBe(true)
     // `message` on expect.poll is a plain string, so it cannot describe a result
     // that only exists once polling has given up. Compose the diagnostic here.
-    .catch(() => {
+    // `cause` keeps the original failure attached: if the poll rejected for a
+    // reason other than the timeout, the diagnostic below would otherwise
+    // replace it with a margin story that was never the problem.
+    .catch((cause: unknown) => {
       const r: MarginResult | null = lastResult;
       if (!r) {
         throw new Error(
           `No margin data available after ${timeout}ms (map still moving or no stations)`,
+          { cause },
         );
       }
       throw new Error(
@@ -318,6 +322,7 @@ async function pollForMarginsSettled(
           `  Margins: L=${r.minMarginLeftPct.toFixed(1)}% R=${r.minMarginRightPct.toFixed(1)}% T=${r.minMarginTopPct.toFixed(1)}% B=${r.minMarginBottomPct.toFixed(1)}%`,
           `  Points: ${JSON.stringify(r.points)}`,
         ].join('\n'),
+        { cause },
       );
     });
   return lastResult!;
