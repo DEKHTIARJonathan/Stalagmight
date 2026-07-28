@@ -93,9 +93,10 @@ pub async fn speleodb_open_project(
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_open_project(project_id, project_name, latest_commit_sha)
+        s.speleodb_open_project(project_id, project_name, latest_commit_sha, entry_path)
     })
     .await
 }
@@ -119,9 +120,15 @@ pub async fn speleodb_open_project_discarding_local(
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_open_project_discarding_local(project_id, project_name, latest_commit_sha)
+        s.speleodb_open_project_discarding_local(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            entry_path,
+        )
     })
     .await
 }
@@ -294,10 +301,18 @@ pub async fn speleodb_restore_revision(
     hexsha: String,
     restore: bool,
     discard_local: Option<bool>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(project_id, project_name, hexsha, restore, discard_local)
+        s.speleodb_restore_revision(
+            project_id,
+            project_name,
+            hexsha,
+            restore,
+            discard_local,
+            entry_path,
+        )
     })
     .await
 }

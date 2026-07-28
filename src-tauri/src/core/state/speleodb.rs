@@ -57,6 +57,19 @@ pub(crate) struct SpeleoDbSession {
     /// sibling session on the same account, is no evidence that THIS process pushed
     /// anything. Written only through [`AppState::speleodb_note_lock_acquired`].
     lock_acquired_here: Option<String>,
+    /// [#258] Which dump entry the user picked, per project, for THIS session.
+    ///
+    /// Deliberately process-local and never persisted. The chosen entry is a
+    /// property of the SERVER TREE at a commit, not of the local project, so a
+    /// stored name can vanish under you and the re-ask path is needed regardless -
+    /// persisting it would add a schema surface that buys nothing.
+    ///
+    /// It exists so the fast-forward verbs (Start editing / Update / Take remote)
+    /// can honour a choice already made. They take no `entryPath` of their own, so
+    /// without this a user who resolved the picker at open time would meet a dead
+    /// end the moment they tried to edit - the very thing the picker exists to
+    /// remove. A miss falls back to failing closed, which is safe: it never guesses.
+    chosen_dump_entries: std::collections::HashMap<String, String>,
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -251,6 +264,10 @@ impl SpeleoDbSession {
         // it. This is what stops a login as a DIFFERENT account inheriting it through
         // the store the switch reuses.
         self.token_store.forget_keychain_belief();
+        // [#258] The remembered dump picks belong to the account that just left: a
+        // different user may not even be able to see those entries, and the next
+        // session must re-derive the choice from what the server actually holds.
+        self.chosen_dump_entries.clear();
         cleared
     }
 
@@ -832,6 +849,27 @@ impl AppState {
     pub(super) fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
         self.speleodb_session_lock()
             .is_ok_and(|session| session.lock_acquired_here.as_deref() == Some(project_id))
+    }
+
+    /// [#258] Record which dump entry resolved this project's ambiguity, so the
+    /// verbs that carry no `entryPath` can honour the choice for the rest of the
+    /// session. Best-effort: a poisoned lock costs the memory, not the pull.
+    pub(super) fn speleodb_remember_dump_entry(&self, project_id: &str, entry: &str) {
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session
+                .chosen_dump_entries
+                .insert(project_id.to_owned(), entry.to_owned());
+        }
+    }
+
+    /// The entry [`Self::speleodb_remember_dump_entry`] recorded, if any.
+    ///
+    /// A hit is still validated against the archive being extracted before it is
+    /// used - remembering a name is not trusting it, and the tree can move between
+    /// the pull that chose it and the fast-forward that recalls it.
+    pub(super) fn speleodb_recalled_dump_entry(&self, project_id: &str) -> Option<String> {
+        let session = self.speleodb_session_lock().ok()?;
+        session.chosen_dump_entries.get(project_id).cloned()
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -3660,6 +3698,7 @@ mod tests {
             token_store,
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         }
     }
 
@@ -5172,6 +5211,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         }
     }
 
@@ -5256,6 +5296,7 @@ mod tests {
             token_store,
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         }
     }
 
@@ -6050,6 +6091,7 @@ mod tests {
             token_store: TokenStore::from_stores(keychain, plaintext),
             rehydrate_attempted: false,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         }
     }
 
@@ -6423,6 +6465,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         };
         let (endpoint, token) = session.active_token().expect("authenticated session");
         assert_eq!(endpoint, "https://x/");
@@ -6437,6 +6480,7 @@ mod tests {
             token_store: TokenStore::from_stores(Box::new(InMemoryStore::new()), None),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_token.active_token(),
@@ -6449,6 +6493,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_email.active_token(),
@@ -6461,6 +6506,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_endpoint.active_token(),
@@ -6574,6 +6620,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token(token),
             rehydrate_attempted: true,
             lock_acquired_here: None,
+            chosen_dump_entries: std::collections::HashMap::new(),
         };
         state
     }
@@ -6600,7 +6647,7 @@ mod tests {
     /// `file_path` we stamp here matches the live `.stalx` the upload snapshots.
     fn orch_open(state: &AppState, id: &str, name: &str) {
         let res = state
-            .speleodb_open_project(id.to_owned(), name.to_owned(), None)
+            .speleodb_open_project(id.to_owned(), name.to_owned(), None, None)
             .expect("pull + stamp");
         let path = PathBuf::from(res.local_path);
         let db = Database::open_existing(&path).expect("open extracted .stalx");
@@ -7010,7 +7057,7 @@ mod tests {
 
         // No lock held at open -> no concurrent-session notice (#193 b8).
         let unlocked = state
-            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None)
+            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None, None)
             .expect("open (unlocked)");
         assert!(
             !unlocked.concurrent_session,
@@ -7022,7 +7069,7 @@ mod tests {
         // session's commits from ours.
         client::acquire_lock(&url, &token, false, &id).expect("acquire as same account");
         let locked = state
-            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None)
+            .speleodb_open_project(id.clone(), "orch-concurrent".to_owned(), None, None)
             .expect("reopen (same-account lock held)");
         assert!(
             locked.concurrent_session,
@@ -7134,7 +7181,7 @@ mod tests {
 
         // Re-download the SERVER's copy: it must carry NO undo/redo (the strip).
         let server = state
-            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None)
+            .speleodb_open_project(id.clone(), "orch-undo".to_owned(), None, None)
             .expect("re-download server copy");
         let server_db =
             Database::open_existing(Path::new(&server.local_path)).expect("open server copy");

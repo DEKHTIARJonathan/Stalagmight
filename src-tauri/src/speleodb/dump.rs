@@ -359,7 +359,9 @@ impl<'a> Dump<'a> {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify, download_temp_path, Dump, DumpClassification, SpeleoDbError};
+    use super::{
+        candidate_is_member, classify, download_temp_path, Dump, DumpClassification, SpeleoDbError,
+    };
 
     fn paths(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
@@ -376,6 +378,76 @@ mod tests {
             writer.write_all(data).expect("write entry");
         }
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn candidate_is_member_accepts_only_what_the_classifier_offered() {
+        // [#258] This is the whole trust boundary for the webview-supplied
+        // entryPath: it must admit exactly the entries the picker was shown, and
+        // nothing else.
+        let ambiguous = paths(&["a.stalx", "b.stalx", "notes.txt"]);
+        assert!(candidate_is_member(&ambiguous, "a.stalx"));
+        assert!(candidate_is_member(&ambiguous, "b.stalx"));
+        assert!(
+            !candidate_is_member(&ambiguous, "notes.txt"),
+            "a non-openable entry of the same archive must be refused"
+        );
+        assert!(
+            !candidate_is_member(&ambiguous, "c.stalx"),
+            "an entry that is not in this archive at all must be refused"
+        );
+        assert!(
+            !candidate_is_member(&ambiguous, "A.STALX"),
+            "matching is exact: the archive is keyed by byte-equal names, so a \
+             near-miss must not resolve to a real entry"
+        );
+        // A dump that is NOT ambiguous offers nothing, so no pick is honoured -
+        // this is what stops a chosen path steering an unambiguous open.
+        assert!(!candidate_is_member(
+            &paths(&["misc/project.stalx"]),
+            "misc/project.stalx"
+        ));
+        // The ariane arm is a member set too.
+        let two_tml = paths(&["ariane.tml", "misc/ariane.tml"]);
+        assert!(candidate_is_member(&two_tml, "misc/ariane.tml"));
+    }
+
+    #[test]
+    fn entry_details_leads_with_the_canonical_entry_and_carries_its_size() {
+        // [#258] Ordering is a correctness property, not presentation: the push
+        // always writes `project.stalx`, so any other pick sets up a silent replace
+        // on the next push. The safe candidate must lead the list the user sees.
+        let zip = make_zip(&[
+            ("backup/old.stalx", b"0123456789"),
+            ("misc/project.stalx", b"abc"),
+            ("ariane.tml", b"x"),
+        ]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted = paths(&["backup/old.stalx", "misc/project.stalx"]);
+        let details = dump.entry_details(&wanted).expect("details");
+
+        assert_eq!(details.len(), 2, "only the wanted entries are described");
+        assert_eq!(details[0].entry_path, "misc/project.stalx");
+        assert!(details[0].is_canonical);
+        assert_eq!(details[0].size_bytes, 3);
+        assert_eq!(details[1].entry_path, "backup/old.stalx");
+        assert!(!details[1].is_canonical);
+        assert_eq!(details[1].size_bytes, 10);
+    }
+
+    #[test]
+    fn entry_details_orders_non_canonical_candidates_by_path() {
+        // With no canonical entry present the order must still be deterministic -
+        // central-directory order is arbitrary and would render differently for
+        // the same repo depending on how the archive was written.
+        let zip = make_zip(&[("z/late.stalx", b"z"), ("a/early.stalx", b"a")]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let details = dump
+            .entry_details(&paths(&["z/late.stalx", "a/early.stalx"]))
+            .expect("details");
+        let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
+        assert_eq!(order, vec!["a/early.stalx", "z/late.stalx"]);
+        assert!(details.iter().all(|c| !c.is_canonical));
     }
 
     #[test]

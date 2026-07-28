@@ -137,12 +137,14 @@ impl AppState {
         project_id: String,
         project_name: String,
         latest_commit_sha: Option<String>,
+        entry_path: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         self.speleodb_pull_project(
             project_id,
             project_name,
             latest_commit_sha,
             LocalEditsPolicy::Protect,
+            entry_path,
         )
     }
 
@@ -160,12 +162,14 @@ impl AppState {
         project_id: String,
         project_name: String,
         latest_commit_sha: Option<String>,
+        entry_path: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         self.speleodb_pull_project(
             project_id,
             project_name,
             latest_commit_sha,
             LocalEditsPolicy::Discard,
+            entry_path,
         )
     }
 
@@ -176,6 +180,7 @@ impl AppState {
         project_name: String,
         latest_commit_sha: Option<String>,
         policy: LocalEditsPolicy,
+        entry_path: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         // Validate the id at the trust boundary, before it reaches the download
         // URL or the cache-path join (closes the path/route-traversal vector).
@@ -215,7 +220,11 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry = resolve_dump_entry(&mut dump, None).map_err(local_dto)?;
+        let entry = resolve_dump_entry(&mut dump, entry_path.as_deref()).map_err(local_dto)?;
+        // [#258] Remember the resolved entry for THIS session so the fast-forward
+        // verbs (Start editing / Update / Take remote), which carry no entryPath of
+        // their own, do not re-raise the picker on every action.
+        self.speleodb_remember_dump_entry(&project_id, &entry);
 
         // Carry the user's local view toggles across the download-replace (a re-open
         // of a previously-customized remote project shouldn't reset their view -
@@ -589,7 +598,10 @@ impl AppState {
             client::download_dump(endpoint, token, insecure_http, project_id),
         )?;
         let mut dump = dump::Dump::open(&zip)?;
-        let entry = resolve_dump_entry(&mut dump, None)?;
+        // [#258] No `entryPath` reaches this verb, so honour a choice the user
+        // already made this session; a miss still fails closed rather than guessing.
+        let recalled = self.speleodb_recalled_dump_entry(project_id);
+        let entry = resolve_dump_entry(&mut dump, recalled.as_deref())?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset
@@ -653,7 +665,70 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify_dump_entry, UnopenableDump};
+    use super::{classify_dump_entry, resolve_dump_entry, UnopenableDump};
+    use crate::speleodb::dump::Dump;
+    use crate::speleodb::SpeleoDbError;
+
+    /// A dump ZIP holding `entries`, for the resolve tests below.
+    fn make_zip(entries: &[&str]) -> Vec<u8> {
+        use std::io::Write as _;
+        let mut writer = zip::write::ZipWriter::new(std::io::Cursor::new(Vec::<u8>::new()));
+        let opts = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+        for name in entries {
+            writer.start_file(*name, opts).expect("start_file");
+            writer.write_all(b"x").expect("write entry");
+        }
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn resolve_honours_a_pick_the_archive_actually_offers() {
+        // [#258] The picker's whole contract: having chosen, the user's next attempt
+        // opens THAT file rather than hitting the same refusal again.
+        let zip = make_zip(&["a.stalx", "b.stalx"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        assert_eq!(
+            resolve_dump_entry(&mut dump, Some("b.stalx")).expect("honoured"),
+            "b.stalx"
+        );
+    }
+
+    #[test]
+    fn resolve_refuses_a_pick_this_archive_does_not_offer_and_re_offers_the_real_ones() {
+        // A stale pick (the dump moved on while the picker sat open) and a hostile
+        // one are the same case here, and neither may reach the extract. Crucially
+        // the user is re-offered what the dump holds NOW rather than being told
+        // their choice was invalid - the second attempt is the useful one.
+        let zip = make_zip(&["a.stalx", "b.stalx", "notes.txt"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        for hostile in ["notes.txt", "gone.stalx", "../../etc/passwd"] {
+            let offered: Vec<String> = match resolve_dump_entry(&mut dump, Some(hostile)) {
+                Err(SpeleoDbError::AmbiguousDump(candidates)) => {
+                    candidates.iter().map(|c| c.entry_path.clone()).collect()
+                }
+                _ => Vec::new(),
+            };
+            assert_eq!(
+                offered,
+                vec!["a.stalx".to_owned(), "b.stalx".to_owned()],
+                "`{hostile}` must be refused and the archive's real candidates re-offered"
+            );
+        }
+    }
+
+    #[test]
+    fn resolve_ignores_a_pick_when_the_dump_is_not_ambiguous() {
+        // A chosen path must never be able to steer an open that had no question to
+        // answer - otherwise the picker's arg becomes a way to extract an arbitrary
+        // entry of any dump.
+        let zip = make_zip(&["misc/project.stalx", "notes.txt"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        assert_eq!(
+            resolve_dump_entry(&mut dump, Some("notes.txt")).expect("resolves normally"),
+            "misc/project.stalx"
+        );
+    }
 
     /// The production region of this file, split out of the test module so the
     /// source-level tripwire below cannot match its own assertions.

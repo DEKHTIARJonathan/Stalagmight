@@ -119,6 +119,7 @@ impl AppState {
         hexsha: String,
         restore: bool,
         discard_local: bool,
+        entry_path: Option<String>,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -168,7 +169,8 @@ impl AppState {
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive (identical to the pull path).
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
-        let entry = resolve_dump_entry(&mut dump, None).map_err(local_dto)?;
+        let entry = resolve_dump_entry(&mut dump, entry_path.as_deref()).map_err(local_dto)?;
+        self.speleodb_remember_dump_entry(&project_id, &entry);
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Carry the user's local view toggles across the download-replace, same as a
