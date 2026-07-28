@@ -52,7 +52,6 @@ in determines how you write it, and picking wrong is the most common rework.
 | [telemetry.md](telemetry.md) | Opt-in anonymous counters: the event registry, source tracking, and how to add events for a new feature. |
 | [style-guide.md](style-guide.md) | UI conventions: design tokens, typography, buttons, panels, tables, forms, accessibility. |
 | [touch-support.md](touch-support.md) | Pointer events and long-press handling for tablets. Dated - written as a change log against its original PR; a rewrite is queued. |
-| [ui-component-inventory.md](ui-component-inventory.md) | Reusable components and where they live. Dated - `Table.tsx` no longer exists and later additions are missing; being reworked. |
 
 ## Import and formats
 

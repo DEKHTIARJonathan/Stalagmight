@@ -189,4 +189,3 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [UI style guide](docs/style-guide.md) | Design tokens, typography, buttons, panels, tables, forms, accessibility |
 | [macOS pan/zoom lockup](docs/debugging-macos-pan-zoom.md) | Postmortem of the macOS UI lockup, and how to re-enable the pan/zoom debug toolkit |
 | [Touch support](docs/touch-support.md) | Pointer events and long-press handling for tablets. Dated - a rewrite is queued |
-| [UI component inventory](docs/ui-component-inventory.md) | Reusable components and where they live. Dated - being reworked |
