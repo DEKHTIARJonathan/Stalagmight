@@ -443,3 +443,79 @@ describe('useRevertRevision - resuming at the push', () => {
     expect(issued()).toEqual(['speleodb_done']);
   });
 });
+
+describe('useRevertRevision - an ambiguous dump is a question, not a failure (#258)', () => {
+  const AMBIGUOUS = {
+    message: 'more than one Stalagmight file',
+    action: 'Ambiguous',
+    dump_candidates: [
+      { entry_path: 'misc/a.stalx', size_bytes: 10, modified: null, is_canonical: false },
+      { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null, is_canonical: false },
+    ],
+  };
+
+  it('hands the lock back and reports the choice, NOT a restore failure', async () => {
+    // The reported bug: this used to come back as `restore_failed`, so the dialog
+    // painted "The write lock was released and nothing was changed" in red while a
+    // picker sat behind it offering a retry the backend would refuse. Both halves
+    // are pinned here - the release DID happen (so a retry can re-acquire), and the
+    // outcome says what is actually going on.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(AMBIGUOUS),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'awaiting_dump_choice', candidates: AMBIGUOUS.dump_candidates });
+    expect(issued()).toContain('speleodb_done');
+  });
+
+  it('re-runs the WHOLE composite on the retry, re-acquiring the lock', async () => {
+    // The heart of the fix. A retry that re-ran only the restore step would be
+    // refused: `restore: true` needs a held lock, and the attempt above gave it back.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual([
+      'speleodb_start_editing',
+      'speleodb_restore_revision',
+      'speleodb_done',
+    ]);
+    expect(argsOf('speleodb_restore_revision')?.entryPath).toBe('misc/b.stalx');
+  });
+
+  it('does NOT offer the choice while the copy is dirty, because the retry could not work', async () => {
+    // A dump can be ambiguous AND the copy un-pushed: the backend resolves the entry
+    // before it consults the local-edits policy. There the lock is deliberately KEPT,
+    // so a composite retry would be refused by the revert's own un-pushed pre-flight.
+    // Offering a picker there would reproduce the reported bug in a rarer form.
+    // Clean at the pre-flight (or the revert would refuse before it ever restored),
+    // then dirty by the time the catch re-reads it - an autosave landing in between
+    // is exactly the race the unwind's refresh exists to catch.
+    useSpeleoStore.setState({
+      link: { ...LINK },
+      refreshLinkStatus: vi.fn(async () => {
+        useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+      }),
+    });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(AMBIGUOUS),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome.kind).toBe('restore_failed');
+    expect(outcome).toMatchObject({ lockHeld: true });
+    expect(issued()).not.toContain('speleodb_done');
+  });
+});

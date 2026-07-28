@@ -377,6 +377,7 @@ interface SpeleoStore {
     candidates: SpeleoDumpCandidate[],
     kind: DumpPickerKind,
     retry: (entryPath: string) => Promise<void>,
+    onCancel?: () => void,
   ) => void;
   /** Dismiss WITHOUT choosing. Nothing was downloaded over and nothing was
       replaced - the classify step runs before the cache is touched - so cancelling
@@ -388,6 +389,11 @@ interface SpeleoStore {
   /** The pending call, held so the dialog itself stays presentational. Not part of
       the picker's public surface - callers go through `openDumpPicker`. */
   dumpPickerRetry: ((entryPath: string) => Promise<void>) | null;
+  /** Run when the picker goes away WITHOUT an answer - dismissed, or dropped by a
+      lost session. It lives here rather than as an effect in each dialog because
+      the session-loss reset below also has to fire it: a caller that suspended a
+      flow on this question is left with a modal it cannot dismiss otherwise. */
+  dumpPickerCancel: (() => void) | null;
   /** Answer the storage question: persist the tier + the settled refusal, and move
       the held token there (no re-login - the backend still has it).
       Resolves the tier the key ACTUALLY LANDED ON, which is not always the one that
@@ -844,23 +850,31 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   dumpPickerKind: 'stalx',
   dumpPickerBusy: false,
   dumpPickerRetry: null,
+  dumpPickerCancel: null,
 
-  openDumpPicker: (candidates, kind, retry) =>
+  openDumpPicker: (candidates, kind, retry, onCancel) =>
     set({
       dumpPickerOpen: true,
       dumpPickerCandidates: candidates,
       dumpPickerKind: kind,
       dumpPickerBusy: false,
       dumpPickerRetry: retry,
+      dumpPickerCancel: onCancel ?? null,
     }),
 
-  closeDumpPicker: () =>
+  closeDumpPicker: () => {
+    const onCancel = get().dumpPickerCancel;
+    // Clear FIRST, then notify: a handler that re-raises the picker must not have
+    // its new state wiped by this same call.
     set({
       dumpPickerOpen: false,
       dumpPickerCandidates: [],
       dumpPickerBusy: false,
       dumpPickerRetry: null,
-    }),
+      dumpPickerCancel: null,
+    });
+    onCancel?.();
+  },
 
   resolveDumpPicker: async (entryPath) => {
     const retry = get().dumpPickerRetry;
@@ -872,7 +886,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // tree moved while the dialog was open), and that re-raise has already
       // replaced the candidate list - closing here would throw it away.
       if (!get().dumpPickerBusy) return;
-      set({ dumpPickerOpen: false, dumpPickerCandidates: [], dumpPickerRetry: null });
+      set({
+        dumpPickerOpen: false,
+        dumpPickerCandidates: [],
+        dumpPickerRetry: null,
+        dumpPickerCancel: null,
+      });
     } finally {
       set({ dumpPickerBusy: false });
     }
@@ -1020,7 +1039,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // a self-contradictory button (e.g. yellow "click to edit" while still claiming we
   // hold the lock and have un-pushed edits). The shell offers Start editing again on
   // re-login, and the next poll re-seeds. (fix 4)
-  clearSession: () =>
+  clearSession: () => {
+    // [#258] Fire the picker's cancel BEFORE dropping it. A caller that suspended a
+    // flow on this question (the revert holds `busy` across it) is otherwise left
+    // with a modal whose every dismissal route is disabled, by the very reset that
+    // was meant to tidy up after the session.
+    const abandonedPicker = get().dumpPickerCancel;
     set((state) => ({
       session: null,
       // The session ended, so nothing still in flight for it may act on whatever
@@ -1069,7 +1093,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       dumpPickerCandidates: [],
       dumpPickerBusy: false,
       dumpPickerRetry: null,
-    })),
+      dumpPickerCancel: null,
+    }));
+    abandonedPicker?.();
+  },
 
   seedFromStatus: (s) =>
     set((state) => {

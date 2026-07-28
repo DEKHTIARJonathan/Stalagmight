@@ -223,8 +223,16 @@ stay **private** with `pub(super)` accessors). **Zero of #258's backend work lan
 - `speleoStore`: `dumpPickerOpen`, `dumpPickerCandidates`, `dumpPickerRequest` (the
   pending call to replay), `openDumpPicker` / `closeDumpPicker`.
 - Mount `<SpeleoDumpPickerDialog />` in `src/App.tsx` immediately after the storage-choice
-  overlay, so portal/stack order puts it topmost - both wrappers use `z-[60]`, so ordering
-  is by `dialogStack`, not z-index.
+  overlay.
+
+**Correction, found in testing.** This step originally read "both wrappers use `z-[60]`,
+so ordering is by `dialogStack`, not z-index". Both halves are false. `DialogWrapper`
+declares `z-50` and `AlertDialog` declares `z-[60]`; they portal into a `#dialog-root`
+that creates no stacking context, so z-index decides and DOM order never gets consulted.
+And `dialogStack` only ever wrote `inert` - it had no bearing on painting at all. The
+picker was therefore painted underneath any `AlertDialog` host while still being the
+interactive one. `dialogStack` now stamps the layer alongside the inertness, which fixes
+the class rather than the one pair.
 
 ### 6. Frontend - the picker component
 

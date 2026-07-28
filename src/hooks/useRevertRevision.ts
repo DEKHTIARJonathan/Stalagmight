@@ -5,7 +5,8 @@ import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
-import { humanizeSpeleoError, unpushedLocalEdits } from '../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../utils/speleoError';
+import type { SpeleoDumpCandidate } from '../types/ipc.generated';
 
 export interface RevertRevisionArgs {
   projectId: string;
@@ -21,6 +22,12 @@ export interface RevertRevisionArgs {
    * armed second press, after the user has been told which local work it replaces.
    */
   discardLocal?: boolean;
+  /**
+   * [#258] The dump entry the user picked, when this whole composite is a retry from
+   * the ambiguity picker. Only the restore step reads it; `resumeAtPush` returns
+   * before that step, so it is inert there by construction.
+   */
+  entryPath?: string;
   /**
    * Resume a revert whose restore already landed: re-issue ONLY the upload +
    * release, against the working copy this flow already swapped in and the write
@@ -76,6 +83,13 @@ export type RevertOutcome =
   | { kind: 'locked_by'; email: string | null }
   | { kind: 'lock_failed' }
   | { kind: 'restore_failed'; message: string; lockHeld: boolean }
+  /** [#258] The revision's tree holds more than one openable file, so the composite
+      is SUSPENDED on a question rather than failed. The write lock has already been
+      handed back (that is why there is no `lockHeld` here), nothing was written, and
+      answering re-runs the whole composite from the top - which is what re-acquires
+      the lock. Never produced while the copy is dirty: there the lock is kept on
+      purpose and a composite retry would be refused by the un-pushed pre-flight. */
+  | { kind: 'awaiting_dump_choice'; candidates: SpeleoDumpCandidate[] }
   | { kind: 'push_failed' }
   /** The edit gate dropped mid-flight (usually a 401 auto-drop): nothing uploaded,
       nothing released, and - unlike `push_failed` - no lock held to retry with. */
@@ -143,6 +157,7 @@ export function useRevertRevision() {
       shortSha,
       message,
       discardLocal = false,
+      entryPath,
       resumeAtPush = false,
       onStep,
     }: RevertRevisionArgs): Promise<RevertOutcome> => {
@@ -210,6 +225,7 @@ export function useRevertRevision() {
           restore: true,
           discardLocal,
           quiet: true,
+          ...(entryPath ? { entryPath } : {}),
         });
       } catch (e) {
         const refusedForLocalEdits = unpushedLocalEdits(e);
@@ -251,6 +267,13 @@ export function useRevertRevision() {
           lockHeld = !(kind === 'released' || kind === 'not_editing');
         }
         if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
+        // [#258] After the unwind, not before it: the release must have HAPPENED, and
+        // `lockHeld` being false is the evidence that a composite retry can re-acquire.
+        // While the copy is dirty the lock is deliberately kept and the retry's own
+        // un-pushed pre-flight would refuse it, so that case falls through to the
+        // message below - which is accurate - rather than to a picker that cannot work.
+        const candidates = dumpCandidates(e);
+        if (candidates && !lockHeld) return { kind: 'awaiting_dump_choice', candidates };
         return {
           kind: 'restore_failed',
           message: humanizeSpeleoError(e, t('speleodb.revert.errors.restorePrefix', { sha: shortSha })),

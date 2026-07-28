@@ -3036,6 +3036,7 @@
       "failed": "Could not restore the revision"
     },
     "revert": {
+      "awaitingChoice": "Revision {{sha}} holds more than one openable file, so the write lock was handed back while you choose. Nothing was changed. Pick a file and the revert runs again from the start.",
       "action": "Revert",
       "title": "Revert to revision {{sha}}",
       "body": "This takes the write lock on \"{{name}}\", replaces the working copy with revision {{sha}}, uploads it as a new revision, and releases the write lock again.",

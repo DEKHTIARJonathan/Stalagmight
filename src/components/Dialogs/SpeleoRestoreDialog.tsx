@@ -3,9 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
+import { useSpeleoStore } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
-import { humanizeSpeleoError, unpushedLocalEdits } from '../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
 
 /**
  * [#218] Restore-revision confirm. Opened from the Project Settings revision
@@ -24,6 +25,7 @@ export default function SpeleoRestoreDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const isDirty = useProjectStore((s) => s.isDirty);
   const restoreRevision = useRestoreRevision();
+  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
 
   const projectId = typeof dialogData.projectId === 'string' ? dialogData.projectId : '';
   const projectName = typeof dialogData.projectName === 'string' ? dialogData.projectName : '';
@@ -60,7 +62,7 @@ export default function SpeleoRestoreDialog() {
     if (needsDiscard) cancelRef.current?.focus();
   }, [needsDiscard]);
 
-  const run = async (discardLocal: boolean) => {
+  const run = async (discardLocal: boolean, entryPath?: string) => {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
@@ -75,9 +77,24 @@ export default function SpeleoRestoreDialog() {
         shortSha,
         restore: true,
         discardLocal,
+        ...(entryPath ? { entryPath } : {}),
       });
       closeDialog();
     } catch (e) {
+      // [#258] The write lock is held for this whole call and is NOT touched here, so
+      // unlike the revert composite the retry is just this attempt again. Cancelling
+      // returns the dialog to its opening state with the lock still held - the user
+      // is still in an edit session, and the edit bar still says so.
+      const candidates = dumpCandidates(e);
+      if (candidates) {
+        openDumpPicker(
+          candidates,
+          'stalx',
+          (chosen) => run(discardLocal, chosen),
+          () => setBusy(false),
+        );
+        return;
+      }
       // A refusal over un-pushed edits is not a dead end: arm the explicit
       // discard step instead of showing the raw "local edits never pushed" line
       // about changes this dialog is already about to replace.

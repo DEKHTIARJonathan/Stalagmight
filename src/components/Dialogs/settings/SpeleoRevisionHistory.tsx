@@ -8,7 +8,7 @@ import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
 import { invokeIpc } from '../../../utils/ipc';
-import { humanizeSpeleoError, unpushedLocalEdits } from '../../../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../../utils/speleoError';
 import { holdsWriteLock } from '../../../utils/quit';
 import { permissionAtLeast } from '../../../utils/speleoPermission';
 import { formatDate } from '../../../i18n/format';
@@ -60,6 +60,7 @@ export function SpeleoRevisionHistory() {
   // would clobber their unsaved, lock-less edits, so the backend refuses both and the
   // UI offers no action. Shared predicate - see `holdsWriteLock`.
   const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
   // A View is read-only in INTENT, but not in effect: the backend swaps the working
   // copy to the chosen revision, so it runs the same un-pushed-edits guard a Restore
   // does and refuses whenever this copy holds work the server has never seen. That
@@ -106,7 +107,7 @@ export function SpeleoRevisionHistory() {
   // Read-only View of a past revision (no lock): check it out for inspection; the
   // SpeleoDB Update then fast-forwards back to the latest. Errors toast (there is no
   // confirm dialog for the non-destructive path).
-  const handleView = async (rev: SpeleoRevision) => {
+  const handleView = async (rev: SpeleoRevision, entryPath?: string) => {
     if (!projectId) return;
     setPendingId(rev.id);
     try {
@@ -116,8 +117,18 @@ export function SpeleoRevisionHistory() {
         hexsha: rev.id,
         shortSha: rev.id.slice(0, 8),
         restore: false,
+        ...(entryPath ? { entryPath } : {}),
       });
     } catch (e) {
+      // [#258] More than one openable file: a question, not a failure. No lock is
+      // ever held on the View path, so the retry is simply this same call again -
+      // and re-entering HERE rather than the hook means the retry's own failure
+      // lands in the toast below, exactly as a first attempt's would.
+      const candidates = dumpCandidates(e);
+      if (candidates) {
+        openDumpPicker(candidates, 'stalx', (chosen) => handleView(rev, chosen));
+        return;
+      }
       // The un-pushed-edits refusal is normally pre-empted by `viewBlocked`, but the
       // dirty bit can flip between render and click (an auto-save, a poll), so the
       // race still has to say the same thing the hint does rather than fall through
