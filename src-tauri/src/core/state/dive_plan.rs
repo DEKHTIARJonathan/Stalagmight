@@ -161,16 +161,33 @@ struct PlanAnchor {
     a: Option<String>,
     #[serde(default)]
     b: Option<String>,
-    /// Fallback only: was this station on the "after `a`" side when it was saved?
+    /// Which side of `a` the station sat on when it was saved, in TRAVERSAL terms.
     ///
-    /// Consulted when the pair can no longer place the station on its own - `a`'s partner was
-    /// deleted, or `a` stopped being terminal because the section was extended past it. A
-    /// reverse invalidates this bit, so the residual inaccuracy is "reverse AND then extend or
-    /// delete at that exact end", plus a single-shot section, whose two ends touch the same one
-    /// shot and so are genuinely indistinguishable. Accepted: single-shot sections are
-    /// vanishingly rare and reverses are not routine.
+    /// Only consulted when the pair cannot place the station on its own - a terminal station has
+    /// no second neighbour, and a deleted partner leaves only one. On its own this bit is
+    /// reverse-UNSAFE, which is what `parity` below repairs.
     #[serde(default)]
     after_a: bool,
+    /// The section's [`Section::reverse_parity`] when this anchor was written.
+    ///
+    /// This is what makes the single-neighbour case correct. `after_a` is expressed in traversal
+    /// terms, and a reverse flips traversal - so the same observable state ("`a` is at position
+    /// 0 and something follows it") is produced by two different histories that need OPPOSITE
+    /// answers:
+    ///
+    /// ```text
+    ///   [s0,s1,s2] reversed          -> a at 0, follower present -> station is index 0
+    ///   [s0,s1] delete s0, append s2 -> a at 0, follower present -> station is index 1
+    /// ```
+    ///
+    /// The pair alone cannot tell those apart. Comparing this against the section's parity now
+    /// can: differing parity means a reverse happened and the side flips; equal parity means it
+    /// did not and the saved side is read literally.
+    ///
+    /// Absent (`false`) on plans written before this field existed, which is correct for them -
+    /// no reverse had been recorded against their sections either.
+    #[serde(default)]
+    parity: bool,
 }
 
 impl PlanAnchor {
@@ -212,21 +229,30 @@ fn to_anchor(project: &Project, r: Option<StationRef>) -> Option<StoredAnchor> {
         b,
         // `a` is the shot BEFORE the station, so the station is on its "after" side.
         after_a: true,
+        parity: section.reverse_parity,
     }))
 }
 
 /// Place a stored anchor against the project as it stands now.
 ///
-/// Order of preference, most trustworthy first:
+/// Two cases, and no others:
 ///
-/// 1. Both neighbours still present - take the end of `a` that FACES `b`. Derived from current
-///    positions, so it survives a reverse, and it survives shots being inserted between them
-///    (including a split, which inserts a new head before the original): the station is still
-///    the one on `a`'s `b`-ward side.
-/// 2. One neighbour present and the other recorded as a free end - if that shot is still at the
-///    end of the section, take the free end. Reverse-safe: which end is free is read from the
-///    current order, not the stored one.
-/// 3. Otherwise fall back to `after_a`, which is only wrong if the section was ALSO reversed.
+/// 1. **Both neighbours present** - the station is the end of `a` that FACES `b`, derived from
+///    their current positions. Survives a reverse (both move together), shots inserted between
+///    them, and a split of either (they simply stop being adjacent; the side is unchanged).
+/// 2. **One neighbour present** - a terminal station, or one whose partner was deleted. Take the
+///    saved side, flipped when the section's parity says a reverse happened since. Position is
+///    NOT consulted: an earlier version inferred the side from "is `a` at an end of the
+///    section", which reads the same after a reverse as after a delete-then-append and so was
+///    wrong for one of them whichever way it guessed.
+///
+/// KNOWN LIMITATION, accepted deliberately: splitting the shot a terminal anchor names. The
+/// split gives the new half a fresh UUID and keeps the old one on the tail, so afterwards no
+/// shot in the file has that station as an endpoint - nothing is left to anchor to, and the
+/// stored side lands on the split point instead. Such an anchor's shot now has neighbours on
+/// BOTH sides, which the stored `None` says is impossible; that case is resolved as though no
+/// reverse occurred. Splitting an end shot of a section a saved plan pins is rare, and the
+/// error is one station.
 fn from_anchor(project: &Project, anchor: &StoredAnchor, stale: &mut u32) -> Option<StationRef> {
     let resolved = resolve_stored(project, anchor);
     if resolved.is_none() {
@@ -240,28 +266,22 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
     let n = section.shots.len();
     let pa = PlanAnchor::position_of(section, &anchor.a);
     let pb = PlanAnchor::position_of(section, &anchor.b);
+    // A reverse since this anchor was written flips what "after" means.
+    let flipped = anchor.parity != section.reverse_parity;
     let index = match (pa, pb) {
         // (1) Both present: the station is the end of `a` that faces `b`.
         (Some(pa), Some(pb)) if pa < pb => pa + 1,
         (Some(pa), Some(_)) => pa,
-        // (2) One present, the other was a free end at save time and this shot still sits at an
-        //     end of the section. `n > 1` keeps the genuinely ambiguous single-shot section out
-        //     of this arm - there both ends touch the same shot.
-        (Some(p), None) if anchor.b.is_none() && n > 1 && p == 0 => 0,
-        (Some(p), None) if anchor.b.is_none() && n > 1 && p == n - 1 => n,
-        (None, Some(p)) if anchor.a.is_none() && n > 1 && p == 0 => 0,
-        (None, Some(p)) if anchor.a.is_none() && n > 1 && p == n - 1 => n,
-        // (3) Ambiguous - the partner is gone, the section grew past this end, or it is a
-        //     single-shot section. Fall back to the saved side.
-        (Some(p), _) => {
-            if anchor.after_a {
+        // (2) One present: the saved side, corrected for orientation.
+        (Some(p), None) => {
+            if anchor.after_a != flipped {
                 p + 1
             } else {
                 p
             }
         }
         (None, Some(p)) => {
-            if anchor.after_a {
+            if anchor.after_a != flipped {
                 p
             } else {
                 p + 1
@@ -926,6 +946,122 @@ mod tests {
         assert_eq!(stale, 0);
     }
 
+    /// Build a section of `n` shots and return `(project, section_id)`.
+    fn project_n_shots(n: usize) -> (Project, u32) {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: (0..n).map(|_| make_shot()).collect(),
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        (project, sec)
+    }
+
+    /// A terminal anchor must survive a reverse IN BOTH DIRECTIONS.
+    ///
+    /// It has one neighbour and so cannot be placed by the pair; the side comes from the saved
+    /// `after_a`, which a reverse flips. Comparing the section's parity against the saved one is
+    /// what corrects it.
+    #[test]
+    fn terminal_anchors_survive_a_reverse_both_ways() {
+        let (mut project, sec) = project_n_shots(3);
+        let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
+        let end = to_anchor(&project, Some(StationRef::new(sec, 3))).unwrap();
+        let mut stale = 0;
+
+        assert!(project.reverse_section(sec, false));
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 3)),
+            "the entrance is now the far end"
+        );
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 0))
+        );
+
+        // ...and back again.
+        assert!(project.reverse_section(sec, false));
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 0))
+        );
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 3))
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// Deleting the head and then appending puts the anchored shot back at position 0 with a
+    /// follower - the SAME observable state a reverse produces, but needing the opposite answer.
+    /// Parity is what tells them apart; an earlier rule inferred the side from position alone
+    /// and got this one wrong.
+    #[test]
+    fn a_terminal_anchor_survives_delete_then_append() {
+        let (mut project, sec) = project_n_shots(2);
+        let end = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+
+        let head = project.get_section(sec).unwrap().shots[0].id;
+        project.remove_shot(sec, head).unwrap();
+        project.add_shot(sec, make_shot()).unwrap();
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 1)),
+            "no reverse happened, so the saved side is read literally"
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// Prepending pushes every later station up by one, and the anchored station goes with it.
+    #[test]
+    fn a_terminal_anchor_survives_a_prepend() {
+        let (mut project, sec) = project_n_shots(2);
+        let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
+
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project
+            .insert_shot_before(sec, first, make_shot(), None, None)
+            .unwrap();
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 1)),
+            "the old entrance is now station 1; a new one sits in front of it"
+        );
+        assert_eq!(stale, 0);
+    }
+
+    /// KNOWN LIMITATION, pinned so it is a decision on record rather than a surprise.
+    ///
+    /// Splitting the shot a terminal anchor names gives the new half a fresh UUID and keeps the
+    /// old one on the tail, so afterwards NO shot in the file has that station as an endpoint -
+    /// there is nothing left to anchor to. The anchored shot now has neighbours on both sides,
+    /// which the stored `None` says is impossible, and the case resolves as though no reverse
+    /// occurred. The error is one station, and splitting an end shot of a section a saved plan
+    /// pins is rare.
+    #[test]
+    fn splitting_the_anchored_end_shot_is_off_by_one_known_limitation() {
+        let (mut project, sec) = project_n_shots(2);
+        let start = to_anchor(&project, Some(StationRef::new(sec, 0))).unwrap();
+
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project.split_shot_at_distance(sec, first, 0.5).unwrap();
+
+        let mut stale = 0;
+        assert_eq!(
+            from_anchor(&project, &start, &mut stale),
+            Some(StationRef::new(sec, 1)),
+            "documented limitation: the entrance is still station 0, and this lands on the split point"
+        );
+        assert_eq!(stale, 0, "it resolves - it is simply one station out");
+    }
+
     /// A shot-less section is one station and no shots - what a GPX waypoint imports as. It has
     /// no neighbours to be named by, and that is a complete description rather than a failure.
     ///
@@ -993,11 +1129,14 @@ mod tests {
         assert_eq!(back.marked_points[0].station, only);
     }
 
-    /// A single-shot section has two ends and both touch the same one shot, so nothing
-    /// intrinsic tells them apart. The saved side is used, and a reverse flips it - accepted
-    /// and documented, because such sections are vanishingly rare and reverses are not routine.
+    /// A single-shot section has two ends that both touch the same one shot, so the pair cannot
+    /// tell them apart - but the section's parity can, and that is enough.
+    ///
+    /// This used to be an accepted inaccuracy: with only a traversal-relative side recorded, a
+    /// reverse flipped the meaning and nothing detected it. Recording the orientation alongside
+    /// closes it, so the case now resolves correctly rather than being documented as wrong.
     #[test]
-    fn a_single_shot_section_falls_back_to_the_saved_side() {
+    fn a_single_shot_sections_ends_survive_a_reverse() {
         let mut project = Project::new("Test".to_string(), None);
         let sec = project
             .add_section(SectionData {
@@ -1018,16 +1157,18 @@ mod tests {
             from_anchor(&project, &end, &mut stale),
             Some(StationRef::new(sec, 1))
         );
-        assert_eq!(stale, 0);
 
-        // The accepted inaccuracy: after a reverse the two ends swap and the saved side cannot
-        // tell. Asserted so the limitation is a decision on record, not a surprise.
+        // Reversing a one-shot section swaps its two stations, and both anchors follow.
         assert!(project.reverse_section(sec, false));
         assert_eq!(
             from_anchor(&project, &start, &mut stale),
-            Some(StationRef::new(sec, 0)),
-            "documented limitation: a one-shot section cannot distinguish its ends"
+            Some(StationRef::new(sec, 1))
         );
+        assert_eq!(
+            from_anchor(&project, &end, &mut stale),
+            Some(StationRef::new(sec, 0))
+        );
+        assert_eq!(stale, 0);
     }
 
     #[test]
