@@ -5,6 +5,94 @@ use crate::models::StationAnchor;
 use crate::models::StationRef;
 use tempfile::TempDir;
 
+/// A pre-v2 `.stalx` must keep `reverse_parity` through the FK rebuild.
+///
+/// `migrate_schema` conditionally ADDs columns to `sections`, and for `user_version < 2` the FK
+/// rebuild then recreates that table from a fixed DDL and copies the rows across. A column
+/// missing from either half is silently dropped, and the file is stamped current afterwards, so
+/// no later open re-adds it. The damage does not show up on load - the read path falls back to a
+/// literal for an absent column - it shows up on the next SAVE, which inserts every column by
+/// name. The project opens fine and can then never be written again.
+///
+/// The insert below is the shape `save_project` uses. It is exercised directly rather than
+/// through `save_project` because a real `save_project` on a pre-v2 file currently fails for an
+/// UNRELATED, pre-existing reason: `init_schema` runs before the migration and creates tables
+/// whose foreign keys reference `sections` (`station_comments` among them), the rebuild's rename
+/// rewrites those references to `sections_old`, and the rebuild does not recreate every one of
+/// them - so the dangling reference outlives the drop. That is master's bug, not this branch's,
+/// and it would mask this assertion rather than sharpen it.
+#[test]
+fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy.stalx");
+
+    // A v1 file: `sections` without any of the columns later migrations add, plus the row we
+    // expect to survive the rebuild.
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sections (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT,
+                 surveyor TEXT,
+                 date TEXT,
+                 color TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO sections (id, name, color, created_at)
+             VALUES (1, 'Legacy', '#ff0000', '2020-01-01T00:00:00Z');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+
+    // Opening migrates: the ALTER adds the column, then the FK rebuild recreates the table.
+    let db = Database::open(&path).unwrap();
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_column, 1,
+        "the FK rebuild must carry reverse_parity through, not drop it"
+    );
+    let survived: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        survived, 1,
+        "the rebuild must copy the existing rows across"
+    );
+
+    // THE regression: this is the insert `save_project` performs, and it is what fails when the
+    // column is dropped by the rebuild.
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, \
+             reverse_parity, created_at) \
+             VALUES (2, 'New', NULL, NULL, '#00ff00', 'in', 1.0, 1, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("a migrated pre-v2 file must still accept the column save_project writes");
+    let parity: i64 = db
+        .conn
+        .query_row(
+            "SELECT reverse_parity FROM sections WHERE id = 2",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        parity, 1,
+        "the value must round-trip, not be silently dropped"
+    );
+}
+
 #[test]
 fn load_project_validation_returns_none_when_table_absent() {
     // A legacy .stalx predating `project_settings`, opened read-only (which does

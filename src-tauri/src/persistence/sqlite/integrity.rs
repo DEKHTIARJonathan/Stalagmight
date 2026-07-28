@@ -143,6 +143,7 @@ impl Database {
                 color TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'in',
                 quality REAL NOT NULL DEFAULT 1.0,
+                reverse_parity INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
 
@@ -243,8 +244,16 @@ impl Database {
 
         // Copy data
         tx.execute(
-            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, created_at)
-             SELECT id, name, surveyor, date, color, direction, quality, created_at FROM sections_old",
+            // Every column `migrate_schema` conditionally ADDs to `sections` has to appear
+            // here as well. That migration runs BEFORE this rebuild, so `sections_old` already
+            // carries them - but this recreates the table from scratch, so anything missing
+            // from the DDL and the copy is silently dropped and the file is then stamped
+            // current, so no later open re-adds it. `save_project` inserts every column by
+            // name, which makes the result an UNSAVEABLE project: loading still works (the
+            // read path falls back to a literal for an absent column) and only the next save
+            // fails, long after the migration that caused it.
+            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, reverse_parity, created_at)
+             SELECT id, name, surveyor, date, color, direction, quality, reverse_parity, created_at FROM sections_old",
             [],
         )?;
 
