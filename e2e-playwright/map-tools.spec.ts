@@ -132,8 +132,11 @@ test.describe('Map Tools', () => {
       // The app should remain functional
       await expect(canvas).toBeVisible();
 
-      // Test Ctrl+click for multi-select
-      await page.mouse.click(centerX + 50, centerY, { modifiers: ['ControlOrMeta'] });
+      // Test Ctrl+click for multi-select. `page.mouse.click` takes no
+      // `modifiers` option, so the key has to be held around the click.
+      await page.keyboard.down('Control');
+      await page.mouse.click(centerX + 50, centerY);
+      await page.keyboard.up('Control');
       await waitForMapIdle(page);
 
       // The app should remain functional

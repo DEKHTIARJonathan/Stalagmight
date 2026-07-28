@@ -3,6 +3,13 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve as pathResolve } from 'node:path';
 import { createRequire } from 'node:module';
 
+declare global {
+  interface Window {
+    /** Installed by this mock; the app's IPC bridge. Also used to emit events. */
+    __TAURI_INTERNALS__?: { invoke: (cmd: string, args?: unknown) => Promise<unknown> };
+  }
+}
+
 // ----------------------------------------------------------------------------
 // msgpack UMD bundle loader.
 //
@@ -1413,6 +1420,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               default_reserve?: string;
               reserve_profile?: { stage_reserve_bar?: number; all_thirds_safety_margin_bar?: number };
               conservative_tank_gas?: boolean;
+              swim_speed_m_per_min?: number;
+              survey_speed_m_per_min?: number | null;
             };
             const cylinders = (args?.cylinders ?? []) as Array<{
               role?: string;

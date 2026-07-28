@@ -298,20 +298,28 @@ async function pollForMarginsSettled(
         result.zoom <= result.zoomMax
       );
     },
-    {
-      timeout,
-      message: () => {
-        if (!lastResult) return `No margin data available after ${timeout}ms (map still moving or no stations)`;
-        return [
-          `Station screen positions did not settle with >= ${minPct}% margin and zoom <= ${lastResult.zoomMax}`,
-          `  Container: ${lastResult.containerWidth}x${lastResult.containerHeight}`,
-          `  Zoom: ${lastResult.zoom.toFixed(2)} (max: ${lastResult.zoomMax})`,
-          `  Margins: L=${lastResult.minMarginLeftPct.toFixed(1)}% R=${lastResult.minMarginRightPct.toFixed(1)}% T=${lastResult.minMarginTopPct.toFixed(1)}% B=${lastResult.minMarginBottomPct.toFixed(1)}%`,
-          `  Points: ${JSON.stringify(lastResult.points)}`,
-        ].join('\n');
-      },
-    },
-  ).toBe(true);
+    { timeout },
+  )
+    .toBe(true)
+    // `message` on expect.poll is a plain string, so it cannot describe a result
+    // that only exists once polling has given up. Compose the diagnostic here.
+    .catch(() => {
+      const r: MarginResult | null = lastResult;
+      if (!r) {
+        throw new Error(
+          `No margin data available after ${timeout}ms (map still moving or no stations)`,
+        );
+      }
+      throw new Error(
+        [
+          `Station screen positions did not settle with >= ${minPct}% margin and zoom <= ${r.zoomMax}`,
+          `  Container: ${r.containerWidth}x${r.containerHeight}`,
+          `  Zoom: ${r.zoom.toFixed(2)} (max: ${r.zoomMax})`,
+          `  Margins: L=${r.minMarginLeftPct.toFixed(1)}% R=${r.minMarginRightPct.toFixed(1)}% T=${r.minMarginTopPct.toFixed(1)}% B=${r.minMarginBottomPct.toFixed(1)}%`,
+          `  Points: ${JSON.stringify(r.points)}`,
+        ].join('\n'),
+      );
+    });
   return lastResult!;
 }
 

@@ -65,6 +65,8 @@ All must pass before pushing:
 ```bash
 pnpm tsc --noEmit
 pnpm typecheck:agent                                      # agent-harness typecheck (CI check-job gate)
+pnpm typecheck:playwright                                 # e2e-playwright specs + IPC mock (CI smoke-job gate)
+pnpm test:mock-contract                                    # IPC mock <-> generate_handler! contract (CI smoke-job gate)
 pnpm exec vitest run                                      # vitest unit + component (CI check-job gate; plain "pnpm test" watches and never exits locally)
 pnpm test:ui
 pnpm lint:e2e-parallel                                    # Playwright parallel-safety (CI smoke-job gate)

@@ -117,14 +117,19 @@ Requires Node 22. See [Agent Harness](agent-harness.md).
 ### Typecheck
 
 ```bash
-pnpm tsc --noEmit         # src/ only - tsconfig.json includes nothing else
-pnpm typecheck:agent      # e2e/agent + e2e/lib (tsconfig.agent.json)
+pnpm tsc --noEmit          # src/ only - tsconfig.json includes nothing else
+pnpm typecheck:agent       # e2e/agent + e2e/lib (tsconfig.agent.json)
+pnpm typecheck:playwright  # e2e-playwright/ + playwright.config.ts
 ```
 
-Note what that leaves out: `e2e-playwright/` and `e2e/legacy/` are **not**
-type-checked by either command or by CI. `tsconfig.playwright.json` and
-`tsconfig.e2e.json` exist but no script and no workflow step runs them, so a
-type error in a spec surfaces only when the spec runs.
+The first two are `check` gates, the third is a `smoke` gate - it has to be,
+because `check` path-ignores `e2e-playwright/**`.
+
+`e2e/legacy/` is the one tree nothing type-checks. `tsconfig.e2e.json` exists but
+is deliberately not gated: the quarantined WDIO suite has roughly 600 pre-existing
+errors (mostly the ambient `browser` global and untyped hook parameters) and runs
+in no automated job, so gating it would mean fixing 600 errors in code that is on
+its way out.
 
 The agent harness runs under `tsx`, which transpiles without type-checking, and
 it is exercised on demand only, so `typecheck:agent` (a CI `check` step) is the
@@ -416,6 +421,10 @@ directions: it parses `generate_handler!` in `src-tauri/src/lib.rs` and the
 mock's `switch` cases and fails on drift, with reasoned allowlists and
 stale-allowlist self-checks. **Adding or removing a `#[tauri::command]` fails
 vitest until the mock and the allowlist agree.**
+
+It is gated from both sides: `check` runs it as part of the vitest suite when
+Rust or `src/` changes, and `smoke` runs it on its own (`pnpm test:mock-contract`)
+when `e2e-playwright/**` changes, which `check` path-ignores.
 
 ### Do not copy backend shapes into a test
 

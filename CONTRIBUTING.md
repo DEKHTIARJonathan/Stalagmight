@@ -99,6 +99,8 @@ Run the same checks CI runs. All of these must pass:
 ```bash
 pnpm tsc --noEmit                                                  # TypeScript
 pnpm typecheck:agent                                               # agent-harness typecheck (a CI gate)
+pnpm typecheck:playwright                                          # Playwright specs + IPC mock (a CI gate)
+pnpm test:mock-contract                                            # IPC mock <-> Rust command contract (a CI gate)
 pnpm exec vitest run                                               # vitest unit + component (plain "pnpm test" watches and never exits)
 pnpm test:ui                                                       # Playwright (needs a display)
 pnpm lint:e2e-parallel                                             # Playwright parallel-safety (a CI gate)

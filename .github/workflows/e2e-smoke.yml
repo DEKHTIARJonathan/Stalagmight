@@ -39,6 +39,19 @@ jobs:
       # changes (`check` path-ignores them), so the gate lives here. See docs/TESTING.md.
       - name: Check e2e-playwright parallel-safety
         run: pnpm lint:e2e-parallel
+      # `check` path-ignores `e2e-playwright/**`, and root `tsconfig.json` includes
+      # only `src`, so without this the specs and the IPC mock are type-checked by
+      # nothing. This is the job that runs on `e2e-playwright/**` changes, so the
+      # gate belongs here. (`tsconfig.e2e.json` covers the quarantined WDIO tree and
+      # is deliberately NOT gated - it has ~600 pre-existing errors and runs nowhere.)
+      - name: Typecheck Playwright specs + IPC mock
+        run: pnpm typecheck:playwright
+      # mockContract pins the mock against lib.rs's generate_handler! list. It lives
+      # in the vitest suite, which only `check` runs - and `check` path-ignores
+      # `e2e-playwright/**`, so a mock-only edit (the exact change most likely to
+      # break the contract) would otherwise be gated by nothing.
+      - name: Mock IPC contract
+        run: pnpm test:mock-contract
       # The timing instrumentation below decides which tests get cut, so its
       # arithmetic is pinned by fixture tests (hook attribution, Worker Cleanup
       # exclusion, failed-run flagging, workflow-command sanitizing). Cheap, and

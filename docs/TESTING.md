@@ -99,9 +99,11 @@ Three workflows gate `master`:
   tripwires. Each tripwire runs its own `:test` fixture first, so the rule itself
   is pinned.
 - **`e2e-smoke.yml` (`smoke`)** - `pnpm lint:e2e-parallel` (the Playwright
-  parallel-safety scanner), then `pnpm lint:pw-timing:test`, then the `@smoke`
-  subset, Chromium-only against the Vite dev server. Any of the three can fail
-  the job.
+  parallel-safety scanner), `pnpm lint:pw-timing:test`,
+  `pnpm typecheck:playwright`, `pnpm test:mock-contract`, then the `@smoke`
+  subset, Chromium-only against the Vite dev server. Any of the five can fail the
+  job. The typecheck and mock-contract steps live here rather than in `check`
+  because `check` path-ignores `e2e-playwright/**` - the very changes they guard.
 - **`leak-scan.yml`** - `lint:private-leaks` + `lint:no-em-dash` over the whole
   tracked tree. It is the one workflow with **no** `paths-ignore`, because
   `check` and `smoke` both skip `**/*.md` and `docs/**` - exactly where a leak or

@@ -593,7 +593,7 @@ test.describe('Error Handling', () => {
         // App should remain functional even after error
         await expect(page.getByTestId('map-canvas')).toBeVisible();
       } else {
-        await expect(errorVisible).toBeVisible();
+        expect(await errorVisible.isVisible()).toBe(true);
       }
 
       // Verify app remains functional after error
