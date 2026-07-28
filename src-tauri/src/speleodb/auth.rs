@@ -915,28 +915,55 @@ impl TokenStore {
     }
 }
 
-/// Delete `key` from one tier, reporting the failure only when the credential is
-/// STILL there afterwards.
+/// Delete `key` from one tier, reporting the failure unless the tier is then
+/// PROVEN to be holding nothing.
 ///
 /// The same discrimination [`TokenStore::clear`] makes, asked the other way round.
 /// `clear` probes before deleting because it has to warn about a keychain whose
 /// entry the delete may have removed; here the delete has already failed, so the
-/// probe answers the question directly: `Ok(Some(_))` means the credential both
-/// survived and is still readable, which is exactly the pair [`TokenStore::load`]
-/// needs to hand it back on the next launch. Anything else - an absent keyring
-/// that fails every op at `Entry::new`, a store that cannot be read - cannot
-/// resurrect a session, and warning about it would fire on every ordinary
-/// session-only choice made on a headless box, which is a warning the user learns
-/// to ignore.
-fn sweep_tier(store: &dyn SecretStore, key: &str) -> Result<(), SecretStoreError> {
+/// probe answers the question directly - and it answers in THREE ways, only two of
+/// which are answers.
+///
+/// `Ok(Some(_))` means the credential both survived and is still readable, which is
+/// exactly the pair [`TokenStore::load`] needs to hand it back on the next launch.
+/// `Ok(None)` proves this tier holds nothing for this account, so the delete that
+/// failed stranded nothing and the choice is settled. An `Err` proves neither: a
+/// locked keyring fails the delete and the probe alike, and "cannot be read" is a
+/// fact about right now, while the promise being made - "you will be signed out
+/// when the app closes" - is about the next launch, by which time the screen is
+/// unlocked and the entry hands the session straight back. Treating that silence as
+/// a clean sweep was the same collapse `clear` was fixed for one verb over: it
+/// closed the dialog reporting a memory-only key over an older, non-revoked bearer
+/// token still on the machine.
+///
+/// `unreadable_may_hold` is the caller's per-tier answer to that third outcome; see
+/// [`TokenStore::sweep_persistent_tiers`] for why the keychain and the plaintext
+/// file answer it differently.
+fn sweep_tier(
+    store: &dyn SecretStore,
+    key: &str,
+    unreadable_may_hold: bool,
+) -> Result<(), SecretStoreError> {
     let Err(e) = store.delete(key) else {
         return Ok(());
     };
-    if matches!(store.load(key), Ok(Some(_))) {
+    let may_have_survived = match store.load(key) {
+        Ok(entry) => entry.is_some(),
+        Err(probe) => {
+            tracing::debug!(
+                error = %probe,
+                tier = store.kind(),
+                unreadable_may_hold,
+                "the SpeleoDB sweep could not probe the tier whose delete just failed"
+            );
+            unreadable_may_hold
+        }
+    };
+    if may_have_survived {
         tracing::warn!(
             error = %e,
             tier = store.kind(),
-            "the SpeleoDB token survived the sweep for a session-only choice"
+            "the SpeleoDB token may have survived the sweep for a session-only choice"
         );
         return Err(e);
     }
@@ -1846,17 +1873,113 @@ mod tests {
         // so reporting each `Err` would refuse the session-only answer on every
         // ordinary Linux machine the escape hatch exists for - over a store that
         // cannot hold a credential and so cannot have stranded one.
+        //
+        // Signed in exactly as production does it, rather than by poking the fields:
+        // the failed keychain write is how the session LEARNS the keyring is unusable
+        // here, and that verdict is the whole licence for the quiet branch (see
+        // `sweep_persistent_tiers`). The decline that follows is the session-only
+        // answer being given, and it must not erase what the login just taught us -
+        // which it did, by overwriting the verdict with `Declined`.
+        let temp = tempfile::TempDir::new().expect("temp");
         let mut store = TokenStore::from_stores(
             Box::new(FailingSecretStore),
+            // The plaintext tier WORKS on this box - it is the escape hatch that
+            // makes the box supported. `a_session_only_choice_does_not_settle_over_a
+            // _plaintext_tier_it_cannot_read` covers the one that does not.
+            Some(Box::new(PlaintextStore::new(temp.path().to_path_buf()))),
+        );
+        assert_eq!(store.store(EP, EMAIL, "tok", false), TokenTier::Memory);
+        assert_eq!(store.keychain_state(), KeychainState::Unavailable);
+
+        store.set_keychain_declined(true);
+        assert_eq!(
+            store.keychain_state(),
+            KeychainState::Declined,
+            "the user is still told they chose this, not that their keyring is broken"
+        );
+
+        assert_eq!(
+            store
+                .restore(EP, EMAIL, false)
+                .expect("an unusable tier never held the token, so nothing was stranded"),
+            Some(TokenTier::Memory)
+        );
+    }
+
+    #[test]
+    fn a_session_only_choice_reports_a_keychain_that_locked_while_holding_the_token() {
+        // The third probe outcome on the session-only path, which used to be folded
+        // into the second exactly as it was in `clear`
+        // (`clear_reports_a_keychain_that_locked_while_holding_the_token`). A locked
+        // keyring fails the delete AND the probe, and `matches!(.., Ok(Some(_)))`
+        // read that silence as "holds nothing": the dialog closed reporting a
+        // memory-only key while the entry THIS login had put in the keyring stayed
+        // there, live - and the next unlocked launch signs the user straight back in
+        // through it, which is the one thing "this session only" promises will not
+        // happen.
+        let (keychain, locked) = LockableStore::pair();
+        let mut store = TokenStore::from_stores(keychain, None);
+        assert_eq!(
+            store.store(EP, EMAIL, "live-token", false),
+            TokenTier::Keychain
+        );
+        assert_eq!(store.keychain_state(), KeychainState::Available);
+
+        locked.store(true, Ordering::SeqCst); // the screen locks; so does the keyring
+        store.set_keychain_declined(true); // "this session only"
+
+        assert!(
+            store.restore(EP, EMAIL, false).is_err(),
+            "a keychain that answers neither the delete nor the probe may still be \
+             holding the token, so the choice is not settled"
+        );
+
+        // And it really did survive: unlock the keyring and the next launch's cold
+        // rehydrate hands the token straight back, which is the resurrection the
+        // report exists to warn about.
+        locked.store(false, Ordering::SeqCst);
+        store.in_memory = None;
+        store.active_tier = None;
+        store.set_keychain_declined(false);
+        assert_eq!(store.load(EP, EMAIL), Some("live-token".to_owned()));
+    }
+
+    #[test]
+    fn a_session_only_choice_does_not_settle_over_a_plaintext_tier_it_cannot_read() {
+        // The keychain's licence for the quiet branch does not transfer to the file
+        // tier, because absence looks different there: a missing file - and a missing
+        // directory with it - is `Ok` on both the delete and the probe. So an `Err`
+        // from the plaintext store is never "there is nothing here"; it is a `0o600`
+        // file we could neither read nor remove, and `load` falls back to it with no
+        // keyring, no unlock and no flag in the way.
+        let mut store = TokenStore::from_stores(
+            Box::new(InMemoryStore::new()), // a working, empty keychain
             Some(Box::new(FailingSecretStore)),
         );
+        store.in_memory = Some("tok".to_owned());
+        store.set_keychain_declined(true);
+
+        assert!(
+            store.restore(EP, EMAIL, false).is_err(),
+            "a file tier that will not answer cannot settle the promise that nothing persists"
+        );
+    }
+
+    #[test]
+    fn a_session_only_sweep_settles_when_the_probe_proves_the_tier_is_empty() {
+        // The other side of the same discrimination, and the branch the fix must not
+        // swallow: `Ok(None)` is a real answer. A delete that failed over an account
+        // the tier demonstrably does not hold stranded nothing, so it must not turn
+        // an ordinary session-only choice into a credential warning. Pins behaviour
+        // the fix deliberately preserves, so it cannot fail beforehand.
+        let mut store = TokenStore::from_stores(Box::new(DeleteFailsStore::empty()), None);
         store.in_memory = Some("tok".to_owned());
         store.set_keychain_declined(true);
 
         assert_eq!(
             store
                 .restore(EP, EMAIL, false)
-                .expect("an unusable tier never held the token, so nothing was stranded"),
+                .expect("a delete that failed over an entry that is not there is not a warning"),
             Some(TokenTier::Memory)
         );
     }
