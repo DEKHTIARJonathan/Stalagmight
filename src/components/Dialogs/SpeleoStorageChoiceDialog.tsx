@@ -38,6 +38,12 @@ const STORAGE_FOR: Record<'session_only' | 'plaintext', TokenStorage> = {
  * session keeps working in memory and nothing is persisted, so the next login
  * asks again. Recording a refusal for someone who pressed Escape would settle a
  * question they never answered.
+ *
+ * Dismissing AFTER picking an option is a different question, answered in `choose`:
+ * the dismissal routes stay live while the move is in flight (see there for why
+ * they must), so a failure re-raises this overlay instead of assuming it is still
+ * mounted. The invariant is that a choice the user actually made never ends up both
+ * unsettled and un-asked.
  */
 export default function SpeleoStorageChoiceDialog() {
   const { t } = useTranslation();
@@ -56,6 +62,37 @@ export default function SpeleoStorageChoiceDialog() {
       const landed = await setTokenStorage(mode);
       if (landed === null) {
         showToast(t('speleodb.storageChoice.failed'), 'speleodb-storage-choice', 'error');
+        // "Stays open" has to be RE-ASSERTED, not merely left un-closed. The option
+        // buttons are disabled for the length of the await above, but Escape, the
+        // title-bar close and the backdrop are not - all three reach `onClose`, which
+        // unmounts this overlay. A dismissal landing mid-move therefore left the
+        // failure with nothing to retry in: one transient toast, no prompt, and the
+        // key still wherever the failed login put it until the NEXT login asks again
+        // (`storageChoiceOpen` is raised nowhere else). Re-raising here is what makes
+        // the sentence above true no matter which of those happened.
+        //
+        // Deliberately NOT done with the `onClose={busy ? () => {} : ...}` idiom
+        // SpeleoQuitDialog uses, even though the shape looks identical. There the
+        // escaped dismissal drops a window's edits, and the verb it waits on is not the
+        // subsystem that just failed. Here every user who sees this prompt is on a
+        // machine whose keychain just failed; the move being awaited ends in a keyring
+        // call on that same keychain (a session-only answer sweeps the persistent tiers,
+        // and on Linux a locked keyring turns any such access into a desktop unlock
+        // prompt that BLOCKS); and nothing on the path - `invokeIpc`, `spawn_blocking`,
+        // keyring-rs - carries a timeout. A no-op close would turn a wedged secret
+        // service into a modal with every control dead, over an app the dialog stack has
+        // made inert, escapable only by killing the process. The worst case being
+        // defended against here is merely an unsettled preference, which is not worth
+        // that. So dismissal always works, and the retry is what comes back.
+        //
+        // Only while a session still holds a key. `clearSession` shuts this overlay on
+        // purpose when the session ends underneath it, and that same ending is one of
+        // the things that makes the move fail (the backend refuses when no token is
+        // held) - re-raising there would ask where to put a key that no longer exists.
+        // Same staleness guard `scanLocksOnOpen` applies before re-raising its prompt.
+        if (useSpeleoStore.getState().session?.loggedIn === true) {
+          useSpeleoStore.setState({ storageChoiceOpen: true });
+        }
         return;
       }
       // Report the tier that TOOK the key, never the button that was pressed. Asking
