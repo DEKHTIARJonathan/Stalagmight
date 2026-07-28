@@ -105,15 +105,21 @@ impl Database {
         Ok(())
     }
 
-    /// Whether `uuid` is already stored in the on-disk `shots` table. A pre-v6
-    /// shot's UUID is minted only in memory until the project is saved, so keying
-    /// a new ignore by such an unpersisted UUID would orphan the row on the next
-    /// open (different UUIDs are minted) - the resolve path keeps those ignores
-    /// position-keyed instead (issue #57 / Codex).
-    pub fn shot_uuid_is_persisted(&self, uuid: &str) -> Result<bool> {
+    /// Whether `uuid` is already stored in the on-disk `shots` table FOR `section_id`. A pre-v6
+    /// shot's UUID is minted only in memory until the project is saved, so keying a new ignore
+    /// by such an unpersisted UUID would orphan the row on the next open (different UUIDs are
+    /// minted) - the resolve path keeps those ignores position-keyed instead (issue #57 / Codex).
+    ///
+    /// Scoped by section for the same reason `delete_matching_resolved` scopes its UUID branch:
+    /// `ensure_unique_shot_uuids` only de-dups WITHIN a section, so two sections can hold the
+    /// same shot UUID. An unscoped `EXISTS` would answer "persisted" because the OTHER section's
+    /// copy is on disk, and the caller would then key an ignore by a UUID that is still
+    /// in-memory-only for the section it actually belongs to - orphaning it on the next open,
+    /// which is precisely what this guard exists to prevent.
+    pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> Result<bool> {
         let exists: bool = self.conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1)",
-            params![uuid],
+            "SELECT EXISTS(SELECT 1 FROM shots WHERE uuid = ?1 AND section_id = ?2)",
+            params![uuid, section_id],
             |row| row.get(0),
         )?;
         Ok(exists)

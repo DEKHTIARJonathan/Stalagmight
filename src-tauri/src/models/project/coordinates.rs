@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use tracing::warn;
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::models::{ClosureRef, ClosureStrategy, Coordinates, SectionId, Station, StationRef};
+use crate::models::{
+    ClosureRef, ClosureStrategy, Coordinates, Section, SectionId, Station, StationRef,
+};
 
 use super::Project;
 
@@ -286,24 +288,141 @@ impl Project {
     pub fn compute_station_coordinates(&self) -> Vec<Station> {
         self.compute_station_coordinates_with_progress(None)
     }
-
     /// Pick a deterministic anchor station for a component that has no zero datum.
     ///
-    /// Returns the lexicographically smallest `(section_id, station_index)` station
-    /// in the component. The anchor only fixes the otherwise-free absolute translation
-    /// (gauge) of a datum-less component - the *shape* of the adjusted geometry is
-    /// independent of this choice. Picking the lex-min keeps it stable and reproducible
-    /// across reloads so the adjusted view doesn't jump between refreshes.
+    /// The anchor is two things at once, and only the first is a pure gauge:
+    ///
+    /// * it fixes the otherwise-free absolute translation of a datum-less
+    ///   component, by pinning that one station at its MEASURED coordinates
+    ///   (`adjust_least_squares`'s `fixed_groups` fallback);
+    /// * it is also a member of the spur-prune `pinned` set in the same solve, so
+    ///   moving it can change which stations count as spurs and are skipped by the
+    ///   update phase. Making it a pure gauge is tracked separately.
+    ///
+    /// Either way the pin has to land on the same PHYSICAL station every time, or
+    /// the adjusted view jumps.
+    ///
+    /// Picking the lex-min `(section_id, station_index)` did not do that. A
+    /// section id survives every edit, but a station INDEX does not: reversing a
+    /// section renumbers station `i` to `N - i`, so `(S, 0)` becomes the far
+    /// physical end and the whole adjusted component translates by the adjustment
+    /// residual - breaking the reverse's "every station keeps its position"
+    /// guarantee exactly where closure-adjusted geometry is forced (Plan/Export).
+    ///
+    /// So the station is named the way the plan anchors name one: by the SHOTS it sits
+    /// between, not by an index. The pair is captured once - on the first save that sees the
+    /// section - and travels with the records, so it is unaffected by a reverse, which carries
+    /// both shots together, and by the section being extended at either end, which moves
+    /// neither relative to the other. Capturing records the station the section is ALREADY
+    /// using, so it never moves anybody's coordinates.
+    ///
+    /// **Residual.** A single-shot section has no second shot to face away from, so its side
+    /// comes from [`Section::reverse_parity`] instead - exact, because a reverse is the only
+    /// thing that swaps such a section's two ends. Losing the captured neighbour degrades to
+    /// the same rule, and losing the captured shot outright falls back to the legacy index,
+    /// which is the pre-capture behaviour.
+    ///
+    /// The captured pair and the parity flag both persist, so the choice is reproducible
+    /// across reloads.
     fn default_anchor_for_component(&self, component: &HashSet<SectionId>) -> Option<StationRef> {
-        self.sections
+        let section = self
+            .sections
             .iter()
             .filter(|s| component.contains(&s.id))
-            .flat_map(|s| (0..=s.shots.len()).map(move |idx| StationRef::new(s.id, idx as u32)))
-            .min_by(|a, b| {
-                a.section_id
-                    .cmp(&b.section_id)
-                    .then(a.station_index.cmp(&b.station_index))
-            })
+            .min_by_key(|s| s.id)?;
+        let index = Self::gauge_index(section);
+        Some(StationRef::new(section.id, index as u32))
+    }
+
+    /// Where the gauge sits in `section` right now.
+    ///
+    /// Prefers the captured pair (see [`Section::gauge_shot_uuid`]): the station is the end of
+    /// that shot facing AWAY from its recorded neighbour, worked out from their current
+    /// positions. Neither moves relative to the other when the section is extended, and a
+    /// reverse carries both, so the same junction is named throughout.
+    ///
+    /// Falls back to the index rule for a section whose pair was never captured (nothing has
+    /// been saved yet) or whose recorded shots are gone. That fallback is what an
+    /// already-existing project uses until its first save, and it deliberately reproduces the
+    /// legacy answer - station 0 - so upgrading moves nobody.
+    fn gauge_index(section: &Section) -> usize {
+        let position_of = |uuid: &Option<String>| -> Option<usize> {
+            let uuid = uuid.as_deref()?;
+            section
+                .shots
+                .iter()
+                .position(|s| s.uuid.as_deref() == Some(uuid))
+        };
+        match (
+            position_of(&section.gauge_shot_uuid),
+            position_of(&section.gauge_neighbour_uuid),
+        ) {
+            // The neighbour is behind the gauge shot, so the gauge station is in front of it.
+            (Some(px), Some(py)) if py < px => px + 1,
+            (Some(px), Some(_)) => px,
+            // The captured shot survives but has no recorded neighbour - a single-shot section,
+            // or one whose neighbour was deleted. Position cannot decide the side: for a
+            // one-shot section BOTH ends touch that shot, and reversing it swaps them while
+            // leaving the shot at position 0. Read the side off the orientation instead, the
+            // way the plan anchors do.
+            //
+            // The CURRENT parity is sufficient, and not because capture always happens with it
+            // false - it can just as well capture a section that is already reversed. It works
+            // because capture picks the shot the parity rule already names (parity false takes
+            // `shots[0]`, parity true takes the last), so the pair and the flag agree at
+            // capture; and a reverse moves that shot to the opposite end AND flips the flag,
+            // so they keep agreeing however many times it happens.
+            (Some(px), None) if section.reverse_parity => px + 1,
+            (Some(px), None) => px,
+            _ => {
+                if section.reverse_parity {
+                    section.shots.len()
+                } else {
+                    0
+                }
+            }
+        }
+    }
+
+    /// Capture the gauge pair for every section that does not have one, so the choice becomes
+    /// durable instead of being re-derived from an index on each solve. Called on save, where
+    /// the project is already mutable.
+    ///
+    /// Records the pair that names the gauge station the section has RIGHT NOW, so capturing
+    /// never moves it - an existing project is pinned to exactly the station it was already
+    /// using.
+    pub fn capture_missing_gauge_anchors(&mut self) {
+        for section in &mut self.sections {
+            if section.gauge_shot_uuid.is_some() || section.shots.is_empty() {
+                continue;
+            }
+            let last = section.shots.len() - 1;
+            let gauge = if section.reverse_parity {
+                section.shots.len()
+            } else {
+                0
+            };
+            // The shot the gauge station touches, and the one beyond it that gives it a side.
+            let (x, y) = if gauge == 0 {
+                (0usize, 1usize)
+            } else {
+                (last, last.wrapping_sub(1))
+            };
+            section.gauge_shot_uuid = section.shots.get(x).and_then(|s| s.uuid.clone());
+            section.gauge_neighbour_uuid = if x == y {
+                None
+            } else {
+                section.shots.get(y).and_then(|s| s.uuid.clone())
+            };
+        }
+    }
+
+    /// The gauge station `section_id`'s component would use, for tests that need to assert it
+    /// survives a save/reload rather than only a reverse in memory.
+    #[cfg(test)]
+    pub(crate) fn adjustment_anchor_for_tests(&self, section_id: SectionId) -> Option<StationRef> {
+        let component = self.get_connected_section_ids(section_id);
+        self.default_anchor_for_component(&component)
     }
 
     /// Whether a loop closure participates in the least-squares adjustment.
@@ -816,5 +935,330 @@ impl Project {
         );
 
         stations
+    }
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "test module: panics on a failed assumption are the point"
+)]
+mod tests {
+    use super::*;
+    use crate::models::{LoopClosure, SectionData, ShotData, StationMerge};
+    use chrono::Utc;
+
+    fn shot(azimuth: f64, length: f64) -> ShotData {
+        ShotData {
+            azimuth_in: azimuth,
+            azimuth_out: azimuth,
+            length,
+            ..Default::default()
+        }
+    }
+
+    fn add_section(project: &mut Project, shots: Vec<ShotData>) -> SectionId {
+        project
+            .add_section(SectionData {
+                shots,
+                ..Default::default()
+            })
+            .id
+    }
+
+    /// The station index [`Project::default_anchor_for_component`] picks for the
+    /// component `section_id` belongs to.
+    fn anchor_index(project: &Project, section_id: SectionId) -> u32 {
+        let component = project.get_connected_section_ids(section_id);
+        let anchor = project.default_anchor_for_component(&component).unwrap();
+        assert_eq!(
+            anchor.section_id, section_id,
+            "fixture expects the anchor to come from section {section_id}"
+        );
+        anchor.station_index
+    }
+
+    fn adjusted_xy(stations: &[Station], sr: StationRef) -> (f64, f64) {
+        stations
+            .iter()
+            .find(|s| s.station_ref == sr)
+            .map(|s| (s.coordinates.x, s.coordinates.y))
+            .unwrap()
+    }
+
+    /// One loop built from two SINGLE-shot sections: merged at their station 0,
+    /// tied by an eligible closure at their station 1, 0.25 m of misclosure and
+    /// no zero datum - so the component's translation is gauged by
+    /// [`Project::default_anchor_for_component`] alone.
+    ///
+    /// A 1-shot section is the shape the shot-UUID identity cannot separate on
+    /// its own (both stations sit between the same single shot and a section
+    /// end), so this is the fixture the incidence tie-break exists for.
+    fn project_with_a_one_shot_loop() -> (Project, SectionId, SectionId) {
+        let mut project = Project::new("one-shot loop".to_string(), None);
+        let a = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        // 0.25 m longer, so the loop does not quite close.
+        let b = add_section(&mut project, vec![shot(0.0, 10.25)]);
+        project.ensure_shot_uuids();
+        project.station_merges.push(StationMerge {
+            station_a: project.key_for_ref(StationRef::new(a, 0)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(b, 0)).unwrap(),
+            merged_at: Utc::now(),
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: project.key_for_ref(StationRef::new(a, 1)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(b, 1)).unwrap(),
+            path_length: 20.25,
+            misclosure_distance: 0.25,
+            error_percentage: 1.2,
+            horizontal_misclosure: 0.25,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::LeastSquaresWeighted,
+            is_aligned: false,
+        });
+        (project, a, b)
+    }
+
+    /// The reverse promises every station keeps its world position, and Plan /
+    /// Export mode FORCES the closure-adjusted view - so the promise has to hold
+    /// for the ADJUSTED coordinates of a section the user did not even touch.
+    ///
+    /// With every section in the component down to a single shot, the shot-UUID
+    /// identity is the same at both ends (station 0 is `(None, u0)`; station 1 is
+    /// `(Some(u0), None)`, which the sort flips onto the same pair), so the pick
+    /// fell through to the lowest index - the far physical end after a reverse.
+    /// The gauge then re-pinned on the other end of the loop and the untouched
+    /// section slid by half the misclosure, 0.125 m.
+    #[test]
+    fn reverse_of_a_one_shot_anchor_section_does_not_move_the_component() {
+        let (project, a, b) = project_with_a_one_shot_loop();
+        let config = ClosureAdjustmentConfig::default();
+
+        let before = project.clone().into_adjusted_station_coordinates(&config);
+        let mut project = project;
+        assert!(project.reverse_section(a, false));
+        let after = project.into_adjusted_station_coordinates(&config);
+
+        // Precondition: the solve actually ran and fused the closure, so the
+        // assertions below are about the gauge and not about a no-op.
+        let (fused_a, fused_b) = (
+            adjusted_xy(&before, StationRef::new(a, 1)),
+            adjusted_xy(&before, StationRef::new(b, 1)),
+        );
+        assert!(
+            (fused_a.0 - fused_b.0).abs() < 1e-6 && (fused_a.1 - fused_b.1).abs() < 1e-6,
+            "precondition: the closure should have been adjusted, got {fused_a:?} / {fused_b:?}"
+        );
+
+        // Section `b` was not touched at all, so not one of its stations may move.
+        for i in 0..=1 {
+            let p = adjusted_xy(&before, StationRef::new(b, i));
+            let q = adjusted_xy(&after, StationRef::new(b, i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
+                "adjusted station b:{i} moved: {p:?} -> {q:?}"
+            );
+        }
+        // And `a`'s station `i` is now station `1 - i`, in the same place.
+        for i in 0..=1 {
+            let p = adjusted_xy(&before, StationRef::new(a, i));
+            let q = adjusted_xy(&after, StationRef::new(a, 1 - i));
+            assert!(
+                (p.0 - q.0).abs() < 1e-9 && (p.1 - q.1).abs() < 1e-9,
+                "adjusted station a:{i} moved: {p:?} -> {q:?}"
+            );
+        }
+    }
+
+    /// UPGRADE REGRESSION: an existing project's gauge must not move.
+    ///
+    /// The gauge has always been "station 0 of the lowest-id section in the component", and the
+    /// solve pins that station at its measured coordinates - so re-picking it on anything
+    /// derived from current data (shot counts, UUID ordering, incidence) would shift Plan and
+    /// Export output the moment someone upgraded, with no reverse performed, no action taken
+    /// and nothing reported. `reverse_parity` is `false` on every file that predates it, which
+    /// is what makes this hold.
+    #[test]
+    fn the_gauge_of_an_untouched_project_is_the_legacy_one() {
+        let mut project = Project::new("mixed".to_string(), None);
+        let one = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        let three = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+        project.station_merges.push(StationMerge {
+            station_a: project.key_for_ref(StationRef::new(one, 1)).unwrap(),
+            station_b: project.key_for_ref(StationRef::new(three, 0)).unwrap(),
+            merged_at: Utc::now(),
+        });
+        assert!(one < three, "fixture: the 1-shot section owns the lower id");
+
+        let component = project.get_connected_section_ids(one);
+        let anchor = project.default_anchor_for_component(&component).unwrap();
+
+        assert_eq!(
+            (anchor.section_id, anchor.station_index),
+            (one, 0),
+            "the gauge must stay where it has always been: station 0 of the lowest-id section"
+        );
+    }
+
+    /// THE reviewer's case: appending to an already-reversed section must not move the gauge.
+    ///
+    /// The old rule was "station 0, or `shots.len()` when reversed" - stable across the reverse
+    /// itself, but `len` grows on the next append and walks the pin onto the newly created far
+    /// station, translating the whole adjusted component by the adjustment residual. The
+    /// captured pair is immune: neither shot moves relative to the other when the section is
+    /// extended.
+    #[test]
+    fn appending_to_a_reversed_section_does_not_move_the_gauge() {
+        let mut project = Project::new("append".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+        // Capture happens on save; do it directly here.
+        project.capture_missing_gauge_anchors();
+        assert_eq!(anchor_index(&project, s), 0);
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 3, "station 0 is now station 3");
+
+        // Extending the passage must not disturb it.
+        project.add_shot(s, shot(270.0, 10.0)).unwrap();
+        assert_eq!(
+            anchor_index(&project, s),
+            3,
+            "the gauge must stay on the same physical station when the section grows"
+        );
+    }
+
+    /// A ONE-SHOT section has no gauge neighbour, so position cannot decide the side: both of
+    /// its ends touch the same single shot, and reversing swaps them while leaving that shot at
+    /// position 0. Reading the side off the orientation is what keeps the gauge on its physical
+    /// station - reachable whenever a one-shot, lowest-id section is wired into a closure
+    /// component.
+    #[test]
+    fn the_gauge_of_a_one_shot_section_follows_a_reverse() {
+        let mut project = Project::new("one shot".to_string(), None);
+        let s = add_section(&mut project, vec![shot(0.0, 10.0)]);
+        project.ensure_shot_uuids();
+        project.capture_missing_gauge_anchors();
+        assert!(
+            project.sections[0].gauge_neighbour_uuid.is_none(),
+            "fixture: a one-shot section has no neighbour to face away from"
+        );
+        assert_eq!(anchor_index(&project, s), 0);
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(
+            anchor_index(&project, s),
+            1,
+            "the original gauge station is now station 1, and the gauge must follow it"
+        );
+
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 0, "and back again");
+    }
+
+    /// A project that has never been saved has no captured pair, and must keep using the legacy
+    /// station-0 answer - capturing is what makes it durable, not what chooses it.
+    #[test]
+    fn an_uncaptured_section_still_uses_the_legacy_gauge() {
+        let mut project = Project::new("legacy".to_string(), None);
+        let s = add_section(&mut project, vec![shot(0.0, 10.0), shot(90.0, 10.0)]);
+        project.ensure_shot_uuids();
+        assert!(project.sections[0].gauge_shot_uuid.is_none());
+        assert_eq!(anchor_index(&project, s), 0);
+
+        // Capturing records exactly the station already in use.
+        project.capture_missing_gauge_anchors();
+        assert_eq!(anchor_index(&project, s), 0);
+    }
+
+    /// ...and it follows that physical station through a reverse, rather than staying on the
+    /// index. Station 0 becomes station N, and the parity marker is what says so.
+    #[test]
+    fn the_gauge_follows_its_physical_station_through_a_reverse() {
+        let mut project = Project::new("one section".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(90.0, 10.0), shot(180.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+
+        assert_eq!(anchor_index(&project, s), 0);
+        assert!(project.reverse_section(s, false));
+        assert_eq!(
+            anchor_index(&project, s),
+            3,
+            "station 0 is now station 3, and the gauge must be there - not on the new station 0"
+        );
+        // Reversing back returns it, because parity is a flip and not a count.
+        assert!(project.reverse_section(s, false));
+        assert_eq!(anchor_index(&project, s), 0);
+    }
+
+    /// Due north end to end: `sin(0.0)` is exactly 0 but `sin(180.0)` is
+    /// 1.22e-16, so a rule that ordered stations by their computed coordinates
+    /// would pick a different end after the reverse turned every bearing around.
+    /// A guard, not a regression - the shot-UUID identity already handles a
+    /// multi-shot section - kept so nobody reintroduces a coordinate rule.
+    #[test]
+    fn anchor_identity_is_stable_across_a_due_north_reverse() {
+        let mut project = Project::new("due north".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![shot(0.0, 10.0), shot(0.0, 10.0), shot(0.0, 10.0)],
+        );
+        project.ensure_shot_uuids();
+
+        let before = anchor_index(&project, s);
+        assert!(project.reverse_section(s, false));
+        let after = anchor_index(&project, s);
+
+        assert_eq!(
+            after,
+            3 - before,
+            "the anchor left its physical station: {before} -> {after}"
+        );
+    }
+
+    /// A lone one-shot section with no merge and no closure: its two ends are told apart by the
+    /// section's ORIENTATION, which a reverse flips.
+    ///
+    /// The rationale this test used to give - that the ends are distinguished because a reverse
+    /// swaps `depth_in`/`depth_out` bit-exactly - described a picker that no longer exists. The
+    /// current one never reads depth, so the fixture's depths were inert and the assertion held
+    /// for any one-shot section rather than for the reason stated. Kept because the CASE still
+    /// matters; the reason is now the parity flag.
+    #[test]
+    fn a_lone_one_shot_sections_gauge_follows_its_orientation() {
+        let mut project = Project::new("depth".to_string(), None);
+        let s = add_section(
+            &mut project,
+            vec![ShotData {
+                azimuth_in: 0.0,
+                azimuth_out: 0.0,
+                length: 10.0,
+                depth_in: 0.0,
+                depth_out: 5.0,
+                ..Default::default()
+            }],
+        );
+        project.ensure_shot_uuids();
+
+        let before = anchor_index(&project, s);
+        assert!(project.reverse_section(s, false));
+        let after = anchor_index(&project, s);
+
+        assert_eq!(
+            after,
+            1 - before,
+            "the anchor left its physical station: {before} -> {after}"
+        );
     }
 }

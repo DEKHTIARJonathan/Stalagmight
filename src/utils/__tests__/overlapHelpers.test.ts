@@ -548,6 +548,41 @@ describe('reverseTargetShot', () => {
   });
 });
 
+// ─── Agreement with the backend reverse ─────────────────────────────────────
+
+describe('reverseTargetShot matches Project::reverse_section', () => {
+  // The round-trip tests below cannot catch either of these: both bugs make the
+  // transform an IDENTITY (or a sign-flip that undoes itself), and an identity
+  // round-trips perfectly.
+
+  it('swaps a degenerate antipodal pair instead of returning it unchanged', () => {
+    // Readings exactly 180 apart have an undefined circular mean, so
+    // reciprocate-and-swap maps the pair to itself and the shot keeps its old
+    // bearing while everything around it turns around. `reverse_shots` swaps such
+    // a pair; without that branch this returned {45, 225} - the input - i.e. it
+    // disagreed with the backend by a full 180 degrees.
+    const reversed = reverseTargetShot(makeTargetShot({ azimuth_in: 45, azimuth_out: 225 }));
+    expect(reversed.azimuth_in).toBe(225);
+    expect(reversed.azimuth_out).toBe(45);
+  });
+
+  it('keeps both legs in [0, 360) for an out-of-range reading', () => {
+    // JS `%` is truncated, so its range is (-360, 360): `(-200 + 180) % 360` is
+    // -20, a non-ignorable INVALID_AZIMUTH at whole-degree scale.
+    expect((-200 + 180) % 360).toBe(-20);
+
+    const reversed = reverseTargetShot(makeTargetShot({ azimuth_in: 20, azimuth_out: -200 }));
+    for (const value of [reversed.azimuth_in, reversed.azimuth_out]) {
+      expect(value).toBeGreaterThanOrEqual(0);
+      expect(value).toBeLessThan(360);
+    }
+    // -200 normalises to 160, so the pair is (20, 160): not antipodal, ordinary
+    // reciprocate-and-swap, exactly what the backend does after ITS pre-normalise.
+    expect(reversed.azimuth_in).toBe(340);
+    expect(reversed.azimuth_out).toBe(200);
+  });
+});
+
 // ─── Round-trip reversal ────────────────────────────────────────────────────
 
 describe('reverseTargetShot round-trip', () => {

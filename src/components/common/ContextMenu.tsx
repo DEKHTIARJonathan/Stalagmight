@@ -32,6 +32,8 @@ import {
   EntityReferenceUnmarkSymbol,
   EntityAddSymbol,
   EntityUnlinkSymbol,
+  EntityMoveSymbol,
+  EntityReverseSymbol,
   ToolGlyph,
 } from './toolIcons';
 
@@ -104,13 +106,14 @@ function buildPlanMenuItems(
 }
 
 export default function ContextMenu() {
-  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
+  const { closeDialog, dialogData, openDialog, setActiveTool, setMergeStationA, triggerZoomToSection, multiSelection, geometryMode, appMode, syntacticLevel } = useUIStore(useShallow((s) => ({
     closeDialog: s.closeDialog,
     dialogData: s.dialogData,
     openDialog: s.openDialog,
     setActiveTool: s.setActiveTool,
     setMergeStationA: s.setMergeStationA,
     triggerZoomToSection: s.triggerZoomToSection,
+    multiSelection: s.multiSelection,
     geometryMode: s.geometryMode,
     appMode: s.appMode,
     syntacticLevel: s.syntacticLevel,
@@ -198,6 +201,45 @@ export default function ContextMenu() {
     a.section_id === b.section_id && a.station_index === b.station_index
   );
 
+  /**
+   * Reverse entries for a section-targeting menu (#24).
+   *
+   * Always offers the right-clicked section. When the user has several sections
+   * multi-selected (and the target is one of them), a second entry reverses the
+   * whole selection in one go - separate entries rather than one ambiguous item,
+   * so it is always obvious how many sections are about to change.
+   */
+  const reverseItems = (sectionId: SectionId): ContextMenuItem[] => {
+    // Deduped so the count the menu label promises matches the sections it acts
+    // on. Defence in depth on the behaviour: a repeat is NOT a silent no-op - it
+    // reverses the section twice, and the backend parity-reduces such a pair out
+    // of `reversed_sections` (see `Command::reversed_section_ids`) precisely
+    // because the second reverse is a real renumbering that cancels the first.
+    const selectedSectionIds = [
+      ...new Set(
+        multiSelection
+          .filter((s) => s.type === 'section' && s.sectionId !== undefined)
+          .map((s) => s.sectionId as SectionId)
+      ),
+    ];
+    const items: ContextMenuItem[] = [
+      {
+        label: 'Reverse Section',
+        action: () => {
+          openDialog('reverse-section', { sectionIds: [sectionId] });
+        },
+      },
+    ];
+    if (selectedSectionIds.length > 1 && selectedSectionIds.includes(sectionId)) {
+      items.push({
+        label: `Reverse ${selectedSectionIds.length} Sections`,
+        action: () => {
+          openDialog('reverse-section', { sectionIds: selectedSectionIds });
+        },
+      });
+    }
+    return items;
+  };
 
   const buildMenuItems = (): ContextMenuItem[] => {
     if (!target) return [];
@@ -362,6 +404,7 @@ export default function ContextMenu() {
           openDialog('edit-section', { sectionId });
         },
       });
+      items.push(...reverseItems(sectionId));
       items.push({
         label: 'Delete Section',
         action: () => {
@@ -483,6 +526,7 @@ export default function ContextMenu() {
           openDialog('edit-section', { sectionId: target.sectionId });
         },
       });
+      items.push(...reverseItems(target.sectionId));
       items.push({
         label: 'Delete Section',
         action: () => {
@@ -523,6 +567,7 @@ export default function ContextMenu() {
             openDialog('edit-section', { sectionId: target.sectionId });
           },
         },
+        ...reverseItems(target.sectionId),
         {
           label: 'Adjust Position...',
           action: () => {
@@ -638,6 +683,8 @@ export default function ContextMenu() {
         return <EntityEditSymbol entity="shot" size={18} />;
       case 'Edit Section':
         return <EntityEditSymbol entity="section" size={18} />;
+      case 'Reverse Section':
+        return <EntityReverseSymbol entity="section" size={18} />;
       case 'Insert Station...':
         return <EntityAddSymbol entity="station" size={18} />;
       case 'Merge With...':
@@ -668,12 +715,17 @@ export default function ContextMenu() {
       case 'Delete Shot':
         return <EntityDeleteSymbol entity="shot" size={18} />;
       case 'Adjust Position...':
-        return <ToolGlyph tool="move_segment" size={18} />;
+        return <EntityMoveSymbol entity="section" size={18} />;
       case 'Zoom to Section':
         return <ToolGlyph tool="zoom" size={16} />;
       default:
-        // Fallback for any unmapped label (every current menu label is handled
-        // by an explicit case above).
+        // "Reverse N Sections" carries the count in its label, so it can't be a
+        // literal case.
+        if (label.startsWith('Reverse ')) {
+          return <EntityReverseSymbol entity="section" size={18} />;
+        }
+        // Fallback for any unmapped label (every other current menu label is
+        // handled by an explicit case above).
         return <ArrowUpRightIcon size={16} />;
     }
   };

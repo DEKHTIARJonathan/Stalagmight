@@ -37,6 +37,35 @@ impl AppState {
                 }
             }
 
+            // For ReverseSection, capture full project snapshot (before/after pair).
+            // Re-running the reverse would be a valid inverse in exact arithmetic,
+            // but the snapshot keeps undo bit-exact (the f64 `(az + 180) % 360`
+            // round trip is not - pinned by
+            // `reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`)
+            // and spares redo from having to reproduce the anchor mirroring, the
+            // section-offset compensation and the collab-baseline invalidation.
+            // A section with no shots is a single station and reverses to itself,
+            // so capturing it would push two identical full-project snapshots and
+            // mark the project dirty for an operation that changed nothing. The
+            // resulting `None` never reaches the stack - `execute()` drops an
+            // unundoable entry rather than wedging every older one under it.
+            Command::ReverseSection { section_id, .. } => {
+                if project
+                    .get_section(*section_id)
+                    .is_some_and(|s| !s.shots.is_empty())
+                {
+                    match serde_json::to_string(project) {
+                        Ok(before) => UndoData::ProjectSnapshotPair {
+                            before,
+                            after: String::new(), // Filled by finalize_undo_data
+                        },
+                        Err(_) => UndoData::None,
+                    }
+                } else {
+                    UndoData::None
+                }
+            }
+
             // For DeleteShot, capture full project snapshot (before/after pair)
             // because remove_shot shifts station refs - a ShotSnapshot alone cannot
             // restore the original station references.
@@ -498,12 +527,13 @@ impl AppState {
                 }
             }
 
-            // DeleteSection/DeleteShot/Merge/Unmerge/MoveStation:
+            // DeleteSection/DeleteShot/ReverseSection/Merge/Unmerge/MoveStation:
             // fill in the "after" snapshot now that the mutation (and any cascade
             // re-anchoring, orphan-closure conversion, and offset reconcile triggered
             // in execute()) is done.
             Command::DeleteSection { .. }
             | Command::DeleteShot { .. }
+            | Command::ReverseSection { .. }
             | Command::MergeStations { .. }
             | Command::UnmergeStations { .. }
             | Command::UnmergeStationPair { .. }

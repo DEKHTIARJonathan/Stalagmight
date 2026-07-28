@@ -113,6 +113,25 @@ interface GasPlanState {
   removeMarkedPoint: (index: number) => void;
   /** #298: set (or clear, with an empty string) marked point `index`'s label. */
   setMarkedPointLabel: (index: number, label: string) => void;
+  /**
+   * #24: re-point every plan pin after a section reverse renumbered its stations.
+   *
+   * Every pin here is a positional `StationRef`, so a reverse leaves it in range
+   * while it starts naming the opposite physical station - the plan would
+   * silently re-price a different route. The caller supplies the already-mirrored
+   * pins (see `utils/reverseAftermath`); this only installs them, and blanks the
+   * cached field the way every other route-input setter does.
+   */
+  applyReversedPins: (
+    pins: {
+      origin: StationRef | null;
+      endpoint: StationRef | null;
+      waypoints: StationRef[];
+      markedPoints: MarkedPoint[];
+      stageDropOverrides: (StationRef | null)[];
+    },
+    baseline: DivePlanSnapshot | null
+  ) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
@@ -182,6 +201,29 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // setDistanceGradientOrigin).
   // These inputs reshuffle the drops (a different rig / route / budget), so any pinned drop
   // overrides no longer line up, clear them alongside the stale field.
+  // The pins moved because the SURVEY was renumbered, not because the diver
+  // changed an input, so the drop overrides are kept (mirrored by the caller)
+  // rather than cleared - the route is the same physical route.
+  // `lastReachField` goes too, even though it is only ever read for MENU SHAPE:
+  // its route refs are positional and pre-reverse, and with `reachField` nulled
+  // here the ContextMenu's `reachField ?? lastReachField` fallback is GUARANTEED
+  // to be taken. A stale route set would then mark the mirrored stations
+  // off-route and hide the stage-drop entries (or offer them on a station that
+  // is no longer on the route - the unsafe direction). Blank, not mirrored: the
+  // field's refs are re-derived by the refetch this same set() triggers.
+  applyReversedPins: (pins, baseline) =>
+    set({
+      ...pins,
+      reachField: null,
+      lastReachField: null,
+      // The saved-plan baseline is mirrored WITH the pins. It is positional too, so leaving it
+      // behind would make `selectIsPlanDirty` compare mirrored pins against pre-reverse indices
+      // and report a plan the diver never edited as unsaved - nagging a save, or blocking a plan
+      // switch, over a route that is still the same physical route. Nothing needs re-saving: the
+      // `.plnx` names stations by the shots they sit between, so a reverse does not move them.
+      ...(baseline === null ? {} : { loadedPlanBaseline: baseline }),
+    }),
+
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
   // Way points are a ROUTE input: every edit re-bases the whole field, so they clear the cached

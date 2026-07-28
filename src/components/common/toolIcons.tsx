@@ -38,6 +38,57 @@ function MoveDeco() {
   );
 }
 
+/**
+ * Compacted object glyphs, drawn small enough to sit INSIDE a full-canvas deco
+ * ([`MoveDeco`]'s compass arms) without colliding
+ * with it. The standalone [`ENTITY_GLYPHS`] fill the whole 24x24 box and would.
+ *
+ * A section is a plain polyline; a segment is a BRANCHING run of shots, so it
+ * adds the fork (extra path + node) - the one visual difference between them.
+ */
+const INNER_GLYPHS: Record<BlobEntity, () => ReactNode> = {
+  station: () => <Station cx={12} cy={12} r={3} />,
+  shot: () => (
+    <g>
+      <path className="s" d="M8.5 15.5 L15.5 8.5" />
+      <Station cx={8.5} cy={15.5} r={1.9} />
+      <Station cx={15.5} cy={8.5} r={1.9} />
+    </g>
+  ),
+  section: () => (
+    <g>
+      <path className="s" d="M7.5 15.5 L11 11 L14 13.5 L16.5 9.5" />
+      <circle className="d" cx="7.5" cy="15.5" r="1.3" />
+      <circle className="d" cx="11" cy="11" r="1.3" />
+      <circle className="d" cx="14" cy="13.5" r="1.3" />
+      <circle className="d" cx="16.5" cy="9.5" r="1.3" />
+    </g>
+  ),
+  segment: () => (
+    <g>
+      <path className="s" d="M7.5 15.5 L11 11 L14 13.5 L16.5 9.5" />
+      <path className="s" d="M11 11 L8.5 7.5" />
+      <circle className="d" cx="7.5" cy="15.5" r="1.3" />
+      <circle className="d" cx="11" cy="11" r="1.3" />
+      <circle className="d" cx="14" cy="13.5" r="1.3" />
+      <circle className="d" cx="16.5" cy="9.5" r="1.3" />
+      <circle className="d" cx="8.5" cy="7.5" r="1.3" />
+    </g>
+  ),
+  comment: () => (
+    <g>
+      <path
+        className="f"
+        d="M7.5 8 H16 A1 1 0 0 1 17 9 V13.5 A1 1 0 0 1 16 14.5 H11 L8.5 17 V14.5 H7.5 A1 1 0 0 1 6.5 13.5 V9 A1 1 0 0 1 7.5 8 Z"
+      />
+      <path
+        className="s"
+        d="M7.5 8 H16 A1 1 0 0 1 17 9 V13.5 A1 1 0 0 1 16 14.5 H11 L8.5 17 V14.5 H7.5 A1 1 0 0 1 6.5 13.5 V9 A1 1 0 0 1 7.5 8 Z"
+      />
+    </g>
+  ),
+};
+
 /** Glyph body for each toolbar tool, keyed by tool id. */
 const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
   select: () => (
@@ -110,42 +161,25 @@ const GLYPHS: Partial<Record<ToolType, () => ReactNode>> = {
   move_comment: () => (
     <g>
       <MoveDeco />
-      <path
-        className="f"
-        d="M7.5 8 H16 A1 1 0 0 1 17 9 V13.5 A1 1 0 0 1 16 14.5 H11 L8.5 17 V14.5 H7.5 A1 1 0 0 1 6.5 13.5 V9 A1 1 0 0 1 7.5 8 Z"
-      />
-      <path
-        className="s"
-        d="M7.5 8 H16 A1 1 0 0 1 17 9 V13.5 A1 1 0 0 1 16 14.5 H11 L8.5 17 V14.5 H7.5 A1 1 0 0 1 6.5 13.5 V9 A1 1 0 0 1 7.5 8 Z"
-      />
+      {INNER_GLYPHS.comment()}
     </g>
   ),
   move_station: () => (
     <g>
       <MoveDeco />
-      <Station cx={12} cy={12} r={3} />
+      {INNER_GLYPHS.station()}
     </g>
   ),
   move_shot: () => (
     <g>
       <MoveDeco />
-      <path className="s" d="M8.5 15.5 L15.5 8.5" />
-      <Station cx={8.5} cy={15.5} r={1.9} />
-      <Station cx={15.5} cy={8.5} r={1.9} />
+      {INNER_GLYPHS.shot()}
     </g>
   ),
   move_segment: () => (
-    // A segment is a BRANCHING run of shots - the fork (extra path + node)
-    // distinguishes it from a plain section polyline, matching delete-segment.
     <g>
       <MoveDeco />
-      <path className="s" d="M7.5 15.5 L11 11 L14 13.5 L16.5 9.5" />
-      <path className="s" d="M11 11 L8.5 7.5" />
-      <circle className="d" cx="7.5" cy="15.5" r="1.3" />
-      <circle className="d" cx="11" cy="11" r="1.3" />
-      <circle className="d" cx="14" cy="13.5" r="1.3" />
-      <circle className="d" cx="16.5" cy="9.5" r="1.3" />
-      <circle className="d" cx="8.5" cy="7.5" r="1.3" />
+      {INNER_GLYPHS.segment()}
     </g>
   ),
 };
@@ -354,6 +388,54 @@ const openEye: BadgeContent = (cx, cy, r) => {
   );
 };
 
+/**
+ * Two horizontal arrows running in opposite directions (top one right, bottom
+ * one left) - reverse. Slate `--sh-move`, the shared "spatial rearrangement"
+ * modifier the move compass uses, so reverse reads as a sibling of move.
+ *
+ * Filled shafts and heads, never stroked: WebKit fattens thin strokes under the
+ * setZoom UI scale (the same reason `dataLines` is filled), and at badge size a
+ * fattened shaft would swallow its own arrowhead.
+ */
+const reverseArrows: BadgeContent = (cx, cy, r) => {
+  const a = r * 0.68;          // half-length
+  const dy = r * 0.38;         // vertical offset of each arrow from centre
+  const t = r * 0.42;          // shaft thickness
+  const hw = r * 0.38;         // arrowhead length
+  const hh = r * 0.48;         // arrowhead half-height
+  const n = (v: number) => v.toFixed(2);
+  return (
+    <g>
+      {/* Shafts run UNDER their heads (they extend a hair past the base) -
+          butt them up exactly and antialiasing leaves a visible seam. */}
+      <rect
+        className="mvc"
+        x={n(cx - a)}
+        y={n(cy - dy - t / 2)}
+        width={n(a * 2 - hw * 0.6)}
+        height={n(t)}
+        rx={n(t / 2)}
+      />
+      <path
+        className="mvf"
+        d={`M${n(cx + a)} ${n(cy - dy)} L${n(cx + a - hw)} ${n(cy - dy - hh)} V${n(cy - dy + hh)} Z`}
+      />
+      <rect
+        className="mvc"
+        x={n(cx - a + hw * 0.6)}
+        y={n(cy + dy - t / 2)}
+        width={n(a * 2 - hw * 0.6)}
+        height={n(t)}
+        rx={n(t / 2)}
+      />
+      <path
+        className="mvf"
+        d={`M${n(cx - a)} ${n(cy + dy)} L${n(cx - a + hw)} ${n(cy + dy - hh)} V${n(cy + dy + hh)} Z`}
+      />
+    </g>
+  );
+};
+
 /** Green plus (add). */
 const greenPlus: BadgeContent = (cx, cy, r) => {
   const a = r * 0.6;
@@ -533,6 +615,48 @@ export function EntityDataSymbol(props: EntitySymbolProps) {
 /** Duotone "<entity> label/name" (entity color + capital-A badge). */
 export function EntityLabelSymbol(props: EntitySymbolProps) {
   return <EntityBadgedSymbol {...props} content={letterA} />;
+}
+
+/** Compacted entity glyph under a full-canvas action deco (move compass /
+ * reverse arrows). The object keeps its own `--sh-<entity>` color; the deco is
+ * the shared slate action tone. */
+function EntityDecoSymbol({
+  entity,
+  deco,
+  size = 16,
+  className = '',
+  testId,
+}: EntitySymbolProps & { deco: ReactNode }) {
+  const style = {
+    '--o': `var(${syntacticVarName(entity)})`,
+    display: 'inline-block',
+    verticalAlign: '-0.2em',
+  } as CSSProperties;
+  return (
+    <svg
+      className={`duotone ${className}`}
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      style={style}
+      aria-hidden="true"
+      focusable="false"
+      data-testid={testId}
+    >
+      {deco}
+      {INNER_GLYPHS[entity]()}
+    </svg>
+  );
+}
+
+/** Duotone "move/reposition <entity>" (entity color + slate move compass) - the
+ * menu counterpart of the move tools, e.g. a section's "Adjust Position...". */
+export function EntityMoveSymbol(props: EntitySymbolProps) {
+  return <EntityDecoSymbol {...props} deco={<MoveDeco />} />;
+}
+/** Duotone "reverse <entity>" (entity color + slate counter-arrow badge, #24). */
+export function EntityReverseSymbol(props: EntitySymbolProps) {
+  return <EntityBadgedSymbol {...props} content={reverseArrows} />;
 }
 
 /** CSS `var(--sh-<role>)` reference for a tool's accent color (icon + button tint). */

@@ -205,6 +205,95 @@ impl AppState {
         all_warnings
     }
 
+    /// Pin the position-keyed ignores of JUST-reversed sections to the physical shot
+    /// they were taken on.
+    ///
+    /// A resolved-warning row with a NULL `shot_uuid` is keyed by `(section_id, shot_id)`,
+    /// and the reverse deliberately keeps shot IDs attached to POSITIONS rather than to
+    /// records - so after it, `shot_id` names a different physical shot. Left alone, the
+    /// save-time carry-over in `project_io` upgrades such a row via
+    /// `live_by_id.get(&(section_id, shot_id))` and pins it, by UUID, to that OTHER shot,
+    /// permanently suppressing an unrelated warning.
+    ///
+    /// NULL-uuid rows are still minted today: `commands::validation` deliberately stores
+    /// `None` when the shot's UUID is not yet on disk (a shot created this session, or a
+    /// pre-v6 file), so this is not only a legacy-data concern.
+    ///
+    /// The mirror: `shots[p].id` is unchanged by the reverse (ids stay with positions),
+    /// while the record that HELD that id moved to position `N - 1 - p`. So the row keyed
+    /// by `shots[p].id` belongs to `shots[N - 1 - p]`'s UUID.
+    ///
+    /// The map is rebuilt from the CURRENT project on every call, so it is not "its own
+    /// inverse" in any useful sense: what makes undo/redo of a reverse safe to re-run is
+    /// the INTERVENING re-reverse, which is what changes the map. Run it twice against ONE
+    /// project state and the second pass re-pins the row a second time, onto a shot that
+    /// was never reversed onto it. `section_ids` must therefore name each section at most
+    /// once - `Command::reversed_section_ids` parity-reduces its `Batch` arm to guarantee it.
+    ///
+    /// Best-effort: no database (an unsaved project) means no rows exist to fix.
+    pub(super) fn pin_position_keyed_warnings_after_reverse(&self, section_ids: &[SectionId]) {
+        let live: std::collections::HashMap<(u32, u32), String> = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return;
+            };
+            section_ids
+                .iter()
+                .filter_map(|sid| project.get_section(*sid))
+                .flat_map(|section| {
+                    let last = section.shots.len().saturating_sub(1);
+                    section.shots.iter().enumerate().filter_map(move |(p, s)| {
+                        let mirrored = section.shots.get(last - p)?;
+                        Some(((section.id, s.id), mirrored.uuid.clone()?))
+                    })
+                })
+                .collect()
+        };
+        if live.is_empty() {
+            return;
+        }
+        let db_guard = match self.database.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(db) = db_guard.as_ref() else {
+            return;
+        };
+        // Only pin onto a UUID the FILE already holds. A pre-v6 project, or any shot whose UUID
+        // was minted in memory and not yet saved, would otherwise get that transient value
+        // written into the persisted warning row - and if the reverse is discarded, or the app
+        // exits before the next save, the following load mints a DIFFERENT UUID and the ignore
+        // is orphaned onto a shot that no longer exists (issue #57 / Codex). Those shots simply
+        // keep their position-keyed rows, which the save carry-over re-keys once the UUIDs are
+        // durable. A failed lookup is treated as "not persisted": skipping a pin costs an ignore
+        // migrating to the mirrored shot, writing a bad one costs it outright.
+        let live: std::collections::HashMap<(u32, u32), String> = live
+            .into_iter()
+            .filter(|((section_id, _), uuid)| {
+                db.shot_uuid_is_persisted(*section_id, uuid)
+                    .unwrap_or(false)
+            })
+            .collect();
+        if live.is_empty() {
+            return;
+        }
+        match db.backfill_resolved_warning_uuids(&live) {
+            Ok(0) => {}
+            Ok(n) => tracing::info!(
+                pinned = n,
+                "Pinned position-keyed warning ignores to their shot's UUID after a section reverse"
+            ),
+            Err(e) => tracing::warn!(
+                reason = %e,
+                purpose = "pin ignores across a section reverse",
+                "Could not pin position-keyed warning ignores; one may migrate to the mirrored shot"
+            ),
+        }
+    }
+
     /// Load resolved warnings from database
     pub fn load_resolved_warnings(&self) -> Result<Vec<crate::persistence::ResolvedWarning>> {
         let db_guard = self
@@ -236,14 +325,14 @@ impl AppState {
     /// `Database::shot_uuid_is_persisted`). Returns false when no database is open
     /// or the lookup fails - the safe default, which keeps a new ignore
     /// position-keyed rather than binding it to an unpersisted UUID (issue #57).
-    pub fn shot_uuid_is_persisted(&self, uuid: &str) -> bool {
+    pub fn shot_uuid_is_persisted(&self, section_id: u32, uuid: &str) -> bool {
         let Ok(db_guard) = self.database.lock() else {
             return false;
         };
         let Some(db) = db_guard.as_ref() else {
             return false;
         };
-        db.shot_uuid_is_persisted(uuid).unwrap_or(false)
+        db.shot_uuid_is_persisted(section_id, uuid).unwrap_or(false)
     }
 
     /// Delete a resolved warning from database (un-ignore). `shot_uuid` keys the

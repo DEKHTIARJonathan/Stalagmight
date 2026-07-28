@@ -10,6 +10,7 @@ import { parseGps, detectFormat, type GpsFormat } from '../../utils/gps';
 import { formatFixed } from '../../i18n/format';
 import { convertToEditableShots } from '../../hooks/useImportState';
 import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
+import { editableShotsToDmpSection } from '../../utils/shotConversion';
 import type { DmpFile } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
@@ -26,8 +27,72 @@ export interface ZeroDatumConfigResult {
     color: string;
     direction: 'in' | 'out';
     quality: number;
+    /** Reverse this section end-to-end on import (#24). */
+    reverse: boolean;
   };
   shots: EditableShot[];
+}
+
+/** A blank row for the shot table, shared by the add and the two insert paths. */
+function makeNewShot(tempId: number): EditableShot {
+  return {
+    id: -tempId,
+    azimuth_in: 0,
+    azimuth_out: 0,
+    length: 0,
+    depth_in: 0,
+    depth_out: 0,
+    pitch_in: null,
+    pitch_out: null,
+    left: null,
+    right: null,
+    up: null,
+    down: null,
+    comment: null,
+    kind: 'Normal' as const,
+    isNew: true,
+    tempId,
+  };
+}
+
+/**
+ * How many surviving rows precede `arrayIndex`.
+ *
+ * `ShotTableEditor` hands its callbacks an index into the FULL `shots` array
+ * (deleted rows included), while a station index counts only survivors, so the
+ * two spaces have to be bridged before a pick can be re-anchored.
+ */
+function survivorsBefore(shots: EditableShot[], arrayIndex: number): number {
+  let count = 0;
+  for (let i = 0; i < arrayIndex && i < shots.length; i++) {
+    if (!shots[i]?.isDeleted) count++;
+  }
+  return count;
+}
+
+/**
+ * Keep a committed station pick on the same physical station across a shot edit.
+ *
+ * The pick addresses the POST-EDIT order (a section of `s` surviving shots has
+ * stations `0..s`), so adding or removing a survivor renumbers every station
+ * beyond it. `editPosition` is the survivor position the edit lands at:
+ * deleting the shot there merges stations `editPosition` and `editPosition + 1`,
+ * inserting there splits them. Stations at or before it keep their number.
+ *
+ * Re-anchoring on EDIT is what makes the pick correct in both orderings.
+ * Translating on pick instead (the shape this dialog used to have) only moves
+ * the breakage from delete-then-pick to pick-then-delete. This map is also
+ * total, unlike an `EditableShot.id` lookup, so it can address a station that a
+ * leading insert has only just created.
+ */
+function reanchorStation(
+  pick: number,
+  editPosition: number,
+  delta: 1 | -1,
+  survivorsAfter: number,
+): number {
+  const shifted = pick > editPosition ? pick + delta : pick;
+  return Math.max(0, Math.min(survivorsAfter, shifted));
 }
 
 interface ZeroDatumConfigDialogProps {
@@ -80,6 +145,7 @@ export default function ZeroDatumConfigDialog({
   );
   const [color, setColor] = useState(SECTION_COLORS[colorIndex % SECTION_COLORS.length] ?? '#4ecdc4');
   const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
+  const [reverse, setReverse] = useState(false);
 
   // Shots state
   const [shots, setShots] = useState<EditableShot[]>(() =>
@@ -87,10 +153,26 @@ export default function ZeroDatumConfigDialog({
   );
   const [nextTempId, setNextTempId] = useState(() => shots.length + 1);
 
-  // Station count = standard shots + 1
+  // Station count = surviving shots + 1
   const stationCount = useMemo(() => {
     return shots.filter((s) => !s.isDeleted).length + 1;
   }, [shots]);
+
+  // The preview is drawn from the EDITED shots, not the file's original ones,
+  // so a click on a station dot and a pick in the dropdown address the same
+  // station. See `editableShotsToDmpSection` for why the raw section diverges
+  // even before anything is deleted.
+  const previewSection = useMemo(
+    () => (section ? editableShotsToDmpSection(section, shots) : null),
+    [section, shots],
+  );
+
+  /** Commit a station pick: the value sent, the map highlight and the hover-revert target. */
+  const commitStation = useCallback((index: number) => {
+    setStationIndex(index);
+    setPreviewStationIndex(index);
+    stationIndexRef.current = index;
+  }, []);
 
   // Station options for the Select component
   const stationOptions = useMemo(() => {
@@ -153,98 +235,49 @@ export default function ZeroDatumConfigDialog({
     []
   );
 
-  const handleAddShot = useCallback(() => {
-    setShots((prev) => [
-      ...prev,
-      {
-        id: -nextTempId,
-        azimuth_in: 0,
-        azimuth_out: 0,
-        length: 0,
-        depth_in: 0,
-        depth_out: 0,
-        pitch_in: null,
-        pitch_out: null,
-        left: null,
-        right: null,
-        up: null,
-        down: null,
-        comment: null,
-        kind: 'Normal' as const,
-        isNew: true,
-        tempId: nextTempId,
-      },
-    ]);
-    setNextTempId((prev) => prev + 1);
-  }, [nextTempId]);
+  // The three shot-count mutators re-anchor the committed pick as they go, so
+  // `stationIndex` always addresses the current, post-edit station order.
+  const insertShotAt = useCallback(
+    (arrayIndex: number) => {
+      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const newShots = [...shots];
+      newShots.splice(arrayIndex, 0, makeNewShot(nextTempId));
+      setShots(newShots);
+      setNextTempId((prev) => prev + 1);
+      commitStation(
+        reanchorStation(stationIndex, survivorsBefore(shots, arrayIndex), 1, survivors + 1),
+      );
+    },
+    [shots, nextTempId, stationIndex, commitStation]
+  );
 
-  const handleDeleteShot = useCallback((index: number) => {
-    setShots((prev) => {
-      const newShots = [...prev];
-      const shot = newShots[index];
-      if (shot) {
-        newShots[index] = { ...shot, isDeleted: true };
-      }
-      return newShots;
-    });
-  }, []);
+  // Appending cannot renumber an existing station (the new one lands past every
+  // pick), but it goes through the same path so the invariant has one owner.
+  const handleAddShot = useCallback(() => insertShotAt(shots.length), [insertShotAt, shots.length]);
 
   const handleInsertBefore = useCallback(
-    (index: number) => {
-      setShots((prev) => {
-        const newShots = [...prev];
-        newShots.splice(index, 0, {
-          id: -nextTempId,
-          azimuth_in: 0,
-          azimuth_out: 0,
-          length: 0,
-          depth_in: 0,
-          depth_out: 0,
-          pitch_in: null,
-          pitch_out: null,
-          left: null,
-          right: null,
-          up: null,
-          down: null,
-          comment: null,
-          kind: 'Normal' as const,
-          isNew: true,
-          tempId: nextTempId,
-        });
-        return newShots;
-      });
-      setNextTempId((prev) => prev + 1);
-    },
-    [nextTempId]
+    (index: number) => insertShotAt(index),
+    [insertShotAt]
   );
 
   const handleInsertAfter = useCallback(
+    (index: number) => insertShotAt(index + 1),
+    [insertShotAt]
+  );
+
+  const handleDeleteShot = useCallback(
     (index: number) => {
-      setShots((prev) => {
-        const newShots = [...prev];
-        newShots.splice(index + 1, 0, {
-          id: -nextTempId,
-          azimuth_in: 0,
-          azimuth_out: 0,
-          length: 0,
-          depth_in: 0,
-          depth_out: 0,
-          pitch_in: null,
-          pitch_out: null,
-          left: null,
-          right: null,
-          up: null,
-          down: null,
-          comment: null,
-          kind: 'Normal' as const,
-          isNew: true,
-          tempId: nextTempId,
-        });
-        return newShots;
-      });
-      setNextTempId((prev) => prev + 1);
+      const shot = shots[index];
+      if (!shot || shot.isDeleted) return;
+      const survivors = shots.filter((s) => !s.isDeleted).length;
+      const newShots = [...shots];
+      newShots[index] = { ...shot, isDeleted: true };
+      setShots(newShots);
+      commitStation(
+        reanchorStation(stationIndex, survivorsBefore(shots, index), -1, survivors - 1),
+      );
     },
-    [nextTempId]
+    [shots, stationIndex, commitStation]
   );
 
   const handleConfirm = useCallback(() => {
@@ -260,10 +293,11 @@ export default function ZeroDatumConfigDialog({
         color,
         direction,
         quality: 1.0,
+        reverse,
       },
       shots,
     });
-  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, shots]);
+  }, [gpsCoords, onConfirm, sectionIndex, stationIndex, name, surveyor, date, color, direction, reverse, shots]);
 
   if (!section) return null;
 
@@ -287,14 +321,10 @@ export default function ZeroDatumConfigDialog({
           data-testid="zero-datum-preview-map"
         >
           <SectionPreview
-            section={section}
+            section={previewSection}
             color={color}
             size={340}
-            onStationClick={(index) => {
-              setStationIndex(index);
-              setPreviewStationIndex(index);
-              stationIndexRef.current = index;
-            }}
+            onStationClick={commitStation}
             selectedStationIndex={previewStationIndex}
             gpsOrigin={gpsOrigin}
             gpsStationIndex={stationIndex}
@@ -324,12 +354,7 @@ export default function ZeroDatumConfigDialog({
               </label>
               <Select
                 value={String(stationIndex)}
-                onChange={(v) => {
-                  const index = parseInt(v, 10);
-                  setStationIndex(index);
-                  setPreviewStationIndex(index);
-                  stationIndexRef.current = index;
-                }}
+                onChange={(v) => commitStation(parseInt(v, 10))}
                 options={stationOptions}
                 className="flex-1"
                 data-testid="zero-datum-station-select"
@@ -402,8 +427,11 @@ export default function ZeroDatumConfigDialog({
               onDateChange={setDate}
               onColorChange={setColor}
               onDirectionChange={setDirection}
+              reverse={reverse}
+              onReverseChange={setReverse}
               showName={false}
               showDirection
+              showReverse
             />
 
             {/* Shot table */}

@@ -1275,6 +1275,7 @@ pub fn convert_tml_to_import_configs(
         };
 
         configs.push(ImportSectionConfig {
+            reverse: false,
             section_index,
             name: Some(section.name.clone()),
             surveyor: section.surveyor.clone(),
@@ -1515,8 +1516,14 @@ pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     };
 
     // Ariane stores azimuths as arbitrary angles (can be negative or >360).
-    // Normalize to 0..360 range for Stalagmight's data model.
-    let az = shot.azimuth.rem_euclid(360.0);
+    // Normalize to [0, 360) for Stalagmight's data model.
+    //
+    // The shared helper, not a bare `rem_euclid`: for a tiny negative input `rem_euclid` returns
+    // exactly `360.0` (`(-1e-14f64).rem_euclid(360.0) == 360.0`), which is OUT of range and trips
+    // `INVALID_AZIMUTH` - a warning `warning_is_ignorable` refuses to suppress. The v14 migration
+    // establishes "every stored azimuth is in [0, 360)" for existing files, and it is gated on
+    // `current < 14`, so a value written here afterwards is never revisited.
+    let az = crate::models::normalize_azimuth(shot.azimuth);
 
     ShotData {
         azimuth_in: az,
@@ -1683,6 +1690,61 @@ fn determine_placement(
 )]
 mod tests {
     use super::*;
+
+    /// A tiny NEGATIVE azimuth must normalise to `0.0`, not `360.0`.
+    ///
+    /// `rem_euclid` alone returns exactly `360.0` for such an input, which is OUT of the
+    /// `[0, 360)` range the data model requires: it trips `INVALID_AZIMUTH`, a warning
+    /// `warning_is_ignorable` refuses to suppress. The v14 migration establishes that invariant
+    /// for existing files and is gated on `current < 14`, so anything this importer writes
+    /// afterwards is never revisited - the importer has to get it right itself.
+    #[test]
+    fn a_tiny_negative_azimuth_normalises_to_zero_not_360() {
+        assert_eq!(
+            (-1e-14f64).rem_euclid(360.0),
+            360.0,
+            "premise: the bare operation this guards against really does return 360"
+        );
+
+        let mut shot = sample_tml_shot();
+        shot.azimuth = -1e-14;
+        let out = normalize_tml_shot(&shot, 0.0);
+        assert_eq!(out.azimuth_in, 0.0);
+        assert_eq!(out.azimuth_out, 0.0);
+
+        // And the ordinary wraps still behave.
+        for (input, expected) in [(-90.0, 270.0), (450.0, 90.0), (360.0, 0.0), (12.5, 12.5)] {
+            shot.azimuth = input;
+            assert_eq!(normalize_tml_shot(&shot, 0.0).azimuth_in, expected);
+        }
+    }
+
+    fn sample_tml_shot() -> TmlShot {
+        TmlShot {
+            id: 1,
+            from_id: 0,
+            shot_type: TmlShotType::Real,
+            azimuth: 0.0,
+            length: 10.0,
+            depth: 0.0,
+            depth_in: 0.0,
+            inclination: 0.0,
+            left: 0.0,
+            right: 0.0,
+            up: 0.0,
+            down: 0.0,
+            comment: None,
+            explorer: None,
+            date: None,
+            color: String::new(),
+            excluded: false,
+            latitude: 0.0,
+            longitude: 0.0,
+            closure_to_id: -1,
+            section: String::new(),
+            uuid: None,
+        }
+    }
 
     // Helper to build minimal XML for testing
     fn wrap_xml(shots_xml: &str) -> String {

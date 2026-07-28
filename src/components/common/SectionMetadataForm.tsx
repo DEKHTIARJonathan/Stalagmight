@@ -14,15 +14,24 @@ export interface SectionMetadataFormProps {
   color: string;
   direction?: 'in' | 'out';
   quality?: number;
+  /** Import-time reverse toggle (#24). Only meaningful when `showReverse`. */
+  reverse?: boolean;
   onNameChange: (value: string) => void;
   onSurveyorChange: (value: string) => void;
   onDateChange: (value: string) => void;
   onColorChange: (value: string) => void;
   onQualityChange?: (value: number) => void;
   onDirectionChange?: (value: 'in' | 'out') => void;
+  onReverseChange?: (value: boolean) => void;
   showName?: boolean;
   showDirection?: boolean;
   showQuality?: boolean;
+  /**
+   * Show the per-section reverse checkbox (#24). Import wizards only - an
+   * existing section is reversed through the Reverse Section action instead,
+   * which can ask about left/right and is undoable on its own.
+   */
+  showReverse?: boolean;
   disabled?: boolean;
 }
 
@@ -33,15 +42,18 @@ export function SectionMetadataForm({
   color,
   direction = 'in',
   quality = 1.0,
+  reverse = false,
   onNameChange,
   onSurveyorChange,
   onDateChange,
   onColorChange,
   onQualityChange,
   onDirectionChange,
+  onReverseChange,
   showName = true,
   showDirection = false,
   showQuality = false,
+  showReverse = false,
   disabled = false,
 }: SectionMetadataFormProps) {
   const { t } = useTranslation();
@@ -98,6 +110,29 @@ export function SectionMetadataForm({
             disabled={disabled}
             data-testid="section-quality-input"
           />
+        </div>
+      )}
+
+      {showReverse && (
+        <div>
+          <label className="flex items-start gap-2 text-sm cursor-pointer">
+            <input
+              type="checkbox"
+              checked={reverse}
+              onChange={(e) => onReverseChange?.(e.target.checked)}
+              className="mt-0.5"
+              disabled={disabled}
+              data-testid="section-reverse-checkbox"
+            />
+            <span>
+              <span className="text-text-primary">
+                {t('sectionMetadata.labels.reverse')}
+              </span>
+              <span className="block text-text-tertiary">
+                {t('sectionMetadata.help.reverse')}
+              </span>
+            </span>
+          </label>
         </div>
       )}
 

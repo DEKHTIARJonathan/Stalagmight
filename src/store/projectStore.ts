@@ -11,6 +11,7 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
+import { applyReverseAftermath, composeReverseTransforms } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -35,6 +36,7 @@ import type {
   Coordinates,
   FrozenShotRef,
 } from '../types/project';
+import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
@@ -342,6 +344,14 @@ interface ProjectStore {
   ) => Promise<CommandResult>;
   updateSection: (sectionId: SectionId, updates: SectionUpdates) => Promise<CommandResult>;
   deleteSection: (sectionId: SectionId) => Promise<CommandResult>;
+  /**
+   * Reverse a section end-to-end so the far end becomes station 0 (#24).
+   * Geometry is preserved - every station keeps its world coordinate and only
+   * the numbering direction changes. `swapLeftRight` also mirrors the left/right
+   * passage dimensions; it is opt-in because whether LRUD was recorded facing
+   * along travel is a survey convention we cannot infer, so the user is asked.
+   */
+  reverseSection: (sectionId: SectionId, swapLeftRight: boolean) => Promise<CommandResult>;
 
   createShot: (sectionId: SectionId, shot: ShotData, afterShotId?: ShotId, beforeShotId?: ShotId) => Promise<CommandResult>;
   updateShot: (sectionId: SectionId, shotId: ShotId, updates: ShotUpdatesPatch) => Promise<CommandResult>;
@@ -431,6 +441,51 @@ function isPartialMultiStepFailure(error: string | null): boolean {
  */
 const inFlightLoads = new Map<string, Promise<{ success: boolean }>>();
 
+/**
+ * Whether the project changed identity between issuing a command and its reply (#24).
+ *
+ * `created_at` alone: it is immutable for the life of a project, whereas `file_path` changes on
+ * a first save or a Save As - keying on that made the guard reject replies that were perfectly
+ * valid and silently leave the frontend's positional refs on the wrong physical station.
+ *
+ * A missing value on either side is NOT a switch. Before the first refresh the store may hold
+ * no project at all, and a closed project resolves to no sections, which the transform builder
+ * already reduces to a no-op. Only two DIFFERENT identities mean the reply belongs to a project
+ * that is no longer open - and because section ids are small per-project integers, those entries
+ * would otherwise match sections in whatever is now open.
+ */
+function projectSwitched(before: string | null, after: string | null): boolean {
+  return before !== null && after !== null && before !== after;
+}
+
+/**
+ * Serialises frontend mutations, so their aftermath applies in ISSUE order (#24).
+ *
+ * `executeCommand` and `executeUndoRedo` are otherwise independent async chains: each awaits
+ * its own IPC call and then its own `refreshProjectState`, so two overlapping operations can
+ * finish in the opposite order to the one they were issued in. Their reverse aftermaths do NOT
+ * commute when the counts differ - reverse at N, a shot-count edit, reverse at N+1 - so applying
+ * them out of order walks the gas-plan pins and the distance-gradient origin onto a different
+ * station, in range and silent.
+ *
+ * The backend already serialises on `command_lock`, so this costs no real concurrency: it makes
+ * the frontend's completion order match the order the backend applied things in.
+ *
+ * Each entry runs whether or not its predecessor succeeded - a failed command must not wedge
+ * every later one - and the chain deliberately holds no result, so a rejected promise cannot
+ * escape into the next link.
+ */
+let mutationChain: Promise<void> = Promise.resolve();
+
+function runSerialized<T>(work: () => Promise<T>): Promise<T> {
+  const result = mutationChain.then(work, work);
+  mutationChain = result.then(
+    () => undefined,
+    () => undefined
+  );
+  return result;
+}
+
 export const useProjectStore = create<ProjectStore>((set, get) => {
   /** Shared helper: invoke IPC command, refresh state on success, mark dirty. */
   const executeCommand = async (
@@ -438,10 +493,42 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     args: Record<string, unknown> | undefined,
     meta: { purpose: string; fields?: Record<string, unknown> }
   ): Promise<CommandResult> => {
+    // Captured when the user ISSUES the command, not when the queue gets round to it. The two
+    // differ once a mutation can wait behind another: project load/create/close do not go
+    // through the queue, so B can open while this entry is still waiting, and reading the
+    // identity inside the callback would capture B and run A's section ids against B's
+    // sections - which, since section ids are small per-project integers, would mostly RESOLVE.
+    const requestProjectKey = get().project?.created_at ?? null;
+    return runSerialized(() => executeCommandInner(command, args, meta, requestProjectKey));
+  };
+
+  const executeCommandInner = async (
+    command: string,
+    args: Record<string, unknown> | undefined,
+    meta: { purpose: string; fields?: Record<string, unknown> },
+    requestProjectKey: string | null
+  ): Promise<CommandResult> => {
+    // Refuse before the IPC leaves: a command issued against a project that is no longer open
+    // must not mutate whatever replaced it.
+    if (projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+      return emptyCommandResult(false, 'The project changed before this action could run.');
+    }
     try {
       const result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         await get().refreshProjectState();
+        // The frontend's own POSITIONAL refs (gas-plan pins, the loaded-plan baseline, the
+        // distance-gradient origin) are mirrored HERE rather than by the caller, so a reverse
+        // and an undo can never interleave: both routes now apply their aftermath in the same
+        // place, in completion order, immediately after the refresh they belong to. A dialog
+        // continuation doing it later could land AFTER a concurrent undo had already mirrored
+        // the pins back, re-applying the forward shift onto restored numbering - silently,
+        // since every index stays in range.
+        if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+          applyReverseAftermath(
+            composeReverseTransforms(result.reversed_sections, get().project?.sections ?? [])
+          );
+        }
         set({ isDirty: true });
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
@@ -496,10 +583,38 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     toastId: string,
     checkPartialFailure: boolean,
   ): Promise<CommandResult> => {
+    // Captured at ISSUE time - see `executeCommand`.
+    const requestProjectKey = get().project?.created_at ?? null;
+    return runSerialized(() =>
+      executeUndoRedoInner(command, args, meta, toastId, checkPartialFailure, requestProjectKey)
+    );
+  };
+
+  const executeUndoRedoInner = async (
+    command: string,
+    args: Record<string, unknown> | undefined,
+    meta: { purpose: string; fields?: Record<string, unknown> },
+    toastId: string,
+    checkPartialFailure: boolean,
+    requestProjectKey: string | null,
+  ): Promise<CommandResult> => {
+    if (projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+      return emptyCommandResult(false, 'The project changed before this action could run.');
+    }
     let result: CommandResult;
+    // #24: undoing (or redoing) a reverse renumbers station i back to N - i, so
+    // every positional StationRef the frontend holds - the gas-plan pins, the
+    // distance-gradient origin - keeps its index and starts naming the OPPOSITE
+    // physical station, silently and persistably. The backend reports what it
+    // renumbered on the result (undo/redo of a reverse re-reverses the same
+    // sections), one entry per reversing STEP with the shot count in force at it,
+    // so compose them and re-mirror once the refreshed state lands. Absent on
+    // everything else, which is the common case and costs nothing.
+    let reversedSections: readonly ReversedSection[] | undefined;
     try {
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
+        reversedSections = result.reversed_sections;
         set({ isDirty: true });
         // #204: an undo/redo mutates the remote project too - mirror the backend
         // dirty bit into the SpeleoDB store (no-op for a local project).
@@ -508,6 +623,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         if (checkPartialFailure && isPartialMultiStepFailure(result.error)) {
           set({ isDirty: true });
           useSpeleoStore.getState().markDirty();
+          // A partial multi-step failure still renumbered: the steps BEFORE the
+          // failing one already flipped their sections and cannot be rolled back,
+          // which is why the backend attaches the entries it applied to the
+          // failure return too. Dropping them here would leave the plan pins and
+          // the distance origin mirrored onto the opposite physical stations with
+          // no error the user could connect to it.
+          reversedSections = result.reversed_sections;
         }
         // A read-only rejection (EDIT_DISABLED) gets the same friendly notice +
         // dedup key as executeCommand, not the raw coded string - mashing Ctrl+Z
@@ -526,6 +648,19 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
       await get().refreshProjectState();
+      // #24: same project-switch guard as executeCommand. Section ids are small per-project
+      // integers, so entries from the OUTGOING project would otherwise match sections in
+      // whatever is now open and mirror that project's pins instead.
+      // The per-step counts come off the wire; the REFRESHED project supplies only
+      // the range to clamp into, which is the numbering the pins now have to fit.
+      // A multi-step undo_to can walk past a CreateShot, so the post-range count
+      // is NOT the divisor the earlier steps mirrored against - composing the
+      // entries is what keeps those steps landing on the right station.
+      if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
+        applyReverseAftermath(
+          composeReverseTransforms(reversedSections, get().project?.sections ?? [])
+        );
+      }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a
       // station an offset anchored on - so re-check integrity, otherwise the
@@ -1659,6 +1794,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       'delete_section',
       { sectionId },
       { purpose: 'remove section from project', fields: { sectionId } }
+    );
+  },
+
+  reverseSection: async (sectionId: SectionId, swapLeftRight: boolean) => {
+    return executeCommand(
+      'reverse_section',
+      { sectionId, swapLeftRight },
+      {
+        purpose: 'reverse section numbering end-to-end',
+        fields: { sectionId, swapLeftRight },
+      }
     );
   },
 

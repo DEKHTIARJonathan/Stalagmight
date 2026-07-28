@@ -13,6 +13,7 @@
 
 import type { ShotKind } from '../types/ipc/ShotKind';
 import { circularMeanDegrees } from './angles';
+import { normalizeAzimuth } from './azimuth';
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -222,11 +223,36 @@ export function avgNullable(a: number | null, b: number | null): number | null {
   return (a + b) / 2;
 }
 
-/** Reverse a target shot's direction so it matches the opposite traversal direction. */
+/**
+ * Reverse a target shot's direction so it matches the opposite traversal direction.
+ *
+ * Mirrors `reverse_shots` in `src-tauri/src/models/project/reverse.rs` step for
+ * step, because the two placements must agree: this runs on the import preview
+ * and the backend runs on the committed section.
+ *
+ * Two things the naive `(x + 180) % 360` got wrong:
+ *
+ * - JS `%` is TRUNCATED, so its result is only in `(-360, 360)`. An out-of-range
+ *   reading came straight back out of range: `(-200 + 180) % 360 === -20`, a
+ *   non-ignorable `INVALID_AZIMUTH` at whole-degree scale. Normalising both
+ *   readings up front, as the backend does, closes that for either branch.
+ * - Readings exactly 180 apart are DEGENERATE: reciprocate-and-swap maps the
+ *   pair to itself, so the shot keeps its old bearing while everything around it
+ *   turns around. The backend swaps such a pair instead, which flips the
+ *   arbitrary tie-break `average_azimuth` resolves the undefined mean with.
+ *   Without that branch this disagreed with the backend by a full 180 degrees:
+ *   `{45, 225}` came back `{45, 225}` against the backend's `{225, 45}`.
+ */
 export function reverseTargetShot(shot: TargetShotLike): TargetShotLike {
+  const azimuthIn = normalizeAzimuth(shot.azimuth_in);
+  const azimuthOut = normalizeAzimuth(shot.azimuth_out);
+  const antipodal = normalizeAzimuth(azimuthOut - azimuthIn) === 180;
+  const [reversedIn, reversedOut] = antipodal
+    ? [azimuthOut, azimuthIn]
+    : [normalizeAzimuth(azimuthOut + 180), normalizeAzimuth(azimuthIn + 180)];
   return {
-    azimuth_in: (shot.azimuth_out + 180) % 360,
-    azimuth_out: (shot.azimuth_in + 180) % 360,
+    azimuth_in: reversedIn,
+    azimuth_out: reversedOut,
     length: shot.length,
     depth_in: shot.depth_out,
     depth_out: shot.depth_in,

@@ -46,7 +46,15 @@ use std::path::Path;
 /// records which importer produced a section. `migrate_pitch_to_down_convention`
 /// infers it from the geometry and negates only the sections that need it. No
 /// column changes, so the carry-forward fence is unaffected.
-const SCHEMA_VERSION: i32 = 13;
+///
+/// v14 normalises stored azimuth readings into `[0, 360)` (#24). Nothing changed
+/// meaning - `Shot::average_azimuth` simply used Rust's truncated `%`, which returned
+/// the ANTIPODE of the circular mean for a reading pair more than 540 degrees apart,
+/// and now wraps with `rem_euclid`. Normalising takes the ambiguity out of the FILE, so
+/// a `.stalx` renders identically either side of that fix. See
+/// `migrate_azimuths_to_canonical_range`. No column changes, so the carry-forward
+/// fence is unaffected.
+const SCHEMA_VERSION: i32 = 14;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

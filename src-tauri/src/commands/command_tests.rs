@@ -1085,6 +1085,7 @@ fn test_import_sections_persists_deferred_new_project() {
 
         // Import one origin-placed section through the command.
         let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
@@ -1153,6 +1154,7 @@ fn test_import_sections_deferred_save_failure_warns_no_phantom() {
         // Import one origin-placed section through the command - same shape as the
         // success test, only the save target differs.
         let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,
@@ -1243,6 +1245,7 @@ fn test_import_sections_deferred_save_permission_denied_humanizes_no_marker_leak
         );
 
         let sections = vec![crate::models::ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("Imported".to_string()),
             surveyor: None,

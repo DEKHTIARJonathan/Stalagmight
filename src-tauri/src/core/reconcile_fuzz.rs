@@ -416,6 +416,193 @@ fn prop_uuid_survives_local_insert(seed: u64) {
     );
 }
 
+/// Every shot's identity plus the geometry a reconcile would rewrite, in project
+/// order. Comparing these catches a collaborator edit that was applied to the
+/// wrong record - which is the whole failure mode the reverse's baseline drop
+/// exists to prevent - without needing `PartialEq` on `Shot`.
+fn shot_fingerprints(p: &Project) -> Vec<String> {
+    p.sections
+        .iter()
+        .flat_map(|s| {
+            s.shots.iter().map(move |shot| {
+                format!(
+                    "{}:{}:{:?}:{}:{}:{}:{}:{}",
+                    s.id,
+                    shot.id,
+                    shot.uuid,
+                    shot.length,
+                    shot.azimuth_in,
+                    shot.azimuth_out,
+                    shot.depth_in,
+                    shot.depth_out
+                )
+            })
+        })
+        .collect()
+}
+
+/// Run one iteration of the reverse property (#24): reversing a section must
+/// round-trip through collab as *moved* shots, not delete+add.
+///
+/// A correct reverse changes every shot's `geo_key` (azimuth is reciprocated,
+/// depths swap), so the geometry matching tier cannot help here - the whole
+/// operation leans on UUIDs travelling with their records (q17). This pins
+/// that: the section's UUID set survives the reverse unchanged, the next save
+/// re-exports every one of them, and the collaborator round-trip that follows
+/// diffs clean.
+///
+/// The baseline is re-seeded after the reverse because that mirrors the normal
+/// sequence - a reverse marks the project dirty and the next save re-exports
+/// the sibling .tml, refreshing the baseline before a collaborator sees it.
+///
+/// The *other* ordering - reverse, then a collaborator edits the sibling before
+/// we save - is covered too, further down: a reverse permutes every shot index
+/// in the section at once, and reconcile applies a matched edit to the baseline
+/// entry's `shot_index`, so a surviving baseline would land the collaborator's
+/// edit on the mirrored shot. `reverse_section` drops the baseline for exactly
+/// that reason; this pins that it does.
+///
+/// Runs over every generated topology, not just `Kind::Plain`: a single section
+/// with no merges and no datums has NO external station refs, so it exercises
+/// none of the read/write ref-remapping the reverse carries for merges, zero
+/// datums, closures and station comments - nor the synthetic export legs those
+/// produce, which are what a reverse can turn into a delete+add.
+fn prop_reverse_roundtrips_through_collab(seed: u64, kind: Kind) {
+    let dir = TempDir::new().unwrap();
+    let mut p = gen_project(&mut Rng::new(seed), kind);
+    seed_baseline(&mut p, dir.path());
+    // The UUIDs the collaborator's file carries today. NOT every shot in the
+    // project: a shot that only reaches the tree through a synthetic export leg
+    // (a `Kind::Merge` child's pre-merge shot) is written as that leg, and leg
+    // shots carry no UUID at all - reverse or no reverse.
+    let exported_before: HashSet<String> = p
+        .collab
+        .as_ref()
+        .map(|c| c.shot_baseline.iter().map(|e| e.uuid.clone()).collect())
+        .unwrap_or_default();
+
+    // Section 0 is the root every other generated construct hangs off, so
+    // reversing it is the case that moves a merge / datum / comment anchor.
+    let section_id = p.sections[0].id;
+    // Whether the section about to be reversed is itself written through a
+    // synthetic leg. Which shots a leg swallows depends on where the tree enters
+    // the section - i.e. on where station 0 is, which is exactly what a reverse
+    // moves - so for such a section the exported UUID set legitimately differs
+    // either side of the reverse. Only that section's own leg matters; another
+    // section's leg is unaffected by this reverse.
+    let leg_prefix = format!("{} (", p.sections[0].name.clone().unwrap_or_default());
+    let reversed_rides_a_leg = p.collab.as_ref().is_some_and(|c| {
+        c.synthetic_section_names
+            .iter()
+            .any(|n| n.starts_with(&leg_prefix))
+    });
+    // Project-wide, not section-scoped: the reverse must not disturb any other
+    // section's identity either, and the baseline it is compared against below
+    // covers the whole project (one entry per real forward shot).
+    let before: HashSet<String> = p
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .map(|s| s.uuid.clone().unwrap_or_default())
+        .collect();
+
+    assert!(
+        p.reverse_section(section_id, false),
+        "seed={seed} kind={kind:?}: reverse failed"
+    );
+
+    // The unsaved-reverse window: the baseline still describes the pre-reverse
+    // numbering, so it must be gone rather than diffed against.
+    assert!(
+        p.collab
+            .as_ref()
+            .is_some_and(|c| c.shot_baseline.is_empty()),
+        "seed={seed} kind={kind:?}: reverse must drop the index-keyed baseline - a \
+         collaborator edit arriving before the next save would be applied to the \
+         mirrored shot"
+    );
+    // ...and the drop has to actually DEFER the reconcile. Diffing an untouched
+    // re-export adds nothing on top of the assertion above - `diff` short-circuits
+    // on an empty baseline, so it is empty by construction the moment the baseline
+    // is. The returned file therefore carries a REAL edit: with a surviving
+    // baseline that edit matches by UUID and is applied at the entry's
+    // now-mirrored `shot_index`, so an empty change set here is a claim about
+    // behaviour rather than a restatement of the line above.
+    let mut edited = returned(&p, dir.path());
+    let reals = real_shot_indices(&edited, 0);
+    assert!(
+        !reals.is_empty(),
+        "seed={seed} kind={kind:?}: no real shot to edit"
+    );
+    edited.sections[0].shots[reals[0]].length += 0.5;
+    let cs = diff(&p, &edited);
+    assert!(
+        cs.is_empty(),
+        "seed={seed} kind={kind:?}: with the baseline dropped, reconcile must report \
+         nothing until the next save re-seeds it:\n{cs:#?}"
+    );
+    // Belt-and-braces on the consequence rather than the report: applying what the
+    // reconcile produced must leave every shot exactly as the reverse left it.
+    let fingerprints = shot_fingerprints(&p);
+    let mut applied = p.clone();
+    apply_changeset(&mut applied, &cs);
+    assert_eq!(
+        shot_fingerprints(&applied),
+        fingerprints,
+        "seed={seed} kind={kind:?}: a collaborator edit arriving before the next \
+         save was applied to a shot"
+    );
+
+    let after: HashSet<String> = p
+        .sections
+        .iter()
+        .flat_map(|s| s.shots.iter())
+        .map(|s| s.uuid.clone().unwrap_or_default())
+        .collect();
+    assert_eq!(
+        before, after,
+        "seed={seed} kind={kind:?}: reverse must not mint or drop a shot UUID - \
+         reconcile would see the section as wholesale delete+add"
+    );
+
+    // The save that follows the reverse: re-export and re-seed the baseline. A
+    // UUID that goes missing, doubles up or appears from nowhere is exactly the
+    // "reversed section reads as delete+add" failure q6 risks.
+    let (baseline, _sha, synthetic) =
+        export_tml_with_baseline(&p, &dir.path().join("saved.tmlu")).unwrap();
+    let saved: HashSet<String> = baseline.iter().map(|e| e.uuid.clone()).collect();
+    assert_eq!(
+        saved.len(),
+        baseline.len(),
+        "seed={seed} kind={kind:?}: the export named one UUID twice - the reverse \
+         re-bound identity to a position"
+    );
+    assert!(
+        saved.is_subset(&after),
+        "seed={seed} kind={kind:?}: the export invented a UUID no live shot carries"
+    );
+    if !reversed_rides_a_leg && !synthetic.iter().any(|n| n.starts_with(&leg_prefix)) {
+        assert_eq!(
+            exported_before, saved,
+            "seed={seed} kind={kind:?}: the save after a reverse must re-export exactly \
+             the same shot UUIDs, or the collaborator sees the section as delete+add"
+        );
+    }
+    seed_baseline(&mut p, dir.path());
+
+    // The collaborator opens that file and returns it untouched: diff is clean.
+    let ret = returned(&p, dir.path());
+    let cs = diff(&p, &ret);
+    assert!(
+        cs.is_empty(),
+        "seed={seed} kind={kind:?}: reverse round-trip not empty:\n{cs:#?}\nproject:\n{p:#?}"
+    );
+    assert!(
+        !has_dangling_ref(&p),
+        "seed={seed} kind={kind:?}: reverse left a dangling cross-reference"
+    );
+}
+
 /// True if any stored cross-reference dangles (its anchoring shot is gone).
 /// With stable identity this is the failure an interleaved insert/delete must
 /// never produce - a missed positional shift used to leave one silently.
@@ -480,6 +667,7 @@ fn run_seed(seed: u64) {
     for kind in [Kind::Plain, Kind::Datum, Kind::Merge, Kind::DupNames] {
         prop_clean_roundtrip(seed, kind);
         prop_diff_is_deterministic(seed, kind);
+        prop_reverse_roundtrips_through_collab(seed, kind);
     }
     for kind in [Kind::Plain, Kind::Datum, Kind::Merge] {
         prop_degraded_roundtrip(seed, kind);
@@ -529,6 +717,14 @@ fn fuzz_uuid_survives_local_insert() {
     for i in 0..iters() {
         let seed = i ^ 0xC011AB_0005;
         prop_uuid_survives_local_insert(seed);
+    }
+}
+
+#[test]
+fn fuzz_reverse_roundtrips_through_collab() {
+    for i in 0..iters() {
+        let seed = i ^ 0xC011AB_0007;
+        prop_reverse_roundtrips_through_collab(seed, KINDS_ALL[(i as usize) % KINDS_ALL.len()]);
     }
 }
 

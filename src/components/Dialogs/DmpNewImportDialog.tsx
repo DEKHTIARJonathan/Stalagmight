@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { invokeIpc } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { CheckCircleIcon } from '../common/icons';
-import type { DmpFile, DmpShot, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
+import type { DmpFile, CrossSectionSuggestion, ImportSectionForSuggestion, CommandResult, SegmentGeometry } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { DistanceField, Project, Station, ShotData } from '../../types/project';
 import type { ImportSectionConfig as BackendImportSectionConfig, ImportPlacement } from '../../types/commands';
@@ -15,10 +15,11 @@ import { Select, type SelectOption } from '../common/Select';
 import { DialogWrapper } from './DialogWrapper';
 import { AlertDialog } from './AlertDialog';
 import { SectionMetadataForm } from '../common/SectionMetadataForm';
+import { buildZeroDatumSectionConfig, finalizePlacementForReverse } from '../../utils/importSectionConfig';
 import { ShotTableEditor, type EditableShot } from '../common/ShotTableEditor';
 import { useProjectStore } from '../../store/projectStore';
 import { convertToEditableShots } from '../../hooks/useImportState';
-import { editableShotToShotData } from '../../utils/shotConversion';
+import { editableShotToShotData, editableShotsToDmpSection } from '../../utils/shotConversion';
 import {
   computeMergeOptions,
   computeOverlapIds,
@@ -137,27 +138,9 @@ export interface SavedManualPlacingState {
 function buildEffectiveDmpSection(raw: DmpSection, edits: SectionEditState | undefined): DmpSection {
   if (!edits) return raw;
   return {
-    ...raw,
+    ...editableShotsToDmpSection(raw, edits.shots),
     name: edits.name,
     direction: edits.direction,
-    shots: edits.shots
-      .filter(s => !s.isDeleted)
-      .map(s => ({
-        shot_type: 'Standard' as const,
-        heading_in: s.azimuth_in,
-        heading_out: s.azimuth_out,
-        length: s.length,
-        depth_in: s.depth_in,
-        depth_out: s.depth_out,
-        pitch_in: s.pitch_in ?? 0,
-        pitch_out: s.pitch_out ?? 0,
-        left: s.left ?? 0,
-        right: s.right ?? 0,
-        up: s.up ?? 0,
-        down: s.down ?? 0,
-        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
-        ...(s.comment != null ? { comment: s.comment } : {}),
-      })),
   };
 }
 
@@ -390,6 +373,7 @@ function applyAllOverlapTreatments(
           color: '',
           direction: section.direction === 'out' ? 'out' : 'in',
           quality: 1.0,
+          reverse: false,
           shots: convertToEditableShots(section.shots),
         };
         sectionEdits.set(importSectionIndex, importEdits);
@@ -624,6 +608,7 @@ function applyAllOverlapTreatments(
             color: '',
             direction: section.direction === 'out' ? 'out' : 'in',
             quality: 1.0,
+            reverse: false,
             shots: convertToEditableShots(section.shots),
           };
           sectionEdits.set(targetImportIndex, targetEdits);
@@ -734,8 +719,12 @@ function applyAllOverlapTreatments(
   return existingShotUpdates;
 }
 
-/** Build batch import configs from virtual connections + BFS order. */
-function buildBatchImport(
+/**
+ * Build batch import configs from virtual connections + BFS order.
+ *
+ * Exported for tests only - the dialog is its sole production caller.
+ */
+export function buildBatchImport(
   connections: VirtualConnection[],
   zeroDatumIndex: number | null,
   dmpFile: DmpFile,
@@ -1083,6 +1072,13 @@ function buildBatchImport(
       const colorValue = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
       const qualityValue = edits?.quality ?? 1.0;
+      const reverseValue = edits?.reverse ?? false;
+
+      // #24 / q14: the backend reverses before creating the section, so every
+      // placement index must address the post-reverse order - on BOTH sides of a
+      // connection. A directPlacement was not derived from `conn`, so it passes
+      // no connection at all (see finalizePlacementForReverse).
+      const finalPlacement = finalizePlacementForReverse(placement, reverseValue, backendShots.length, directPlacement ? null : conn, sectionEdits);
 
       const config: BackendImportSectionConfig = {
         section_index: configs.length,
@@ -1093,8 +1089,9 @@ function buildBatchImport(
         direction: directionValue,
         quality: qualityValue,
         shots: backendShots,
-        placement,
+        placement: finalPlacement,
         station_comments: [],
+        reverse: reverseValue,
       };
 
       emittedPosition.set(idx, configs.length);
@@ -1748,6 +1745,7 @@ export default function DmpNewImportDialog({
       color: SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4',
       direction: section.direction === 'out' ? 'out' : 'in',
       quality: 1.0,
+      reverse: false,
       shots,
     };
 
@@ -1889,7 +1887,7 @@ export default function DmpNewImportDialog({
   }, [editState, currentSuggestion, selectedMergePair, overlapMode, dmpFile.sections]);
 
   // Section edit callbacks
-  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number) => {
+  const handleMetadataChange = useCallback((field: keyof SectionEditState, value: string | number | boolean) => {
     setEditState((prev) => prev ? { ...prev, [field]: value } : prev);
   }, []);
 
@@ -2254,30 +2252,8 @@ export default function DmpNewImportDialog({
       // 1. Import zero datum section if provided (this is the anchor)
       if (zeroDatumConfig) {
         setIsImporting(true);
-        const { sectionIndex, stationIndex, gps, metadata, shots } = zeroDatumConfig;
-
-        const backendShots: ShotData[] = shots
-          .filter((s) => !s.isDeleted)
-          .map(editableShotToShotData);
-
-        const placement: ImportPlacement = {
-          type: 'zero_datum',
-          coordinates: gps,
-          station_index: stationIndex,
-        };
-
-        const config: BackendImportSectionConfig = {
-          section_index: sectionIndex,
-          name: metadata.name,
-          surveyor: metadata.surveyor,
-          date: metadata.date,
-          color: metadata.color,
-          direction: metadata.direction,
-          quality: metadata.quality,
-          shots: backendShots,
-          placement,
-          station_comments: [],
-        };
+        const { sectionIndex } = zeroDatumConfig;
+        const config: BackendImportSectionConfig = buildZeroDatumSectionConfig(zeroDatumConfig);
 
         // 'AllReferences', not Auto (#27): the DMP parser only ever emits
         // Normal shots, so every virtual shot reaching this import is one the
@@ -2615,30 +2591,10 @@ export default function DmpNewImportDialog({
     if (!section) return null;
     if (!editState) return section;
 
-    const syntheticShots: DmpShot[] = editState.shots
-      .filter((s) => !s.isDeleted)
-      .map((s) => ({
-        shot_type: 'Standard' as const,
-        heading_in: s.azimuth_in,
-        heading_out: s.azimuth_out,
-        length: s.length,
-        depth_in: s.depth_in,
-        depth_out: s.depth_out,
-        pitch_in: s.pitch_in ?? 0,
-        pitch_out: s.pitch_out ?? 0,
-        left: s.left ?? 0,
-        right: s.right ?? 0,
-        up: s.up ?? 0,
-        down: s.down ?? 0,
-        temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
-        ...(s.comment != null ? { comment: s.comment } : {}),
-      }));
-
     return {
-      ...section,
+      ...editableShotsToDmpSection(section, editState.shots),
       name: editState.name,
       direction: editState.direction,
-      shots: syntheticShots,
     };
   }, [currentSuggestion, dmpFile.sections, editState]);
 
@@ -3898,8 +3854,11 @@ export default function DmpNewImportDialog({
                       onColorChange={(v) => handleMetadataChange('color', v)}
                       onDirectionChange={(v) => handleMetadataChange('direction', v)}
                       onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      reverse={editState.reverse}
+                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
                       showName={false}
                       showDirection
+                      showReverse
                     />
                     <div className="border-t border-border" />
                     <ShotTableEditor
@@ -4222,8 +4181,11 @@ export default function DmpNewImportDialog({
                       onColorChange={(v) => handleMetadataChange('color', v)}
                       onDirectionChange={(v) => handleMetadataChange('direction', v)}
                       onQualityChange={(v) => handleMetadataChange('quality', v)}
+                      reverse={editState.reverse}
+                      onReverseChange={(v) => handleMetadataChange('reverse', v)}
                       showName={false}
                       showDirection
+                      showReverse
                     />
                     <div className="border-t border-border" />
                     <ShotTableEditor

@@ -69,6 +69,52 @@ impl Database {
             tracing::info!("Added direction column to sections table");
         }
 
+        // Add the gauge pair to sections if absent (#24). Nullable: NULL means "not captured
+        // yet", which falls back to the legacy index rule, so an existing file keeps exactly
+        // the gauge station it already had until its first save records the pair.
+        for column in ["gauge_shot_uuid", "gauge_neighbour_uuid"] {
+            let present: bool = self
+                .conn
+                .query_row(
+                    &format!(
+                        "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='{column}'"
+                    ),
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .map(|c| c > 0)
+                .unwrap_or(false);
+            if !present {
+                self.conn.execute(
+                    &format!("ALTER TABLE sections ADD COLUMN {column} TEXT"),
+                    [],
+                )?;
+                tracing::info!(column, "Added gauge column to sections table");
+            }
+        }
+
+        // Add reverse_parity to sections if absent (#24). Flips on every section reverse; the
+        // least-squares gauge reads it to keep pinning the same physical station. Default 0 is
+        // exactly right for an existing file - it means "station 0", which is where the gauge
+        // already is, so upgrading moves nobody's coordinates.
+        let has_reverse_parity_column: bool = self
+            .conn
+            .query_row(
+                "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+                [],
+                |row| row.get::<_, i64>(0),
+            )
+            .map(|c| c > 0)
+            .unwrap_or(false);
+
+        if !has_reverse_parity_column {
+            self.conn.execute(
+                "ALTER TABLE sections ADD COLUMN reverse_parity INTEGER NOT NULL DEFAULT 0",
+                [],
+            )?;
+            tracing::info!("Added reverse_parity column to sections table");
+        }
+
         // Add quality column to sections table if it doesn't exist (added for weighted adjustments)
         let has_quality_column: bool = self
             .conn
@@ -733,6 +779,182 @@ impl Database {
         Ok(())
     }
 
+    /// Normalise stored azimuth readings into `[0, 360)` (schema v13 to v14).
+    ///
+    /// Nothing derived is invalidated (see "What is deliberately NOT invalidated"), so
+    /// the sections holding a shot whose walked BEARING actually moved are only logged:
+    /// that warning is the sole record that those shots used to render 180 degrees off.
+    ///
+    /// ## What changed, and why this is not a v11-to-v12-shaped flip
+    ///
+    /// `Shot::average_azimuth` is the circular mean of the two forward readings. It used
+    /// Rust's `%`, which is *truncated* and keeps the sign of the dividend, so for a
+    /// reading pair more than 540 degrees apart in the negative direction
+    /// (`azimuth_out - azimuth_in < -540`, bar the exact `-360k` offsets where both wraps
+    /// agree) the intermediate `diff` stayed outside `(-180, 180]` and the mean came back
+    /// as the ANTIPODE of the true bearing. It now wraps with `rem_euclid` and returns the
+    /// true mean.
+    ///
+    /// Unlike the pitch flip, NO stored value changed meaning: an azimuth is still degrees
+    /// clockwise from north, and the old rendering was simply wrong. So this migration must
+    /// NOT rewrite readings to preserve the old geometry - that would bake the 180-degree
+    /// error in permanently. What it does instead is remove the ambiguity from the file: a
+    /// reading in `[0, 360)` cannot reach the truncation bug, in this build or an older one,
+    /// so the same `.stalx` now renders identically either side of the change.
+    ///
+    /// ## Reachability
+    ///
+    /// Both readings in `[0, 360)` put their difference in `(-360, 360)`, so an affected
+    /// shot always has at least one out-of-range reading. Compass and TML normalise on
+    /// import and `DmpShot::to_shot_data` now does too, so this is a one-off cleanup of
+    /// what earlier builds admitted: DMP legs (raw `i16 * 0.1`, `-3276.8..3276.7`) and
+    /// hand-entered values, which `Validator::validate_shot` only WARNS about.
+    ///
+    /// ## What is deliberately NOT invalidated
+    ///
+    /// * **Persisted undo/redo.** The v11-to-v12 flip had to drop it because replaying a
+    ///   pre-flip payload wrote a geometrically WRONG pitch into a migrated file. Here a
+    ///   payload's raw azimuth means what it always meant and walks to the same place under
+    ///   `rem_euclid`, so replaying one is geometrically exact - it can only reintroduce an
+    ///   unnormalised READING, which the next open of a v14 file no longer re-examines but
+    ///   which is still rendered correctly. Losing the history would cost more than it buys.
+    /// * **Warning dismissals.** `INVALID_AZIMUTH` simply stops firing once the reading is
+    ///   in range, so its rows go inert rather than suppressing something live. That holds
+    ///   for every row because the wrap is [`crate::models::normalize_azimuth`], whose
+    ///   output is `[0, 360)` by construction; a bare `rem_euclid` would have left the
+    ///   claim false for a sub-ulp negative reading, which it maps to exactly `360.0` -
+    ///   still `INVALID_AZIMUTH`, minted by the migration itself.
+    ///   `AZIMUTH_DEVIATION` measures `(azimuth_out - azimuth_in).abs()` folded about 180:
+    ///   for an out-of-range pair that fold produced a NEGATIVE "difference" and the warning
+    ///   could never fire, so there is no dismissal to clear - and after normalisation it
+    ///   starts firing correctly, which is the user-visible signal that these shots were
+    ///   touched.
+    /// * **The collab sidecar baseline.** Unlike v11 to v12, no TML convention changed
+    ///   here, and the sibling is not a rendering of the mean: the exporter writes the raw
+    ///   `azimuth_in` (`export::tml`, the `azimuth: shot.azimuth_in` legs), and both
+    ///   `parsers::tml::normalize_tml_shot` and `models::collab::geo_key` apply the same
+    ///   `rem_euclid(360.0)` this migration wraps with. That agreement is now
+    ///   unconditional: the migration writes through
+    ///   [`crate::models::normalize_azimuth`], so every migrated reading is in
+    ///   `[0, 360)` and `rem_euclid` returns it untouched on the reconcile side. (Before
+    ///   that clamp there was a boundary hole - a reading in `[-2.84e-14, 0)` migrated to
+    ///   exactly `360.0`, which `geo_key` then wrapped to `0.0`, so the two disagreed.)
+    ///   So a migrated project and an untouched sibling agree on every field reconcile
+    ///   compares. Dropping the provenance would cost real data instead:
+    ///   `compute_collab` bails while `last_export_tml_sha256` is `None`,
+    ///   so the reconcile dialog never opens and the next save overwrites the
+    ///   collaborator's unmerged edits with no prompt. See
+    ///   [`crate::models::Project::invalidate_collab_baseline`] for the runtime policy,
+    ///   which empties the baseline and deliberately keeps the sha for the same reason.
+    /// * **`section_offsets`.** These are the one derived value that a corrected bearing
+    ///   really can leave inconsistent, and they are still left alone - deliberately, not by
+    ///   omission. An offset is an ACCUMULATED translation: `adjust_section_offset` adds or
+    ///   subtracts a shot's displacement each time a shot is inserted at or removed from a
+    ///   section's head, so what is stored is the running sum of past edits, not a function of
+    ///   the current shots. A compensation banked under the antipodal bearing cannot be
+    ///   recomputed from the file - only replaying the edit history would do it, and that
+    ///   history is not kept.
+    ///
+    ///   The affected population is the intersection of two already-rare conditions: the
+    ///   section must have held an out-of-range azimuth PAIR (see Reachability) *and* have had
+    ///   a shot inserted or removed at its head. For such a section the migration still fixes
+    ///   what matters - the SHAPE, i.e. the direction its shots walk - while its absolute
+    ///   placement can be out by up to twice the affected shot's horizontal vector. That is a
+    ///   visible displacement the user can correct by moving the section, not a silent
+    ///   corruption of measured values.
+    ///
+    ///   The alternatives are worse. Zeroing offsets would move every section that has one,
+    ///   including the overwhelming majority whose azimuths were always in range and whose
+    ///   placement is correct today; recomputing them is impossible for the reason above. So
+    ///   the rule is: correct the readings, leave the accumulated translation, and accept a
+    ///   recoverable misplacement in a rare intersection rather than a certain one everywhere.
+    ///   Pinned by `migration_v14_leaves_section_offsets_untouched`.
+    pub(super) fn migrate_azimuths_to_canonical_range(conn: &Connection) -> Result<()> {
+        let mut stmt = conn.prepare(
+            "SELECT id, section_id, azimuth_in, azimuth_out
+             FROM shots
+             WHERE azimuth_in < 0.0 OR azimuth_in >= 360.0
+                OR azimuth_out < 0.0 OR azimuth_out >= 360.0",
+        )?;
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, f64>(2)?,
+                row.get::<_, f64>(3)?,
+            ))
+        })?;
+
+        // (shot id, normalised in, normalised out) plus the sections whose bearing moved.
+        let mut updates: Vec<(i64, f64, f64)> = Vec::new();
+        let mut reinterpreted: Vec<i64> = Vec::new();
+        for row in rows {
+            let (id, section_id, azimuth_in, azimuth_out) = row?;
+            // A non-finite reading (SQLite rejects NaN into a NOT NULL REAL, but stores
+            // infinities) has no canonical form; `normalize_azimuth` passes it through, so
+            // without this guard the row would take a no-op UPDATE and still inflate the
+            // count. Leave it for `ShotData::all_finite` and the integrity banner.
+            if !azimuth_in.is_finite() || !azimuth_out.is_finite() {
+                continue;
+            }
+            if Self::old_wrap_returned_the_antipode(azimuth_in, azimuth_out) {
+                reinterpreted.push(section_id);
+            }
+            updates.push((
+                id,
+                crate::models::normalize_azimuth(azimuth_in),
+                crate::models::normalize_azimuth(azimuth_out),
+            ));
+        }
+        drop(stmt);
+
+        if updates.is_empty() {
+            return Ok(());
+        }
+        // No transaction here on purpose: the caller opens one so these per-row UPDATEs
+        // commit as a batch instead of N autocommits.
+        for (id, azimuth_in, azimuth_out) in &updates {
+            conn.execute(
+                "UPDATE shots SET azimuth_in = ?2, azimuth_out = ?3 WHERE id = ?1",
+                params![id, azimuth_in, azimuth_out],
+            )?;
+        }
+        reinterpreted.sort_unstable();
+        reinterpreted.dedup();
+        tracing::info!(
+            shots_normalised = updates.len(),
+            sections_reinterpreted = reinterpreted.len(),
+            "Normalised stored azimuth readings into [0, 360) (v13 to v14)"
+        );
+        if !reinterpreted.is_empty() {
+            tracing::warn!(
+                sections = ?reinterpreted,
+                "These sections held a shot whose two azimuth readings were more than 540 \
+                 degrees apart; earlier builds walked it 180 degrees off, and it now walks \
+                 to the bearing its readings actually describe"
+            );
+        }
+        Ok(())
+    }
+
+    /// Whether the pre-#24 truncated wrap walked this reading pair 180 degrees off.
+    ///
+    /// `average_azimuth_of` wraps `azimuth_out - azimuth_in + 540.0`. Rust's `%` is
+    /// truncated - it keeps the dividend's sign - so it differs from `rem_euclid` by
+    /// exactly 360 when that expression is negative AND not an exact multiple of 360,
+    /// and that halves into the 180-degree error. The naive
+    /// `azimuth_out - azimuth_in < -540.0` test drops the second clause, so it
+    /// false-positives on every exact `-360k` offset: a pair with
+    /// `azimuth_out - azimuth_in == -900.0` walks to the same bearing under either
+    /// wrap and was never misread.
+    ///
+    /// Only feeds [`Self::migrate_azimuths_to_canonical_range`]'s warning - nothing is
+    /// invalidated on the strength of it.
+    pub(super) fn old_wrap_returned_the_antipode(azimuth_in: f64, azimuth_out: f64) -> bool {
+        let wrap_input = azimuth_out - azimuth_in + 540.0;
+        wrap_input < 0.0 && wrap_input.rem_euclid(360.0) != 0.0
+    }
+
     /// Drop the persisted undo/redo stacks. Called by every migration whose
     /// change makes older payloads unsafe to replay.
     ///
@@ -825,7 +1047,23 @@ impl Database {
         Ok(())
     }
 
-    /// Drop the collab sidecar provenance on the v11 to v12 upgrade.
+    /// Drop the collab sidecar provenance. Sole caller: the v11 to v12 upgrade.
+    ///
+    /// This is a last resort, not a routine precaution, and no later migration should
+    /// reach for it without the same justification. It clears
+    /// `last_export_tml_sha256`, and `compute_collab` bails while that is `None`: no
+    /// reconcile dialog can open, so the next save overwrites whatever the
+    /// collaborator has since put in the sibling `.tml`, silently. The runtime policy
+    /// is the safe shape - [`crate::models::Project::invalidate_collab_baseline`]
+    /// empties `shot_baseline` and deliberately KEEPS the sha, which is enough for
+    /// every invalidation whose cause is a local renumbering.
+    ///
+    /// v11 to v12 earns it because the sibling itself becomes unreadable rather than
+    /// merely out of date - re-exporting is the only way back to a comparable file, and
+    /// a phantom-inclination reconcile would do more damage than the lost prompt. That
+    /// is not true of a migration that only rewrites how a value is spelled: v13 to v14
+    /// normalises stored azimuths and deliberately leaves this alone (see
+    /// [`Self::migrate_azimuths_to_canonical_range`]).
     ///
     /// Unlike the stored-shot flip, this is unconditional for a pre-v12 project.
     /// The TML sign convention changed on both sides of the boundary at once
@@ -989,6 +1227,15 @@ impl Database {
             // correct it. The history is not worth an unsafe shortcut.
             self.drop_legacy_undo_history()?;
         }
+        if current < 14 {
+            // One transaction only to batch the per-row UPDATEs: the callee issues one
+            // `execute` per affected shot and documents that the caller wraps them.
+            // Nothing else runs here - in particular the collab sidecar is NOT
+            // invalidated, for the reasons on the callee's doc.
+            let tx = self.conn.unchecked_transaction()?;
+            Self::migrate_azimuths_to_canonical_range(&tx)?;
+            tx.commit()?;
+        }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
         let _ = self.conn.execute(
@@ -1023,6 +1270,9 @@ impl Database {
                 color TEXT NOT NULL,
                 direction TEXT NOT NULL DEFAULT 'in',
                 quality REAL NOT NULL DEFAULT 1.0,
+                reverse_parity INTEGER NOT NULL DEFAULT 0,
+                gauge_shot_uuid TEXT,
+                gauge_neighbour_uuid TEXT,
                 created_at TEXT NOT NULL
             );
 

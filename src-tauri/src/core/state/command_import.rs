@@ -584,7 +584,27 @@ impl AppState {
 
         for (idx, config) in sections.iter().enumerate() {
             let t_section_start = std::time::Instant::now();
-            // Build SectionData from ImportSectionConfig
+            // Build SectionData from ImportSectionConfig.
+            //
+            // The reverse (#24) is applied HERE, before the section exists, so
+            // placement and station-comment indices below resolve against the
+            // final order - the contract every importer wizard builds against.
+            // Left/right is never swapped on this path (no dialog to ask).
+            let mut shots = config.shots.clone();
+            // A reverse makes station 0 the far end, so the section's anchor has
+            // to gain the span it used to cover or the passage lands a full
+            // end-to-end displacement away from where the wizard put it.  The
+            // in-app reverse does this via `adjust_section_offset`; do the same
+            // here, measured on the pre-reverse order, and apply it once the
+            // section exists.  Merge- and datum-based placements below re-anchor
+            // the section outright, so for those it is inert - it is `Origin` and
+            // `Manual` (which position station 0 directly) that would otherwise
+            // silently move.
+            let reverse_offset = config.reverse.then(|| {
+                let displacement = crate::models::shot_run_displacement(&shots);
+                crate::models::reverse_shots(&mut shots, false);
+                displacement
+            });
             let section_data = SectionData {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
@@ -592,7 +612,7 @@ impl AppState {
                 color: config.color.clone(),
                 direction: config.direction,
                 quality: config.quality,
-                shots: config.shots.clone(),
+                shots,
             };
 
             // Step 1: Create the section
@@ -614,9 +634,43 @@ impl AppState {
                 return CommandResult::failure("Section created but no ID returned".to_string());
             };
 
+            // The shots were reversed before the section existed, so record that on the section
+            // itself (#24). `reverse_parity` is documented as flipping whenever a section's
+            // shot order is reversed, and the plan-anchor resolution reads it to decide which
+            // side of a shot a terminal station sits on - leaving it false here would make two
+            // geometrically identical projects ("import then reverse" vs "import with the
+            // toggle") disagree about that, and about which end the least-squares gauge pins.
+            if config.reverse {
+                if let Ok(mut guard) = self.project.lock() {
+                    if let Some(section) =
+                        guard.as_mut().and_then(|p| p.get_section_mut(section_id))
+                    {
+                        section.reverse_parity = !section.reverse_parity;
+                    }
+                }
+            }
+
             created_ids.insert(config.section_index, section_id);
             all_section_ids.push(section_id);
             all_warnings.extend(create_result.warnings);
+
+            // Keep a reversed section where the un-reversed import would have put
+            // it (see `reverse_offset` above).  Undo/redo for the whole import is
+            // the before/after snapshot pair pushed at the end, so this needs no
+            // command of its own.
+            if let Some((dx, dy)) = reverse_offset {
+                // Finiteness first - `NaN != 0.0` is true, and `section_offsets`
+                // has no other finite guard (see `Project::reverse_section`).
+                if dx.is_finite() && dy.is_finite() && (dx != 0.0 || dy != 0.0) {
+                    let mut proj_guard = match self.project.lock() {
+                        Ok(g) => g,
+                        Err(poisoned) => poisoned.into_inner(),
+                    };
+                    if let Some(project) = proj_guard.as_mut() {
+                        project.adjust_section_offset(section_id, dx, dy);
+                    }
+                }
+            }
 
             // Apply station comments (promoted from shot comments during TML import)
             if !config.station_comments.is_empty() {
@@ -625,8 +679,32 @@ impl AppState {
                     Err(poisoned) => poisoned.into_inner(),
                 };
                 if let Some(project) = proj_guard.as_mut() {
+                    let shot_count = config.shots.len() as u32;
                     for (station_index, comment) in &config.station_comments {
-                        let station_ref = StationRef::new(section_id, *station_index);
+                        // Mirror here rather than trusting the caller to have done
+                        // it. `reverse` renumbers station `i` to `shot_count - i`,
+                        // and these indices were collected against the file's
+                        // original order - the same rewrite the wizard applies to
+                        // `placement` (src/utils/reversePlacement.ts). Doing it
+                        // backend-side keeps the one importer that actually
+                        // populates `station_comments` (TML) correct the day its
+                        // wizard gains the toggle, instead of relying on a prose
+                        // contract every future importer has to re-derive.
+                        // `checked_sub`, not `saturating_sub`: an index past the
+                        // last station has no mirror, and saturating it would
+                        // park the comment on station 0 - a station it was never
+                        // about. Un-reversed the same index simply fails
+                        // `key_for_ref` below and the comment is dropped, so
+                        // skipping here keeps the two paths honest.
+                        let index = if config.reverse {
+                            match shot_count.checked_sub(*station_index) {
+                                Some(mirrored) => mirrored,
+                                None => continue,
+                            }
+                        } else {
+                            *station_index
+                        };
+                        let station_ref = StationRef::new(section_id, index);
                         if let Some(key) = project.key_for_ref(station_ref) {
                             project.station_comments.insert(key, comment.clone());
                         }
@@ -634,13 +712,16 @@ impl AppState {
                 }
             }
 
+            // Record the shots as they were actually created (post-reverse), not
+            // the raw config - otherwise a redo would recreate the section in the
+            // file's original order.
             batch_commands.push(Command::CreateSection {
                 name: config.name.clone(),
                 surveyor: config.surveyor.clone(),
                 date: config.date,
                 color: config.color.clone(),
                 direction: config.direction,
-                shots: config.shots.clone(),
+                shots: section_data.shots.clone(),
             });
 
             // Step 2: Apply placement

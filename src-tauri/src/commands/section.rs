@@ -90,6 +90,32 @@ pub(crate) fn delete_section_impl(state: &AppState, section_id: SectionId) -> Co
     state.execute(Command::DeleteSection { section_id })
 }
 
+/// Reverse a section end-to-end so the far end becomes station 0.
+///
+/// Geometry is preserved: every station keeps its world coordinate and only the
+/// numbering direction changes. `swap_left_right` additionally mirrors the
+/// left/right passage dimensions - opt-in, because whether LRUD was recorded
+/// facing along travel is a survey convention the app cannot infer.
+#[tauri::command]
+pub fn reverse_section(
+    state: State<AppState>,
+    section_id: SectionId,
+    swap_left_right: bool,
+) -> CommandResult {
+    reverse_section_impl(state.inner(), section_id, swap_left_right)
+}
+
+pub(crate) fn reverse_section_impl(
+    state: &AppState,
+    section_id: SectionId,
+    swap_left_right: bool,
+) -> CommandResult {
+    state.execute(Command::ReverseSection {
+        section_id,
+        swap_left_right,
+    })
+}
+
 /// Move a section by an offset
 #[tauri::command]
 pub fn move_section(

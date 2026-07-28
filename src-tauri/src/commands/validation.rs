@@ -109,7 +109,10 @@ pub(crate) fn resolve_warning_impl(
     // Fall back to a legacy position-keyed ignore for such a shot - it survives via
     // the position fallback and the load-time backfill upgrades it once the UUID is
     // persisted (issue #57 / Codex).
-    let shot_uuid = if state.shot_uuid_is_persisted(&shot_uuid) {
+    // Section-scoped: two sections can hold the same shot UUID (`ensure_unique_shot_uuids`
+    // de-dups within a section only), so an unscoped check would call a UUID persisted only in
+    // ANOTHER section durable and key the ignore by it anyway.
+    let shot_uuid = if state.shot_uuid_is_persisted(section_id, &shot_uuid) {
         Some(shot_uuid)
     } else {
         None

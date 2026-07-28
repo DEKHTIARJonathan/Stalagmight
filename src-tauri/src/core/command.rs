@@ -1,5 +1,6 @@
 use chrono::NaiveDate;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use ts_rs::TS;
 
@@ -79,6 +80,16 @@ pub enum Command {
     UpdateSectionMetadata {
         section_id: SectionId,
         updates: SectionUpdates,
+    },
+    /// Reverse a section end-to-end so the far end becomes station 0, keeping
+    /// every station's world coordinate (see [`crate::models::Project::reverse_section`]).
+    /// `swap_left_right` also mirrors the `left`/`right` passage dimensions; it
+    /// is opt-in because whether LRUD was recorded facing along travel is a
+    /// survey convention we cannot infer.
+    ReverseSection {
+        section_id: SectionId,
+        #[serde(default)]
+        swap_left_right: bool,
     },
 
     // Shot commands
@@ -226,6 +237,20 @@ pub(crate) const EDIT_DISABLED_CODE: &str = "EDIT_DISABLED";
 /// edit through and the fence catches any real conflict).
 pub(crate) const EDIT_REVERIFY_DIVERGED_CODE: &str = "EDIT_REVERIFY_DIVERGED";
 
+/// One section whose station numbering an operation reversed, together with the
+/// shot count `N` that was IN FORCE at that reverse - the divisor the mirror
+/// `i -> N - i` needs.
+///
+/// The count travels with the entry rather than being read off the refreshed
+/// project because a multi-step `undo_to` can walk past a `CreateShot`: the
+/// post-range count is then not the count the earlier steps mirrored against, and
+/// a consumer that divided by it would land one station out.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, TS)]
+pub struct ReversedSection {
+    pub section_id: u32,
+    pub shot_count: u32,
+}
+
 /// Result of command execution
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct CommandResult {
@@ -244,6 +269,52 @@ pub struct CommandResult {
     /// Path the project was saved to (for SaveProject command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
+    /// The sections whose station NUMBERING this operation reversed (station `i`
+    /// became station `N - i`), each carrying the shot count `N` in force at that
+    /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo
+    /// of either (undoing a reverse re-reverses the numbering, so it reports the
+    /// same sections).
+    ///
+    /// Every station keeps its world position, so this is not a geometry change
+    /// the frontend can see by diffing coordinates: it exists so a positional
+    /// station reference held on the frontend (a selection, a pinned plan point)
+    /// can be mirrored EXACTLY rather than inferred by comparing station
+    /// positions across the operation - an inference that misses a section which
+    /// was reversed and moved in the same action.
+    ///
+    /// TWO SHAPES, and a consumer must not treat them alike:
+    ///
+    /// * From ONE command (`ReverseSection` or a `Batch`), this is a
+    ///   PARITY-REDUCED set: [`Command::reversed_section_ids`] drops a section the
+    ///   batch reversed an even number of times, because such a batch leaves the
+    ///   numbering exactly as it found it and there is nothing to mirror. At most
+    ///   one entry per section, and `shot_count` is unambiguous because a batch
+    ///   cannot change it (`is_batch_allowed` admits no shot create/delete).
+    /// * From `undo_to` / `redo_to`, this is an ORDERED PER-STEP LOG: one entry
+    ///   per reversing step, in the order the steps ran, repeats intact. It is
+    ///   deliberately NOT parity-reduced, because `shot_count` can differ between
+    ///   steps (a `CreateShot` undone between two reverses of one section). The
+    ///   consumer must COMPOSE the entries into a single transform and apply that
+    ///   once; replaying the mirror per entry is wrong.
+    ///
+    /// Composition is required because the FRONTEND's mirror is not an involution: it is
+    /// `i -> N - i` CLAMPED into range (`utils/reverseAftermath`), and a clamp is lossy, so
+    /// replaying it per entry does not undo itself. The counts can also differ between entries
+    /// - a `CreateShot` undone between two reverses of one section changes `N` - which is
+    /// exactly the case neither "cancel the repeat" nor "replay the mirror twice" gets right.
+    ///
+    /// The sibling `.plnx` needs none of this: its plans name a station by the shots it sits
+    /// BETWEEN, so a reverse does not move them at all (see `state::dive_plan`).
+    ///
+    /// Same wire contract as `section_ids` above - `skip_serializing_if` + `default`, so
+    /// the key is simply absent for every command that reversed nothing and an older
+    /// frontend is unaffected - but typed `Option` rather than `Vec` so ts-rs emits it as
+    /// `reversed_sections?:` instead of a required array. That absence IS the wire
+    /// truth (`section_ids` is typed required despite the same serde attributes, which is
+    /// why its consumers already need `?? []`), and a required field would break every
+    /// existing `CommandResult` literal on the frontend.
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub reversed_sections: Option<Vec<ReversedSection>>,
 }
 
 /// Result of an explicit "repair project integrity" action. `fixed` and
@@ -306,6 +377,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            reversed_sections: None,
         }
     }
 
@@ -318,6 +390,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            reversed_sections: None,
         }
     }
 
@@ -351,6 +424,12 @@ impl CommandResult {
         self
     }
 
+    /// Attach the sections whose station numbering this operation reversed.
+    pub fn with_reversed_sections(mut self, sections: Vec<ReversedSection>) -> Self {
+        self.reversed_sections = Some(sections);
+        self
+    }
+
     /// Attach a single warning message to this result.
     pub fn with_warning(mut self, message: &str) -> Self {
         self.warnings.push(ValidationWarning {
@@ -363,6 +442,61 @@ impl CommandResult {
 }
 
 impl Command {
+    /// Reduce a reverse log to its NET effect: keep an id only when it occurs an
+    /// ODD number of times, in first-occurrence order.
+    ///
+    /// Parity is associative and commutative, so reducing sub-lists and then the
+    /// concatenation gives the same answer as reducing once - nested batches are
+    /// safe. Within a batch the shot count `N` cannot change (`is_batch_allowed`
+    /// admits no `CreateShot`/`DeleteShot`/`DeleteSection`; `merge_stations` only
+    /// records relations and `move_segment` only offsets), so a section reversed
+    /// twice is not renumbered AT ALL: it must be neither reported nor fixed up.
+    /// Reporting it would be actively wrong, because the two fix-ups
+    /// `settle_reversed_sections` runs are applied once per list entry against one
+    /// final project state, and neither is an involution there - a repeated id
+    /// walks every saved `.plnx` key two stations along a numbering that never
+    /// moved.
+    fn net_reversed(ids: Vec<SectionId>) -> Vec<SectionId> {
+        let mut counts: HashMap<SectionId, usize> = HashMap::new();
+        for id in &ids {
+            *counts.entry(*id).or_insert(0) += 1;
+        }
+        let mut net: Vec<SectionId> = Vec::new();
+        for id in ids {
+            if counts.get(&id).is_some_and(|n| n % 2 == 1) && !net.contains(&id) {
+                net.push(id);
+            }
+        }
+        net
+    }
+
+    /// The sections whose station numbering this command reverses, in command
+    /// order, `Batch` included (reversing a multi-selection is one batched user
+    /// action) and PARITY-REDUCED there via [`Self::net_reversed`].
+    ///
+    /// Read declaratively off the command rather than inferred afterwards from
+    /// moved stations: a reverse keeps every station's world position, so there
+    /// is nothing in the geometry to diff, and a section that was reversed AND
+    /// moved in the same action defeats a position-based heuristic outright.
+    /// Undo/redo of a snapshot pair reuses this on the stored command - undoing a
+    /// reverse re-reverses the numbering, so the same sections apply.
+    ///
+    /// The reduction belongs HERE, at the producer, and not in `undo_to`/`redo_to`:
+    /// those aggregate ACROSS commands, where the shot count can differ between
+    /// steps, so their per-step entries must stay intact.
+    pub fn reversed_section_ids(&self) -> Vec<SectionId> {
+        match self {
+            Command::ReverseSection { section_id, .. } => vec![*section_id],
+            Command::Batch { commands } => Self::net_reversed(
+                commands
+                    .iter()
+                    .flat_map(Command::reversed_section_ids)
+                    .collect(),
+            ),
+            _ => Vec::new(),
+        }
+    }
+
     /// Get a human-readable description of this command
     pub fn description(&self) -> String {
         match self {
@@ -383,6 +517,9 @@ impl Command {
             }
             Command::UpdateSectionMetadata { section_id, .. } => {
                 format!("Update section {section_id} metadata")
+            }
+            Command::ReverseSection { section_id, .. } => {
+                format!("Reverse section {section_id}")
             }
             Command::CreateShot { section_id, .. } => {
                 format!("Create shot in section {section_id}")

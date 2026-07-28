@@ -84,6 +84,9 @@ export type BatchCommand =
   | { type: 'move_segment'; section_id: number; offset: Coordinates }
   | { type: 'move_station'; station_ref: StationRef; offset: Coordinates }
   | { type: 'set_zero_datum'; station_ref: StationRef; coordinates: GpsCoordinates }
+  // Reversing a multi-selection is one user action, so it goes through a batch:
+  // all-or-nothing rollback and a single undo entry (#24).
+  | { type: 'reverse_section'; section_id: SectionId; swap_left_right: boolean }
   // Per-shot field edit - lets the data-table grid commit a multi-cell edit
   // (paste/fill) as one undo unit. Nested payload uses snake_case (it bypasses
   // Tauri's top-level camelCase conversion). ShotUpdates fields are all optional.

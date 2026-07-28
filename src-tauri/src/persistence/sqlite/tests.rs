@@ -5,6 +5,162 @@ use crate::models::StationAnchor;
 use crate::models::StationRef;
 use tempfile::TempDir;
 
+/// A pre-v2 `.stalx` must keep `reverse_parity` through the FK rebuild.
+///
+/// `migrate_schema` conditionally ADDs columns to `sections`, and for `user_version < 2` the FK
+/// rebuild then recreates that table from a fixed DDL and copies the rows across. A column
+/// missing from either half is silently dropped, and the file is stamped current afterwards, so
+/// no later open re-adds it. The damage does not show up on load - the read path falls back to a
+/// literal for an absent column - it shows up on the next SAVE, which inserts every column by
+/// name. The project opens fine and can then never be written again.
+///
+/// The insert below is the shape `save_project` uses. It is exercised directly rather than
+/// through `save_project` because a real `save_project` on a pre-v2 file currently fails for an
+/// UNRELATED, pre-existing reason: `init_schema` runs before the migration and creates tables
+/// whose foreign keys reference `sections` (`station_comments` among them), the rebuild's rename
+/// rewrites those references to `sections_old`, and the rebuild does not recreate every one of
+/// them - so the dangling reference outlives the drop. That is master's bug, not this branch's,
+/// and it would mask this assertion rather than sharpen it.
+#[test]
+fn a_pre_v2_rebuild_keeps_the_reverse_parity_column() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy.stalx");
+
+    // A v1 file: `sections` without any of the columns later migrations add, plus the row we
+    // expect to survive the rebuild.
+    {
+        let conn = Connection::open(&path).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE sections (
+                 id INTEGER PRIMARY KEY,
+                 name TEXT,
+                 surveyor TEXT,
+                 date TEXT,
+                 color TEXT NOT NULL,
+                 created_at TEXT NOT NULL
+             );
+             INSERT INTO sections (id, name, color, created_at)
+             VALUES (1, 'Legacy', '#ff0000', '2020-01-01T00:00:00Z');
+             PRAGMA user_version = 1;",
+        )
+        .unwrap();
+    }
+
+    // Opening migrates: the ALTER adds the column, then the FK rebuild recreates the table.
+    let db = Database::open(&path).unwrap();
+    let has_column: i64 = db
+        .conn
+        .query_row(
+            "SELECT COUNT(*) FROM pragma_table_info('sections') WHERE name='reverse_parity'",
+            [],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        has_column, 1,
+        "the FK rebuild must carry reverse_parity through, not drop it"
+    );
+    let survived: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM sections", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(
+        survived, 1,
+        "the rebuild must copy the existing rows across"
+    );
+
+    // THE regression: this is the insert `save_project` performs, and it is what fails when the
+    // column is dropped by the rebuild.
+    db.conn
+        .execute(
+            "INSERT INTO sections (id, name, surveyor, date, color, direction, quality, \
+             reverse_parity, created_at) \
+             VALUES (2, 'New', NULL, NULL, '#00ff00', 'in', 1.0, 1, '2026-01-01T00:00:00Z')",
+            [],
+        )
+        .expect("a migrated pre-v2 file must still accept the column save_project writes");
+    let parity: i64 = db
+        .conn
+        .query_row(
+            "SELECT reverse_parity FROM sections WHERE id = 2",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        parity, 1,
+        "the value must round-trip, not be silently dropped"
+    );
+}
+
+/// The v14 azimuth migration must leave `section_offsets` exactly as it found them.
+///
+/// An offset is an accumulated translation from past head insert/remove edits, not a function
+/// of the current shots, so one banked under the old antipodal bearing cannot be recomputed -
+/// only replaying the edit history would do it. Zeroing them instead would move every section
+/// that has one, including the overwhelming majority whose azimuths were always in range. The
+/// decision is to correct the readings and leave the translation; this pins it so a later
+/// "tidy-up" cannot quietly start rewriting placements.
+#[test]
+fn migration_v14_leaves_section_offsets_untouched() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v13.stalx");
+
+    {
+        let db = Database::open(&path).unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (0, '#abcdef', '2020-01-01T00:00:00Z')",
+                [],
+            )
+            .unwrap();
+        // An out-of-range PAIR - the shape the migration exists for.
+        db.conn
+            .execute(
+                "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out) \
+                 VALUES (1, 0, 0, 0.0, -600.0, 10.0, 0.0, 0.0)",
+                [],
+            )
+            .unwrap();
+        db.conn
+            .execute(
+                "INSERT INTO section_offsets (section_id, offset_x, offset_y) VALUES (0, 12.5, -7.25)",
+                [],
+            )
+            .unwrap();
+        // Back-date so the migration actually runs on the next open.
+        db.conn.execute("PRAGMA user_version = 13", []).unwrap();
+    }
+
+    let db = Database::open(&path).unwrap();
+
+    let (x, y): (f64, f64) = db
+        .conn
+        .query_row(
+            "SELECT offset_x, offset_y FROM section_offsets WHERE section_id = 0",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        (x, y),
+        (12.5, -7.25),
+        "the accumulated translation must survive the migration verbatim"
+    );
+
+    // ...while the readings it exists for WERE corrected, so this is not a vacuous assertion.
+    let (az_in, az_out): (f64, f64) = db
+        .conn
+        .query_row(
+            "SELECT azimuth_in, azimuth_out FROM shots WHERE id = 1",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(az_in, 0.0);
+    assert_eq!(az_out, 120.0, "-600 normalises into [0, 360)");
+}
+
 #[test]
 fn load_project_validation_returns_none_when_table_absent() {
     // A legacy .stalx predating `project_settings`, opened read-only (which does
@@ -124,8 +280,42 @@ fn shot_uuid_is_persisted_reflects_the_shots_table() {
             [],
         )
         .unwrap();
-    assert!(db.shot_uuid_is_persisted("persisted-uuid").unwrap());
-    assert!(!db.shot_uuid_is_persisted("transient-uuid").unwrap());
+    assert!(db.shot_uuid_is_persisted(0, "persisted-uuid").unwrap());
+    assert!(!db.shot_uuid_is_persisted(0, "transient-uuid").unwrap());
+}
+
+/// The check is SECTION-SCOPED, because `ensure_unique_shot_uuids` only de-dups within a
+/// section - two sections can legitimately hold the same shot UUID.
+///
+/// Unscoped, the query answers "persisted" for section 1 because section 0's copy is on disk,
+/// and the caller then keys an ignore by a UUID that is still in-memory-only for the section it
+/// belongs to. The next open mints a different one and the suppression is orphaned - exactly
+/// what this guard exists to prevent (issue #57).
+#[test]
+fn shot_uuid_is_persisted_does_not_answer_for_another_section() {
+    let db = Database::in_memory().unwrap();
+    for section_id in [0, 1] {
+        db.conn
+            .execute(
+                "INSERT INTO sections (id, color, created_at) VALUES (?1, '#abcdef', '2026-01-01T00:00:00Z')",
+                [section_id],
+            )
+            .unwrap();
+    }
+    // The SHARED uuid is on disk for section 0 only; section 1's copy is still in memory.
+    db.conn
+        .execute(
+            "INSERT INTO shots (id, section_id, sequence_order, azimuth_in, azimuth_out, length, depth_in, depth_out, uuid) \
+             VALUES (1, 0, 0, 0, 0, 1, 0, 0, 'shared-uuid')",
+            [],
+        )
+        .unwrap();
+
+    assert!(db.shot_uuid_is_persisted(0, "shared-uuid").unwrap());
+    assert!(
+        !db.shot_uuid_is_persisted(1, "shared-uuid").unwrap(),
+        "another section's copy must not count as persisted for this one"
+    );
 }
 
 #[test]
@@ -5796,6 +5986,318 @@ fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
         state_json.contains(r#""enabled":true"#),
         "clearing the baseline must not disable collab: {state_json}"
     );
+}
+
+/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`, and
+/// leaves the collab sidecar provenance alone while doing it.
+///
+/// Nothing changed meaning - `Shot::average_azimuth` used Rust's truncated `%`, which
+/// returned the ANTIPODE of the circular mean for a pair more than 540 degrees apart, and
+/// now wraps with `rem_euclid`. Normalising takes the ambiguity out of the FILE so the
+/// same `.stalx` renders identically on either build.
+///
+/// The sidecar is NOT touched, in either fixture. The exporter writes the raw
+/// `azimuth_in` and both `normalize_tml_shot` and `geo_key` apply the same
+/// `rem_euclid(360.0)` the migration wraps with, and the migration writes through
+/// `normalize_azimuth`, so every migrated reading lands in `[0, 360)` and `rem_euclid`
+/// returns it untouched on the reconcile side. A migrated project and an untouched
+/// sibling therefore agree on every field reconcile compares - unconditionally, which
+/// the fourth shot below pins. Dropping `last_export_tml_sha256` would instead make
+/// `compute_collab` bail, so the reconcile dialog could never open and the next save
+/// would overwrite the collaborator's unmerged edits with no prompt - see
+/// `migrate_v14_leaves_an_untouched_sibling_reconcilable`.
+///
+/// Both fixtures run because this used to be gated on a "reinterpreted" verdict: the
+/// first holds a shot whose walked bearing really did move, the second only readings no
+/// build ever misread. The gate is gone, so the two cases must behave identically.
+#[test]
+fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
+    let temp = TempDir::new().unwrap();
+
+    let out_of_range = |azimuth_in: f64, azimuth_out: f64| ShotData {
+        azimuth_in,
+        azimuth_out,
+        length: 10.0,
+        depth_in: 0.0,
+        depth_out: 0.0,
+        ..Default::default()
+    };
+
+    for (file, shots, expected) in [
+        (
+            "legacy_v13_azimuth.stalx",
+            vec![
+                // 600 and 0 are 600 apart: the truncated wrap walked this 180 degrees off.
+                out_of_range(600.0, 0.0),
+                // Out of range but only 20 apart - normalised, never misread.
+                out_of_range(370.0, 350.0),
+                // Already canonical: must be left exactly alone.
+                out_of_range(12.5, 13.5),
+                // A hair WEST of north. `rem_euclid` alone maps both of these to
+                // exactly 360.0, so the migration would write the very
+                // `INVALID_AZIMUTH` its "rows go inert" justification promises it
+                // clears - and `geo_key` wraps 360.0 back to 0.0, so the migrated
+                // project and an untouched sibling would disagree on that shot.
+                // `normalize_azimuth` clamps the escape.
+                out_of_range(-1e-14, -2.8e-14),
+            ],
+            vec![(240.0, 0.0), (10.0, 350.0), (12.5, 13.5), (0.0, 0.0)],
+        ),
+        (
+            "legacy_v13_benign.stalx",
+            vec![out_of_range(370.0, 350.0)],
+            vec![(10.0, 350.0)],
+        ),
+    ] {
+        let path = temp.path().join(file);
+        let mut project = Project::new("Legacy".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Wide".to_string()),
+            shots,
+            ..Default::default()
+        });
+
+        {
+            let mut db = Database::open(&path).unwrap();
+            db.save_project(&project).unwrap();
+            db.conn
+                .execute(
+                    "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
+                    [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+                )
+                .unwrap();
+            db.set_user_version(13).unwrap();
+        }
+
+        let db = Database::open_existing(&path).unwrap();
+        assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+
+        let stored: Vec<(f64, f64)> = db
+            .conn
+            .prepare("SELECT azimuth_in, azimuth_out FROM shots ORDER BY sequence_order")
+            .unwrap()
+            .query_map([], |r| Ok((r.get::<_, f64>(0)?, r.get::<_, f64>(1)?)))
+            .unwrap()
+            .map(|r| r.unwrap())
+            .collect();
+        assert_eq!(
+            stored, expected,
+            "{file}: every reading must land in [0, 360) and an in-range one must be untouched"
+        );
+
+        let state_json: String = db
+            .conn
+            .query_row(
+                "SELECT state_json FROM collab_state WHERE id = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            state_json.contains("last_export_tml_sha256"),
+            "{file}: the sibling .tml is still ours and still comparable, so its \
+             provenance must survive: {state_json}"
+        );
+        assert!(
+            state_json.contains("shot_baseline"),
+            "{file}: the baseline's (section_id, shot_index) keys did not move either, \
+             so reconcile can still place a returned edit: {state_json}"
+        );
+        assert!(
+            state_json.contains(r#""enabled":true"#),
+            "{file}: the migration must not disable collab: {state_json}"
+        );
+    }
+}
+
+/// The migration must leave a sibling `.tml` the collaborator has since edited
+/// RECONCILABLE. This is what the dropped invalidation actually cost: without the
+/// provenance sha `compute_collab` bails, the reconcile dialog never opens, and the next
+/// save rewrites the sibling over the collaborator's unmerged work with no prompt.
+///
+/// The fixture is the worst case for the old gate - a `(600.0, 0.0)` shot, whose walked
+/// bearing genuinely moved. Even there the sibling stays comparable: the export carried
+/// the raw `600.0`, and `normalize_tml_shot` wraps it with the same `rem_euclid(360.0)`
+/// the migration applied to the stored row, so reconcile sees no azimuth difference at
+/// all - only the length the collaborator really changed.
+#[test]
+fn migrate_v14_leaves_an_untouched_sibling_reconcilable() {
+    // `open_project` persists the recent-projects list, which lives in the config.
+    let _cfg = crate::test_helpers::isolated_config();
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("collab.stalx");
+    let sibling = temp.path().join("collab.tml");
+
+    let mut project = Project::new("Collab".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Wide".to_string()),
+        shots: vec![ShotData {
+            azimuth_in: 600.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 1.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    // The save path mints these before exporting, so both sides of the round trip have
+    // to agree on them for reconcile's UUID tier to match.
+    project.ensure_shot_uuids();
+    let section_id = project.sections[0].id;
+
+    // The pre-migration build's export, verbatim - this is the file we handed over.
+    let mut collab = crate::models::CollabState::new("collab.tml".to_string());
+    let (baseline, sha, synthetic) =
+        crate::export::tml::export_tml_with_baseline(&project, &sibling).unwrap();
+    collab.last_export_tml_sha256 = Some(sha);
+    collab.shot_baseline = baseline;
+    collab.synthetic_section_names = synthetic;
+    collab.section_name_map = vec![("Wide".to_string(), section_id)];
+    project.collab = Some(collab);
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(13).unwrap();
+    }
+
+    // The collaborator opens it in Ariane, retapes one shot and saves. Only the sha
+    // moving is what makes `compute_collab` run the diff rather than short-circuit.
+    let mut returned = project.clone();
+    returned.sections[0].shots[0].length = 11.0;
+    crate::export::tml::export_tml_with_baseline(&returned, &sibling).unwrap();
+
+    let state = crate::core::state::AppState::new().unwrap();
+    let opened = state.execute(crate::core::Command::OpenProject { path });
+    assert!(opened.success, "{:?}", opened.error);
+
+    let changes = state.detect_collab_changes().unwrap().expect(
+        "the migration must leave the sibling reconcilable - a dropped baseline makes \
+         compute_collab bail, so the dialog never opens and the next save silently \
+         overwrites the collaborator's edits",
+    );
+    assert_eq!(
+        changes.shots_edited.len(),
+        1,
+        "the collaborator's one edit must be surfaced: {changes:#?}"
+    );
+    let fields: Vec<&str> = changes.shots_edited[0]
+        .changes
+        .iter()
+        .map(|c| c.field.as_str())
+        .collect();
+    assert_eq!(
+        fields,
+        vec!["length"],
+        "the migration rewrote 600 -> 240 on our side only; the sibling's raw 600 wraps \
+         to the same bearing, so no azimuth change may be reported: {changes:#?}"
+    );
+}
+
+/// The "this shot was walked 180 degrees off" verdict must not fire on a pair the old
+/// truncated wrap handled correctly.
+///
+/// `average_azimuth_of` wraps `azimuth_out - azimuth_in + 540.0`; truncated `%` and
+/// `rem_euclid` agree whenever that expression is non-negative OR an exact multiple of
+/// 360. The naive `azimuth_out - azimuth_in < -540.0` test drops the second clause, so
+/// every exact `-360k` offset was reported as reinterpreted when nothing moved.
+#[test]
+fn the_antipode_verdict_ignores_exact_360_multiples() {
+    // The pre-#24 wrap, verbatim, as the oracle.
+    let old_mean = |azimuth_in: f64, azimuth_out: f64| {
+        let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
+        (azimuth_in + diff / 2.0 + 360.0) % 360.0
+    };
+
+    for (azimuth_in, azimuth_out, expected, why) in [
+        (
+            900.0,
+            0.0,
+            false,
+            "-900 is an exact -360k offset: both wraps walk it to the same bearing",
+        ),
+        (
+            1260.0,
+            0.0,
+            false,
+            "-1260 likewise - the naive `< -540` test called both of these reinterpreted",
+        ),
+        (
+            600.0,
+            0.0,
+            true,
+            "-600 is the real thing: the old wrap returned the antipode",
+        ),
+        (
+            370.0,
+            350.0,
+            false,
+            "out of range but only 20 apart - never misread",
+        ),
+    ] {
+        // Ground truth: did the walked bearing actually move?
+        let moved = {
+            let delta = (old_mean(azimuth_in, azimuth_out)
+                - crate::models::average_azimuth_of(azimuth_in, azimuth_out))
+            .abs();
+            delta.min(360.0 - delta) > 1e-9
+        };
+        assert_eq!(
+            moved, expected,
+            "fixture is wrong for ({azimuth_in}, {azimuth_out}): {why}"
+        );
+        assert_eq!(
+            Database::old_wrap_returned_the_antipode(azimuth_in, azimuth_out),
+            expected,
+            "({azimuth_in}, {azimuth_out}): {why}"
+        );
+    }
+}
+
+/// Normalising must not move the cave: the walked bearing of a normalised pair is the one
+/// the raw readings always described. This is the whole justification for rewriting stored
+/// data instead of leaving it - it is a no-op for geometry under this build, and it takes
+/// the truncated-`%` trap away from every older build too.
+#[test]
+fn migrate_v14_normalisation_leaves_the_walked_bearing_alone() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("legacy_v13_geometry.stalx");
+
+    let mut project = Project::new("Geometry".to_string(), None);
+    project.add_section(SectionData {
+        name: Some("Wide".to_string()),
+        shots: vec![ShotData {
+            azimuth_in: 600.0,
+            azimuth_out: 0.0,
+            length: 10.0,
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let before = project.compute_station_coordinates();
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&project).unwrap();
+        db.set_user_version(13).unwrap();
+    }
+
+    let migrated = Database::open_existing(&path)
+        .unwrap()
+        .load_project()
+        .unwrap();
+    let after = migrated.compute_station_coordinates();
+    assert_eq!(before.len(), after.len());
+    for (a, b) in before.iter().zip(&after) {
+        assert!(
+            (a.coordinates.x - b.coordinates.x).abs() < 1e-9
+                && (a.coordinates.y - b.coordinates.y).abs() < 1e-9,
+            "normalisation moved a station: {:?} -> {:?}",
+            a.coordinates,
+            b.coordinates
+        );
+    }
 }
 
 /// Dismissals of a warning the convention change cannot affect must survive.

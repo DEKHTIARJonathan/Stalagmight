@@ -1,10 +1,12 @@
 use super::AppState;
 #[cfg(test)]
 use crate::core::CommentHolder;
-use crate::core::{Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, UndoData};
-use crate::models::{Project, SectionData, ViolationSeverity};
+use crate::core::{
+    Command, CommandResult, IntegrityCheckResult, IntegrityRepairResult, ReversedSection, UndoData,
+};
+use crate::models::{Project, SectionData, SectionId, ViolationSeverity};
 #[cfg(test)]
-use crate::models::{SectionId, ShotData, ShotId, ShotUpdates};
+use crate::models::{ShotData, ShotId, ShotUpdates};
 
 /// The integrity-relevant capabilities of a [`Command`], declared in ONE place
 /// ([`AppState::command_integrity`]). The `execute()` epilogue reads these flags
@@ -54,6 +56,7 @@ impl AppState {
             CreateSection { .. }
             | DeleteSection { .. }
             | UpdateSectionMetadata { .. }
+            | ReverseSection { .. }
             | CreateShot { .. }
             | UpdateShot { .. }
             | DeleteShot { .. }
@@ -75,6 +78,51 @@ impl AppState {
             | RepairIntegrity
             | UpdateProjectSettings => false,
         }
+    }
+
+    /// The sections a command reverses, WITHOUT the parity reduction
+    /// `Command::reversed_section_ids` applies - `None` when the command is not purely
+    /// reverses. Parity reduction is right for the settle step (which asks "what moved?") and
+    /// wrong here, where a `[A, A]` batch must still be recognised as touching A.
+    fn reverse_only_sections(cmd: &Command) -> Option<Vec<SectionId>> {
+        match cmd {
+            Command::ReverseSection { section_id, .. } => Some(vec![*section_id]),
+            Command::Batch { commands } => {
+                let mut out = Vec::with_capacity(commands.len());
+                for c in commands {
+                    match c {
+                        Command::ReverseSection { section_id, .. } => out.push(*section_id),
+                        // Anything else in the batch can change something.
+                        _ => return None,
+                    }
+                }
+                (!out.is_empty()).then_some(out)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether this command is a reverse (or a batch of reverses) whose every named section has
+    /// no shots - i.e. provably a no-op, so it must not consume the redo branch or dirty a
+    /// remote project. A missing section counts as "nothing to change" for the same reason.
+    fn is_provable_reverse_noop(&self, cmd: &Command) -> bool {
+        let Some(sections) = Self::reverse_only_sections(cmd) else {
+            return false;
+        };
+        let guard = match self.project.lock() {
+            Ok(g) => g,
+            Err(poisoned) => poisoned.into_inner(),
+        };
+        let Some(project) = guard.as_ref() else {
+            return false;
+        };
+        // A MISSING section is not a no-op - it is an error, and must still fall through so the
+        // command fails. Only a section that exists and has no shots is provably inert.
+        sections.iter().all(|sid| {
+            project
+                .get_section(*sid)
+                .is_some_and(|s| s.shots.is_empty())
+        })
     }
 
     fn command_integrity(cmd: &Command) -> CommandIntegrity {
@@ -167,7 +215,13 @@ impl AppState {
             // table) is metadata, and the rationale below does not apply to it.
             UpdateShot { updates, .. } if !updates.touches_geometry() => INERT,
 
-            CreateSection { .. }
+            // Reverse renumbers every station in a section but rewrites its own
+            // external refs to the mirrored stations as part of the operation, so
+            // nothing is left dangling and no closure is stranded. World coords are
+            // invariant by construction; the reconcile epilogue is a no-op that
+            // keeps it uniform with the other station-moving commands.
+            ReverseSection { .. }
+            | CreateSection { .. }
             | UpdateShot { .. }
             | MergeStations { .. }
             | CreateLoopClosure { .. }
@@ -465,6 +519,23 @@ impl AppState {
                 return f;
             }
         }
+        // A reverse of a section that has no shots provably changes nothing (#24):
+        // `Project::reverse_section` returns `true` on `shot_count == 0` without touching a
+        // single field. Returning here - BEFORE the cache invalidation, the undo/redo epilogue
+        // and the dirty flip - is what makes that a true no-op. Previously it fell through,
+        // cleared the whole redo branch and stamped `has_unpushed_edits`, proliferating a
+        // phantom edit to SpeleoDB for an operation with no effect.
+        //
+        // Guarded in the BACKEND rather than trusting the dialog's filter: the batch path, the
+        // raw IPC command and the agent harness all reach this function without passing through
+        // that filter, and shot-less sections are real (a GPX waypoint imports as one).
+        if self.is_provable_reverse_noop(&cmd) {
+            tracing::debug!(
+                command = %cmd.description(),
+                "Reverse of shot-less section(s) changes nothing; skipping undo, redo-clear and dirty flip"
+            );
+            return CommandResult::success();
+        }
         // Any mutation invalidates the derived closure-adjusted view.
         self.invalidate_adjusted_cache();
         tracing::info!(
@@ -504,7 +575,7 @@ impl AppState {
         // introduce corruption into a clean project.
         let pre_had_critical = integrity_snapshot.is_some() && self.project_has_critical();
 
-        let result = match &cmd {
+        let mut result = match &cmd {
             Command::CreateProject { name, location } => {
                 self.create_project(name.clone(), location.clone())
             }
@@ -534,6 +605,10 @@ impl AppState {
                 section_id,
                 updates,
             } => self.update_section(*section_id, updates.clone()),
+            Command::ReverseSection {
+                section_id,
+                swap_left_right,
+            } => self.reverse_section(*section_id, *swap_left_right),
             Command::CreateShot {
                 section_id,
                 shot,
@@ -654,8 +729,39 @@ impl AppState {
             // For create commands, finalize undo data with snapshot-based ID preservation
             let final_undo_data = self.finalize_undo_data(&cmd, undo_data);
 
+            // An entry `undo()` cannot apply must never enter the stack: `undo()`
+            // pops it, maps `UndoData::None` to a failure, and its epilogue pushes
+            // the entry straight BACK - so that pop is unproductive forever and
+            // every older entry underneath it is permanently unreachable. The
+            // stack is persisted, so the wedge survives close/reopen (stacks
+            // written before this guard are healed at load - see
+            // `UndoStack::is_applicable`). Reachable today by reversing a shot-less
+            // section (a GPX waypoint section, and the context menu offers Reverse
+            // with no shot-count guard): the command succeeds as a no-op while
+            // `generate_undo_data` returns `None`. Guarded here rather than per
+            // command so any future command with the same shape is covered.
+            //
+            // The redo stack is cleared REGARDLESS. `None` here does NOT imply the
+            // command changed nothing: `UnmergeStations` on a station that is in no
+            // merge returns `CommandResult::success()` unconditionally
+            // (`command_station.rs`) while `generate_undo_data` yields `None`, and
+            // it is classified as affecting geometry - so the epilogue above has
+            // already reconciled derived state. What the entry loses is the ability
+            // to be undone, not the fact that a forward command ran; the redo branch
+            // replays onto a state the project has left either way. (Accepted cost:
+            // a provably-no-op forward command, such as reversing a shot-less
+            // section, also drops the redo branch. "A successful forward command
+            // invalidates redo" outranks preserving redo across a no-op.)
             if let Ok(mut undo_stack) = self.undo_stack.lock() {
-                undo_stack.push_with_data(cmd.clone(), final_undo_data);
+                if matches!(final_undo_data, UndoData::None) {
+                    tracing::debug!(
+                        command = %cmd.description(),
+                        "Command produced no undo data; not pushing an unundoable entry, clearing redo"
+                    );
+                    undo_stack.clear_redo();
+                } else {
+                    undo_stack.push_with_data(cmd.clone(), final_undo_data);
+                }
             }
             // Dirty-bit flip (#191, D-B16): a successful, undo-pushed edit of a
             // remote project marks it has_unpushed_edits. Set-only; no-op for
@@ -667,7 +773,75 @@ impl AppState {
             }
         }
 
+        if result.success {
+            result = self.settle_reversed_sections(&cmd, result);
+        }
+
         result
+    }
+
+    /// Finish a successful operation that REVERSED some sections' station numbering
+    /// (a forward `ReverseSection`, a batch of them, or an undo/redo of either - all
+    /// re-reverse the numbering).
+    ///
+    /// The warning re-pin is driven off the PARITY-REDUCED list
+    /// `Command::reversed_section_ids` returns, and each named section is fixed up exactly
+    /// once; it rebuilds its map from the CURRENT project, so what makes undo/redo safe is the
+    /// intervening re-reverse, not any self-inverse property of the call.
+    ///
+    /// `resolved_warnings` rows still keyed by position are out of reach of
+    /// `reverse_section`'s own cross-reference rewrite (which walks `for_each_station_ref`:
+    /// merges, closures, zero datums, station offsets, station comments), because the reverse
+    /// detached their `shot_id` from its record.
+    ///
+    /// The sibling `.plnx` needs nothing here (#24). Its plans identify a station by the shots
+    /// it sits BETWEEN, and a reverse does not change what a station sits between - so there is
+    /// no re-pointing to do, and no window in which the two files could disagree.
+    ///
+    /// It also reports the sections on the result, each with the shot count now in
+    /// force. A reverse keeps every station's world position, so there is nothing
+    /// in the geometry for a consumer to diff: without this signal the frontend had
+    /// to INFER a reverse from station positions, which cannot tell a reversed
+    /// section from one that was reversed and moved in the same action.
+    ///
+    /// A named section that is gone or has no shots is DROPPED from the report:
+    /// `Project::reverse_section` returns early on a shot-less section, so nothing
+    /// was renumbered and there is no divisor for the frontend's mirror.
+    pub(super) fn settle_reversed_sections(
+        &self,
+        cmd: &Command,
+        result: CommandResult,
+    ) -> CommandResult {
+        let reversed = cmd.reversed_section_ids();
+        if reversed.is_empty() {
+            return result;
+        }
+        self.pin_position_keyed_warnings_after_reverse(&reversed);
+        // One project lock for the whole list; both fix-ups above take (and
+        // release) it themselves, and the mutex is not reentrant.
+        let entries: Vec<ReversedSection> = {
+            let guard = match self.project.lock() {
+                Ok(g) => g,
+                Err(poisoned) => poisoned.into_inner(),
+            };
+            let Some(project) = guard.as_ref() else {
+                return result;
+            };
+            reversed
+                .iter()
+                .filter_map(|section_id| {
+                    let shot_count = project.get_section(*section_id)?.shots.len() as u32;
+                    (shot_count > 0).then_some(ReversedSection {
+                        section_id: *section_id,
+                        shot_count,
+                    })
+                })
+                .collect()
+        };
+        if entries.is_empty() {
+            return result;
+        }
+        result.with_reversed_sections(entries)
     }
 
     // === Shot operations ===
@@ -697,6 +871,10 @@ impl AppState {
                 | Command::MoveStation { .. }
                 | Command::SetZeroDatum { .. }
                 | Command::UpdateShot { .. }
+                // Reversing a multi-selection is one user action: batching gives
+                // it all-or-nothing rollback and a single undo entry, instead of
+                // N commands that can strand the project half-reversed.
+                | Command::ReverseSection { .. }
         )
     }
 

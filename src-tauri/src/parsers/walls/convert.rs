@@ -534,6 +534,7 @@ pub fn convert_walls_to_import_configs(
     for &ci in &placements.creation_order {
         let chain = &chains[ci];
         configs.push(ImportSectionConfig {
+            reverse: false,
             section_index: chain.section_index,
             name: Some(chain.label.clone()),
             surveyor: chain.surveyor.clone(),

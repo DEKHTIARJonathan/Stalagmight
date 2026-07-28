@@ -59,6 +59,12 @@ impl AppState {
                 section_id,
                 updates,
             } => self.update_section(*section_id, updates.clone()),
+            // Reachable as a batch sub-command: reversing a multi-selection is
+            // one atomic user action (#24).
+            Command::ReverseSection {
+                section_id,
+                swap_left_right,
+            } => self.reverse_section(*section_id, *swap_left_right),
             Command::CreateShot {
                 section_id,
                 shot,

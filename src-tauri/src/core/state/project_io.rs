@@ -124,6 +124,12 @@ impl AppState {
         // ref, so unlike those it is safe to auto-heal on save rather than block.)
         project.ensure_unique_shot_uuids();
 
+        // Capture the least-squares gauge pair for any section that lacks one (#24), now that
+        // every shot is guaranteed a UUID. Recording the station the section is ALREADY using
+        // means capturing never moves anybody's coordinates; from here on the gauge is named by
+        // a pair of shots rather than re-derived from an index that a later append can shift.
+        project.capture_missing_gauge_anchors();
+
         // Drop section_offsets for sections that no longer exist. An orphan entry
         // (a section removed via a path that bypassed cleanup) is dead data, and the
         // SQLite section_offsets row carries a FOREIGN KEY to sections(id) - writing

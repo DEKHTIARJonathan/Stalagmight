@@ -1,4 +1,4 @@
-use crate::core::{Command, CommandResult, UndoData};
+use crate::core::{Command, CommandResult, ReversedSection, UndoData};
 use crate::models::{SectionId, SectionUpdates, Shot, ShotUpdates};
 
 use super::AppState;
@@ -57,7 +57,7 @@ impl AppState {
         // IMPORTANT: No early returns after this point - all paths must flow
         // through the epilogue so the entry is either pushed to redo (success)
         // or pushed back to undo (failure).
-        let result = match &entry.undo_data {
+        let mut result = match &entry.undo_data {
             UndoData::InverseCommand(inverse_cmd) => {
                 // Execute the inverse command (without pushing to undo stack)
                 self.execute_without_undo(inverse_cmd.clone())
@@ -423,6 +423,7 @@ impl AppState {
 
         // Epilogue: push to redo stack on success, push back to undo stack on failure
         if result.success {
+            result = self.settle_reversed_sections(&entry.command, result);
             if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_redo(entry);
             }
@@ -484,7 +485,7 @@ impl AppState {
         // For snapshot-based undo data, restore from snapshot instead of re-executing.
         // This handles cases where re-execution would create different IDs.
         // IMPORTANT: No early returns after the pop - all paths flow through the epilogue.
-        let result = match &entry.undo_data {
+        let mut result = match &entry.undo_data {
             UndoData::ProjectSnapshotPair { before: _, after } => match self.project.lock() {
                 Ok(mut proj) => {
                     if Self::restore_snapshot_into(&mut proj, after.as_str()) {
@@ -704,7 +705,20 @@ impl AppState {
         // Important: Use the original entry with its original undo_data, not regenerated data
         // This ensures undo after redo works correctly
         if result.success {
-            if let Ok(mut stack) = self.undo_stack.lock() {
+            result = self.settle_reversed_sections(&entry.command, result);
+            // A redo entry carrying `UndoData::None` redoes correctly (the catch-all
+            // arm above just re-executes `entry.command`), which is why the redo
+            // stack is NOT filtered at load. But moving it to the undo stack would
+            // re-create the wedge `UndoStack::is_applicable` exists to heal: `undo()`
+            // would pop it, fail, and push it straight back, sealing off everything
+            // beneath. Drop it here instead - the redo itself already succeeded.
+            if matches!(entry.undo_data, UndoData::None) {
+                tracing::warn!(
+                    command = %entry.command.description(),
+                    purpose = "keep the undo stack applicable",
+                    "Redone entry carries no undo data; not pushing it onto the undo stack"
+                );
+            } else if let Ok(mut stack) = self.undo_stack.lock() {
                 stack.push_undo(entry);
             }
             tracing::info!("Redo performed");
@@ -829,15 +843,35 @@ impl AppState {
 
         // Execute (index + 1) undos to include the target index
         let count = index + 1;
+        // An ORDERED PER-STEP LOG: concatenated in step order, repeats intact and
+        // deliberately NOT parity-reduced. Each entry carries the shot count in
+        // force at ITS step, which can differ between steps of one range (a
+        // `CreateShot` undone between two reverses of the same section), so the
+        // consumer composes them rather than cancelling repeats. Dropping them
+        // would leave the gas plan and the distance origin on the mirrored
+        // stations after a multi-step undo.
+        let mut reversed: Vec<ReversedSection> = Vec::new();
         for i in 0..count {
             let result = self.undo_inner();
             if !result.success {
-                return CommandResult::failure(format!(
+                // The earlier steps ALREADY flipped their sections and cannot be
+                // rolled back, so the failure has to carry what was applied -
+                // otherwise the frontend's positional refs are left mirrored with
+                // nothing on the wire to say so.
+                let failure = CommandResult::failure(format!(
                     "Undo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                return if reversed.is_empty() {
+                    failure
+                } else {
+                    failure.with_reversed_sections(reversed)
+                };
+            }
+            if let Some(entries) = result.reversed_sections {
+                reversed.extend(entries);
             }
         }
 
@@ -845,7 +879,11 @@ impl AppState {
         // no-op for local-only.
         self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Undo to index completed");
-        CommandResult::success()
+        if reversed.is_empty() {
+            CommandResult::success()
+        } else {
+            CommandResult::success().with_reversed_sections(reversed)
+        }
     }
 
     /// Perform multiple redos to reach a specific history point
@@ -876,15 +914,28 @@ impl AppState {
 
         // Execute (index + 1) redos to include the target index
         let count = index + 1;
+        // An ordered per-step log, repeats intact and not parity-reduced - see
+        // `undo_to`.
+        let mut reversed: Vec<ReversedSection> = Vec::new();
         for i in 0..count {
             let result = self.redo_inner();
             if !result.success {
-                return CommandResult::failure(format!(
+                // Same reasoning as `undo_to`: the steps that already ran are not
+                // rolled back, so the failure carries their entries.
+                let failure = CommandResult::failure(format!(
                     "Redo failed at step {} of {}: {}",
                     i + 1,
                     count,
                     result.error.unwrap_or_else(|| "Unknown error".to_string())
                 ));
+                return if reversed.is_empty() {
+                    failure
+                } else {
+                    failure.with_reversed_sections(reversed)
+                };
+            }
+            if let Some(entries) = result.reversed_sections {
+                reversed.extend(entries);
             }
         }
 
@@ -892,6 +943,10 @@ impl AppState {
         // no-op for local-only.
         self.mark_remote_dirty();
         tracing::info!(index = index, count = count, "Redo to index completed");
-        CommandResult::success()
+        if reversed.is_empty() {
+            CommandResult::success()
+        } else {
+            CommandResult::success().with_reversed_sections(reversed)
+        }
     }
 }

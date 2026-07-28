@@ -263,12 +263,17 @@ fn test_open_project_restores_undo_redo_and_assigns_closure_ids() {
     let mut db = Database::open(&project_path).unwrap();
     db.save_project(&project).unwrap();
 
+    // The UNDO entry needs real undo data: `load_from_persisted_with_timestamps`
+    // drops `UndoData::None` from the undo stack, so `None` here would test that
+    // filter instead of the restore. The REDO entry deliberately keeps `None` -
+    // the redo stack is not filtered (a `None` redo entry re-executes its command
+    // correctly), and `redo_len() == 1` below is the pin for that.
     let undo_entry = UndoEntry {
         command: Command::CreateProject {
             name: "Undo Project".to_string(),
             location: None,
         },
-        undo_data: UndoData::None,
+        undo_data: UndoData::InverseCommand(Command::CloseProject),
         timestamp: None,
     };
     let redo_entry = UndoEntry {
@@ -6472,6 +6477,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     });
 
     let seed = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Existing".to_string()),
         surveyor: None,
@@ -6500,6 +6506,7 @@ fn test_import_shot_updates_reject_atomically_when_one_is_poisoned() {
     let len1 = project.sections[0].shots[1].length;
 
     let incoming = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Incoming".to_string()),
         surveyor: None,
@@ -15531,6 +15538,7 @@ fn test_execute_import_sections_origin_placement() {
 
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("Import1".to_string()),
             surveyor: None,
@@ -15543,6 +15551,7 @@ fn test_execute_import_sections_origin_placement() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("Import2".to_string()),
             surveyor: None,
@@ -15611,6 +15620,7 @@ fn imported_shot_kinds_survive_an_undo_redo_round_trip() {
         shots: vec![test_shot_data(5.0), virtual_shot, test_shot_data(6.0)],
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        reverse: false,
     }];
 
     let result = state.execute_import_sections(
@@ -15664,6 +15674,7 @@ fn importing_a_second_file_leaves_existing_shot_kinds_alone() {
         shots,
         station_comments: Vec::new(),
         placement: ImportPlacement::Origin,
+        reverse: false,
     };
     let reference_shot = ShotData {
         kind: ShotKind::Reference,
@@ -15745,6 +15756,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
     });
 
     let seed = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Existing".to_string()),
         surveyor: None,
@@ -15771,6 +15783,7 @@ fn test_execute_import_sections_rejects_non_finite_shot_update() {
     let clean_length = project.sections[0].shots[0].length;
 
     let poisoned = ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Incoming".to_string()),
         surveyor: None,
@@ -15831,6 +15844,7 @@ fn test_execute_import_sections_from_importing_placement() {
 
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("First".to_string()),
             surveyor: None,
@@ -15843,6 +15857,7 @@ fn test_execute_import_sections_from_importing_placement() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("Second".to_string()),
             surveyor: None,
@@ -15897,6 +15912,7 @@ fn test_execute_import_sections_from_existing_placement() {
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Imported".to_string()),
         surveyor: None,
@@ -15938,6 +15954,7 @@ fn test_execute_import_sections_manual_with_offset() {
     });
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Manual".to_string()),
         surveyor: None,
@@ -15992,6 +16009,7 @@ fn test_execute_import_sections_zero_datum_placement() {
 
     let gps = GpsCoordinates::new(10.0, 20.0, 5.0).unwrap();
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("GPS Section".to_string()),
         surveyor: None,
@@ -16036,6 +16054,7 @@ fn test_execute_import_sections_rollback_on_failure() {
     // First section succeeds, second fails (merge to nonexistent existing section)
     let sections = vec![
         ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("GoodSection".to_string()),
             surveyor: None,
@@ -16048,6 +16067,7 @@ fn test_execute_import_sections_rollback_on_failure() {
             placement: ImportPlacement::Origin,
         },
         ImportSectionConfig {
+            reverse: false,
             section_index: 1,
             name: Some("BadSection".to_string()),
             surveyor: None,
@@ -16112,6 +16132,7 @@ fn test_execute_import_sections_no_project() {
 
     let state = AppState::new().unwrap();
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Test".to_string()),
         surveyor: None,
@@ -16157,6 +16178,7 @@ fn test_execute_import_sections_manual_snap_placement() {
     let existing_id = state.get_project_state().unwrap().sections[0].id;
 
     let sections = vec![ImportSectionConfig {
+        reverse: false,
         section_index: 0,
         name: Some("Snapped".to_string()),
         surveyor: None,
@@ -16848,6 +16870,7 @@ fn kb5_import_overlap_interpolation_integration() {
 
     let result_002 = state.execute_import_sections(
         vec![ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("002".to_string()),
             surveyor: None,
@@ -16960,6 +16983,7 @@ fn kb5_import_overlap_interpolation_integration() {
     // Import 001 merged to 002 at station 182, with existing shot updates
     let result_001 = state.execute_import_sections(
         vec![ImportSectionConfig {
+            reverse: false,
             section_index: 0,
             name: Some("001".to_string()),
             surveyor: None,
@@ -20559,6 +20583,11 @@ const MUTATION_ENTRYPOINTS: &[&str] = &[
     "execute:MoveSegment",
     "execute:MoveSection",
     "execute:Batch",
+    // ReverseSection renumbers stations and is newly reachable from three menus (#24), so it
+    // is exactly the shape the geometry probes above exist for. Both the bare command and the
+    // Batch wrapper the multi-select path uses.
+    "execute:ReverseSection",
+    "execute:Batch:ReverseSection",
     "execute:MoveComment",
     "execute:ApplyCollabChanges",
     // history entrypoints
@@ -20592,7 +20621,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
     // guard_mutation AND add its name to MUTATION_ENTRYPOINTS + a call below.
     assert_eq!(
         MUTATION_ENTRYPOINTS.len(),
-        25,
+        27,
         "update both the routing and this list when adding a mutation entry"
     );
 
@@ -20626,6 +20655,22 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             &state.execute(Command::MoveStation {
                 station_ref: StationRef::new(sid, 1),
                 offset: Coordinates::new(1.0, 2.0, 0.0),
+            }),
+        );
+        assert_disabled(
+            "execute:ReverseSection",
+            &state.execute(Command::ReverseSection {
+                section_id: sid,
+                swap_left_right: false,
+            }),
+        );
+        assert_disabled(
+            "execute:Batch:ReverseSection",
+            &state.execute(Command::Batch {
+                commands: vec![Command::ReverseSection {
+                    section_id: sid,
+                    swap_left_right: false,
+                }],
             }),
         );
         assert_disabled(
@@ -20735,6 +20780,7 @@ fn gate_rejects_every_mutation_entrypoint_with_edit_disabled_code() {
             "execute_import_sections",
             &state.execute_import_sections(
                 vec![ImportSectionConfig {
+                    reverse: false,
                     section_index: 0,
                     name: Some("Imp".to_string()),
                     surveyor: None,
@@ -21246,4 +21292,316 @@ fn repair_and_settings_gated_on_locked_remote() {
         .error
         .as_deref()
         .is_some_and(|e| e.starts_with(EDIT_DISABLED_CODE)));
+}
+
+// === Wedge healing: entries `undo()` cannot apply (Q8) ===
+
+/// A stack persisted before the forward guard existed still carries the poison on
+/// disk, and `load_from_persisted_with_timestamps` used to restore it verbatim:
+/// `undo()` pops the `UndoData::None` entry, maps it to a failure, and the epilogue
+/// pushes it straight back, so every older entry is unreachable forever.
+#[test]
+fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Wedged".to_string(),
+        location: None,
+    });
+    for name in ["First", "Second"] {
+        let created = state.execute(Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        assert!(created.success);
+    }
+
+    // Serialize the live stack, then splice the poison on top - exactly the shape
+    // a pre-guard build wrote to the database.
+    let mut persisted: Vec<(String, String, Option<String>)> = {
+        let stack = state.undo_stack.lock().unwrap();
+        assert_eq!(stack.len(), 2);
+        stack
+            .entries_to_persist(20)
+            .map(|e| UndoStack::serialize_entry_with_timestamp(e).unwrap())
+            .collect()
+    };
+    persisted.push(
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::ReverseSection {
+                section_id: 1,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        })
+        .unwrap(),
+    );
+
+    // Restore it the way `project_load.rs` does.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.load_from_persisted_with_timestamps(persisted, vec![]);
+    }
+
+    let first = state.undo();
+    assert!(
+        first.success,
+        "undo blocked by the persisted unundoable entry: {:?}",
+        first.error
+    );
+    let second = state.undo();
+    assert!(
+        second.success,
+        "history beneath the persisted unundoable entry was unreachable: {:?}",
+        second.error
+    );
+
+    let project = state.get_project_state().unwrap();
+    assert!(
+        project.sections.is_empty(),
+        "both sections should be undone, still have: {:?}",
+        project.sections.iter().map(|s| s.id).collect::<Vec<_>>()
+    );
+}
+
+/// The redo stack is deliberately NOT filtered - a `UndoData::None` redo entry
+/// re-executes its command correctly. But the redo epilogue must not then move it
+/// onto the undo stack, or the wedge is recreated at runtime.
+#[test]
+fn redoing_an_unundoable_entry_does_not_re_wedge_the_undo_stack() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Redo Wedge".to_string(),
+        location: None,
+    });
+
+    // A shot-less (waypoint-style) section, so the redone reverse is a no-op.
+    let waypoint = state.execute(Command::CreateSection {
+        name: Some("Waypoint".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    let waypoint_id = waypoint.section_id.unwrap();
+
+    let real = state.execute(Command::CreateSection {
+        name: Some("Real".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    let real_id = real.section_id.unwrap();
+
+    // The kind of entry a pre-guard build could leave on the persisted redo stack.
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.push_redo(UndoEntry {
+            command: Command::ReverseSection {
+                section_id: waypoint_id,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        });
+    }
+
+    let redone = state.redo();
+    assert!(redone.success, "redo failed: {:?}", redone.error);
+
+    let undone = state.undo();
+    assert!(
+        undone.success,
+        "the redone unundoable entry wedged the undo stack: {:?}",
+        undone.error
+    );
+    let project = state.get_project_state().unwrap();
+    assert!(
+        !project.sections.iter().any(|s| s.id == real_id),
+        "undo should have reached the real entry beneath"
+    );
+}
+
+/// `UnmergeStations` on a station that is in no merge returns success
+/// unconditionally while `generate_undo_data` yields `UndoData::None`, and it is
+/// classified as affecting geometry - so the epilogue reconciles derived state with
+/// no undo entry pushed. The redo branch replays onto a state the project has left,
+/// so it must be cleared even though nothing was pushed.
+#[test]
+fn a_no_undo_data_command_still_clears_the_redo_branch() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "Redo Clear".to_string(),
+        location: None,
+    });
+
+    let mut ids: Vec<SectionId> = Vec::new();
+    for name in ["A", "B", "C"] {
+        let created = state.execute(Command::CreateSection {
+            name: Some(name.to_string()),
+            surveyor: None,
+            date: None,
+            color: "#4ecdc4".to_string(),
+            direction: None,
+            shots: vec![test_shot_data(5.0)],
+        });
+        assert!(created.success);
+        ids.push(created.section_id.unwrap());
+    }
+
+    assert!(state.undo().success);
+    assert!(state.undo().success);
+    assert!(state.can_redo(), "two undos should leave a redo branch");
+
+    // Section A survived both undos, and A:0 is in no merge.
+    let unmerge = state.execute(Command::UnmergeStations {
+        station_ref: StationRef::new(ids[0], 0),
+    });
+    assert!(unmerge.success, "unmerge failed: {:?}", unmerge.error);
+
+    assert!(
+        !state.can_redo(),
+        "a successful forward command must invalidate the redo branch even when it \
+         produced no undo entry"
+    );
+}
+
+/// A shot-less `ReverseSection` must NOT drop the redo branch (#24).
+///
+/// "A successful forward command invalidates redo" is the right rule for a command that did
+/// something - including `UnmergeStations` on an unmerged station, which reconciles derived
+/// state (see the test above). A reverse of a section with no shots is different in kind:
+/// `Project::reverse_section` returns `true` without touching a field, so there is no state for
+/// the redo branch to have diverged from. Dropping it - and stamping `has_unpushed_edits`, which
+/// proliferates a phantom edit to SpeleoDB - was pure loss.
+///
+/// Guarded in the backend, not the dialog: the batch path, the raw IPC command and the agent
+/// harness all reach `execute` without passing the dialog's filter.
+#[test]
+fn a_shotless_reverse_leaves_the_redo_branch_intact() {
+    let state = AppState::new().unwrap();
+    state.execute(Command::CreateProject {
+        name: "No-op Reverse".to_string(),
+        location: None,
+    });
+
+    let waypoint = state.execute(Command::CreateSection {
+        name: Some("Waypoint".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff6b6b".to_string(),
+        direction: None,
+        shots: Vec::new(),
+    });
+    let waypoint_id = waypoint.section_id.unwrap();
+
+    let real = state.execute(Command::CreateSection {
+        name: Some("Real".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#4ecdc4".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    assert!(real.success);
+
+    assert!(state.undo().success);
+    assert!(state.can_redo());
+
+    let reversed = state.execute(Command::ReverseSection {
+        section_id: waypoint_id,
+        swap_left_right: false,
+    });
+    assert!(reversed.success, "reverse failed: {:?}", reversed.error);
+
+    assert!(
+        state.can_redo(),
+        "a provable no-op must leave the redo branch alone"
+    );
+}
+
+/// `entries_to_persist` copies the stack verbatim, so an unfiltered load would
+/// write the poison straight back to disk on the next save.
+#[test]
+fn a_loaded_none_entry_is_not_re_persisted() {
+    let state = AppState::new().unwrap();
+
+    let persisted: Vec<(String, String, Option<String>)> = vec![
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::DeleteSection { section_id: 7 },
+            undo_data: UndoData::InverseCommand(Command::DeleteSection { section_id: 7 }),
+            timestamp: None,
+        })
+        .unwrap(),
+        UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::ReverseSection {
+                section_id: 1,
+                swap_left_right: false,
+            },
+            undo_data: UndoData::None,
+            timestamp: None,
+        })
+        .unwrap(),
+    ];
+
+    let mut stack = state.undo_stack.lock().unwrap();
+    stack.load_from_persisted_with_timestamps(persisted, vec![]);
+
+    let to_persist: Vec<&UndoEntry> = stack.entries_to_persist(20).collect();
+    assert_eq!(to_persist.len(), 1);
+    assert!(
+        !to_persist
+            .iter()
+            .any(|e| matches!(e.undo_data, UndoData::None)),
+        "the poison must not be written back to disk"
+    );
+}
+
+/// The load-time filter must not weaken the deliberate push-back-on-failure
+/// contract: an entry that CAN be applied but fails while applying it stays on the
+/// undo stack. `PreviousValues` with unparseable JSON is such an entry, and it is
+/// fed through the same load path so the filter is provably in the way.
+#[test]
+fn a_failed_undo_still_pushes_its_entry_back() {
+    let state = AppState::new().unwrap();
+
+    let persisted: Vec<(String, String, Option<String>)> =
+        vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+            command: Command::UpdateShot {
+                section_id: 1,
+                shot_id: 1,
+                updates: ShotUpdates::default(),
+            },
+            undo_data: UndoData::PreviousValues {
+                section_id: 1,
+                shot_id: Some(1),
+                values_json: "not-valid-json".to_string(),
+            },
+            timestamp: None,
+        })
+        .unwrap()];
+
+    {
+        let mut stack = state.undo_stack.lock().unwrap();
+        stack.load_from_persisted_with_timestamps(persisted, vec![]);
+        assert_eq!(stack.len(), 1, "an applicable entry must survive the load");
+    }
+
+    let result = state.undo();
+    assert!(!result.success);
+    assert_eq!(result.error.as_deref(), Some("Failed to parse undo data"));
+
+    let stack = state.undo_stack.lock().unwrap();
+    assert_eq!(stack.len(), 1, "a failed undo must preserve its entry");
+    assert!(
+        !stack.can_redo(),
+        "the entry must not move to the redo stack"
+    );
 }

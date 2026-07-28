@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useEditingBlocked } from '../../hooks/useEditingBlocked';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -31,6 +32,11 @@ export default function EditSectionDialog() {
     }
     return frozen.size > 0 ? frozen : undefined;
   }, [sectionId, section, isShotFrozen]);
+
+  // Reverse (#24) mutates the survey, and the closure-adjusted / Plan / Export
+  // read-only mode has no server backstop (see useEditingBlocked's
+  // backstop-asymmetry note), so its entry point has to be gated here too.
+  const editingBlocked = useEditingBlocked();
 
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -484,6 +490,29 @@ export default function EditSectionDialog() {
         )}
 
         <div className="flex justify-end gap-2 pt-4 border-t border-border">
+          {/*
+            Reverse (#24) applies straight to the backend, so it cannot merge with
+            unsaved edits held in this dialog's local copy. Rather than prompting
+            to discard them, the action is simply unavailable while dirty - no
+            confirm hop, and no way to lose work by misreading a dialog.
+          */}
+          <Button
+            onClick={() => {
+              openDialog('reverse-section', { sectionIds: [section.id] });
+            }}
+            disabled={isLoading || isDirty || pendingMidDelete !== null || editingBlocked}
+            title={
+              editingBlocked
+                ? 'Editing is disabled in the current view'
+                : isDirty
+                  ? 'Save or discard your edits first'
+                  : 'Renumber this section end-to-end (the cave does not move)'
+            }
+            data-testid="edit-section-reverse"
+          >
+            Reverse Section
+          </Button>
+          <div className="flex-1" />
           <Button onClick={closeDialog} disabled={isLoading}>
             Cancel
           </Button>

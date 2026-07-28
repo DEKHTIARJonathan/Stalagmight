@@ -66,6 +66,38 @@ pub struct Section {
     pub shots: Vec<Shot>,
     /// Next shot ID to assign
     pub next_shot_id: ShotId,
+    /// Flips every time this section's shot order is REVERSED (#24). Not a count and not
+    /// meaningful on its own - only whether it still matches what something else recorded.
+    ///
+    /// Exists so the least-squares gauge can stay on one PHYSICAL station. That gauge has
+    /// always been "station 0 of the lowest-id section in the component", and a reverse turns
+    /// station 0 into station N - pinning the opposite end, which translates the whole adjusted
+    /// component and breaks the reverse's "every station keeps its position" guarantee exactly
+    /// where closure-adjusted geometry is forced (Plan/Export). Reading the end off this flag
+    /// keeps the original choice: `false` means station 0, as every existing project has it.
+    #[serde(default)]
+    pub reverse_parity: bool,
+    /// The least-squares gauge station for this section, as the pair of shots that identify it:
+    /// the station is the end of `gauge_shot_uuid` FACING AWAY FROM `gauge_neighbour_uuid`
+    /// (#24). `None` until the first save captures it.
+    ///
+    /// The gauge fixes the otherwise-free absolute translation of a datum-less component by
+    /// pinning one station at its measured coordinates, so it has to name the SAME physical
+    /// station for the life of the project - if it moves, the whole component translates by the
+    /// adjustment residual and Plan/Export coordinates jump.
+    ///
+    /// An index cannot do that. "Station 0, or `shots.len()` when the section is reversed" is
+    /// stable across the reverse itself but not across what comes next: appending to a reversed
+    /// section grows `len` and walks the gauge onto the newly created far station. A pair is
+    /// immune - neither shot moves relative to the other when the section is extended at either
+    /// end, and a reverse carries both together, so "away from the neighbour" names the same
+    /// junction throughout.
+    #[serde(default)]
+    pub gauge_shot_uuid: Option<String>,
+    /// The shot on the far side of [`Self::gauge_shot_uuid`], giving the gauge station its
+    /// direction. `None` for a single-shot section, which has no second shot to face away from.
+    #[serde(default)]
+    pub gauge_neighbour_uuid: Option<String>,
 }
 
 /// Data for creating a new section
@@ -152,6 +184,27 @@ pub struct ImportSectionConfig {
     /// Each tuple is (station_index, comment_text).
     #[serde(default)]
     pub station_comments: Vec<(u32, String)>,
+    /// Reverse this section end-to-end as it is imported (#24), so the file's
+    /// last station becomes station 0.
+    ///
+    /// A one-shot transform, not persisted state: the backend reverses the
+    /// shots *before* creating the section.
+    ///
+    /// Index conventions, which differ by field:
+    /// * `station_comments` indices are given in the FILE's original order - the
+    ///   backend mirrors them itself (`execute_import_sections`), so an importer
+    ///   never has to think about it.
+    /// * `placement` indices must already address the final (reversed) order.
+    ///   Placement is a graph of cross-section references the wizard resolves
+    ///   while the user is looking at the original numbering, so only the caller
+    ///   knows which side of a connection this batch renumbers; see
+    ///   `src/utils/reversePlacement.ts`.
+    ///
+    /// Left/right passage dimensions are NOT swapped on the import path - the
+    /// wizard has no dialog moment to ask, and mirroring LRUD without asking
+    /// would silently rewrite measurements.
+    #[serde(default)]
+    pub reverse: bool,
 }
 
 /// Update to apply to an existing section's shot during batch import.
@@ -245,6 +298,9 @@ impl Section {
             },
             shots: Vec::new(),
             next_shot_id: id * FEATURE_ID_STRIDE,
+            reverse_parity: false,
+            gauge_shot_uuid: None,
+            gauge_neighbour_uuid: None,
         };
 
         for shot_data in data.shots {

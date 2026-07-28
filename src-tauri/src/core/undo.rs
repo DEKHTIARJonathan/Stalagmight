@@ -273,6 +273,12 @@ impl UndoStack {
     }
 
     /// Push a command without undo data (convenience wrapper, timestamps are added automatically)
+    ///
+    /// The resulting entry carries [`UndoData::None`], which `undo()` cannot apply
+    /// (see [`Self::is_applicable`]). Production code must not use this: the command
+    /// path guards on `UndoData::None` before pushing, and `load_from_persisted*`
+    /// drops such entries. Kept for the stack-mechanics tests in
+    /// `tests/integration_tests.rs`, which only exercise push/pop/limit ordering.
     pub fn push(&mut self, command: Command) {
         self.push_with_data(command, UndoData::None);
     }
@@ -311,6 +317,17 @@ impl UndoStack {
     /// Clear both stacks
     pub fn clear(&mut self) {
         self.undo_stack.clear();
+        self.redo_stack.clear();
+    }
+
+    /// Clear the redo stack only, leaving undo history intact.
+    ///
+    /// `push_with_data` already clears redo as part of pushing; this is for the
+    /// command path's other branch, where a command SUCCEEDED but produced no
+    /// undoable entry. The redo branch is invalidated either way - the project has
+    /// moved on from the state those entries would replay onto - so the clear must
+    /// not be coupled to whether an entry was pushed.
+    pub fn clear_redo(&mut self) {
         self.redo_stack.clear();
     }
 
@@ -428,16 +445,54 @@ impl UndoStack {
         })
     }
 
+    /// True when `undo()` can actually apply this entry.
+    ///
+    /// A [`UndoData::None`] entry cannot be applied: `undo_inner` maps that variant
+    /// to a failure, and the failure epilogue pushes the entry straight BACK onto the
+    /// undo stack. So the top of the stack is unpoppable forever and every older
+    /// entry underneath it is permanently unreachable - the stack is wedged. The
+    /// command path now refuses to push such an entry, but stacks written before that
+    /// guard are ON DISK and are restored verbatim (and re-persisted on every save),
+    /// so the poison also has to be dropped at load.
+    ///
+    /// Applied to the UNDO stack only. A redo entry with `UndoData::None` redoes
+    /// CORRECTLY - `redo_inner`'s catch-all arm re-executes `entry.command` and never
+    /// reads `undo_data` - so filtering the redo stack would destroy working
+    /// functionality and shift the indices `redo_to` is called with.
+    fn is_applicable(entry: &UndoEntry) -> bool {
+        !matches!(entry.undo_data, UndoData::None)
+    }
+
+    /// Emit a single counted warning for the entries a load dropped as unapplicable,
+    /// naming the commands so the truncation of history is not silent.
+    fn warn_dropped_unapplicable(dropped: &[String]) {
+        if dropped.is_empty() {
+            return;
+        }
+        tracing::warn!(
+            count = dropped.len(),
+            commands = %dropped.join("; "),
+            purpose = "load persisted undo history",
+            "Dropped persisted undo entries that carry no undo data; they could not be undone and would have blocked every older entry"
+        );
+    }
+
     /// Load entries from persisted data
     pub fn load_from_persisted(&mut self, entries: Vec<(String, String)>) {
         self.undo_stack.clear();
         self.redo_stack.clear();
 
+        let mut dropped: Vec<String> = Vec::new();
         for (command_json, undo_data_json) in entries {
             if let Some(entry) = Self::deserialize_entry(&command_json, &undo_data_json) {
-                self.undo_stack.push_back(entry);
+                if Self::is_applicable(&entry) {
+                    self.undo_stack.push_back(entry);
+                } else {
+                    dropped.push(entry.command.description());
+                }
             }
         }
+        Self::warn_dropped_unapplicable(&dropped);
 
         // Trim to history limit
         while self.undo_stack.len() > self.history_limit {
@@ -454,16 +509,23 @@ impl UndoStack {
         self.undo_stack.clear();
         self.redo_stack.clear();
 
+        let mut dropped: Vec<String> = Vec::new();
         for (command_json, undo_data_json, timestamp_str) in undo_entries {
             if let Some(entry) = Self::deserialize_entry_with_timestamp(
                 &command_json,
                 &undo_data_json,
                 timestamp_str.as_deref(),
             ) {
-                self.undo_stack.push_back(entry);
+                if Self::is_applicable(&entry) {
+                    self.undo_stack.push_back(entry);
+                } else {
+                    dropped.push(entry.command.description());
+                }
             }
         }
+        Self::warn_dropped_unapplicable(&dropped);
 
+        // The redo stack is loaded UNFILTERED on purpose - see `is_applicable`.
         for (command_json, undo_data_json, timestamp_str) in redo_entries {
             if let Some(entry) = Self::deserialize_entry_with_timestamp(
                 &command_json,
@@ -1132,12 +1194,14 @@ mod tests {
     fn test_load_from_persisted_respects_limit() {
         let mut stack = UndoStack::new_with_limit(2);
 
-        // Create more entries than the limit
+        // Create more entries than the limit. The filler undo data must be a REAL
+        // variant: `load_from_persisted` drops `UndoData::None` entries, so `None`
+        // here would test the filter instead of the limit.
         let entries: Vec<(String, String)> = (0..5)
             .map(|i| {
                 let entry = UndoEntry {
                     command: test_create_section_command(&format!("Section {i}")),
-                    undo_data: UndoData::None,
+                    undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
                     timestamp: None,
                 };
                 UndoStack::serialize_entry(&entry).unwrap()
@@ -1169,10 +1233,11 @@ mod tests {
             timestamp: None,
         });
 
-        // Load persisted data should clear existing
+        // Load persisted data should clear existing. Real undo data, so the load
+        // filter keeps the entry and this stays a test of the clear.
         let entries: Vec<(String, String)> = vec![UndoStack::serialize_entry(&UndoEntry {
             command: test_create_section_command("Loaded"),
-            undo_data: UndoData::None,
+            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
         })
         .unwrap()];
@@ -1187,9 +1252,11 @@ mod tests {
     fn test_load_from_persisted_skips_invalid() {
         let mut stack = UndoStack::new();
 
+        // Real undo data, so the only thing that can drop this entry is the
+        // malformed-JSON skip this test is about.
         let valid_entry = UndoStack::serialize_entry(&UndoEntry {
             command: test_create_section_command("Valid"),
-            undo_data: UndoData::None,
+            undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
             timestamp: None,
         })
         .unwrap();
@@ -1204,6 +1271,116 @@ mod tests {
 
         // Only the valid entry should be loaded
         assert_eq!(stack.len(), 1);
+    }
+
+    /// A stack persisted before the forward guard existed can carry an entry with
+    /// `UndoData::None`. `undo()` cannot apply it and pushes it straight back, so
+    /// everything below it is unreachable forever. Loading must drop it and keep the
+    /// real history underneath usable.
+    #[test]
+    fn load_drops_a_persisted_none_entry_and_keeps_the_history_under_it() {
+        let mut stack = UndoStack::new();
+
+        let entries: Vec<(String, String)> = vec![
+            UndoStack::serialize_entry(&UndoEntry {
+                command: test_create_section_command("Older"),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                timestamp: None,
+            })
+            .unwrap(),
+            UndoStack::serialize_entry(&UndoEntry {
+                command: test_create_section_command("Poison"),
+                undo_data: UndoData::None,
+                timestamp: None,
+            })
+            .unwrap(),
+            UndoStack::serialize_entry(&UndoEntry {
+                command: test_create_section_command("Newer"),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
+                timestamp: None,
+            })
+            .unwrap(),
+        ];
+
+        stack.load_from_persisted(entries);
+
+        assert_eq!(stack.len(), 2, "the unapplicable entry must be dropped");
+
+        let top = stack.pop_undo().unwrap();
+        match top.command {
+            Command::CreateSection { name, .. } => assert_eq!(name, Some("Newer".to_string())),
+            other => panic!("Expected Newer, got {other:?}"),
+        }
+        let below = stack.pop_undo().unwrap();
+        match below.command {
+            Command::CreateSection { name, .. } => assert_eq!(name, Some("Older".to_string())),
+            other => panic!("Expected Older, got {other:?}"),
+        }
+    }
+
+    /// The timestamped twin - the only loader real project opens use
+    /// (`project_load.rs`), and previously the only one with no unit coverage.
+    #[test]
+    fn load_with_timestamps_drops_a_persisted_none_undo_entry() {
+        let mut stack = UndoStack::new();
+
+        let undo_entries: Vec<(String, String, Option<String>)> = vec![
+            UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command: test_create_section_command("Older"),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(1)),
+                timestamp: None,
+            })
+            .unwrap(),
+            UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command: test_create_section_command("Poison"),
+                undo_data: UndoData::None,
+                timestamp: None,
+            })
+            .unwrap(),
+            UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command: test_create_section_command("Newer"),
+                undo_data: UndoData::InverseCommand(test_delete_section_command(3)),
+                timestamp: None,
+            })
+            .unwrap(),
+        ];
+
+        stack.load_from_persisted_with_timestamps(undo_entries, vec![]);
+
+        assert_eq!(stack.len(), 2);
+
+        let top = stack.pop_undo().unwrap();
+        match top.command {
+            Command::CreateSection { name, .. } => assert_eq!(name, Some("Newer".to_string())),
+            other => panic!("Expected Newer, got {other:?}"),
+        }
+        let below = stack.pop_undo().unwrap();
+        match below.command {
+            Command::CreateSection { name, .. } => assert_eq!(name, Some("Older".to_string())),
+            other => panic!("Expected Older, got {other:?}"),
+        }
+    }
+
+    /// Guards against over-filtering. `redo_inner`'s catch-all arm re-executes
+    /// `entry.command` and never reads `undo_data`, so a `UndoData::None` REDO entry
+    /// redoes correctly. Dropping it would destroy working functionality and shift
+    /// the indices `redo_to` is called with.
+    #[test]
+    fn load_keeps_a_none_redo_entry() {
+        let mut stack = UndoStack::new();
+
+        let redo_entries: Vec<(String, String, Option<String>)> =
+            vec![UndoStack::serialize_entry_with_timestamp(&UndoEntry {
+                command: test_create_section_command("Redoable"),
+                undo_data: UndoData::None,
+                timestamp: None,
+            })
+            .unwrap()];
+
+        stack.load_from_persisted_with_timestamps(vec![], redo_entries);
+
+        assert_eq!(stack.redo_len(), 1, "the redo stack must not be filtered");
+        assert!(stack.can_redo());
     }
 
     #[test]

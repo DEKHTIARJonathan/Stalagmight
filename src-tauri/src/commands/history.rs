@@ -142,6 +142,7 @@ fn get_command_type(command: &Command) -> String {
         Command::CreateSection { .. } => "create_section".to_string(),
         Command::DeleteSection { .. } => "delete_section".to_string(),
         Command::UpdateSectionMetadata { .. } => "update_section_metadata".to_string(),
+        Command::ReverseSection { .. } => "reverse_section".to_string(),
         Command::CreateShot { .. } => "create_shot".to_string(),
         Command::UpdateShot { .. } => "update_shot".to_string(),
         Command::DeleteShot { .. } => "delete_shot".to_string(),

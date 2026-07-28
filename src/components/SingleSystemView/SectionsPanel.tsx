@@ -73,10 +73,13 @@ export function rovingDefaultTabIndex(
 export default function SectionsPanel({ sections }: SectionsPanelProps) {
   const { t } = useTranslation();
   const precision = useDecimalPrecision();
-  const { selection, setSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
+  const { selection, multiSelection, setSelection, addToSelection, toggleSelection, clearSelection, hoveredSectionId, hoveredShot, hoveredStation, setHoveredSectionId, openDialog, enterSectionFocus, triggerZoomToSection } = useUIStore(
     useShallow((s) => ({
       selection: s.selection,
+      multiSelection: s.multiSelection,
       setSelection: s.setSelection,
+      addToSelection: s.addToSelection,
+      toggleSelection: s.toggleSelection,
       clearSelection: s.clearSelection,
       hoveredSectionId: s.hoveredSectionId,
       hoveredShot: s.hoveredShot,
@@ -124,6 +127,19 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
       : selection?.type === 'station'
         ? selection.stationRef?.section_id ?? null
         : null;
+
+  // Every directly-selected section, so a shift/ctrl-extended selection actually
+  // looks like one. `selectedSectionId` above stays the single "owning" section
+  // (it also covers a selected shot/station and drives the scroll-into-view).
+  const selectedSectionIds = useMemo(
+    () =>
+      new Set(
+        multiSelection
+          .filter((s) => s.type === 'section' && s.sectionId !== undefined)
+          .map((s) => s.sectionId as SectionId)
+      ),
+    [multiSelection]
+  );
 
   // Track the last hovered section ID set by this panel (for cleanup on unmount)
   const lastHoveredIdRef = useRef<SectionId | null>(null);
@@ -314,14 +330,24 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
     // Only handle left mouse button for mouse events
     if (e && e.button !== 0) return;
     setSource('sections-panel');
+    const sel = { type: 'section' as const, sectionId: section.id };
+    // Shift/ctrl extend the selection, matching the map's station and shot
+    // clicks (useMapTools). This is the only affordance that produces a
+    // multi-section selection, so it is what makes the context menu's
+    // "Reverse N Sections" (#24) reachable at all.
+    if (e?.shiftKey) {
+      addToSelection(sel);
+      return;
+    }
+    if (e?.ctrlKey || e?.metaKey) {
+      toggleSelection(sel);
+      return;
+    }
     // Single click only selects - it must NOT move the map (reverts #64's
     // single-click-centers behaviour). Double-click enters focus mode, which is
     // what frames the section - see handleSectionDoubleClick.
-    setSelection({
-      type: 'section',
-      sectionId: section.id,
-    });
-  }, [setSelection]);
+    setSelection(sel);
+  }, [setSelection, addToSelection, toggleSelection]);
 
   // Shared focus-entry: select the section and drop into focus mode. Used by
   // double-click and keyboard Enter so focus is reachable without a mouse.
@@ -543,7 +569,7 @@ export default function SectionsPanel({ sections }: SectionsPanelProps) {
                     index={index}
                     meta={sectionMetaById.get(section.id)}
                     surveyData={surveyData}
-                    isSelected={selectedSectionId === section.id}
+                    isSelected={selectedSectionId === section.id || selectedSectionIds.has(section.id)}
                     isHovered={effectiveHoveredSectionId === section.id}
                     isFocused={focusedIndex === index}
                     isDefaultFocus={index === defaultTabIndex}

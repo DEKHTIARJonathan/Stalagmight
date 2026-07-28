@@ -976,6 +976,160 @@ After selecting sections, the workflow continues into zero-datum setup (if neede
 
 For manual entry (no DMP file), use the generic Import dialog with an empty shot table.
 
+#### Reverse Section Dialog (ReverseSectionDialog.tsx)
+
+Confirms reversing a section end-to-end, so the far end becomes station 0.
+
+```
+┌─ Reverse Section ────────────────────────────────────────────────┐
+│                                                                  │
+│  Renumber this section end-to-end, so the last station becomes   │
+│  station 0.                                                      │
+│                                                                  │
+│   • Main Line (station 0 → 14, station 14 → 0)                   │
+│                                                                  │
+│  The cave does not move: every station keeps its position on     │
+│  the map, and merges, loop closures, zero datums and comments    │
+│  stay on the station they were set on.                           │
+│                                                                  │
+│  [ ] Swap left/right passage measurements                        │
+│      Tick this if LRUD was recorded facing along the survey      │
+│      direction, so what was on the left is now on the right.     │
+│                                                                  │
+│  [ Cancel ]                                     [ Reverse ]      │
+└──────────────────────────────────────────────────────────────────┘
+```
+
+**Semantics.** Reverse is a one-shot action, not persisted state. Geometry is
+invariant - every station keeps its world coordinate, and `reverse(reverse(s))`
+is the identity in exact arithmetic. In f64 it is only *bit*-exact when the
+`+180` shift is representable (`17.5` round-trips exactly; `0.1` comes back a
+couple of ulps out), which is why undo snapshots the project rather than
+re-running the transform. Per shot:
+
+| field | operation |
+|-------|-----------|
+| shot order | reversed; ids stay attached to positions, `uuid` travels with the record |
+| `azimuth_in` / `azimuth_out` | reciprocated (`+180`) **and** swapped |
+| `depth_in` / `depth_out` | swapped |
+| `pitch_in` / `pitch_out` | swapped **and negated** |
+| `left` / `right` | swapped only when the user opts in |
+| `up`, `down`, `length`, `marker_index`, `comment`, `kind` | unchanged |
+
+`azimuth_in`/`azimuth_out` are two **forward** readings and geometry uses their
+circular mean, so swapping them alone is a no-op - the reciprocal is what
+actually turns the shot around. The exception is a pair exactly 180 degrees
+apart (a gross reading blunder): its circular mean is undefined, and
+reciprocating maps the pair to itself, so such a shot is **swapped** instead.
+That keeps both recorded values and flips the arbitrary tie-break the mean is
+resolved with, which is what turns the bearing around.
+
+**Azimuths are stored in `[0, 360)`.** The circular mean wraps with `rem_euclid`,
+not Rust's `%`: `%` is *truncated*, so for a reading pair more than 540 degrees
+apart it left the intermediate difference outside `(-180, 180]` and returned the
+**antipode** of the true bearing. Nothing about a stored value changed meaning -
+an azimuth is still degrees clockwise from north and the old rendering was simply
+wrong - so, unlike the v11 to v12 pitch flip, the fix must not rewrite readings to
+preserve the old geometry. Instead the ambiguity is taken out of the file:
+schema **v14** normalises every stored reading into `[0, 360)`, and
+`DmpShot::to_shot_data` now does the same at import (Compass and TML already did),
+so no build can reach the truncation case again. Normalising is a no-op for
+geometry - `600` and `240` are the same reading - so the same `.stalx` renders
+identically either side of the fix. Affected data is narrow and already flagged:
+both readings inside `[0, 360)` put their difference in `(-360, 360)`, so a shot
+that could be misread always has an out-of-range reading, which
+`Validator::validate_shot` reports as `INVALID_AZIMUTH`. The v14 migration drops
+the collab `.tml` baseline only for a project that actually held such a shot,
+whose export carried the antipodal bearing.
+
+Beyond the shots, `section_offsets` gains the section's old total displacement
+(station 0 is now the far end), and every external station ref in the section -
+merges, loop closures, zero datums, station offsets and comments - is remapped
+to its mirrored station so each relationship stays on its original physical
+station. That list is the complete set of `StationKey`-bearing collections on
+`Project` (`for_each_station_ref`), but it is *not* everything in the app that
+names a station: the gas plan's pins (origin, endpoint, way points, marked
+points, stage-drop overrides) and the UI's selection are positional
+`StationRef`s the backend cannot reach. The plan's pins are mirrored frontend-
+side so the plan stays on the physical stations the diver picked; selection and
+merge staging are cleared.
+
+Pins inside a *saved* `.plnx` need **no** rewriting, because a plan does not name a
+station by its position. It records the two shots a station sits BETWEEN, and a
+reverse does not change what a station sits between - the same pair still names
+the same junction whichever way the section is walked.
+
+That matters because the old `AfterShot(uuid)` form failed silently: after a
+reverse such an anchor still *resolved*, to the station next door, since the
+anchoring shot travelled with its record. Nothing counted as stale, so
+`stale_ref_count` stayed 0 and the panel showed no warning while the route - and
+with it the gas plan - had quietly been re-priced against a different pair of
+stations. Every other survey edit leaves an unresolvable ref that fails loudly.
+
+A station at the END of a section has only one neighbouring shot, so its side
+comes from the section's recorded orientation (`reverse_parity`) instead. The one
+case that cannot be tracked is splitting that shot: the split keeps the original
+UUID on the shortened tail, so afterwards no shot in the file has that station as
+an endpoint. That is detected via the neighbour's recorded length and reported as
+a stale ref for the diver to re-pin, rather than guessed at.
+
+Two other stores outside `Project` are settled the same way. Position-keyed
+(`NULL`-uuid) `resolved_warnings` rows are pinned to their shot's UUID, because
+the reverse keeps shot *ids* on positions - so the save-time carry-over would
+otherwise re-read the row's `(section_id, shot_id)` as an identity and migrate
+the ignore onto the mirrored shot. And an undo/redo snapshot restore keeps the
+collab export provenance (`last_export_tml_sha256`) from the *live* project
+rather than the snapshot, dropping `shot_baseline` when the restored layout no
+longer matches it: undo does not un-write the sibling `.tml`, so rewinding that
+provenance would report a phantom collaborator edit and apply it at a pre-reverse
+`shot_index`.
+
+`CommandResult.reversed_sections` names the sections a command renumbered -
+on the forward reverse, on a batch of them, and on an undo or redo of either
+(undoing a reverse re-reverses the numbering). A reverse keeps every station's
+world position, so there is nothing in the geometry for a consumer to diff; the
+field exists so the frontend mirrors its positional refs exactly instead of
+inferring a reverse from moved stations, an inference that cannot tell a
+reversed section from one that was reversed *and* moved in the same action. It
+is omitted from the payload entirely when nothing was renumbered.
+
+The section's `direction` (In/Out) is metadata and is deliberately **not**
+flipped - it records how the survey was swum, which a renumbering does not
+change. Nothing in the geometry pipeline reads it.
+
+Frozen shots do not block a reverse: the physical line is preserved exactly, so
+the frozen invariant still holds. Undo is a before/after project snapshot pair.
+
+**Entry points.** Sections-panel, map-station and map-shot context menus
+("Reverse Section", plus "Reverse N Sections" when several sections are
+multi-selected), and a button in the Edit Section dialog that is disabled while
+that dialog has unsaved edits.
+
+A multi-section reverse is **one action**: it goes through `execute_batch`, so
+either every selected section reverses or none does, and a single Undo restores
+them all.
+
+**On import.** `ImportSectionConfig.reverse` applies the same transform before
+the section is created. `placement` indices must already address the final
+(reversed) order - only the wizard knows which side of a cross-section
+connection this batch renumbers (`src/utils/reversePlacement.ts`) - while
+`station_comments` indices are given in the file's original order and mirrored
+backend-side. Left/right is never swapped on the import path (no dialog to ask).
+The toggle is offered by the DMP wizard only; the TML, Compass, Walls and GPX
+importers build their configs with `reverse: false`.
+
+Ticking the toggle changes numbering only, never where the passage lands: the
+section anchor gains the same displacement the in-app reverse applies, because
+station 0 is now the far end. Merge- and datum-based placements re-anchor the
+section anyway; `Origin` and `Manual` position station 0 directly and would
+otherwise land a full end-to-end displacement away.
+
+Both sides of a connection renumber independently. A wizard connection whose
+target is created **by the same batch** has its target index mirrored too - and
+that includes a target the wizard rewrites into a `from_existing` placement
+because it was already created earlier in the run. A connection to a section
+that was already in the project keeps the index the user picked.
+
 #### Merge Stations Dialog
 
 Shown when merging two **unconnected** stations (different section groups).

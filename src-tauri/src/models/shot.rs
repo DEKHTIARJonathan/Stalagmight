@@ -4,7 +4,7 @@ use ts_rs::TS;
 /// Unique identifier for a shot within a section
 pub type ShotId = u32;
 
-use super::{SectionId, FEATURE_ID_STRIDE};
+use super::{normalize_azimuth, SectionId, FEATURE_ID_STRIDE};
 
 /// Convert a raw ShotId to a 1-indexed display position.
 ///
@@ -31,6 +31,45 @@ pub(crate) fn horizontal_length_from_slope(length: f64, dz: f64) -> f64 {
     } else {
         len_sq.sqrt()
     }
+}
+
+/// Circular mean of a shot's two **forward** azimuth readings, normalised to
+/// `[0, 360)`.
+///
+/// `azimuth_in`/`azimuth_out` are not a foresight/backsight pair - they are two
+/// readings of the same forward line - so geometry uses their mean, not either
+/// one alone.
+///
+/// The mean of two readings exactly 180 degrees apart is undefined (both
+/// perpendiculars are equidistant); the `+540, wrap, -180` normalisation
+/// resolves that tie to `azimuth_in - 90`. Reversing a section has to cope with
+/// that arbitrary choice - see [`crate::models::reverse_shots`].
+///
+/// Wraps with `rem_euclid`, not `%`. Rust's `%` is *truncated* - it keeps the
+/// sign of the dividend - so for a reading far outside `[0, 360)` it leaves
+/// `diff` outside `(-180, 180]` and returns the ANTIPODE of the true circular
+/// mean. That is not academic: `validation.rs` only warns on an out-of-range
+/// azimuth, and the DMP parser stores headings verbatim where the Compass and
+/// TML importers normalise theirs. It also broke the reverse, whose helpers all
+/// use `rem_euclid`: the two disagreed, so the degenerate-pair guard missed and
+/// the bearing survived un-turned while the rest of the section flipped, moving
+/// the cave by its own span. In-range readings are NOT bit-for-bit what `%`
+/// returned: the old wrap was `(x + 360.0) % 360.0` and its addend rounds, where
+/// `x.rem_euclid(360.0)` returns an in-range `x` untouched. About half of the
+/// in-range pairs therefore differ, by at most half an ulp of 720 (~5.7e-14
+/// degrees, ~1e-15 radians - sub-picometre over a kilometre of passage).
+///
+/// Both wraps go through [`normalize_azimuth`], not a bare `rem_euclid`, because
+/// `rem_euclid` alone can return exactly `360.0` - and this function is the
+/// ordinary way to get there. Every fore/back pair whose circular mean is
+/// exactly north does it, 360 of them on a plain 0.1-degree grid starting at
+/// `(0.1, 359.9)`. The `horizontal <= 1e-9` fallbacks in `closure.rs` and
+/// `command_move.rs` then write that value verbatim onto both legs, where
+/// `>= 360.0` is a non-ignorable `INVALID_AZIMUTH`.
+pub(crate) fn average_azimuth_of(azimuth_in: f64, azimuth_out: f64) -> f64 {
+    // Handle wraparound at 360 degrees
+    let diff = normalize_azimuth(azimuth_out - azimuth_in + 540.0) - 180.0;
+    normalize_azimuth(azimuth_in + diff / 2.0)
 }
 
 /// Convert horizontal + vertical components into slope length.
@@ -595,9 +634,7 @@ impl Shot {
 
     /// Calculate the average azimuth from in and out readings
     pub fn average_azimuth(&self) -> f64 {
-        // Handle wraparound at 360 degrees
-        let diff = (self.azimuth_out - self.azimuth_in + 540.0) % 360.0 - 180.0;
-        (self.azimuth_in + diff / 2.0 + 360.0) % 360.0
+        average_azimuth_of(self.azimuth_in, self.azimuth_out)
     }
 
     /// Horizontal projection of the shot length (meters).
@@ -664,6 +701,13 @@ impl ShotData {
     /// ShotData.length is slope distance, so horizontal is derived from depth change.
     pub fn horizontal_length(&self) -> f64 {
         horizontal_length_from_slope(self.length, self.depth_out - self.depth_in)
+    }
+
+    /// Circular mean of the two forward azimuth readings - the bearing geometry
+    /// actually walks. Mirrors [`Shot::average_azimuth`] for the pre-creation
+    /// form used by the importers.
+    pub fn average_azimuth(&self) -> f64 {
+        average_azimuth_of(self.azimuth_in, self.azimuth_out)
     }
 }
 
@@ -1066,6 +1110,93 @@ mod tests {
             },
         );
         assert!((shot.average_azimuth() - 270.0).abs() < 1e-6);
+    }
+
+    /// The `rem_euclid` wrap is a CORRECTION, not a reinterpretation of stored data.
+    ///
+    /// Rust's `%` is truncated, so for a reading pair more than 540 degrees apart in the
+    /// negative direction the old `(az_out - az_in + 540.0) % 360.0` left `diff` outside
+    /// `(-180, 180]` and the result came back 180 degrees from the true circular mean.
+    /// An azimuth still means what it always meant (degrees clockwise from north), so
+    /// unlike the v11 -> v12 inclination flip there is no stored VALUE whose meaning
+    /// changed and therefore nothing a migration could rewrite without baking the
+    /// 180-degree error in permanently.
+    ///
+    /// The affected data is also a strict subset of data the app already flags: the pair
+    /// has to differ by more than 540 degrees, which is impossible while both readings sit
+    /// in `[0, 360)`, so at least one of them is out of range and the shot already raises
+    /// `INVALID_AZIMUTH` in the warnings panel. (Reachable because the DMP parser stores
+    /// headings verbatim and validation only warns; Compass and TML normalise on import.)
+    #[test]
+    fn average_azimuth_of_far_out_of_range_readings_is_the_true_circular_mean() {
+        // 600 degrees is 240; paired with 0 the true mean is 300 (the short way round).
+        let truncated = |azimuth_in: f64, azimuth_out: f64| {
+            let diff = (azimuth_out - azimuth_in + 540.0) % 360.0 - 180.0;
+            (azimuth_in + diff / 2.0 + 360.0) % 360.0
+        };
+        assert!((average_azimuth_of(600.0, 0.0) - 300.0).abs() < 1e-9);
+        assert!(
+            (truncated(600.0, 0.0) - 120.0).abs() < 1e-9,
+            "precondition: the old truncated wrap returned the antipode"
+        );
+        // The mean of the SAME bearings written in range is identical, which is what makes
+        // normalising stored readings a no-op for geometry rather than a second fix.
+        assert!((average_azimuth_of(240.0, 0.0) - average_azimuth_of(600.0, 0.0)).abs() < 1e-9);
+        // In-range pairs are untouched by the change beyond float noise.
+        assert!((average_azimuth_of(350.0, 10.0) - 0.0).abs() < 1e-9);
+    }
+
+    /// The reachable half of the `rem_euclid` escape, and the reason
+    /// `average_azimuth_of` wraps through `normalize_azimuth`.
+    ///
+    /// `(0.1, 359.9)` is an ordinary fore/back pair. Its circular mean is exactly
+    /// north, and a bare `rem_euclid` returns `360.0` for it - out of range, and a
+    /// non-ignorable `INVALID_AZIMUTH` once the `horizontal <= 1e-9` fallbacks in
+    /// `closure.rs` / `command_move.rs` copy it onto both legs. There are 360 such
+    /// pairs on a plain 0.1-degree grid, not one crafted ulp.
+    #[test]
+    fn average_of_ordinary_fore_back_readings_is_never_360() {
+        let naive = |azimuth_in: f64, azimuth_out: f64| {
+            let diff = (azimuth_out - azimuth_in + 540.0).rem_euclid(360.0) - 180.0;
+            (azimuth_in + diff / 2.0).rem_euclid(360.0)
+        };
+        assert_eq!(
+            naive(0.1, 359.9),
+            360.0,
+            "precondition: the bare rem_euclid wrap returns exactly 360.0 here"
+        );
+
+        let mean = average_azimuth_of(0.1, 359.9);
+        assert!(
+            (0.0..360.0).contains(&mean),
+            "average_azimuth_of(0.1, 359.9) = {mean} escaped [0, 360)"
+        );
+        assert_eq!(mean, 0.0);
+
+        // Sweep the whole 0.1-degree grid: no in-range pair may escape the range.
+        // The grid is built by PARSING each decimal, which is what a typed reading
+        // or a stored one actually is - `i as f64 * 0.1` accumulates a different
+        // rounding and hits only 203 of the 360 cases.
+        let grid: Vec<f64> = (0..3600)
+            .map(|i| format!("{}.{}", i / 10, i % 10).parse().unwrap())
+            .collect();
+        let mut naive_escapes = 0_u32;
+        for &azimuth_in in &grid {
+            for &azimuth_out in &grid {
+                let mean = average_azimuth_of(azimuth_in, azimuth_out);
+                assert!(
+                    (0.0..360.0).contains(&mean),
+                    "average_azimuth_of({azimuth_in}, {azimuth_out}) = {mean}"
+                );
+                if naive(azimuth_in, azimuth_out) >= 360.0 {
+                    naive_escapes += 1;
+                }
+            }
+        }
+        assert_eq!(
+            naive_escapes, 360,
+            "precondition: the bare rem_euclid wrap escapes [0, 360) for 360 grid pairs"
+        );
     }
 
     #[test]

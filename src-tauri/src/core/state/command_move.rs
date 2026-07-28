@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::CommandResult;
-use crate::models::{Coordinates, SectionId, StationRef};
+use crate::models::{normalize_azimuth, Coordinates, SectionId, StationRef};
 
 impl AppState {
     pub(super) fn move_section(&self, section_id: SectionId, offset: Coordinates) -> CommandResult {
@@ -159,7 +159,7 @@ impl AppState {
                     );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
-                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
                 } else {
                     shot.average_azimuth()
                 };
@@ -185,7 +185,7 @@ impl AppState {
                     );
                 }
                 let new_azi = if new_horizontal > 1e-9 {
-                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
                 } else {
                     shot.average_azimuth()
                 };

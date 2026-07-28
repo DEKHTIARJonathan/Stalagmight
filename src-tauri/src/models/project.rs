@@ -39,6 +39,7 @@ mod shots;
 mod integrity;
 mod offsets;
 mod relationships;
+mod reverse;
 mod stats;
 
 pub use classify::ClassifyScope;
@@ -47,6 +48,7 @@ pub use gas::{
     Team,
 };
 pub use integrity::{IntegrityViolation, ViolationSeverity};
+pub use reverse::{reverse_shots, shot_run_displacement};
 pub use shots::MIN_SPLIT_CHILD_LENGTH_M;
 
 /// Relationships that reference a given section (merges, closures, offsets, zero datums).
@@ -698,6 +700,28 @@ impl Project {
         }
     }
 
+    /// Mint a UUID for every shot of ONE section that lacks one.
+    ///
+    /// Section-scoped twin of [`Self::ensure_shot_uuids`], for callers that only
+    /// need one section's `AfterShot` anchors to be buildable (e.g.
+    /// [`Self::reverse_section`]). The project-wide version walks every shot of
+    /// every section, so calling it per section turns a batch of N single-section
+    /// commands into N full-project passes - and mints UUIDs in sections the
+    /// command never touched.
+    ///
+    /// Does NOT update [`Self::shot_uuid_index`]; pair it with
+    /// [`Self::reindex_section_shot_uuids`] when the section's shots also move.
+    pub(crate) fn ensure_section_shot_uuids(&mut self, section_id: SectionId) {
+        let Some(section) = self.get_section_mut(section_id) else {
+            return;
+        };
+        for shot in &mut section.shots {
+            if shot.uuid.as_deref().map_or(true, str::is_empty) {
+                shot.uuid = Some(uuid::Uuid::new_v4().to_string());
+            }
+        }
+    }
+
     /// Re-mint the UUID of any shot that shares a UUID with an earlier shot in
     /// the SAME section, keeping the first occurrence (AfterShot anchors resolve
     /// to the first match via `position()`, so they stay valid). Returns the
@@ -801,6 +825,66 @@ impl Project {
         }
     }
 
+    /// Refresh [`Self::shot_uuid_index`] for ONE section whose shots were
+    /// reordered or re-minted, without the whole-project pass
+    /// [`Self::rebuild_shot_uuid_index`] performs.
+    ///
+    /// A stale entry is never *wrong* - `resolve_key` re-checks the cached index
+    /// against the shot's UUID and falls back to a linear scan - but an operation
+    /// that permutes every index in a section (a reverse) invalidates every one of
+    /// its entries at once, so every later `resolve_key` into that section pays the
+    /// O(shots) scan until something else rebuilds the cache.
+    pub(crate) fn reindex_section_shot_uuids(&mut self, section_id: SectionId) {
+        self.shot_uuid_index
+            .retain(|(sid, _), _| *sid != section_id);
+        let Some(section) = self.get_section(section_id) else {
+            return;
+        };
+        // Collected first: `section` borrows self immutably, the insert needs it
+        // mutably.
+        let entries: Vec<((SectionId, String), u32)> = section
+            .shots
+            .iter()
+            .enumerate()
+            .filter_map(|(i, shot)| shot.uuid.clone().map(|u| ((section_id, u), i as u32)))
+            .collect();
+        for (key, index) in entries {
+            // First-occurrence wins, as in `rebuild_shot_uuid_index`.
+            self.shot_uuid_index.entry(key).or_insert(index);
+        }
+    }
+
+    /// Drop the per-shot collaboration baseline captured at the last
+    /// sibling-`.tml` export, so `reconcile::diff` returns an empty change set
+    /// until the next save re-exports and re-seeds it.
+    ///
+    /// Call this from any operation that invalidates the baseline's
+    /// `(section_id, shot_index)` identity key wholesale. Reconcile matches a
+    /// returned shot to a baseline entry by UUID, but then applies the edit to
+    /// `project.sections[..].shots[entry.shot_index]` - so once local indices have
+    /// moved under the baseline, a collaborator's edit would land on a *different*
+    /// shot. Emptying the baseline is the fail-safe: `reconcile::diff` short-
+    /// circuits on it, so the reconcile is skipped rather than misapplied.
+    ///
+    /// Deliberately keeps `last_export_tml_sha256`. That field is *provenance* -
+    /// proof the sibling `.tml` came from us - and three things read it that have
+    /// nothing to do with the baseline: `compute_collab` bails outright when it is
+    /// `None` (so clearing it would stop us ever noticing the sibling changed,
+    /// permanently, if the next export failed), and `collab_sibling_when_disabled`
+    /// uses it to decide whether to warn about a leftover `.tml`. Clearing it buys
+    /// nothing the empty baseline does not already give.
+    pub(crate) fn invalidate_collab_baseline(&mut self) {
+        if let Some(collab) = self.collab.as_mut() {
+            if collab.shot_baseline.is_empty() {
+                return;
+            }
+            collab.shot_baseline.clear();
+            tracing::info!(
+                "Cleared collab shot baseline; the .tml will be re-exported before the next reconcile"
+            );
+        }
+    }
+
     /// Push a new merge AND incrementally update the adjacency cache.
     /// Always use this instead of writing to `station_merges` directly
     /// so the cache stays in sync.
@@ -830,11 +914,16 @@ impl Project {
     }
 
     /// Compute the (dx, dy) horizontal displacement of a shot from its data.
-    /// Uses the same average azimuth calculation as coordinate computation.
+    ///
+    /// Routed through [`ShotData::average_azimuth`] rather than re-deriving the
+    /// mean: this feeds the persisted `section_offsets` compensation that
+    /// insert/prepend/delete apply, so a private copy that drifts from the
+    /// coordinate walk moves the section by twice the shot vector and saves it.
+    /// An inlined `%` copy did exactly that once `average_azimuth_of` moved to
+    /// `rem_euclid` - the two disagreed by 180 degrees for readings more than
+    /// 540 apart, which validation only warns about.
     pub(crate) fn shot_displacement(data: &ShotData) -> (f64, f64) {
-        let diff = (data.azimuth_out - data.azimuth_in + 540.0) % 360.0 - 180.0;
-        let avg_az = (data.azimuth_in + diff / 2.0 + 360.0) % 360.0;
-        let az_rad = avg_az.to_radians();
+        let az_rad = data.average_azimuth().to_radians();
         let horizontal = data.horizontal_length();
         (horizontal * az_rad.sin(), horizontal * az_rad.cos())
     }

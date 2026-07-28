@@ -56,12 +56,12 @@ function fixture(): { sections: Section[]; stations: Station[] } {
   const sections: Section[] = [
     {
       id: 1, name: 'A', surveyor: null, date: null, color: '#ff0000',
-      direction: 'in', quality: 1, next_shot_id: 10,
+      direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [shot(101), shot(102), shot(103, true)],
     },
     {
       id: 2, name: 'B', surveyor: null, date: null, color: '#00ff00',
-      direction: 'in', quality: 1, next_shot_id: 10,
+      direction: 'in', quality: 1, next_shot_id: 10, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [shot(201), shot(202)],
     },
   ];
@@ -439,11 +439,11 @@ describe('SurveyGeometryIndex.measuredShotSegments (global shot ids)', () => {
   const sections: Section[] = [
     {
       id: 0, name: 'A', surveyor: null, date: null, color: '#f00',
-      direction: 'in', quality: 1, next_shot_id: 2, shots: [mkShot(0), mkShot(1)],
+      direction: 'in', quality: 1, next_shot_id: 2, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null, shots: [mkShot(0), mkShot(1)],
     },
     {
       id: 1, name: 'B', surveyor: null, date: null, color: '#0f0',
-      direction: 'in', quality: 1, next_shot_id: 100002,
+      direction: 'in', quality: 1, next_shot_id: 100002, reverse_parity: false, gauge_shot_uuid: null, gauge_neighbour_uuid: null,
       shots: [mkShot(100000), mkShot(100001, true)],
     },
   ];

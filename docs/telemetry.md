@@ -360,18 +360,22 @@ corresponding type union that is parsed by Rust exhaustiveness tests.
 2. Cancel/dismiss paths need no changes - `closeDialog()` auto-detects.
 3. For informational dialogs (no meaningful cancel), add
    `trackDialogComplete` before every close path.
-4. Add three registry entries: `action.dialog.my-dialog`,
-   `dialog-cancel.my-dialog`, `dwell.dialog.my-dialog`.
-5. Tests `registry_covers_all_dialogs` and `dialog_complete_calls_match_dialogs`
-   will fail if anything is missing.
+4. Add four registry entries: `action.dialog.my-dialog`,
+   `dialog-cancel.my-dialog`, `dwell.dialog.my-dialog` and
+   `active-dwell.dialog.my-dialog` - every dwell state is mirrored 1:1 by an
+   active-dwell one (#31), so the fourth is not optional.
+5. Tests `registry_covers_all_dialogs`, `active_dwell_mirrors_dwell` and
+   `dialog_complete_calls_match_dialogs` will fail if anything is missing.
 
 ### New IPC command
 
 Automatic - `invokeIpc` calls `trackCommand` for all non-telemetry commands.
 If the command is undoable, add it to `UNDOABLE_COMMANDS` in `telemetry.ts`.
 
-You must also add a `command.<name>` entry to `EVENT_NAMES` in `registry.rs`. The
-`registry_covers_all_commands` test will fail if you forget.
+You must also add a `command.<name>` entry to `EVENT_NAMES` in `registry.rs`,
+plus an `undo-after.<name>` entry if you added it to `UNDOABLE_COMMANDS`. The
+`registry_covers_all_commands` and `registry_covers_all_undoable_commands` tests
+will fail if you forget either.
 
 ### New tool
 

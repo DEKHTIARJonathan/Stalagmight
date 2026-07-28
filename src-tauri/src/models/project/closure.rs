@@ -2,7 +2,9 @@ use std::collections::{HashMap, HashSet};
 use tracing::{debug, error, trace, warn};
 
 use crate::config::ClosureAdjustmentConfig;
-use crate::models::{ClosureStrategy, Coordinates, LoopClosure, SectionId, Shot, StationRef};
+use crate::models::{
+    normalize_azimuth, ClosureStrategy, Coordinates, LoopClosure, SectionId, Shot, StationRef,
+};
 
 use super::{PathEdge, Project, StationPath};
 
@@ -45,7 +47,7 @@ impl Project {
     pub(super) fn update_shot_horizontal_only(shot: &mut Shot, dx: f64, dy: f64) {
         let horizontal = (dx * dx + dy * dy).sqrt();
         let new_azi = if horizontal > 1e-9 {
-            dx.atan2(dy).to_degrees().rem_euclid(360.0)
+            normalize_azimuth(dx.atan2(dy).to_degrees())
         } else {
             shot.average_azimuth()
         };
@@ -243,7 +245,7 @@ impl Project {
                 let new_dz = (shot.depth_out + total_dz) - shot.depth_in;
                 let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
                 let new_azi = if new_horizontal > 1e-9 {
-                    new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                    normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
                 } else {
                     shot.average_azimuth()
                 };
@@ -268,7 +270,7 @@ impl Project {
             let new_dz = shot.depth_out - (shot.depth_in + total_dz);
             let new_len = (new_horizontal * new_horizontal + new_dz * new_dz).sqrt();
             let new_azi = if new_horizontal > 1e-9 {
-                new_dx.atan2(new_dy).to_degrees().rem_euclid(360.0)
+                normalize_azimuth(new_dx.atan2(new_dy).to_degrees())
             } else {
                 shot.average_azimuth()
             };

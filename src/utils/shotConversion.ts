@@ -1,3 +1,4 @@
+import type { DmpSection, DmpShot } from '../types/commands';
 import type { ShotData } from '../types/project';
 import type { EditableShot } from '../components/common/ShotTableEditor';
 
@@ -22,6 +23,46 @@ export function editableShotToShotData(shot: EditableShot): ShotData {
     marker_index: null,
     temperature: null,
   };
+}
+
+/**
+ * Re-render a DMP section from the shot table's current rows.
+ *
+ * The wizard previews are fed `DmpSection`s but the user edits `EditableShot`s,
+ * so every preview that must reflect pending edits converts back. Doing that in
+ * one place matters for more than duplication: `SectionPreview` draws
+ * `shots.filter(s => s.shot_type === 'Standard')` and numbers the stations it
+ * draws from 0, so a preview built off the RAW section addresses a different
+ * station space than the shot table does. `convertToEditableShots` drops
+ * non-Standard shots AND length-1 Standard ones (`isImportableDmpShot`), and the
+ * table then drops whatever the user deleted. Emitting every surviving row as
+ * `Standard` makes that filter a no-op, so a click on the preview and a pick in
+ * the station dropdown mean the same station.
+ *
+ * Callers that also track a name/direction edit should spread those over the
+ * result; this only rewrites the geometry.
+ */
+export function editableShotsToDmpSection(raw: DmpSection, shots: EditableShot[]): DmpSection {
+  const syntheticShots: DmpShot[] = shots
+    .filter((s) => !s.isDeleted)
+    .map((s) => ({
+      shot_type: 'Standard' as const,
+      heading_in: s.azimuth_in,
+      heading_out: s.azimuth_out,
+      length: s.length,
+      depth_in: s.depth_in,
+      depth_out: s.depth_out,
+      pitch_in: s.pitch_in ?? 0,
+      pitch_out: s.pitch_out ?? 0,
+      left: s.left ?? 0,
+      right: s.right ?? 0,
+      up: s.up ?? 0,
+      down: s.down ?? 0,
+      temperature: 0, hour: 0, minute: 0, second: 0, marker_index: 0,
+      ...(s.comment != null ? { comment: s.comment } : {}),
+    }));
+
+  return { ...raw, shots: syntheticShots };
 }
 
 /**

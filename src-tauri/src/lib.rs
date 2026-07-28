@@ -1343,6 +1343,7 @@ pub fn run() {
             commands::section::create_section,
             commands::section::update_section,
             commands::section::delete_section,
+            commands::section::reverse_section,
             commands::section::move_section,
             commands::section::move_segment,
             commands::section::execute_batch,

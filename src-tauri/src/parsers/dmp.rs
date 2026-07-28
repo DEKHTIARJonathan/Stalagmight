@@ -651,10 +651,23 @@ impl DmpShot {
     /// Pitch is copied straight across: `parse_section` already normalised it
     /// to the model's positive-DOWN frame, so there is nothing left to flip
     /// here.  See `docs/inclination.md`.
+    ///
+    /// Headings ARE normalised into `[0, 360)` here, matching what the Compass and TML
+    /// importers already do. A DMP heading is a raw `i16 * 0.1`, so the file format admits
+    /// `-3276.8..3276.7`, and `Validator::validate_shot` only REPORTS a reading outside the
+    /// range (as `INVALID_AZIMUTH` - error severity, so not even ignorable, but still not a
+    /// gate) - so an out-of-range pair used to reach the model and persist. Two such
+    /// readings more than 540 degrees apart hit the truncated-`%` wrap that
+    /// `average_azimuth_of` fixed (schema v14 normalises the ones already stored); keeping
+    /// the class out of the model at the seam means an import can never recreate it.
+    /// `DmpShot` itself still holds the verbatim value, so the raw-data view is unaffected.
+    ///
+    /// `normalize_azimuth` leaves a non-finite reading alone: it has no canonical form, and
+    /// `ShotData::all_finite` plus the integrity banner are what surface those.
     pub fn to_shot_data(&self) -> crate::models::ShotData {
         crate::models::ShotData {
-            azimuth_in: self.heading_in,
-            azimuth_out: self.heading_out,
+            azimuth_in: crate::models::normalize_azimuth(self.heading_in),
+            azimuth_out: crate::models::normalize_azimuth(self.heading_out),
             length: self.length,
             depth_in: self.depth_in,
             depth_out: self.depth_out,
@@ -3082,5 +3095,58 @@ mod tests {
             -17,
             "should reconstruct -17"
         );
+    }
+    /// #24: a DMP heading is a raw `i16 * 0.1`, so the format admits `-3276.8..3276.7`,
+    /// and validation only WARNS about an out-of-range reading - so an out-of-range pair
+    /// used to reach the model and persist. Two readings more than 540 degrees apart hit
+    /// the truncated-`%` wrap `average_azimuth_of` fixed, so the conversion normalises
+    /// them (as the Compass and TML importers already did). `DmpShot` keeps the verbatim
+    /// value for the raw-data view.
+    #[test]
+    fn to_shot_data_normalises_out_of_range_headings_without_moving_the_bearing() {
+        let mut shot = DmpShot {
+            shot_type: DmpShotType::Standard,
+            heading_in: 600.0,
+            heading_out: 0.0,
+            length: 10.0,
+            depth_in: 0.0,
+            depth_out: 0.0,
+            pitch_in: 0.0,
+            pitch_out: 0.0,
+            left: 1.0,
+            right: 1.0,
+            up: 1.0,
+            down: 1.0,
+            temperature: 18.0,
+            hour: 0,
+            minute: 0,
+            second: 0,
+            marker_index: 0,
+            comment: None,
+        };
+        let data = shot.to_shot_data();
+        assert_eq!(shot.heading_in, 600.0, "the raw record stays verbatim");
+        assert!((data.azimuth_in - 240.0).abs() < 1e-9);
+        assert!((data.azimuth_out - 0.0).abs() < 1e-9);
+        // Normalising is a no-op for geometry: the pair walks the same bearing either way
+        // (600 and 240 are the same reading), which is what makes the rewrite safe.
+        let raw = crate::models::ShotData {
+            azimuth_in: 600.0,
+            azimuth_out: 0.0,
+            ..data.clone()
+        };
+        assert!((data.average_azimuth() - raw.average_azimuth()).abs() < 1e-9);
+
+        // A negative reading wraps the same way.
+        shot.heading_in = -30.0;
+        shot.heading_out = -20.0;
+        let data = shot.to_shot_data();
+        assert!((data.azimuth_in - 330.0).abs() < 1e-9);
+        assert!((data.azimuth_out - 340.0).abs() < 1e-9);
+
+        // A non-finite reading has no canonical form and is left for the finiteness guards.
+        shot.heading_in = f64::INFINITY;
+        shot.heading_out = 0.0;
+        assert!(shot.to_shot_data().azimuth_in.is_infinite());
     }
 }
