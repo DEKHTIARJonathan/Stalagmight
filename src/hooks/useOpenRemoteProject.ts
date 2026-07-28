@@ -120,6 +120,26 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * tail can name the open project: "Open from SpeleoDB" sits in the
        * IN-PROJECT menu, so `openRemote` re-opening the current project is an
        * ordinary mis-step, and the adopt it can route to lands on the same path.
+       *
+       * A LITERAL string comparison, deliberately - it is NOT a claim that the two
+       * spellings name the same file on disk. What it has to predict is whether
+       * `loadProject` will short-circuit, and the backend decides exactly that with
+       * the same literal test (`do_load_project_full`:
+       * `project.file_path.as_ref() == Some(&path)`), over the same two values:
+       * `file_path` is stored verbatim from the path the load was handed, and both
+       * sides here are minted by one process-wide `speleodb_cache_path`. So the
+       * aliases a literal test cannot see through - a symlink, `..`, a Windows /
+       * macOS case alias - are ones the BACKEND cannot see through either, and this
+       * lands on the correct branch anyway: it really is a full reload, so the seed
+       * really is needed. Canonicalizing only this side would desync the prediction
+       * from the fact and skip the seed for a load that still happens, leaving
+       * `syncProjectLink` (literal in the same way, on `linkPath === forPath`) to
+       * resolve the fresh open to read-only / nothing-unpushed with no seed left to
+       * carry the permission or the dirty bit. Alias tolerance, if it is ever
+       * wanted, has to start in `do_load_project_full` - `project_io::same_file`
+       * canonicalizes, and `close_project_if_open_at` already uses it - with this
+       * side following, never leading. The webview cannot canonicalize a path at
+       * all: it has no filesystem.
        */
       const alreadyOpen = priorPath === result.local_path;
       // #193 b8: a lock held by THIS account at open time = a second same-account
@@ -350,6 +370,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // Decided by PATH, the same comparison `finishOpen` makes for the same reason
       // (`alreadyOpen`) - and unlike the id-based exemption inside the guard, it does
       // not depend on a status poll having landed to record `remoteProjectId`.
+      //
+      // Literal, for the reason spelled out at `alreadyOpen`: it predicts the
+      // backend's own literal already-open test rather than asserting file identity.
+      // A spelling that test would not match (symlink, `..`, a case alias) falls to
+      // the guarded branch, and that is the CORRECT answer there, not merely the
+      // careful one - the backend reloads such a path in full, which is exactly how
+      // unsaved in-memory survey gets dropped, so the disk-dirty refusal the guard
+      // raises is the one that belongs. Case-folding or collapsing dot segments here
+      // would skip the guard for a load that still replaces the project.
       const replacesOpenProject =
         (useProjectStore.getState().project?.file_path ?? null) !== localPath;
       if (replacesOpenProject) {

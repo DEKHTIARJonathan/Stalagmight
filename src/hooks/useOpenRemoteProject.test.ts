@@ -768,6 +768,60 @@ describe('useOpenRemoteProject (#218)', () => {
     });
   });
 
+  /**
+   * DO-NOT-REGRESS. Both "is this the project already on screen?" tests in the hook
+   * (`finishOpen`'s `alreadyOpen`, `keepLocalCopy`'s skip) compare paths as LITERAL
+   * strings, and that is the point rather than an oversight: they predict whether
+   * `loadProject` will short-circuit, and the backend decides that with the same
+   * literal test (`do_load_project_full`: `project.file_path.as_ref() ==
+   * Some(&path)`). An alias the backend cannot see through must therefore take the
+   * NOT-already-open branch on this side too - the reload really does happen, so the
+   * seed really is needed and the guard really does have something to protect.
+   *
+   * These cases fail the moment someone "fixes" either site with canonicalization or
+   * a narrower normalization (collapsing `.`/`..`, case-folding): the first would
+   * skip a seed the reload needs, the second would skip a guard that is standing in
+   * front of unsaved in-memory survey. The webview has no filesystem to canonicalize
+   * with in any case; alias tolerance would have to start in `do_load_project_full`
+   * (`project_io::same_file`), with this side following.
+   */
+  describe('path spellings the backend would not match either', () => {
+    it('openRemote still seeds when the open project is spelled differently', async () => {
+      // Same file, dot-segment spelling. `do_load_project_full` compares literally,
+      // so it reloads - and a reload with no seed resolves through `syncProjectLink`
+      // to read-only / nothing-unpushed, dropping the permission on the floor.
+      useProjectStore.setState({ project: { file_path: '/cache/./p1.stalx' } as never });
+      invokeIpcMock.mockImplementation((cmd: string) =>
+        cmd === 'speleodb_open_project'
+          ? Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false })
+          : Promise.resolve(null),
+      );
+
+      expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+      expect(setLinkOnOpenMock).toHaveBeenCalledWith({
+        permission: 'READ_AND_WRITE',
+        forPath: '/cache/p1.stalx',
+        hasUnpushedEdits: false,
+      });
+    });
+
+    it('keepLocalCopy still guards when the open project is spelled differently', async () => {
+      // Case alias - the same file on Windows/macOS, and NOT what the backend's
+      // literal check matches. So this ends in a full reload that drops the unsaved
+      // in-memory survey, which is precisely what the disk-dirty refusal is for.
+      useProjectStore.setState({
+        project: { file_path: '/cache/P1.stalx' } as never,
+        isDirty: true,
+      });
+
+      const outcome = await hook().keepLocalCopy(SUMMARY, '/cache/p1.stalx');
+
+      expect(outcome.status).toBe('error');
+      if (outcome.status === 'error') expect(outcome.message).toMatch(/sav/i);
+      expect(loadProjectMock).not.toHaveBeenCalled();
+    });
+  });
+
   it('adoptRemote adopts, loads, and reports opened', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_adopt_ariane')
