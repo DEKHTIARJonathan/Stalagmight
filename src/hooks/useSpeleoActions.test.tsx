@@ -56,7 +56,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
       await result.current.done();
     });
 
-    expect(saveProjectMock).toHaveBeenCalledWith();
+    expect(saveProjectMock).toHaveBeenCalledWith(undefined, true);
   });
 
   it('push (→ pushed) saves the project to disk (quiet autosave)', async () => {
@@ -67,7 +67,7 @@ describe('useSpeleoActions - flush to disk after a confirmed push/unlock', () =>
       await result.current.push();
     });
 
-    expect(saveProjectMock).toHaveBeenCalledWith();
+    expect(saveProjectMock).toHaveBeenCalledWith(undefined, true);
   });
 
   it('does NOT flush on an unconfirmed push (no false-clean local state)', async () => {

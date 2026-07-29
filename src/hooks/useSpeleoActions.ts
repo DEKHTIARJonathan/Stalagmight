@@ -99,7 +99,7 @@ export function useSpeleoActions(): SpeleoActions {
   // which is the safe direction since the push already persisted the same edits.
   const flushToDiskAfterPush = useCallback(async () => {
     try {
-      await useProjectStore.getState().saveProject();
+      await useProjectStore.getState().saveProject(undefined, true);
     } catch {
       /* best-effort; isDirty stays set, which safely re-prompts on exit */
     }
