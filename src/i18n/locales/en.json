@@ -322,47 +322,6 @@
         "label": "Route through reference ties",
         "help": "Off (default): reference ties are survey connections nobody swims, so gas, penetration distance and the ruler route around them. On: restores the pre-split behaviour where every marked shot counts as swimmable - useful if a tie in your data really is divable and you would rather not reclassify it.",
         "aria": "Route through reference ties"
-      },
-      "dpv": {
-        "title": "Scooter (DPV) rig",
-        "enabled": {
-          "label": "Scooter (DPV) rig",
-          "help": "A rig is a primary scooter plus a mandatory backup - a scootered dive with no backup is not planned at all. Off (default): no scooter, penetration is limited by gas alone.",
-          "aria": "Enable a DPV rig for route planning"
-        },
-        "primarySpeed": {
-          "label": "Primary speed (m/min)",
-          "labelImperial": "Primary speed (ft/min)",
-          "help": "Cruising speed of the primary scooter.",
-          "aria": "Primary scooter speed in meters per minute",
-          "ariaImperial": "Primary scooter speed in feet per minute"
-        },
-        "primaryBurn": {
-          "label": "Primary burn time (min)",
-          "help": "Run time of the primary scooter at cruising speed.",
-          "aria": "Primary scooter burn time in minutes"
-        },
-        "backupSpeed": {
-          "label": "Backup speed (m/min)",
-          "labelImperial": "Backup speed (ft/min)",
-          "help": "Cruising speed of the mandatory backup scooter, ridden out on the return leg.",
-          "aria": "Backup scooter speed in meters per minute",
-          "ariaImperial": "Backup scooter speed in feet per minute"
-        },
-        "backupBurn": {
-          "label": "Backup burn time (min)",
-          "help": "Run time of the backup scooter at cruising speed.",
-          "aria": "Backup scooter burn time in minutes"
-        },
-        "rangeReserve": {
-          "label": "Range reserve (%)",
-          "help": "Fraction of the weaker unit's range held back for an ageing battery or flow, e.g. 20%. Applied proportionally, not as a flat distance.",
-          "aria": "DPV range reserve percentage"
-        },
-        "usableRange": {
-          "label": "Usable range",
-          "help": "One-way penetration allowance this rig buys: the weaker unit's range (not halved - primary flies in, backup flies out), less the reserve."
-        }
       }
     },
     "units": {
@@ -2373,8 +2332,11 @@
       "colTo": "To",
       "colSpeed": "Speed",
       "colScooter": "DPV",
+      "origin": "Origin",
+      "waypointN": "WP {{n}}",
+      "endpoint": "Endpoint",
       "onward": "Onward",
-      "noRigHint": "Add a DPV rig in Settings to plan scooter legs.",
+      "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
       "speedAria": "Speed for the {{from}} to {{to}} leg",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
@@ -2382,6 +2344,47 @@
       "resetSpeed": "Reset",
       "resetSpeedHint": "Return to the plan's swim speed",
       "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
+    },
+    "dpv": {
+      "title": "Scooter (DPV) rig",
+      "enabled": {
+        "label": "Scooter (DPV) rig",
+        "help": "A rig is a primary scooter plus a mandatory backup - a scootered dive with no backup is not planned at all. Off (default): no scooter, penetration is limited by gas alone.",
+        "aria": "Enable a DPV rig for route planning"
+      },
+      "primarySpeed": {
+        "label": "Primary speed (m/min)",
+        "labelImperial": "Primary speed (ft/min)",
+        "help": "Cruising speed of the primary scooter.",
+        "aria": "Primary scooter speed in meters per minute",
+        "ariaImperial": "Primary scooter speed in feet per minute"
+      },
+      "primaryBurn": {
+        "label": "Primary burn time (min)",
+        "help": "Run time of the primary scooter at cruising speed.",
+        "aria": "Primary scooter burn time in minutes"
+      },
+      "backupSpeed": {
+        "label": "Backup speed (m/min)",
+        "labelImperial": "Backup speed (ft/min)",
+        "help": "Cruising speed of the mandatory backup scooter, ridden out on the return leg.",
+        "aria": "Backup scooter speed in meters per minute",
+        "ariaImperial": "Backup scooter speed in feet per minute"
+      },
+      "backupBurn": {
+        "label": "Backup burn time (min)",
+        "help": "Run time of the backup scooter at cruising speed.",
+        "aria": "Backup scooter burn time in minutes"
+      },
+      "rangeReserve": {
+        "label": "Range reserve (%)",
+        "help": "Fraction of the weaker unit's range held back for an ageing battery or flow, e.g. 20%. Applied proportionally, not as a flat distance.",
+        "aria": "DPV range reserve percentage"
+      },
+      "usableRange": {
+        "label": "Usable range",
+        "help": "One-way penetration allowance this rig buys: the weaker unit's range (not halved - primary flies in, backup flies out), less the reserve."
+      }
     }
   },
   "modeCarousel": {
@@ -2409,7 +2412,7 @@
   },
   "planTables": {
     "tabs": {
-      "cylinders": "Cylinders",
+      "equipment": "Equipment",
       "segments": "Segments",
       "profile": "Profile"
     },
