@@ -462,14 +462,16 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.up();
       await page.keyboard.up('Control');
 
-      // Switch tools BY MOUSE, so no key event follows to correct the flag.
-      await page.getByTestId('tool-move_station').click();
-      await waitForActiveTool(page, 'move_station');
+      // Switch tools BY MOUSE, so no key event follows to correct the flag. Measure
+      // is standalone on the toolbar (the move tools sit behind a group flyout) and
+      // is itself a Ctrl+pan tool, so a latched flag still resolves to `grab` here.
+      await page.getByTestId('tool-measure').click();
+      await waitForActiveTool(page, 'measure');
 
-      // Move Station's off-feature arrow, not the stale pan grab.
+      // Measure's own crosshair, not the stale pan grab.
       await expect
         .poll(() => page.evaluate(() => document.querySelector('canvas')?.style.cursor || ''))
-        .toBe('default');
+        .toBe('crosshair');
     });
   });
 });
