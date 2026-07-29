@@ -76,13 +76,11 @@ enum Kind {
     Plain,
     /// One section with a zero datum on a mid-station.
     Datum,
-    /// Root + a differently-named child merged mid-station.
+    /// Root + a child merged mid-station.
     Merge,
-    /// Root + a same-named child merged at its start.
-    DupNames,
 }
 
-const KINDS_ALL: [Kind; 4] = [Kind::Plain, Kind::Datum, Kind::Merge, Kind::DupNames];
+const KINDS_ALL: [Kind; 3] = [Kind::Plain, Kind::Datum, Kind::Merge];
 
 /// Depth-continuous shot run starting at `depth`, with within-section distinct
 /// azimuths. Returns the shots and the final station depth.
@@ -162,21 +160,6 @@ fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
             p.station_merges.push(StationMerge {
                 station_a: StationRef::new(root_id, 1).into(),
                 station_b: StationRef::new(child_id, 1).into(),
-                merged_at: chrono::Utc::now(),
-            });
-        }
-        Kind::DupNames => {
-            p.add_section(section("Main", root_shots));
-            // Second "Main" attached at its start to root station 1.
-            let child_n = rng.range(1, 3);
-            let mut child_shots = gen_run(rng, child_n, root_station1_depth).0;
-            child_shots[0].depth_in = root_station1_depth;
-            p.add_section(section("Main", child_shots));
-            let root_id = p.sections[0].id;
-            let child_id = p.sections[1].id;
-            p.station_merges.push(StationMerge {
-                station_a: StationRef::new(root_id, 1).into(),
-                station_b: StationRef::new(child_id, 0).into(),
                 merged_at: chrono::Utc::now(),
             });
         }

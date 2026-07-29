@@ -45,6 +45,12 @@ describe('saveProject autosave quieting', () => {
     useProjectStore.setState({ project: null, isDirty: false } as never);
   });
 
+  const resolveSave = () => {
+    invokeIpcMock.mockImplementation(async (command: string) =>
+      command === 'save_project' ? { success: true, saved_path: '/cave.stalx' } : undefined
+    );
+  };
+
   const denyPermission = () => {
     invokeIpcMock.mockImplementation(async (command: string) => {
       if (command === 'save_project') {
@@ -73,9 +79,7 @@ describe('saveProject autosave quieting', () => {
   });
 
   it('skips the post-save integrity re-check on a clean autosave', async () => {
-    invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project' ? { success: true, saved_path: '/cave.stalx' } : undefined
-    );
+    resolveSave();
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
@@ -83,9 +87,7 @@ describe('saveProject autosave quieting', () => {
   });
 
   it('still re-checks integrity on a manual save', async () => {
-    invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project' ? { success: true, saved_path: '/cave.stalx' } : undefined
-    );
+    resolveSave();
 
     await useProjectStore.getState().saveProject('/cave.stalx');
 
@@ -93,9 +95,7 @@ describe('saveProject autosave quieting', () => {
   });
 
   it('never sends isAutosave over IPC - the backend save is identical either way', async () => {
-    invokeIpcMock.mockImplementation(async (command: string) =>
-      command === 'save_project' ? { success: true, saved_path: '/cave.stalx' } : undefined
-    );
+    resolveSave();
 
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
