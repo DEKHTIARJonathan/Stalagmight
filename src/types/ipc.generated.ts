@@ -37,6 +37,7 @@ export * from './ipc/GasReachField';
 export * from './ipc/MarkedPoint';
 export * from './ipc/DivePlanSnapshot';
 export * from './ipc/DivePlanMeta';
+export * from './ipc/PlanAnchorSet';
 export * from './ipc/DivePlan';
 export * from './ipc/RouteLeg';
 export * from './ipc/RouteProfilePoint';
