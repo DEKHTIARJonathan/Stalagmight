@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use super::AppState;
 use crate::config::GasConfig;
+use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
     Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
     PlanSegment, Project, StationKey, StationRef, DIVE_PLAN_SCHEMA_VERSION,
@@ -47,6 +48,25 @@ pub(crate) const MAX_SEGMENTS: usize = MAX_WAYPOINTS + 1;
 /// reach it - but each one is a DOM element plus a station lookup on the frontend, so the same
 /// hand-edited-file reasoning applies.
 const MAX_MARKED_POINTS: usize = 500;
+
+/// Upper bound on ONE call to the anchor-translation pair (#310), which unlike every sibling list
+/// had no bound at all. Each entry costs a section scan under the project mutex - the same lock the
+/// map, the data table and every mutation contend for - so an unbounded batch is a lock-hold
+/// amplifier, not merely slow.
+///
+/// Derived from the caps that already bound what a plan can hold, rather than picked:
+///
+/// ```text
+///   2                   origin + endpoint
+/// + MAX_WAYPOINTS       the ordered way points
+/// + MAX_MARKED_POINTS   the marked points
+/// + MAX_WAYPOINTS       stage-drop overrides (capped at the way-point bound on load)
+/// = 630 pins in one plan
+/// x 2                   the frontend legitimately re-anchors the LIVE plan and its saved
+///                       baseline in one pass
+/// = 1260
+/// ```
+const MAX_PLAN_ANCHOR_BATCH: usize = 2 * (2 + MAX_WAYPOINTS + MAX_MARKED_POINTS + MAX_WAYPOINTS);
 
 /// The open project's `.plnx` sibling path plus the identity we stamp/verify it
 /// with (`created_at` is immutable, so it survives a file rename).
@@ -485,38 +505,121 @@ fn resolve_keeping_anchor(
     }
 }
 
+/// A span the diver never gave a speed of its own: it flies at the plan speed, off the scooter.
+fn inherited_segment() -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: None,
+        on_scooter: false,
+    }
+}
+
+/// The speed a span will ACTUALLY be flown at, which is the only basis on which two spans can be
+/// compared.
+///
+/// The validity filter is not a nicety: it is the engine's, deliberately, because a stored number
+/// the engine will not honour must not be allowed to win a comparison here either. `resolve_segments`
+/// (`models/project/gas/scooter.rs`) falls back to the plan speed for anything outside
+/// `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`, so a hand-edited `.plnx` holding a
+/// denormal like `1e-320` would otherwise read as "the slowest span there is" to the fold below,
+/// which would keep it - and the engine would then discard it and fly the merged span at the PLAN
+/// speed, faster than either half. That is the exact direction these merges exist to prevent, so
+/// both sides have to agree on which numbers are real.
+fn effective_speed(seg: &PlanSegment, plan_speed: f64) -> f64 {
+    seg.speed_m_per_min
+        .filter(|v| (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(v))
+        .unwrap_or(plan_speed)
+}
+
+/// Collapse two adjacent spans into one, conservatively - the arithmetic shared by every place a
+/// segment boundary disappears (#317).
+///
+/// Both fields go the direction that can only ever make the merged span cost MORE, never less:
+///
+/// - **Speed: the slower of the two.** Gas is `rmv x ata(depth) x length / speed`, so the slower
+///   span is the dearer one. "Slower" is decided on the EFFECTIVE speeds, which is why `plan_speed`
+///   is a parameter: a span with no speed of its own inherits the plan's, and comparing `None`
+///   against a number without resolving it first would pick the wrong half in one direction or the
+///   other. A tie keeps `prev`, so a span inheriting the plan speed keeps inheriting it rather than
+///   being frozen at whatever the plan speed happened to be that day.
+/// - **`on_scooter`: OR, not AND.** The flag spends the rig's usable range, and range is a CAP
+///   (`scootered <= limit`), so LESS spend means MORE reach. ANDing was therefore the
+///   reach-EXTENDING direction, not the safe one: merging `{55, true}` with `{55, false}` under AND
+///   kept the speed at 55 and dropped the whole first span's range spend, so the plan reached
+///   further than either half allowed. Assuming the merged span is scootered spends its range, and
+///   spending range can only pull the turn point closer.
+fn fold_segments(prev: PlanSegment, next: PlanSegment, plan_speed: f64) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: if effective_speed(&next, plan_speed) < effective_speed(&prev, plan_speed)
+        {
+            next.speed_m_per_min
+        } else {
+            prev.speed_m_per_min
+        },
+        on_scooter: prev.on_scooter || next.on_scooter,
+    }
+}
+
+/// Force the `segments.len() == waypoint_count + 1` invariant, FOLDING any excess rather than
+/// dropping it (#317).
+///
+/// Everything downstream - the panel's table, the engine's per-span re-weighting, the store's
+/// add/remove-way-point arithmetic - takes the invariant as given and none of them heal a
+/// violation, so it has to be established on the way past. Both directions are reachable: a plan
+/// written before segments existed carries zero rows, and a hand-edited `.plnx` carries any number
+/// at all.
+///
+/// A short list is PADDED with inherited spans - the file described those spans, it simply did not
+/// describe the later ones, and an unedited span has always meant "fly it at the plan speed".
+///
+/// A long list is FOLDED into the final retained span with [`fold_segments`], never truncated. A
+/// bare truncate silently discards the diver's statement about how those spans are flown, and every
+/// field it discards is discarded in the reach-extending direction: a dropped slow speed becomes the
+/// plan speed (cheaper on gas), a dropped `on_scooter` stops spending range. Folding keeps the
+/// slowest speed and any scooter use, so an over-long list can only ever cost more than the file
+/// claimed.
+fn normalize_segment_count(
+    mut segments: Vec<PlanSegment>,
+    waypoint_count: usize,
+    plan_speed: f64,
+) -> Vec<PlanSegment> {
+    // A plan always has at least the one span from the origin into the open field, so `want >= 1`
+    // and the fold below always has a span to fold INTO.
+    let want = waypoint_count + 1;
+    if segments.len() > want {
+        let tail = segments.split_off(want);
+        if let Some(last) = segments.last_mut() {
+            for seg in tail {
+                *last = fold_segments(*last, seg, plan_speed);
+            }
+        }
+    } else {
+        segments.resize_with(want, inherited_segment);
+    }
+    segments
+}
+
 /// Merge a persisted segment list against which way points survived resolution (#317).
 ///
 /// ⚠ **This is not the backend half of the store's `mergeSegments`.** The names line up and the
 /// arithmetic is shared, but they answer different questions and neither can stand in for the
 /// other: this one reconciles DANGLING ANCHORS on load - way points the survey no longer
 /// contains, which the user never touched and may not know about - while the store's version
-/// implements the user pressing "remove this way point". Only the conservative arithmetic below
-/// is common to both (slower effective speed wins, `on_scooter` is ANDed), and that is what the
-/// tests on either side pin. Do not "unify" them; a change to one is not automatically a change
-/// the other wants.
+/// implements the user pressing "remove this way point". Only the conservative arithmetic in
+/// [`fold_segments`] is common to both, and that is what the tests on either side pin. Do not
+/// "unify" them; a change to one is not automatically a change the other wants.
 ///
 /// Segments are positional against way points (`segments.len() == waypoints.len() + 1`): span
 /// `k` runs between way point `k-1` and way point `k` (span 0 runs from the origin, the last span
 /// covers the open reach field past the final way point). When way point `j` is DROPPED (its
 /// station no longer resolves), the two spans it used to separate collapse into one - the diver's
 /// actual route no longer stops there, so there is no longer a boundary across which two
-/// different speeds could apply. The merged span takes the SLOWER of the two speeds and requires
-/// BOTH halves to have been scootered (`on_scooter = a && b`): both are the conservative
-/// direction - the merged segment can only ever cost MORE gas or LESS scooter range than either
-/// half implied on its own, never less of either (the safe direction, section 6).
-///
-/// "Slower" is decided on the EFFECTIVE speeds, which is why `plan_speed` is a parameter: a span
-/// with no speed of its own inherits the plan's, and comparing `None` against a number without
-/// resolving it first would pick the wrong half in one direction or the other. When the inheriting
-/// half wins (or ties) the merged span keeps its `None`, so a span the diver never edited still
-/// follows the plan speed afterwards rather than being frozen at whatever it happened to be.
+/// different speeds could apply.
 ///
 /// `survived[j]` reports whether way point `j` (0-indexed into the pre-drop list) resolved - the
 /// mask [`from_anchors_with_survival`] returns. A length mismatch against `segments` is only
 /// reachable via a hand-edited `.plnx` (the trusted write path always saves
 /// `segments.len() == waypoints.len() + 1`), and it IS reachable here: this runs on the raw
-/// persisted list, before `resolve_persisted` normalises the length. It degrades gracefully by
+/// persisted list, before `normalize_segment_count` settles the length. It degrades gracefully by
 /// treating any waypoint position past the end of `survived` as surviving, so a malformed file
 /// can only ever leave a span un-merged, never merge across a boundary the mask does not
 /// actually describe.
@@ -525,27 +628,13 @@ fn merge_segments_for_surviving_waypoints(
     survived: &[bool],
     plan_speed: f64,
 ) -> Vec<PlanSegment> {
-    let effective = |s: &PlanSegment| {
-        s.speed_m_per_min
-            .filter(|v| v.is_finite() && *v > 0.0)
-            .unwrap_or(plan_speed)
-    };
     let last_index = segments.len().saturating_sub(1);
     let mut merged = Vec::new();
     let mut pending: Option<PlanSegment> = None;
     for (j, seg) in segments.into_iter().enumerate() {
         pending = Some(match pending {
             None => seg,
-            Some(prev) => PlanSegment {
-                // Tie goes to `prev`, so an inherited span survives a merge with an explicit span
-                // set to the very same speed.
-                speed_m_per_min: if effective(&seg) < effective(&prev) {
-                    seg.speed_m_per_min
-                } else {
-                    prev.speed_m_per_min
-                },
-                on_scooter: prev.on_scooter && seg.on_scooter,
-            },
+            Some(prev) => fold_segments(prev, seg, plan_speed),
         });
         let waypoint_survived = survived.get(j).copied().unwrap_or(true);
         if j == last_index || waypoint_survived {
@@ -555,6 +644,30 @@ fn merge_segments_for_surviving_waypoints(
         }
     }
     merged
+}
+
+/// The speed a span with no speed of its own is flown at: the plan's survey speed, or its swim
+/// speed when the plan is symmetric.
+fn plan_speed_of(config: &GasConfig) -> f64 {
+    config
+        .survey_speed_m_per_min
+        .unwrap_or(config.swim_speed_m_per_min)
+}
+
+/// Bound one anchor-translation batch (#310), mirroring the way-point and segment caps.
+///
+/// REJECT rather than truncate, for the reason those two do: the two commands are index-aligned
+/// with their input, so a short answer would silently re-anchor only the first `N` pins and leave
+/// the rest of the plan holding stale ones - the caller has no way to tell that from a batch where
+/// the tail genuinely did not place. The bound is far past any real plan (see
+/// [`MAX_PLAN_ANCHOR_BATCH`]), so this is unreachable from normal use.
+fn validate_anchor_batch(len: usize) -> Result<(), String> {
+    if len > MAX_PLAN_ANCHOR_BATCH {
+        return Err(format!(
+            "Too many plan anchors: {len} (max {MAX_PLAN_ANCHOR_BATCH})."
+        ));
+    }
+    Ok(())
 }
 
 /// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
@@ -662,6 +775,7 @@ impl AppState {
         &self,
         refs: Vec<StationRef>,
     ) -> Result<Vec<Option<StoredAnchor>>, String> {
+        validate_anchor_batch(refs.len())?;
         let guard = self
             .project
             .lock()
@@ -683,6 +797,7 @@ impl AppState {
         &self,
         anchors: Vec<StoredAnchor>,
     ) -> Result<Vec<Option<StationRef>>, String> {
+        validate_anchor_batch(anchors.len())?;
         let guard = self
             .project
             .lock()
@@ -837,12 +952,18 @@ impl AppState {
                 .map(|o| to_anchor(project, *o))
                 .collect(),
             marked_points,
-            // Unlike a dangling way point (refused above) or an over-long list (also refused via
-            // the MAX_WAYPOINTS/MAX_MARKED_POINTS checks), a segment past MAX_SEGMENTS describes a
-            // span that cannot exist for ANY plan (segments are already bounded by way points, so
-            // this only fires on a malformed caller) - truncating it drops nothing a real plan could
-            // have meant, so there is no user-facing refusal to write here.
-            segments: snap.segments.iter().copied().take(MAX_SEGMENTS).collect(),
+            // Normalised, not truncated. A segment past `waypoints.len() + 1` describes a span that
+            // cannot exist for ANY plan, so unlike a dangling way point (refused above) there is
+            // nothing to refuse the write over - but the data in it is still the diver's statement
+            // about how a span is flown, and `take()` dropped it in the reach-extending direction.
+            // `normalize_segment_count` folds it in instead; way points are capped just above, so
+            // the result is `<= MAX_SEGMENTS` by construction and that separate cap can no longer
+            // bind here.
+            segments: normalize_segment_count(
+                snap.segments.clone(),
+                snap.waypoints.len(),
+                plan_speed_of(&snap.gas_config),
+            ),
         })
     }
 
@@ -878,26 +999,14 @@ impl AppState {
         // the survival mask above BEFORE anything about waypoints changes shape - see
         // `merge_segments_for_surviving_waypoints`. It runs on the RAW persisted list (any
         // length): the mask describes the input positions, so trimming first would misalign it.
-        let plan_speed = p
-            .gas_config
-            .survey_speed_m_per_min
-            .unwrap_or(p.gas_config.swim_speed_m_per_min);
-        let mut segments =
+        let plan_speed = plan_speed_of(&p.gas_config);
+        let segments =
             merge_segments_for_surviving_waypoints(p.segments, &waypoints_survived, plan_speed);
-        // The one place the `segments.len() == waypoints.len() + 1` invariant is actually
-        // ESTABLISHED rather than assumed (#317). Everything downstream - the panel's table, the
-        // engine's per-span re-weighting, the store's add/remove-way-point arithmetic - takes it
-        // as given and none of them heal a violation, so a plan written before segments existed
-        // (zero rows) or a hand-edited file (any number of rows) has to be normalised on the way
-        // in. `resize_with` both pads and truncates, which is why it replaces the old
-        // `take(MAX_SEGMENTS)` here: way points are already capped just above, so
-        // `waypoints.len() + 1 <= MAX_SEGMENTS` holds by construction and a separate cap can no
-        // longer bind. A padded span carries no speed of its own, so it flies at the plan speed
-        // rather than being frozen at some default the diver never chose.
-        segments.resize_with(waypoints.len() + 1, || PlanSegment {
-            speed_m_per_min: None,
-            on_scooter: false,
-        });
+        // The load side of the `segments.len() == waypoints.len() + 1` invariant (#317), which a
+        // plan written before segments existed (zero rows) and a hand-edited file (any number of
+        // rows) both violate. Way points are already capped just above, so `waypoints.len() + 1 <=
+        // MAX_SEGMENTS` holds by construction and that separate cap can no longer bind here.
+        let segments = normalize_segment_count(segments, waypoints.len(), plan_speed);
         // Capped on the way IN like the way points and marked points, and for the same reason:
         // the threat is a hand-edited `.plnx`, which by definition never crosses the write
         // path. One entry per stage cylinder is the real bound (`gas.rs` already truncates the
@@ -1924,17 +2033,16 @@ mod tests {
     }
 
     #[test]
-    fn dropping_a_waypoint_merges_its_two_adjacent_segments_to_the_slower_speed_and_ands_the_flag()
-    {
+    fn dropping_a_waypoint_merges_its_two_adjacent_segments_to_the_slower_speed_and_ors_the_flag() {
         // THE #317 headline case. Segments are positional against way points, so dropping way
         // point `j` collapses the spans on either side of it (segments `j` and `j+1`) into one.
-        // The merge must go the SAFE direction on both fields - the slower of the two speeds, and
-        // scootered only if BOTH halves were - never the opposite, because either would
-        // understate the gas the merged span actually costs (section 6).
+        // The merge must go the direction that can only cost MORE on both fields - the slower of
+        // the two speeds (dearer gas), and scootered if EITHER half was (spends range, and range
+        // is a cap, so spending it can only pull the turn point closer).
         //
         // The two segments to merge are built so neither "take the first", "take the second",
-        // "max" nor "OR the flag" reproduces the correct answer: only min(speed) + (a && b)
-        // lands on {8.0, false}.
+        // "max speed" nor "AND the flag" reproduces the correct answer: only min(speed) + (a || b)
+        // lands on {8.0, true}.
         let (mut project, sec) = project_6_shots();
         let state = AppState::new().unwrap();
 
@@ -1958,11 +2066,11 @@ mod tests {
                 }, // origin -> waypoint 0
                 PlanSegment {
                     speed_m_per_min: Some(8.0),
-                    on_scooter: true,
+                    on_scooter: false,
                 }, // waypoint 0 -> waypoint 1 (merges away)
                 PlanSegment {
                     speed_m_per_min: Some(15.0),
-                    on_scooter: false,
+                    on_scooter: true,
                 }, // waypoint 1 -> waypoint 2 (merges away)
                 PlanSegment {
                     speed_m_per_min: Some(30.0),
@@ -1998,9 +2106,9 @@ mod tests {
             resolved.segments[1],
             PlanSegment {
                 speed_m_per_min: Some(8.0),
-                on_scooter: false,
+                on_scooter: true,
             },
-            "the merged span must take the SLOWER speed and require BOTH halves scootered"
+            "the merged span must take the SLOWER speed and be scootered if EITHER half was"
         );
         assert_eq!(
             resolved.segments[2],
@@ -2012,44 +2120,131 @@ mod tests {
         );
     }
 
+    /// The flag on its own, with the speeds held equal so nothing else can carry the result.
+    ///
+    /// `on_scooter` only ever spends the rig's usable RANGE, and range is a cap
+    /// (`scootered <= limit`), so less spend means more reach. ANDing the flag was therefore the
+    /// reach-EXTENDING direction dressed up as the safe one: the merged span below keeps its 55
+    /// m/min - identical gas - while dropping the whole first span's range spend, so the plan
+    /// reaches further than either half allowed.
     #[test]
-    fn over_long_segment_list_is_capped_on_save_and_on_load() {
-        // Mirrors the way point / marked point caps: MAX_SEGMENTS exists for a hand-edited
-        // `.plnx` (the trusted write path never saves more than `waypoints.len() + 1`), so both
-        // directions must enforce it independently.
+    fn a_merged_span_is_scootered_when_either_half_was() {
+        let merged = merge_segments_for_surviving_waypoints(
+            vec![
+                PlanSegment {
+                    speed_m_per_min: Some(55.0),
+                    on_scooter: true,
+                },
+                PlanSegment {
+                    speed_m_per_min: Some(55.0),
+                    on_scooter: false,
+                },
+            ],
+            // The single way point between them no longer resolves, so the two spans collapse.
+            &[false],
+            10.0,
+        );
+        assert_eq!(
+            merged,
+            vec![PlanSegment {
+                speed_m_per_min: Some(55.0),
+                on_scooter: true,
+            }],
+            "with the gas unchanged, dropping the range spend can only extend reach"
+        );
+    }
+
+    /// The merge and the engine must agree on which stored speeds are REAL.
+    ///
+    /// `resolve_segments` honours only `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`
+    /// and flies anything else at the plan speed. A merge that ranked speeds on a looser domain
+    /// would hand a denormal from a hand-edited `.plnx` the "slowest span" prize and keep it - and
+    /// the engine would then discard it and fly the merged span at the plan's 10 m/min, FASTER than
+    /// either half, which is the exact direction the merge exists to prevent.
+    #[test]
+    fn a_speed_the_engine_will_not_honour_never_wins_the_merge() {
+        let merged = merge_segments_for_surviving_waypoints(
+            vec![
+                PlanSegment {
+                    // Below MIN_SEGMENT_SPEED_M_PER_MIN: the engine flies this span at 10.0.
+                    speed_m_per_min: Some(1e-320),
+                    on_scooter: false,
+                },
+                PlanSegment {
+                    speed_m_per_min: Some(3.0),
+                    on_scooter: false,
+                },
+            ],
+            &[false],
+            10.0,
+        );
+        assert_eq!(
+            merged.len(),
+            1,
+            "the way point dangled, so the two spans collapse"
+        );
+        assert_eq!(
+            merged[0].speed_m_per_min,
+            Some(3.0),
+            "3 m/min is the slowest speed either half will ACTUALLY be flown at"
+        );
+    }
+
+    #[test]
+    fn an_over_long_segment_list_is_folded_into_the_closing_span_not_truncated() {
+        // A hand-edited `.plnx` (and a caller that never touches a file) can carry any number of
+        // segments; a plan has exactly `waypoints.len() + 1` spans. Both directions have to settle
+        // that, and neither may do it by dropping the excess: every field a truncate discards is
+        // discarded in the reach-extending direction - a dropped slow speed becomes the plan speed
+        // (cheaper gas), a dropped `on_scooter` stops spending range.
+        //
+        // So the tail here carries values DISTINCT from the spans that survive: the two retained
+        // spans inherit (10 m/min, no scooter), the tail runs at 5 and closes at 3 with the scooter
+        // on. A truncate leaves the closing span inheriting; the fold leaves it {3.0, true}.
         let temp = TempDir::new().unwrap();
         let (mut project, sec) = project_3_shots();
         project.file_path = Some(temp.path().join("cave.stalx"));
         let state = AppState::new().unwrap();
         *state.project.lock().unwrap() = Some(project);
 
-        // Save-side: truncated, not refused - a segment past MAX_SEGMENTS describes a span that
-        // cannot exist for any plan, so there is nothing to warn the user about.
-        let mut snapshot = snapshot_with_route_points(sec);
-        snapshot.segments = vec![
+        let mut long_list = vec![inherited_segment(), inherited_segment()];
+        long_list.extend(std::iter::repeat_n(
             PlanSegment {
                 speed_m_per_min: Some(5.0),
                 on_scooter: false,
-            };
-            MAX_SEGMENTS + 25
-        ];
-        let persisted = state.to_persisted(&snapshot).unwrap();
-        assert_eq!(persisted.segments.len(), MAX_SEGMENTS);
+            },
+            MAX_SEGMENTS + 24,
+        ));
+        long_list.push(PlanSegment {
+            speed_m_per_min: Some(3.0),
+            on_scooter: true,
+        });
+        let folded = PlanSegment {
+            speed_m_per_min: Some(3.0),
+            on_scooter: true,
+        };
 
-        // Load-side: a hand-edited file bypasses the save-time cap entirely, and the load path
-        // holds the tighter line - not `MAX_SEGMENTS` but the actual invariant, one segment per
-        // span of THIS plan. The snapshot has a single way point, so two spans.
+        // Save-side. The snapshot carries one way point, so two spans - and `MAX_SEGMENTS` never
+        // gets to bind, because `waypoints.len() + 1` is the tighter line.
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.segments = long_list.clone();
+        let persisted = state.to_persisted(&snapshot).unwrap();
+        assert_eq!(persisted.segments.len(), 2);
+        assert_eq!(
+            persisted.segments[1], folded,
+            "the discarded tail's slowest speed and its scooter use must reach the disk"
+        );
+
+        // Load-side, which is where a doctored file actually enters.
         let mut doctored = persisted;
-        doctored.segments = vec![
-            PlanSegment {
-                speed_m_per_min: Some(5.0),
-                on_scooter: false,
-            };
-            MAX_SEGMENTS + 25
-        ];
+        doctored.segments = long_list;
         let (resolved, _anchors, _stale) = state.resolve_persisted(doctored).unwrap();
         assert_eq!(resolved.waypoints.len(), 1);
         assert_eq!(resolved.segments.len(), 2);
+        assert_eq!(
+            resolved.segments[1], folded,
+            "and again on the way back in - a load must not drop it either"
+        );
     }
 
     /// Every plan written before #317 has NO segments at all, and nothing downstream heals that:
@@ -2502,5 +2697,48 @@ mod tests {
         let state = AppState::new().unwrap();
         assert!(state.plan_anchors_for_refs(Vec::new()).is_err());
         assert!(state.plan_refs_for_anchors(Vec::new()).is_err());
+    }
+
+    /// Both anchor commands are bounded, like every other list a plan can hold.
+    ///
+    /// They are the one pair that never had a cap, and each entry costs a section scan under the
+    /// project mutex - the lock the map, the data table and every mutation contend for - so an
+    /// unbounded batch holds that lock for as long as the caller cares to make it. The bound is
+    /// derived from the plan's own caps and doubled for the live-plus-baseline pass the frontend
+    /// legitimately makes, so a real plan can never reach it.
+    #[test]
+    fn the_anchor_commands_refuse_an_over_long_batch() {
+        let (project, sec) = project_3_shots();
+        let anchor = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+        let state = state_with(project);
+        let station = StationRef::new(sec, 2);
+
+        // Exactly at the cap is fine - the boundary is inclusive, and every entry is answered.
+        assert_eq!(
+            state
+                .plan_anchors_for_refs(vec![station; MAX_PLAN_ANCHOR_BATCH])
+                .unwrap()
+                .len(),
+            MAX_PLAN_ANCHOR_BATCH
+        );
+        assert_eq!(
+            state
+                .plan_refs_for_anchors(vec![anchor.clone(); MAX_PLAN_ANCHOR_BATCH])
+                .unwrap()
+                .len(),
+            MAX_PLAN_ANCHOR_BATCH
+        );
+
+        // One past it is refused outright rather than answered short: the reply is index-aligned
+        // with the input, so a truncated answer would silently leave the tail of the plan holding
+        // stale pins, indistinguishable from pins that genuinely no longer place.
+        let err = state
+            .plan_anchors_for_refs(vec![station; MAX_PLAN_ANCHOR_BATCH + 1])
+            .unwrap_err();
+        assert!(err.contains("Too many plan anchors"), "got: {err}");
+        let err = state
+            .plan_refs_for_anchors(vec![anchor; MAX_PLAN_ANCHOR_BATCH + 1])
+            .unwrap_err();
+        assert!(err.contains("Too many plan anchors"), "got: {err}");
     }
 }

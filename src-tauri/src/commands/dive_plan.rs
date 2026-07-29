@@ -65,6 +65,9 @@ pub async fn save_dive_plan(
 /// had that problem because it stores anchors - this hands the same anchors to the frontend for
 /// the plan it is holding in memory. An anchor is OPAQUE on the wire (`unknown` in TS): store it
 /// and give it back to [`plan_refs_for_anchors`], nothing else.
+///
+/// The batch is length-capped in `AppState` (`MAX_PLAN_ANCHOR_BATCH`), like every other list a
+/// plan can hold: each entry costs a section scan under the project mutex.
 #[tauri::command]
 pub async fn plan_anchors_for_refs(
     app_handle: tauri::AppHandle,
@@ -84,7 +87,8 @@ pub async fn plan_anchors_for_refs(
 }
 
 /// Place anchors against the survey as it stands now (#310), index-aligned with `anchors`;
-/// `None` for one that no longer places. The read half of [`plan_anchors_for_refs`].
+/// `None` for one that no longer places. The read half of [`plan_anchors_for_refs`], and capped
+/// the same way.
 #[tauri::command]
 pub async fn plan_refs_for_anchors(
     app_handle: tauri::AppHandle,

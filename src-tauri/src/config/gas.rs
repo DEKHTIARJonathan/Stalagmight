@@ -152,6 +152,15 @@ impl DpvUnit {
 /// backup, so the exit mirrors the entry segment for segment and `gas_out == gas_in` exactly. The
 /// existing fraction reserves (thirds, Half-Minus, Free) therefore stay correct and untouched, and
 /// the scooter only ever adds a SECOND, non-gas constraint - see [`DpvRig::usable_range_m`].
+///
+/// ⚠ That symmetry is EXACT only while both units cruise at the same speed, which the seeded
+/// default does. Gas on a span is `rmv x ata(depth) x length / speed`, so a slower backup takes
+/// proportionally longer to fly the same passage home and costs proportionally more gas to do it -
+/// a 55/30 rig spends roughly 1.83x the entry gas on each scootered span of the exit, and nothing
+/// in the engine accounts for that today. What absorbs it is the fraction reserve: thirds and
+/// Half-Minus hold back more than the entry leg cost, and that margin is the buffer a mismatched
+/// pair eats into. Pricing the exit on the backup's own speed is a domain call for the maintainers,
+/// not something to slip in behind this comment.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS)]
 pub struct DpvRig {
     pub primary: DpvUnit,
