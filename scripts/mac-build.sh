@@ -162,12 +162,27 @@ else
 fi
 ok "Production build complete"
 
-# ── Step 6a: Ad-hoc code sign ────────────────────────────────────────────────
+# ── Step 6a: Verify the ad-hoc code signature ───────────────────────────────
+# Tauri signs the app itself now, via bundle.macOS.signingIdentity in
+# tauri.conf.json. That matters for ordering: signing has to happen before the
+# DMG is built, and this step used to run after, so the .app on disk got signed
+# while the DMG next to it kept an unsigned copy. Verifying is all that is left
+# to do here, and it is the more useful job, because an invalid signature is not
+# a warning the user can dismiss - macOS calls the app "damaged" and refuses to
+# open it at all (#350).
 APP_BUNDLE="$CARGO_TARGET/release/bundle/macos/Stalagmight.app"
 if [[ -d "$APP_BUNDLE" ]]; then
-  info "Ad-hoc signing Stalagmight.app"
-  codesign --force --deep -s - "$APP_BUNDLE"
-  ok "Ad-hoc signed (users can right-click → Open to bypass Gatekeeper)"
+  info "Verifying Stalagmight.app code signature"
+  # --deep --strict is the check that matters: a bundle carrying only the Rust
+  # linker's ad-hoc signature, with no sealed resources, still looks signed to a
+  # plain `codesign -dv` but fails here.
+  if codesign --verify --deep --strict "$APP_BUNDLE" 2>/dev/null; then
+    ok "Ad-hoc signed (users can right-click → Open to bypass Gatekeeper)"
+  else
+    warn "Stalagmight.app is NOT validly signed - macOS will call it damaged"
+    warn "  check bundle.macOS.signingIdentity in src-tauri/tauri.conf.json"
+    codesign --verify --deep --strict "$APP_BUNDLE" || true
+  fi
 fi
 
 # ── Step 7: Report artifacts ────────────────────────────────────────────────

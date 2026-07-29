@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+- macOS: the released `.app` would not open at all, reporting "damaged and can't be opened". No signing identity was configured, so Tauri skipped code signing and the bundle shipped with only the Rust linker's ad-hoc signature on the inner binary, which macOS rejects as invalid rather than merely unsigned. The app is now ad-hoc signed before the DMG is built, and the release workflow verifies the app inside the DMG. First launch still shows the usual unnotarized-app warning, which right-click then **Open** dismisses ([#350](https://github.com/Stalagmight/Stalagmight/issues/350))
+
 ### Changed
 
 - CI: GitHub Actions bumped to versions that run on Node.js 24, ahead of the Node.js 20 runtime deprecation ([#351](https://github.com/Stalagmight/Stalagmight/issues/351))

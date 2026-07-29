@@ -89,6 +89,36 @@ jobs:
         run: pnpm tauri build -- --features telemetry
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+      # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
+      # cause was an absent signature rather than a corrupt download: with no
+      # signing identity Tauri skips codesign entirely, leaving only the Rust
+      # linker's ad-hoc signature on the inner binary, which is inconsistent with
+      # the bundle around it. That is an *invalid* signature, and unlike the
+      # ordinary unnotarized-app warning the user cannot click past it. Tauri now
+      # ad-hoc signs via bundle.macOS.signingIdentity, which happens before the
+      # DMG is built. Verify the app inside the DMG, because that is the artifact
+      # someone actually downloads, and a silent regression here is invisible
+      # until a human tries to launch it. See #350.
+      - name: Verify the shipped macOS app is validly signed
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          dmgs=( "$BUNDLE_DIR"/dmg/*.dmg )
+          [ ${#dmgs[@]} -eq 1 ] || { echo "::error::expected 1 DMG, found ${#dmgs[@]}"; exit 1; }
+          MNT="$(mktemp -d)"
+          cleanup() { hdiutil detach "$MNT" -quiet 2>/dev/null || true; }
+          trap cleanup EXIT
+          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$MNT"
+          APP="$MNT/Stalagmight.app"
+          [ -d "$APP" ] || { echo "::error::no Stalagmight.app inside the DMG"; exit 1; }
+          codesign -dv --verbose=2 "$APP"
+          # --deep --strict is what the rc1 bundle failed: a signature with no
+          # sealed resources and no _CodeSignature directory is rejected here,
+          # while a plain `codesign -dv` still prints a signature and looks fine.
+          codesign --verify --deep --strict --verbose=2 "$APP"
+          echo "macOS bundle signature verified"
       - name: Collect release artifacts
         shell: bash
         run: |
@@ -114,9 +144,10 @@ jobs:
             echo "::error::No artifacts found in $BUNDLE_DIR"
             exit 1
           fi
-      # Nothing is code-signed, and the release notes tell recipients how to
-      # click past the OS warning, so give them something to check the download
-      # against. Computed on the runner that built the bytes.
+      # Nothing is notarized (macOS is only ad-hoc signed, Windows not at all),
+      # and the release notes tell recipients how to click past the OS warning,
+      # so give them something to check the download against. Computed on the
+      # runner that built the bytes.
       - name: Checksum this platform's artifacts
         shell: bash
         working-directory: release-artifacts

@@ -140,12 +140,24 @@ git push origin master && git push origin --tags
   the easy one to miss.
 - `fail-fast` is off so every platform reports its own failure, but `release`
   depends on all three builds, so a partial artifact set is never published.
-- Nothing is code-signed. The release notes get an "Installing" footer telling
-  recipients how to get past Gatekeeper and SmartScreen. Because those steps
-  talk people through overriding a security warning, the release also ships a
-  `SHA256SUMS` generated on the runner that built the binaries, and the footer
-  points at it. Signing/notarization is an open decision on
+- **The macOS app is ad-hoc signed; nothing is notarized, and Windows is
+  unsigned.** Tauri signs the app itself, from `bundle.macOS.signingIdentity` in
+  `tauri.conf.json`, which happens before the DMG is built. Do not move signing
+  after the build: v0.5.0-rc1 shipped with no identity set, so Tauri skipped
+  codesign and the bundle carried only the Rust linker's ad-hoc signature on the
+  inner binary. That combination is *invalid* rather than merely unsigned, and
+  macOS reports it as "damaged and can't be opened" with no way for the user to
+  click past it, unlike the ordinary unnotarized warning
+  ([#350](https://github.com/Stalagmight/Stalagmight/issues/350)). The `build`
+  job re-checks the app *inside* the DMG with
+  `codesign --verify --deep --strict`, since that is the artifact people download.
+  Real Developer ID signing plus notarization needs a paid Apple Developer
+  account and is an open decision on
   [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
+- The release notes get an "Installing" footer telling recipients how to get past
+  Gatekeeper and SmartScreen. Because those steps talk people through overriding
+  a security warning, the release also ships a `SHA256SUMS` generated on the
+  runner that built the binaries, and the footer points at it.
 - `verify` runs the test suite on Linux only. Per-platform test runs are tracked
   in [#325](https://github.com/Stalagmight/Stalagmight/issues/325); note Windows
   needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
