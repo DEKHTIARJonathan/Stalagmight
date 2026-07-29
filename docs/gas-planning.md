@@ -25,7 +25,8 @@ edge gas (litres) = rmv_eff x ata(mean leg depth) x (length / speed_in)
 ata(z)            = 1 + max(z, 0) / 10            (10 msw ~ 1 bar)
 mean leg depth    = (z_from + z_to) / 2
 rmv_eff           = rmv x survey_rmv_multiplier   ( x jump_rmv_multiplier on a virtual leg)
-speed_in          = survey_speed_m_per_min, else swim_speed_m_per_min
+speed_in          = the span's segment speed (below), else survey_speed_m_per_min,
+                    else swim_speed_m_per_min
 ```
 
 (`gas/physics.rs` - pure, golden-tested.) A station is reachable when its
@@ -218,6 +219,59 @@ None of this is the length of the highlight on screen: the engine measures 3-D
 swum distance on measured coordinates, while `SurveyLayer.applyGasRoute` draws
 through the displayed geometry - in Plan, the closure-adjusted 2-D plan view.
 
+The Profile tab ([#299](https://github.com/Stalagmight/Stalagmight/issues/299))
+charts `route_profile` - depth against distance or runtime, out to the turn and
+back - and exports it as Subsurface-shaped XML or a plain-text slate table. The
+way in is priced at each span's own speed on the survey RMV; the way out at
+`swim_speed_m_per_min` on the base RMV, which `normalize` guarantees is no
+slower - so the return is never under-stated, including for a span that was
+scootered in.
+
+## Segments and the DPV
+
+The way points divide the route into **segments** - exactly `waypoints + 1`
+spans, segment k running from way point k-1 to k and the last out into the open
+field. Each span carries an optional speed and an `on_scooter` flag
+(`PlanSegment`; the Segments tab is the editor). A `null` speed means "fly this
+span at the plan speed" - only a span the diver edits gets a number, so the
+Swim-speed field stays live for everything else - and a speed outside
+`[0.1, 1000]` m/min is ignored the same way (`resolve_segments` falls back to
+the plan speed rather than flying a denormal). Each segment has an identity
+color (`utils/segmentColors.ts`): the route
+highlight paints each leg with its segment's color, and the table row carries a
+matching chip, keyed off the engine's own `waypoint_route_indices` rather than
+re-matching stations client-side (a route can double back, and a merge makes one
+physical station several refs).
+
+A DPV rig (`GasConfig.dpv`, edited beside the cylinders in the Plan dock's
+**Equipment** tab) is a primary scooter plus a mandatory backup - there is no
+dead-scooter swim-out to model, so the exit mirrors the entry span for span and
+the gas half of the reach predicate is untouched. The rig's usable one-way range
+is the weaker unit by LINE COVERED (`speed x burn` - not halved: primary flies
+in, backup flies out), less a reserve fraction for battery age and flow
+(`DpvRig::usable_range_m`; reserve normalized into `[0, 0.9]`).
+
+Riding a span spends that allowance in **range, not line**: at or above the
+slower unit's cruise speed a metre of line costs a metre of range, and a
+below-cruise span costs `slower_cruise / speed` per metre - the battery drains
+by the clock, not the odometer (`range_per_metre`, `gas/scooter.rs`). So
+`scooter_distance_m` is range *spent* and can exceed the line covered. A station
+whose route spends more than the usable range drops out of the reach masks, and
+`turn_on_scooter_range` reports when the range cap - not gas - is what moved the
+turnaround (set from the route target itself, not a cave-global scan). Riding
+buys speed, and through it cheaper gas per metre; it does not change the
+breathing rate.
+
+A span with the flag off is swum - towing the units or having parked them,
+numerically identical - so the park point is *derived*, never placed: the
+boundary after the last scootered span (`scooter_drop_ref`), which can only be a
+way point. The engine keeps a rig-less segment's explicit speed on purpose
+(variable pace is useful without a scooter), so the UI owns the intuitive
+contract: unticking a span's DPV box returns it to the plan speed, and removing
+the rig (`gasPlanStore.setDpvRig(null)`) resets every scootered span the same
+way - otherwise the auto-filled cruise speed would keep pricing gas at a pace
+the diver no longer has, and the plan would stay too long until someone noticed.
+
 ## Display values are engine-computed
 
 Every budget-dependent number the panel shows comes from `GasReachField`; the UI
@@ -260,6 +314,19 @@ closures and datums already hold. `Project::key_for_ref` canonicalizes on save a
 `resolve_key` re-resolves on load, so a saved plan tracks the same physical
 station across survey edits.
 
+The LIVE store holds the same guarantee
+([#310](https://github.com/Stalagmight/Stalagmight/issues/310)): every pin -
+origin, endpoint, way points, marked points, stage-drop overrides - carries an
+opaque anchor beside its positional ref, captured through `plan_anchors_for_refs`
+and re-resolved through `plan_refs_for_anchors` after every mutating command and
+undo/redo, *before* the state refetch, so the reach field never recomputes on a
+stale ref. A pin whose anchor no longer resolves is kept and flagged, never
+retargeted: a flagged way point stalls the compute client-side, the others are
+omitted from the request, and Save refuses while any flag is up. A capture never
+re-anchors a flagged slot - only a remap that resolves the original anchor (a
+survey undo) or the user re-placing the pin unlocks it. Reversing a section
+needs no special-cased pin mirroring; the anchor round trip covers it.
+
 The two directions differ deliberately. Save **refuses** a way point or marked
 point that no longer anchors, telling the user to remove it: dropping it would be
 silent data loss, since the frontend rebaselines its dirty check on the snapshot
@@ -281,21 +348,27 @@ survives Survey/Plan/Export switches and resets only on project load.
 
 | Command | Purpose |
 |---|---|
-| `compute_gas_reach_field` | The whole plan in one call: reach mask, gas-to-reach, turn frontier, route, stage drops, gauges, route metrics. Re-runs on every input change, no debounce. Re-validates diver and cylinders through the model constructors, normalizes the gas config, rejects more than 64 way points, runs on `spawn_blocking`. `Ok(None)` when no project is open. |
+| `compute_gas_reach_field` | The whole plan in one call: reach mask, gas-to-reach, turn frontier, route, stage drops, gauges, route metrics. Re-runs on every input change, no debounce. Re-validates diver and cylinders through the model constructors, normalizes the gas config, rejects more than 64 way points and an over-long segment list (`validate_plan_inputs`), runs on `spawn_blocking`. `Ok(None)` when no project is open. |
 | `list_dive_plans` | Saved plans beside the open project, newest activity first. Empty (not an error) with no project, no `.plnx`, or a foreign one. |
 | `load_dive_plan` | One plan, anchors re-resolved, `stale_ref_count` reported. |
 | `save_dive_plan` | Insert (`id: None`) or overwrite; canonicalizes refs to anchors first. |
 | `delete_dive_plan` | Remove one plan. |
+| `plan_anchors_for_refs` / `plan_refs_for_anchors` | The live-pin anchor round trip (#310): read-only, batched, capped. |
+| `export_dive_profile` / `render_dive_profile_text` | The Profile tab's XML / plain-text exports (#299). A second door into the engine, so they share `validate_plan_inputs` + `validate_plan_segments` with `compute_gas_reach_field`. |
 
 Frontend seams, all under `src/`: `store/gasPlanStore.ts` (plan inputs,
 runtime-only), `components/SingleSystemView/GasPlanPanel.tsx` (setup sidebar +
-readout), its `DivePlanBar.tsx` (save/load/delete) and `CylindersTable.tsx` (the
-rig, in the bottom Plan dock), `components/Map/MapCanvas.tsx` (fetch, turn dots,
-draggable drops, final-turn marker), `components/Map/useGasPlanPointMarkers.ts`
-(datum stars, way points, marked points), `components/Map/GasLegend.tsx`, and
-`utils/gasReach.ts` (the overlay ramp).
+readout), its `DivePlanBar.tsx` (save/load/delete); the bottom Plan dock's
+`PlanTablesPanel.tsx` with `CylindersTable.tsx` + `DpvRigEditor.tsx` (the
+Equipment tab), `SegmentsTable.tsx` and `ProfileChart.tsx`;
+`components/Map/MapCanvas.tsx` (fetch, turn dots, draggable drops, final-turn
+marker), `components/Map/useGasPlanPointMarkers.ts` (datum stars, way points,
+marked points), `components/Map/useGasPlanDropMarkers.ts` (stage drops + the
+scooter park marker), `components/Map/GasLegend.tsx`, `utils/gasReach.ts` (the
+overlay ramp), and `utils/segmentColors.ts` + `utils/dpv.ts` (segment identity
+colors; the rig editor's Rust-mirroring helpers).
 
-Engine semantics are pinned by 82 tests in `gas/tests.rs`. Before changing it,
+Engine semantics are pinned by 111 tests in `gas/tests.rs`. Before changing it,
 read `gas_reach_field_no_waypoints_is_identical_to_the_plain_field`,
 `gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch`,
 `gas_reach_field_override_to_default_station_is_a_no_op` and
@@ -304,21 +377,18 @@ each pins a rule that reads like an implementation detail and is not.
 
 ## Known limits
 
-- [#299](https://github.com/Stalagmight/Stalagmight/issues/299) - the Plan dock's
-  Profile tab is a stub (`PlanTablesPanel.tsx`): no depth/time/gas profile, no
-  Subsurface export.
-- [#310](https://github.com/Stalagmight/Stalagmight/issues/310) - the store holds
-  route points as positional `StationRef`s, and resolving a positional key only
-  range-checks. Edit the survey with a plan loaded and an in-range reference can
-  silently name a different station. The `.plnx` round trip is correctly anchored;
-  the hole is in-memory.
 - [#311](https://github.com/Stalagmight/Stalagmight/issues/311) - the stage-drop
   marker's keyboard nudge and its `aria-valuenow` re-derive the route position by
   first match, so on a way-point route that doubles back they act on the wrong
   pass.
-- The exit leg is not modelled. `stressed_rmv_multiplier`, the two
-  `reserve_profile.recalc_hold_*` pressures and `DpvProfile` are carried in the
-  config for later phases; nothing computes with them today.
+- The exit leg is never costed into the budget - the strategy's reserve pays for
+  the way home, and the #299 profile draws the return at `swim_speed_m_per_min`
+  (over-stating a scootered span's exit, the safe direction). A scootered exit
+  mirrors the entry span for span, so `gas_out == gas_in` and the reserves stay
+  correct; the flip side is that a plan whose out-speed genuinely differs from
+  its in-speed on a span has no way to say so (noted on `DpvRig`).
+  `stressed_rmv_multiplier` and the two `reserve_profile.recalc_hold_*` pressures
+  are still carried in the config for later phases; nothing computes with them.
 - `Team` and `PlanMode` (open-circuit vs CCR bailout) exist in `gas/model.rs` so
   the multi-diver and CCR phases need no migration, but the entry point takes one
   diver and its cylinders. Everything shipped is single-diver open-circuit.
