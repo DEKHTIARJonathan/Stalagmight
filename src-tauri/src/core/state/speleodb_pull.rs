@@ -799,10 +799,23 @@ impl AppState {
         // `latest_commit_sha`: the open recorded the answer against the topology tip,
         // so reading it back against `max(authored_date)` would never match and the
         // picker would re-ask forever.
-        let remembered =
-            self.speleodb_recalled_dump_entry(&project_id, DumpAt::from_sha(adopt_at.as_deref()));
+        //
+        // This classifier is adoption's own - it wants an Ariane entry and refuses a
+        // `.stalx` with its own message - so the resolver's dating does not reach it,
+        // and BOTH halves of that dating have to be repeated here or the whole
+        // guarantee stops at the `.stalx` picker. An `ariane.tml` behaves exactly like
+        // a `.stalx` under a collaborator's push: the canonical file moves, every other
+        // entry stays where it was, so a backup chosen at A sails through membership at
+        // B - and adoption then imports it and stamps BASE at B.
+        let adopt_dump_at = DumpAt::from_sha(adopt_at.as_deref());
+        let remembered = self.speleodb_recalled_dump_entry(&project_id, adopt_dump_at);
         let picked = entry_path
             .as_deref()
+            // The fresh reply is gated exactly as the resolver gates one: honoured only
+            // while it answers the revision its candidates were offered for. The recall
+            // beside it is already dated, so a discarded reply correctly falls back to
+            // a remembered answer that IS about this tree, and otherwise to a re-offer.
+            .filter(|_| self.speleodb_dump_offer_answers(&project_id, adopt_dump_at))
             .or(remembered.as_deref())
             .filter(|chosen| {
                 dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane)
@@ -819,13 +832,20 @@ impl AppState {
             (None, DumpClassification::NothingToOpen) => {
                 return Err(local_dto(SpeleoDbError::EmptyDump))
             }
+            // Both ambiguities record the offer, for the same reason the resolver does:
+            // these candidates are going to a user, and the reply arrives through a
+            // separate call that resolves the tip again. The `.stalx` set is no
+            // exception - the frontend routes it by kind to the OPEN verb, which reads
+            // this same record.
             (None, DumpClassification::AmbiguousStalx(paths)) => {
+                self.speleodb_note_dump_offer(&project_id, adopt_dump_at);
                 return Err(local_dto(unopenable_to_error(
                     UnopenableDump::AmbiguousStalx(paths),
                     &mut dump,
                 )));
             }
             (None, DumpClassification::AmbiguousAriane(paths)) => {
+                self.speleodb_note_dump_offer(&project_id, adopt_dump_at);
                 return Err(local_dto(unopenable_to_error(
                     UnopenableDump::AmbiguousAriane(paths),
                     &mut dump,
@@ -1575,6 +1595,70 @@ mod tests {
                 )
                 .expect("the re-offer is answerable"),
             "backup/old.stalx"
+        );
+    }
+
+    /// [#258] The same question for Ariane. An `ariane.tml` behaves exactly like a
+    /// `.stalx` under a collaborator's push - the canonical file moves, every other
+    /// entry stays where it was - so a backup chosen at A still passes membership at B,
+    /// and adoption would import it and stamp BASE at B. The gate is shared session
+    /// state, so the offer an OPEN records is the one adoption's reply is measured
+    /// against; this pins that hand-off, which is the half a structural scan cannot see.
+    #[test]
+    fn an_ariane_offer_is_dated_the_same_way_and_read_back_by_adoption() {
+        let state = AppState::new().expect("state");
+        let project = "dddddddd-dddd-dddd-dddd-dddddddddddd";
+        let zip = make_zip(&["one/ariane.tml", "two/ariane.tml"]);
+
+        // The OPEN path meets the ambiguity and offers the candidates for A.
+        let mut dump = Dump::open(&zip).expect("open");
+        assert!(matches!(
+            state.speleodb_resolve_entry_remembering(
+                project,
+                &mut dump,
+                None,
+                ArianeRoute::Adopt,
+                DumpAt::Revision(TIP),
+                StalxAmbiguity::Ask,
+            ),
+            Err(SpeleoDbError::AmbiguousAriane(_))
+        ));
+
+        // Adoption reads that record back. An answer about A does not answer B...
+        assert!(!state.speleodb_dump_offer_answers(project, DumpAt::Revision(NEXT)));
+        // ...and does answer A, so the ordinary confirmation is untouched.
+        assert!(state.speleodb_dump_offer_answers(project, DumpAt::Revision(TIP)));
+    }
+
+    /// [#258] Adoption classifies with its OWN matcher - it wants an Ariane entry and
+    /// refuses a `.stalx` with its own message - so the resolver's dating never reaches
+    /// it and both halves have to be repeated there. Missing either restored the
+    /// overwrite for Ariane alone, which is exactly how it was missed the first time:
+    /// the `.stalx` picker was bound and this one silently was not.
+    ///
+    /// Structural because the behavioural version needs a server - the gate itself is
+    /// covered above, on the session state the two paths share.
+    #[test]
+    fn adoption_dates_its_own_picker_replies_too() {
+        let src = prod_source();
+        let start = src
+            .find("fn speleodb_adopt_ariane")
+            .expect("the adoption verb is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert_eq!(
+            body.matches("speleodb_dump_offer_answers(").count(),
+            1,
+            "adoption must gate a FRESH `entry_path` on the revision its candidates \
+             were offered for, exactly as the resolver gates one"
+        );
+        assert_eq!(
+            body.matches("speleodb_note_dump_offer(").count(),
+            2,
+            "both ambiguities adoption reports - the Ariane set, and the `.stalx` set \
+             the frontend routes by kind to the OPEN verb - must record the revision \
+             they describe, or the reply has nothing to be measured against"
         );
     }
 
