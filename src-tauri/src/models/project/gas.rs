@@ -564,8 +564,15 @@ impl Project {
         // The park point is the boundary after the last scootered segment, so it is a way point by
         // construction. Resolving it through the ORIGINAL `waypoints` (not the graph) keeps it a
         // station the diver named.
-        let scooter_drop_ref =
-            scooter_drop_index(&plan_segments).and_then(|k| waypoints.get(k).copied());
+        //
+        // Gated on a target, exactly as `drop_indices` and `route_profile` are. The park point is
+        // otherwise derived from the segment list ALONE, which is pure input - so a plan whose
+        // way-point chain stalls (an unresolvable or disconnected way point, field all-unreachable)
+        // would still hand back "leave the scooters at W1" for a dive the engine has just declared
+        // unflyable. No turnaround, no route, nowhere to park.
+        let scooter_drop_ref = route_target
+            .and_then(|_| scooter_drop_index(&plan_segments))
+            .and_then(|k| waypoints.get(k).copied());
         let scooter_range_limit_m = gas_config.dpv.as_ref().map(|rig| rig.usable_range_m());
 
         // Back-gas turn gauge - computed here so the UI never re-derives the budget math; honours the
@@ -908,8 +915,10 @@ struct BudgetView {
     target_toward_endpoint: bool,
     route: Vec<usize>,
     route_gas: Vec<f64>,
-    /// Whether the scooter range, not gas, is what limits the dive - see the derivation in
-    /// [`budget_view`]. Surfaced as `GasReachField::turn_on_scooter_range`.
+    /// Whether the scooter range, not gas, is what limits the dive: whether relaxing the range cap
+    /// would move `target` FARTHER. Derived by [`route_target`], branch by branch, because the
+    /// answer depends on which rule picked the target. Surfaced as
+    /// `GasReachField::turn_on_scooter_range`.
     scooter_bound: bool,
 }
 
@@ -927,17 +936,44 @@ struct BudgetView {
 /// turnaround from the northern lead the diver picked to some unrelated eastern one, which reads as
 /// the plan choosing a destination at random. Walking toward the pick instead keeps the answer to
 /// the question actually being asked - "how far toward X can I get on this gas?"
+///
+/// Returns `(target, toward_endpoint, bound_by_range)`. The third is
+/// `GasReachField::turn_on_scooter_range`, and it is derived HERE - per branch - because the only
+/// definition that is not a false-positive machine is **"relaxing the DPV range cap would move the
+/// target farther"**, and which station answers that depends on which rule picked the target. A
+/// cave-wide "is any gas-affordable station out of range" scan fires whenever some unvisited pocket
+/// is out of range, however comfortably the dive reaches its endpoint - and because gas scales with
+/// depth while range scales with length alone, a shallow distant passage trips it routinely.
+///
+/// `range_bound[i]` is the per-node witness "the diver has the gas to end at `i`, but it is out of
+/// scooter range" - built in [`budget_view`] off the same two vectors as `can_end_at`, so the two
+/// can never disagree about which cap excluded a station.
 fn route_target(
     endpoint: Option<usize>,
     walk: &WaypointWalk,
-    reachable: &[bool],
+    can_end_at: &[bool],
+    range_bound: &[bool],
     deepest: Option<usize>,
-) -> (Option<usize>, bool) {
-    let Some(endpoint) = endpoint else {
-        return (deepest, false);
+    deepest_gas: f64,
+) -> (Option<usize>, bool, bool) {
+    // The deepest-anywhere fallback's own range question: with the cap lifted, could the arg-max
+    // land FARTHER than it did? Only a gas-affordable, out-of-range station that costs strictly
+    // more gas than the winner can move it. The `> deepest_gas` clause is the whole difference from
+    // the old cave-wide scan, which counted every out-of-range station anywhere - including the
+    // shallow ones the arg-max had already beaten.
+    let deepest_is_range_bound = || {
+        walk.gas_in
+            .iter()
+            .zip(range_bound)
+            .any(|(&g, &bound)| bound && g > deepest_gas)
     };
-    if reachable.get(endpoint).copied().unwrap_or(false) {
-        return (Some(endpoint), true);
+    let Some(endpoint) = endpoint else {
+        return (deepest, false, deepest_is_range_bound());
+    };
+    if can_end_at.get(endpoint).copied().unwrap_or(false) {
+        // The dive reaches the diver's own pick. Neither cap is binding it, whatever else in the
+        // cave sits out of range.
+        return (Some(endpoint), true, false);
     }
     // Walk the path toward the endpoint and keep the last station still in budget. Gas along a
     // shortest path is monotone non-decreasing, so that is exactly where the gas runs out. An
@@ -950,13 +986,24 @@ fn route_target(
     // another component). Telling a diver "turning at X on the way there" when X sits in an
     // unrelated passage is the very failure the walk-toward-the-endpoint rule was added to kill; it
     // would just have survived in the branches that rule cannot reach.
-    match path_to(&walk.pred, endpoint)
-        .into_iter()
-        .take_while(|&n| reachable.get(n).copied().unwrap_or(false))
-        .last()
-    {
-        Some(n) => (Some(n), true),
-        None => (deepest, false),
+    let path = path_to(&walk.pred, endpoint);
+    // The node that STOPPED the walk is the one to interrogate: the dive turned where it did
+    // because that node was excluded, so whichever cap excluded IT is the cap that turned the dive.
+    // `None` means the walk ran the whole path (the endpoint was reached), and then nothing bound.
+    let stopped = path
+        .iter()
+        .position(|&n| !can_end_at.get(n).copied().unwrap_or(false));
+    let last_in_budget = match stopped {
+        Some(p) => p.checked_sub(1).map(|i| path[i]),
+        None => path.last().copied(),
+    };
+    match last_in_budget {
+        Some(n) => (
+            Some(n),
+            true,
+            stopped.is_some_and(|p| range_bound.get(path[p]).copied().unwrap_or(false)),
+        ),
+        None => (deepest, false, deepest_is_range_bound()),
     }
 }
 fn budget_view(
@@ -991,15 +1038,21 @@ fn budget_view(
         .zip(&walk.scoot_in)
         .map(|(&g, &s)| g.is_finite() && g <= budget_litres && in_range(s))
         .collect();
-    // Is the SCOOTER what is stopping the dive? True when some station the diver has the gas to end
-    // at is out of scooter range. Computed here because the UI cannot recover it afterwards: the
-    // route already stops at whichever cap bound first, so comparing the route's scootered distance
-    // against the limit reads as "equal" in precisely the case being asked about.
-    let scooter_bound = walk
+    // Per-node witness for "the RANGE, not the gas, is why the dive cannot end here": affordable on
+    // gas, out of scooter range. Built off the same two vectors as `can_end_at`, in the same shape,
+    // so `can_end_at[i] == gas_ok && in_range` and `range_bound[i] == gas_ok && !in_range` are
+    // complementary by construction and cannot drift into disagreeing about which cap bound.
+    //
+    // Note this reads `gas_in` / `scoot_in` - the DESTINATION prices, already settled across
+    // zero-cost merge/closure ties by the Dijkstra that produced them - and not the overlay's
+    // pass-through `reach_gas` / `reach_scoot`. It has to: it is only ever consumed by
+    // [`route_target`], which is asking where the dive can END.
+    let range_bound: Vec<bool> = walk
         .gas_in
         .iter()
         .zip(&walk.scoot_in)
-        .any(|(&g, &s)| g.is_finite() && g <= budget_litres && !in_range(s));
+        .map(|(&g, &s)| g.is_finite() && g <= budget_litres && !in_range(s))
+        .collect();
 
     // `max_reachable_gas` (reported) is the largest in-budget gas-to-reach, floored at 0.
     let mut max_reachable_gas = 0.0_f64;
@@ -1031,7 +1084,17 @@ fn budget_view(
         }
     }
 
-    let (target, target_toward_endpoint) = route_target(endpoint, walk, &can_end_at, deepest);
+    // The range flag comes out of the target choice itself, never from a scan beside it: "the
+    // scooter turned this dive" is exactly "lifting the cap would move the target", and only the
+    // branch that picked the target knows which station answers that.
+    let (target, target_toward_endpoint, scooter_bound) = route_target(
+        endpoint,
+        walk,
+        &can_end_at,
+        &range_bound,
+        deepest,
+        deepest_gas,
+    );
     // The committed way-point chain, then the last leg's path to the target. That path starts at
     // the final way point, which the chain already ends on, so it is skipped from the tail. With no
     // way points the chain is empty and the route is exactly the origin→target path.

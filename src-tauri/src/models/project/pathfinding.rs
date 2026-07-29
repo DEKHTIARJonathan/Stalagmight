@@ -696,8 +696,15 @@ impl Project {
         adj: &[Vec<(usize, f64)>],
         roots: &[usize],
     ) -> (Vec<f64>, Vec<usize>) {
-        // Riders scaled to 0 accumulate nothing, so passing `adj` as its own rider graph is free
-        // and keeps a single copy of the heap loop.
+        // Riders scaled to 0 accumulate nothing, so passing `adj` as its own rider graph is
+        // CORRECT - but it is not free. Every plain Dijkstra now allocates two extra
+        // `vec![f64::INFINITY; n]` and does two multiply-adds per successful relaxation, and this is
+        // the entry point the distance-gradient overlay runs over the whole survey graph.
+        //
+        // The trade is still right: one heap loop, maintained and tested once, against two
+        // near-identical copies that would drift. The costs are O(n) memory and a constant factor on
+        // the relaxation - not another graph walk - so they stay well under the heap operations that
+        // dominate. If a profile ever says otherwise, the fix is a rider-count generic, not a fork.
         let (dist, _, pred) = Self::dijkstra_scaled_with_riders(adj, adj, roots, 1.0, [0.0, 0.0]);
         (dist, pred)
     }

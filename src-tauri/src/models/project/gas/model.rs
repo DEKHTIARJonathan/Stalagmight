@@ -379,8 +379,14 @@ pub struct GasReachField {
     /// One-way runtime (minutes) along the planned route, at each segment's own speed. The engine's
     /// first time-valued output; `None` when nothing is reachable.
     pub route_runtime_min: Option<f64>,
-    /// Whether the **scooter range**, rather than gas, is what limits the dive: true when some
-    /// station the diver has the gas to end at is out of scooter range.
+    /// Whether the **scooter range**, rather than gas, is what limits the dive: true when lifting
+    /// the DPV range cap would move the turnaround FARTHER than where this plan turns.
+    ///
+    /// Scoped to the dive's own turn, never to the cave. "Some station the diver has the gas for is
+    /// out of range" sounds like the same statement and is a false-positive machine: it fires on any
+    /// unvisited pocket beyond the rig's reach however comfortably the dive makes its endpoint, and
+    /// since gas scales with depth while range scales with length alone, one shallow distant passage
+    /// trips it on plans the scooter never constrained at all.
     ///
     /// The UI must not re-derive this. Comparing `scooter_distance_m` against
     /// `scooter_range_limit_m` looks equivalent and is not - the route already stops at the cap, so

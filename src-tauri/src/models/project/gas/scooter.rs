@@ -19,6 +19,24 @@ pub(super) struct ResolvedSegment {
     pub(super) on_scooter: bool,
 }
 
+/// Slowest per-span speed (metres per minute) the engine will fly; below it the span inherits the
+/// plan speed instead.
+///
+/// A floor is needed, not just `> 0.0`. A stored speed can be any positive `f64` a hand-edited
+/// `.plnx` or a bad round-trip contains, and the engine divides by it twice - once for the gas
+/// scalar `rmv / speed`, once for the runtime rider `1 / speed`. A denormal (1e-320) overflows both
+/// to `INFINITY`, which is not merely "very expensive": a real edge is then priced at `INFINITY`, so
+/// `nd < dist[v]` fails and it never relaxes, and a zero-weight merge / loop-closure tie is priced
+/// at `0.0 * INFINITY = NaN`, which fails the same comparison. Nothing propagates and the whole
+/// field collapses to the origin. 0.1 m/min is two orders of magnitude under any real survey pace,
+/// so nothing legitimate is excluded.
+const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
+
+/// Fastest per-span speed the engine will fly; above it the span inherits the plan speed. The
+/// ceiling is the floor's mirror - it keeps the reciprocal off the denormal end - and 1000 m/min is
+/// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
+const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
+
 /// Normalise the diver's segment list to exactly one entry per route span, with a concrete speed.
 ///
 /// A plan has `waypoint_count + 1` spans (origin → W0 → … → open-field tail). The stored list can
@@ -27,8 +45,9 @@ pub(super) struct ResolvedSegment {
 ///
 /// `default_speed` is the plan's own speed (`survey_speed` falling back to `swim_speed`). A span
 /// takes it whenever the diver has not set one: a missing entry, an explicit `None`, or a stored
-/// number that is non-finite or non-positive. The last case falls back rather than being rejected
-/// because it would otherwise divide into the edge cost and poison the field with `+Inf`/`NaN`.
+/// number outside `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]` (which subsumes
+/// non-finite, zero and negative). The last case falls back rather than being rejected because it
+/// would otherwise divide into the edge cost and poison the field with `+Inf`/`NaN`.
 ///
 /// ⚠ An all-`None` list must therefore reproduce the pre-#317 field EXACTLY, and that is not a nice
 /// property but the contract: the frontend sends a full-length list from the moment Plan mode
@@ -50,7 +69,9 @@ pub(super) fn resolve_segments(
             ResolvedSegment {
                 speed_m_per_min: seg
                     .and_then(|s| s.speed_m_per_min)
-                    .filter(|s| s.is_finite() && *s > 0.0)
+                    .filter(|s| {
+                        (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(s)
+                    })
                     .unwrap_or(default_speed),
                 on_scooter: has_rig && seg.is_some_and(|s| s.on_scooter),
             }
@@ -90,7 +111,6 @@ mod tests {
         DpvUnit {
             speed_m_per_min: speed,
             burn_minutes: burn,
-            label: None,
         }
     }
 
@@ -158,9 +178,21 @@ mod tests {
 
     #[test]
     fn a_bad_speed_falls_back_to_the_default() {
-        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY] {
+        // `1e-320` is the one that needs the bounds rather than a sign/finiteness check: it is a
+        // positive, finite subnormal, so it passes `is_finite() && > 0.0` and then overflows the
+        // engine's two reciprocals to INFINITY. `1e6` is its mirror at the top.
+        for bad in [0.0, -5.0, f64::NAN, f64::INFINITY, 1e-320, 1e6] {
             let out = resolve_segments(&[seg(bad, false)], 0, 12.0, true);
             assert_eq!(out[0].speed_m_per_min, 12.0, "speed {bad} should fall back");
+        }
+        // The bounds are inclusive, and a plausible slow survey pace is well inside them.
+        for good in [
+            MIN_SEGMENT_SPEED_M_PER_MIN,
+            3.0,
+            MAX_SEGMENT_SPEED_M_PER_MIN,
+        ] {
+            let out = resolve_segments(&[seg(good, false)], 0, 12.0, true);
+            assert_eq!(out[0].speed_m_per_min, good, "speed {good} should be kept");
         }
     }
 
@@ -256,9 +288,13 @@ mod tests {
         // case, and the twin is named in each so a change to either breaks a test that says where
         // its counterpart lives.
         //
-        // The pair is chosen so a wrong rule is detectable: the primary has the LONGER burn
-        // (100 min vs 20) but the SHORTER range (1000 m vs 800), so comparing burn times picks the
-        // wrong unit. Halving would give 400, not 600.
+        // The pair is chosen so several wrong rules are detectable: taking the primary
+        // unconditionally gives 750, dropping the reserve gives 800, and halving gives 400.
+        //
+        // It does NOT discriminate burn from range - the backup is the weaker unit on both counts
+        // here (20 min vs 100, and 800 m vs 1000), so either rule lands on 600. That distinction is
+        // `the_cap_is_the_weaker_unit_by_range_not_by_burn`'s job, and this pair is chosen instead
+        // to be the exact case the TypeScript preview pins.
         //
         // Twin: `the computed usable-range line matches the Rust formula for a hand-picked pair`
         // in `src/components/Dialogs/settings/GasSettings.test.tsx`.

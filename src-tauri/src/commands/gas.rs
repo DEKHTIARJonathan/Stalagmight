@@ -1,9 +1,29 @@
 use tauri::Manager;
 
 use crate::config::GasConfig;
-use crate::core::state::dive_plan::MAX_WAYPOINTS;
+use crate::core::state::dive_plan::{MAX_SEGMENTS, MAX_WAYPOINTS};
 use crate::core::AppState;
 use crate::models::{Cylinder, Diver, GasReachField, PlanSegment, StationRef};
+
+/// Bound a plan's per-span segment list, mirroring the way-point cap in [`validate_plan_inputs`].
+///
+/// Kept separate from that function only because it is newer: both doors into the engine call it
+/// (`compute_gas_reach_field` here, `render_profile_for` in `commands::export`), and the `.plnx`
+/// write path caps segments on its own. Fold it into `validate_plan_inputs` when that signature is
+/// next touched.
+///
+/// REJECT rather than truncate, for the same reason the way-point cap does: a segment is the diver's
+/// statement about how a span is flown, and quietly dropping the last few would fly them at the plan
+/// speed on no scooter instead - slower and cheaper on gas, so the reported reach could only grow.
+pub(crate) fn validate_plan_segments(segments: &[PlanSegment]) -> Result<(), String> {
+    if segments.len() > MAX_SEGMENTS {
+        return Err(format!(
+            "Too many plan segments: {} (max {MAX_SEGMENTS}).",
+            segments.len()
+        ));
+    }
+    Ok(())
+}
 
 /// Validate a plan's inputs before they reach the engine, and normalize its config.
 ///
@@ -98,6 +118,7 @@ pub async fn compute_gas_reach_field(
     // amplifier guard on the hottest path there is.
     let (diver, cylinders, gas_config) =
         validate_plan_inputs(&waypoints, diver, cylinders, gas_config)?;
+    validate_plan_segments(&segments)?;
 
     let field = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
@@ -117,4 +138,33 @@ pub async fn compute_gas_reach_field(
     // Err rather than collapsing it to Ok(None) - which is reserved for "no project open".
     .map_err(|e| format!("gas reach computation failed: {e}"))?;
     Ok(field)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "tests assert on a known-Err result; a failed unwrap should fail the test"
+)]
+mod tests {
+    use super::{validate_plan_segments, MAX_SEGMENTS};
+    use crate::models::PlanSegment;
+
+    fn span() -> PlanSegment {
+        PlanSegment {
+            speed_m_per_min: Some(55.0),
+            on_scooter: true,
+        }
+    }
+
+    #[test]
+    fn the_segment_list_is_capped_at_the_ipc_boundary() {
+        // The way-point cap exists "so the limit cannot be walked past by a caller that never
+        // touches a file"; the segment list arrived at the same door with no such bound, even
+        // though the `.plnx` write path caps it.
+        assert!(validate_plan_segments(&[]).is_ok());
+        assert!(validate_plan_segments(&vec![span(); MAX_SEGMENTS]).is_ok());
+
+        let err = validate_plan_segments(&vec![span(); MAX_SEGMENTS + 1]).unwrap_err();
+        assert!(err.contains("Too many plan segments"), "{err}");
+    }
 }
