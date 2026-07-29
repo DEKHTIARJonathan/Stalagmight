@@ -1329,4 +1329,121 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(call?.[1]).toMatchObject({ discardLocal: true });
     });
   });
+
+  describe('a picker replay that needs a re-login (#258)', () => {
+    const CANDIDATES = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+
+    const session = () => ({
+      loggedIn: true,
+      userEmail: 'someone@example.test',
+      endpoint: 'https://example.test',
+      keychainBacked: true,
+      storage: 'keychain' as const,
+      keychain: { available: true, declined: false, probed: true } as never,
+    });
+
+    /**
+     * The picker is a user interaction of unbounded length, so the token can die
+     * between the ambiguity that raised it and the pick that replays it. The backend
+     * has already dropped its session by then; the replay's `reLogin` is the only
+     * thing that tells this side to do the same, and all three replay callbacks used
+     * to throw the message and discard it - leaving the frontend claiming to be
+     * logged in, with the picker still up offering to retry against nothing.
+     */
+    /**
+     * The replayed verb is chosen by the ambiguity's KIND, not by the verb that
+     * raised it (an adoption whose new tree holds `.stalx` replays the OPEN), so each
+     * case has to announce the kind that routes back to the verb under test.
+     */
+    const ambiguousThenDeadToken = (cmd: string, kind: 'stalx' | 'ariane') => {
+      invokeIpcMock.mockImplementation((c: string, args?: Record<string, unknown>) => {
+        if (c !== cmd) return Promise.resolve(null);
+        if (args?.entryPath)
+          return Promise.reject({
+            message: 'your session has expired',
+            action: 'ReLogin',
+            status: 401,
+          });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: CANDIDATES,
+          dump_candidate_kind: kind,
+        });
+      });
+    };
+
+    type Case = [
+      verb: string,
+      cmd: string,
+      kind: 'stalx' | 'ariane',
+      run: (h: ReturnType<typeof hook>) => Promise<unknown>,
+    ];
+    const VERBS: Case[] = [
+      ['openRemote', 'speleodb_open_project', 'stalx', (h) => h.openRemote(SUMMARY)],
+      [
+        'takeRemoteDiscardingLocal',
+        'speleodb_open_project_discarding_local',
+        'stalx',
+        (h) => h.takeRemoteDiscardingLocal(SUMMARY),
+      ],
+      ['adoptRemote', 'speleodb_adopt_ariane', 'ariane', (h) => h.adoptRemote(SUMMARY)],
+    ];
+
+    it.each(VERBS)('drops the session when the %s replay reports one', async (_v, cmd, kind, run) => {
+      useSpeleoStore.setState({ session: session() });
+      const before = useSpeleoStore.getState().sessionGeneration;
+      ambiguousThenDeadToken(cmd, kind);
+
+      const outcome = await run(hook());
+      expect(outcome).toEqual({ status: 'ambiguous' });
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+
+      await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+
+      const s = useSpeleoStore.getState();
+      expect(s.session).toBeNull();
+      expect(s.sessionGeneration).toBe(before + 1);
+      // `clearSession` is what closes the picker, and it must actually close: a
+      // dialog offering to retry against a session that no longer exists is a dead
+      // end whichever button is pressed.
+      expect(s.dumpPickerOpen).toBe(false);
+      // ...and the replay's throw must not paint an error onto the closed dialog,
+      // where it would surface on whatever picker opens next.
+      expect(s.dumpPickerError).toBeNull();
+    });
+
+    it('still reports an ordinary replay failure without dropping the session', async () => {
+      // The other half of the same branch: only `reLogin` ends the session. A replay
+      // that fails for any other reason has to leave the picker up, with its reason
+      // on it, so the user can simply answer again.
+      useSpeleoStore.setState({ session: session() });
+      invokeIpcMock.mockImplementation((c: string, args?: Record<string, unknown>) => {
+        if (c !== 'speleodb_open_project') return Promise.resolve(null);
+        if (args?.entryPath)
+          return Promise.reject({ message: 'that file is corrupt', action: null, status: 500 });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: CANDIDATES,
+        });
+      });
+
+      await hook().openRemote(SUMMARY);
+      await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+
+      const s = useSpeleoStore.getState();
+      expect(s.session).not.toBeNull();
+      expect(s.dumpPickerOpen).toBe(true);
+      // The message itself comes from the mocked `getErrorMessage` at the top of this
+      // file; what matters here is that a reason was recorded ON the still-open
+      // picker rather than the session being torn down under it.
+      expect(s.dumpPickerError).not.toBeNull();
+    });
+  });
 });

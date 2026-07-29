@@ -922,10 +922,19 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set({ dumpPickerBusy: true, dumpPickerError: null });
     try {
       await retry(entryPath);
-      // Only close on success. A failed retry may itself be a FRESH ambiguity (the
-      // tree moved while the dialog was open), and that re-raise has already
-      // replaced the candidate list - closing here would throw it away.
-      if (!get().dumpPickerBusy) return;
+      // Only act on a picker that is still THIS one. `retry` is the ownership token:
+      // every route that ends a picker replaces it - `closeDumpPicker` and
+      // `clearSession` null it, `openDumpPicker` installs a fresh closure - so an
+      // identity check catches all three, where the `dumpPickerBusy` proxy this
+      // replaces caught only the re-raise. A confirm is a network round trip of
+      // unbounded length, and the session can die and be replaced under it (the
+      // reLogin route does exactly that), after which closing, erroring or
+      // un-busying would be acting on a DIFFERENT dialog's state.
+      //
+      // A fresh ambiguity is the ordinary case: the tree moved while the dialog was
+      // open, so the retry re-raised the picker with a new candidate list, and
+      // closing here would throw that away.
+      if (get().dumpPickerRetry !== retry) return;
       // Both halves, in this order, exactly as `uiStore.openDialog` does for a
       // chained dialog. `trackDialogComplete` only SETS a module-global marker and
       // `checkDialogCancel` is what consumes it - so completing without consuming
@@ -939,6 +948,10 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         dumpPickerCandidates: [],
         dumpPickerRetry: null,
         dumpPickerCancel: null,
+        // Cleared HERE rather than left to the `finally`, which no longer fires
+        // unconditionally: this very `set` hands ownership away, so the guard below
+        // correctly declines to touch a picker that is no longer ours.
+        dumpPickerBusy: false,
       });
     } catch (e) {
       // The retry runs from the DIALOG, so its rejection has nowhere else to go: the
@@ -949,9 +962,17 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // this module, so reaching for it here would close an import cycle. The
       // picker's message is the raw reason, which is what a user staring at a
       // failed confirmation needs.
+      //
+      // Same ownership check as the success path, and it is what keeps the reLogin
+      // route quiet: that replay drops the session (which closes this picker) and
+      // then rethrows, and painting its message onto whatever dialog came next -
+      // or onto a closed one, to surface on the next open - helps nobody.
+      if (get().dumpPickerRetry !== retry) return;
       set({ dumpPickerError: getErrorMessage(e) });
     } finally {
-      set({ dumpPickerBusy: false });
+      // Never un-busy a picker we no longer own: a late loser settling under a
+      // NEWER picker would otherwise re-enable its buttons mid-confirm.
+      if (get().dumpPickerRetry === retry) set({ dumpPickerBusy: false });
     }
   },
 

@@ -416,6 +416,32 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     [handBackRefusal],
   );
 
+  /**
+   * [#258] Fail a picker replay the way the FIRST attempt would have.
+   *
+   * A replay runs from the dialog, so no host is awaiting its outcome - the picker
+   * itself is the only thing that can act on it, and it acts on a THROW. That made
+   * `throw new Error(retried.message)` look complete, and it is not: the outcome
+   * also carries `reLogin`, and every host honours that by dropping the session.
+   * A token that dies between raising the picker and confirming a pick is not
+   * hypothetical - the picker is a user interaction of unbounded length, and the
+   * backend has already forgotten the token by the time the replay returns
+   * (`speleodb_handle_auth` clears it on a genuine 401). Dropping the flag here
+   * left the two sides disagreeing about whether anyone was logged in, with the
+   * picker still up and offering to retry against a session that no longer exists.
+   *
+   * `clearSession` is what closes the picker on the way out, and it does it
+   * properly - it fires the pending cancel so a caller suspended on the question is
+   * released, and records the dismissal telemetry. So this only has to drop the
+   * session and re-raise; the throw then lands on a picker that is already gone,
+   * which `resolveDumpPicker`'s ownership check discards rather than painting an
+   * error onto a closed dialog.
+   */
+  const failReplay = useCallback((retried: { message: string; reLogin: boolean }): never => {
+    if (retried.reLogin) useSpeleoStore.getState().clearSession();
+    throw new Error(retried.message);
+  }, []);
+
   const openRemote = useCallback(
     async (
       summary: SpeleoProjectSummary,
@@ -461,7 +487,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
             // A retry that fails for some OTHER reason must not be swallowed by the
             // dialog: rethrow so the store leaves the picker open and the host
             // surfaces the message, exactly as the first attempt would have.
-            if (retried?.status === 'error') throw new Error(retried.message);
+            if (retried?.status === 'error') failReplay(retried);
             // The pick was an `ariane.tml`: the backend refuses to extract it and
             // routes to adoption, which needs its confirmation shown. Nobody is
             // awaiting this call, so hand it back explicitly.
@@ -502,6 +528,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       openDumpPicker,
       onAdoptAfterPick,
       cancelReturnsTo,
+      failReplay,
       t,
     ],
   );
@@ -628,7 +655,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         if (candidates) {
           openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
             const retried = await takeRemoteRef.current?.(summary, { entryPath });
-            if (retried?.status === 'error') throw new Error(retried.message);
+            if (retried?.status === 'error') failReplay(retried);
             // The pick was an `ariane.tml`: the backend refuses to extract it and
             // routes to adoption, which needs its confirmation shown. Nobody is
             // awaiting this call, so hand it back explicitly.
@@ -649,7 +676,15 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (landed) return { status: 'error', message: landed, reLogin: false };
       return finishOpen(result, summary.permission);
     },
-    [finishOpen, handBackRefusal, handBackRefusalAfterPull, openDumpPicker, onAdoptAfterPick, t],
+    [
+      finishOpen,
+      handBackRefusal,
+      handBackRefusalAfterPull,
+      openDumpPicker,
+      onAdoptAfterPick,
+      failReplay,
+      t,
+    ],
   );
 
   const adoptRemote = useCallback(
@@ -728,7 +763,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
             // A replay that fails for some OTHER reason must not be swallowed by the
             // dialog: rethrow so the picker stays open and the host surfaces it,
             // exactly as the first attempt would have.
-            if (retried?.status === 'error') throw new Error(retried.message);
+            if (retried?.status === 'error') failReplay(retried);
             // An open replay can land back on adoption (the pick turned out to be a
             // `.tml`, or the tree moved again). Nobody is awaiting this call, so the
             // confirmation has to be handed back explicitly, as the other two picker
@@ -789,7 +824,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         },
       });
     },
-    [finishOpen, handBackRefusal, openDumpPicker, onAdoptAfterPick, t],
+    [finishOpen, handBackRefusal, openDumpPicker, onAdoptAfterPick, failReplay, t],
   );
 
   useEffect(() => {

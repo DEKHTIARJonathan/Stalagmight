@@ -1017,4 +1017,61 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
     expect(useSpeleoStore.getState().dumpPickerError).toBeNull();
   });
+
+  it('lets a retry that lost its picker settle without touching the one that replaced it', async () => {
+    // Confirming is a network round trip of unbounded length, so the picker it began
+    // on can be gone by the time it settles - closed, re-raised on a moved tree, or
+    // torn down by a session loss. Writing the outcome anyway landed it on a
+    // DIFFERENT dialog: the loser's error overwrote the newcomer's, and its `finally`
+    // re-enabled the newcomer's buttons in the middle of its own confirm.
+    const first = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    const second = [
+      { entry_path: 'c.stalx', size_bytes: 3, modified: null, is_canonical: false },
+      { entry_path: 'd.stalx', size_bytes: 4, modified: null, is_canonical: false },
+    ];
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    useSpeleoStore.getState().openDumpPicker(first, 'stalx', async () => {
+      await gate;
+      throw new Error('the loser finally settled');
+    });
+
+    const inFlight = useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+    expect(useSpeleoStore.getState().dumpPickerBusy).toBe(true);
+
+    // A second picker takes over while the first confirm is still in flight, and is
+    // itself mid-confirm with a failure of its own already on screen.
+    useSpeleoStore.getState().openDumpPicker(second, 'stalx', async () => {});
+    useSpeleoStore.setState({ dumpPickerBusy: true, dumpPickerError: 'the new one is working' });
+
+    release();
+    await inFlight;
+
+    const s = useSpeleoStore.getState();
+    expect(s.dumpPickerCandidates).toEqual(second);
+    expect(s.dumpPickerError).toBe('the new one is working');
+    expect(s.dumpPickerBusy).toBe(true);
+    expect(s.dumpPickerOpen).toBe(true);
+  });
+
+  it('still clears busy when the picker it owns succeeds', async () => {
+    // The ownership guard moved the un-busy off the unconditional `finally`, so the
+    // ordinary close has to carry it - or a successful pick would leave the next
+    // picker's buttons disabled from the moment it opened.
+    const candidates = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
+
+    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+
+    expect(useSpeleoStore.getState().dumpPickerBusy).toBe(false);
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+  });
 });
