@@ -71,12 +71,18 @@ git push origin master && git push origin --tags
 | `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, checksums them, uploads them as a job artifact |
 | `release` | `ubuntu-latest` | Downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI |
 
-- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS), `.msi` / `-setup.exe` (Windows),
-  plus a `SHA256SUMS` covering all of them
-- macOS is built `--target universal-apple-darwin`, so one `.dmg` runs on both
-  Apple Silicon and Intel. Passing `--target` moves Tauri's bundle output to
-  `src-tauri/target/universal-apple-darwin/release/bundle`, which is why that
-  matrix row carries its own `bundle_dir`.
+- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS, Apple Silicon
+  only), `.msi` / `-setup.exe` (Windows), plus a `SHA256SUMS` covering all of them
+- **macOS is Apple Silicon only, on purpose.** No maintainer has an Intel Mac, so
+  an architecture-specific bug on Intel could not be reproduced or fixed. Shipping
+  a binary nobody can debug is worse than not shipping it, so the build is native
+  to the `macos-latest` runner (arm64) rather than universal. Intel users build
+  from source. Revisit if someone on the team gets Intel hardware: give the
+  macOS row `--target universal-apple-darwin`, add `rustup target add
+  aarch64-apple-darwin x86_64-apple-darwin` for that row, and point `BUNDLE_DIR`
+  at `src-tauri/target/universal-apple-darwin/release/bundle` - passing
+  `--target` relocates Tauri's bundle output under the triple. That last part is
+  the easy one to miss.
 - `fail-fast` is off so every platform reports its own failure, but `release`
   depends on all three builds, so a partial artifact set is never published.
 - Nothing is code-signed. The release notes get an "Installing" footer telling

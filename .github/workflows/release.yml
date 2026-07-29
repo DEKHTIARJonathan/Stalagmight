@@ -50,20 +50,18 @@ jobs:
         include:
           - os: ubuntu-latest
             name: linux
-            tauri_args: ''
-            bundle_dir: src-tauri/target/release/bundle
-          # Universal, so one .dmg covers both Apple Silicon and Intel testers.
-          # Passing --target moves the bundle output under the triple, which is
-          # why this row needs its own bundle_dir.
+          # Apple Silicon only, deliberately. No maintainer has an Intel Mac, so
+          # an arch-specific bug there could not be reproduced or fixed - better
+          # not to ship a binary nobody can debug. Every platform therefore
+          # builds native for its runner, and none passes --target, which is why
+          # the bundle path below is the same for all three.
           - os: macos-latest
             name: macos
-            tauri_args: '--target universal-apple-darwin'
-            bundle_dir: src-tauri/target/universal-apple-darwin/release/bundle
           - os: windows-latest
             name: windows
-            tauri_args: ''
-            bundle_dir: src-tauri/target/release/bundle
     runs-on: ${{ matrix.os }}
+    env:
+      BUNDLE_DIR: src-tauri/target/release/bundle
     # macOS and Windows runners bill at a multiple of the Linux rate, and the
     # DMG bundler has a known way to hang (see the build step). Without a ceiling
     # the default is 6 hours on the most expensive runner in the matrix.
@@ -76,9 +74,6 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
-      - name: Add macOS universal targets
-        if: matrix.os == 'macos-latest'
-        run: rustup target add aarch64-apple-darwin x86_64-apple-darwin
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@v4
         with:
@@ -91,13 +86,12 @@ jobs:
       # identically everywhere. The Windows default is pwsh, which parses it.
       - name: Build
         shell: bash
-        run: pnpm tauri build ${{ matrix.tauri_args }} -- --features telemetry
+        run: pnpm tauri build -- --features telemetry
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
       - name: Collect release artifacts
         shell: bash
         run: |
-          BUNDLE_DIR="${{ matrix.bundle_dir }}"
           mkdir -p release-artifacts
           echo "=== All bundle output ==="
           find "$BUNDLE_DIR" -maxdepth 2 -type f || true
@@ -210,6 +204,10 @@ jobs:
           ---
 
           ### Installing
+
+          The macOS build is **Apple Silicon only** (M1 and later). There is no Intel build:
+          no maintainer has an Intel Mac, so an architecture-specific bug there could not be
+          reproduced or fixed. Intel users should build from source instead.
 
           These builds are not code-signed, so the first launch is blocked on every platform.
 
