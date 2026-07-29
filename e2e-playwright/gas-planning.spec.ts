@@ -274,6 +274,44 @@ async function stageDropOverrides(page: Page): Promise<Array<StationRefLite | nu
   );
 }
 
+/** The `endpoint` argument the LAST compute_gas_reach_field call was invoked with (#310). */
+async function lastGasReachEndpoint(page: Page): Promise<StationRefLite | null> {
+  return page.evaluate(() => {
+    const calls =
+      (
+        window as unknown as {
+          __MOCK_GAS_REACH_CALLS__?: Array<{ endpoint: StationRefLite | null }>;
+        }
+      ).__MOCK_GAS_REACH_CALLS__ ?? [];
+    return calls.length ? calls[calls.length - 1].endpoint : null;
+  });
+}
+
+/** Delete shot `shotIndex` of section 1 directly via the store - the same command
+ *  (`delete_shot`) the UI's confirm/shift-geometry paths issue, without the dialog chrome
+ *  a #310 repro doesn't need. Renumbers every later station down by one in the mock. */
+async function deleteShotAt(page: Page, shotIndex: number): Promise<void> {
+  await page.evaluate(async (idx) => {
+    const e2e = (
+      window as unknown as {
+        __E2E_TEST__: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
+              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).__E2E_TEST__;
+    const state = e2e.projectStore.getState();
+    const sec = state.project.sections[0];
+    const shot = sec.shots[idx];
+    if (!shot) throw new Error(`no shot at index ${idx}`);
+    await state.deleteShot(sec.id, shot.id);
+  }, shotIndex);
+}
+
 /** The `stage_drop_overrides` argument the LAST compute_gas_reach_field call was invoked with. */
 async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite | null>> {
   return page.evaluate(() => {
@@ -304,10 +342,12 @@ async function lastGasReachSegments(page: Page): Promise<PlanSegmentLite[]> {
   });
 }
 
-/** Enable a DPV rig (Settings ▸ Gas) and save. Must run BEFORE the FIRST Plan-mode entry this
- *  session: `GasPlanPanel` seeds its working `gasConfig` from the persisted config only once
- *  (gated on the store's `hydrated` flag) and never re-seeds on a later config change, so setting
- *  the rig after Plan has already been entered once would be invisible to the panel/table. */
+/** Enable a DPV rig (Settings ▸ Gas) and save. Safe to call at any point in a test, before or
+ *  after Plan mode has been entered: the DPV rig is one of the "settings-only" gas fields (no
+ *  in-panel control of its own), and `gasPlanStore` re-syncs those specifically whenever the
+ *  persisted config changes (`syncSettingsOnlyGasFields`), independent of the seed-once
+ *  `hydrated` gate that governs the rest of `gasConfig`. Configuring the rig after re-entering
+ *  Plan once - which used to be invisible to the panel/table - now reaches them. */
 async function enableDpvRig(page: Page): Promise<void> {
   await openSettingsFromMenu(page);
   await page.locator('[data-testid="settings-tab-gas"]').click();
@@ -892,6 +932,43 @@ test.describe('Gas planning', () => {
       .toEqual({ section_id: 1, station_index: 2 });
     // The origin pick must NOT double as an endpoint pick - they are separate route roles.
     expect(await gasEndpoint(page)).toBeNull();
+  });
+
+  test('#310: a live endpoint pin follows its physical station across an upstream shot delete', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Station 8 of the 11-station seed (10 shots): before = shot[7], after = shot[8].
+    await openPlanMenu(page, 8);
+    await planMenuItem(page, 'Set as endpoint').click();
+    await expect
+      .poll(() => gasEndpoint(page), { timeout: 2000 })
+      .toEqual({ section_id: 1, station_index: 8 });
+
+    // Deleting shot 0 (upstream of station 8) shifts every later station down by one, so the
+    // SAME physical station - once station 8 - is now station 7. A positional ref that is
+    // never re-anchored stays the literal `station_index: 8`, which after this edit names a
+    // DIFFERENT physical station (the one that used to be station 9) - the #310 bug: the pin
+    // silently retargets instead of following its station or dropping out.
+    const WRONG_OLD_BEHAVIOUR_INDEX = 8;
+    const CORRECT_INDEX = 7;
+
+    await enterMode(page, 'survey');
+    await deleteShotAt(page, 0);
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Discriminating assertion: the corrected ref must reach the engine, and it must NOT be
+    // the stale literal index - which remains a perfectly valid (if wrong) station in the
+    // shrunken 10-station project, so a regression here would still produce SOME endpoint,
+    // just the wrong one, and pass a weaker "is not null" check.
+    await expect
+      .poll(() => lastGasReachEndpoint(page), { timeout: 3000 })
+      .toEqual({ section_id: 1, station_index: CORRECT_INDEX });
+    const sent = await lastGasReachEndpoint(page);
+    expect(sent?.station_index).not.toBe(WRONG_OLD_BEHAVIOUR_INDEX);
   });
 
   test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
@@ -1543,13 +1620,40 @@ test.describe('Gas planning', () => {
 
     // With a rig configured, the scooter distance/range row appears (even before anything is
     // scootered - it starts at 0 of the rig's usable range) and the checkbox is live.
-    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
-      timeout: 3000,
-    });
+    const readout = page.locator('[data-testid="gas-readout-scooter-range"]');
+    await expect(readout).toBeVisible({ timeout: 3000 });
+    // Pin the mock's copy of `DpvRig::usable_range_m` (src-tauri/src/config/gas.rs) AND the
+    // Settings default rig constants (primary 45 m/min x 60 min, backup 45 m/min x 45 min,
+    // range_reserve_fraction 0.1, `enableDpvRig`'s `toggle-gas-dpv-enabled` default -
+    // GasSettings.tsx's `makeDefaultDpvRig`): `min(45*60, 45*45) * (1 - 0.1)` =
+    // `min(2700, 2025) * 0.9` = `2025 * 0.9` = 1822.5, which the metric formatter rounds and
+    // groups to "1,823 m". Nothing is scootered yet, so the distance half reads "0 m".
+    await expect(readout).toHaveText('0 m / 1,823 m');
 
     await page.locator('[data-testid="plan-tab-segments"]').click();
     await expect(page.locator('[data-testid="segment-scooter-0"]')).toBeEnabled();
     await expect(page.locator('[data-testid="segments-no-rig-hint"]')).toHaveCount(0);
+  });
+
+  test('a DPV rig configured after Plan mode has already been entered once reaches the panel on the next entry (#317)', async ({
+    page,
+  }) => {
+    // Enter Plan first (this is what used to be forbidden - see `enableDpvRig`'s comment):
+    // the panel seeds `gasConfig` from the persisted config, latching `hydrated`.
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toHaveCount(0);
+
+    await enterMode(page, 'survey');
+    await enableDpvRig(page);
+
+    // Re-entering Plan remounts the panel; the rig must be visible without a project reload -
+    // this is exactly the "leave Plan, set the rig, return" gesture the store-synced fix targets.
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
+      timeout: 3000,
+    });
   });
 
   test('the scooter park marker appears mid-route and disappears once every segment is scootered (#317)', async ({

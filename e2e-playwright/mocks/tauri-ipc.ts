@@ -181,6 +181,76 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
+      // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
+      // survey edit that renumbers stations doesn't silently retarget them. The real backend
+      // names a station by the shots on either side of it (core/state/dive_plan.rs's
+      // `PlanAnchor`); this mock mirrors that NEIGHBOUR-PAIR semantics only - no reverse-parity
+      // or terminal-shot-length tracking, since the mock only needs to survive the shot
+      // add/delete an e2e can actually drive. The anchor shape below is this mock's own and is
+      // opaque to the app (`PlanAnchor` is `unknown` on the TS side).
+      interface MockPlanRefLite {
+        section_id: number;
+        station_index: number;
+      }
+      interface MockPlanAnchor {
+        section_id: number;
+        before_shot_uuid: string | null;
+        after_shot_uuid: string | null;
+      }
+      interface MockShotRef {
+        id: number;
+        uuid?: string;
+      }
+      interface MockSectionRef {
+        id: number;
+        shots: MockShotRef[];
+      }
+      const sectionForAnchor = (sectionId: number): MockSectionRef | undefined =>
+        (currentProject?.sections as MockSectionRef[] | undefined)?.find(
+          (s) => s.id === sectionId,
+        );
+      /** Describe the station at `ref` by the uuids of its neighbouring shots (station `i` sits
+       *  between shot `i-1` and shot `i`; a section end has no neighbour on that side). `null`
+       *  when the section is gone or the index is out of range - mirrors the backend's
+       *  `to_anchor`. */
+      const refToAnchor = (ref: MockPlanRefLite | null | undefined): MockPlanAnchor | null => {
+        if (!ref) return null;
+        const section = sectionForAnchor(ref.section_id);
+        if (!section || ref.station_index < 0 || ref.station_index > section.shots.length) {
+          return null;
+        }
+        const before = ref.station_index > 0 ? section.shots[ref.station_index - 1] : undefined;
+        const after =
+          ref.station_index < section.shots.length ? section.shots[ref.station_index] : undefined;
+        return {
+          section_id: ref.section_id,
+          before_shot_uuid: before?.uuid ?? null,
+          after_shot_uuid: after?.uuid ?? null,
+        };
+      };
+      /** Place an anchor against the project as it stands now: the boundary right after its
+       *  surviving "before" neighbour, or - failing that - right at its surviving "after"
+       *  neighbour. `null` only when NEITHER uuid is found anymore (mirrors the backend: a
+       *  single surviving neighbour is enough to replace a station that shifted). */
+      const anchorToRef = (anchor: MockPlanAnchor | null | undefined): MockPlanRefLite | null => {
+        if (!anchor) return null;
+        const section = sectionForAnchor(anchor.section_id);
+        if (!section) return null;
+        const beforeIdx = anchor.before_shot_uuid
+          ? section.shots.findIndex((s) => s.uuid === anchor.before_shot_uuid)
+          : -1;
+        if (beforeIdx >= 0) {
+          return { section_id: anchor.section_id, station_index: beforeIdx + 1 };
+        }
+        const afterIdx = anchor.after_shot_uuid
+          ? section.shots.findIndex((s) => s.uuid === anchor.after_shot_uuid)
+          : -1;
+        if (afterIdx >= 0) {
+          return { section_id: anchor.section_id, station_index: afterIdx };
+        }
+        return null;
+      };
+
       // `section_offsets` reaches the mock in TWO shapes, so nothing may index it
       // directly. `create_project_full` / `import_sections` / `execute_gpx_import`
       // build the JS `Record<sectionId, [dx, dy]>`, while the binary envelope
@@ -1365,6 +1435,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'load_dive_plan': {
             const found = mockDivePlans.find((p) => p.id === args?.id);
             if (!found) throw new Error('That dive plan no longer exists.');
+            // #310: this mock keeps a plan's refs POSITIONAL (unlike the real `.plnx`, which
+            // canonicalizes to shot-uuid anchors on save), so the anchors below are derived
+            // fresh at load time against the CURRENT survey - exactly what a real load would
+            // hand back for a plan whose refs happen to still be current.
+            const snap = (found.snapshot ?? {}) as {
+              origin?: MockPlanRefLite | null;
+              endpoint?: MockPlanRefLite | null;
+              waypoints?: MockPlanRefLite[];
+              marked_points?: Array<{ station: MockPlanRefLite; label?: string | null }>;
+              stage_drop_overrides?: Array<MockPlanRefLite | null>;
+            };
             return {
               meta: {
                 id: found.id,
@@ -1374,6 +1455,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               snapshot: found.snapshot,
               stale_ref_count: 0,
+              anchors: {
+                origin: refToAnchor(snap.origin ?? null),
+                endpoint: refToAnchor(snap.endpoint ?? null),
+                waypoints: (snap.waypoints ?? []).map((w) => refToAnchor(w)),
+                marked_points: (snap.marked_points ?? []).map((m) => refToAnchor(m.station)),
+                stage_drop_overrides: (snap.stage_drop_overrides ?? []).map((r) =>
+                  refToAnchor(r ?? null),
+                ),
+              },
             };
           }
           case 'save_dive_plan': {
@@ -1417,6 +1507,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               throw new Error('That dive plan no longer exists.');
             }
             return null;
+          }
+
+          // #310: anchor / re-resolve live plan pins across a survey edit. Recorded together in
+          // one call log (both commands round-trip the same opaque anchor shape).
+          case 'plan_anchors_for_refs': {
+            const refs = (args?.refs ?? []) as Array<MockPlanRefLite | null>;
+            const anchors = refs.map((ref) => refToAnchor(ref));
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
+            calls.push({ cmd: 'plan_anchors_for_refs', refs, anchors });
+            win.__MOCK_ANCHOR_CALLS__ = calls;
+            return anchors;
+          }
+          case 'plan_refs_for_anchors': {
+            const anchors = (args?.anchors ?? []) as Array<MockPlanAnchor | null>;
+            const refs = anchors.map((a) => anchorToRef(a));
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
+            calls.push({ cmd: 'plan_refs_for_anchors', anchors, refs });
+            win.__MOCK_ANCHOR_CALLS__ = calls;
+            return refs;
           }
           case 'compute_gas_reach_field': {
             // Record every call's inputs so drag e2e can assert the dragged station was sent as a
@@ -1831,8 +1942,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 scooter_drop_ref = waypointArgs[lastOn] ?? null;
               }
             }
-            const turn_on_scooter_range =
-              scooter_range_limit_m != null && scooter_distance_m > scooter_range_limit_m;
+            // NOT `scooter_distance_m > scooter_range_limit_m` - that is verbatim the naive
+            // per-route comparison `GasReachField::turn_on_scooter_range`'s own doc
+            // (models/project/gas/model.rs) says the UI must not re-derive: the route already
+            // stops at whichever cap bound first, so the two read as merely equal in exactly
+            // the case being asked about. No spec asserts this value; hardcoded false rather
+            // than guess at the real (cave-scoped) rule.
+            const turn_on_scooter_range = false;
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1886,6 +2002,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
               id: mockShotId(sectionCounter, index),
+              // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
+              // key off this, exactly as the real backend keys off `Shot.uuid`.
+              uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
               azimuth_in: (shot.azimuth_in as number) ?? 0,
               azimuth_out: (shot.azimuth_out as number) ?? 0,
               length: (shot.length as number) ?? 0,
@@ -3809,9 +3928,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
-          case 'delete_shot':
+          case 'delete_shot': {
             console.log('[Mock IPC] delete_shot called with:', args);
+            // #310: a plain no-op response left every station index unchanged, so nothing
+            // could ever be renumbered to test a live anchored pin against. Splice the shot
+            // out in place - the real backend's `remove_shot_with_rewire` shortens the section
+            // by one shot the same way, shifting every later station down by one index.
+            if (currentProject && args) {
+              const sectionId = args.sectionId as number;
+              const shotId = args.shotId as number;
+              const section = (
+                currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
+              ).find((s) => s.id === sectionId);
+              if (section) {
+                const idx = section.shots.findIndex((sh) => sh.id === shotId);
+                if (idx >= 0) section.shots.splice(idx, 1);
+              }
+            }
             return { success: true };
+          }
 
           case 'delete_last_shot_and_section':
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);

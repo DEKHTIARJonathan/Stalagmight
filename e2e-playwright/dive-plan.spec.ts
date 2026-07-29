@@ -90,6 +90,31 @@ async function giveProjectAPath(page: Page): Promise<void> {
   await setProjectPath(page, '/tmp/dive-plan-e2e.stalx');
 }
 
+/** Delete shot `shotIndex` of section 1 directly via the store (#310) - the same `delete_shot`
+ *  command the UI's confirm/shift-geometry paths issue. Renumbers every later station down by
+ *  one in the mock, so it can drive a live pin's anchor out from under it. */
+async function deleteShotAt(page: Page, shotIndex: number): Promise<void> {
+  await page.evaluate(async (idx) => {
+    const e2e = (
+      window as unknown as {
+        __E2E_TEST__: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
+              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).__E2E_TEST__;
+    const state = e2e.projectStore.getState();
+    const sec = state.project.sections[0];
+    const shot = sec.shots[idx];
+    if (!shot) throw new Error(`no shot at index ${idx}`);
+    await state.deleteShot(sec.id, shot.id);
+  }, shotIndex);
+}
+
 async function setDiverRmv(page: Page, rmv: number): Promise<void> {
   await page.evaluate((r) => {
     (window as unknown as E2EWindow).__E2E_TEST__?.gasPlanStore
@@ -351,5 +376,65 @@ test.describe('Dive-plan persistence (#244)', () => {
 
     await expect.poll(() => savedPlans(page).then((p) => p.length), { timeout: 3000 }).toBe(0);
     expect(await loadedPlanId(page)).toBeNull();
+  });
+
+  test('#310: losing both neighbours of a pinned way point marks it unresolved and blocks Save', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+
+    // Way point at station 3 of the 6-shot seed (7 stations, 0..6): neighbours are shot[2]
+    // (before) and shot[3] (after), both interior - deleting both leaves nothing left to
+    // anchor this pin to.
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
+        section_id: 1,
+        station_index: 3,
+      });
+    });
+    await saveAs(page, 'Stall repro');
+
+    // A second way point dirties the plan against its just-saved baseline, so Save is enabled
+    // for a reason OTHER than the stall below - proving the assertions that follow are actually
+    // driven by the anchor loss, not by a plan that just happened to already block saving.
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
+        section_id: 1,
+        station_index: 6,
+      });
+    });
+    await expect(page.locator('[data-testid="dive-plan-save"]')).toBeEnabled();
+
+    await deleteShotAt(page, 2);
+    await deleteShotAt(page, 2); // shot[3] is now at index 2 after the first delete.
+
+    // ASSUMPTION (for reconciliation): as of this writing, the #310 fix is still being built by
+    // another agent. `unresolved.waypoints[0]` mirrors the `PlanPinFlags` shape + doc comment
+    // already present on `gasPlanStore.ts` ("a flagged pin is never sent to the gas engine and
+    // blocks a Save") - the store-level source of truth this assertion is written against.
+    // `gas-waypoint-unresolved` is an INVENTED per-row testid (no such indicator exists in
+    // GasPlanPanel yet); if the real one lands under a different name, only this one locator
+    // needs to change.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__?: {
+                    gasPlanStore: { getState: () => { unresolved: { waypoints: boolean[] } } };
+                  };
+                }
+              ).__E2E_TEST__?.gasPlanStore.getState().unresolved.waypoints[0] ?? false,
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    await expect(page.locator('[data-testid="gas-waypoint-unresolved"]').first()).toBeVisible({
+      timeout: 3000,
+    });
+    await expect(page.locator('[data-testid="dive-plan-save"]')).toBeDisabled();
   });
 });
