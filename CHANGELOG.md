@@ -14,6 +14,10 @@ Update this file every time a new version is tagged.
 - The pinned toolchain moved to **Node.js 24** (`.nvmrc` plus advisory `engines`), so builds and tests now run on the current LTS line. `scripts/mac-setup.sh` and `scripts/mac-build.sh` read the major from `.nvmrc` instead of hardcoding it, so they can no longer drift behind a bump. pnpm stays pinned at `9.15.9` ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
 - The agent harness moved to Node 24 with everything else, so there is no second toolchain. Its "Node 22 only" rule blamed a webdriverio undici-versus-built-in-fetch mismatch that the code does not actually do; session creation works identically on Node 22 and 24, and `pnpm agent:http-probe` now checks that in one command after a webdriverio or Node bump
 
+### Fixed
+
+- **Light mode is actually light** - the theme switched the panels and controls but left the map canvas on the dark palette, so the app still read as dark. Light mode now themes the survey canvas too, inverting outlines, labels, halos and the compass to dark ink so the survey stays legible on the light background. The two remaining light palettes, Solarized Light and Catppuccin Latte, keep the dark canvas for now ([#332](https://github.com/Stalagmight/Stalagmight/issues/332))
+
 ## [0.5.0] - 2026-07-29
 
 The first release with builds for all three platforms. The headline additions are
