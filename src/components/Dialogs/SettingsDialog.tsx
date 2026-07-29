@@ -813,6 +813,11 @@ export default function SettingsDialog() {
       >
         <div className="space-y-2">
           <p className="font-medium">{t('dialogs.about.version', { version: __APP_VERSION__ })}</p>
+          {/* A released build's version is bare, so the commit is shown here:
+              a bug report still has to identify which build it came from. */}
+          <p className="text-xs text-text-secondary" data-testid="about-commit">
+            {t('dialogs.about.build', { commit: __APP_COMMIT__ })}
+          </p>
           <p className="text-sm text-text-secondary">{t('dialogs.about.description')}</p>
           <p>
             <a

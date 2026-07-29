@@ -3,14 +3,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Re-run build script when these env vars change.
     println!("cargo::rerun-if-env-changed=CI");
+    println!("cargo::rerun-if-env-changed=GITHUB_REF_TYPE");
     println!("cargo::rerun-if-env-changed=TELEMETRY_ENDPOINT");
 
-    // Embed the exact commit in the version: `x.y.z-<shorthash>` for CI/release
-    // builds and `x.y.z-dev-<shorthash>` for local builds (CI env var not set).
-    // Falls back to `unknown` when git is unavailable (e.g. a source tarball).
+    // A released build reports the bare version: the tag already pins the
+    // commit. Every other build keeps the hash, because that is its only
+    // identity - `x.y.z-<shorthash>` for CI builds and `x.y.z-dev-<shorthash>`
+    // locally. Mirrors vite.config.ts so the UI's About version and telemetry's
+    // app_version agree. Falls back to `unknown` when git is unavailable (e.g. a
+    // source tarball).
     let pkg_version = std::env::var("CARGO_PKG_VERSION")?;
     let short_hash = git_short_hash();
-    let app_version = if std::env::var("CI").is_ok() {
+    let app_version = if is_tagged_release(&pkg_version) {
+        pkg_version.clone()
+    } else if std::env::var("CI").is_ok() {
         format!("{pkg_version}-{short_hash}")
     } else {
         format!("{pkg_version}-dev-{short_hash}")
@@ -56,6 +62,26 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     Ok(())
+}
+
+/// Whether this build is of a commit tagged `v<pkg_version>`.
+///
+/// In Actions on a tag push `GITHUB_REF_TYPE` is authoritative and needs no git
+/// state; otherwise ask git, so a release built by hand identifies itself the
+/// same way. Anything unreadable falls through to false, which only means the
+/// build keeps its commit hash - the safe direction.
+fn is_tagged_release(pkg_version: &str) -> bool {
+    if std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
+        return true;
+    }
+    let want = format!("v{pkg_version}");
+    std::process::Command::new("git")
+        .args(["tag", "--points-at", "HEAD"])
+        .output()
+        .ok()
+        .filter(|out| out.status.success())
+        .and_then(|out| String::from_utf8(out.stdout).ok())
+        .is_some_and(|tags| tags.lines().any(|t| t.trim() == want))
 }
 
 /// Short hash of the checked-out commit, or `unknown` when git is unavailable
