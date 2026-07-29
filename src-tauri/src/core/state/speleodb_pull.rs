@@ -236,8 +236,16 @@ impl AppState {
     /// time - before any lock existed - was asked again by the revert, which by then
     /// had taken the write lock and had to hand it back to ask.
     ///
-    /// An explicit `chosen` always wins; otherwise the remembered entry is offered,
-    /// and only when it was an answer about `at` - the revision this dump came from.
+    /// An explicit `chosen` wins over the remembered entry, but only while it is an
+    /// answer to the question we asked - see `speleodb_dump_offer_answers`. A pick and
+    /// a recall are now dated the same way, which they were not: dating the REMEMBERED
+    /// answer while letting a fresh `entryPath` through on membership alone left the
+    /// hole open at the point the user is actually deciding. The picker lists a size
+    /// and a timestamp per candidate so the choice can be informed; it is a question
+    /// about one tree, and confirming it replays the verb, which resolves the tip
+    /// again. So an answer about A was being applied to B - and membership is exactly
+    /// what a surviving backup copy passes.
+    ///
     /// Neither is trusted: both are then checked for membership against the archive
     /// being extracted, so a name that made sense for the tip's tree simply falls
     /// through to the ambiguity when a revision's tree does not contain it.
@@ -270,17 +278,30 @@ impl AppState {
         at: DumpAt<'_>,
         stalx: StalxAmbiguity,
     ) -> Result<String, SpeleoDbError> {
+        // A pick that answers a DIFFERENT revision is discarded here rather than
+        // membership-checked, because membership is what it would pass: a push writes
+        // the canonical entry and leaves every other `.stalx` where it was, so the
+        // backup the user chose at A is still in B's tree. Dropping it falls through to
+        // a fresh classification, which re-offers what the dump holds now - and records
+        // the new revision, so the next reply matches and this cannot loop.
+        let answered_here = chosen.filter(|_| self.speleodb_dump_offer_answers(project_id, at));
         let recalled = self.speleodb_recalled_dump_entry(project_id, at);
-        let candidate = chosen.or(recalled.as_deref());
+        let candidate = answered_here.or(recalled.as_deref());
         match resolve_dump_entry(dump, candidate) {
             Ok(entry) => {
-                // Honoured explicit pick only: `resolve_dump_entry` returns `chosen`
-                // verbatim when it accepts it, and a refused pick falls through to a
-                // classification that cannot equal it (a refused name is not an
-                // openable entry of this archive, a classified one always is). A hit
-                // recalled from the session is already recorded, so re-recording it
+                // Honoured explicit pick only: `resolve_dump_entry` returns the
+                // candidate verbatim when it accepts it, and a refused pick falls
+                // through to a classification that cannot equal it (a refused name is
+                // not an openable entry of this archive, a classified one always is). A
+                // hit recalled from the session is already recorded, so re-recording it
                 // would be a no-op.
-                if chosen.is_some_and(|c| c == entry.as_str()) {
+                //
+                // `answered_here`, NOT `chosen`: a pick discarded for answering another
+                // revision must not be recorded on its way past. An unambiguous dump
+                // classifies to its sole entry, which can equal the discarded name - so
+                // testing `chosen` would promote a pick we just refused into a standing
+                // session answer, over a question that was never asked.
+                if answered_here.is_some_and(|c| c == entry.as_str()) {
                     self.speleodb_remember_dump_entry(project_id, &entry, at);
                 }
                 Ok(entry)
@@ -322,6 +343,16 @@ impl AppState {
                     }
                 }
                 Err(SpeleoDbError::AdoptAriane)
+            }
+            // [#258] An ambiguity that is about to be REPORTED - the refusing arms are
+            // above, so reaching here means this caller does host a picker and these
+            // candidates are going to the user. Record which revision they describe,
+            // because the reply arrives through a SEPARATE call that resolves the tip
+            // again, and that is the only way to tell an answer to this question from
+            // an answer to a different one.
+            Err(e @ (SpeleoDbError::AmbiguousDump(_) | SpeleoDbError::AmbiguousAriane(_))) => {
+                self.speleodb_note_dump_offer(project_id, at);
+                Err(e)
             }
             Err(e) => Err(e),
         }
@@ -1477,6 +1508,105 @@ mod tests {
                 base: None,
             }
         );
+    }
+
+    /// [#258] The picker's reply is an answer about ONE tree. Confirming it replays the
+    /// verb, which resolves the tip again - so if a revision landed while the dialog was
+    /// open, the answer to A arrives against B. Membership is no defence at all here:
+    /// the backup the user chose survives the push untouched, which is exactly why it
+    /// still passes. The pick is discarded and the current candidates re-offered.
+    #[test]
+    fn a_pick_that_answers_an_earlier_revision_is_refused_and_re_offered() {
+        let state = AppState::new().expect("state");
+        let project = "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa";
+        let zip = make_zip(&["backup/old.stalx", "project.stalx"]);
+
+        // Candidates offered for A. Recording that is the whole mechanism: it is what
+        // later distinguishes an answer to this question from an answer to another.
+        let mut dump = Dump::open(&zip).expect("open");
+        assert!(matches!(
+            state.speleodb_resolve_entry_remembering(
+                project,
+                &mut dump,
+                None,
+                ArianeRoute::Adopt,
+                DumpAt::Revision(TIP),
+                StalxAmbiguity::Ask,
+            ),
+            Err(SpeleoDbError::AmbiguousDump(_))
+        ));
+
+        // A collaborator pushes while the picker is open, then the user confirms. The
+        // chosen entry is still in B's tree - untouched by their push - so nothing about
+        // the archive objects.
+        let mut dump = Dump::open(&zip).expect("open");
+        let replayed = state.speleodb_resolve_entry_remembering(
+            project,
+            &mut dump,
+            Some("backup/old.stalx"),
+            ArianeRoute::Adopt,
+            DumpAt::Revision(NEXT),
+            StalxAmbiguity::Ask,
+        );
+        assert!(
+            matches!(replayed, Err(SpeleoDbError::AmbiguousDump(_))),
+            "an answer about an earlier revision must be refused, not extracted"
+        );
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(NEXT)),
+            None,
+            "and it must not be recorded on its way past either"
+        );
+
+        // The refusal re-offered B's candidates, so answering THAT question works and
+        // the flow cannot loop.
+        let mut dump = Dump::open(&zip).expect("open");
+        assert_eq!(
+            state
+                .speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    Some("backup/old.stalx"),
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(NEXT),
+                    StalxAmbiguity::Ask,
+                )
+                .expect("the re-offer is answerable"),
+            "backup/old.stalx"
+        );
+    }
+
+    /// The permissive halves of the same gate, both deliberate. An undatable dump has
+    /// no revision to disagree with, and refusing there would re-offer an equally
+    /// undatable question - the picker would ask forever. A pick with no offer behind
+    /// it contradicts nothing, and is still membership-checked.
+    #[test]
+    fn a_pick_is_only_refused_when_the_offer_positively_disagrees() {
+        let state = AppState::new().expect("state");
+        let zip = make_zip(&["a.stalx", "b.stalx"]);
+
+        for (project, at) in [
+            ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", DumpAt::Unknown),
+            (
+                "cccccccc-cccc-cccc-cccc-cccccccccccc",
+                DumpAt::Revision(TIP),
+            ),
+        ] {
+            let mut dump = Dump::open(&zip).expect("open");
+            assert_eq!(
+                state
+                    .speleodb_resolve_entry_remembering(
+                        project,
+                        &mut dump,
+                        Some("b.stalx"),
+                        ArianeRoute::Adopt,
+                        at,
+                        StalxAmbiguity::Ask,
+                    )
+                    .expect("nothing here contradicts the pick"),
+                "b.stalx"
+            );
+        }
     }
 
     /// [#258] A dump nobody can date cannot be shown to match any choice, so it

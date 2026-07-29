@@ -70,6 +70,21 @@ pub(crate) struct SpeleoDbSession {
     /// end the moment they tried to edit - the very thing the picker exists to
     /// remove. A miss falls back to failing closed, which is safe: it never guesses.
     chosen_dump_entries: std::collections::HashMap<String, DumpChoice>,
+    /// [#258] Which revision this project's candidate list was last OFFERED for.
+    ///
+    /// The sibling of `chosen_dump_entries`, and it closes that field's blind spot.
+    /// Dating the REMEMBERED answer stops a choice being reused across a revision it
+    /// never described - but an EXPLICIT `entryPath` skipped the check entirely, and
+    /// that is the one the user just made. The picker shows a per-candidate size and
+    /// timestamp precisely so the choice can be informed; it is a question about one
+    /// tree, and the confirmation replays the verb, which resolves the tip again. So
+    /// the answer to A was being applied to B, with only path membership between them
+    /// - and membership is exactly what a surviving backup copy passes.
+    ///
+    /// Recorded here rather than round-tripped through the DTO because it need not
+    /// leave the process: the offer and the reply are the same session, so the client
+    /// never has to be trusted to hand it back, and no IPC surface widens.
+    offered_dump_at: std::collections::HashMap<String, String>,
 }
 
 /// [#258] A dump-entry choice, and the revision it was an answer about.
@@ -315,6 +330,7 @@ impl SpeleoDbSession {
         // different user may not even be able to see those entries, and the next
         // session must re-derive the choice from what the server actually holds.
         self.chosen_dump_entries.clear();
+        self.offered_dump_at.clear();
         cleared
     }
 
@@ -954,6 +970,50 @@ impl AppState {
             .get(project_id)
             .filter(|choice| choice.at == sha)
             .map(|choice| choice.entry.clone())
+    }
+
+    /// [#258] Record that this project's candidate list was offered for `at`.
+    ///
+    /// Called wherever an ambiguity is about to be REPORTED - never where it is
+    /// refused, because a caller with no picker offers nothing. An undatable dump
+    /// records nothing, which is what keeps [`Self::speleodb_dump_offer_answers`]
+    /// permissive in that case rather than looping.
+    pub(super) fn speleodb_note_dump_offer(&self, project_id: &str, at: DumpAt<'_>) {
+        let DumpAt::Revision(sha) = at else { return };
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session
+                .offered_dump_at
+                .insert(project_id.to_owned(), sha.to_owned());
+        }
+    }
+
+    /// Whether an explicit pick arriving now is an answer to the question we asked.
+    ///
+    /// True unless we can positively show otherwise, and the two permissive cases are
+    /// deliberate rather than lax:
+    ///
+    /// - **No offer recorded.** Nothing was asked, so nothing can be contradicted. The
+    ///   pick is still membership-checked against the archive being extracted, which is
+    ///   the check that was always doing the real work for a hand-authored `entryPath`.
+    /// - **An undatable dump.** There is no revision to disagree with. Refusing here
+    ///   would be worse than useless: the re-offer would be undatable too, so the
+    ///   picker would ask the same unanswerable question forever.
+    ///
+    /// A mismatch, though, is positive evidence - the tree moved between the offer and
+    /// the reply - and the answer is discarded so the flow re-offers what the dump
+    /// holds NOW. That re-offer records the new revision, so the next reply matches and
+    /// the loop terminates.
+    pub(super) fn speleodb_dump_offer_answers(&self, project_id: &str, at: DumpAt<'_>) -> bool {
+        let DumpAt::Revision(sha) = at else {
+            return true;
+        };
+        let Ok(session) = self.speleodb_session_lock() else {
+            return true;
+        };
+        session
+            .offered_dump_at
+            .get(project_id)
+            .is_none_or(|offered| offered == sha)
     }
 
     /// [#258] Forget this project's remembered dump entry.
@@ -3894,6 +3954,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
@@ -5407,6 +5468,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
@@ -5492,6 +5554,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
@@ -6287,6 +6350,7 @@ mod tests {
             rehydrate_attempted: false,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         }
     }
 
@@ -6661,6 +6725,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         };
         let (endpoint, token) = session.active_token().expect("authenticated session");
         assert_eq!(endpoint, "https://x/");
@@ -6676,6 +6741,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_token.active_token(),
@@ -6689,6 +6755,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_email.active_token(),
@@ -6702,6 +6769,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         };
         assert!(matches!(
             no_endpoint.active_token(),
@@ -6816,6 +6884,7 @@ mod tests {
             rehydrate_attempted: true,
             lock_acquired_here: None,
             chosen_dump_entries: std::collections::HashMap::new(),
+            offered_dump_at: std::collections::HashMap::new(),
         };
         state
     }
