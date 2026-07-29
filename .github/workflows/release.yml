@@ -2,15 +2,77 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Rehearsal path. A dispatch runs verify + the full build matrix but stops
+  # short of publishing (the release job is tag-gated), so the per-platform
+  # bundle paths and globs can be proven without cutting a tag first.
+  workflow_dispatch:
 
 jobs:
-  build:
+  # Gate the release on the checks the tagged commit should already have passed.
+  # Linux-only, which is what this workflow did before it grew a build matrix.
+  # Running the suite on macOS and Windows too is tracked separately (#325);
+  # note Windows needs STALAGMIGHT_TEST_MANIFEST=1 (see scripts/test.ps1).
+  verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     permissions:
-      contents: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
+      # Cached here but deliberately NOT in `build`: this job compiles only to
+      # run tests, while `build` produces the binaries people install, and those
+      # are worth the cold compile.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm tsc --noEmit
+      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+
+  build:
+    needs: verify
+    strategy:
+      # Build every platform even when one fails, so a single broken target
+      # reports alongside the others instead of masking them. The release job
+      # still needs all three, so nothing half-complete gets published.
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: linux
+          # Apple Silicon only, deliberately. No maintainer has an Intel Mac, so
+          # an arch-specific bug there could not be reproduced or fixed - better
+          # not to ship a binary nobody can debug. Every platform therefore
+          # builds native for its runner, and none passes --target, which is why
+          # the bundle path below is the same for all three.
+          - os: macos-latest
+            name: macos
+          - os: windows-latest
+            name: windows
+    runs-on: ${{ matrix.os }}
+    env:
+      BUNDLE_DIR: src-tauri/target/release/bundle
+    # macOS and Windows runners bill at a multiple of the Linux rate, and the
+    # DMG bundler has a known way to hang (see the build step). Without a ceiling
+    # the default is 6 hours on the most expensive runner in the matrix.
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux build dependencies
+        if: matrix.os == 'ubuntu-latest'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@v4
@@ -18,60 +80,120 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      # Tests
-      - run: pnpm tsc --noEmit
-      - run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
-        env:
-          XDG_CONFIG_HOME: ${{ runner.temp }}/config
-          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
-      # Build (telemetry feature enabled via Cargo args)
-      - run: pnpm tauri build -- --features telemetry
+      # Actions sets CI=true, which is what stops Tauri's DMG bundler from
+      # driving Finder over AppleScript and hanging headless (see mac-build.sh).
+      # shell: bash so the `--` separating tauri args from cargo args is handled
+      # identically everywhere. The Windows default is pwsh, which parses it.
+      - name: Build
+        shell: bash
+        run: pnpm tauri build -- --features telemetry
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
-      # Collect artifacts
       - name: Collect release artifacts
+        shell: bash
         run: |
           mkdir -p release-artifacts
           echo "=== All bundle output ==="
-          find src-tauri/target/release/bundle -maxdepth 2 -type f
+          find "$BUNDLE_DIR" -maxdepth 2 -type f || true
           echo "=== Copying artifacts ==="
-          cp src-tauri/target/release/bundle/deb/*.deb release-artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/rpm/*.rpm release-artifacts/ 2>/dev/null || true
-          cp src-tauri/target/release/bundle/appimage/*.AppImage release-artifacts/ 2>/dev/null || true
+          # One list for every platform; only the host's own bundles exist.
+          for pattern in \
+            deb/*.deb \
+            rpm/*.rpm \
+            appimage/*.AppImage \
+            dmg/*.dmg \
+            msi/*.msi \
+            nsis/*-setup.exe
+          do
+            cp "$BUNDLE_DIR"/$pattern release-artifacts/ 2>/dev/null || true
+          done
           echo "=== Collected ==="
           ls -lh release-artifacts/
           FILE_COUNT=$(find release-artifacts -type f | wc -l)
           if [ "$FILE_COUNT" -eq 0 ]; then
-            echo "::error::No artifacts found in bundle output"
+            echo "::error::No artifacts found in $BUNDLE_DIR"
             exit 1
           fi
-      # Extract changelog section for this version
-      - name: Extract changelog
-        id: changelog
+      # Nothing is code-signed, and the release notes tell recipients how to
+      # click past the OS warning, so give them something to check the download
+      # against. Computed on the runner that built the bytes.
+      - name: Checksum this platform's artifacts
+        shell: bash
+        working-directory: release-artifacts
         run: |
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
-          # Extract the section between this version header and the next version header.
-          # Tolerates both bracketed (## [0.2.0]) and unbracketed (## 0.2.0) headers,
-          # with or without a trailing date; terminates on the next "## " heading.
-          BODY=$(awk -v ver="$VERSION" '
-            $0 ~ "^## +\\[?" ver "\\]?([^0-9.]|$)" { found=1; next }
-            found && /^## / { exit }
-            found { print }
-          ' CHANGELOG.md)
-          # Fall back if empty
-          if [ -z "$BODY" ]; then
-            BODY="Release ${TAG}"
+          # macOS has shasum, not sha256sum.
+          if command -v sha256sum >/dev/null 2>&1; then
+            SUM="sha256sum"
+          else
+            SUM="shasum -a 256"
           fi
-          # Write to file for safe multi-line handling
-          echo "$BODY" > /tmp/release-body.md
-      # Create release and upload assets
+          $SUM * > "$RUNNER_TEMP/sums"
+          mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
+          cat "SHA256SUMS-${{ matrix.name }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.name }}
+          path: release-artifacts/*
+          if-no-files-found: error
+
+  release:
+    needs: build
+    # Only a tag publishes. A workflow_dispatch rehearsal stops after `build`.
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-artifacts
+          merge-multiple: true
+      - run: ls -lh release-artifacts/
+      # `needs: build` already blocks a partial matrix from reaching this job.
+      # This re-checks the artifacts themselves, so completeness does not rest
+      # on that single upstream edge, and confirms the bytes still match what
+      # the build runners hashed.
+      - name: Verify checksums and assemble SHA256SUMS
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          cat SHA256SUMS-* > "$RUNNER_TEMP/SHA256SUMS"
+          rm SHA256SUMS-*
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          sha256sum -c SHA256SUMS
+          # At least one installable per platform. Grouped by platform rather
+          # than asserting every extension, so a bundler dropping (say) the .rpm
+          # doesn't block an otherwise complete release.
+          shopt -s nullglob
+          linux=( *.deb *.rpm *.AppImage )
+          macos=( *.dmg )
+          windows=( *.msi *.exe )
+          [ ${#linux[@]}   -gt 0 ] || { echo "::error::no Linux artifact";   exit 1; }
+          [ ${#macos[@]}   -gt 0 ] || { echo "::error::no macOS artifact";   exit 1; }
+          [ ${#windows[@]} -gt 0 ] || { echo "::error::no Windows artifact"; exit 1; }
+          echo "SHA256SUMS:"; cat SHA256SUMS
+      # Same script you can run locally to preview the body before tagging, so
+      # what gets published is never a surprise.
+      - name: Build release notes
+        shell: bash
+        run: ./scripts/release-notes.sh "$GITHUB_REF_NAME" > "$RUNNER_TEMP/release-body.md"
       - name: Create release and upload artifacts
+        shell: bash
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           TAG="${GITHUB_REF_NAME}"
+          # A tag carrying a suffix (v0.5.0-rc1) is a candidate, not a release.
+          # Without --prerelease it would become "Latest" and be handed to
+          # everyone as the real thing.
+          PRERELEASE=()
+          case "${TAG#v}" in
+            *-*) PRERELEASE=(--prerelease); echo "Publishing $TAG as a pre-release" ;;
+          esac
           gh release create "$TAG" \
             --title "Stalagmight ${TAG}" \
-            --notes-file /tmp/release-body.md \
+            --notes-file "$RUNNER_TEMP/release-body.md" \
+            "${PRERELEASE[@]}" \
             release-artifacts/*

@@ -45,6 +45,18 @@ fi
 
 [[ -f "$PROJECT_DIR/package.json" ]] || die "Not a valid project directory: $PROJECT_DIR"
 
+# Ask cargo where it actually writes rather than assuming src-tauri/target.
+# A per-clone .cargo/config.toml can redirect target-dir (this repo's clones put
+# it on an external disk), and cargo resolves that config from the working
+# directory, which is why this runs from inside PROJECT_DIR. Getting it wrong is
+# silent: the signing and reporting steps below just find nothing.
+CARGO_TARGET="$(cd "$PROJECT_DIR/src-tauri" && cargo metadata --format-version 1 --no-deps 2>/dev/null \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["target_directory"])' 2>/dev/null)"
+if [[ -z "$CARGO_TARGET" ]]; then
+  warn "Could not read cargo's target directory; assuming src-tauri/target"
+  CARGO_TARGET="$PROJECT_DIR/src-tauri/target"
+fi
+
 # ── Environment ──────────────────────────────────────────────────────────────
 # Treat this as a CI build (suppresses -dev version suffix in telemetry)
 export CI=true
@@ -151,7 +163,7 @@ fi
 ok "Production build complete"
 
 # ── Step 6a: Ad-hoc code sign ────────────────────────────────────────────────
-APP_BUNDLE="$PROJECT_DIR/src-tauri/target/release/bundle/macos/Stalagmight.app"
+APP_BUNDLE="$CARGO_TARGET/release/bundle/macos/Stalagmight.app"
 if [[ -d "$APP_BUNDLE" ]]; then
   info "Ad-hoc signing Stalagmight.app"
   codesign --force --deep -s - "$APP_BUNDLE"
@@ -159,7 +171,7 @@ if [[ -d "$APP_BUNDLE" ]]; then
 fi
 
 # ── Step 7: Report artifacts ────────────────────────────────────────────────
-BUNDLE_DIR="$PROJECT_DIR/src-tauri/target/release/bundle/macos"
+BUNDLE_DIR="$CARGO_TARGET/release/bundle/macos"
 info "Build artifacts in $BUNDLE_DIR:"
 if [[ -d "$BUNDLE_DIR" ]]; then
   find "$BUNDLE_DIR" -maxdepth 1 -type f -o -type d -maxdepth 1 | while read -r f; do
@@ -173,7 +185,7 @@ else
 fi
 
 # Also check for DMG
-DMG_DIR="$PROJECT_DIR/src-tauri/target/release/bundle/dmg"
+DMG_DIR="$CARGO_TARGET/release/bundle/dmg"
 if [[ -d "$DMG_DIR" ]]; then
   info "DMG artifacts in $DMG_DIR:"
   find "$DMG_DIR" -maxdepth 1 -type f | while read -r f; do

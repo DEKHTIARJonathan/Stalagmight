@@ -11,6 +11,60 @@ Releases are created through Claude Code. The process:
 5. Claude pushes the commit and tag
 6. GitHub Actions builds the app and creates a release with artifacts
 
+## Release notes
+
+**`CHANGELOG.md` is the release notes.** There is no second place to write them:
+the workflow builds the published body from the changelog via
+`scripts/release-notes.sh`, so whatever is in `## [Unreleased]` when you tag is
+what recipients read. Write it for someone using the app, not for someone
+reading the diff.
+
+Preview the exact body before tagging - it is the same script CI runs:
+
+```bash
+./scripts/release-notes.sh v0.5.0
+./scripts/release-notes.sh v0.5.0-rc1
+```
+
+The script picks the section, then appends the install instructions and the
+checksum note that every release carries:
+
+| Tag | Notes come from |
+|-----|-----------------|
+| `v0.5.0`, after `release.sh` moved the section | `## [0.5.0]` |
+| `v0.5.0`, before that | `## [Unreleased]` (fallback) |
+| `v0.5.0-rc1` | `## [0.5.0]`, or `## [Unreleased]`, plus a candidate banner |
+| anything with no matching section | `Release <tag>` (last resort) |
+
+A candidate deliberately reuses the notes of the version it is a candidate for -
+an RC *is* that release, built early - so the notes are written once.
+
+## Release candidates
+
+Bump once, then cut as many candidates as you like before the real thing:
+
+```bash
+./scripts/release.sh 0.5.0 --no-edit --no-tag      # bump + changelog, no tag
+git push
+git tag v0.5.0-rc1 && git push origin v0.5.0-rc1   # then rc2, rc3, ...
+git tag v0.5.0     && git push origin v0.5.0       # the real one
+```
+
+`--no-tag` matters: without it `release.sh` creates `v0.5.0` immediately, which
+would either publish the real release early or sit on the wrong commit once
+further fixes land before `rc2`.
+
+- **The version files stay at the plain `0.5.0`.** The candidate lives only in
+  the tag. This is not a style choice: the Windows MSI bundler rejects a
+  non-numeric pre-release identifier, so `0.5.0-rc1` in `tauri.conf.json` fails
+  the Windows build outright. Artifacts are therefore named
+  `Stalagmight_0.5.0_*` for every candidate.
+- **A tag with a suffix is published as a GitHub pre-release**, so it never
+  becomes "Latest" and is not handed to people expecting the final build.
+- **About shows the tag**, so a candidate reads `0.5.0-rc1` and cannot be
+  mistaken for the final release. Keep candidates rather than deleting them -
+  a tester's bug report names one.
+
 ## Step-by-step (what Claude does)
 
 ```bash
@@ -51,6 +105,7 @@ git push origin master && git push origin --tags
 |------|--------|
 | `--no-edit` | Skip opening `$EDITOR` on the changelog (required for Claude) |
 | `--dry-run` | Print what would happen without making changes |
+| `--no-tag` | Bump, move the changelog and commit, but create no tag - use when the next thing you cut is a candidate (`v0.5.0-rc1`) rather than the release |
 
 ## CI/CD Workflows
 
@@ -63,10 +118,90 @@ git push origin master && git push origin --tags
 ### Release (`.github/workflows/release.yml`)
 
 - **Trigger**: push of `v*` tags
-- **Steps**: TypeScript check, Rust tests, `pnpm tauri build`
-- **Artifacts**: `.deb`, `.rpm`, `.AppImage` (Linux only - current runner is Linux)
-- Creates a GitHub release via the `gh` CLI with changelog content as the body
-- Uploads all artifacts to the release
+- **Jobs**: `verify` -> `build` (3-platform matrix) -> `release`
+
+| Job | Runner | Does |
+|-----|--------|------|
+| `verify` | `ubuntu-latest` | TypeScript check + Rust tests - a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or leak-scan; those gate the merge, and a tag is cut from already-merged code |
+| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, checksums them, uploads them as a job artifact |
+| `release` | `ubuntu-latest` | Downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI |
+
+- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS, Apple Silicon
+  only), `.msi` / `-setup.exe` (Windows), plus a `SHA256SUMS` covering all of them
+- **macOS is Apple Silicon only, on purpose.** No maintainer has an Intel Mac, so
+  an architecture-specific bug on Intel could not be reproduced or fixed. Shipping
+  a binary nobody can debug is worse than not shipping it, so the build is native
+  to the `macos-latest` runner (arm64) rather than universal. Intel users build
+  from source. Revisit if someone on the team gets Intel hardware: give the
+  macOS row `--target universal-apple-darwin`, add `rustup target add
+  aarch64-apple-darwin x86_64-apple-darwin` for that row, and point `BUNDLE_DIR`
+  at `src-tauri/target/universal-apple-darwin/release/bundle` - passing
+  `--target` relocates Tauri's bundle output under the triple. That last part is
+  the easy one to miss.
+- `fail-fast` is off so every platform reports its own failure, but `release`
+  depends on all three builds, so a partial artifact set is never published.
+- Nothing is code-signed. The release notes get an "Installing" footer telling
+  recipients how to get past Gatekeeper and SmartScreen. Because those steps
+  talk people through overriding a security warning, the release also ships a
+  `SHA256SUMS` generated on the runner that built the binaries, and the footer
+  points at it. Signing/notarization is an open decision on
+  [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
+- `verify` runs the test suite on Linux only. Per-platform test runs are tracked
+  in [#325](https://github.com/Stalagmight/Stalagmight/issues/325); note Windows
+  needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
+
+**Runner cost**: macOS and Windows runners bill at a multiple of the Linux rate,
+so a tag is materially more expensive than it used to be. Every job carries a
+`timeout-minutes` for the same reason - the platform default is six hours, which
+on the macOS runner is a large bill for a hung build.
+
+Measured on a cold rehearsal run, 2026-07-29 (all three legs run in parallel, so
+wall-clock for the whole release is roughly `verify` + the slowest leg):
+
+| Job | Wall clock | Billing multiplier | Included minutes |
+|-----|-----------|--------------------|------------------|
+| `verify` (Linux, cached) | 4m03s | 1x | 4 |
+| `build` linux | 17m11s | 1x | 17 |
+| `build` macos | 10m16s | 10x | 103 |
+| `build` windows | 27m47s | 2x | 56 |
+| `release` | ~1m | 1x | 1 |
+| **Total** | **~33m elapsed** | | **~181** |
+
+macOS dominates the bill despite being the fastest leg. Re-measure rather than
+trusting this table if the build changes shape; confirm the multipliers and
+per-minute rates against GitHub's billing docs, which move.
+
+### Rehearsing before you tag
+
+The workflow also has a `workflow_dispatch` trigger. A manual run executes
+`verify` and the whole `build` matrix but skips `release` (it is gated on
+`startsWith(github.ref, 'refs/tags/')`), so the per-platform bundle paths and
+globs can be proven without publishing anything:
+
+```bash
+gh workflow run release.yml --ref <branch>
+gh run watch
+```
+
+Do this before the first tag after any change to the build matrix. The
+platform-specific `bundle_dir` values and artifact globs are only really
+confirmed by a run that produces the files.
+
+## Testing the release tooling
+
+```bash
+./scripts/test-release.sh
+```
+
+Covers both scripts. For `release.sh` it clones the repo to a temp directory and
+drives the real script through a normal bump plus four refusal cases
+(re-releasing the current version, an existing tag, a drifted version-string
+format, an empty `[Unreleased]`), asserting each time that the tree is left clean
+and nothing was tagged. For `release-notes.sh` it runs the real script against a
+fixture changelog and checks the section each tag shape resolves to, the
+candidate banner, and that an empty changelog still yields a usable body.
+
+Run it after touching either script; it takes a few seconds and needs no network.
 
 ## Version locations
 
@@ -89,4 +224,18 @@ Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but 
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.
 
 ### Multi-platform builds
-Currently Linux-only. Windows/Mac builds require runners on those platforms - Tauri can't cross-compile due to platform-specific system library dependencies.
+Linux, macOS and Windows are all built from the tag by the `build` matrix. Each
+platform builds on its own runner because Tauri can't cross-compile - it needs
+that platform's system libraries.
+
+If one platform fails, the other two still build and report, but no release is
+created. Fix the failing platform and re-run the workflow, or delete and re-push
+the tag.
+
+### `release.sh` fails on macOS
+Shouldn't anymore, but this is what to look for: the script used `grep -oP` and
+GNU-style `sed -i`, neither of which exists in the BSD userland macOS ships. It
+now reads the version with POSIX `sed` and rewrites files through a helper that
+avoids `sed -i` entirely. **The script has to run under BSD userland, so don't
+reach for GNU-only flags here** - `scripts/test-release.sh` runs on whatever
+machine invokes it and will catch a regression.

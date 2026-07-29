@@ -16,15 +16,49 @@ set -euo pipefail
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+SCRATCH="$(mktemp -d "${TMPDIR:-/tmp}/release.XXXXXX")"
+trap 'rm -rf "$SCRATCH"' EXIT
+
+# Rewrite a file through sed without `sed -i`, which is not portable: GNU takes
+# no argument, BSD/macOS requires one. Redirecting into the original preserves
+# its mode and inode.
+replace_in_file() {
+  local expr="$1" file="$2" tmp="$SCRATCH/rewrite"
+  sed "$expr" "$file" > "$tmp"
+  # A rewrite that empties the file means sed did something unintended; better to
+  # stop than to truncate a manifest.
+  if [ ! -s "$tmp" ]; then
+    echo "Error: rewriting $file produced an empty file. Aborting." >&2
+    exit 1
+  fi
+  cat "$tmp" > "$file"
+}
+
+# Assert a file matches a pattern on exactly one line.
+#
+# "The string is present somewhere" is too weak a check: it passes just as
+# happily when a substitution hit two lines and clobbered an unrelated field as
+# when it hit the one line it was aimed at. Counting is what distinguishes them.
+require_one_match() {
+  local file="$1" pattern="$2" when="$3" n
+  n=$(grep -c "$pattern" "$PROJECT_ROOT/$file" || true)
+  if [ "$n" -ne 1 ]; then
+    echo "Error: $file has $n lines matching /$pattern/ $when, expected exactly 1." >&2
+    return 1
+  fi
+}
+
 # --- Parse arguments ---
 VERSION_ARG=""
 NO_EDIT=false
 DRY_RUN=false
+NO_TAG=false
 
 for arg in "$@"; do
   case "$arg" in
     --no-edit) NO_EDIT=true ;;
     --dry-run) DRY_RUN=true ;;
+    --no-tag) NO_TAG=true ;;
     -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
     *) VERSION_ARG="$arg" ;;
   esac
@@ -36,7 +70,13 @@ if [ -z "$VERSION_ARG" ]; then
 fi
 
 # --- Read current version from package.json ---
-CURRENT_VERSION=$(grep -oP '"version":\s*"\K[^"]+' "$PROJECT_ROOT/package.json" | head -1)
+# POSIX sed rather than `grep -oP`, which BSD/macOS grep does not support.
+CURRENT_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "$PROJECT_ROOT/package.json" | head -1)
+if [ -z "$CURRENT_VERSION" ]; then
+  echo "Error: could not read \"version\" from package.json." >&2
+  exit 1
+fi
 echo "Current version: $CURRENT_VERSION"
 
 # --- Compute new version ---
@@ -57,6 +97,28 @@ case "$VERSION_ARG" in
 esac
 
 echo "New version: $NEW_VERSION"
+
+if [ "$NEW_VERSION" = "$CURRENT_VERSION" ]; then
+  echo "Error: $NEW_VERSION is already the current version." >&2
+  echo "Every substitution below would be a no-op that still looks like it worked," >&2
+  echo "producing a release commit that bumps nothing." >&2
+  exit 1
+fi
+
+if git -C "$PROJECT_ROOT" rev-parse -q --verify "refs/tags/v$NEW_VERSION" >/dev/null 2>&1; then
+  echo "Error: tag v$NEW_VERSION already exists." >&2
+  exit 1
+fi
+
+# Version strings are substituted into grep/sed patterns, where an unescaped dot
+# is a wildcard - "0.2.0" would match "0X2Y0".
+CURRENT_RE=$(printf '%s' "$CURRENT_VERSION" | sed 's/\./\\./g')
+NEW_RE=$(printf '%s' "$NEW_VERSION" | sed 's/\./\\./g')
+
+CURRENT_JSON="\"version\": \"$CURRENT_RE\""
+CURRENT_TOML="^version = \"$CURRENT_RE\""
+NEW_JSON="\"version\": \"$NEW_RE\""
+NEW_TOML="^version = \"$NEW_RE\""
 
 if [ "$DRY_RUN" = true ]; then
   echo ""
@@ -107,14 +169,37 @@ if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
   fi
 fi
 
+# --- Pre-flight: prove all three files have the shape the rewrites assume ---
+# Checking before writing rather than after is what keeps a format drift in the
+# third file from leaving the first two already bumped on disk.
+if ! require_one_match "package.json"              "$CURRENT_JSON" "before the rewrite" \
+  || ! require_one_match "src-tauri/tauri.conf.json" "$CURRENT_JSON" "before the rewrite" \
+  || ! require_one_match "src-tauri/Cargo.toml"      "$CURRENT_TOML" "before the rewrite"; then
+  echo "The version string is not in the expected format. Nothing was modified." >&2
+  exit 1
+fi
+
 # --- Update package.json ---
-sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$PROJECT_ROOT/package.json"
+replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/package.json"
 
 # --- Update tauri.conf.json ---
-sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$PROJECT_ROOT/src-tauri/tauri.conf.json"
+replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/src-tauri/tauri.conf.json"
 
 # --- Update Cargo.toml (only the package version line) ---
-sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" "$PROJECT_ROOT/src-tauri/Cargo.toml"
+replace_in_file "s/^version = \"$CURRENT_RE\"/version = \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/src-tauri/Cargo.toml"
+
+# --- Confirm every bump landed, on exactly one line ---
+if ! require_one_match "package.json"              "$NEW_JSON" "after the rewrite" \
+  || ! require_one_match "src-tauri/tauri.conf.json" "$NEW_JSON" "after the rewrite" \
+  || ! require_one_match "src-tauri/Cargo.toml"      "$NEW_TOML" "after the rewrite"; then
+  git -C "$PROJECT_ROOT" checkout -- \
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+  echo "Reverted the version files. No commit or tag was made." >&2
+  exit 1
+fi
 
 # --- Update CHANGELOG.md: move [Unreleased] content under new version header ---
 TODAY=$(date +%Y-%m-%d)
@@ -128,6 +213,21 @@ awk -v ver="$NEW_VERSION" -v date="$TODAY" '
   }
   { print }
 ' "$CHANGELOG" > "$CHANGELOG.tmp" && mv "$CHANGELOG.tmp" "$CHANGELOG"
+
+# awk exits 0 whether or not it matched, so a missed [Unreleased] header would
+# copy the file through untouched and still look like success. Unreachable today
+# - the emptiness check above keys off the same pattern and already aborts when
+# it does not match - so this is belt-and-braces in case that check is ever
+# relaxed. CHANGELOG.md is deliberately NOT reverted: it can hold hand-written
+# release notes that are not committed yet.
+if ! grep -q "^## \[$NEW_RE\]" "$CHANGELOG"; then
+  echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' section after the rewrite." >&2
+  echo "The '## [Unreleased]' header was probably not found." >&2
+  git -C "$PROJECT_ROOT" checkout -- \
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+  echo "Reverted the version files, left CHANGELOG.md alone. No commit or tag was made." >&2
+  exit 1
+fi
 
 # --- Open editor for final review ---
 if [ "$NO_EDIT" = false ]; then
@@ -143,6 +243,18 @@ git -C "$PROJECT_ROOT" add \
   CHANGELOG.md
 
 git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION"
+
+if [ "$NO_TAG" = true ]; then
+  echo ""
+  echo "Prepared v$NEW_VERSION (no tag created)"
+  echo ""
+  echo "Next steps:"
+  echo "  git push"
+  echo "  git tag v$NEW_VERSION-rc1 && git push origin v$NEW_VERSION-rc1   # a candidate"
+  echo "  git tag v$NEW_VERSION     && git push origin v$NEW_VERSION       # the release"
+  exit 0
+fi
+
 git -C "$PROJECT_ROOT" tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 
 echo ""

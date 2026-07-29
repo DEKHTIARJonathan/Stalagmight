@@ -18,13 +18,48 @@ function gitShortHash(): string {
   }
 }
 
-// Embed the exact commit in the displayed version: `x.y.z-<shorthash>` for CI
-// builds and `x.y.z-dev-<shorthash>` for local builds (CI env var not set). Mirrors
-// src-tauri/build.rs so the UI's About version and telemetry's app_version agree.
+/**
+ * The release tag on the checked-out commit, or null.
+ *
+ * Must match this package version - `v0.5.0` or a candidate for it like
+ * `v0.5.0-rc1` - so an unrelated tag sitting on the same commit cannot rename
+ * the build.
+ */
+function releaseTag(): string | null {
+  const matches = (t: string) => t === `v${pkg.version}` || t.startsWith(`v${pkg.version}-`);
+  // In Actions on a tag push this is authoritative and needs no git state.
+  if (process.env.GITHUB_REF_TYPE === 'tag') {
+    const ref = process.env.GITHUB_REF_NAME ?? '';
+    return matches(ref) ? ref : null;
+  }
+  // Otherwise ask git, so a release built by hand identifies itself the same way.
+  try {
+    return (
+      execSync('git tag --points-at HEAD', { stdio: ['ignore', 'pipe', 'ignore'] })
+        .toString()
+        .split('\n')
+        .map((t) => t.trim())
+        .find(matches) ?? null
+    );
+  } catch {
+    return null;
+  }
+}
+
+// A released build reports its tag: the tag already pins the commit, so the hash
+// is noise on the one build users actually read a version number off - and a
+// candidate says so (0.5.0-rc1) rather than passing for the final release.
+// Everything else keeps the commit, because that IS its only identity:
+// `x.y.z-<shorthash>` for CI builds and `x.y.z-dev-<shorthash>` locally.
+// Mirrors src-tauri/build.rs so the UI's About version and telemetry's
+// app_version agree.
 const shortHash = gitShortHash();
-const appVersion = process.env.CI
-  ? `${pkg.version}-${shortHash}`
-  : `${pkg.version}-dev-${shortHash}`;
+const tag = releaseTag();
+const appVersion = tag
+  ? tag.slice(1) // v0.5.0-rc1 -> 0.5.0-rc1
+  : process.env.CI
+    ? `${pkg.version}-${shortHash}`
+    : `${pkg.version}-dev-${shortHash}`;
 
 const coverageEnabled = process.env.VITE_COVERAGE === '1';
 const plugins: PluginOption[] = [
@@ -55,6 +90,9 @@ const plugins: PluginOption[] = [
 export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(appVersion),
+    // Shown separately in About. A released build's version no longer carries
+    // the hash, but a bug report still needs to say which build it came from.
+    __APP_COMMIT__: JSON.stringify(shortHash),
   },
   // Force a single React instance. The toolchain pins Node 22 (.nvmrc); on a
   // newer Node major, Vite's dep optimizer can intermittently pre-bundle two
