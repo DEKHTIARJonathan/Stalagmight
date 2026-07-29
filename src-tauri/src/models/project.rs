@@ -20,7 +20,10 @@ use super::placement_suggest;
 mod closure;
 mod coordinates;
 mod distance;
-mod gas;
+// Crate-visible only so the `.plnx` load path can reach the engine's segment-speed bounds
+// (`MIN/MAX_SEGMENT_SPEED_M_PER_MIN`) and rank stored speeds on the same domain the engine
+// honours (#317). Everything else in here stays behind the `pub use` list below.
+pub(crate) mod gas;
 mod lsq;
 mod pathfinding;
 

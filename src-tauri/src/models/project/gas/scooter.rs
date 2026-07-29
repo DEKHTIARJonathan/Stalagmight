@@ -17,6 +17,10 @@ use super::model::PlanSegment;
 pub(super) struct ResolvedSegment {
     pub(super) speed_m_per_min: f64,
     pub(super) on_scooter: bool,
+    /// Metres of the rig's usable RANGE one metre of line on this span costs - the engine's
+    /// scootered-distance rider, so it is `0.0` on a swum span. See [`range_per_metre`] for why it
+    /// is not simply `1.0` on a scootered one.
+    pub(super) range_per_metre: f64,
 }
 
 /// Slowest per-span speed (metres per minute) the engine will fly; below it the span inherits the
@@ -30,12 +34,41 @@ pub(super) struct ResolvedSegment {
 /// at `0.0 * INFINITY = NaN`, which fails the same comparison. Nothing propagates and the whole
 /// field collapses to the origin. 0.1 m/min is two orders of magnitude under any real survey pace,
 /// so nothing legitimate is excluded.
-const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
+pub(crate) const MIN_SEGMENT_SPEED_M_PER_MIN: f64 = 0.1;
 
 /// Fastest per-span speed the engine will fly; above it the span inherits the plan speed. The
 /// ceiling is the floor's mirror - it keeps the reciprocal off the denormal end - and 1000 m/min is
 /// roughly ten times the fastest DPV, so it cannot exclude a real plan either.
-const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
+pub(crate) const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
+
+/// The cruise speed the range cap is built from: the slower of the two units.
+///
+/// [`DpvRig::usable_range_m`] picks the weaker unit by LINE COVERED (`burn x speed`), which need not
+/// be the slower one - so this is deliberately the more conservative of the two questions. It is
+/// only ever used to inflate the range a below-cruise span spends, and the slowest cruise gives the
+/// largest inflation, so picking it can never over-state how far the rig will carry the diver (§6).
+fn slower_cruise_m_per_min(rig: &DpvRig) -> f64 {
+    rig.primary.speed_m_per_min.min(rig.backup.speed_m_per_min)
+}
+
+/// Metres of scooter RANGE one metre of line costs on a scootered span ridden at `speed_m_per_min`.
+///
+/// The cap is a distance (`burn x cruising speed`, less the reserve), but what actually runs out is
+/// battery MINUTES, and the two only convert 1:1 at the unit's cruise speed. A span ridden at a
+/// quarter of cruise takes four times the minutes the cap's own arithmetic assumed for those metres,
+/// so charging a flat metre per metre EXTENDS reach the slower the diver rides - the unsafe
+/// direction (§6), and reachable-overlay ground the battery cannot actually deliver.
+///
+/// So a below-cruise span spends the allowance time-equivalently: `slower_cruise / speed` metres of
+/// range per metre of line. At or above cruise the factor floors at exactly `1.0`, which keeps the
+/// plain line model - a span cannot stretch the battery by going FASTER (drag rises with speed, so
+/// the unit's burn figure would not hold there either) - and that floor is what leaves every
+/// at-cruise plan, the cap itself, the Settings preview and their pinned formula tests untouched.
+///
+/// A non-finite ratio yields `1.0`: `f64::max` returns the non-NaN operand.
+fn range_per_metre(speed_m_per_min: f64, slower_cruise_m_per_min: f64) -> f64 {
+    (slower_cruise_m_per_min / speed_m_per_min).max(1.0)
+}
 
 /// Normalise the diver's segment list to exactly one entry per route span, with a concrete speed.
 ///
@@ -49,31 +82,43 @@ const MAX_SEGMENT_SPEED_M_PER_MIN: f64 = 1000.0;
 /// non-finite, zero and negative). The last case falls back rather than being rejected because it
 /// would otherwise divide into the edge cost and poison the field with `+Inf`/`NaN`.
 ///
-/// ⚠ An all-`None` list must therefore reproduce the pre-#317 field EXACTLY, and that is not a nice
-/// property but the contract: the frontend sends a full-length list from the moment Plan mode
-/// opens, so if `None` did not inherit, the Swim-speed field and Settings > Gas would silently stop
-/// affecting anything (`plan_speed_reaches_the_engine_through_a_full_length_segment_list` pins it).
+/// ⚠ An all-`None` list must therefore reproduce the pre-#317 field - arithmetically equal, within
+/// float re-association (the engine now scales a shared edge basis at relax time rather than folding
+/// the speed into the edge weight, so the multiplications associate differently). That is not a nice
+/// property but the contract: the frontend sends a full-length list from the moment Plan mode opens,
+/// so if `None` did not inherit, the Swim-speed field and Settings > Gas would silently stop
+/// affecting anything (`the_plan_speed_still_reaches_the_engine_through_a_full_length_segment_list`
+/// pins it).
 ///
-/// `has_rig` gates `on_scooter`. Without a rig there is no range to spend and no drop to derive, so
-/// a leftover flag would report a scootered distance the plan cannot be held to. The segment's
-/// *speed* still applies - variable pace is useful with or without a scooter.
+/// `dpv` gates `on_scooter` - and is also what the span's range cost is measured against. Without a
+/// rig there is no range to spend and no drop to derive, so a leftover flag would report a scootered
+/// distance the plan cannot be held to. The segment's *speed* still applies - variable pace is
+/// useful with or without a scooter.
 pub(super) fn resolve_segments(
     segments: &[PlanSegment],
     waypoint_count: usize,
     default_speed: f64,
-    has_rig: bool,
+    dpv: Option<&DpvRig>,
 ) -> Vec<ResolvedSegment> {
+    let cruise = dpv.map_or(f64::INFINITY, slower_cruise_m_per_min);
     (0..=waypoint_count)
         .map(|k| {
             let seg = segments.get(k);
+            let speed_m_per_min = seg
+                .and_then(|s| s.speed_m_per_min)
+                .filter(|s| (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(s))
+                .unwrap_or(default_speed);
+            let on_scooter = dpv.is_some() && seg.is_some_and(|s| s.on_scooter);
             ResolvedSegment {
-                speed_m_per_min: seg
-                    .and_then(|s| s.speed_m_per_min)
-                    .filter(|s| {
-                        (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(s)
-                    })
-                    .unwrap_or(default_speed),
-                on_scooter: has_rig && seg.is_some_and(|s| s.on_scooter),
+                speed_m_per_min,
+                on_scooter,
+                // `cruise` is only ever infinite when there is no rig, which is exactly when
+                // `on_scooter` is false - so the rider can never be infinite.
+                range_per_metre: if on_scooter {
+                    range_per_metre(speed_m_per_min, cruise)
+                } else {
+                    0.0
+                },
             }
         })
         .collect()
@@ -128,16 +173,28 @@ mod tests {
         }
     }
 
+    /// A rig whose two units share one cruise speed, so `slower_cruise_m_per_min` is unambiguous.
+    fn rig(cruise: f64) -> DpvRig {
+        DpvRig {
+            primary: unit(cruise, 60.0),
+            backup: unit(cruise, 60.0),
+            range_reserve_fraction: 0.0,
+        }
+    }
+
+    /// A resolved span ridden AT CRUISE (or swum), where a metre of line costs exactly a metre of
+    /// range - the only case with a range factor of 1.0.
     fn resolved(speed: f64, on_scooter: bool) -> ResolvedSegment {
         ResolvedSegment {
             speed_m_per_min: speed,
             on_scooter,
+            range_per_metre: if on_scooter { 1.0 } else { 0.0 },
         }
     }
 
     #[test]
     fn empty_segments_expand_to_the_default_speed_and_no_scooter() {
-        let out = resolve_segments(&[], 2, 10.0, true);
+        let out = resolve_segments(&[], 2, 10.0, Some(&rig(55.0)));
         assert_eq!(out.len(), 3);
         assert!(out.iter().all(|s| s.speed_m_per_min == 10.0));
         assert!(out.iter().all(|s| !s.on_scooter));
@@ -152,15 +209,15 @@ mod tests {
             &[inherit(false), inherit(false), inherit(false)],
             2,
             17.0,
-            true,
+            Some(&rig(55.0)),
         );
-        assert_eq!(unset, resolve_segments(&[], 2, 17.0, true));
+        assert_eq!(unset, resolve_segments(&[], 2, 17.0, Some(&rig(55.0))));
         assert!(unset.iter().all(|s| s.speed_m_per_min == 17.0));
     }
 
     #[test]
     fn a_short_list_is_padded_and_a_long_one_truncated() {
-        let padded = resolve_segments(&[seg(55.0, true)], 2, 10.0, true);
+        let padded = resolve_segments(&[seg(55.0, true)], 2, 10.0, Some(&rig(55.0)));
         assert_eq!(padded.len(), 3);
         assert_eq!(padded[0].speed_m_per_min, 55.0);
         assert!(padded[0].on_scooter);
@@ -170,7 +227,7 @@ mod tests {
             &[seg(55.0, true), seg(20.0, false), seg(30.0, true)],
             0,
             10.0,
-            true,
+            Some(&rig(55.0)),
         );
         assert_eq!(truncated.len(), 1);
         assert_eq!(truncated[0].speed_m_per_min, 55.0);
@@ -182,7 +239,7 @@ mod tests {
         // positive, finite subnormal, so it passes `is_finite() && > 0.0` and then overflows the
         // engine's two reciprocals to INFINITY. `1e6` is its mirror at the top.
         for bad in [0.0, -5.0, f64::NAN, f64::INFINITY, 1e-320, 1e6] {
-            let out = resolve_segments(&[seg(bad, false)], 0, 12.0, true);
+            let out = resolve_segments(&[seg(bad, false)], 0, 12.0, Some(&rig(55.0)));
             assert_eq!(out[0].speed_m_per_min, 12.0, "speed {bad} should fall back");
         }
         // The bounds are inclusive, and a plausible slow survey pace is well inside them.
@@ -191,7 +248,7 @@ mod tests {
             3.0,
             MAX_SEGMENT_SPEED_M_PER_MIN,
         ] {
-            let out = resolve_segments(&[seg(good, false)], 0, 12.0, true);
+            let out = resolve_segments(&[seg(good, false)], 0, 12.0, Some(&rig(55.0)));
             assert_eq!(out[0].speed_m_per_min, good, "speed {good} should be kept");
         }
     }
@@ -202,7 +259,7 @@ mod tests {
             &[inherit(false), seg(55.0, false), inherit(false)],
             2,
             12.0,
-            true,
+            Some(&rig(55.0)),
         );
         assert_eq!(
             out,
@@ -216,9 +273,59 @@ mod tests {
 
     #[test]
     fn without_a_rig_the_scooter_flag_is_dropped_but_the_speed_is_kept() {
-        let out = resolve_segments(&[seg(55.0, true)], 0, 10.0, false);
+        let out = resolve_segments(&[seg(55.0, true)], 0, 10.0, None);
         assert_eq!(out[0].speed_m_per_min, 55.0);
         assert!(!out[0].on_scooter);
+        // And nothing is charged against a range that does not exist - never the INFINITY that a
+        // rig-less "slower cruise" would otherwise divide into the rider.
+        assert_eq!(out[0].range_per_metre, 0.0);
+    }
+
+    #[test]
+    fn riding_below_cruise_spends_range_faster_than_it_covers_line() {
+        // ⚠ THE OVER-EXTENDING BUG. The cap is a DISTANCE (`burn x cruise`), but what runs out is
+        // battery MINUTES, and the two only convert 1:1 at cruise. A span ridden at a third of
+        // cruise takes three times the minutes the cap assumed for those metres, so a flat metre per
+        // metre lets the diver reach ground the battery cannot deliver - the unsafe direction.
+        let cruise = rig(45.0);
+        let out = resolve_segments(
+            &[seg(15.0, true), seg(45.0, true), seg(90.0, true)],
+            2,
+            10.0,
+            Some(&cruise),
+        );
+        // A third of cruise: three metres of allowance per metre of line.
+        assert_eq!(out[0].range_per_metre, 3.0);
+        // At cruise, exactly the old 1:1 - which is what keeps every at-cruise plan, the cap and the
+        // Settings preview untouched.
+        assert_eq!(out[1].range_per_metre, 1.0);
+        // Above cruise the factor FLOORS rather than shrinking: going faster must not stretch the
+        // battery either, since the unit's own burn figure is quoted at cruise.
+        assert_eq!(out[2].range_per_metre, 1.0);
+    }
+
+    #[test]
+    fn the_range_factor_is_measured_against_the_slower_unit() {
+        // `usable_range_m` picks the weaker unit by LINE COVERED, which is not always the slower
+        // one: here the 45 m/min primary covers 2700 m and the 20 m/min backup only 1200, but if the
+        // burns were reversed the primary would be weaker while the backup stayed slower. The factor
+        // takes the slower cruise either way, because that is the larger factor and so the
+        // conservative answer.
+        let mixed = DpvRig {
+            primary: unit(45.0, 60.0),
+            backup: unit(20.0, 60.0),
+            range_reserve_fraction: 0.0,
+        };
+        let out = resolve_segments(&[seg(10.0, true)], 0, 10.0, Some(&mixed));
+        assert_eq!(out[0].range_per_metre, 2.0, "20 / 10, not 45 / 10");
+    }
+
+    #[test]
+    fn a_swum_span_spends_no_range_however_slowly_it_is_swum() {
+        // The factor exists to price BATTERY time. A swum span spends none at any pace, so it must
+        // stay at 0.0 rather than picking up the below-cruise multiplier of a scooter it is not on.
+        let out = resolve_segments(&[seg(1.0, false)], 0, 10.0, Some(&rig(45.0)));
+        assert_eq!(out[0].range_per_metre, 0.0);
     }
 
     #[test]

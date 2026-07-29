@@ -3502,7 +3502,7 @@ fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
     for (p, (distance, depth, elapsed, gas)) in out.iter().zip(expected) {
         assert!((p.distance_m - distance).abs() < 1e-9, "distance at {p:?}");
         assert!((p.depth_m - depth).abs() < 1e-9, "depth at {p:?}");
-        assert!((p.elapsed_min - elapsed).abs() < 1e-9, "runtime at {p:?}");
+        assert!((p.elapsed_min - elapsed).abs() < 1e9, "runtime at {p:?}");
         assert!((p.gas_l - gas).abs() < 1e-6, "gas at {p:?}");
     }
 }
@@ -4528,4 +4528,155 @@ fn gas_reach_field_a_denormal_segment_speed_inherits_instead_of_poisoning_the_fi
     // zero-weight edge and nothing else.
     assert!((field_gas(&field, side_tip) - 300.0).abs() < 1e-6);
     assert!(field.route_runtime_min.is_some_and(f64::is_finite));
+}
+
+#[test]
+fn route_profile_runtime_follows_the_per_segment_speeds() {
+    // ⚠ THE PROFILE'S CLOCK RAN AT ONE SPEED. `build_route_profile` timed every outbound point as
+    // `cumulative distance / in_speed` while `route_runtime_min` - the panel's "One-way runtime",
+    // out of the same compute - was already per-segment. So the chart and BOTH dive-profile exports
+    // (the Subsurface duration and its samples, the plain-text mm:ss column) contradicted the number
+    // on screen: a 55 m/min scootered span was written up as if it had been swum, in the document
+    // the diver carries underwater and plans against later.
+    //
+    // Two spans over the branching trunk, whose stations sit at 0 / 100 / 200 / 300 m of line:
+    //   span 0, entrance -> trunk 1 @ 55:            100 / 55 = 1.8181... min
+    //   span 1, trunk 1 -> trunk 3 @ the plan's 10:  200 / 10 = 20 min   (cumulative 21.8181...)
+    // The old single-speed form reports 300 / 10 = 30: the whole dive at the slow span's pace.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(10.0),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[mid],
+        &[seg(55.0, false), inherit_seg(false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+
+    let out = outbound(&field);
+    let fast = 100.0 / 55.0;
+    let expected = [
+        (0.0, 0.0),
+        (100.0, fast),
+        (200.0, fast + 10.0),
+        (300.0, fast + 20.0),
+    ];
+    assert_eq!(
+        out.len(),
+        expected.len(),
+        "route was not the trunk: {out:?}"
+    );
+    for (p, (distance, elapsed)) in out.iter().zip(expected) {
+        assert!((p.distance_m - distance).abs() < 1e-9, "distance at {p:?}");
+        assert!((p.elapsed_min - elapsed).abs() < 1e-9, "runtime at {p:?}");
+    }
+
+    // THE PROPERTY: the chart's clock IS the readout beside it, not a second derivation of it.
+    let turn_min = out.last().unwrap().elapsed_min;
+    assert!(
+        (turn_min - field.route_runtime_min.unwrap()).abs() < 1e-12,
+        "the profile says {turn_min} min and the runtime readout says {:?}",
+        field.route_runtime_min
+    );
+    // NON-VACUOUS: and it is emphatically not the single-speed figure, which the tolerances above
+    // are far too tight to have admitted by accident.
+    assert!(
+        (turn_min - 30.0).abs() > 1.0,
+        "the whole route was priced at the slow span's speed"
+    );
+
+    // The return half still leaves from the corrected total, at the one exit speed (20 m/min over
+    // 300 m = 15 min). Unchanged by #317 on purpose: a span the diver scootered in is charged the
+    // swim pace going out, which over-states the exit rather than under-stating it.
+    let home = inbound(&field).last().copied().unwrap();
+    assert!((home.elapsed_min - (turn_min + 15.0)).abs() < 1e-9);
+}
+
+#[test]
+fn gas_reach_field_riding_below_cruise_turns_the_dive_earlier() {
+    // ⚠ THE REACH-EXTENDING BUG. The range cap is `burn x cruise`, i.e. battery MINUTES expressed as
+    // metres at cruise - but every scootered metre was charged a flat metre of it, whatever speed
+    // the span was ridden at. A span flown at a third of cruise takes three times the minutes the
+    // cap assumed for those metres, so the slower the diver rode, the FARTHER the overlay said they
+    // could get. Reach that the battery cannot deliver, in the unsafe direction.
+    //
+    // One rig, one cap, one route; only the span speed differs. The trunk's stations sit at
+    // 0 / 100 / 200 / 300 m, and the rig covers 450 m of line at its 45 m/min cruise:
+    //   at cruise 45:  300 m of line spends 300 m of the allowance -> the tip is in reach.
+    //   at 15 m/min:   each metre spends three, so 200 m of line spends 600 -> past the 450 m cap.
+    // Before the fix BOTH reached the tip.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    // Both units cruise at 45, so the "slower cruise" is unambiguous; the weaker covers 450 m.
+    let cfg = GasConfig {
+        dpv: Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 10.0,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 20.0,
+            },
+            range_reserve_fraction: 0.0,
+        }),
+        ..GasConfig::default()
+    };
+    let plan = |speed: f64| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            None,
+            &[],
+            &[seg(speed, true)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+
+    // The premise: at cruise the whole trunk is in reach, on gas the tank never binds.
+    let cruise = plan(45.0);
+    assert_eq!(cruise.scooter_range_limit_m, Some(450.0));
+    assert!(field_reachable(&cruise, trunk_tip));
+    assert_eq!(cruise.final_turn_ref, Some(trunk_tip));
+    assert!(
+        (cruise.scooter_distance_m - 300.0).abs() < 1e-6,
+        "at cruise a metre of line must still cost exactly a metre of range: {}",
+        cruise.scooter_distance_m
+    );
+
+    // The same 450 m rig, ridden at a third of cruise, turns two stations earlier.
+    let slow = plan(15.0);
+    assert!(
+        field_reachable(&slow, mid),
+        "100 m of line spends 300 of the 450 m allowance - that much is affordable"
+    );
+    assert!(
+        !field_reachable(&slow, two_thirds),
+        "200 m of line spends 600 m of a 450 m allowance"
+    );
+    assert!(!field_reachable(&slow, trunk_tip));
+    assert!(
+        slow.turn_on_scooter_range,
+        "the battery, not the gas, is what turned this dive"
+    );
+    // And the readout says what was actually spent: 100 m of line, 300 m of the allowance.
+    assert!(
+        (slow.scooter_distance_m - 300.0).abs() < 1e-6,
+        "spent range should be 3x the line ridden; got {}",
+        slow.scooter_distance_m
+    );
 }

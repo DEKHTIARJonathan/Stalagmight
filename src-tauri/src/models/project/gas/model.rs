@@ -228,11 +228,13 @@ pub struct RouteLeg {
 /// the origin, so it describes the whole round trip the budget is sized for.
 ///
 /// The two directions are **not** symmetric, and that is the point of shipping both. Distance
-/// mirrors exactly - the diver swims the same line back - but the engine prices the way IN at the
-/// survey speed and survey RMV (`gas.rs`'s `in_speed` / `in_rmv`, the basis of every gas number in
-/// this struct) and the way OUT at `swim_speed_m_per_min` with the diver's base RMV, which
-/// `GasConfig::normalize` guarantees is the faster of the two. So the return leg is shorter in time
-/// and cheaper in gas than the identical distance was on the way in.
+/// mirrors exactly - the diver swims the same line back - but the engine prices the way IN at each
+/// route span's own speed (#317, defaulting to the survey speed) on the survey RMV - the basis of
+/// every gas and time number in this struct - and the way OUT at `swim_speed_m_per_min` with the
+/// diver's base RMV, which `GasConfig::normalize` guarantees is no slower than the survey speed. So
+/// a swum return leg is shorter in time and cheaper in gas than the identical distance was on the
+/// way in; a span the diver SCOOTERED in is charged the swim pace going out, which over-states the
+/// exit rather than under-stating it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct RouteProfilePoint {
     /// Position along the route's station sequence, 0 = origin. A way-point route can revisit a
@@ -252,8 +254,9 @@ pub struct RouteProfilePoint {
     /// `budget_litres`: that budget is the one-way penetration allowance (the reserve fraction is
     /// what pays for the return), so the round trip legitimately finishes above it.
     pub gas_l: f64,
-    /// Cumulative elapsed time (minutes) on arrival here. Not a deco schedule - no ascent, no stops,
-    /// no decompression is modelled anywhere in this app.
+    /// Cumulative elapsed time (minutes) on arrival here, at each span's own speed - so the last
+    /// outbound point IS `route_runtime_min`, not a re-derivation of it. Not a deco schedule - no
+    /// ascent, no stops, no decompression is modelled anywhere in this app.
     pub elapsed_min: f64,
     /// `false` for the mirrored return leg.
     pub outbound: bool,
@@ -363,10 +366,15 @@ pub struct GasReachField {
     /// as `stage_drop_route_indices`. `None` from the first way point that stalls, matching
     /// `waypoint_gas_litres`.
     pub waypoint_route_indices: Vec<Option<u32>>,
-    /// Scootered line (metres) from the origin to the turnaround - the quantity
+    /// Scooter range (metres) spent from the origin to the turnaround - the quantity
     /// [`Self::scooter_range_limit_m`] caps. Counts only the route's spans whose segment is
-    /// `on_scooter`, so a plan that parks the units partway reports the distance up to the park and
+    /// `on_scooter`, so a plan that parks the units partway reports what it spent up to the park and
     /// nothing beyond it. `0.0` when nothing is flown on a scooter.
+    ///
+    /// ⚠ This is the scootered LINE only for a span flown at the units' cruise speed, which is the
+    /// normal case and every plan before #317. Below cruise it is larger than the line: the cap is
+    /// `burn x cruise`, so it converts battery minutes into metres at cruise and only there, and a
+    /// span ridden slower spends the allowance faster than it covers ground.
     pub scooter_distance_m: f64,
     /// The rig's usable one-way range (metres): the weaker unit's `burn x cruising speed`, less the
     /// conservatism margin. `None` when the plan has no DPV rig, in which case the cap is infinite
