@@ -96,10 +96,25 @@ git push origin master && git push origin --tags
   needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
 
 **Runner cost**: macOS and Windows runners bill at a multiple of the Linux rate,
-so a tag is materially more expensive than it used to be. Check the current
-multipliers against GitHub's billing docs before tagging on a tight budget. Every
-job carries a `timeout-minutes` for the same reason - the platform default is six
-hours, which on the macOS runner is a large bill for a hung build.
+so a tag is materially more expensive than it used to be. Every job carries a
+`timeout-minutes` for the same reason - the platform default is six hours, which
+on the macOS runner is a large bill for a hung build.
+
+Measured on a cold rehearsal run, 2026-07-29 (all three legs run in parallel, so
+wall-clock for the whole release is roughly `verify` + the slowest leg):
+
+| Job | Wall clock | Billing multiplier | Included minutes |
+|-----|-----------|--------------------|------------------|
+| `verify` (Linux, cached) | 4m03s | 1x | 4 |
+| `build` linux | 17m11s | 1x | 17 |
+| `build` macos | 10m16s | 10x | 103 |
+| `build` windows | 27m47s | 2x | 56 |
+| `release` | ~1m | 1x | 1 |
+| **Total** | **~33m elapsed** | | **~181** |
+
+macOS dominates the bill despite being the fastest leg. Re-measure rather than
+trusting this table if the build changes shape; confirm the multipliers and
+per-minute rates against GitHub's billing docs, which move.
 
 ### Rehearsing before you tag
 
