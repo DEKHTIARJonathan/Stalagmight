@@ -17,15 +17,12 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 6. Reopen database at final path
 7. Persist undo/redo stacks synchronously to the database
 8. Update project.file_path
-9. Collaboration mode only: write the sibling .tml (best-effort)
-10. Swap in the new database handle
-11. Update recent projects list in config
-12. Return CommandResult with saved_path
+9. Swap in the new database handle
+10. Update recent projects list in config
+11. Return CommandResult with saved_path
 ```
 
 Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
-
-Step 9 runs only when collab mode is enabled. An auto-save also rewrites the sibling unless `CollabState.write_tml_on_autosave` is turned off (it defaults to true); turning it off keeps the file Ariane has open from churning on every debounce, while manual saves always rewrite. `write_collab_sibling` exports the sibling `.tml` and refreshes the stored baseline; a failed `.tml` write never fails the `.stalx` save - the result stays successful and carries a `COLLAB_SIBLING_WRITE_FAILED` warning, because a green checkmark would otherwise hide the fact that the collaborator's copy is now stale. See [Collaboration](collaboration.md).
 
 ### Frontend (`saveProject` in `projectStore.ts`)
 
@@ -121,5 +118,4 @@ The `save_project` backend command returns the save path as a string in `Command
 | `src/hooks/useAutoSave.ts` | Debounced auto-save hook |
 | `src-tauri/src/persistence/sqlite.rs` | SQLite database operations |
 | `docs/undo-redo.md` | Undo/redo stack persistence details |
-| `docs/collaboration.md` | Sibling `.tml` write, baseline, reconcile |
 | `docs/configuration.md` | Auto-save config options |

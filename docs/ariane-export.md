@@ -52,7 +52,7 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
-| `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
+| `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
@@ -90,22 +90,40 @@ Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-d
 
 ## Station-comment co-encoding
 
-The TML format has one `<Comment>` field per shot and no per-station comment
-field. To round-trip both `shot.comment` and `project.station_comments` through
-Ariane, the exporter packs both into the shot's `<Comment>`:
+Ariane's `.tml` format has one `<Comment>` field per shot and no per-station
+comment field, so a Stalagmight station comment otherwise has nowhere to live
+in `.tml`. To round-trip both `shot.comment` and `project.station_comments`
+through Ariane, the exporter packs both into the shot's `<Comment>`:
 
-- Lines of `shot.comment` are prefixed with a zero-width space (`U+200B`).
-- Lines of the **to-station's** `station_comments` entry (the station at
-  `shot_index + 1`) are appended unmarked.
-- When a child section's station 0 is merged into a parent station, both
-  StationRefs alias the same Ariane shot id and both station comments are
-  concatenated (sorted by `(section_id, station_index)` for reproducibility).
+- Each station comment is attached to the shot whose **`to` station** matches
+  it - the shot that "creates" that station, i.e. the one at `shot_index + 1`.
+- Shot vs station lines inside the resulting Comment are distinguished by a
+  zero-width-space (`U+200B`) prefix: lines prefixed with `ZWSP` are shot
+  comments; lines without the prefix are station comments.
+- The marker is invisible in any editor, including Ariane's, so a reader sees
+  a single readable Comment block.
 
-START shots keep their hardcoded `"START"` content untouched (no station-
-comment fold), and CLOSURE shots have no `to` station in the create-station
-sense. The same split is applied in reverse on `.tml` import via
-`core::comment_split::split`. See
-[docs/collaboration.md → Station comments via the ZWSP marker](collaboration.md#station-comments-via-the-zwsp-marker).
+Caveats:
+
+- Station 0 of the root section (the START shot's station) has no shot whose
+  `to` station matches, so its comment is dropped from the `.tml` export. Add
+  the note one shot downstream if you need it to survive.
+- When a child section's station 0 is merged into a parent's station, both
+  StationRefs alias the same Ariane shot id, so both station comments are
+  concatenated into the exported Comment (sorted by `(section_id,
+  station_index)` for reproducibility).
+
+START shots keep their hardcoded `"START"` content untouched (no
+station-comment fold), and CLOSURE shots have no `to` station in the
+create-station sense.
+
+The same split logic is applied in reverse on `.tml` import
+(`core::comment_split::split`) when the import dialog's "comments on
+stations" option is on (the default). Text typed in Ariane carries no marker
+and therefore routes to the **station** on import - matching how Ariane
+visually centers Comment text on the station, not along the shot. A bare
+Ariane file has no markers at all, so every Comment line routes to the
+station.
 
 ## Implementation
 

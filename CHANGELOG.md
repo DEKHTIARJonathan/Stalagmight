@@ -14,6 +14,10 @@ Update this file every time a new version is tagged.
 - The pinned toolchain moved to **Node.js 24** (`.nvmrc` plus advisory `engines`), so builds and tests now run on the current LTS line. `scripts/mac-setup.sh` and `scripts/mac-build.sh` read the major from `.nvmrc` instead of hardcoding it, so they can no longer drift behind a bump. pnpm stays pinned at `9.15.9` ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
 - The agent harness moved to Node 24 with everything else, so there is no second toolchain. Its "Node 22 only" rule blamed a webdriverio undici-versus-built-in-fetch mismatch that the code does not actually do; session creation works identically on Node 22 and 24, and `pnpm agent:http-probe` now checks that in one command after a webdriverio or Node bump
 
+### Removed
+
+- **Ariane collaboration mode** - the opt-in per-project mode that kept a sibling `.tml` next to the `.stalx`, saved both on every save, and reconciled external Ariane edits back in on the next open has been removed entirely. Plain Ariane `.tml`/`.tmlu` import and export are unaffected. `.stalx` schema v15 drops the now-unused `collab_state` table. **Persisted undo/redo history is cleared on first open of a pre-upgrade project** - a saved entry can name a collaboration operation this build no longer understands, and replaying the entries around it would corrupt the survey, so the stored history is dropped once and rebuilds as you work.
+
 ## [0.5.0] - 2026-07-29
 
 The first release with builds for all three platforms. The headline additions are
