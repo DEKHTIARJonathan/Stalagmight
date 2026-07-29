@@ -185,6 +185,70 @@ test.describe('Data table column preferences', () => {
       .toEqual(order);
   });
 
+  test('dragging a column edge persists the new width, and only on release', async ({ page }) => {
+    // Count only calls that actually carry a width for `length`. A bare call
+    // count races the table's own settling snapshot, which this file documents
+    // above and which carries an EMPTY columnWidths - that flaked this test on
+    // its first run.
+    const widthCallCount = async (): Promise<number> =>
+      (await getViewCalls(page)).filter(
+        (c) => (c.columnWidths as Record<string, number> | undefined)?.length !== undefined,
+      ).length;
+
+    expect(await widthCallCount()).toBe(0);
+
+    const header = page.getByTestId('grid-header-length');
+
+    // Grab the resize edge and widen the column by ~60px, pausing mid-drag: the
+    // width is committed on mouse-up, so nothing should be recorded yet.
+    // hover() rather than a mouse.move to a captured boundingBox - the handle is
+    // only a few px wide and straddles the column boundary, so a raw move landed
+    // beside it under parallel load and the drag silently did nothing.
+    const handle = page.getByTestId('grid-col-resize-length');
+    await handle.hover();
+    // Measure only once the pointer is settled on the handle, so `before` is the
+    // laid-out width rather than a mid-settle one.
+    const before = (await header.boundingBox())!;
+    await page.mouse.down();
+    const grip = (await handle.boundingBox())!;
+    await page.mouse.move(grip.x + grip.width / 2 + 60, grip.y + grip.height / 2, { steps: 8 });
+
+    // The grid follows the pointer immediately...
+    await expect.poll(async () => (await header.boundingBox())!.width).toBeGreaterThan(before.width + 40);
+    // ...but no width has been persisted yet. Were the width lifted to the host
+    // as controlled state, this would already be writing once per pixel.
+    expect(await widthCallCount()).toBe(0);
+
+    await page.mouse.up();
+
+    // The debounce can emit an interim snapshot, so poll the LATEST call rather
+    // than asserting a count or reading calls[0] (#171).
+    await expect
+      .poll(
+        async () => {
+          const calls = await getViewCalls(page);
+          const widths = calls[calls.length - 1]?.columnWidths as Record<string, number> | undefined;
+          return widths?.length;
+        },
+        { timeout: 5000 },
+      )
+      .toBeGreaterThan(before.width + 40);
+
+    // Integers only - the persisted config stores u32.
+    const calls = await getViewCalls(page);
+    const persisted = calls[calls.length - 1]!.columnWidths as Record<string, number>;
+    expect(Number.isInteger(persisted.length)).toBe(true);
+
+    // The post-save loadConfig() re-sync settles on the same width.
+    await expect
+      .poll(
+        async () =>
+          ((await getPanelsConfig(page)).data_table_shot_column_widths as Record<string, number>)?.length,
+        { timeout: 5000 },
+      )
+      .toBe(persisted.length);
+  });
+
   test('header right-click hide entry hides the column and persists', async ({ page }) => {
     expect(await getViewCalls(page)).toHaveLength(0);
 
