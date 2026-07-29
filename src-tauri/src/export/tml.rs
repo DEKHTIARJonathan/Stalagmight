@@ -1660,8 +1660,8 @@ mod tests {
     /// The model is +down and Ariane is treated as +up, so the two must be
     /// mirror images and a round-trip must land back on the original value
     /// (issue #296).  Zero stays a plain `0.0` in both directions: `-0.0` would
-    /// survive into the XML and into the collab baseline, where it reads as an
-    /// edit that never happened.
+    /// survive into the XML, where it renders as a different string for a value
+    /// that did not change.
     #[test]
     fn tml_inclination_round_trips_through_the_sign_flip() {
         use crate::parsers::tml::inclination_to_pitch;
@@ -1731,7 +1731,8 @@ mod tests {
     ///
     /// Every `.tml` fixture in the tree carries `Inclination` 0 (Ariane does not
     /// populate the field), so non-zero inclination is only reachable through a
-    /// file Stalagmight wrote itself, which is exactly the collab sidecar case.
+    /// file Stalagmight wrote itself - an export the user re-imports, or the
+    /// sidecar the SpeleoDB push renders.
     #[test]
     fn tml_inclination_survives_a_file_level_round_trip() {
         let project = simple_project();
@@ -1773,7 +1774,7 @@ mod tests {
         assert_eq!(
             reimported, exported,
             "pitch must survive export and re-import unchanged; a flip applied \
-             zero or two times here is what produces phantom collab diffs"
+             zero or two times here silently inverts every shot"
         );
     }
 

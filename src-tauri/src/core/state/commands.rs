@@ -334,14 +334,7 @@ impl AppState {
     /// cost that used to dominate a large import.
     pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
         self.reconcile_geometry();
-        if pre_had_critical {
-            return false;
-        }
-        self.project
-            .lock()
-            .ok()
-            .and_then(|g| g.as_ref().map(Project::has_critical_integrity_violations))
-            .unwrap_or(false)
+        !pre_had_critical && self.project_has_critical()
     }
 
     /// Structural-integrity violation messages for the open project, critical

@@ -43,7 +43,7 @@ impl AppState {
             // round trip is not - pinned by
             // `reverse_of_an_unrepresentable_azimuth_round_trips_to_within_an_ulp`)
             // and spares redo from having to reproduce the anchor mirroring, the
-            // section-offset compensation and the collab-baseline invalidation.
+            // section-offset compensation.
             // A section with no shots is a single station and reverses to itself,
             // so capturing it would push two identical full-project snapshots and
             // mark the project dirty for an operation that changed nothing. The
