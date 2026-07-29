@@ -181,7 +181,6 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Excluded" | b"EXC" => Some("excluded"),
         b"Latitude" | b"LT" => Some("latitude"),
         b"Longitude" | b"LGT" => Some("longitude"),
-        b"Name" | b"NM" => Some("name"),
         _ => None,
     }
 }
