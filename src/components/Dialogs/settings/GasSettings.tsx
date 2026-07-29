@@ -10,7 +10,7 @@ import type { DpvRig, DpvUnit } from '../../../types/ipc.generated';
 import { PositiveNumberField } from '../../common/PositiveNumberField';
 import { Toggle } from '../../common/Toggle';
 import { ChevronRightIcon } from '../../common/icons';
-import { formatGasLength } from '../../../utils/formatGas';
+import { formatGasLength, speedFromDisplay, speedToDisplay } from '../../../utils/formatGas';
 
 /** Mirrors `default_dpv_range_reserve_fraction()` in `src-tauri/src/config/gas.rs` (0.1). */
 const DEFAULT_DPV_RANGE_RESERVE_FRACTION = 0.1;
@@ -48,24 +48,38 @@ function dpvUnitInvalid(unit: DpvUnit): boolean {
 }
 
 /**
+ * Mirrors `GasConfig::normalize` in `src-tauri/src/config/gas.rs` EXACTLY - not a plain clamp to
+ * `[0, MAX_DPV_RANGE_RESERVE_FRACTION]`. A non-finite or negative fraction RESETS to the default
+ * (0.1), it does not clamp to 0; only a value ABOVE the cap clamps down to the cap. The two branches
+ * disagree on purpose (Rust's own comment: the cap would zero the whole usable range, which is
+ * useless but not unsafe, so it's capped rather than reset like a negative fraction is) - a plain
+ * `Math.max(0, ...)` here would preview 100% of the weaker unit's range for a negative entry instead
+ * of the 90% the backend would actually give it once normalized.
+ */
+function normalizedReserveFraction(fraction: number): number {
+  if (!Number.isFinite(fraction) || fraction < 0) return DEFAULT_DPV_RANGE_RESERVE_FRACTION;
+  return Math.min(fraction, MAX_DPV_RANGE_RESERVE_FRACTION);
+}
+
+/**
  * Usable one-way range (metres): `min(primary.range, backup.range) x (1 - reserve)`, the weaker
  * unit by line covered (not by burn time), not halved (primary flies in, backup flies out).
  * Mirrors `DpvRig::usable_range_m` in `src-tauri/src/config/gas.rs` exactly - read it before
  * changing this.
  *
- * The reserve fraction is clamped into the backend's accepted domain ([0, `MAX_DPV_RANGE_
- * RESERVE_FRACTION`]) before it is used, the same way `GasConfig::normalize` clamps it on save:
- * this previews the LIVE (not-yet-saved) working config, and Save is blocked outside that domain
- * (see the validation effect below) - but a value the diver is mid-typing must never preview a
- * number the backend would not actually honor once saved (a 0.95 entry previewing 5% of range
- * while the backend would clamp to 0.9 and give 10% is exactly that drift, the #233 gauge class).
+ * The reserve fraction is normalized into the backend's accepted domain before it is used, the same
+ * way `GasConfig::normalize` normalizes it on save: this previews the LIVE (not-yet-saved) working
+ * config, and Save is blocked outside that domain (see the validation effect below) - but a value the
+ * diver is mid-typing must never preview a number the backend would not actually honor once saved (a
+ * 0.95 entry previewing 5% of range while the backend would clamp to 0.9 and give 10% is exactly that
+ * drift, the #233 gauge class).
  */
 function dpvUsableRangeM(rig: DpvRig): number {
   const weaker = Math.min(
     rig.primary.speed_m_per_min * rig.primary.burn_minutes,
     rig.backup.speed_m_per_min * rig.backup.burn_minutes
   );
-  const reserve = Math.max(0, Math.min(rig.range_reserve_fraction, MAX_DPV_RANGE_RESERVE_FRACTION));
+  const reserve = normalizedReserveFraction(rig.range_reserve_fraction);
   return Math.max(weaker * (1 - reserve), 0);
 }
 
@@ -131,6 +145,7 @@ export function GasSettings({
     if (!rig) return;
     setRig({ backup: { ...rig.backup, ...patch } });
   };
+  const units = config.gas.units;
 
   return (
     <div
@@ -229,7 +244,12 @@ export function GasSettings({
             {dpvDetailsExpanded && (
               <div className="mt-2 space-y-1" id={dpvDetailsRegionId} data-testid="gas-dpv-details-content">
                 <SettingRow
-                  label={t('settings.gas.dpv.primarySpeed.label')}
+                  label={t(
+                    units === 'imperial'
+                      ? 'settings.gas.dpv.primarySpeed.labelImperial'
+                      : 'settings.gas.dpv.primarySpeed.label',
+                    'Primary speed (ft/min)'
+                  )}
                   helpText={t('settings.gas.dpv.primarySpeed.help')}
                   isChanged={isFieldChanged(changedFields, 'gas.dpv.primary.speed_m_per_min')}
                   onReset={() => setPrimary({ speed_m_per_min: DEFAULT_DPV_RIG.primary.speed_m_per_min })}
@@ -237,11 +257,16 @@ export function GasSettings({
                   data-testid="setting-gas-dpv-primary-speed"
                 >
                   <PositiveNumberField
-                    value={rig.primary.speed_m_per_min}
-                    onCommit={(n) => setPrimary({ speed_m_per_min: n })}
-                    step={1}
+                    value={speedToDisplay(rig.primary.speed_m_per_min, units)}
+                    onCommit={(n) => setPrimary({ speed_m_per_min: speedFromDisplay(n, units) })}
+                    step={units === 'imperial' ? 5 : 1}
                     className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-                    ariaLabel={t('settings.gas.dpv.primarySpeed.aria')}
+                    ariaLabel={t(
+                      units === 'imperial'
+                        ? 'settings.gas.dpv.primarySpeed.ariaImperial'
+                        : 'settings.gas.dpv.primarySpeed.aria',
+                      'Primary scooter speed in feet per minute'
+                    )}
                     testId="input-gas-dpv-primary-speed"
                   />
                 </SettingRow>
@@ -265,7 +290,12 @@ export function GasSettings({
                 </SettingRow>
 
                 <SettingRow
-                  label={t('settings.gas.dpv.backupSpeed.label')}
+                  label={t(
+                    units === 'imperial'
+                      ? 'settings.gas.dpv.backupSpeed.labelImperial'
+                      : 'settings.gas.dpv.backupSpeed.label',
+                    'Backup speed (ft/min)'
+                  )}
                   helpText={t('settings.gas.dpv.backupSpeed.help')}
                   isChanged={isFieldChanged(changedFields, 'gas.dpv.backup.speed_m_per_min')}
                   onReset={() => setBackup({ speed_m_per_min: DEFAULT_DPV_RIG.backup.speed_m_per_min })}
@@ -273,11 +303,16 @@ export function GasSettings({
                   data-testid="setting-gas-dpv-backup-speed"
                 >
                   <PositiveNumberField
-                    value={rig.backup.speed_m_per_min}
-                    onCommit={(n) => setBackup({ speed_m_per_min: n })}
-                    step={1}
+                    value={speedToDisplay(rig.backup.speed_m_per_min, units)}
+                    onCommit={(n) => setBackup({ speed_m_per_min: speedFromDisplay(n, units) })}
+                    step={units === 'imperial' ? 5 : 1}
                     className="w-24 px-2 py-1 bg-background border border-border rounded text-sm text-right"
-                    ariaLabel={t('settings.gas.dpv.backupSpeed.aria')}
+                    ariaLabel={t(
+                      units === 'imperial'
+                        ? 'settings.gas.dpv.backupSpeed.ariaImperial'
+                        : 'settings.gas.dpv.backupSpeed.aria',
+                      'Backup scooter speed in feet per minute'
+                    )}
                     testId="input-gas-dpv-backup-speed"
                   />
                 </SettingRow>

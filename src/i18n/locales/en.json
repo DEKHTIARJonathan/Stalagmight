@@ -332,8 +332,10 @@
         },
         "primarySpeed": {
           "label": "Primary speed (m/min)",
+          "labelImperial": "Primary speed (ft/min)",
           "help": "Cruising speed of the primary scooter.",
-          "aria": "Primary scooter speed in meters per minute"
+          "aria": "Primary scooter speed in meters per minute",
+          "ariaImperial": "Primary scooter speed in feet per minute"
         },
         "primaryBurn": {
           "label": "Primary burn time (min)",
@@ -342,8 +344,10 @@
         },
         "backupSpeed": {
           "label": "Backup speed (m/min)",
+          "labelImperial": "Backup speed (ft/min)",
           "help": "Cruising speed of the mandatory backup scooter, ridden out on the return leg.",
-          "aria": "Backup scooter speed in meters per minute"
+          "aria": "Backup scooter speed in meters per minute",
+          "ariaImperial": "Backup scooter speed in feet per minute"
         },
         "backupBurn": {
           "label": "Backup burn time (min)",
@@ -2346,7 +2350,7 @@
       "routeRuntime": "One-way runtime",
       "routeRuntimeHint": "Time to fly/swim the route to the turnaround, at each segment's own speed.",
       "scooterRange": "Scooter range used",
-      "scooterRangeHint": "Line flown on the scooters, against this rig's usable one-way range (primary/backup pair, less the reserve).",
+      "scooterRangeHint": "Battery range the scootered legs consume, against this rig's usable one-way range (primary/backup pair, less the reserve). Riding slower than cruise drains the battery clock, not the odometer, so a slow leg uses more range than line.",
       "turnOnScooterRange": "Turning on scooter range, not gas.",
       "computing": "Computing…"
     },
@@ -2374,7 +2378,10 @@
       "speedAria": "Speed for the {{from}} to {{to}} leg",
       "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
       "parkHere": "Parked here",
-      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly."
+      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly.",
+      "resetSpeed": "Reset",
+      "resetSpeedHint": "Return to the plan's swim speed",
+      "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
     }
   },
   "modeCarousel": {
@@ -2431,7 +2438,8 @@
         "xmlFilter": "Subsurface XML",
         "written": "Dive profile exported",
         "failed": "Dive profile export failed",
-        "clipboardUnavailable": "Copy failed - clipboard unavailable"
+        "clipboardUnavailable": "Copy failed - clipboard unavailable",
+        "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before exporting."
       },
       "aria": "Dive profile: max depth {{depth}}, {{distance}} penetration, about {{runtime}} minutes round trip."
     }

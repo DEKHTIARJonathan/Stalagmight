@@ -13,6 +13,7 @@ import { render, screen, fireEvent } from '@testing-library/react';
 import { GasSettings } from './GasSettings';
 import { defaultConfig } from '../../../types/config';
 import type { Config } from '../../../types/config';
+import { speedToDisplay } from '../../../utils/formatGas';
 
 let onChange: ReturnType<typeof vi.fn>;
 
@@ -228,6 +229,22 @@ describe('GasSettings DPV range-reserve domain [0, 0.9] (#317)', () => {
     expect(onValidationError).toHaveBeenCalledWith('gas', true);
   });
 
+  it('the usable-range preview resets a negative reserve to the default (0.1), mirroring Rust normalize', () => {
+    // ⚠ CROSS-LANGUAGE PIN (#317 FIX 4) - Rust's `GasConfig::normalize` RESETS a negative
+    // `range_reserve_fraction` to the default 0.1; it does NOT clamp it to 0 the way a positive
+    // value above the cap clamps to 0.9. A naive `Math.max(0, ...)` here would preview 100% of the
+    // weaker unit's range for a negative entry instead of the 90% the backend actually gives it.
+    renderPanel({
+      dpv: {
+        primary: { speed_m_per_min: 10, burn_minutes: 100 }, // range 1000 m
+        backup: { speed_m_per_min: 100, burn_minutes: 10 }, // range 1000 m - equal on purpose
+        range_reserve_fraction: -0.5,
+      },
+    });
+    // weaker = 1000; reset to the default reserve 0.1; usable = 1000 * 0.9 = 900
+    expect(screen.getByTestId('gas-dpv-usable-range-value').textContent).toBe('900 m');
+  });
+
   it('the usable-range preview clamps a reserve above the cap down to 0.9', () => {
     // ⚠ CROSS-LANGUAGE PIN - twin of `test_gas_config_normalize_clamps_dpv_range_reserve_at_the_
     // cap_boundary` in `src-tauri/src/config/tests.rs`; that test names this one back. Primary and
@@ -241,5 +258,86 @@ describe('GasSettings DPV range-reserve domain [0, 0.9] (#317)', () => {
       },
     });
     expect(screen.getByTestId('gas-dpv-usable-range-value').textContent).toBe('100 m');
+  });
+});
+
+/**
+ * #317 FIX 3 - the rig's cruising-speed fields were metric-only in an otherwise unit-aware dialog:
+ * the usable-range line beside them converts via `formatGasLength` and the Segments table converts
+ * via `speedToDisplay`, but these two inputs bound `speed_m_per_min` raw. An imperial user would
+ * type metres and read feet in the same panel.
+ */
+describe('GasSettings DPV rig speed fields convert for imperial units (#317)', () => {
+  it('renders the primary speed converted to the display unit under imperial', () => {
+    renderPanel({
+      units: 'imperial',
+      dpv: {
+        primary: { speed_m_per_min: 45, burn_minutes: 60 },
+        backup: { speed_m_per_min: 24, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      },
+    });
+    const input = screen.getByTestId('input-gas-dpv-primary-speed') as HTMLInputElement;
+    expect(Number(input.value)).toBeCloseTo(speedToDisplay(45, 'imperial'), 5);
+  });
+
+  it('renders the backup speed converted to the display unit under imperial', () => {
+    renderPanel({
+      units: 'imperial',
+      dpv: {
+        primary: { speed_m_per_min: 45, burn_minutes: 60 },
+        backup: { speed_m_per_min: 24, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      },
+    });
+    const input = screen.getByTestId('input-gas-dpv-backup-speed') as HTMLInputElement;
+    expect(Number(input.value)).toBeCloseTo(speedToDisplay(24, 'imperial'), 5);
+  });
+
+  it('committing a speed typed in feet/min round-trips to the correct metric value', () => {
+    // Seeded at a DIFFERENT speed so the edit below is a genuine value change - assigning back the
+    // exact string the field already shows is a no-op RTL/React can't distinguish from "nothing
+    // typed" (the DOM value tracker sees no change and never calls the handler).
+    renderPanel({
+      units: 'imperial',
+      dpv: {
+        primary: { speed_m_per_min: 10, burn_minutes: 60 },
+        backup: { speed_m_per_min: 24, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      },
+    });
+    const input = screen.getByTestId('input-gas-dpv-primary-speed') as HTMLInputElement;
+    const displayed = speedToDisplay(45, 'imperial');
+    fireEvent.change(input, { target: { value: String(displayed) } });
+    const call = onChange.mock.calls[0]?.[0] as { gas: { dpv: { primary: { speed_m_per_min: number } } } };
+    expect(call.gas.dpv.primary.speed_m_per_min).toBeCloseTo(45, 6);
+  });
+
+  it('leaves burn-time fields metric/unit-free (not converted)', () => {
+    // burn_minutes is a duration, not a length - it must NOT be run through speedToDisplay/
+    // formatGasLength the way the two cruising-speed fields are.
+    renderPanel({
+      units: 'imperial',
+      dpv: {
+        primary: { speed_m_per_min: 45, burn_minutes: 60 },
+        backup: { speed_m_per_min: 24, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      },
+    });
+    expect(screen.getByTestId('input-gas-dpv-primary-burn')).toHaveValue(60);
+    expect(screen.getByTestId('input-gas-dpv-backup-burn')).toHaveValue(45);
+  });
+
+  it('renders the metric value unconverted under metric units (regression guard)', () => {
+    renderPanel({
+      units: 'metric',
+      dpv: {
+        primary: { speed_m_per_min: 45, burn_minutes: 60 },
+        backup: { speed_m_per_min: 24, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      },
+    });
+    expect(screen.getByTestId('input-gas-dpv-primary-speed')).toHaveValue(45);
+    expect(screen.getByTestId('input-gas-dpv-backup-speed')).toHaveValue(24);
   });
 });

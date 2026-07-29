@@ -4,7 +4,19 @@ import { planSpeed, useGasPlanStore } from '../../store/gasPlanStore';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import { formatStationId } from '../../utils/formatters';
 import { speedFromDisplay, speedToDisplay } from '../../utils/formatGas';
+import { clamp } from '../../utils/clamp';
 import type { StationRef } from '../../types/project';
+
+/**
+ * Mirrors `MIN_SEGMENT_SPEED_M_PER_MIN` in `src-tauri/src/models/project/gas/scooter.rs`. Outside
+ * `[MIN, MAX]`, `resolve_segments` silently discards the segment's own speed and falls back to the
+ * plan speed - so a committed value outside this range would show one number in this table and
+ * price a different one in the engine (and in the exported dive profile). Clamped here so the value
+ * the row displays after commit is always the value the engine will actually use.
+ */
+const MIN_SEGMENT_SPEED_M_PER_MIN = 0.1;
+/** Mirrors `MAX_SEGMENT_SPEED_M_PER_MIN` in the same file. */
+const MAX_SEGMENT_SPEED_M_PER_MIN = 1000;
 
 function sameStation(a: StationRef | null, b: StationRef | null): boolean {
   return a != null && b != null && a.section_id === b.section_id && a.station_index === b.station_index;
@@ -63,7 +75,26 @@ export function SegmentsTable() {
   const boundaryRefs: (StationRef | null)[] = [origin, ...waypoints, endpoint];
 
   const setSpeed = (idx: number, speedMPerMin: number) =>
-    setSegments(segments.map((seg, i) => (i === idx ? { ...seg, speed_m_per_min: speedMPerMin } : seg)));
+    setSegments(
+      segments.map((seg, i) =>
+        i === idx
+          ? {
+              ...seg,
+              speed_m_per_min: clamp(
+                speedMPerMin,
+                MIN_SEGMENT_SPEED_M_PER_MIN,
+                MAX_SEGMENT_SPEED_M_PER_MIN
+              ),
+            }
+          : seg
+      )
+    );
+  // Return a span to inheriting the plan speed (undoes an explicit edit). `speed_m_per_min: null`
+  // is the same thing a span has meant since it was created (see `defaultSegment`) - this is the
+  // only way back to it once the diver has typed a number, since `setSpeed` above only ever writes
+  // one.
+  const resetSpeed = (idx: number) =>
+    setSegments(segments.map((seg, i) => (i === idx ? { ...seg, speed_m_per_min: null } : seg)));
   // Ticking on_scooter on a span still inheriting the plan speed (`speed_m_per_min: null`) also
   // fixes that span's speed to the rig's primary. Riding a span at swim pace while the range model
   // spends the rig's range by METRES (not by time) would understate the real battery drain - the
@@ -131,6 +162,18 @@ export function SegmentsTable() {
                           : 'gasPanel.swimSpeed.unit'
                       )}
                     </span>
+                    {seg.speed_m_per_min != null && (
+                      <button
+                        type="button"
+                        onClick={() => resetSpeed(idx)}
+                        className="px-1.5 py-0.5 text-xs border border-border rounded opacity-70 hover:opacity-100"
+                        title={t('gasPanel.segments.resetSpeedHint')}
+                        aria-label={t('gasPanel.segments.resetSpeedAria', { from, to })}
+                        data-testid={`segment-speed-reset-${idx}`}
+                      >
+                        {t('gasPanel.segments.resetSpeed')}
+                      </button>
+                    )}
                   </div>
                 </td>
                 <td className="py-1 pr-3">

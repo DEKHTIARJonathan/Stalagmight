@@ -221,4 +221,59 @@ describe('SegmentsTable', () => {
     expect(screen.queryByTestId('segment-park-0')).not.toBeInTheDocument();
     expect(screen.queryByTestId('segment-park-1')).not.toBeInTheDocument();
   });
+
+  /**
+   * #317 fix pass: `resolve_segments` (src-tauri/src/models/project/gas/scooter.rs) SILENTLY
+   * discards a segment speed outside `[0.1, 1000]` m/min and falls back to the plan speed - so
+   * without a matching clamp here, the table would show the diver's typed value while the engine
+   * (and the exported dive profile) priced a completely different one.
+   */
+  describe('speed commit clamps to the range the engine honors ([0.1, 1000] m/min)', () => {
+    it('clamps an over-range commit down to the engine max (1000)', async () => {
+      const user = userEvent.setup();
+      render(<SegmentsTable />);
+
+      const input = screen.getByTestId('segment-speed-0');
+      await user.clear(input);
+      await user.type(input, '5000');
+      await user.tab();
+
+      expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(1000);
+    });
+
+    it('clamps an under-range commit up to the engine min (0.1)', async () => {
+      const user = userEvent.setup();
+      render(<SegmentsTable />);
+
+      const input = screen.getByTestId('segment-speed-0');
+      await user.clear(input);
+      await user.type(input, '0.01');
+      await user.tab();
+
+      expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBe(0.1);
+    });
+  });
+
+  describe('reset-to-inherit control (#317 FIX 5)', () => {
+    it('hides the reset control on a span with no explicit speed', () => {
+      render(<SegmentsTable />);
+      expect(screen.queryByTestId('segment-speed-reset-0')).not.toBeInTheDocument();
+    });
+
+    it('shows the reset control once a span has an explicit speed, and resetting it writes null and shows the inherited speed again', async () => {
+      const user = userEvent.setup();
+      useGasPlanStore.setState({
+        gasConfig: { ...defaultConfig.gas, swim_speed_m_per_min: 23, survey_speed_m_per_min: null },
+        segments: [{ speed_m_per_min: 12, on_scooter: false }],
+      });
+      render(<SegmentsTable />);
+
+      expect(screen.getByTestId('segment-speed-reset-0')).toBeInTheDocument();
+      await user.click(screen.getByTestId('segment-speed-reset-0'));
+
+      expect(useGasPlanStore.getState().segments[0]?.speed_m_per_min).toBeNull();
+      expect(screen.getByTestId('segment-speed-0')).toHaveValue(23);
+      expect(screen.queryByTestId('segment-speed-reset-0')).not.toBeInTheDocument();
+    });
+  });
 });

@@ -277,5 +277,5 @@ export function useGasPlanDropMarkers({
     // keyboard focus; overrides are read fresh from the store where needed. The fetch effect in
     // MapCanvas IS keyed on the overrides, so a pin/reset always re-fetches and lands here via
     // `gasReachField`.
-  }, [showGasPlan, gasReachField, setStageDropOverride, activeStations, gpsOrigin, mapLoaded, t]);
+  }, [map, showGasPlan, gasReachField, setStageDropOverride, activeStations, gpsOrigin, mapLoaded, t]);
 }
