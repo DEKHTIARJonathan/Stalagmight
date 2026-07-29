@@ -872,6 +872,38 @@ impl AppState {
         session.chosen_dump_entries.get(project_id).cloned()
     }
 
+    /// [#258] Forget a remembered entry that a push has just made stale.
+    ///
+    /// A push always uploads under the canonical wire name and leaves every other
+    /// `.stalx` in the tree untouched. So a user who chose, say, `backup/old.stalx`
+    /// held a name that was correct when they answered and is PRE-PUSH data the
+    /// moment their push lands - and the recall is per session, not per open, so the
+    /// next open or fast-forward extracted that stale database and then stamped it
+    /// with the new server revision. That is a silent rollback of their own work,
+    /// published under a commit that claims to contain it.
+    ///
+    /// Forgotten rather than rebound to the canonical path, because there may not be
+    /// one to bind to: the upload target's FOLDER is the server's `TARGET_FOLDER`
+    /// and not part of the contract, so the post-push tree can hold two entries with
+    /// the canonical basename and no way to tell which is the target. Forgetting
+    /// costs at most one more question, and only for someone who already answered a
+    /// genuinely ambiguous one.
+    ///
+    /// A canonical choice survives: the push wrote exactly that file, so it is the
+    /// one name still guaranteed current.
+    pub(super) fn speleodb_forget_stale_dump_entry(&self, project_id: &str) {
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        let stale = session
+            .chosen_dump_entries
+            .get(project_id)
+            .is_some_and(|entry| !crate::speleodb::dump::has_canonical_basename(entry));
+        if stale {
+            session.chosen_dump_entries.remove(project_id);
+        }
+    }
+
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
     /// Every **established-session** authed call (list/open) routes its `Result`
     /// through this; a **genuine 401** fully clears the token (keychain +
@@ -2379,6 +2411,12 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
+                // [#258] The bytes just landed under the canonical name, so any
+                // remembered NONCANONICAL entry now points at pre-push data. Dropped
+                // here, at the one place a new revision is confirmed, rather than at
+                // each verb that pushes. The 304 path deliberately does not: nothing
+                // was uploaded, so nothing the recall names has moved.
+                self.speleodb_forget_stale_dump_entry(project_id);
                 Ok(PushOutcome::Confirmed)
             }
             Err(e) => {

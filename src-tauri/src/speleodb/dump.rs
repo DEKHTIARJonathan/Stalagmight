@@ -10,6 +10,7 @@
 //! break the pull (the server stores "other" files under `misc/` today, but that
 //! is not part of the contract).
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
@@ -129,6 +130,19 @@ fn has_stalx_suffix(path: &str) -> bool {
         .is_some_and(|e| e.eq_ignore_ascii_case("stalx"))
 }
 
+/// Whether `path`'s file name is the one a push writes.
+///
+/// A basename test, like everything else that locates the `.stalx` here: the folder
+/// it sits in is the server's `TARGET_FOLDER`, not part of the contract. So this
+/// answers "could this be the upload target", never "is it" - see
+/// [`Dump::entry_details`] for what happens when more than one entry can be.
+pub(crate) fn has_canonical_basename(path: &str) -> bool {
+    Path::new(path)
+        .file_name()
+        .and_then(|n| n.to_str())
+        .is_some_and(|n| n == super::client::CANONICAL_STALX_WIRE_NAME)
+}
+
 /// The server reserves the root filename `ariane.tml` for the Ariane sidecar.
 fn is_ariane_tml(path: &str) -> bool {
     Path::new(path)
@@ -227,6 +241,29 @@ impl<'a> Dump<'a> {
         &mut self,
         wanted: &[String],
     ) -> Result<Vec<SpeleoDumpCandidate>, SpeleoDbError> {
+        // Membership as a SET. `wanted` is bounded only by the archive's own entry
+        // count, and both grow together: an allowed dump near `MAX_ENTRIES` that is
+        // ambiguous in all of them turned this into ~n^2 path comparisons - tens of
+        // millions before the picker could be drawn - all of it driven by a
+        // server-supplied file, i.e. exactly the input that must not be able to
+        // stall the app.
+        let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+
+        // The canonical entry is identified by BASENAME, never by a fixed path: the
+        // server's `TARGET_FOLDER` is configurable, so `misc/project.stalx` is where
+        // it lands today and not a contract. A basename can therefore repeat across
+        // folders, and when it does this cannot tell which one the upload actually
+        // targets - so NEITHER is canonical. Badging both as current was worse than
+        // badging none: it also sorted a backup copy first, so the preselected pick
+        // in the worst case was the one that silently gets replaced on the next
+        // push. No canonical entry means the picker asks outright, which is the
+        // honest answer when the archive genuinely does not say.
+        let mut canonical = wanted.iter().filter(|w| has_canonical_basename(w));
+        let canonical_path: Option<&str> = match (canonical.next(), canonical.next()) {
+            (Some(only), None) => Some(only.as_str()),
+            _ => None,
+        };
+
         let mut out = Vec::with_capacity(wanted.len());
         for i in 0..self.archive.len() {
             let entry = self
@@ -234,13 +271,10 @@ impl<'a> Dump<'a> {
                 .by_index(i)
                 .map_err(|e| SpeleoDbError::Parse(format!("could not read ZIP entry {i}: {e}")))?;
             let entry_path = entry.name().to_owned();
-            if !wanted.iter().any(|w| *w == entry_path) {
+            if !wanted_set.contains(entry_path.as_str()) {
                 continue;
             }
-            let is_canonical = Path::new(&entry_path)
-                .file_name()
-                .and_then(|n| n.to_str())
-                .is_some_and(|n| n == super::client::CANONICAL_STALX_WIRE_NAME);
+            let is_canonical = canonical_path == Some(entry_path.as_str());
             out.push(SpeleoDumpCandidate {
                 entry_path,
                 size_bytes: entry.size(),
@@ -455,6 +489,64 @@ mod tests {
         assert_eq!(details[1].entry_path, "backup/old.stalx");
         assert!(!details[1].is_canonical);
         assert_eq!(details[1].size_bytes, 10);
+    }
+
+    #[test]
+    fn a_repeated_canonical_basename_makes_none_canonical() {
+        // [#258] The canonical entry is found by BASENAME, because the folder is the
+        // server's TARGET_FOLDER and not part of the contract. So the name can repeat
+        // across folders, and then nothing here can say which one the upload targets.
+        //
+        // Marking both was the worst of the three answers: the badge told the user
+        // two different files were the current one, and canonical-first sorting then
+        // preselected whichever sorted earlier - which can be the BACKUP, i.e. the
+        // pick that quietly gets replaced by the next push. Marking neither makes the
+        // picker ask outright, which is what the archive actually supports.
+        let zip = make_zip(&[
+            ("backup/project.stalx", b"old"),
+            ("misc/project.stalx", b"live"),
+        ]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted = paths(&["backup/project.stalx", "misc/project.stalx"]);
+        let details = dump.entry_details(&wanted).expect("details");
+
+        assert_eq!(details.len(), 2);
+        assert!(
+            details.iter().all(|c| !c.is_canonical),
+            "an unresolvable canonical basename must badge NEITHER entry as current"
+        );
+        // Still deterministic: with no canonical entry to lead, path order decides.
+        let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
+        assert_eq!(order, vec!["backup/project.stalx", "misc/project.stalx"]);
+    }
+
+    #[test]
+    fn entry_details_describes_every_wanted_entry_of_a_large_archive() {
+        // Membership is a set lookup, not a scan of `wanted` per archive entry: both
+        // grow with the same server-supplied archive, so the pairwise form was
+        // quadratic in it. This pins the BEHAVIOUR that change had to preserve -
+        // every wanted entry described exactly once, none of the unwanted ones - at a
+        // size where the old form was doing millions of comparisons.
+        let bodies: Vec<(String, Vec<u8>)> = (0..1_000)
+            .map(|i| (format!("d{i:04}/f{i:04}.stalx"), vec![b'x'; 1]))
+            .chain((0..200).map(|i| (format!("misc/other{i:04}.txt"), vec![b'y'; 1])))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = bodies
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let zip = make_zip(&entries);
+        let mut dump = Dump::open(&zip).expect("open zip");
+
+        let wanted: Vec<String> = (0..1_000)
+            .map(|i| format!("d{i:04}/f{i:04}.stalx"))
+            .collect();
+        let details = dump.entry_details(&wanted).expect("details");
+
+        assert_eq!(details.len(), 1_000, "every wanted entry, and nothing else");
+        assert!(details.iter().all(|c| !c.is_canonical));
+        assert_eq!(details[0].entry_path, "d0000/f0000.stalx");
+        assert_eq!(details[999].entry_path, "d0999/f0999.stalx");
     }
 
     #[test]

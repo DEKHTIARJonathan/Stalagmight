@@ -1029,6 +1029,53 @@ mod tests {
         );
     }
 
+    /// [#258] A push writes the canonical name and touches nothing else, so a
+    /// remembered NONCANONICAL entry is pre-push data the instant the push lands.
+    /// Left in place it was a silent rollback: the next same-session open or
+    /// fast-forward extracted that stale database and stamped it with the new server
+    /// revision, publishing a commit that claims to hold work it does not.
+    #[test]
+    fn a_push_forgets_a_noncanonical_choice_but_keeps_the_canonical_one() {
+        let state = AppState::new().expect("state");
+        let project = "55555555-5555-5555-5555-555555555555";
+
+        // The choice a user made against an ambiguous dump, then pushed.
+        state.speleodb_remember_dump_entry(project, "backup/old.stalx");
+        state.speleodb_forget_stale_dump_entry(project);
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project),
+            None,
+            "a non-canonical choice must not survive the push that made it stale"
+        );
+
+        // The canonical pick is the one name the push itself wrote, so it stays and
+        // the user is not re-asked. Any folder, since TARGET_FOLDER is the server's.
+        for canonical in ["project.stalx", "misc/project.stalx"] {
+            state.speleodb_remember_dump_entry(project, canonical);
+            state.speleodb_forget_stale_dump_entry(project);
+            assert_eq!(
+                state.speleodb_recalled_dump_entry(project).as_deref(),
+                Some(canonical),
+                "`{canonical}` is what the push wrote, so it is still current"
+            );
+        }
+    }
+
+    /// The rule above is only worth anything if the push actually applies it, and a
+    /// confirmed upload is the one place a new revision exists. A source scan because
+    /// reaching the real thing needs a server: the failure being guarded is someone
+    /// adding a push path that forgets to invalidate, which is structural.
+    #[test]
+    fn the_confirmed_push_invalidates_the_remembered_entry() {
+        assert_eq!(
+            speleodb_prod_matches("speleodb_forget_stale_dump_entry(", &[]),
+            2,
+            "expected one definition plus exactly one caller - the confirmed-upload \
+             arm. A second caller means another path is invalidating (or a push path \
+             stopped doing so, which silently restores the stale-recall rollback)."
+        );
+    }
+
     /// [#258] The probe's answer is advisory, but the request that produces it is
     /// authenticated: `hexsha` lands in the URL path, so anything that could reshape
     /// that path is rejected before the request is built - the same guard the restore
