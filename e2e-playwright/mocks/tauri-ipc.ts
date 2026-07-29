@@ -1561,6 +1561,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // #317: the per-span speed + propulsion, so an e2e can assert a segment edit
                 // reached the engine rather than only re-rendering the table.
                 segments: args?.segments ?? [],
+                // #317: the rig itself, so disabling it can be proven at the REQUEST - the
+                // readout that gates on it also gates on the client-side `hasDpvRig` flag, which
+                // flips a render tick before any recompute round-trips.
+                dpv: (args?.gasConfig as { dpv?: unknown } | undefined)?.dpv ?? null,
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
