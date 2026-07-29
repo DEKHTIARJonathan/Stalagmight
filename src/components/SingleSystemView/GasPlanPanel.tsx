@@ -19,7 +19,7 @@ import {
 } from '../../utils/formatGas';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import { DivePlanBar } from './DivePlanBar';
-import type { DpvRig, GasUnits, ReservePreset } from '../../types/ipc.generated';
+import type { GasUnits, ReservePreset } from '../../types/ipc.generated';
 
 const RESERVE_PRESETS: readonly ReservePreset[] = [
   'all_thirds',
@@ -83,6 +83,7 @@ export function GasPlanPanel() {
     gasConfig,
     reachField,
     stageDropOverrides,
+    unresolved,
     pushyAck,
     setOrigin,
     setEndpoint,
@@ -105,6 +106,7 @@ export function GasPlanPanel() {
       gasConfig: s.gasConfig,
       reachField: s.reachField,
       stageDropOverrides: s.stageDropOverrides,
+      unresolved: s.unresolved,
       pushyAck: s.pushyAck,
       setOrigin: s.setOrigin,
       setEndpoint: s.setEndpoint,
@@ -139,40 +141,28 @@ export function GasPlanPanel() {
       ...structuredClone(cfg?.gas ?? defaultConfig.gas),
       units: masterImperial ? 'imperial' : 'metric',
     });
-    useGasPlanStore.getState().markHydrated();
+    // Pass the config the seed came from so `syncSettingsOnlyGasFields` (below) has its
+    // "already observed" baseline from the moment of hydration, regardless of which of
+    // this component's two effects React happens to run first.
+    useGasPlanStore.getState().markHydrated(cfg?.gas ?? defaultConfig.gas);
   }, [setGasConfig]);
 
-  // Mirror a DPV rig EDITED IN SETTINGS during this session into the working config (#317).
+  // Mirror any Settings-only gas field EDITED IN SETTINGS during this session into the working
+  // config (#317): the DPV rig, the jump RMV multiplier and the include-reference-legs toggle
+  // have no in-panel control at all, so Settings is their only source - which made the seed-once
+  // `hydrated` gate above (deliberately, #244: re-seeding on every mode-switch remount would
+  // clobber working inputs and a loaded plan) swallow them entirely: edit one after Plan mode has
+  // already opened once this session and it would never appear, with nothing on screen to explain
+  // why.
   //
-  // The `hydrated` gate above deliberately seeds once, because the panel remounts on every mode
-  // switch and re-seeding would clobber working inputs and a loaded plan (#244). The rig is the
-  // first gas setting with NO in-panel control at all, so Settings is its only source - which made
-  // the seed-once rule swallow it: configure a scooter after having opened Plan mode even once and
-  // the rig would never appear, with nothing on screen to explain why.
-  //
-  // Keyed on the persisted value CHANGING, not on it differing from the working one. That
-  // distinction is what keeps #244 intact: a loaded plan carries its own rig in its snapshot, and a
-  // plan planned on a different scooter must not be silently re-rigged just because the diver's
-  // personal default says otherwise. Only an actual edit in Settings - an intent - moves it.
-  //
-  // Scoped to `dpv` on purpose. Every other gas setting is editable in the panel, so mirroring
-  // those would fight the user's own edits; the general "Settings changes are invisible mid-session"
-  // wart is left alone rather than half-fixed here.
-  const persistedDpv = useProjectStore((s) => s.config?.gas?.dpv ?? null);
-  const lastPersistedDpvRef = useRef<DpvRig | null | undefined>(undefined);
+  // The diffing this needs to stay safe - apply an actual edit, but leave a loaded plan's own
+  // values alone when Settings did not change - must survive a PANEL REMOUNT (this component
+  // remounts on every mode switch), so it lives in the store (`syncSettingsOnlyGasFields`), not a
+  // component ref: a ref resets on remount and loses exactly the "last observed" memory this needs.
+  const persistedGasConfig = useProjectStore((s) => s.config?.gas ?? defaultConfig.gas);
   useEffect(() => {
-    const previous = lastPersistedDpvRef.current;
-    lastPersistedDpvRef.current = persistedDpv;
-    // First observation is the seed, not an edit - the hydrate effect above already applied it.
-    if (previous === undefined) return;
-    if (JSON.stringify(previous) === JSON.stringify(persistedDpv)) return;
-    // Deep-clone for the same reason the seed does: the working config must never share nested
-    // references with the live persisted config.
-    setGasConfig({
-      ...useGasPlanStore.getState().gasConfig,
-      dpv: persistedDpv ? structuredClone(persistedDpv) : null,
-    });
-  }, [persistedDpv, setGasConfig]);
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
+  }, [persistedGasConfig]);
 
   // Swim-speed disk-persist debounce (#241): the in-memory working config updates
   // immediately on every keystroke, but the disk write is trailing-debounced so a fast
@@ -225,6 +215,12 @@ export function GasPlanPanel() {
   // lag a keystroke behind the store, and warning about a way point the user just removed reads
   // as a bug.
   const stalledWaypoint = stalledIdx >= 0 && stalledIdx < waypoints.length ? stalledIdx : null;
+  // A way point whose anchor no longer resolves to a station (a survey edit removed both of its
+  // neighbouring shots). Distinct from a stall: the engine is never asked while one exists, so it
+  // outranks the stall warning below.
+  const unresolvedIdx = unresolved.waypoints.findIndex(Boolean);
+  const unresolvedWaypoint =
+    unresolvedIdx >= 0 && unresolvedIdx < waypoints.length ? unresolvedIdx : null;
   // Over budget = the detour alone costs more gas than the diver has. Distinct from a stall
   // (which is "cannot be reached at all") and gets its own, actionable message.
   const waypointsOverBudget =
@@ -449,6 +445,11 @@ export function GasPlanPanel() {
                     <span className="font-mono flex-1">
                       {formatStationId(w.section_id, w.station_index)}
                     </span>
+                    {unresolved.waypoints[i] && (
+                      <span className="text-error" data-testid="gas-waypoint-unresolved">
+                        {t('gasPanel.route.unresolvedBadge')}
+                      </span>
+                    )}
                     {/* Cumulative gas at this way point, straight from the engine - the panel must
                         never re-derive a budget-dependent number (#233 lesson). `null` means the
                         chain stalled here or before it. */}
@@ -501,7 +502,12 @@ export function GasPlanPanel() {
             {waypoints.length > 0 && (
               <p className="text-xs opacity-60 mt-0.5">{t('gasPanel.route.waypointsHint')}</p>
             )}
-            {stalledWaypoint !== null && (
+            {unresolvedWaypoint !== null && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnUnresolved', { n: unresolvedWaypoint + 1 })}
+              </p>
+            )}
+            {unresolvedWaypoint === null && stalledWaypoint !== null && (
               <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
                 {t('gasPanel.route.warnUnreachable', { n: stalledWaypoint + 1 })}
               </p>

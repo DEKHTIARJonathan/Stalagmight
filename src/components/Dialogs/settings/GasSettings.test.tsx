@@ -90,8 +90,8 @@ describe('GasSettings DPV rig (#317)', () => {
 
   it('disabling the rig clears it back to null (DpvRig -> null)', () => {
     const rig = {
-      primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
-      backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+      primary: { speed_m_per_min: 24, burn_minutes: 60 },
+      backup: { speed_m_per_min: 18, burn_minutes: 45 },
       range_reserve_fraction: 0.2,
     };
     renderPanel({ dpv: rig });
@@ -106,8 +106,8 @@ describe('GasSettings DPV rig (#317)', () => {
       gas: {
         ...defaultConfig.gas,
         dpv: {
-          primary: { speed_m_per_min: 0, burn_minutes: 60, label: null },
-          backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+          primary: { speed_m_per_min: 0, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
           range_reserve_fraction: 0.2,
         },
       },
@@ -131,8 +131,8 @@ describe('GasSettings DPV rig (#317)', () => {
       gas: {
         ...defaultConfig.gas,
         dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
-          backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
           range_reserve_fraction: 0.2,
         },
       },
@@ -160,12 +160,86 @@ describe('GasSettings DPV rig (#317)', () => {
     // 1000 m - when the engine compares RANGE (speed x burn), never burn alone.
     renderPanel({
       dpv: {
-        primary: { speed_m_per_min: 10, burn_minutes: 100, label: null },
-        backup: { speed_m_per_min: 40, burn_minutes: 20, label: null },
+        primary: { speed_m_per_min: 10, burn_minutes: 100 },
+        backup: { speed_m_per_min: 40, burn_minutes: 20 },
         range_reserve_fraction: 0.25,
       },
     });
     // weaker = min(1000, 800) = 800; usable = 800 * (1 - 0.25) = 600
     expect(screen.getByTestId('gas-dpv-usable-range-value').textContent).toBe('600 m');
+  });
+});
+
+/**
+ * #317 (M5): the usable-range preview and the Save-blocking validation must accept the exact
+ * same domain the backend does for `range_reserve_fraction` - `[0, MAX_DPV_RANGE_RESERVE_
+ * FRACTION]` (0.9, `src-tauri/src/config/gas.rs`). Before this, the preview computed with the
+ * raw value while Save only blocked a NEGATIVE one - a diver typing 0.95 previewed 5% of range
+ * while the backend would clamp to 0.9 and give 10%, a silent drift once saved.
+ */
+describe('GasSettings DPV range-reserve domain [0, 0.9] (#317)', () => {
+  it('does not block Save when the range reserve sits exactly at the cap (0.9)', () => {
+    const onValidationError = vi.fn();
+    const config: Config = {
+      ...defaultConfig,
+      gas: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
+          range_reserve_fraction: 0.9,
+        },
+      },
+    };
+    render(
+      <GasSettings
+        config={config}
+        onChange={onChange}
+        changedFields={new Set()}
+        onValidationError={onValidationError}
+        panelIdBase="settings"
+      />
+    );
+    expect(onValidationError).not.toHaveBeenCalled();
+  });
+
+  it('blocks Save when the range reserve exceeds the cap', () => {
+    const onValidationError = vi.fn();
+    const config: Config = {
+      ...defaultConfig,
+      gas: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
+          range_reserve_fraction: 0.9001,
+        },
+      },
+    };
+    render(
+      <GasSettings
+        config={config}
+        onChange={onChange}
+        changedFields={new Set()}
+        onValidationError={onValidationError}
+        panelIdBase="settings"
+      />
+    );
+    expect(onValidationError).toHaveBeenCalledWith('gas', true);
+  });
+
+  it('the usable-range preview clamps a reserve above the cap down to 0.9', () => {
+    // ⚠ CROSS-LANGUAGE PIN - twin of `test_gas_config_normalize_clamps_dpv_range_reserve_at_the_
+    // cap_boundary` in `src-tauri/src/config/tests.rs`; that test names this one back. Primary and
+    // backup are given EQUAL range (1000 m each) so the "weaker unit" pick can't mask the clamp:
+    // an unclamped 0.95 would preview 1000 * 0.05 = 50 m; the clamped 0.9 previews 100 m.
+    renderPanel({
+      dpv: {
+        primary: { speed_m_per_min: 10, burn_minutes: 100 },
+        backup: { speed_m_per_min: 100, burn_minutes: 10 },
+        range_reserve_fraction: 0.95,
+      },
+    });
+    expect(screen.getByTestId('gas-dpv-usable-range-value').textContent).toBe('100 m');
   });
 });

@@ -64,8 +64,23 @@ export function SegmentsTable() {
 
   const setSpeed = (idx: number, speedMPerMin: number) =>
     setSegments(segments.map((seg, i) => (i === idx ? { ...seg, speed_m_per_min: speedMPerMin } : seg)));
+  // Ticking on_scooter on a span still inheriting the plan speed (`speed_m_per_min: null`) also
+  // fixes that span's speed to the rig's primary. Riding a span at swim pace while the range model
+  // spends the rig's range by METRES (not by time) would understate the real battery drain - the
+  // two only agree once the span's speed actually matches what it's flown at. A row with its own
+  // explicit speed keeps it; unticking changes nothing (the speed the diver set doesn't stop being
+  // true just because the checkbox comes back off).
   const setScooter = (idx: number, onScooter: boolean) =>
-    setSegments(segments.map((seg, i) => (i === idx ? { ...seg, on_scooter: onScooter } : seg)));
+    setSegments(
+      segments.map((seg, i) => {
+        if (i !== idx) return seg;
+        const speed =
+          onScooter && seg.speed_m_per_min == null && gasConfig.dpv
+            ? gasConfig.dpv.primary.speed_m_per_min
+            : seg.speed_m_per_min;
+        return { ...seg, on_scooter: onScooter, speed_m_per_min: speed };
+      })
+    );
 
   return (
     <div className="h-full overflow-auto p-3 text-sm text-text-primary" data-testid="segments-table">

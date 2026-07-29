@@ -22,8 +22,8 @@ import type { Config } from '../../types/config';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
 
 const RIG: DpvRig = {
-  primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
-  backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+  primary: { speed_m_per_min: 24, burn_minutes: 60 },
+  backup: { speed_m_per_min: 18, burn_minutes: 45 },
   range_reserve_fraction: 0.2,
 };
 
@@ -198,17 +198,22 @@ describe('GasPlanPanel scooter (DPV) readout (#317)', () => {
 });
 
 /**
- * #317: a DPV rig has NO in-panel control, so Settings is its only source. The panel's
- * seed-once `hydrated` gate (#244, which exists so a mode-switch remount cannot clobber working
- * inputs or a loaded plan) therefore swallowed it entirely: configure a scooter after opening
- * Plan mode even once and the rig never appeared, with nothing on screen to explain why.
+ * #317: the DPV rig (and, alongside it, the jump RMV multiplier / include-reference-legs
+ * toggle) has NO in-panel control, so Settings is its only source. The panel's seed-once
+ * `hydrated` gate (#244, which exists so a mode-switch remount cannot clobber working inputs or
+ * a loaded plan) therefore swallowed it entirely: configure a scooter after opening Plan mode
+ * even once and the rig never appeared, with nothing on screen to explain why.
  *
- * The fix mirrors a rig EDITED IN SETTINGS during the session into the working config, keyed on
- * the persisted value changing rather than differing - which is what keeps a loaded plan's own
- * rig from being silently overwritten by a personal default it was never planned on.
+ * The fix mirrors a Settings-only field EDITED IN SETTINGS during the session into the working
+ * config via `gasPlanStore.syncSettingsOnlyGasFields`, keyed on the persisted value changing
+ * rather than differing - which is what keeps a loaded plan's own rig from being silently
+ * overwritten by a personal default it was never planned on. That diffing lives in the STORE, not
+ * a component ref, because the panel remounts on every mode switch and a ref would lose its
+ * "already observed this session" memory exactly when the fix needs it most (see the remount
+ * test below - the bug this replaced was that exact ref losing its memory on remount).
  */
 describe('GasPlanPanel DPV rig sync (#317)', () => {
-  it('picks up a rig configured in Settings after the panel has already hydrated', () => {
+  it('picks up a rig configured in Settings while the panel stays mounted', () => {
     // `hydrated: true` from beforeEach is the whole point: this is the state the bug lived in.
     const { rerender } = render(<GasPlanPanel />);
     expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
@@ -219,6 +224,25 @@ describe('GasPlanPanel DPV rig sync (#317)', () => {
     useProjectStore.setState({ config: next });
     rerender(<GasPlanPanel />);
 
+    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(RIG);
+  });
+
+  it('picks up a rig configured in Settings AFTER the panel unmounts and remounts (mode switch)', () => {
+    // THE regression test: a real `unmount()` + fresh `render()`, not `rerender()` of the same
+    // instance. `rerender` cannot reproduce the bug this guards - it never destroys the component,
+    // so a component-local ref would still have its memory intact and the test would pass even
+    // with the broken mechanism reinstated. The realistic flow is "leave Plan mode (unmounts the
+    // panel), configure the scooter in Settings, come back to Plan (a brand-new component
+    // instance)".
+    const { unmount } = render(<GasPlanPanel />);
+    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+    unmount();
+
+    const next = structuredClone(defaultConfig) as Config;
+    next.gas.dpv = RIG;
+    useProjectStore.setState({ config: next });
+
+    render(<GasPlanPanel />);
     expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(RIG);
   });
 
@@ -240,8 +264,8 @@ describe('GasPlanPanel DPV rig sync (#317)', () => {
     // re-rigged just because the diver's personal default disagrees. A naive "if working !==
     // persisted, copy persisted" would fail here, so this is what separates the two designs.
     const planRig: DpvRig = {
-      primary: { speed_m_per_min: 40, burn_minutes: 30, label: 'plan primary' },
-      backup: { speed_m_per_min: 35, burn_minutes: 30, label: 'plan backup' },
+      primary: { speed_m_per_min: 40, burn_minutes: 30 },
+      backup: { speed_m_per_min: 35, burn_minutes: 30 },
       range_reserve_fraction: 0.1,
     };
     const settingsConfig = structuredClone(defaultConfig) as Config;

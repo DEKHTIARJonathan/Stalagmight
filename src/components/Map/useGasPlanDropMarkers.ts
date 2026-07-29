@@ -63,6 +63,13 @@ export function useGasPlanDropMarkers({
     gasDropMarkersRef.current = [];
     gasFinalTurnMarkerRef.current?.remove();
     gasFinalTurnMarkerRef.current = null;
+    // Symmetric with the two teardowns above (and with the returned cleanup below, which already
+    // clears all three): without this, an early return just below - mode switch, project switch,
+    // or a field with no scooter drop - would leave a stale scooter marker's ref uncleared here
+    // while the other two marker kinds are already gone, an asymmetry between what "start a fresh
+    // build" clears for the three marker kinds this effect owns.
+    gasScooterDropMarkerRef.current?.remove();
+    gasScooterDropMarkerRef.current = null;
     if (!map || !mapLoaded || !showGasPlan || !gasReachField) return undefined;
     const mapInst = map;
     const lngLatFor = (ref: { section_id: number; station_index: number }) => {

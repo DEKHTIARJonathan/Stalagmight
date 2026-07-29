@@ -117,8 +117,8 @@ describe('SegmentsTable', () => {
       gasConfig: {
         ...defaultConfig.gas,
         dpv: {
-          primary: { speed_m_per_min: 24, burn_minutes: 60, label: null },
-          backup: { speed_m_per_min: 18, burn_minutes: 45, label: null },
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
           range_reserve_fraction: 0.2,
         },
       },
@@ -131,6 +131,75 @@ describe('SegmentsTable', () => {
 
     await user.click(checkbox);
     expect(useGasPlanStore.getState().segments[0]?.on_scooter).toBe(true);
+  });
+
+  it('sets the row speed to the rig primary when on_scooter is ticked on a span with no speed of its own', async () => {
+    // #317 C3: a scootered span still flown at swim pace would understate the real battery
+    // drain (range is spent by METRES, the rig drains by TIME), so the tick also fixes the
+    // span's speed - the only value that keeps the two consistent for a span with no speed
+    // of its own to begin with.
+    const user = userEvent.setup();
+    useGasPlanStore.setState({
+      gasConfig: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
+          range_reserve_fraction: 0.2,
+        },
+      },
+    });
+    render(<SegmentsTable />);
+
+    await user.click(screen.getByTestId('segment-scooter-0'));
+
+    const segment = useGasPlanStore.getState().segments[0];
+    expect(segment?.on_scooter).toBe(true);
+    expect(segment?.speed_m_per_min).toBe(24);
+  });
+
+  it('leaves an explicit speed alone when on_scooter is ticked on a span that already has one', async () => {
+    const user = userEvent.setup();
+    useGasPlanStore.setState({
+      gasConfig: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
+          range_reserve_fraction: 0.2,
+        },
+      },
+      segments: [{ speed_m_per_min: 12, on_scooter: false }],
+    });
+    render(<SegmentsTable />);
+
+    await user.click(screen.getByTestId('segment-scooter-0'));
+
+    const segment = useGasPlanStore.getState().segments[0];
+    expect(segment?.on_scooter).toBe(true);
+    expect(segment?.speed_m_per_min).toBe(12);
+  });
+
+  it('unticking on_scooter does not change the speed', async () => {
+    const user = userEvent.setup();
+    useGasPlanStore.setState({
+      gasConfig: {
+        ...defaultConfig.gas,
+        dpv: {
+          primary: { speed_m_per_min: 24, burn_minutes: 60 },
+          backup: { speed_m_per_min: 18, burn_minutes: 45 },
+          range_reserve_fraction: 0.2,
+        },
+      },
+      segments: [{ speed_m_per_min: 24, on_scooter: true }],
+    });
+    render(<SegmentsTable />);
+
+    await user.click(screen.getByTestId('segment-scooter-0'));
+
+    const segment = useGasPlanStore.getState().segments[0];
+    expect(segment?.on_scooter).toBe(false);
+    expect(segment?.speed_m_per_min).toBe(24);
   });
 
   it('marks the segment boundary the engine names as the DPV park point, and no other', () => {

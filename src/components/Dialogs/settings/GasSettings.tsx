@@ -12,13 +12,16 @@ import { Toggle } from '../../common/Toggle';
 import { ChevronRightIcon } from '../../common/icons';
 import { formatGasLength } from '../../../utils/formatGas';
 
+/** Mirrors `default_dpv_range_reserve_fraction()` in `src-tauri/src/config/gas.rs` (0.1). */
+const DEFAULT_DPV_RANGE_RESERVE_FRACTION = 0.1;
+
 /**
- * Mirrors `default_dpv_range_reserve_fraction()` in `src-tauri/src/config/gas.rs` (0.1).
- * `GasConfig.dpv` defaults to `None` (`defaultConfig.gas.dpv` is `null`), so there is no live
- * rig to read the fraction off of; the optional-chain keeps this correct if a default rig is
- * ever introduced, and the `?? 0.1` fallback is the only place the constant is duplicated.
+ * Mirrors `MAX_DPV_RANGE_RESERVE_FRACTION` in `src-tauri/src/config/gas.rs` (0.9). Above this,
+ * `GasConfig::normalize` clamps the fraction down to the cap rather than repairing it another
+ * way (the cap would zero the whole usable range, which is useless but not unsafe, so it's
+ * capped rather than reset like a negative fraction is).
  */
-const DEFAULT_DPV_RANGE_RESERVE_FRACTION = defaultConfig.gas.dpv?.range_reserve_fraction ?? 0.1;
+const MAX_DPV_RANGE_RESERVE_FRACTION = 0.9;
 
 /**
  * A sensible starting rig for the "enable" toggle. There is no backend default to seed from
@@ -27,8 +30,8 @@ const DEFAULT_DPV_RANGE_RESERVE_FRACTION = defaultConfig.gas.dpv?.range_reserve_
  */
 function makeDefaultDpvRig(): DpvRig {
   return {
-    primary: { speed_m_per_min: 45, burn_minutes: 60, label: null },
-    backup: { speed_m_per_min: 45, burn_minutes: 45, label: null },
+    primary: { speed_m_per_min: 45, burn_minutes: 60 },
+    backup: { speed_m_per_min: 45, burn_minutes: 45 },
     range_reserve_fraction: DEFAULT_DPV_RANGE_RESERVE_FRACTION,
   };
 }
@@ -49,13 +52,21 @@ function dpvUnitInvalid(unit: DpvUnit): boolean {
  * unit by line covered (not by burn time), not halved (primary flies in, backup flies out).
  * Mirrors `DpvRig::usable_range_m` in `src-tauri/src/config/gas.rs` exactly - read it before
  * changing this.
+ *
+ * The reserve fraction is clamped into the backend's accepted domain ([0, `MAX_DPV_RANGE_
+ * RESERVE_FRACTION`]) before it is used, the same way `GasConfig::normalize` clamps it on save:
+ * this previews the LIVE (not-yet-saved) working config, and Save is blocked outside that domain
+ * (see the validation effect below) - but a value the diver is mid-typing must never preview a
+ * number the backend would not actually honor once saved (a 0.95 entry previewing 5% of range
+ * while the backend would clamp to 0.9 and give 10% is exactly that drift, the #233 gauge class).
  */
 function dpvUsableRangeM(rig: DpvRig): number {
   const weaker = Math.min(
     rig.primary.speed_m_per_min * rig.primary.burn_minutes,
     rig.backup.speed_m_per_min * rig.backup.burn_minutes
   );
-  return Math.max(weaker * (1 - rig.range_reserve_fraction), 0);
+  const reserve = Math.max(0, Math.min(rig.range_reserve_fraction, MAX_DPV_RANGE_RESERVE_FRACTION));
+  return Math.max(weaker * (1 - reserve), 0);
 }
 
 /**
@@ -94,7 +105,8 @@ export function GasSettings({
       (dpvUnitInvalid(rig.primary) ||
         dpvUnitInvalid(rig.backup) ||
         !Number.isFinite(rig.range_reserve_fraction) ||
-        rig.range_reserve_fraction < 0);
+        rig.range_reserve_fraction < 0 ||
+        rig.range_reserve_fraction > MAX_DPV_RANGE_RESERVE_FRACTION);
     const hasError =
       !Number.isFinite(swim) || swim <= 0 || !Number.isFinite(jump) || jump < 1 || rigInvalid;
     if (hasError !== hasErrorRef.current) {
