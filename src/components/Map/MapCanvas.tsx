@@ -2695,14 +2695,37 @@ function MapCanvas() {
       setZoomBox({ start: null, end: null });
     };
 
+    /**
+     * The same correction from the POINTER, which is the half the keyboard cannot
+     * cover: after a Ctrl+drag whose release landed inside the suppression window,
+     * the next thing a user does is usually click a toolbar tool or just move the
+     * mouse - neither of which is a key event, so `ctrlHeld` stayed latched and the
+     * pan grab followed them onto the tool they had just chosen.
+     *
+     * Skipped while a Ctrl+pan is actually running: Ctrl is known to be down for the
+     * duration by construction, so nothing needs deducing, and that is exactly the
+     * window in which the platform's modifier reporting is not to be trusted - the
+     * spurious keyups this whole guard exists for are fired from these very events.
+     *
+     * Re-setting `false` when it is already `false` is free: React bails out of the
+     * render when the state is unchanged, which is the common case on every move.
+     */
+    const clearIfReleased = (e: MouseEvent | PointerEvent) => {
+      if (!e.ctrlKey && !ctrlPanActiveRef.current) setCtrlHeld(false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pointerdown', clearIfReleased);
+    window.addEventListener('mousemove', clearIfReleased);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pointerdown', clearIfReleased);
+      window.removeEventListener('mousemove', clearIfReleased);
     };
   }, []);
 

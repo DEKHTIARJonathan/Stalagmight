@@ -211,6 +211,74 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(replay?.[1]).toMatchObject({ entryPath: 'two/ariane.tml', discardLocal: true });
   });
 
+  it('routes a fresh STALX ambiguity out of adoption instead of looping (#258)', async () => {
+    // If a `.stalx` appears while the adopt confirmation sits open, the answer is to
+    // extract it - and adoption accepts nothing but an Ariane entry. Replaying
+    // adoption there re-raised the identical picker on every confirmation, so the
+    // user could never get out of it.
+    const candidates = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    let adoptCalls = 0;
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_adopt_ariane') {
+        adoptCalls += 1;
+        return Promise.reject({
+          message: 'more than one Stalagmight file',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+          dump_candidate_kind: 'stalx',
+        });
+      }
+      if (cmd === 'speleodb_open_project' && args?.entryPath === 'b.stalx')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().adoptRemote(SUMMARY);
+    expect(outcome).toEqual({ status: 'ambiguous' });
+    // Offered with the OPEN verb, matching what the replay will actually do.
+    expect(useSpeleoStore.getState().dumpPickerKind).toBe('stalx');
+
+    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
+    // The pick opened the project rather than bouncing off adoption again.
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    expect(adoptCalls).toBe(1);
+  });
+
+  it('replays the DISCARDING open for a stalx ambiguity raised by adoption (#258)', async () => {
+    // Same routing, but the user reached adoption through "take the server copy and
+    // discard my local changes". Replaying the plain open would meet the un-pushed
+    // edits guard and refuse a question they had already answered.
+    const candidates = [
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.reject({
+          message: 'more than one Stalagmight file',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+          dump_candidate_kind: 'stalx',
+        });
+      if (cmd === 'speleodb_open_project_discarding_local' && args?.entryPath === 'b.stalx')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY, { discardLocal: true });
+    await useSpeleoStore.getState().resolveDumpPicker('b.stalx');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    const opened = invokeIpcMock.mock.calls.filter(
+      (c) => c[0] === 'speleodb_open_project_discarding_local',
+    );
+    expect(opened.length).toBe(1);
+  });
+
   it('raises the picker from the CONFIRMED-DISCARD open too (#258)', async () => {
     // The only route that reaches an ambiguous dump with un-pushed local edits: the
     // guard runs before the download, so a protected open is refused before anything

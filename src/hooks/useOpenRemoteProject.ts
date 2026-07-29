@@ -698,23 +698,42 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         });
       } catch (e) {
         // [#258] Adoption can raise the ambiguity itself, not just inherit one: the
-        // Ariane tree can change while the confirmation sits open, so the backend
-        // answers with a fresh candidate set. That is a ROUTING signal, and treating
-        // it as a flat error stranded the user - they could not pick from the new
-        // tree without restarting the whole open flow. Replay adoption with the
-        // choice, carrying `discardLocal` so the loss they already confirmed is not
-        // re-asked.
+        // tree can change while the confirmation sits open, so the backend answers
+        // with a fresh candidate set. That is a ROUTING signal, and treating it as a
+        // flat error stranded the user - they could not pick from the new tree
+        // without restarting the whole open flow.
         const candidates = dumpCandidates(e);
         if (candidates) {
-          openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
-            const retried = await adoptRemoteRef.current?.(summary, {
-              ...(opts.discardLocal === true ? { discardLocal: true } : {}),
-              entryPath,
-            });
+          // WHICH verb replays depends on what the new tree turned out to hold, and
+          // it is not always this one. If a `.stalx` has appeared the answer is to
+          // EXTRACT it, and adoption refuses anything but an Ariane entry - so
+          // replaying adoption there re-raised the identical picker on every
+          // confirmation, an unbreakable loop. Route by kind instead, and keep the
+          // discarding variant when the user already confirmed that loss.
+          const kind = dumpCandidateKind(e);
+          const discarding = opts.discardLocal === true;
+          openDumpPicker(candidates, kind, async (entryPath) => {
+            const replay = async () => {
+              if (kind === 'ariane') {
+                return adoptRemoteRef.current?.(summary, {
+                  ...(discarding ? { discardLocal: true } : {}),
+                  entryPath,
+                });
+              }
+              return discarding
+                ? takeRemoteRef.current?.(summary, { entryPath })
+                : openRemoteRef.current?.(summary, { entryPath });
+            };
+            const retried = await replay();
             // A replay that fails for some OTHER reason must not be swallowed by the
             // dialog: rethrow so the picker stays open and the host surfaces it,
             // exactly as the first attempt would have.
             if (retried?.status === 'error') throw new Error(retried.message);
+            // An open replay can land back on adoption (the pick turned out to be a
+            // `.tml`, or the tree moved again). Nobody is awaiting this call, so the
+            // confirmation has to be handed back explicitly, as the other two picker
+            // sites do.
+            if (retried?.status === 'adopt') onAdoptAfterPick?.(summary, discarding);
           });
           return { status: 'ambiguous' };
         }
@@ -770,7 +789,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         },
       });
     },
-    [finishOpen, handBackRefusal, openDumpPicker, t],
+    [finishOpen, handBackRefusal, openDumpPicker, onAdoptAfterPick, t],
   );
 
   useEffect(() => {

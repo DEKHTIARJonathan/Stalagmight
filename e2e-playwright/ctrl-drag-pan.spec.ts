@@ -438,5 +438,38 @@ test.describe('Ctrl+Drag Panning', () => {
       // Map should remain functional after all these switches
       await expect(canvas).toBeVisible();
     });
+
+    test('a Ctrl release the drag guard swallowed is cleared by the next pointer event', async ({ page }) => {
+      // The spurious-keyup guard suppresses any Ctrl keyup landing within 50ms of a
+      // Ctrl+drag mouse event, so a quick genuine release is swallowed and no further
+      // keyup is ever coming. Recovering only from later KEY events left the flag
+      // latched for the commonest next action there is - reaching for the toolbar
+      // with the mouse - which put the pan grab over the tool just chosen.
+      await page.keyboard.press('s');
+      await waitForActiveTool(page, 'select');
+
+      await page.keyboard.down('Control');
+      await page.waitForFunction(() => document.querySelector('canvas')?.style.cursor === 'grab');
+
+      const canvas = page.getByTestId('map-canvas');
+      const box = await canvas.boundingBox();
+      expect(box).not.toBeNull();
+      const cx = box!.x + box!.width / 2;
+      const cy = box!.y + box!.height / 2;
+      await page.mouse.move(cx, cy);
+      await page.mouse.down();
+      await page.mouse.move(cx + 60, cy + 60, { steps: 6 });
+      await page.mouse.up();
+      await page.keyboard.up('Control');
+
+      // Switch tools BY MOUSE, so no key event follows to correct the flag.
+      await page.getByTestId('tool-move_station').click();
+      await waitForActiveTool(page, 'move_station');
+
+      // Move Station's off-feature arrow, not the stale pan grab.
+      await expect
+        .poll(() => page.evaluate(() => document.querySelector('canvas')?.style.cursor || ''))
+        .toBe('default');
+    });
   });
 });
