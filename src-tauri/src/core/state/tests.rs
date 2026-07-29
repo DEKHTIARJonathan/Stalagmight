@@ -1475,12 +1475,12 @@ fn finalize_structural_edit_ignores_pre_existing_critical() {
 
     // pre_had_critical = true: do NOT signal rollback (the corruption pre-existed).
     assert!(
-        !state.finalize_structural_edit(true, true),
+        !state.finalize_structural_edit(true),
         "must not block an otherwise-clean edit on an already-critical project"
     );
     // pre_had_critical = false (clean before): DOES signal rollback (corruption present).
     assert!(
-        state.finalize_structural_edit(false, true),
+        state.finalize_structural_edit(false),
         "must block when this edit introduced the critical violation"
     );
 }

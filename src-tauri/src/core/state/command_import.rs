@@ -1038,7 +1038,7 @@ impl AppState {
         // the spanning-tree merges, never sole bridges), so it can't strand a
         // section behind a closure - skip the O(closures × connectivity)
         // sole-bridge conversion that otherwise dominated a large import.
-        if self.finalize_structural_edit(pre_had_critical, false) {
+        if self.finalize_structural_edit(pre_had_critical) {
             self.rollback_project(&before_snapshot);
             tracing::error!(
                 purpose = "block corruption at the source",
