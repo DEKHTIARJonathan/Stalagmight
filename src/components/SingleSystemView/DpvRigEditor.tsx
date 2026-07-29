@@ -1,40 +1,27 @@
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
-import { useProjectStore } from '../../store/projectStore';
 import { PositiveNumberField } from '../common/PositiveNumberField';
 import { Toggle } from '../common/Toggle';
 import { formatGasLength, speedFromDisplay, speedToDisplay } from '../../utils/formatGas';
 import { MAX_DPV_RANGE_RESERVE_FRACTION, dpvUsableRangeM, makeDefaultDpvRig } from '../../utils/dpv';
+import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import type { DpvRig, DpvUnit } from '../../types/ipc.generated';
-
-// Persist the DPV rig into the saved config - mirrors `writeSwimSpeedToDisk` in GasPlanPanel.tsx
-// (reads the LATEST saved config at call time, so a write always merges against current state
-// rather than a stale snapshot). Rig edits are commit-granularity: `PositiveNumberField` only
-// calls `onCommit` on blur/Enter, not per keystroke, unlike the swim-speed field which fires on
-// every keystroke and needs a trailing debounce to avoid one disk write per keystroke - a rig
-// edit is already at most one write per field commit, so there is nothing to debounce here.
-function writeDpvRigToDisk(rig: DpvRig | null): void {
-  const saved = useProjectStore.getState().config;
-  if (saved) {
-    void useProjectStore.getState().updateConfig({
-      ...saved,
-      gas: { ...saved.gas, dpv: rig },
-    });
-  }
-}
 
 /**
  * The optional DPV (scooter) rig editor (#317) - a block under the cylinder table in the
  * Plan-mode bottom panel's "Equipment" tab. Moved out of Settings so the rig lives alongside
  * the rest of the dive's equipment rather than in a separate dialog. Every commit updates both
  * the working `gasConfig` (via `setDpvRig`, which also resets scootered segments and nulls the
- * cached reach field so the map overlay refetches) and the persisted config on disk, the same
- * two-write shape `GasPlanPanel`'s swim-speed field uses. `PositiveNumberField` blocks a
- * non-positive speed/burn entry at the field itself (it reverts to the last valid value), so an
- * invalid rig cannot be constructed here - Settings used to police this with a Save-blocking
- * validation effect; that effect (and its rig-specific checks) is gone along with the rig UI.
+ * cached reach field so the map overlay refetches) and, through `queueGasConfigWrite`, the
+ * persisted config on disk. The disk half MUST be debounced: `PositiveNumberField` commits on
+ * every valid keystroke, not on blur, so a direct write would fire one `update_config` IPC +
+ * config reload + LSQ-cache drop per digit typed (the same reason the swim-speed field
+ * debounces, #241). `PositiveNumberField` blocks a non-positive speed/burn entry at the field
+ * itself (it reverts to the last valid value), so an invalid rig cannot be constructed here -
+ * Settings used to police this with a Save-blocking validation effect; that effect (and its
+ * rig-specific checks) is gone along with the rig UI.
  */
 export function DpvRigEditor() {
   const { t } = useTranslation();
@@ -47,9 +34,18 @@ export function DpvRigEditor() {
   const units = gasConfig.units;
   const rig = gasConfig.dpv;
 
+  // Flush any still-debounced rig write on unmount, so a value typed right before switching
+  // tabs or modes still reaches disk (same contract as the swim-speed field's flush).
+  useEffect(
+    () => () => {
+      void flushGasConfigWrite();
+    },
+    []
+  );
+
   const applyRig = (next: DpvRig | null) => {
     setDpvRig(next);
-    writeDpvRigToDisk(next);
+    queueGasConfigWrite({ dpv: next });
   };
   const setRig = (patch: Partial<DpvRig>) => {
     if (!rig) return;

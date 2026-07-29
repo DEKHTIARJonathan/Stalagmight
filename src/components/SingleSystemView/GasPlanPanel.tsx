@@ -1,9 +1,10 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
+import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import { formatStationId } from '../../utils/formatters';
 import { formatFixed } from '../../i18n/format';
 import {
@@ -49,24 +50,10 @@ function formatRouteRuntime(min: number): string {
   return `${formatFixed(min, undefined, 1)} min`;
 }
 
-// Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
-// Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
-// write always merges against current state rather than a stale snapshot. Module-scope
-// so the debounced callbacks below stay dependency-free.
-function writeSwimSpeedToDisk(v: number): void {
-  const saved = useProjectStore.getState().config;
-  if (saved) {
-    void useProjectStore.getState().updateConfig({
-      ...saved,
-      gas: { ...saved.gas, swim_speed_m_per_min: v },
-    });
-  }
-}
-
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
  * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
- * rig editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) - this sidebar
+ * rig editor lives in the bottom panel's "Equipment" tab (see PlanTablesPanel) - this sidebar
  * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
  * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
  * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
@@ -164,33 +151,19 @@ export function GasPlanPanel() {
     useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
   }, [persistedGasConfig]);
 
-  // Swim-speed disk-persist debounce (#241): the in-memory working config updates
-  // immediately on every keystroke, but the disk write is trailing-debounced so a fast
-  // typist doesn't fire one config save per keystroke (each save reloads config + drops
-  // the LSQ solve). Cancel any pending write when a newer value arrives, so only the
-  // LATEST value is ever persisted regardless of write-completion order.
-  const swimSpeedPersistRef = useRef<{
-    timer: ReturnType<typeof setTimeout>;
-    value: number;
-  } | null>(null);
-  // Flush any pending write immediately (used on unmount so a value typed within the
-  // debounce window right before leaving Plan mode still reaches disk -- the pre-debounce
-  // code persisted every keystroke, so dropping the last one would be a regression).
-  const flushSwimSpeed = useCallback(() => {
-    const pending = swimSpeedPersistRef.current;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    swimSpeedPersistRef.current = null;
-    writeSwimSpeedToDisk(pending.value);
-  }, []);
-  useEffect(() => flushSwimSpeed, [flushSwimSpeed]);
+  // Swim-speed disk persist (#241, shared queue since the #317 review round): the in-memory
+  // working config updates immediately on every keystroke; the disk write goes through
+  // `queueGasConfigWrite` (trailing-debounced, merged, serialized against the rig editor's
+  // writes - see utils/gasConfigDisk.ts). Flush on unmount so a value typed within the
+  // debounce window right before leaving Plan mode still reaches disk.
+  useEffect(
+    () => () => {
+      void flushGasConfigWrite();
+    },
+    []
+  );
   const persistSwimSpeed = useCallback((v: number) => {
-    if (swimSpeedPersistRef.current) clearTimeout(swimSpeedPersistRef.current.timer);
-    const timer = setTimeout(() => {
-      swimSpeedPersistRef.current = null;
-      writeSwimSpeedToDisk(v);
-    }, 450);
-    swimSpeedPersistRef.current = { timer, value: v };
+    queueGasConfigWrite({ swim_speed_m_per_min: v });
   }, []);
 
   const units = gasConfig.units;
@@ -329,7 +302,7 @@ export function GasPlanPanel() {
   };
   const confirmPushy = () => {
     if (!pendingPushy) return;
-    // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
+    // Re-check: the rig may have lost stages while the ack panel was open (the Equipment tab is
     // visible alongside it). Only apply if the rig still satisfies the strategy - otherwise we'd
     // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.

@@ -1,0 +1,58 @@
+import { useProjectStore } from '../store/projectStore';
+import type { GasConfig } from '../types/ipc.generated';
+
+/**
+ * The one path Plan-mode controls persist gas fields through (#317 review round).
+ *
+ * Two things went wrong with per-caller writers, and this module exists to make both
+ * structurally impossible:
+ *
+ * - `PositiveNumberField` commits on every valid CHANGE, not on blur - so an un-debounced
+ *   writer turns "type 100" into three `update_config` IPCs, three config reloads, and three
+ *   LSQ-solve cache drops. Every queued write here is trailing-debounced.
+ * - Two independent writers clobber each other across the async round trip: `updateConfig`
+ *   only refreshes `config` after its IPC + reload complete, so a second writer that reads
+ *   `getState().config` inside that window merges against the pre-write snapshot and silently
+ *   reverts the first writer's field. Here every write joins one promise chain and reads the
+ *   saved config at EXECUTION time, after the previous write has fully landed, and patches
+ *   queued while a write is pending are merged into a single later write.
+ *
+ * Fire-and-forget by design (a failed write logs inside `updateConfig` and keeps the working
+ * copy authoritative for the session) - same contract the swim-speed writer always had.
+ */
+const WRITE_DEBOUNCE_MS = 450;
+
+let pending: Partial<GasConfig> | null = null;
+let timer: ReturnType<typeof setTimeout> | null = null;
+let chain: Promise<void> = Promise.resolve();
+
+function fire(): void {
+  const patch = pending;
+  pending = null;
+  timer = null;
+  if (!patch) return;
+  chain = chain.then(async () => {
+    const store = useProjectStore.getState();
+    const saved = store.config;
+    if (!saved) return;
+    await store.updateConfig({ ...saved, gas: { ...saved.gas, ...patch } });
+  });
+}
+
+/** Queue a gas-field patch for the saved config; newer patches to the same field win. */
+export function queueGasConfigWrite(patch: Partial<GasConfig>): void {
+  pending = { ...pending, ...patch };
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(fire, WRITE_DEBOUNCE_MS);
+}
+
+/**
+ * Write anything still queued immediately (component unmount - a value committed within the
+ * debounce window right before leaving Plan mode must still reach disk). Returns a promise
+ * that resolves once every write issued so far has fully landed, so tests can await it.
+ */
+export function flushGasConfigWrite(): Promise<void> {
+  if (timer) clearTimeout(timer);
+  fire();
+  return chain;
+}

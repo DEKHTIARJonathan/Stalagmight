@@ -17,6 +17,7 @@ vi.mock('./DivePlanBar', () => ({ DivePlanBar: () => null }));
 import { GasPlanPanel } from './GasPlanPanel';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
+import { flushGasConfigWrite } from '../../utils/gasConfigDisk';
 import { defaultConfig } from '../../types/config';
 import type { Config } from '../../types/config';
 import type { DpvRig, GasReachField } from '../../types/ipc.generated';
@@ -63,7 +64,10 @@ function makeReachField(overrides: Partial<GasReachField> = {}): GasReachField {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  // Drain anything a previous test left in the shared gas-config write queue into the OLD
+  // mocks, so it cannot pollute this test's call counts.
+  await flushGasConfigWrite();
   vi.useFakeTimers();
   useGasPlanStore.setState({
     origin: null,
@@ -89,7 +93,7 @@ afterEach(() => {
 });
 
 describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
-  it('coalesces rapid keystrokes into a single debounced updateConfig call', () => {
+  it('coalesces rapid keystrokes into a single debounced updateConfig call', async () => {
     render(<GasPlanPanel />);
     const input = screen.getByTestId('gas-swim-speed-input');
 
@@ -101,6 +105,8 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
 
     vi.runAllTimers();
+    // The debounce timer only QUEUES the write onto the serialized chain - await it landing.
+    await flushGasConfigWrite();
 
     const updateConfig = useProjectStore.getState().updateConfig;
     expect(updateConfig).toHaveBeenCalledTimes(1);
@@ -120,7 +126,7 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
   });
 
-  it('flushes a pending write on unmount so a value typed right before leaving is not lost', () => {
+  it('flushes a pending write on unmount so a value typed right before leaving is not lost', async () => {
     const { unmount } = render(<GasPlanPanel />);
     const input = screen.getByTestId('gas-swim-speed-input');
 
@@ -131,6 +137,8 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     // pending value must still be persisted (parity with the pre-debounce behavior
     // that wrote every keystroke), not dropped.
     unmount();
+    // Unmount flushes fire-and-forget; await the chain so the assertion sees the landed write.
+    await flushGasConfigWrite();
 
     const updateConfig = useProjectStore.getState().updateConfig;
     expect(updateConfig).toHaveBeenCalledTimes(1);
