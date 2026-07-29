@@ -11,6 +11,54 @@ Releases are created through Claude Code. The process:
 5. Claude pushes the commit and tag
 6. GitHub Actions builds the app and creates a release with artifacts
 
+## Release notes
+
+**`CHANGELOG.md` is the release notes.** There is no second place to write them:
+the workflow builds the published body from the changelog via
+`scripts/release-notes.sh`, so whatever is in `## [Unreleased]` when you tag is
+what recipients read. Write it for someone using the app, not for someone
+reading the diff.
+
+Preview the exact body before tagging - it is the same script CI runs:
+
+```bash
+./scripts/release-notes.sh v0.5.0
+./scripts/release-notes.sh v0.5.0-rc1
+```
+
+The script picks the section, then appends the install instructions and the
+checksum note that every release carries:
+
+| Tag | Notes come from |
+|-----|-----------------|
+| `v0.5.0`, after `release.sh` moved the section | `## [0.5.0]` |
+| `v0.5.0`, before that | `## [Unreleased]` (fallback) |
+| `v0.5.0-rc1` | `## [0.5.0]`, or `## [Unreleased]`, plus a candidate banner |
+| anything with no matching section | `Release <tag>` (last resort) |
+
+A candidate deliberately reuses the notes of the version it is a candidate for -
+an RC *is* that release, built early - so the notes are written once.
+
+## Release candidates
+
+Cut as many as you like before the real thing:
+
+```bash
+git tag v0.5.0-rc1 && git push origin v0.5.0-rc1   # then rc2, rc3, ...
+git tag v0.5.0     && git push origin v0.5.0       # the real one
+```
+
+- **The version files stay at the plain `0.5.0`.** The candidate lives only in
+  the tag. This is not a style choice: the Windows MSI bundler rejects a
+  non-numeric pre-release identifier, so `0.5.0-rc1` in `tauri.conf.json` fails
+  the Windows build outright. Artifacts are therefore named
+  `Stalagmight_0.5.0_*` for every candidate.
+- **A tag with a suffix is published as a GitHub pre-release**, so it never
+  becomes "Latest" and is not handed to people expecting the final build.
+- **About shows the tag**, so a candidate reads `0.5.0-rc1` and cannot be
+  mistaken for the final release. Keep candidates rather than deleting them -
+  a tester's bug report names one.
+
 ## Step-by-step (what Claude does)
 
 ```bash
@@ -132,17 +180,21 @@ Do this before the first tag after any change to the build matrix. The
 platform-specific `bundle_dir` values and artifact globs are only really
 confirmed by a run that produces the files.
 
-## Testing `scripts/release.sh`
+## Testing the release tooling
 
 ```bash
 ./scripts/test-release.sh
 ```
 
-Clones the repo to a temp directory and drives the real script through a normal
-bump plus four refusal cases (re-releasing the current version, an existing tag,
-a drifted version-string format, an empty `[Unreleased]`), asserting each time
-that the tree is left clean and nothing was tagged. Run it after touching
-`release.sh`; it takes a few seconds and needs no network.
+Covers both scripts. For `release.sh` it clones the repo to a temp directory and
+drives the real script through a normal bump plus four refusal cases
+(re-releasing the current version, an existing tag, a drifted version-string
+format, an empty `[Unreleased]`), asserting each time that the tree is left clean
+and nothing was tagged. For `release-notes.sh` it runs the real script against a
+fixture changelog and checks the section each tag shape resolves to, the
+candidate banner, and that an empty changelog still yields a usable body.
+
+Run it after touching either script; it takes a few seconds and needs no network.
 
 ## Version locations
 

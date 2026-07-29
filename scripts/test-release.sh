@@ -137,6 +137,44 @@ else
   refute "no tag created" has_tag "$D" v6.6.6
 fi
 
+echo "== release-notes.sh =="
+NOTES="$PROJECT_ROOT/scripts/release-notes.sh"
+FIXTURE="$WORK/CHANGELOG.md"
+printf '%s\n' \
+  '# Changelog' '' \
+  '## [Unreleased]' '' '- unreleased thing' '' \
+  '## [0.4.0] - 2026-01-01' '' '- the 0.4.0 thing' '' \
+  > "$FIXTURE"
+
+# A final tag takes its own section.
+assert "final tag uses its version's section" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "the 0.4.0 thing"'
+refute "final tag has no candidate banner" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "Release candidate"'
+
+# A candidate takes the notes of the version it is a candidate for, not its own
+# (nonexistent) section, and says clearly that it is a candidate.
+assert "candidate uses the base version's section" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0-rc1 | grep -q "the 0.4.0 thing"'
+assert "candidate is labelled as one" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0-rc1 | grep -q "Release candidate for 0.4.0"'
+
+# Before release.sh moves it, a version has no section yet - fall back to
+# [Unreleased] rather than publishing an empty body.
+assert "unmoved version falls back to Unreleased" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v9.9.9 | grep -q "unreleased thing"'
+
+# Every release explains how to install an unsigned build and how to check it.
+assert "installing footer present" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "SHA256SUMS"'
+assert "apple silicon caveat present" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "Apple Silicon only"'
+
+# An empty changelog must still yield a usable body, never nothing.
+printf '%s\n' '# Changelog' '' '## [Unreleased]' '' > "$WORK/empty.md"
+assert "empty changelog still produces a body" \
+  bash -c 'CHANGELOG='"$WORK"'/empty.md bash '"$NOTES"' v1.2.3 | grep -q "Release v1.2.3"'
+
 echo
-echo "release.sh: $PASS passed, $FAIL failed"
+echo "release tooling: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

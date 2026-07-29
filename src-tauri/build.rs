@@ -4,18 +4,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Re-run build script when these env vars change.
     println!("cargo::rerun-if-env-changed=CI");
     println!("cargo::rerun-if-env-changed=GITHUB_REF_TYPE");
+    // Both halves matter: the version comes from the tag NAME, so a build that
+    // saw a different tag must not serve a cached APP_VERSION.
+    println!("cargo::rerun-if-env-changed=GITHUB_REF_NAME");
     println!("cargo::rerun-if-env-changed=TELEMETRY_ENDPOINT");
 
-    // A released build reports the bare version: the tag already pins the
-    // commit. Every other build keeps the hash, because that is its only
-    // identity - `x.y.z-<shorthash>` for CI builds and `x.y.z-dev-<shorthash>`
-    // locally. Mirrors vite.config.ts so the UI's About version and telemetry's
+    // A released build reports its tag: the tag already pins the commit, and a
+    // candidate says so (0.5.0-rc1) rather than passing for the final release.
+    // Every other build keeps the hash, because that is its only identity -
+    // `x.y.z-<shorthash>` for CI builds and `x.y.z-dev-<shorthash>` locally.
+    // Mirrors vite.config.ts so the UI's About version and telemetry's
     // app_version agree. Falls back to `unknown` when git is unavailable (e.g. a
     // source tarball).
     let pkg_version = std::env::var("CARGO_PKG_VERSION")?;
     let short_hash = git_short_hash();
-    let app_version = if is_tagged_release(&pkg_version) {
-        pkg_version.clone()
+    let app_version = if let Some(tag) = release_tag(&pkg_version) {
+        tag.trim_start_matches('v').to_string()
     } else if std::env::var("CI").is_ok() {
         format!("{pkg_version}-{short_hash}")
     } else {
@@ -64,24 +68,35 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Whether this build is of a commit tagged `v<pkg_version>`.
+/// The release tag on the checked-out commit, or `None`.
 ///
-/// In Actions on a tag push `GITHUB_REF_TYPE` is authoritative and needs no git
+/// Must match `pkg_version` - `v0.5.0` or a candidate for it like `v0.5.0-rc1` -
+/// so an unrelated tag sitting on the same commit cannot rename the build. In
+/// Actions on a tag push `GITHUB_REF_TYPE` is authoritative and needs no git
 /// state; otherwise ask git, so a release built by hand identifies itself the
-/// same way. Anything unreadable falls through to false, which only means the
-/// build keeps its commit hash - the safe direction.
-fn is_tagged_release(pkg_version: &str) -> bool {
+/// same way. Anything unreadable yields `None`, which only means the build keeps
+/// its commit hash - the safe direction.
+fn release_tag(pkg_version: &str) -> Option<String> {
+    let exact = format!("v{pkg_version}");
+    let candidate_prefix = format!("v{pkg_version}-");
+    let matches = |t: &str| t == exact || t.starts_with(&candidate_prefix);
+
     if std::env::var("GITHUB_REF_TYPE").as_deref() == Ok("tag") {
-        return true;
+        let name = std::env::var("GITHUB_REF_NAME").unwrap_or_default();
+        return matches(&name).then_some(name);
     }
-    let want = format!("v{pkg_version}");
     std::process::Command::new("git")
         .args(["tag", "--points-at", "HEAD"])
         .output()
         .ok()
         .filter(|out| out.status.success())
         .and_then(|out| String::from_utf8(out.stdout).ok())
-        .is_some_and(|tags| tags.lines().any(|t| t.trim() == want))
+        .and_then(|tags| {
+            tags.lines()
+                .map(str::trim)
+                .find(|t| matches(t))
+                .map(str::to_string)
+        })
 }
 
 /// Short hash of the checked-out commit, or `unknown` when git is unavailable
