@@ -1417,6 +1417,32 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(s.dumpPickerError).toBeNull();
     });
 
+    it('does not raise a picker for a session that ended while the request was out', async () => {
+      // Ambiguity is a routing signal, so the catch that receives it opens a dialog
+      // rather than reporting anything - and these verbs make a call of unbounded
+      // length, so a 401 auto-drop on any concurrent call can end the session
+      // underneath them. Routing anyway put a picker on screen for an account nobody
+      // was signed in to, where every button fails.
+      useSpeleoStore.setState({ session: session() });
+      invokeIpcMock.mockImplementation((c: string) => {
+        if (c !== 'speleodb_open_project') return Promise.resolve(null);
+        // Something else drops the session while this request is in flight.
+        useSpeleoStore.getState().clearSession();
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: CANDIDATES,
+          dump_candidate_kind: 'stalx',
+        });
+      });
+
+      const outcome = await hook().openRemote(SUMMARY);
+
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+      expect(outcome).toMatchObject({ status: 'error' });
+    });
+
     it('still reports an ordinary replay failure without dropping the session', async () => {
       // The other half of the same branch: only `reLogin` ends the session. A replay
       // that fails for any other reason has to leave the picker up, with its reason

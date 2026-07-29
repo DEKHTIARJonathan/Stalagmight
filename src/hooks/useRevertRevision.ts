@@ -174,6 +174,19 @@ export function useRevertRevision() {
       // tests, so running it here would refuse the retry over the revert's own tree.
       if (resumeAtPush) return publish({ message, shortSha, onStep });
 
+      // Which project this composite is FOR, against what is open right now. The
+      // dialog captured `projectId` from its open data, so it is a snapshot; nothing
+      // downstream re-checks it, and the two steps that would act on a mismatch act on
+      // different projects - `startEditing()` takes no argument and locks whatever is
+      // open, while the restore targets the captured id.
+      //
+      // Checked at ENTRY as well as before the acquire below, because this callback is
+      // re-entered from the picker with `entryPath` set, which skips the probe branch
+      // and every check inside it. The picker is the longest wait in the whole flow.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        return { kind: 'project_changed' };
+      }
+
       // Un-SAVED is a different loss from un-PUSHED, and this flow resolves neither:
       // the restore closes and reopens the project at the checked-out tree, so an edit
       // that exists only in memory is gone, and `useRestoreRevision` then force-clears
@@ -214,26 +227,35 @@ export function useRevertRevision() {
       // download when this session already settled the question - which it usually
       // has, since opening the project settles it and opening takes no lock.
       if (!entryPath) {
-        // Which project this composite is about, captured ACROSS the probe. The probe
-        // is the only step here that can involve a dump download, so it is also the
-        // longest, and nothing downstream of it names the project the way this call
-        // does: `startEditing()` takes no argument and locks whatever is open now,
-        // while `restoreRevision` targets the captured `projectId`. A swap in between
-        // therefore takes a write lock on one project and checks a revision out of
-        // another - and the candidates would open a picker describing a server tree
-        // nobody is looking at any more.
-        const askedFor = useSpeleoStore.getState().remoteProjectId;
         const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
           'speleodb_dump_candidates',
           { projectId, hexsha },
         ).catch(() => null);
-        if (useSpeleoStore.getState().remoteProjectId !== askedFor) {
+        // The probe can involve a dump download, so it is the longest step before the
+        // acquire. Candidates painted after a swap would describe a server tree nobody
+        // is looking at any more.
+        if (useSpeleoStore.getState().remoteProjectId !== projectId) {
           return { kind: 'project_changed' };
         }
         if (candidates && candidates.length > 0) {
           return { kind: 'awaiting_dump_choice', candidates };
         }
       }
+
+      // Last call before anything becomes irreversible: the acquire below takes a
+      // server mutex and the restore after it replaces the whole working tree. Both
+      // pre-flights are re-run here rather than trusted from the top, because every
+      // route into this point has a wait behind it - the probe's download, or the
+      // picker, whose answer re-enters this callback from the very beginning with
+      // `entryPath` set. The identity check answers "still the same project?"; the
+      // dirty check answers "did they edit while we waited?", which the entry check
+      // cannot, since it ran before the wait. Skipping the second let a restore
+      // destroy in-memory work that arrived during the probe, under a confirmation
+      // whose copy only ever mentions SpeleoDB.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        return { kind: 'project_changed' };
+      }
+      if (useProjectStore.getState().isDirty) return { kind: 'unsaved_local' };
 
       onStep?.('locking');
       if (!(await startEditing())) {

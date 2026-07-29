@@ -501,6 +501,47 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(issued()).toEqual(['speleodb_dump_candidates']);
   });
 
+  it('abandons a picker retry whose project changed while the dialog was open', async () => {
+    // The retry re-enters the composite from the top with `entryPath` set, which
+    // SKIPS the probe branch and every check inside it - so the guard that only lived
+    // there covered the shorter wait and missed the longer one. The picker is an
+    // interaction of unbounded length; the probe is a download.
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('refuses to restore over edits that arrived while the probe was out', async () => {
+    // The unsaved-work guard runs at entry, before a download that can take as long as
+    // it likes. An edit landing during it was still in memory when the restore closed
+    // and reopened the project at the checked-out tree - and `useRestoreRevision`
+    // force-clears `isDirty` behind it, so nothing would have said it ever existed.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') {
+        useProjectStore.setState({ isDirty: true });
+        return null;
+      }
+      if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'unsaved_local' });
+    // Nothing acquired: the re-check sits in front of the lock, not behind it.
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
   it('does not probe on the retry - the answer is already in hand', async () => {
     ipc({
       speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
