@@ -33,8 +33,6 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
     comment on.
   - `validation` - per-project thresholds, stored in the `.stalx` so they travel with the
     file between collaborators instead of following whoever opens it.
-  - `collab` - Ariane collaboration state (sibling `.tml` path, the hash of what we last
-    wrote, the per-shot baseline). `None` when collaboration is off.
   - `imported_file_hashes` / `imported_section_hashes` - re-import de-duplication.
 - **Section**: Group of shots with metadata (name, surveyor, date, color)
 - **Shot**: Single measurement (azimuth pair, length, depth in/out, pitch, LRUD) plus its
@@ -93,15 +91,6 @@ unlike the mode-driven read-only above, that one has a real backend backstop -
 `AppState::guard_mutation` refuses every gated mutation while the lock is missing.
 No subsystem page yet; the closest thing is the test-setup + verified-API-contract
 guide -> [speleodb-dev-testing.md](speleodb-dev-testing.md)
-
-**Ariane collaboration.** With `Project.collab` enabled, every save also writes the sibling
-`.tml` (`core/state/project_io.rs::write_collab_sibling`) and refreshes the stored hash and
-per-shot baseline. Opening a project whose sibling changed underneath diffs the returned
-file against that baseline to classify added / edited / removed shots
-(`core/reconcile.rs`) and applies the result (`core/state/collab.rs`). Matching a returned
-shot back is tiered - UUID, then the Ariane integer ID, then a quantized geometry
-fingerprint - because `Shot::id` is regenerated from sequence order on every load and so
-cannot carry identity across the trip. -> [collaboration.md](collaboration.md)
 
 **Telemetry.** `src-tauri/src/telemetry/` is always compiled but real only behind the
 `telemetry` Cargo feature; with it off every method is an empty no-op. Anonymous

@@ -333,8 +333,8 @@ read; never an ongoing reconcile). `speleodb_open_project` surfaces the typed
 `SpeleoDbAction::Adopt` (not a hard error); the browser then offers a confirm
 dialog, and on confirm `speleodb_adopt_ariane` downloads the dump, imports the
 `ariane.tml` through the normal TML importer (`include_excluded=false`,
-`comments_on_stations=true` - the same settings the collab `.tml` round-trip
-uses), saves a new `.stalx` at the pull cache path, stamps the `speleo_link`
+`comments_on_stations=true` - the same settings a plain `.tml` import/export
+round-trip uses), saves a new `.stalx` at the pull cache path, stamps the `speleo_link`
 (`base = server tip`, `has_unpushed_edits = true`), and best-effort PATCHes the
 server project `type` ariane→other.
 

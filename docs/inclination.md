@@ -97,10 +97,10 @@ stamp means they are never re-examined.
 
 ### What else the migration has to discard
 
-The migration rewrites the `shots` table. Three other stores keep pitch, or a
-verdict derived from it, and none of them is versioned, so a stale copy would
+The migration rewrites the `shots` table. Two other stores keep pitch, or a
+verdict derived from it, and neither is versioned, so a stale copy would
 outlive the migration with no second pass to catch it. When at least one section
-is flipped, `invalidate_pre_pitch_flip_state` drops all three:
+is flipped, `invalidate_pre_pitch_flip_state` drops both:
 
 - **Persisted undo/redo.** Payloads carry absolute pitch and whole-project
   snapshots, so one undo of a pre-upgrade edit would write the +up value back
@@ -109,24 +109,8 @@ is flipped, `invalidate_pre_pitch_flip_state` drops all three:
 - **Dismissed inclination warnings.** `resolved_warnings` is keyed by
   `(section_id, shot_id, warning_code)` with no value component, so a mismatch
   dismissed under the old convention would keep suppressing the check.
-- **The collab sidecar baseline.** The sibling `.tml` on disk was written by a
-  pre-#296 build in the unflipped convention, so diffing against it reports a
-  phantom inclination edit of twice the pitch on every shot in a section the
-  migration correctly left alone. Clearing the hash and the per-shot baseline
-  forces a fresh export before the next reconcile.
 
-A project where nothing was flipped keeps its undo history. The collab baseline
-is the exception: it is cleared for **every** pre-v12 project, flipped or not,
-because the TML convention changed on both sides of the boundary at once. A
-project whose sections were all already +down still has a sidecar written by an
-older build in the old frame.
-
-Known consequence, accepted: if Ariane edited the sidecar while Stalagmight was
-closed, clearing the baseline makes those edits undiscoverable and the next save
-overwrites them. An old-frame `.tml` cannot be diffed against a new-frame
-project, so there is no correct merge to perform; the alternative is a phantom
-inclination edit on every shot. Users mid-collaboration should reconcile before
-upgrading.
+A project where nothing was flipped keeps its undo history.
 
 ## TML is always read and written as Ariane
 
@@ -138,8 +122,7 @@ re-imports correctly as though Ariane had written it
 The cost is that a standalone `.tml` exported by a **pre-#296** build carries
 raw +down pitch in a field now read as +up, so its non-zero inclinations import
 inverted, and unlike a `.stalx` there is no migration to repair it. Real
-Ariane-authored files are unaffected: they carry `Inclination` 0. The collab
-sidecar case is handled by forcing a re-export, above.
+Ariane-authored files are unaffected: they carry `Inclination` 0.
 
 ## Adding a new importer
 
