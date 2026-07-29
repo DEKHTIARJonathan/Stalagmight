@@ -1836,7 +1836,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // stand-in over the linear e2e seed, not the engine's tie-aware, asymmetrically-priced
             // walk. It does honour the one property the UI is asserted on - the exit leg is swum at
             // `swim_speed_m_per_min` while the way in uses the survey speed when one is set - so a
-            // spec can tell the two axes apart. The exact math is pinned by the Rust tests.
+            // spec can tell the two axes apart. The real engine additionally rides a SCOOTERED span
+            // out at the span's own pace (#317); no spec asserts the exit half's numbers, so this
+            // stand-in does not model that. The exact math is pinned by the Rust tests.
             const inSpeed = gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min ?? 10;
             const outSpeed = gasConfig.swim_speed_m_per_min ?? 10;
             const routeGasAt = (r: { section_id: number; station_index: number }) => {

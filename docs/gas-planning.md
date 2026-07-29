@@ -382,11 +382,13 @@ each pins a rule that reads like an implementation detail and is not.
   first match, so on a way-point route that doubles back they act on the wrong
   pass.
 - The exit leg is never costed into the budget - the strategy's reserve pays for
-  the way home, and the #299 profile draws the return at `swim_speed_m_per_min`
-  (over-stating a scootered span's exit, the safe direction). A scootered exit
-  mirrors the entry span for span, so `gas_out == gas_in` and the reserves stay
-  correct; the flip side is that a plan whose out-speed genuinely differs from
-  its in-speed on a span has no way to say so (noted on `DpvRig`).
+  the way home. The #299 profile draws the return at `swim_speed_m_per_min` for
+  swum spans and at the span's own pace for scootered ones (the mandatory backup
+  rides the same line home - the same assumption the one-way range cap already
+  makes). A scootered exit mirrors the entry span for span, so `gas_out ==
+  gas_in` and the reserves stay correct; the flip side is that a plan whose
+  out-speed genuinely differs from its in-speed on a span has no way to say so
+  (noted on `DpvRig`).
   `stressed_rmv_multiplier` and the two `reserve_profile.recalc_hold_*` pressures
   are still carried in the config for later phases; nothing computes with them.
 - `Team` and `PlanMode` (open-circuit vs CCR bailout) exist in `gas/model.rs` so

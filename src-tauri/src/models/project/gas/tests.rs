@@ -4595,11 +4595,87 @@ fn route_profile_runtime_follows_the_per_segment_speeds() {
         "the whole route was priced at the slow span's speed"
     );
 
-    // The return half still leaves from the corrected total, at the one exit speed (20 m/min over
-    // 300 m = 15 min). Unchanged by #317 on purpose: a span the diver scootered in is charged the
-    // swim pace going out, which over-states the exit rather than under-stating it.
+    // The return half still leaves from the corrected total, at the one swum exit speed (20 m/min
+    // over 300 m = 15 min): neither span is scootered, and a custom pace is an ENTRY property -
+    // the way home is a plain swim. A RIDDEN span is the exception; see
+    // `route_profile_scootered_span_rides_out_at_scooter_pace`.
     let home = inbound(&field).last().copied().unwrap();
     assert!((home.elapsed_min - (turn_min + 15.0)).abs() < 1e-9);
+}
+
+#[test]
+fn route_profile_scootered_span_rides_out_at_scooter_pace() {
+    // ⚠ THE EXIT WAS SWUM. The return half priced every leg at `swim_speed_m_per_min`, scootered
+    // spans included - but there is no dead-scooter swim-out in this model: the mandatory backup
+    // rides the diver home over the same line (`DpvRig`), and the range cap charges its allowance
+    // one way for exactly that reason. Billing a 55 m/min span at the 20 m/min swim pace wrote
+    // runtime and exit gas the plan does not spend into the export the diver carries.
+    //
+    // Trunk stations at 0 / 100 / 200 / 300 m of line, way point at 100 m:
+    //   span 0 (entrance -> WP 1): scootered at 55
+    //   span 1 (WP 1 -> endpoint): inherited survey pace, 10
+    // Way out: 200 m swum home at 20, then the ridden 100 m at 55.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(10.0),
+        dpv: Some(rig_covering(1000.0)),
+        ..GasConfig::default()
+    };
+    let plan = |ridden: bool| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            None,
+            &[mid],
+            &[seg(55.0, ridden), inherit_seg(false)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+    let field = plan(true);
+
+    let out_ridden = outbound(&field);
+    let turn = out_ridden.last().unwrap();
+    assert!(
+        (turn.distance_m - 300.0).abs() < 1e-9,
+        "route was not the trunk: {out_ridden:?}"
+    );
+    let turn_min = turn.elapsed_min;
+    let home = inbound(&field).last().copied().unwrap();
+    let ridden_home = 200.0 / 20.0 + 100.0 / 55.0;
+    assert!(
+        (home.elapsed_min - (turn_min + ridden_home)).abs() < 1e-9,
+        "the scootered span must ride home at 55: {} vs {}",
+        home.elapsed_min,
+        turn_min + ridden_home
+    );
+    // NON-VACUOUS: the all-swum exit is 300 / 20 = 15 min home, more than 3 minutes slower - far
+    // outside the tolerance above.
+    assert!((home.elapsed_min - (turn_min + 15.0)).abs() > 1.0);
+
+    // The gas follows the clock. Same speeds ridden or swum, so the way IN is identical either
+    // way - any round-trip difference is the exit pricing alone - and riding the span home means
+    // less time at depth, hence less exit gas, than swimming the same line out.
+    let swum = plan(false);
+    let out_swum = outbound(&swum);
+    assert_eq!(out_ridden.len(), out_swum.len());
+    for (r, s) in out_ridden.iter().zip(&out_swum) {
+        assert!(
+            (r.gas_l - s.gas_l).abs() < 1e-9 && (r.elapsed_min - s.elapsed_min).abs() < 1e-9,
+            "the way in must not depend on the propulsion flag: {r:?} vs {s:?}"
+        );
+    }
+    let home_swum = inbound(&swum).last().copied().unwrap();
+    assert!(
+        home.gas_l < home_swum.gas_l - 1e-9,
+        "riding out must cost less gas than swimming out: {} vs {}",
+        home.gas_l,
+        home_swum.gas_l
+    );
 }
 
 #[test]

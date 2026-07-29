@@ -527,6 +527,27 @@ impl Project {
         // syntactically valid Subsurface file describing a dive that never happened.
         let swum_route_m = cum_route_distance.last().copied().unwrap_or(0.0);
         let route_profile = if route_target.is_some() && swum_route_m > 0.0 {
+            // A scootered span rides OUT at its own pace too: the mandatory backup makes the
+            // ride home a modelled certainty (`DpvRig`), and the one-way range cap already
+            // assumes the backup covers the same line back. Leg `i` joins route nodes `i` and
+            // `i + 1` and belongs to the segment counted by the way points placed at or before
+            // node `i` - the chain indices double as route indices, so this is the same
+            // leg->segment mapping the walk priced the way in with. Swum spans keep the flat
+            // swum exit.
+            let placed: Vec<usize> = walk
+                .waypoint_chain_idx
+                .iter()
+                .map_while(|idx| *idx)
+                .collect();
+            let scooter_speed_by_leg = (0..route_refs.len().saturating_sub(1))
+                .map(|i| {
+                    let seg_idx = placed.iter().filter(|&&p| p <= i).count();
+                    plan_segments
+                        .get(seg_idx)
+                        .filter(|s| s.on_scooter)
+                        .map(|s| s.speed_m_per_min)
+                })
+                .collect();
             build_route_profile(
                 &route_refs,
                 &route_pts,
@@ -538,6 +559,7 @@ impl Project {
                     speed_m_per_min: gas_config.swim_speed_m_per_min,
                     rmv_l_per_min: diver.rmv_l_per_min,
                     jump_multiplier: gas_config.jump_rmv_multiplier,
+                    scooter_speed_by_leg,
                 },
             )
         } else {
@@ -1464,9 +1486,15 @@ fn route_metrics(pts: &[Coordinates], swim: &[bool]) -> (f64, Option<f64>, Optio
 /// never prices. `GasConfig::normalize` guarantees `speed_m_per_min` is finite, positive and no
 /// slower than the survey speed, and `jump_multiplier` is >= 1.0.
 struct ExitLegRates {
+    /// The swum exit pace - every leg the diver was not riding comes home at this.
     speed_m_per_min: f64,
     rmv_l_per_min: f64,
     jump_multiplier: f64,
+    /// Per route leg, aligned with `leg_kinds`: `Some(pace)` where the span was scootered - the
+    /// backup rides the same line home, so that leg exits at the span's own pace
+    /// (`resolve_segments`-guaranteed finite and positive) - else `None` for the swum exit. A
+    /// missing entry falls back to the swum exit, the over-stating (conservative) direction.
+    scooter_speed_by_leg: Vec<Option<f64>>,
 }
 
 /// Build the round-trip dive profile (#299): depth, swum distance, runtime and cumulative gas at
@@ -1485,10 +1513,12 @@ struct ExitLegRates {
 /// The RETURN leg is derived here and nowhere else. The reach field only ever prices the way IN
 /// (`in_rmv` / the per-segment speeds in the caller), because the reserve fraction is what pays for
 /// the exit - so this is the single place that knows the exit-leg rates. Distance mirrors exactly;
-/// time and gas do not, since the exit is swum at one speed on the diver's base RMV. That exit speed
-/// is `GasConfig::normalize`-guaranteed to be no slower than the survey speed, so a swum plan's
-/// return is never over-stated - but a span the diver SCOOTERS in is still charged the swim pace on
-/// the way out, which over-states the exit (the safe direction, §6).
+/// time and gas do not: a swum leg comes home at the one swum exit speed on the diver's base RMV
+/// (`GasConfig::normalize`-guaranteed no slower than the survey speed, so a swum plan's return is
+/// never over-stated), while a SCOOTERED span rides home at the span's own pace - the mandatory
+/// backup makes the ride out a modelled certainty (`DpvRig`), and the one-way range cap already
+/// assumes the backup covers the same line back. Charging a ridden span the swim pace instead
+/// would bill runtime and exit gas the plan does not spend, in the export the diver carries.
 ///
 /// The turnaround is emitted once, the origin twice (departure and return), giving `2n - 1` points.
 fn build_route_profile(
@@ -1542,8 +1572,14 @@ fn build_route_profile(
             } else {
                 exit.rmv_l_per_min
             };
-            elapsed_min += seg_m / exit.speed_m_per_min;
-            gas_l += edge_gas(rmv, exit.speed_m_per_min, seg_m, from.depth_m, to.depth_m);
+            let speed = exit
+                .scooter_speed_by_leg
+                .get(i)
+                .copied()
+                .flatten()
+                .unwrap_or(exit.speed_m_per_min);
+            elapsed_min += seg_m / speed;
+            gas_l += edge_gas(rmv, speed, seg_m, from.depth_m, to.depth_m);
         }
         profile.push(RouteProfilePoint {
             route_index: to.route_index,
