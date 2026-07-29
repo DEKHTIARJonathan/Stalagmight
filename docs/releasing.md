@@ -67,11 +67,12 @@ git push origin master && git push origin --tags
 
 | Job | Runner | Does |
 |-----|--------|------|
-| `verify` | `ubuntu-latest` | TypeScript check, Rust tests. Gates the whole release |
-| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, uploads them as a job artifact |
-| `release` | `ubuntu-latest` | Downloads all three artifact sets, extracts the changelog section, creates the GitHub release via the `gh` CLI |
+| `verify` | `ubuntu-latest` | TypeScript check + Rust tests - a subset of the CI `check` job, not the whole gate. It does not run `cargo fmt --check`, clippy, vitest, the file-size ratchets or leak-scan; those gate the merge, and a tag is cut from already-merged code |
+| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, checksums them, uploads them as a job artifact |
+| `release` | `ubuntu-latest` | Downloads all three artifact sets, re-verifies the checksums, asserts every platform is represented, extracts the changelog section, creates the GitHub release via the `gh` CLI |
 
-- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS), `.msi` / `-setup.exe` (Windows)
+- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS), `.msi` / `-setup.exe` (Windows),
+  plus a `SHA256SUMS` covering all of them
 - macOS is built `--target universal-apple-darwin`, so one `.dmg` runs on both
   Apple Silicon and Intel. Passing `--target` moves Tauri's bundle output to
   `src-tauri/target/universal-apple-darwin/release/bundle`, which is why that
@@ -79,15 +80,48 @@ git push origin master && git push origin --tags
 - `fail-fast` is off so every platform reports its own failure, but `release`
   depends on all three builds, so a partial artifact set is never published.
 - Nothing is code-signed. The release notes get an "Installing" footer telling
-  recipients how to get past Gatekeeper and SmartScreen. Signing/notarization is
-  an open decision on [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
+  recipients how to get past Gatekeeper and SmartScreen. Because those steps
+  talk people through overriding a security warning, the release also ships a
+  `SHA256SUMS` generated on the runner that built the binaries, and the footer
+  points at it. Signing/notarization is an open decision on
+  [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
 - `verify` runs the test suite on Linux only. Per-platform test runs are tracked
   in [#325](https://github.com/Stalagmight/Stalagmight/issues/325); note Windows
   needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
 
 **Runner cost**: macOS and Windows runners bill at a multiple of the Linux rate,
 so a tag is materially more expensive than it used to be. Check the current
-multipliers against GitHub's billing docs before tagging on a tight budget.
+multipliers against GitHub's billing docs before tagging on a tight budget. Every
+job carries a `timeout-minutes` for the same reason - the platform default is six
+hours, which on the macOS runner is a large bill for a hung build.
+
+### Rehearsing before you tag
+
+The workflow also has a `workflow_dispatch` trigger. A manual run executes
+`verify` and the whole `build` matrix but skips `release` (it is gated on
+`startsWith(github.ref, 'refs/tags/')`), so the per-platform bundle paths and
+globs can be proven without publishing anything:
+
+```bash
+gh workflow run release.yml --ref <branch>
+gh run watch
+```
+
+Do this before the first tag after any change to the build matrix. The
+platform-specific `bundle_dir` values and artifact globs are only really
+confirmed by a run that produces the files.
+
+## Testing `scripts/release.sh`
+
+```bash
+./scripts/test-release.sh
+```
+
+Clones the repo to a temp directory and drives the real script through a normal
+bump plus four refusal cases (re-releasing the current version, an existing tag,
+a drifted version-string format, an empty `[Unreleased]`), asserting each time
+that the tree is left clean and nothing was tagged. Run it after touching
+`release.sh`; it takes a few seconds and needs no network.
 
 ## Version locations
 
@@ -122,5 +156,6 @@ the tag.
 Shouldn't anymore, but this is what to look for: the script used `grep -oP` and
 GNU-style `sed -i`, neither of which exists in the BSD userland macOS ships. It
 now reads the version with POSIX `sed` and rewrites files through a helper that
-avoids `sed -i` entirely. If you add a step here, don't reach for a GNU-only
-flag - both maintainers who cut releases are on macOS.
+avoids `sed -i` entirely. **The script has to run under BSD userland, so don't
+reach for GNU-only flags here** - `scripts/test-release.sh` runs on whatever
+machine invokes it and will catch a regression.
