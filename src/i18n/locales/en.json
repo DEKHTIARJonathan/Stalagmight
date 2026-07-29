@@ -1182,7 +1182,6 @@
       "tabs": {
         "general": "General",
         "validation": "Validation",
-        "experimental": "Experimental",
         "speleodb": "SpeleoDB"
       },
       "name": {
@@ -1190,32 +1189,6 @@
         "help": "The name of this cave system / project.",
         "remoteHelp": "This project is managed by SpeleoDB. Edit its name in the SpeleoDB tab."
       }
-    },
-    "collabReview": {
-      "title": "Review Collaborator Changes",
-      "intro": "The companion Ariane file (.tml) was edited outside Stalagmight. The following changes will be merged into this project. Stalagmight-only data (loop closures, merges, offsets, comments) is preserved.",
-      "matchFingerprint": "Shots were matched by geometry (the returned file has no shared IDs). Review the changes carefully before applying.",
-      "matchPositional": "Shots could only be matched by position. Matching is approximate - review the changes carefully before applying.",
-      "countAdded": "Added",
-      "countEdited": "Edited",
-      "countRemoved": "Removed",
-      "countSections": "New sections",
-      "countSectionMeta": "Section edits",
-      "editedShots": "Edited shots",
-      "addedShots": "Added shots",
-      "removedShots": "Removed shots",
-      "newSections": "New sections",
-      "sectionChanges": "Section changes",
-      "alsoRemoves": "(also removes {{count}} closure/merge)",
-      "sectionShots": "{{count}} shots",
-      "cancel": "Cancel",
-      "apply": "Apply Changes",
-      "applying": "Applying...",
-      "readOnlyHint": "Applying is disabled while this project is read-only (closure-adjusted view, Plan/Export mode, or a write-locked remote SpeleoDB project).",
-      "errorTitle": "Reconcile Failed",
-      "errorUnknown": "Unknown error while applying changes",
-      "errorApply": "Failed to apply collaborator changes",
-      "siblingWarning": "This project has an Ariane companion file ({{siblingName}}) but collaboration is off - it will not be updated when you save. Enable Ariane collaboration in Project details to keep them in sync."
     },
     "unsaved": {
       "title": "Unsaved Changes",
@@ -1659,14 +1632,6 @@
     },
     "projectSettings": {
       "open": "Project Settings"
-    },
-    "collaboration": {
-      "title": "Collaboration",
-      "enable": "Ariane collaboration",
-      "help": "Saves a companion Ariane file (.tml) on every save and merges external Ariane edits when you reopen the project.",
-      "aria": "Toggle Ariane collaboration mode",
-      "companion": "Companion file",
-      "toggleFailed": "Failed to change collaboration mode"
     },
     "closures": {
       "title": "Loop closures",

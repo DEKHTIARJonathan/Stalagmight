@@ -1152,9 +1152,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               // Must match `core/load_binary.rs::BINARY_FORMAT_VERSION` and
               // `EXPECTED_VERSION` in `src/utils/loadProjectBinary.ts`; the
               // binaryFormatVersion tripwire pins the other two to each other.
-              // 3 (#27): the per-shot flags byte carries a 2-bit ShotKind
-              // discriminant in bits 0-1 rather than a single is_reference bit.
-              version: 3,
+              // Bumped from 3 to 4 when Ariane collaboration mode was removed:
+              // the header no longer carries a `collab` field.
+              version: 4,
               loading_id: jsonResult.loadingId,
               // Added to the envelope at v3 alongside the ShotKind bits
               // (`load_binary.rs`): the decoder reads it unvalidated, so omitting
@@ -1184,11 +1184,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_comments_map: [],
                 imported_file_hashes: [],
                 imported_section_hashes: [],
-                // Collab is off for the test fixture; loadProjectBinary
-                // writes this through to `project.collab` and the
-                // load-time detect path short-circuits on
-                // `result.project.collab?.enabled`.
-                collab: null,
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
@@ -3658,7 +3653,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   east: -87.4568,
                   west: -87.4694,
                 },
-                collab_enabled: true,
               },
               {
                 name: 'Underwater Cave Beta',
@@ -3674,7 +3668,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   east: -82.4521,
                   west: -82.4647,
                 },
-                collab_enabled: false,
               },
               {
                 name: 'Deep Cave Gamma',
@@ -3685,7 +3678,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 total_length: 2100.3,
                 gps_center: [-77.3963, 25.0343],
                 gps_bounds: null,
-                collab_enabled: false,
               },
               {
                 name: 'Local Survey (No GPS)',
@@ -3696,7 +3688,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 total_length: 350.0,
                 gps_center: null,
                 gps_bounds: null,
-                collab_enabled: false,
               },
             ].map((p) =>
               recentNameOverrides[p.file_path]
@@ -4595,27 +4586,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return mockGeometry;
           }
 
-          // Collaboration mode
-          case 'set_collab_enabled':
-            console.log('[Mock IPC] set_collab_enabled called with:', args);
-            return { success: true };
-          case 'set_collab_enabled_for_path':
-            console.log('[Mock IPC] set_collab_enabled_for_path called with:', args);
-            return { success: true };
-          case 'get_collab_state':
-            return null;
           case 'take_unrecognised_shot_kinds':
             // #27: no unreadable kinds in the mocked fixtures. Present so the
             // post-load call resolves instead of throwing into the catch, which
             // would mask a real regression in that path.
             return [];
-          case 'detect_collab_changes':
-            return null;
-          case 'collab_sibling_when_disabled':
-            return null;
-          case 'apply_collab_changes':
-            console.log('[Mock IPC] apply_collab_changes called with:', args);
-            return { success: true };
 
           // Silent no-ops: commands that should succeed without side-effects
           case 'push_frontend_log':

@@ -31,15 +31,8 @@ export default function DeleteProjectDialog() {
     path?.split(/[\\/]/).pop()?.replace(/\.stalx$/i, '') ||
     'this project';
 
-  // Name the actual files the backend will remove, by full path: the .stalx, plus
-  // its .tml collab sibling when the project is collab-enabled.
-  const collabEnabled = Boolean(dialogData.collabEnabled);
-  const tmlPath = path?.replace(/\.stalx$/i, '.tml');
-  const fileNames = path
-    ? collabEnabled && tmlPath && tmlPath !== path
-      ? `${path} and ${tmlPath}`
-      : path
-    : name;
+  // Name the actual file the backend will remove, by full path.
+  const fileNames = path ?? name;
 
   // A remote (SpeleoDB) recent is only a local cache copy: deleting it leaves the
   // project on the server (re-openable via Open from SpeleoDB), so we frame it as a
@@ -56,7 +49,7 @@ export default function DeleteProjectDialog() {
     }
     setIsDeleting(true);
     setError(null);
-    const result = await deleteProject(path, collabEnabled);
+    const result = await deleteProject(path);
     if (result.success) {
       // Mark the dialog completed BEFORE closing: closeDialog() runs
       // checkDialogCancel('delete-project'), which would otherwise record a

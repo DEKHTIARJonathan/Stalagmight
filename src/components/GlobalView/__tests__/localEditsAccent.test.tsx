@@ -38,7 +38,6 @@ const project = (id: string, name: string): ProjectMetadata => ({
   station_count: 2,
   gps_center: null,
   gps_bounds: null,
-  collab_enabled: false,
   is_remote: true,
   speleodb_project_id: id,
 });

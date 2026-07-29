@@ -117,7 +117,6 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
       station_comments_map: [],
       imported_file_hashes: [],
       imported_section_hashes: [],
-      collab: null,
       validation: {} as BinaryEnvelope['project_header']['validation'],
     },
     shot_count: shotCount,

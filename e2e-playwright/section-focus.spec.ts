@@ -189,8 +189,8 @@ test.describe('Section focus mode', () => {
     // Enter focus mode.
     await enterFocus(page, sectionId);
 
-    // Delete the focused section out from under focus mode (e.g. via undo, collab
-    // sync, or a delete action). Focus must not linger on a section that's gone.
+    // Delete the focused section out from under focus mode (e.g. via undo,
+    // or a delete action). Focus must not linger on a section that's gone.
     await page.evaluate((secId) => {
       const store = (window as unknown as {
         __E2E_TEST__?: { projectStore?: { getState: () => { deleteSection: (id: number) => Promise<unknown> } } };
