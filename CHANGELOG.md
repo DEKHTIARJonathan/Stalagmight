@@ -7,6 +7,8 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-07-29
+
 The first release with builds for all three platforms. The headline additions are
 **Plan mode**, a gas- and range-aware dive planner built on the survey graph, and
 **SpeleoDB integration**, which lets a project live on a server and be handed
