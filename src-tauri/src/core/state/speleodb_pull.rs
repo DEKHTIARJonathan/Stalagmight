@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use super::speleodb::{local_dto, validate_project_id};
+use super::speleodb::{local_dto, validate_project_id, DumpAt};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
@@ -66,6 +66,35 @@ const ARIANE_NOT_RESTORABLE: &str =
     "this revision holds only Ariane data and no Stalagmight file, so there is \
      nothing to view or restore; Ariane data can only be adopted from the project's \
      current revision";
+
+/// [#258] Whether a caller can put a `.stalx` ambiguity to the user.
+///
+/// The same question as [`ArianeRoute`], asked about the other ambiguity, and for
+/// the same reason: what to do with a dump the app cannot classify depends on the
+/// CALLER's surface, not on the dump. Every frontend host that raises the picker is
+/// bound to a specific verb (`dumpCandidates` is checked at each one), so the verbs
+/// with no host must not answer with a candidate list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum StalxAmbiguity {
+    /// Report the candidates; this caller's frontend raises the picker and replays
+    /// the verb with the answer. Open, open-discarding, adopt, restore and the
+    /// lock-free probe behind the revert.
+    Ask,
+    /// Refuse with directions. The verbs behind [`AppState::speleodb_fast_forward`] -
+    /// Start editing, Update, Take remote - accept no `entryPath` and have no picker
+    /// bound to them, so a candidate list reaches a frontend that cannot use it.
+    Refuse,
+}
+
+/// Refusal for [`StalxAmbiguity::Refuse`]. Names the flow that CAN ask, because
+/// otherwise this is indistinguishable from the dead end it replaces: the verbs it
+/// covers already surfaced the raw ambiguity as a bare error whenever the session had
+/// no usable answer, which - before choices were dated - is exactly what our own push
+/// left behind.
+const AMBIGUOUS_NEEDS_REOPEN: &str =
+    "this project holds more than one Stalagmight file on the server, and the file \
+     you chose is not the one this revision was built from; re-open the project to \
+     choose which file to use";
 
 /// Trust-boundary check on the lock-free probe's inputs. [#258]
 ///
@@ -149,10 +178,24 @@ impl AppState {
     /// time - before any lock existed - was asked again by the revert, which by then
     /// had taken the write lock and had to hand it back to ask.
     ///
-    /// An explicit `chosen` always wins; otherwise the remembered entry is offered.
-    /// Neither is trusted: both are checked for membership against the archive being
-    /// extracted, so a name that made sense for the tip's tree simply falls through
-    /// to the ambiguity when a revision's tree does not contain it.
+    /// An explicit `chosen` always wins; otherwise the remembered entry is offered,
+    /// and only when it was an answer about `at` - the revision this dump came from.
+    /// Neither is trusted: both are then checked for membership against the archive
+    /// being extracted, so a name that made sense for the tip's tree simply falls
+    /// through to the ambiguity when a revision's tree does not contain it.
+    ///
+    /// Membership used to be the only guard on a recall and it is nowhere near enough
+    /// on its own, because the stale case USUALLY still passes it: a push writes the
+    /// canonical entry and leaves the others where they are, so a choice that named a
+    /// backup is still a member of every later tree while pointing at bytes from
+    /// before the push. `at` is what catches that, and it catches a collaborator's
+    /// push as well as our own - which membership never could.
+    ///
+    /// `stalx` says whether this caller's frontend can put an ambiguity to the user.
+    /// The verbs behind `speleodb_fast_forward` cannot: they carry no `entryPath` and
+    /// have no picker host, so handing them a candidate list is handing them a
+    /// question nobody will ever be asked. They get a refusal that names the way out
+    /// instead - the same shape as `ARIANE_NOT_RESTORABLE`.
     ///
     /// Only an answer the USER gave is recorded. An unambiguous dump asks nothing, so
     /// there is nothing to remember, and recording its sole `.stalx` anyway would
@@ -166,8 +209,10 @@ impl AppState {
         dump: &mut dump::Dump<'_>,
         chosen: Option<&str>,
         ariane: ArianeRoute,
+        at: DumpAt<'_>,
+        stalx: StalxAmbiguity,
     ) -> Result<String, SpeleoDbError> {
-        let recalled = self.speleodb_recalled_dump_entry(project_id);
+        let recalled = self.speleodb_recalled_dump_entry(project_id, at);
         let candidate = chosen.or(recalled.as_deref());
         match resolve_dump_entry(dump, candidate) {
             Ok(entry) => {
@@ -178,9 +223,20 @@ impl AppState {
                 // recalled from the session is already recorded, so re-recording it
                 // would be a no-op.
                 if chosen.is_some_and(|c| c == entry.as_str()) {
-                    self.speleodb_remember_dump_entry(project_id, &entry);
+                    self.speleodb_remember_dump_entry(project_id, &entry, at);
                 }
                 Ok(entry)
+            }
+            // [#258] An ambiguity this caller has no way to ask about. Every verb
+            // behind the fast-forward lands here once the tree has moved under a
+            // remembered choice - which is now the ordinary outcome of a collaborator
+            // pushing, not a rare one - and a candidate list would reach a frontend
+            // with no picker bound to it and surface as a bare "more than one
+            // Stalagmight file". Name the way out instead: re-opening the project is
+            // the flow that DOES host the picker, and answering it there re-arms this
+            // one for the revision the answer was actually about.
+            Err(SpeleoDbError::AmbiguousDump(_)) if stalx == StalxAmbiguity::Refuse => {
+                Err(SpeleoDbError::Parse(AMBIGUOUS_NEEDS_REOPEN.to_owned()))
             }
             // [#258] Ariane data, and this caller cannot import it. Refuse with a
             // reason instead of handing back an adoption signal it has no way to act
@@ -204,7 +260,7 @@ impl AppState {
                 if let Some(chosen) = candidate {
                     let names = dump.entry_paths()?;
                     if dump::chosen_candidate(&names, chosen) == Some(dump::ChosenKind::Ariane) {
-                        self.speleodb_remember_dump_entry(project_id, chosen);
+                        self.speleodb_remember_dump_entry(project_id, chosen, at);
                     }
                 }
                 Err(SpeleoDbError::AdoptAriane)
@@ -226,11 +282,16 @@ impl AppState {
     /// authoritative error. A probe that could report its own failures would just be a
     /// second place the same problem is surfaced, out of order with the flow.
     ///
-    /// Short-circuits on a remembered answer, so the common path costs no network at
-    /// all - opening a project already settles this, and opening takes no lock. The
-    /// remembered name is not re-validated here; if it turns out not to be in the
-    /// revision's tree, the restore falls back to asking, which is the one case that
-    /// still pays the lock round trip.
+    /// It used to short-circuit on ANY remembered answer, which cost no network at
+    /// all and answered the wrong question. The probe is asked about a specific
+    /// `hexsha`, and a session's answer is about the tree it was given - normally the
+    /// tip, since opening the project is what settles this. Those are different trees
+    /// whenever the revert is doing its job, so the short-circuit was skipping the
+    /// requested revision on the strength of an answer that never described it. It is
+    /// gone; the recall is consulted where every other path consults it, inside the
+    /// resolver, which will only honour it for the revision it belongs to. The cost is
+    /// the download this used to skip - which the probe was already prepared to make
+    /// on every miss, and still no lock.
     pub(crate) fn speleodb_dump_candidates(
         &self,
         project_id: String,
@@ -239,9 +300,6 @@ impl AppState {
         // Trust boundary first, before any network or session work: both ids are
         // interpolated into an authenticated URL path.
         if !probe_inputs_valid(&project_id, hexsha.as_deref()) {
-            return Ok(None);
-        }
-        if self.speleodb_recalled_dump_entry(&project_id).is_some() {
             return Ok(None);
         }
         let Ok((endpoint, token)) = self.speleodb_active_token() else {
@@ -265,10 +323,11 @@ impl AppState {
             return Ok(None);
         };
         // Through the shared resolver, not the bare one, so the probe classifies and
-        // maps errors exactly as the flow it is predicting. Both of the resolver's
-        // session side effects are inert here: the recall short-circuited above, and
-        // a probe passes no `chosen`, so it records nothing - it is answering "would
-        // this ask?", which is not itself an answer worth remembering.
+        // maps errors exactly as the flow it is predicting - including whether the
+        // session's answer applies to the revision being asked about, which is the
+        // whole reason the short-circuit above is gone. The resolver's recording side
+        // effect stays inert: a probe passes no `chosen`, so there is nothing to
+        // record - it is answering "would this ask?", which is not itself an answer.
         //
         // The Ariane route has to match the flow being predicted, or the probe would
         // advertise a picker the real call then refuses: at a `hexsha` this predicts
@@ -278,7 +337,17 @@ impl AppState {
         } else {
             ArianeRoute::Adopt
         };
-        match self.speleodb_resolve_entry_remembering(&project_id, &mut dump, None, ariane) {
+        // Predicting a flow that ASKS, in both cases: the restore behind a `hexsha`
+        // raises the picker, and so does the pull without one. `Refuse` here would
+        // convert the very ambiguity this exists to report into a flat message.
+        match self.speleodb_resolve_entry_remembering(
+            &project_id,
+            &mut dump,
+            None,
+            ariane,
+            DumpAt::from_sha(hexsha.as_deref()),
+            StalxAmbiguity::Ask,
+        ) {
             Ok(_) => Ok(None),
             Err(SpeleoDbError::AmbiguousDump(candidates))
             | Err(SpeleoDbError::AmbiguousAriane(candidates)) => Ok(Some(candidates)),
@@ -405,6 +474,40 @@ impl AppState {
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
+        // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
+        // list/get_project `latest_commit` field, which is `max(authored_date)` and
+        // ties to the root creation commit (see speleodb_server_head). The dump we
+        // just downloaded IS this HEAD's working tree, so BASE must match it - else
+        // the first Start editing would needlessly fast-forward. Best-effort: fall
+        // back to the caller-supplied SHA if the history can't be fetched (Start
+        // editing then fast-forwards to reconcile).
+        // Fetch the revision history DIRECTLY here (NOT via speleodb_handle_auth) so
+        // a transient/spurious 401 on this best-effort BASE-stamp cannot auto-drop the
+        // whole session mid-open: the dump download above already authenticated with
+        // this token, and the fence simply falls back to latest_commit_sha. Start
+        // editing / Done DO route revisions through the auto-drop (a dead token there
+        // must force re-login). (#197 review.)
+        //
+        // Resolved HERE, ahead of the classify, because [#258] the same sha is what
+        // dates the dump: a remembered entry is only an answer about the tree it was
+        // given, and this is the only thing on this path that says which tree that is.
+        // It stamped BASE from further down until then, which was too late to be the
+        // yardstick for the choice the classify was already making.
+        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => sync::tip_of(&history.commits)
+                .map(str::to_owned)
+                .or(latest_commit_sha),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "resolve server HEAD on pull",
+                    "speleodb_open_project: could not resolve server HEAD; using list latest_commit"
+                );
+                latest_commit_sha
+            }
+        };
+
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
@@ -414,6 +517,11 @@ impl AppState {
                 &mut dump,
                 entry_path.as_deref(),
                 ArianeRoute::Adopt,
+                DumpAt::from_sha(base_sha.as_deref()),
+                // The pull is where the picker lives: both its verbs carry an
+                // `entryPath`, and all three frontend hosts raise the dialog on the
+                // candidates this reports.
+                StalxAmbiguity::Ask,
             )
             .map_err(local_dto)?;
 
@@ -433,34 +541,6 @@ impl AppState {
         let preserved_view = self
             .replace_cache_stalx_with(&mut dump, &entry, &dest, &project_id, policy)
             .map_err(local_dto)?;
-
-        // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
-        // list/get_project `latest_commit` field, which is `max(authored_date)` and
-        // ties to the root creation commit (see speleodb_server_head). The dump we
-        // just downloaded IS this HEAD's working tree, so BASE must match it - else
-        // the first Start editing would needlessly fast-forward. Best-effort: fall
-        // back to the caller-supplied SHA if the history can't be fetched (Start
-        // editing then fast-forwards to reconcile).
-        // Fetch the revision history DIRECTLY here (NOT via speleodb_handle_auth) so
-        // a transient/spurious 401 on this best-effort BASE-stamp cannot auto-drop the
-        // whole session mid-open: the dump download above already authenticated with
-        // this token, and the fence simply falls back to latest_commit_sha. Start
-        // editing / Done DO route revisions through the auto-drop (a dead token there
-        // must force re-login). (#197 review.)
-        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => sync::tip_of(&history.commits)
-                .map(str::to_owned)
-                .or(latest_commit_sha),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "resolve server HEAD on pull",
-                    "speleodb_open_project: could not resolve server HEAD; using list latest_commit"
-                );
-                latest_commit_sha
-            }
-        };
 
         // Concurrent same-account session notice (#193 b8): if the server already
         // reports a lock held by our OWN account, a second session is editing this
@@ -572,7 +652,30 @@ impl AppState {
         // The picker's answer reaches this command either directly, or - when the
         // ambiguity surfaced on the OPEN path, which refuses a `.tml` and routes
         // here - through the entry that path recorded for this session.
-        let remembered = self.speleodb_recalled_dump_entry(&project_id);
+        //
+        // [#258] That hand-off is why the tip is resolved the same way the open path
+        // resolves it. The open recorded the answer against the server's TRUE HEAD, so
+        // reading it back against anything else - the caller-supplied
+        // `latest_commit_sha`, which is `max(authored_date)` and can name the root
+        // commit - would never match and the picker would re-ask forever. Best-effort
+        // and deliberately not fatal: an unresolvable head means the answer cannot be
+        // dated, so it is not honoured, and adoption asks again through the picker it
+        // already hosts.
+        let adopt_at = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
+            .map(|(tip, _)| tip)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "date a remembered Ariane pick on adopt",
+                    "speleodb_adopt_ariane: could not resolve server HEAD; re-asking instead \
+                     of honouring an undatable choice"
+                );
+                None
+            });
+        let remembered =
+            self.speleodb_recalled_dump_entry(&project_id, DumpAt::from_sha(adopt_at.as_deref()));
         let picked = entry_path
             .as_deref()
             .or(remembered.as_deref())
@@ -813,11 +916,24 @@ impl AppState {
         // already settled, and a miss still fails closed rather than guessing.
         // Adoption is reachable from here: this verb pulls the TIP, which is exactly
         // what adoption would import, so routing to it answers the same question.
+        //
+        // `tip` is what this whole call is fast-forwarding TO, so it is also what the
+        // dump it just downloaded is - which makes it the right yardstick for a
+        // remembered answer. A choice made at an earlier revision no longer applies,
+        // and that is precisely the case this verb must not paper over: the entry it
+        // names is still in the tree (a push leaves every non-canonical `.stalx`
+        // alone), so membership would wave it through and extract pre-push bytes under
+        // a BASE stamped at the new tip.
+        //
+        // And `Refuse`, because there is nowhere to ask: no picker is bound to Start
+        // editing, Update or Take remote.
         let entry = self.speleodb_resolve_entry_remembering(
             project_id,
             &mut dump,
             None,
             ArianeRoute::Adopt,
+            DumpAt::from_sha(tip),
+            StalxAmbiguity::Refuse,
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
@@ -883,12 +999,20 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        classify_dump_entry, probe_inputs_valid, resolve_dump_entry, ArianeRoute, UnopenableDump,
+        classify_dump_entry, probe_inputs_valid, resolve_dump_entry, ArianeRoute, DumpAt,
+        StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
     use crate::speleodb::dump::Dump;
     use crate::speleodb::SpeleoDbError;
+
+    /// The revision the resolve tests pretend their dumps came from. Most of them
+    /// are not about dating at all, so they use one sha throughout and let the recall
+    /// behave as it did before choices carried a revision.
+    const TIP: &str = "1111111111111111111111111111111111111111";
+    /// A later revision, for the tests that ARE about dating.
+    const NEXT: &str = "2222222222222222222222222222222222222222";
 
     /// A dump ZIP holding `entries`, for the resolve tests below.
     fn make_zip(entries: &[&str]) -> Vec<u8> {
@@ -918,12 +1042,19 @@ mod tests {
         let mut dump = Dump::open(&sole).expect("open");
         assert_eq!(
             state
-                .speleodb_resolve_entry_remembering(project, &mut dump, None, ArianeRoute::Adopt)
+                .speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    None,
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Ask,
+                )
                 .expect("sole .stalx opens"),
             "backup/old.stalx"
         );
         assert_eq!(
-            state.speleodb_recalled_dump_entry(project),
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
             None,
             "an unasked question must leave no remembered answer"
         );
@@ -938,7 +1069,9 @@ mod tests {
                     project,
                     &mut dump,
                     None,
-                    ArianeRoute::Adopt
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Ask,
                 ),
                 Err(SpeleoDbError::AmbiguousDump(_))
             ),
@@ -961,10 +1094,12 @@ mod tests {
             &mut dump,
             Some("gone.stalx"),
             ArianeRoute::Adopt,
+            DumpAt::Revision(TIP),
+            StalxAmbiguity::Ask,
         );
         assert!(matches!(refused, Err(SpeleoDbError::AmbiguousDump(_))));
         assert_eq!(
-            state.speleodb_recalled_dump_entry(project),
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
             None,
             "a pick this archive does not offer is not an answer"
         );
@@ -976,13 +1111,17 @@ mod tests {
                     project,
                     &mut dump,
                     Some("b.stalx"),
-                    ArianeRoute::Adopt
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Ask,
                 )
                 .expect("honoured"),
             "b.stalx"
         );
         assert_eq!(
-            state.speleodb_recalled_dump_entry(project).as_deref(),
+            state
+                .speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP))
+                .as_deref(),
             Some("b.stalx"),
             "the user's answer must survive to the next flow in this session"
         );
@@ -1006,6 +1145,8 @@ mod tests {
                 &mut dump,
                 None,
                 ArianeRoute::Refuse,
+                DumpAt::Revision(TIP),
+                StalxAmbiguity::Ask,
             );
             assert!(
                 matches!(refusal, Err(SpeleoDbError::Parse(_))),
@@ -1021,9 +1162,11 @@ mod tests {
             &mut dump,
             Some("two/ariane.tml"),
             ArianeRoute::Refuse,
+            DumpAt::Revision(TIP),
+            StalxAmbiguity::Ask,
         );
         assert_eq!(
-            state.speleodb_recalled_dump_entry(project),
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
             None,
             "a pick the flow refuses must not be remembered as an answer"
         );
@@ -1050,15 +1193,151 @@ mod tests {
             "misc/project.stalx",
             "project.stalx",
         ] {
-            state.speleodb_remember_dump_entry(project, entry);
+            state.speleodb_remember_dump_entry(project, entry, DumpAt::Revision(TIP));
             state.speleodb_forget_dump_entry(project);
             assert_eq!(
-                state.speleodb_recalled_dump_entry(project),
+                state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
                 None,
                 "`{entry}` must not survive a push: nothing here proves it is the \
                  file the upload actually replaced"
             );
         }
+    }
+
+    /// [#258] The rollback the rule above prevents for OUR push has a second author:
+    /// anyone else with write access. Their push updates the canonical entry and
+    /// leaves the backup exactly where it is, so the remembered name still passes
+    /// membership - the guard the recall used to rely on - while pointing at bytes
+    /// from before their work. Extracting that and stamping BASE at the new tip
+    /// leaves the copy looking current, and the next push replaces their revision
+    /// with no divergence to stop it. Nothing local can observe their push, so the
+    /// choice has to carry the revision it was an answer about.
+    #[test]
+    fn a_choice_is_an_answer_about_one_revision_and_not_the_next() {
+        let state = AppState::new().expect("state");
+        let project = "66666666-6666-6666-6666-666666666666";
+
+        // The user picks the backup at TIP, and it is honoured there.
+        let zip = make_zip(&["backup/old.stalx", "project.stalx"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        assert_eq!(
+            state
+                .speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    Some("backup/old.stalx"),
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Ask,
+                )
+                .expect("an explicit pick is honoured"),
+            "backup/old.stalx"
+        );
+        assert_eq!(
+            state
+                .speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP))
+                .as_deref(),
+            Some("backup/old.stalx"),
+            "the answer stands for the revision it was given about"
+        );
+
+        // A collaborator pushes. Same two entries in the tree, so membership is no
+        // help at all - only the revision says the answer no longer describes it.
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(NEXT)),
+            None,
+            "a choice made at an earlier revision must not be honoured at a later one"
+        );
+        let mut dump = Dump::open(&zip).expect("open");
+        assert!(
+            matches!(
+                state.speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    None,
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(NEXT),
+                    StalxAmbiguity::Ask,
+                ),
+                Err(SpeleoDbError::AmbiguousDump(_))
+            ),
+            "the tree moved under the choice, so the user has to be asked again \
+             rather than handed the pre-push file"
+        );
+    }
+
+    /// [#258] A dump nobody can date cannot be shown to match any choice, so it
+    /// neither honours one nor records one. Failing closed costs a question; the
+    /// alternative is trusting a name on the strength of nothing, which is the whole
+    /// bug.
+    #[test]
+    fn an_undatable_dump_neither_recalls_nor_records() {
+        let state = AppState::new().expect("state");
+        let project = "77777777-7777-7777-7777-777777777777";
+
+        state.speleodb_remember_dump_entry(project, "a.stalx", DumpAt::Unknown);
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
+            None,
+            "a choice with no revision on it must never have been stored"
+        );
+
+        state.speleodb_remember_dump_entry(project, "a.stalx", DumpAt::Revision(TIP));
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Unknown),
+            None,
+            "a dated choice is still no answer for a dump we cannot date"
+        );
+    }
+
+    /// [#258] The fast-forward verbs accept no `entryPath` and no picker is bound to
+    /// them, so reporting candidates to Start editing / Update / Take remote offers a
+    /// question that reaches a frontend with no way to ask it - it surfaced as a bare
+    /// "more than one Stalagmight file". They get the way out named instead. The
+    /// asking callers are unaffected: the candidate list IS their answer.
+    #[test]
+    fn only_a_caller_that_can_ask_is_handed_the_candidates() {
+        let state = AppState::new().expect("state");
+        let project = "88888888-8888-8888-8888-888888888888";
+        let zip = make_zip(&["a.stalx", "b.stalx"]);
+
+        let mut dump = Dump::open(&zip).expect("open");
+        let refused = state.speleodb_resolve_entry_remembering(
+            project,
+            &mut dump,
+            None,
+            ArianeRoute::Adopt,
+            DumpAt::Revision(TIP),
+            StalxAmbiguity::Refuse,
+        );
+        // Folded to one assertion rather than a match arm that panics: any other
+        // outcome debug-prints into `got`, which cannot contain the phrase, so the
+        // wrong-variant case fails here too and says what it got.
+        let got = match refused {
+            Err(SpeleoDbError::Parse(msg)) => msg,
+            other => format!("{other:?}"),
+        };
+        assert!(
+            got.contains("re-open"),
+            "a caller with no picker must be refused with a message naming the flow \
+             that CAN ask, or this is just the dead end it replaces; got: {got}"
+        );
+
+        let mut dump = Dump::open(&zip).expect("open");
+        assert!(
+            matches!(
+                state.speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    None,
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Ask,
+                ),
+                Err(SpeleoDbError::AmbiguousDump(_))
+            ),
+            "a caller that hosts the picker must still get the candidates"
+        );
     }
 
     /// The rule above is only worth anything if every landing path applies it, and

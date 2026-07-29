@@ -69,7 +69,54 @@ pub(crate) struct SpeleoDbSession {
     /// without this a user who resolved the picker at open time would meet a dead
     /// end the moment they tried to edit - the very thing the picker exists to
     /// remove. A miss falls back to failing closed, which is safe: it never guesses.
-    chosen_dump_entries: std::collections::HashMap<String, String>,
+    chosen_dump_entries: std::collections::HashMap<String, DumpChoice>,
+}
+
+/// [#258] A dump-entry choice, and the revision it was an answer about.
+///
+/// The revision is half the answer, not decoration. A push uploads under the
+/// server's canonical wire name and leaves every other `.stalx` in the tree alone,
+/// so a choice that named any OTHER entry describes pre-push bytes the moment a
+/// revision lands - and it does not matter whose push landed it. Ours is already
+/// handled ([`AppState::speleodb_revision_landed`]); a collaborator's was not, and
+/// that is the dangerous half, because their work is what the stale entry would
+/// replace. The extract would hand back the old file while BASE was stamped at the
+/// new tip, which leaves the copy looking current, so the next push overwrites their
+/// revision with no divergence to stop it.
+///
+/// Keyed by revision rather than rebound to the target, because rebinding is not
+/// available: the upload response carries the commit sha and the project, never the
+/// stored path. Re-asking costs one more question, and only for someone whose
+/// project is ambiguous at all.
+#[derive(Debug, Clone)]
+struct DumpChoice {
+    /// The entry path within the dump the user picked.
+    entry: String,
+    /// The revision the dump was fetched at when they picked it.
+    at: String,
+}
+
+/// [#258] Which revision a dump being classified came from, as far as the caller can
+/// establish - the yardstick a [`DumpChoice`] is measured against.
+///
+/// `Unknown` is a real answer and it fails CLOSED: a choice that cannot be dated
+/// cannot be shown to still apply, so nothing is recalled and nothing is recorded.
+/// The cost is a question; the alternative is honouring a name on the strength of
+/// nothing, which is the bug this type exists to close.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DumpAt<'a> {
+    /// This dump is the tree at `sha`.
+    Revision(&'a str),
+    /// The revision could not be resolved (a best-effort history fetch that failed,
+    /// or a caller with nothing authoritative to offer).
+    Unknown,
+}
+
+impl<'a> DumpAt<'a> {
+    /// The usual spelling at a call site: an optional sha straight from the caller.
+    pub(super) fn from_sha(sha: Option<&'a str>) -> Self {
+        sha.map_or(Self::Unknown, Self::Revision)
+    }
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -854,22 +901,59 @@ impl AppState {
     /// [#258] Record which dump entry resolved this project's ambiguity, so the
     /// verbs that carry no `entryPath` can honour the choice for the rest of the
     /// session. Best-effort: a poisoned lock costs the memory, not the pull.
-    pub(super) fn speleodb_remember_dump_entry(&self, project_id: &str, entry: &str) {
+    ///
+    /// `at` is stored with the entry and is what later decides whether the answer
+    /// still describes anything (see [`DumpChoice`]). An undatable dump records
+    /// NOTHING: a choice with no revision on it could never be shown to still apply,
+    /// so keeping it would only be a name waiting to be trusted on no evidence.
+    pub(super) fn speleodb_remember_dump_entry(
+        &self,
+        project_id: &str,
+        entry: &str,
+        at: DumpAt<'_>,
+    ) {
+        let DumpAt::Revision(sha) = at else { return };
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session
-                .chosen_dump_entries
-                .insert(project_id.to_owned(), entry.to_owned());
+            session.chosen_dump_entries.insert(
+                project_id.to_owned(),
+                DumpChoice {
+                    entry: entry.to_owned(),
+                    at: sha.to_owned(),
+                },
+            );
         }
     }
 
-    /// The entry [`Self::speleodb_remember_dump_entry`] recorded, if any.
+    /// The entry [`Self::speleodb_remember_dump_entry`] recorded, if it was an answer
+    /// about the revision now being classified.
     ///
-    /// A hit is still validated against the archive being extracted before it is
-    /// used - remembering a name is not trusting it, and the tree can move between
-    /// the pull that chose it and the fast-forward that recalls it.
-    pub(super) fn speleodb_recalled_dump_entry(&self, project_id: &str) -> Option<String> {
+    /// Two independent checks, and both are needed. THIS one asks whether the answer
+    /// is about the right tree at all; a hit is then still validated for membership
+    /// against the archive being extracted, because remembering a name is not
+    /// trusting it. Membership alone was the whole guard and it is far too weak on
+    /// its own - the entry a stale choice names is usually still present (a
+    /// collaborator's push updates the canonical file and leaves a backup copy exactly
+    /// where it was), so it sails through, and the pre-push bytes it points at get
+    /// extracted and stamped with the new tip.
+    ///
+    /// A mismatch is left in place rather than evicted. It cannot be honoured while
+    /// the revision differs, the next answer overwrites it, and both logout and a
+    /// landing clear it outright - so evicting from a `&self` read would buy nothing
+    /// but a surprising write on a path that only meant to ask a question.
+    pub(super) fn speleodb_recalled_dump_entry(
+        &self,
+        project_id: &str,
+        at: DumpAt<'_>,
+    ) -> Option<String> {
+        let DumpAt::Revision(sha) = at else {
+            return None;
+        };
         let session = self.speleodb_session_lock().ok()?;
-        session.chosen_dump_entries.get(project_id).cloned()
+        session
+            .chosen_dump_entries
+            .get(project_id)
+            .filter(|choice| choice.at == sha)
+            .map(|choice| choice.entry.clone())
     }
 
     /// [#258] Forget this project's remembered dump entry.
@@ -896,6 +980,14 @@ impl AppState {
     /// the upload response carries the commit sha and the project, never the stored
     /// path. Forgetting costs one more question, and only for someone whose project
     /// is ambiguous at all.
+    ///
+    /// Still worth its own call even though [`DumpChoice`] now carries the revision
+    /// it answered about, which already retires a choice the moment the tree moves
+    /// under it - by whoever's hand. The two are not redundant: this one runs on OUR
+    /// push, where the sha we would compare against is the one we just created, so
+    /// the recall is stale and datable at the same instant. Dropping it outright is
+    /// simply the earliest correct moment, and it keeps the invalidation legible at
+    /// the point the staleness is caused rather than deferred to whoever reads next.
     pub(super) fn speleodb_forget_dump_entry(&self, project_id: &str) {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.chosen_dump_entries.remove(project_id);

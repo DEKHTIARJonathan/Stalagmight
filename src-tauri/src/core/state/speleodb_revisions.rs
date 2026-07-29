@@ -11,9 +11,9 @@
 //! away. Both replace the cache `.stalx` and reload the project - a View is not
 //! ephemeral, only reversible.
 
-use super::speleodb::{local_dto, validate_project_id};
+use super::speleodb::{local_dto, validate_project_id, DumpAt};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
-use super::speleodb_pull::ArianeRoute;
+use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
@@ -178,12 +178,24 @@ impl AppState {
         // otherwise. The resolver records the user's pick itself when it honours one;
         // re-recording it here would also record an entry nobody chose, turning an
         // unambiguous revision's sole `.stalx` into a standing session answer.
+        //
+        // `hexsha` dates the dump, and it is the revision being checked out - so a
+        // session answer given at the TIP correctly does not apply here, and the
+        // restore falls through to asking. That is not a regression on the sentence
+        // above: the probe in front of this flow is what puts the question before the
+        // lock, and it now asks about this same revision for the same reason. Where an
+        // answer WAS given for this revision (the picker's replay, which arrives as
+        // `entry_path`) it is honoured and recorded against it.
         let entry = self
             .speleodb_resolve_entry_remembering(
                 &project_id,
                 &mut dump,
                 entry_path.as_deref(),
                 ArianeRoute::Refuse,
+                DumpAt::Revision(&hexsha),
+                // Both hosts of this verb raise the picker on the candidates:
+                // `SpeleoRestoreDialog` and the revert composite.
+                StalxAmbiguity::Ask,
             )
             .map_err(local_dto)?;
 

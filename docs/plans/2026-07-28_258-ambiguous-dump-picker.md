@@ -316,3 +316,45 @@ server is additive, a resolved project stays ambiguous. Session memory (D-3), th
 canonical pre-selection (D-2) and the consequence copy are what keep this from being a
 modal the user meets on every open. Without them, #258 relocates the problem rather than
 closing it.
+
+---
+
+## Amendment (post-review): the remembered choice carries its revision
+
+Two reviews of the shipped branch converged on the same hole, and it is a real one.
+
+**What D-1 and D-3 got wrong.** They key the recall on project id alone. The resolver
+reads from whatever entry the user picked, but a push always uploads to the server's
+canonical wire name - so a non-canonical choice describes pre-push bytes the moment
+*any* revision lands. `speleodb_revision_landed` already handled our own push. Nothing
+observed a collaborator's, and that is the dangerous half: their work is what the stale
+entry replaces. The fast-forward would extract the old file, stamp BASE at the new tip,
+and the next push would overwrite their revision with no divergence to stop it.
+
+Membership was the only guard, and it is far too weak on its own - the stale case
+usually *passes* it, because a push leaves every non-canonical `.stalx` exactly where
+it was.
+
+**What changed.** `DumpChoice` now carries the revision the answer was about, and
+`DumpAt` is what every classify site measures against. `Unknown` fails closed. This also
+retired the probe's short-circuit, which skipped inspecting the requested revision
+entirely on the strength of an answer about a different tree.
+
+**Why D-1's "silently reuse or fail closed" needed a third answer.** Making the recall
+revision-scoped would have turned a silent rollback into a dead end: the three
+fast-forward verbs have no picker host (`dumpCandidates` is checked per verb on the
+frontend, and `useSpeleoActions` does not check it), so a candidate list reaches a
+surface that cannot ask. They now refuse with `AMBIGUOUS_NEEDS_REOPEN`, which names
+re-opening as the flow that does host the picker. Note this dead end was already
+reachable before the amendment - our own push cleared the recall, so start-editing after
+a push met the raw ambiguity. The refusal is a strict improvement on that, not a new
+limitation.
+
+**Follow-up 3 is now the natural next step,** and cheaper than it was: with choices
+already dated, widening `speleodb_start_editing` / `_update` / `_take_remote` is purely
+"add the pre-flight probe", the same shape `speleodb_dump_candidates` already gives the
+revert. Worth doing if the re-open step proves annoying in practice.
+
+**R3 revisited.** Re-asking is now once per external revision on an ambiguous project,
+where it used to be once per session. That is the honest frequency - the tree really did
+move - but it is the number to watch if the picker starts feeling like a nag.
