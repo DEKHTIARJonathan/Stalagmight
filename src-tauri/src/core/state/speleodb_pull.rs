@@ -19,6 +19,7 @@ use std::path::Path;
 
 use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
+use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::dump::{self, DumpClassification};
@@ -42,6 +43,40 @@ pub(super) enum UnopenableDump {
     AmbiguousStalx(Vec<String>),
     /// No `.stalx` and more than one `ariane.tml`.
     AmbiguousAriane(Vec<String>),
+}
+
+/// [#258] What a caller is able to do with a dump that holds only Ariane data.
+///
+/// Adoption is a TIP-only operation: it imports a `.tml` by downloading the project's
+/// current contents, with no import-at-hash counterpart. So the answer differs by
+/// caller rather than by dump, and the caller has to say which it is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum ArianeRoute {
+    /// Route to the one-shot adoption flow, which imports the `.tml`.
+    Adopt,
+    /// Refuse. For a caller with no import path, advertising an Ariane choice would
+    /// offer a question whose every answer is an error.
+    Refuse,
+}
+
+/// Refusal for [`ArianeRoute::Refuse`]. Says what is missing and where adoption does
+/// work, so the user is not left to infer that a revision swap and adoption are
+/// different operations.
+const ARIANE_NOT_RESTORABLE: &str =
+    "this revision holds only Ariane data and no Stalagmight file, so there is \
+     nothing to view or restore; Ariane data can only be adopted from the project's \
+     current revision";
+
+/// Trust-boundary check on the lock-free probe's inputs. [#258]
+///
+/// Both ids reach an authenticated request path, so both are validated exactly as
+/// the flows the probe predicts validate them - `speleodb_restore_revision` checks
+/// the same pair before it builds its download-at-hash URL. Pure and separate from
+/// the command so the check is unit-testable: inside the command every rejection
+/// looks like the advisory `None` it shares with "not logged in", which would make a
+/// missing guard invisible to a test.
+pub(super) fn probe_inputs_valid(project_id: &str, hexsha: Option<&str>) -> bool {
+    validate_project_id(project_id).is_ok() && hexsha.is_none_or(|sha| validate_hexsha(sha).is_ok())
 }
 
 /// Map a downloaded dump's entry list to the single openable `.stalx` path, or the
@@ -118,18 +153,46 @@ impl AppState {
     /// Neither is trusted: both are checked for membership against the archive being
     /// extracted, so a name that made sense for the tip's tree simply falls through
     /// to the ambiguity when a revision's tree does not contain it.
+    ///
+    /// Only an answer the USER gave is recorded. An unambiguous dump asks nothing, so
+    /// there is nothing to remember, and recording its sole `.stalx` anyway would
+    /// promote an automatic classification into a standing choice: once a second
+    /// `.stalx` appears the recalled name still passes membership (the old file is
+    /// still in the tree), so the picker never opens, and every later pull - plus the
+    /// push that follows - silently keeps using the file nobody picked.
     pub(super) fn speleodb_resolve_entry_remembering(
         &self,
         project_id: &str,
         dump: &mut dump::Dump<'_>,
         chosen: Option<&str>,
+        ariane: ArianeRoute,
     ) -> Result<String, SpeleoDbError> {
         let recalled = self.speleodb_recalled_dump_entry(project_id);
         let candidate = chosen.or(recalled.as_deref());
         match resolve_dump_entry(dump, candidate) {
             Ok(entry) => {
-                self.speleodb_remember_dump_entry(project_id, &entry);
+                // Honoured explicit pick only: `resolve_dump_entry` returns `chosen`
+                // verbatim when it accepts it, and a refused pick falls through to a
+                // classification that cannot equal it (a refused name is not an
+                // openable entry of this archive, a classified one always is). A hit
+                // recalled from the session is already recorded, so re-recording it
+                // would be a no-op.
+                if chosen.is_some_and(|c| c == entry.as_str()) {
+                    self.speleodb_remember_dump_entry(project_id, &entry);
+                }
                 Ok(entry)
+            }
+            // [#258] Ariane data, and this caller cannot import it. Refuse with a
+            // reason instead of handing back an adoption signal it has no way to act
+            // on: a revision swap that routed here downloaded the TIP, answering a
+            // question about an old revision with today's contents. Covers the lone
+            // `.tml` and the ambiguous set alike - neither is restorable, so offering
+            // a picker for the second would only move the dead end one click later.
+            // Nothing is remembered: a pick this flow refuses is not an answer.
+            Err(SpeleoDbError::AdoptAriane | SpeleoDbError::AmbiguousAriane(_))
+                if ariane == ArianeRoute::Refuse =>
+            {
+                Err(SpeleoDbError::Parse(ARIANE_NOT_RESTORABLE.to_owned()))
             }
             // [#258] The pick was an `ariane.tml`, so this path refuses it and the
             // flow routes to adoption. Record it anyway: adoption is a SEPARATE
@@ -173,7 +236,9 @@ impl AppState {
         project_id: String,
         hexsha: Option<String>,
     ) -> Result<Option<Vec<SpeleoDumpCandidate>>, SpeleoErrorDto> {
-        if validate_project_id(&project_id).is_err() {
+        // Trust boundary first, before any network or session work: both ids are
+        // interpolated into an authenticated URL path.
+        if !probe_inputs_valid(&project_id, hexsha.as_deref()) {
             return Ok(None);
         }
         if self.speleodb_recalled_dump_entry(&project_id).is_some() {
@@ -184,6 +249,8 @@ impl AppState {
         };
         let insecure_http = self.speleodb_insecure_http();
         let downloaded = match &hexsha {
+            // Validated at the entry by `probe_inputs_valid`, exactly like the restore
+            // path validates before building its own download-at-hash URL.
             Some(sha) => self.speleodb_handle_auth(
                 Endpoint::DownloadDump,
                 client::download_dump_at_hash(&endpoint, &token, insecure_http, &project_id, sha),
@@ -197,10 +264,21 @@ impl AppState {
         let Ok(mut dump) = dump::Dump::open(&zip) else {
             return Ok(None);
         };
-        // Through the shared resolver, not the bare one: an unambiguous probe RECORDS
-        // what it found, so the flow that follows asks nothing either. The recall side
-        // is a no-op here, since a hit would have short-circuited above.
-        match self.speleodb_resolve_entry_remembering(&project_id, &mut dump, None) {
+        // Through the shared resolver, not the bare one, so the probe classifies and
+        // maps errors exactly as the flow it is predicting. Both of the resolver's
+        // session side effects are inert here: the recall short-circuited above, and
+        // a probe passes no `chosen`, so it records nothing - it is answering "would
+        // this ask?", which is not itself an answer worth remembering.
+        //
+        // The Ariane route has to match the flow being predicted, or the probe would
+        // advertise a picker the real call then refuses: at a `hexsha` this predicts
+        // the revision swap, which cannot import.
+        let ariane = if hexsha.is_some() {
+            ArianeRoute::Refuse
+        } else {
+            ArianeRoute::Adopt
+        };
+        match self.speleodb_resolve_entry_remembering(&project_id, &mut dump, None, ariane) {
             Ok(_) => Ok(None),
             Err(SpeleoDbError::AmbiguousDump(candidates))
             | Err(SpeleoDbError::AmbiguousAriane(candidates)) => Ok(Some(candidates)),
@@ -331,7 +409,12 @@ impl AppState {
         // `.stalx` from the same parsed archive.
         let mut dump = dump::Dump::open(&zip).map_err(local_dto)?;
         let entry = self
-            .speleodb_resolve_entry_remembering(&project_id, &mut dump, entry_path.as_deref())
+            .speleodb_resolve_entry_remembering(
+                &project_id,
+                &mut dump,
+                entry_path.as_deref(),
+                ArianeRoute::Adopt,
+            )
             .map_err(local_dto)?;
 
         // Carry the user's local view toggles across the download-replace (a re-open
@@ -728,7 +811,14 @@ impl AppState {
         let mut dump = dump::Dump::open(&zip)?;
         // [#258] No `entryPath` reaches this verb - it honours whatever the session
         // already settled, and a miss still fails closed rather than guessing.
-        let entry = self.speleodb_resolve_entry_remembering(project_id, &mut dump, None)?;
+        // Adoption is reachable from here: this verb pulls the TIP, which is exactly
+        // what adoption would import, so routing to it answers the same question.
+        let entry = self.speleodb_resolve_entry_remembering(
+            project_id,
+            &mut dump,
+            None,
+            ArianeRoute::Adopt,
+        )?;
         let dest = self.speleodb_cache_path(project_id)?;
         // Capture the user's local view toggles BEFORE the download replaces the
         // file - they're stripped from the server copy, so they'd otherwise reset
@@ -792,8 +882,11 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify_dump_entry, resolve_dump_entry, UnopenableDump};
+    use super::{
+        classify_dump_entry, probe_inputs_valid, resolve_dump_entry, ArianeRoute, UnopenableDump,
+    };
     use crate::core::state::tests_support::speleodb_prod_matches;
+    use crate::core::state::AppState;
     use crate::speleodb::dump::Dump;
     use crate::speleodb::SpeleoDbError;
 
@@ -808,6 +901,162 @@ mod tests {
             writer.write_all(b"x").expect("write entry");
         }
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    /// [#258] An automatic classification is NOT an answer, so it must not be
+    /// recorded as one. Recording it made a sole `.stalx` a standing session choice:
+    /// the moment a collaborator added a second one the recall still validated - the
+    /// original file is still in the tree - so the picker never opened and every
+    /// later pull, plus the push after it, silently kept using the file nobody chose.
+    #[test]
+    fn an_unambiguous_dump_records_no_choice_so_a_later_rival_still_asks() {
+        let state = AppState::new().expect("state");
+        let project = "11111111-1111-1111-1111-111111111111";
+
+        // One `.stalx`: resolved without a question, so nothing is remembered.
+        let sole = make_zip(&["backup/old.stalx"]);
+        let mut dump = Dump::open(&sole).expect("open");
+        assert_eq!(
+            state
+                .speleodb_resolve_entry_remembering(project, &mut dump, None, ArianeRoute::Adopt)
+                .expect("sole .stalx opens"),
+            "backup/old.stalx"
+        );
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project),
+            None,
+            "an unasked question must leave no remembered answer"
+        );
+
+        // A rival appears. The old name is still a member, so a recorded choice would
+        // have been silently reused; with none recorded the user is asked instead.
+        let rivals = make_zip(&["backup/old.stalx", "project.stalx"]);
+        let mut dump = Dump::open(&rivals).expect("open");
+        assert!(
+            matches!(
+                state.speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    None,
+                    ArianeRoute::Adopt
+                ),
+                Err(SpeleoDbError::AmbiguousDump(_))
+            ),
+            "a second .stalx must raise the ambiguity, not resolve from a phantom choice"
+        );
+    }
+
+    /// The other half of the same rule: an answer the user actually gave IS recorded,
+    /// so the next flow in the session does not re-ask. A pick the archive refuses is
+    /// not an answer and leaves nothing behind.
+    #[test]
+    fn an_explicit_pick_is_remembered_and_a_refused_one_is_not() {
+        let state = AppState::new().expect("state");
+        let project = "22222222-2222-2222-2222-222222222222";
+        let zip = make_zip(&["a.stalx", "b.stalx"]);
+
+        let mut dump = Dump::open(&zip).expect("open");
+        let refused = state.speleodb_resolve_entry_remembering(
+            project,
+            &mut dump,
+            Some("gone.stalx"),
+            ArianeRoute::Adopt,
+        );
+        assert!(matches!(refused, Err(SpeleoDbError::AmbiguousDump(_))));
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project),
+            None,
+            "a pick this archive does not offer is not an answer"
+        );
+
+        let mut dump = Dump::open(&zip).expect("open");
+        assert_eq!(
+            state
+                .speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    Some("b.stalx"),
+                    ArianeRoute::Adopt
+                )
+                .expect("honoured"),
+            "b.stalx"
+        );
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project).as_deref(),
+            Some("b.stalx"),
+            "the user's answer must survive to the next flow in this session"
+        );
+    }
+
+    /// [#258] Adoption downloads the project TIP, so a revision swap that routed to
+    /// it would answer a question about an old `hexsha` with today's contents. Both
+    /// Ariane shapes therefore refuse under `Refuse` - offering a picker for the
+    /// ambiguous one would only move the dead end one click later - and a refused
+    /// pick leaves no remembered answer behind.
+    #[test]
+    fn a_revision_refuses_ariane_instead_of_routing_to_a_tip_only_adoption() {
+        let state = AppState::new().expect("state");
+        let project = "33333333-3333-3333-3333-333333333333";
+
+        for entries in [vec!["ariane.tml"], vec!["one/ariane.tml", "two/ariane.tml"]] {
+            let zip = make_zip(&entries);
+            let mut dump = Dump::open(&zip).expect("open");
+            let refusal = state.speleodb_resolve_entry_remembering(
+                project,
+                &mut dump,
+                None,
+                ArianeRoute::Refuse,
+            );
+            assert!(
+                matches!(refusal, Err(SpeleoDbError::Parse(_))),
+                "{entries:?} must refuse with a reason, not an adoption signal"
+            );
+        }
+
+        // Even an explicit Ariane pick records nothing on a flow that refuses it.
+        let zip = make_zip(&["one/ariane.tml", "two/ariane.tml"]);
+        let mut dump = Dump::open(&zip).expect("open");
+        let _ = state.speleodb_resolve_entry_remembering(
+            project,
+            &mut dump,
+            Some("two/ariane.tml"),
+            ArianeRoute::Refuse,
+        );
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project),
+            None,
+            "a pick the flow refuses must not be remembered as an answer"
+        );
+    }
+
+    /// [#258] The probe's answer is advisory, but the request that produces it is
+    /// authenticated: `hexsha` lands in the URL path, so anything that could reshape
+    /// that path is rejected before the request is built - the same guard the restore
+    /// path applies. Tested on the pure helper because inside the command every
+    /// rejection is indistinguishable from the "not logged in" `None`.
+    #[test]
+    fn the_probe_validates_both_ids_before_building_an_authenticated_url() {
+        let project = "44444444-4444-4444-4444-444444444444";
+        assert!(probe_inputs_valid(project, None));
+        assert!(probe_inputs_valid(project, Some("abc1234")));
+
+        for bad in [
+            "../../admin",
+            "abc/../../x",
+            "abc1234/../../projects",
+            "not-hex",
+            "abc",
+            "",
+        ] {
+            assert!(
+                !probe_inputs_valid(project, Some(bad)),
+                "`{bad}` must never reach the download-at-hash URL"
+            );
+        }
+        assert!(
+            !probe_inputs_valid("../../etc", Some("abc1234")),
+            "a bad project id is refused on the same boundary"
+        );
     }
 
     #[test]

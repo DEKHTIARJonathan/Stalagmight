@@ -13,6 +13,7 @@
 
 use super::speleodb::{local_dto, validate_project_id};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
+use super::speleodb_pull::ArianeRoute;
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
 use crate::speleodb::models::SpeleoRevision;
@@ -171,10 +172,20 @@ impl AppState {
         // [#258] Consults the session's existing answer, so a user who resolved the
         // ambiguity when they OPENED the project - before any lock existed - is not
         // asked again here, where asking costs a lock round trip.
+        // Ariane data REFUSES here rather than routing to adoption: adoption imports
+        // the project's tip, so on a revision swap it would answer a question about
+        // `hexsha` with today's contents, and there is no import-at-hash path to do
+        // otherwise. The resolver records the user's pick itself when it honours one;
+        // re-recording it here would also record an entry nobody chose, turning an
+        // unambiguous revision's sole `.stalx` into a standing session answer.
         let entry = self
-            .speleodb_resolve_entry_remembering(&project_id, &mut dump, entry_path.as_deref())
+            .speleodb_resolve_entry_remembering(
+                &project_id,
+                &mut dump,
+                entry_path.as_deref(),
+                ArianeRoute::Refuse,
+            )
             .map_err(local_dto)?;
-        self.speleodb_remember_dump_entry(&project_id, &entry);
 
         let dest = self.speleodb_cache_path(&project_id).map_err(local_dto)?;
         // Carry the user's local view toggles across the download-replace, same as a
