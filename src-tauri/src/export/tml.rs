@@ -175,10 +175,12 @@ fn reversed_leg_pitch(shot: &Shot) -> Option<f64> {
 #[derive(Debug)]
 struct ExportShot {
     id: i64,
-    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. Empty for the
+    /// Persistent Stalagmight shot UUID, emitted as `<UUID>`. `None` for the
     /// synthesized shots (START, CLOSURE, reversed / pre-zero-datum legs) that
-    /// have no 1:1 Stalagmight shot behind them.
-    uuid: String,
+    /// have no 1:1 Stalagmight shot behind them. This cannot be derived from
+    /// `shot_type`: a reversed leg re-exports a REAL shot in the opposite
+    /// direction, so it carries a real type but no identity of its own.
+    uuid: Option<String>,
     from_id: i64,
     shot_type: &'static str, // "START", "REAL", "VIRTUAL", "CLOSURE"
     section: String,
@@ -363,8 +365,8 @@ fn write_shot<W: std::io::Write>(
     // re-export of an unchanged project byte-identical - which the SpeleoDB
     // co-push render relies on. Ariane 26+ preserves it across edits, ≤25
     // ignores it.
-    if !shot.uuid.is_empty() {
-        write_text_element(writer, n.uuid, &shot.uuid)?;
+    if let Some(uuid) = &shot.uuid {
+        write_text_element(writer, n.uuid, uuid)?;
     }
 
     writer.write_event(Event::End(BytesEnd::new(n.survey_data)))?;
@@ -446,12 +448,14 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
 /// settles these before every save and before the SpeleoDB render, so the mint is a
 /// fallback for an export of a project that was never saved - without it the same
 /// project would render to different bytes on each export.
-fn shot_export_uuid(shot: &Shot) -> String {
-    shot.uuid
-        .as_deref()
-        .filter(|u| !u.is_empty())
-        .map(str::to_string)
-        .unwrap_or_else(|| uuid::Uuid::new_v4().to_string())
+fn shot_export_uuid(shot: &Shot) -> Option<String> {
+    Some(
+        shot.uuid
+            .as_deref()
+            .filter(|u| !u.is_empty())
+            .map(str::to_string)
+            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
+    )
 }
 
 fn build_export_shots(project: &Project) -> Vec<ExportShot> {
@@ -529,7 +533,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
             let mut root_shots = Vec::new();
             root_shots.push(ExportShot {
                 id: start_id,
-                uuid: String::new(),
+                uuid: None,
                 from_id: -1,
                 shot_type: "START",
                 section: section_name.clone(),
@@ -635,7 +639,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                     reverse_shots.push(ExportShot {
                         id: shot_ariane_id,
-                        uuid: String::new(),
+                        uuid: None,
                         from_id: prev_id,
                         shot_type: if shot.kind.is_virtual() {
                             "VIRTUAL"
@@ -773,7 +777,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
-                            uuid: String::new(),
+                            uuid: None,
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
                                 "VIRTUAL"
@@ -838,7 +842,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                         rev_shots.push(ExportShot {
                             id: shot_ariane_id,
-                            uuid: String::new(),
+                            uuid: None,
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
                                 "VIRTUAL"
@@ -897,7 +901,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
             shots.push(ExportShot {
                 id: start_id,
-                uuid: String::new(),
+                uuid: None,
                 from_id: -1,
                 shot_type: "START",
                 section: section_name.clone(),
@@ -1206,7 +1210,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
         closure_shots.push(ExportShot {
             id: closure_id,
-            uuid: String::new(),
+            uuid: None,
             from_id,
             shot_type: "CLOSURE",
             section: section_name,
@@ -2701,7 +2705,7 @@ mod tests {
         // let an earlier version export this 0.29 m descent as a 1.07 m ascent.
         let mut shots = vec![
             ExportShot {
-                uuid: String::new(),
+                uuid: None,
                 id: 1,
                 from_id: -1,
                 shot_type: "START",
@@ -2726,7 +2730,7 @@ mod tests {
                 locked: false,
             },
             ExportShot {
-                uuid: String::new(),
+                uuid: None,
                 id: 2,
                 from_id: 1,
                 shot_type: "REAL",
@@ -2776,7 +2780,7 @@ mod tests {
         depth_in_same_as_prev: bool,
     ) -> ExportShot {
         ExportShot {
-            uuid: String::new(),
+            uuid: None,
             id,
             from_id,
             shot_type: if from_id == -1 { "START" } else { "REAL" },
@@ -2934,7 +2938,7 @@ mod tests {
         // whether a shot is possible, so it aborts the same conversion.
         let mut shots = vec![
             ExportShot {
-                uuid: String::new(),
+                uuid: None,
                 id: 1,
                 from_id: -1,
                 shot_type: "START",
@@ -2959,7 +2963,7 @@ mod tests {
                 locked: false,
             },
             ExportShot {
-                uuid: String::new(),
+                uuid: None,
                 id: 2,
                 from_id: 1,
                 shot_type: "REAL",

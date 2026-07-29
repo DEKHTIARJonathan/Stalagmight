@@ -8,8 +8,10 @@
 //! 1. a structural edit (insert / delete) never strands an anchor, and
 //! 2. reversing a section neither mints nor drops a shot UUID.
 //!
-//! Both used to be asserted inside the collaboration reconcile fuzz harness;
-//! they are not about collaboration at all, so they outlived it.
+//! Both used to be asserted inside the collaboration reconcile fuzz harness,
+//! which lived beside the diff engine it tested. They are not about
+//! collaboration at all, so they outlived it - and they belong here, next to the
+//! `Project` geometry they constrain.
 //!
 //! Dependency-free: a SplitMix64 PRNG plus a generator bounded to a handful of
 //! representative topologies. A failing case prints its seed so it can be pinned

@@ -6,9 +6,6 @@ pub mod state;
 pub mod undo;
 pub mod validation;
 
-#[cfg(test)]
-mod anchor_fuzz;
-
 pub use command::*;
 pub use loading::*;
 pub use state::*;
