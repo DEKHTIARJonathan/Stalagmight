@@ -2795,6 +2795,11 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
     assert_eq!(p.sections_panel_mode, "pin");
     assert_eq!(p.detail_panel_mode, "pin");
     assert_eq!(p.data_table_mode, "pin");
+    // Every config written before #334 also lacks the column-width tables, so
+    // they must default to "no overrides" rather than failing the whole load and
+    // dropping the user back to stock settings.
+    assert!(p.data_table_shot_column_widths.is_empty());
+    assert!(p.data_table_station_column_widths.is_empty());
 }
 
 // ========================================================================
