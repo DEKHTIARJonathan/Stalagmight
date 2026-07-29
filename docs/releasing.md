@@ -63,10 +63,31 @@ git push origin master && git push origin --tags
 ### Release (`.github/workflows/release.yml`)
 
 - **Trigger**: push of `v*` tags
-- **Steps**: TypeScript check, Rust tests, `pnpm tauri build`
-- **Artifacts**: `.deb`, `.rpm`, `.AppImage` (Linux only - current runner is Linux)
-- Creates a GitHub release via the `gh` CLI with changelog content as the body
-- Uploads all artifacts to the release
+- **Jobs**: `verify` -> `build` (3-platform matrix) -> `release`
+
+| Job | Runner | Does |
+|-----|--------|------|
+| `verify` | `ubuntu-latest` | TypeScript check, Rust tests. Gates the whole release |
+| `build` | `ubuntu-latest`, `macos-latest`, `windows-latest` | `pnpm tauri build`, collects that platform's bundles, uploads them as a job artifact |
+| `release` | `ubuntu-latest` | Downloads all three artifact sets, extracts the changelog section, creates the GitHub release via the `gh` CLI |
+
+- **Artifacts**: `.deb` / `.rpm` / `.AppImage` (Linux), `.dmg` (macOS), `.msi` / `-setup.exe` (Windows)
+- macOS is built `--target universal-apple-darwin`, so one `.dmg` runs on both
+  Apple Silicon and Intel. Passing `--target` moves Tauri's bundle output to
+  `src-tauri/target/universal-apple-darwin/release/bundle`, which is why that
+  matrix row carries its own `bundle_dir`.
+- `fail-fast` is off so every platform reports its own failure, but `release`
+  depends on all three builds, so a partial artifact set is never published.
+- Nothing is code-signed. The release notes get an "Installing" footer telling
+  recipients how to get past Gatekeeper and SmartScreen. Signing/notarization is
+  an open decision on [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
+- `verify` runs the test suite on Linux only. Per-platform test runs are tracked
+  in [#325](https://github.com/Stalagmight/Stalagmight/issues/325); note Windows
+  needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
+
+**Runner cost**: macOS and Windows runners bill at a multiple of the Linux rate,
+so a tag is materially more expensive than it used to be. Check the current
+multipliers against GitHub's billing docs before tagging on a tight budget.
 
 ## Version locations
 
@@ -89,4 +110,17 @@ Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but 
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.
 
 ### Multi-platform builds
-Currently Linux-only. Windows/Mac builds require runners on those platforms - Tauri can't cross-compile due to platform-specific system library dependencies.
+Linux, macOS and Windows are all built from the tag by the `build` matrix. Each
+platform builds on its own runner because Tauri can't cross-compile - it needs
+that platform's system libraries.
+
+If one platform fails, the other two still build and report, but no release is
+created. Fix the failing platform and re-run the workflow, or delete and re-push
+the tag.
+
+### `release.sh` fails on macOS
+Shouldn't anymore, but this is what to look for: the script used `grep -oP` and
+GNU-style `sed -i`, neither of which exists in the BSD userland macOS ships. It
+now reads the version with POSIX `sed` and rewrites files through a helper that
+avoids `sed -i` entirely. If you add a step here, don't reach for a GNU-only
+flag - both maintainers who cut releases are on macOS.
