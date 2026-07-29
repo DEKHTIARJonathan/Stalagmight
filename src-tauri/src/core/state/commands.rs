@@ -313,7 +313,7 @@ impl AppState {
     }
 
     /// Shared structural-edit epilogue for the custom `execute_*` paths that
-    /// bypass [`Self::execute`]'s gated epilogue (collab apply, TML import).
+    /// bypass [`Self::execute`]'s gated epilogue (TML import).
     /// Converts sole-bridge closures to merges and reconciles derived offsets,
     /// then reports whether this edit INTRODUCED a CRITICAL integrity violation
     /// (dangling ref / out-of-range index / non-finite geometry). A caller that
@@ -324,21 +324,15 @@ impl AppState {
     /// `pre_had_critical` is the project's critical state BEFORE the edit. Matching
     /// `guard_introduced_corruption` / `execute`, an already-critical project (one
     /// opened with a dangling ref or non-finite shot - permitted; the banner offers
-    /// Repair) does not block an otherwise-clean collab apply / import: only NEWLY
-    /// introduced corruption rolls back.
-    /// `can_orphan_closures` mirrors [`CommandIntegrity::can_orphan_closures`]:
-    /// only an operation that can SEVER connectivity can strand a section behind a
-    /// sole-bridge closure (issue #8). Pure-addition paths (a fresh import) never
-    /// create one, so they pass `false` and skip the O(closures × connectivity)
-    /// sole-bridge scan - which otherwise dominated a large import.
-    pub(super) fn finalize_structural_edit(
-        &self,
-        pre_had_critical: bool,
-        can_orphan_closures: bool,
-    ) -> bool {
-        if can_orphan_closures {
-            self.convert_orphan_closures_in_open_project();
-        }
+    /// Repair) does not block an otherwise-clean import: only NEWLY introduced
+    /// corruption rolls back.
+    ///
+    /// No sole-bridge scan runs here. Only an operation that can SEVER
+    /// connectivity can strand a section behind a sole-bridge closure (issue #8),
+    /// and the one remaining caller is a pure-addition path (a fresh import) that
+    /// never creates one - so it would only pay the O(closures × connectivity)
+    /// cost that used to dominate a large import.
+    pub(super) fn finalize_structural_edit(&self, pre_had_critical: bool) -> bool {
         self.reconcile_geometry();
         if pre_had_critical {
             return false;
