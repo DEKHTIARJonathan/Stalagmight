@@ -72,8 +72,10 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * - #270: the envelope carries `is_remote`, so the SpeleoDB read-only gate
  *   settles with the load.
  *
- * 4 drops the header's `collab` field with Ariane collaboration mode: a v3
- * reader would misread the envelope from that field onwards.
+ * 4 drops the header's `collab` field with Ariane collaboration mode. The
+ * envelope is map-encoded (`rmp_serde::to_vec_named`), so a stale reader would
+ * find the key absent rather than misalign - the bump is a deliberate fence, not
+ * a decode requirement, and it keeps this constant honest about the shape.
  */
 const EXPECTED_VERSION = 4;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */

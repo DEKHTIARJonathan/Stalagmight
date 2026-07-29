@@ -1043,9 +1043,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             { loadingId: result.loadingId },
             { purpose: 'resolve unreadable shot kinds' }
           );
-          // Staleness guard: a user who switched or closed the project while the
-          // IPC was in flight must not get a dialog about a file that is no
-          // longer open.
           const st = get();
           if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
             useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });

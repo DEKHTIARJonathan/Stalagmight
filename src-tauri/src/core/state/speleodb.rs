@@ -3110,9 +3110,7 @@ impl AppState {
     /// co-push (#196). Mints a stable UUID for any shot still missing one - a
     /// no-op for modern files; for legacy pre-v6 shots it mints AND persists so
     /// the canonical `.stalx` (hence its push snapshot) shares the identity the
-    /// `.tml` carries. Renders via `export_tml` DIRECTLY (never the collab sibling
-    /// `export_tml_with_baseline`), discarding the baseline - the `.tml` is a
-    /// throwaway render sidecar, not the collab round-trip file.
+    /// `.tml` carries. Renders via `export_tml` into a throwaway sidecar.
     fn speleodb_render_tml(&self, dest: &Path) -> Result<(), SpeleoDbError> {
         // Snapshot the in-memory project so the UUID-persist + render run without
         // holding the project lock across the database lock.
