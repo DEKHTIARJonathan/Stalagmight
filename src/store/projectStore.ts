@@ -11,7 +11,7 @@ import {
   READ_ONLY_EDIT_NOTICE,
 } from '../utils/editErrors';
 import { hasEligibleClosures } from '../utils/closures';
-import { applyReverseAftermath, composeReverseTransforms } from '../utils/reverseAftermath';
+import { applyReverseAftermath, composeReverseTransforms, flushPlanAnchors, remapPlanPins } from '../utils/reverseAftermath';
 import { useUIStore } from './uiStore';
 import { surfaceSaveFailure } from '../utils/saveFeedback';
 import { useGlobalViewStore } from './globalViewStore';
@@ -514,20 +514,24 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       return emptyCommandResult(false, 'The project changed before this action could run.');
     }
     try {
+      // #310: anchor the gas-plan pins against the survey as it stands BEFORE this edit - a pin
+      // placed a moment ago may still be sitting on the debounce. No-op for a plan with no pins.
+      await flushPlanAnchors();
       const result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
+        // Re-resolve those pins BEFORE the refetch: the reach-field effect keys on modified_at,
+        // so a stale pin sent here would paint a route through the wrong station for a frame.
+        if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) await remapPlanPins();
         await get().refreshProjectState();
-        // The frontend's own POSITIONAL refs (gas-plan pins, the loaded-plan baseline, the
-        // distance-gradient origin) are mirrored HERE rather than by the caller, so a reverse
+        // The frontend's own POSITIONAL refs (the distance-gradient origin) are mirrored HERE
+        // rather than by the caller, so a reverse
         // and an undo can never interleave: both routes now apply their aftermath in the same
         // place, in completion order, immediately after the refresh they belong to. A dialog
         // continuation doing it later could land AFTER a concurrent undo had already mirrored
-        // the pins back, re-applying the forward shift onto restored numbering - silently,
+        // the origin back, re-applying the forward shift onto restored numbering - silently,
         // since every index stays in range.
         if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
-          applyReverseAftermath(
-            composeReverseTransforms(result.reversed_sections, get().project?.sections ?? [])
-          );
+          applyReverseAftermath(composeReverseTransforms(result.reversed_sections, get().project?.sections ?? []));
         }
         set({ isDirty: true });
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
@@ -612,6 +616,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     // everything else, which is the common case and costs nothing.
     let reversedSections: readonly ReversedSection[] | undefined;
     try {
+      await flushPlanAnchors(); // #310, see executeCommandInner
       result = await invokeIpc<CommandResult>(command, args, meta);
       if (result.success) {
         reversedSections = result.reversed_sections;
@@ -647,19 +652,21 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       result = emptyCommandResult(false, String(e));
       useUIStore.getState().showToast(result.error ?? 'Unknown error', toastId, 'error');
     } finally {
+      // #310: re-resolve the plan pins before the refetch (see executeCommandInner). In the
+      // `finally` because a PARTIAL multi-step undo renumbered too, and its pins need it just
+      // as much as a clean one's do.
+      if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) await remapPlanPins();
       await get().refreshProjectState();
       // #24: same project-switch guard as executeCommand. Section ids are small per-project
       // integers, so entries from the OUTGOING project would otherwise match sections in
-      // whatever is now open and mirror that project's pins instead.
+      // whatever is now open and mirror that project's origin instead.
       // The per-step counts come off the wire; the REFRESHED project supplies only
-      // the range to clamp into, which is the numbering the pins now have to fit.
+      // the range to clamp into, which is the numbering the origin now has to fit.
       // A multi-step undo_to can walk past a CreateShot, so the post-range count
       // is NOT the divisor the earlier steps mirrored against - composing the
       // entries is what keeps those steps landing on the right station.
       if (!projectSwitched(requestProjectKey, get().project?.created_at ?? null)) {
-        applyReverseAftermath(
-          composeReverseTransforms(reversedSections, get().project?.sections ?? [])
-        );
+        applyReverseAftermath(composeReverseTransforms(reversedSections, get().project?.sections ?? []));
       }
       // Undo/redo can change which cross-references resolve - e.g. undoing a
       // Repair restores the dropped dangling refs, redoing a delete removes a

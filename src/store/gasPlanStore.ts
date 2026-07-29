@@ -12,7 +12,13 @@ import type {
   PlanSegment,
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
-import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
+import { deepEqual, divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
+import {
+  planAnchorsForRefs,
+  planRefsForAnchors,
+  type LoadedPlanAnchors,
+  type PlanAnchor,
+} from '../utils/divePlanApi';
 
 /**
  * Mirror the Rust caps (`core/state/dive_plan.rs`), the same way `GasPlanPanel` mirrors
@@ -21,15 +27,16 @@ import { divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
  * building a plan the app will later refuse to store.
  */
 const MAX_WAYPOINTS = 64;
-/**
- * Upper bound on a plan's per-span pace/propulsion segments (#317), mirroring the Rust
- * `MAX_SEGMENTS` (`core/state/dive_plan.rs`). Not independently enforced anywhere below:
- * `segments` is always exactly `waypoints.length + 1` (the length-sync invariant the
- * setters below maintain), so the `MAX_WAYPOINTS` cap on way points already caps this too.
- * Kept as its own named constant so a reader doesn't have to re-derive the relationship.
- */
-export const MAX_SEGMENTS = MAX_WAYPOINTS + 1;
 const MAX_MARKED_POINTS = 500;
+/**
+ * How long a pin edit waits before its anchors are captured (#310).
+ *
+ * Long enough that dropping a run of way points costs one round trip rather than one per click,
+ * short enough that a normal "place a pin, go edit the survey" gesture finds the anchors already
+ * taken. It is never the last word: the mutation seam flushes a pending capture before it dispatches
+ * (see `flushAnchorCapture`), so the debounce is a latency optimisation, not a correctness window.
+ */
+const ANCHOR_CAPTURE_DEBOUNCE_MS = 300;
 
 /**
  * Gas & route-planning sub-mode state (#38, Phase 1). Runtime-only - never
@@ -73,12 +80,54 @@ export function planSpeed(gasConfig: GasConfig): number {
 }
 
 /**
+ * The gas settings with NO control anywhere in the Plan panel (#317).
+ *
+ * Every other gas field is editable in-panel, so mirroring a Settings edit into it would fight the
+ * diver's own working value. These three have Settings as their only source, which the seed-once
+ * `hydrated` gate would otherwise swallow entirely: configure a scooter after having opened Plan
+ * mode once and the rig never appears, with nothing on screen to explain why.
+ */
+export type SettingsOnlyGasFields = Pick<
+  GasConfig,
+  'dpv' | 'jump_rmv_multiplier' | 'include_reference_legs'
+>;
+
+function settingsOnlyFieldsOf(gas: GasConfig): SettingsOnlyGasFields {
+  return {
+    dpv: gas.dpv,
+    jump_rmv_multiplier: gas.jump_rmv_multiplier,
+    include_reference_legs: gas.include_reference_legs,
+  };
+}
+
+/**
+ * Force `segments` to the one-per-span invariant: exactly `waypointCount + 1` entries.
+ *
+ * The setters below all preserve that length, but two inputs arrive from outside them: a `.plnx`
+ * written before #317 existed carries NO segments at all, and a hand-built list can be any length.
+ * Left alone, a short list means the Segments tab renders fewer rows than the route has spans and
+ * the engine prices the missing ones at the plan speed while the panel shows nothing for them.
+ * Padding is the conservative repair - a fresh span inherits the plan speed and no scooter, which
+ * is the same thing an unedited span has always meant.
+ */
+function normalizeSegments(segments: PlanSegment[], waypointCount: number): PlanSegment[] {
+  const want = waypointCount + 1;
+  if (segments.length === want) return segments;
+  const out = segments.slice(0, want);
+  while (out.length < want) out.push(defaultSegment());
+  return out;
+}
+
+/**
  * Collapse two spans into one when the way point between them goes away.
  *
- * Mirrors `merge_segments_for_surviving_waypoints` (core/state/dive_plan.rs), including its tie
- * rule: the SLOWER effective speed wins, and a tie keeps `before`, so a span that was inheriting
- * the plan speed keeps inheriting it. Either half taken alone would understate the gas the merged
- * span actually costs.
+ * NOT a mirror of the backend's `merge_segments_for_surviving_waypoints` (core/state/dive_plan.rs),
+ * despite the identical arithmetic: that one reconciles a loaded plan whose anchors no longer
+ * resolve, this one implements the panel's remove-way-point button. They share only the tie rule -
+ * the SLOWER effective speed wins, a tie keeps `before` (so a span inheriting the plan speed keeps
+ * inheriting it), and `on_scooter` is ANDed - because either half taken alone would understate the
+ * gas the merged span costs. The cross-language tests below pin that arithmetic in both places; the
+ * two callers are free to diverge in everything else.
  */
 function mergeSegments(before: PlanSegment, after: PlanSegment, speed: number): PlanSegment {
   const effective = (s: PlanSegment) => s.speed_m_per_min ?? speed;
@@ -86,6 +135,78 @@ function mergeSegments(before: PlanSegment, after: PlanSegment, speed: number): 
     speed_m_per_min:
       effective(after) < effective(before) ? after.speed_m_per_min : before.speed_m_per_min,
     on_scooter: before.on_scooter && after.on_scooter,
+  };
+}
+
+/**
+ * The five plan pins, reduced to bare station refs, in one fixed slot order (#310).
+ *
+ * Everything anchor-related walks this shape, so an anchor, an `unresolved` flag and the pin it
+ * belongs to are aligned by construction rather than by three separate loops kept in step by hand.
+ */
+export interface PlanPinRefs {
+  origin: StationRef | null;
+  endpoint: StationRef | null;
+  waypoints: StationRef[];
+  markedPoints: StationRef[];
+  stageDropOverrides: (StationRef | null)[];
+}
+
+/** One value per pin slot, in `PlanPinRefs` shape. */
+interface Slotted<T> {
+  origin: T | null;
+  endpoint: T | null;
+  waypoints: (T | null)[];
+  markedPoints: (T | null)[];
+  stageDropOverrides: (T | null)[];
+}
+
+/** A backend anchor per pin; `null` = that pin has no anchor (never captured, or it named no
+ *  station), which means a re-resolve leaves it exactly where it is. */
+export type PlanAnchorSet = Slotted<PlanAnchor>;
+
+/** Pins the backend could no longer resolve, in `PlanPinRefs` shape. */
+export interface PlanPinFlags {
+  origin: boolean;
+  endpoint: boolean;
+  waypoints: boolean[];
+  markedPoints: boolean[];
+  stageDropOverrides: boolean[];
+}
+
+const NO_FLAGS: PlanPinFlags = {
+  origin: false,
+  endpoint: false,
+  waypoints: [],
+  markedPoints: [],
+  stageDropOverrides: [],
+};
+
+/** Every filled slot, in slot order - the order the two IPC calls' arrays are aligned to. */
+function collectPresent<T>(s: Slotted<T>): T[] {
+  const out: T[] = [];
+  const push = (v: T | null) => {
+    if (v !== null && v !== undefined) out.push(v);
+  };
+  push(s.origin);
+  push(s.endpoint);
+  s.waypoints.forEach(push);
+  s.markedPoints.forEach(push);
+  s.stageDropOverrides.forEach(push);
+  return out;
+}
+
+/** The inverse of `collectPresent`: scatter a reply back over the slots that were filled. */
+function redistribute<T, U>(shape: Slotted<T>, values: (U | null)[]): Slotted<U> {
+  let next = 0;
+  const take = (v: T | null): U | null =>
+    v === null || v === undefined ? null : (values[next++] ?? null);
+  return {
+    origin: take(shape.origin),
+    endpoint: take(shape.endpoint),
+    waypoints: shape.waypoints.map(take),
+    markedPoints: shape.markedPoints.map(take),
+    stageDropOverrides: shape.stageDropOverrides.map(take),
   };
 }
 
@@ -146,6 +267,36 @@ interface GasPlanState {
    *  session. Gates the panel's one-time seed so re-ENTERING Plan mode does not re-seed and
    *  clobber a loaded plan / working inputs. Cleared by `reset()` (project load / new session). */
   hydrated: boolean;
+  /**
+   * #317: the persisted values of the gas settings that have NO in-panel control, as last seen.
+   *
+   * Lives in the store rather than in a `useRef` beside the effect that reads it: `GasPlanPanel`
+   * unmounts on every mode switch, so a ref-held marker is thrown away and re-seeded each time -
+   * which makes "leave Plan, change the rig in Settings, come back" look exactly like a first
+   * observation and silently drop the edit.
+   */
+  lastSeenPersistedGas: SettingsOnlyGasFields | null;
+  /**
+   * #310: one backend anchor per live pin, and the pin refs they were taken against.
+   *
+   * A pin is a positional `StationRef`, so any survey edit that renumbers stations leaves it IN
+   * RANGE naming a different physical station - the plan silently re-prices a different route, and
+   * a Save bakes the wrong stations into the `.plnx`. The anchors are the fix: the backend names a
+   * station by the shots either side of it, so it survives the renumbering and can hand back a
+   * corrected ref. `anchoredPins` is what makes that safe - anchors are only ever applied to the
+   * exact pin set they were captured against, so a reply that raced a pin edit is dropped instead
+   * of being scattered over slots that have since moved.
+   */
+  anchors: PlanAnchorSet | null;
+  anchoredPins: PlanPinRefs | null;
+  /** The same, for `loadedPlanBaseline`'s pins - so a renumbering edit re-resolves the dirty-check
+   *  baseline too and an untouched plan does not read as unsaved afterwards. */
+  baselineAnchors: PlanAnchorSet | null;
+  baselineAnchoredPins: PlanPinRefs | null;
+  /** Pins whose anchor no longer resolves to a station (the shots on BOTH sides are gone). The pin
+   *  and its anchor are kept - a survey undo can bring the station back - but a flagged pin is
+   *  never sent to the gas engine and blocks a Save. */
+  unresolved: PlanPinFlags;
 
   setOrigin: (origin: StationRef | null) => void;
   setEndpoint: (endpoint: StationRef | null) => void;
@@ -166,39 +317,55 @@ interface GasPlanState {
   /** #298: set (or clear, with an empty string) marked point `index`'s label. */
   setMarkedPointLabel: (index: number, label: string) => void;
   /**
-   * #24: re-point every plan pin after a section reverse renumbered its stations.
+   * #310: take a backend anchor for every pin the plan currently holds, right now.
    *
-   * Every pin here is a positional `StationRef`, so a reverse leaves it in range
-   * while it starts naming the opposite physical station - the plan would
-   * silently re-price a different route. The caller supplies the already-mirrored
-   * pins (see `utils/reverseAftermath`); this only installs them, and blanks the
-   * cached field the way every other route-input setter does.
+   * Capture is debounced off each pin edit, so most of the time this finds the anchors already
+   * taken and returns without an IPC call. The mutation seam awaits it BEFORE dispatching an edit,
+   * which is the point: a pin placed 50ms ago must be anchored against the survey as it stands
+   * before the edit, or there is nothing to correct it back to afterwards.
    */
-  applyReversedPins: (
-    pins: {
-      origin: StationRef | null;
-      endpoint: StationRef | null;
-      waypoints: StationRef[];
-      markedPoints: MarkedPoint[];
-      stageDropOverrides: (StationRef | null)[];
-    },
-    baseline: DivePlanSnapshot | null
-  ) => void;
+  flushAnchorCapture: () => Promise<void>;
+  /**
+   * #310: ask the backend where the anchored pins live in TODAY's numbering and write the answer
+   * back. Called by the mutation seam after an edit lands and before the project refetch, so the
+   * reach field is recomputed against corrected pins rather than stale ones.
+   *
+   * A pin whose anchor no longer resolves is KEPT and flagged (see `unresolved`) rather than
+   * dropped: an undo of the deletion brings the station back, and a later remap clears the flag.
+   */
+  remapPinsFromAnchors: () => Promise<void>;
+  /**
+   * #317: adopt a Settings-only gas field the user changed during this session.
+   *
+   * Applies ALWAYS, including with a plan loaded. That is deliberate and is the one place the
+   * plan's snapshot is allowed to move underneath it: these fields have no in-panel control, so
+   * "the setting is ignored while a plan is open" would be indistinguishable from a broken setting.
+   * The loaded plan simply goes dirty through the ordinary `selectIsPlanDirty` path and the diver
+   * saves or discards it, exactly as if they had edited a field by hand.
+   */
+  syncSettingsOnlyGasFields: (persistedGas: GasConfig) => void;
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
   setReachField: (reachField: GasReachField | null) => void;
   setPushyAck: (ack: boolean) => void;
-  /** #244: mark the gas config seeded for this session (see `hydrated`). */
-  markHydrated: () => void;
+  /** #244: mark the gas config seeded for this session (see `hydrated`). `persistedGas` is the
+   *  config the seed came from; passing it makes the panel's mount order irrelevant by giving
+   *  `syncSettingsOnlyGasFields` its baseline up front (#317). */
+  markHydrated: (persistedGas?: GasConfig) => void;
   /** Pin (or, with `null`, reset) stage `index`'s drop to a route station. Does NOT null
    *  `reachField`, so the existing drop markers stay put during the ms-fast refetch instead of
    *  flickering; the fetch effect depends on `stageDropOverrides` and swaps the field in on arrival. */
   setStageDropOverride: (index: number, ref: StationRef | null) => void;
   /** #244: apply a loaded plan's snapshot to the inputs and mark it the clean baseline.
    *  Sets all six gas inputs at once (the reach-field effect recomputes) and nulls the
-   *  cached field so a stale overlay never shows under the new plan. */
-  applyLoadedPlan: (planId: number, snapshot: DivePlanSnapshot) => void;
+   *  cached field so a stale overlay never shows under the new plan. `anchors` are the ones the
+   *  backend resolved the snapshot's refs FROM (#310), so a load needs no capture round trip. */
+  applyLoadedPlan: (
+    planId: number,
+    snapshot: DivePlanSnapshot,
+    anchors?: LoadedPlanAnchors | null
+  ) => void;
   /** #244: after a successful Save / Save as, rebind the baseline to the EXACT snapshot that
    *  was persisted (passed in, not re-derived - so an edit made during the async save can't
    *  read clean-but-stale) under the given plan id. */
@@ -227,6 +394,12 @@ const initialState = (): Pick<
   | 'loadedPlanBaseline'
   | 'pushyAck'
   | 'hydrated'
+  | 'lastSeenPersistedGas'
+  | 'anchors'
+  | 'anchoredPins'
+  | 'baselineAnchors'
+  | 'baselineAnchoredPins'
+  | 'unresolved'
 > => ({
   origin: null,
   endpoint: null,
@@ -245,38 +418,255 @@ const initialState = (): Pick<
   loadedPlanBaseline: null,
   pushyAck: false,
   hydrated: false,
+  lastSeenPersistedGas: null,
+  anchors: null,
+  anchoredPins: null,
+  baselineAnchors: null,
+  baselineAnchoredPins: null,
+  unresolved: NO_FLAGS,
 });
 
-export const useGasPlanStore = create<GasPlanState>((set) => ({
+/** The live pins, in the shape everything anchor-related walks. */
+function pinRefsOf(
+  s: Pick<
+    GasPlanState,
+    'origin' | 'endpoint' | 'waypoints' | 'markedPoints' | 'stageDropOverrides'
+  >
+): PlanPinRefs {
+  return {
+    origin: s.origin,
+    endpoint: s.endpoint,
+    waypoints: s.waypoints,
+    markedPoints: s.markedPoints.map((m) => m.station),
+    stageDropOverrides: s.stageDropOverrides,
+  };
+}
+
+/** The same, for a persisted snapshot (the dirty-check baseline). */
+function pinRefsOfSnapshot(snapshot: DivePlanSnapshot | null): PlanPinRefs | null {
+  if (snapshot === null) return null;
+  return {
+    origin: snapshot.origin,
+    endpoint: snapshot.endpoint,
+    waypoints: snapshot.waypoints,
+    markedPoints: snapshot.marked_points.map((m) => m.station),
+    stageDropOverrides: snapshot.stage_drop_overrides,
+  };
+}
+
+/** True when the held anchors describe exactly the pins the store holds right now. */
+function anchorsAreCurrent(s: GasPlanState): boolean {
+  if (s.anchoredPins === null || !deepEqual(s.anchoredPins, pinRefsOf(s))) return false;
+  return deepEqual(s.baselineAnchoredPins, pinRefsOfSnapshot(s.loadedPlanBaseline));
+}
+
+/** Pending debounced capture, and the capture currently on the wire (module state: there is
+ *  exactly one store). */
+let captureTimer: ReturnType<typeof setTimeout> | null = null;
+let captureInFlight: Promise<void> | null = null;
+
+/**
+ * Take an anchor for every live pin AND every baseline pin, in one call.
+ *
+ * Both halves matter: the live pins are what the map and the engine read, and the baseline is
+ * what `selectIsPlanDirty` compares them against - re-resolving one without the other would
+ * report a plan the diver never touched as unsaved after any renumbering edit.
+ */
+async function captureAnchors(): Promise<void> {
+  const before = useGasPlanStore.getState();
+  if (anchorsAreCurrent(before)) return;
+  const livePins = pinRefsOf(before);
+  const basePins = pinRefsOfSnapshot(before.loadedPlanBaseline);
+  const liveRefs = collectPresent(livePins);
+  const baseRefs = basePins === null ? [] : collectPresent(basePins);
+  if (liveRefs.length + baseRefs.length === 0) {
+    useGasPlanStore.setState({
+      anchors: null,
+      anchoredPins: livePins,
+      baselineAnchors: null,
+      baselineAnchoredPins: basePins,
+    });
+    return;
+  }
+  let taken: (PlanAnchor | null)[];
+  try {
+    taken = await planAnchorsForRefs([...liveRefs, ...baseRefs]);
+  } catch (e) {
+    // No anchors is a degradation, not a failure: the pins keep working positionally (which is
+    // what they did before #310) until the next edit tries again. Throwing here would turn a
+    // backend hiccup into a failed survey edit.
+    console.debug('[gas-plan] anchor capture failed', e);
+    return;
+  }
+  if (!Array.isArray(taken)) return;
+  // Drop a reply that raced a pin edit. The anchors are positional within THIS request, so
+  // scattering them over a pin set that has since changed would hand slot N's anchor to a
+  // different station - the exact silent mis-binding the anchors exist to prevent.
+  const after = useGasPlanStore.getState();
+  if (!deepEqual(pinRefsOf(after), livePins)) return;
+  if (!deepEqual(pinRefsOfSnapshot(after.loadedPlanBaseline), basePins)) return;
+  useGasPlanStore.setState({
+    anchors: redistribute(livePins, taken.slice(0, liveRefs.length)),
+    anchoredPins: livePins,
+    baselineAnchors:
+      basePins === null ? null : redistribute(basePins, taken.slice(liveRefs.length)),
+    baselineAnchoredPins: basePins,
+  });
+}
+
+function runAnchorCapture(): Promise<void> {
+  const started = captureAnchors().finally(() => {
+    if (captureInFlight === started) captureInFlight = null;
+  });
+  captureInFlight = started;
+  return started;
+}
+
+/** Re-arm the debounce. Called from the store subscription below, so it covers every pin
+ *  mutation - including a direct `setState` - rather than each setter remembering to. */
+function scheduleAnchorCapture(): void {
+  if (captureTimer !== null) clearTimeout(captureTimer);
+  captureTimer = setTimeout(() => {
+    captureTimer = null;
+    void runAnchorCapture();
+  }, ANCHOR_CAPTURE_DEBOUNCE_MS);
+}
+
+function cancelAnchorCapture(): void {
+  if (captureTimer !== null) clearTimeout(captureTimer);
+  captureTimer = null;
+}
+
+export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   ...initialState(),
 
-  // Each input setter clears the cached field so stale reachable colors aren't
-  // shown under the new inputs' legend while the refetch is in flight (mirrors
-  // setDistanceGradientOrigin).
-  // These inputs reshuffle the drops (a different rig / route / budget), so any pinned drop
-  // overrides no longer line up, clear them alongside the stale field.
-  // The pins moved because the SURVEY was renumbered, not because the diver
-  // changed an input, so the drop overrides are kept (mirrored by the caller)
-  // rather than cleared - the route is the same physical route.
-  // `lastReachField` goes too, even though it is only ever read for MENU SHAPE:
-  // its route refs are positional and pre-reverse, and with `reachField` nulled
-  // here the ContextMenu's `reachField ?? lastReachField` fallback is GUARANTEED
-  // to be taken. A stale route set would then mark the mirrored stations
-  // off-route and hide the stage-drop entries (or offer them on a station that
-  // is no longer on the route - the unsafe direction). Blank, not mirrored: the
-  // field's refs are re-derived by the refetch this same set() triggers.
-  applyReversedPins: (pins, baseline) =>
+  flushAnchorCapture: async () => {
+    cancelAnchorCapture();
+    if (captureInFlight !== null) await captureInFlight;
+    if (anchorsAreCurrent(get())) return;
+    await runAnchorCapture();
+  },
+
+  remapPinsFromAnchors: async () => {
+    const s = get();
+    const anchors = s.anchors;
+    const pinsAtCapture = s.anchoredPins;
+    if (anchors === null || pinsAtCapture === null) return;
+    // Anchors that describe a pin set the store has since moved past are not safe to scatter.
+    if (!deepEqual(pinsAtCapture, pinRefsOf(s))) return;
+    const basePins = s.baselineAnchoredPins;
+    const baseAnchorSet = basePins === null ? null : s.baselineAnchors;
+    const liveAnchors = collectPresent(anchors);
+    const baseAnchors = baseAnchorSet === null ? [] : collectPresent(baseAnchorSet);
+    if (liveAnchors.length + baseAnchors.length === 0) return;
+    let resolved: (StationRef | null)[];
+    try {
+      resolved = await planRefsForAnchors([...liveAnchors, ...baseAnchors]);
+    } catch (e) {
+      console.debug('[gas-plan] pin re-resolve failed', e);
+      return;
+    }
+    if (!Array.isArray(resolved)) return;
+    const now = get();
+    // Same race guard as the capture: a pin edit during the round trip invalidates the alignment.
+    if (!deepEqual(pinsAtCapture, pinRefsOf(now))) return;
+    // The baseline is guarded SEPARATELY, not with an early return: a Save that landed in between
+    // replaced the baseline (making these anchors stale for it) while leaving the live pins - and
+    // the live pins are the ones the map and the engine read.
+    const baselineIntact = deepEqual(basePins, pinRefsOfSnapshot(now.loadedPlanBaseline));
+
+    const liveOut = redistribute(anchors, resolved.slice(0, liveAnchors.length));
+    const flags: PlanPinFlags = {
+      origin: anchors.origin !== null && liveOut.origin === null,
+      endpoint: anchors.endpoint !== null && liveOut.endpoint === null,
+      waypoints: anchors.waypoints.map((a, i) => a !== null && liveOut.waypoints[i] === null),
+      markedPoints: anchors.markedPoints.map((a, i) => a !== null && liveOut.markedPoints[i] === null),
+      stageDropOverrides: anchors.stageDropOverrides.map(
+        (a, i) => a !== null && liveOut.stageDropOverrides[i] === null
+      ),
+    };
+    // An unresolved pin KEEPS its old ref: the station may come back on an undo, and dropping the
+    // diver's chosen lead because a shot was deleted is a worse answer than showing it as stalled.
+    const kept = <T>(next: T | null, current: T): T => next ?? current;
+    const nextPins: PlanPinRefs = {
+      origin: liveOut.origin ?? now.origin,
+      endpoint: liveOut.endpoint ?? now.endpoint,
+      waypoints: now.waypoints.map((w, i) => kept(liveOut.waypoints[i] ?? null, w)),
+      markedPoints: now.markedPoints.map((m, i) => kept(liveOut.markedPoints[i] ?? null, m.station)),
+      stageDropOverrides: now.stageDropOverrides.map((d, i) =>
+        d === null ? null : kept(liveOut.stageDropOverrides[i] ?? null, d)
+      ),
+    };
+    const moved = !deepEqual(nextPins, pinsAtCapture);
+    const baseOut =
+      basePins === null || baseAnchorSet === null || !baselineIntact
+        ? null
+        : redistribute(baseAnchorSet, resolved.slice(liveAnchors.length));
+    const nextBasePins: PlanPinRefs | null =
+      basePins === null || baseOut === null
+        ? null
+        : {
+            origin: baseOut.origin ?? basePins.origin,
+            endpoint: baseOut.endpoint ?? basePins.endpoint,
+            waypoints: basePins.waypoints.map((w, i) => kept(baseOut.waypoints[i] ?? null, w)),
+            markedPoints: basePins.markedPoints.map((m, i) =>
+              kept(baseOut.markedPoints[i] ?? null, m)
+            ),
+            stageDropOverrides: basePins.stageDropOverrides.map((d, i) =>
+              d === null ? null : kept(baseOut.stageDropOverrides[i] ?? null, d)
+            ),
+          };
+    const baselineMoved = nextBasePins !== null && !deepEqual(nextBasePins, basePins);
+    if (!moved && !baselineMoved && deepEqual(flags, now.unresolved)) return;
+    const baseline = now.loadedPlanBaseline;
     set({
-      ...pins,
+      origin: nextPins.origin,
+      endpoint: nextPins.endpoint,
+      waypoints: nextPins.waypoints,
+      markedPoints: now.markedPoints.map((m, i) => ({ ...m, station: nextPins.markedPoints[i]! })),
+      stageDropOverrides: nextPins.stageDropOverrides,
+      unresolved: flags,
+      anchoredPins: nextPins,
+      ...(baselineMoved && baseline !== null && nextBasePins !== null
+        ? {
+            loadedPlanBaseline: {
+              ...baseline,
+              origin: nextBasePins.origin,
+              endpoint: nextBasePins.endpoint,
+              waypoints: nextBasePins.waypoints,
+              marked_points: baseline.marked_points.map((m, i) => ({
+                ...m,
+                station: nextBasePins.markedPoints[i]!,
+              })),
+              stage_drop_overrides: nextBasePins.stageDropOverrides,
+            },
+            baselineAnchoredPins: nextBasePins,
+          }
+        : {}),
+      // The pins moved, so the painted field and the menu-shape fallback both describe a route
+      // through stations that are no longer the ones pinned. Blanked exactly like every other
+      // route-input change; the refetch this triggers re-derives them.
+      ...(moved ? { reachField: null, lastReachField: null } : {}),
+    });
+  },
+
+  syncSettingsOnlyGasFields: (persistedGas) => {
+    const next = settingsOnlyFieldsOf(persistedGas);
+    const s = get();
+    // First observation is the seed, not an edit: the panel's hydrate already applied this config.
+    if (s.lastSeenPersistedGas === null) {
+      set({ lastSeenPersistedGas: next });
+      return;
+    }
+    if (deepEqual(s.lastSeenPersistedGas, next)) return;
+    // Deep-cloned for the same reason the hydrate seed is: the working config must never share a
+    // nested reference with the live persisted config.
+    set({
+      gasConfig: { ...s.gasConfig, ...structuredClone(next) },
+      lastSeenPersistedGas: next,
       reachField: null,
-      lastReachField: null,
-      // The saved-plan baseline is mirrored WITH the pins. It is positional too, so leaving it
-      // behind would make `selectIsPlanDirty` compare mirrored pins against pre-reverse indices
-      // and report a plan the diver never edited as unsaved - nagging a save, or blocking a plan
-      // switch, over a route that is still the same physical route. Nothing needs re-saving: the
-      // `.plnx` names stations by the shots they sit between, so a reverse does not move them.
-      ...(baseline === null ? {} : { loadedPlanBaseline: baseline }),
-    }),
+    });
+  },
 
   setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
   setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
@@ -317,12 +707,13 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
       // scootered: the safe direction, mirroring the backend's own reconciliation of a stale
       // way point on load (`merge_segments_for_surviving_waypoints`, core/state/dive_plan.rs).
       // Either half taken alone would understate the gas the merged span actually costs.
-      const before = s.segments[index];
-      const after = s.segments[index + 1];
-      const merged: PlanSegment =
-        before && after
-          ? mergeSegments(before, after, planSpeed(s.gasConfig))
-          : (before ?? after ?? defaultSegment());
+      // Both spans always exist: `segments` is normalised to `waypoints.length + 1` at every
+      // entry point, and `index` is in range, so `index + 1` is at most the last span.
+      const merged: PlanSegment = mergeSegments(
+        s.segments[index]!,
+        s.segments[index + 1]!,
+        planSpeed(s.gasConfig)
+      );
       return {
         waypoints: s.waypoints.filter((_w, i) => i !== index),
         segments: [...s.segments.slice(0, index), merged, ...s.segments.slice(index + 2)],
@@ -352,7 +743,12 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   // gets no reduced-RMV credit (PRD section 10), which is the conservative direction. Either way
   // the field is stale, so this nulls `reachField` and clears `stageDropOverrides` exactly like
   // `setCylinders`/`setGasConfig`.
-  setSegments: (segments) => set({ segments, reachField: null, stageDropOverrides: [] }),
+  setSegments: (segments) =>
+    set((s) => ({
+      segments: normalizeSegments(segments, s.waypoints.length),
+      reachField: null,
+      stageDropOverrides: [],
+    })),
   addMarkedPoint: (ref) =>
     set((s) =>
       s.markedPoints.length >= MAX_MARKED_POINTS
@@ -388,7 +784,16 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
   setReachField: (reachField) =>
     set(reachField ? { reachField, lastReachField: reachField } : { reachField }),
   setPushyAck: (pushyAck) => set({ pushyAck }),
-  markHydrated: () => set({ hydrated: true }),
+  markHydrated: (persistedGas) =>
+    set((s) => ({
+      hydrated: true,
+      // Seed the Settings-only baseline here too, so the panel's mount order cannot matter: a
+      // hydrate that ran before the first `syncSettingsOnlyGasFields` already establishes what
+      // "unchanged" means. Never overwrites a value a sync has since moved on from.
+      ...(persistedGas !== undefined && s.lastSeenPersistedGas === null
+        ? { lastSeenPersistedGas: settingsOnlyFieldsOf(persistedGas) }
+        : {}),
+    })),
   setStageDropOverride: (index, ref) => {
     // Guard BEFORE set so a stray negative index is a true no-op (returning {} from the updater
     // would still merge a fresh state object and wake subscribers for nothing).
@@ -401,31 +806,144 @@ export const useGasPlanStore = create<GasPlanState>((set) => ({
     });
   },
 
-  applyLoadedPlan: (planId, snapshot) =>
+  applyLoadedPlan: (planId, snapshot, anchors) => {
+    // A plan written before segments existed carries none, and a hand-edited one can carry any
+    // number; either way the panel and the engine need exactly one per span from the first render.
+    const normalized: DivePlanSnapshot = {
+      ...snapshot,
+      segments: normalizeSegments(snapshot.segments, snapshot.waypoints.length),
+    };
+    const pins = pinRefsOfSnapshot(normalized)!;
+    // The backend resolved these refs FROM these anchors moments ago, so they are already correct
+    // for the pins being installed - seeding them here saves the load path a capture round trip
+    // and, more importantly, closes the window where a survey edit could land against no anchors.
+    const seeded: PlanAnchorSet | null =
+      anchors === null || anchors === undefined
+        ? null
+        : {
+            origin: anchors.origin,
+            endpoint: anchors.endpoint,
+            waypoints: anchors.waypoints,
+            markedPoints: anchors.marked_points,
+            stageDropOverrides: anchors.stage_drop_overrides,
+          };
     set({
-      origin: snapshot.origin,
-      endpoint: snapshot.endpoint,
-      waypoints: snapshot.waypoints,
-      markedPoints: snapshot.marked_points,
-      diver: snapshot.diver,
-      cylinders: snapshot.cylinders,
-      gasConfig: snapshot.gas_config,
-      stageDropOverrides: snapshot.stage_drop_overrides,
-      segments: snapshot.segments,
+      origin: normalized.origin,
+      endpoint: normalized.endpoint,
+      waypoints: normalized.waypoints,
+      markedPoints: normalized.marked_points,
+      diver: normalized.diver,
+      cylinders: normalized.cylinders,
+      gasConfig: normalized.gas_config,
+      stageDropOverrides: normalized.stage_drop_overrides,
+      segments: normalized.segments,
       reachField: null,
       loadedPlanId: planId,
-      loadedPlanBaseline: snapshot,
-    }),
+      loadedPlanBaseline: normalized,
+      // Live and baseline pins are identical the instant a plan loads, so one anchor set serves
+      // both; they diverge on the first edit, and the next capture splits them.
+      anchors: seeded,
+      anchoredPins: seeded === null ? null : pins,
+      baselineAnchors: seeded,
+      baselineAnchoredPins: seeded === null ? null : pins,
+      unresolved: NO_FLAGS,
+    });
+  },
   markPlanSaved: (planId, baseline) =>
     set({ loadedPlanId: planId, loadedPlanBaseline: baseline }),
-  clearLoadedPlan: () => set({ loadedPlanId: null, loadedPlanBaseline: null }),
+  clearLoadedPlan: () =>
+    set({ loadedPlanId: null, loadedPlanBaseline: null, baselineAnchors: null, baselineAnchoredPins: null }),
 
-  reset: () => set(initialState()),
+  reset: () => {
+    set(initialState());
+    // After the set, not before: the subscription below re-arms the debounce on the pin change
+    // this very reset just made, and a capture left armed would fire against the next project.
+    cancelAnchorCapture();
+  },
 }));
+
+/**
+ * Re-arm the anchor capture whenever the pins move (#310).
+ *
+ * One subscription rather than a call in each of the eight pin-mutating setters: a setter added
+ * later cannot forget to opt in, and a direct `setState` (the panel's own reverse/undo paths, and
+ * tests) is covered for free. Only the pin REFS are compared, so relabelling a marked point or
+ * editing the rig does not schedule anything.
+ */
+useGasPlanStore.subscribe((state, previous) => {
+  if (deepEqual(pinRefsOf(state), pinRefsOf(previous))) return;
+  scheduleAnchorCapture();
+});
 
 /** #244: true when a plan is loaded and the live inputs diverge from its saved
  *  baseline. A never-saved exploration (`loadedPlanId === null`) is never dirty. */
 export function selectIsPlanDirty(s: GasPlanState): boolean {
   if (s.loadedPlanId === null || s.loadedPlanBaseline === null) return false;
   return !divePlanSnapshotsEqual(divePlanSnapshotOf(s), s.loadedPlanBaseline);
+}
+
+/** #310: whether the plan pins anything at all - what lets the mutation seam skip the whole
+ *  anchor round trip (two IPC calls per edit) for the overwhelmingly common empty plan. */
+export function selectHasPins(s: GasPlanState): boolean {
+  return collectPresent(pinRefsOf(s)).length > 0;
+}
+
+/** #310: any pin the backend could no longer place. Blocks a Save - persisting a pin the backend
+ *  cannot anchor is exactly how a plan acquires a silently wrong station. */
+export function selectHasUnresolvedPins(s: GasPlanState): boolean {
+  const f = s.unresolved;
+  return (
+    f.origin ||
+    f.endpoint ||
+    f.waypoints.some(Boolean) ||
+    f.markedPoints.some(Boolean) ||
+    f.stageDropOverrides.some(Boolean)
+  );
+}
+
+/** Cache so `selectComputeGate` returns a STABLE drops array. Rebuilding it per call would make
+ *  the map's `useShallow` subscription see a new value on every unrelated store write and refetch
+ *  the reach field in a loop. */
+let maskedDropsCache: {
+  drops: (StationRef | null)[];
+  flags: boolean[];
+  out: (StationRef | null)[];
+} | null = null;
+
+function maskedDrops(drops: (StationRef | null)[], flags: boolean[]): (StationRef | null)[] {
+  if (!flags.some(Boolean)) return drops;
+  if (maskedDropsCache !== null && maskedDropsCache.drops === drops && maskedDropsCache.flags === flags) {
+    return maskedDropsCache.out;
+  }
+  // Masked to null, NOT spliced out: the array is aligned by index with the field's
+  // `stage_drop_refs`, so removing an entry would silently move every later stage's drop.
+  const out = drops.map((d, i) => (flags[i] ? null : d));
+  maskedDropsCache = { drops, flags, out };
+  return out;
+}
+
+/**
+ * #310: what the reach-field fetch is allowed to send.
+ *
+ * A stale positional pin is not a harmless one: after a delete it still names a station that
+ * EXISTS, just the wrong one, so the engine happily prices a route the diver never asked for. So
+ * anything the backend could not re-place is withheld here rather than sent:
+ *  - a way point STALLS the whole compute (`skip`), because the plan is defined as visiting it in
+ *    order and there is no honest field to draw without it - the #298 contract;
+ *  - the origin and endpoint DEGRADE to their defaults (entrance / deepest in-budget), which is
+ *    the same graceful fallback a plan with a dangling anchor gets on load;
+ *  - a stage drop falls back to the strategy default.
+ */
+export function selectComputeGate(s: GasPlanState): {
+  skip: boolean;
+  origin: StationRef | null;
+  endpoint: StationRef | null;
+  stageDropOverrides: (StationRef | null)[];
+} {
+  return {
+    skip: s.unresolved.waypoints.some(Boolean),
+    origin: s.unresolved.origin ? null : s.origin,
+    endpoint: s.unresolved.endpoint ? null : s.endpoint,
+    stageDropOverrides: maskedDrops(s.stageDropOverrides, s.unresolved.stageDropOverrides),
+  };
 }

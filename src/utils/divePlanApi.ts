@@ -5,6 +5,7 @@ import type {
   DivePlanSnapshot,
   DiveProfileRequest,
 } from '../types/ipc.generated';
+import type { StationRef } from '../types/project';
 
 /**
  * `DiveProfileRequest` is the plan-input tuple `compute_gas_reach_field` takes, and it is GENERATED
@@ -84,5 +85,70 @@ export function deleteDivePlan(id: number): Promise<void> {
     'delete_dive_plan',
     { id },
     { purpose: 'delete dive plan', fields: { id } }
+  );
+}
+
+/**
+ * A backend station anchor (#310), deliberately OPAQUE on this side.
+ *
+ * The backend names a station by the shots on either side of it, so an anchor survives a
+ * renumbering that a positional `StationRef` does not (insert, delete, split, reverse). TypeScript
+ * only ever carries one from `plan_anchors_for_refs` back to `plan_refs_for_anchors`; typing its
+ * innards here would create a second, hand-maintained copy of a Rust enum that changes for
+ * backend-only reasons, and the compiler would be checking a shape nothing on this side reads.
+ */
+export type PlanAnchor = unknown;
+
+/** The anchors a `load_dive_plan` reply carries alongside the snapshot, one per persisted pin. */
+export interface LoadedPlanAnchors {
+  origin: PlanAnchor | null;
+  endpoint: PlanAnchor | null;
+  waypoints: (PlanAnchor | null)[];
+  marked_points: (PlanAnchor | null)[];
+  stage_drop_overrides: (PlanAnchor | null)[];
+}
+
+/**
+ * Read the anchors off a loaded plan, or `null` when the reply carries none.
+ *
+ * Read defensively rather than off the generated `DivePlan` type: the e2e IPC mock and any
+ * pre-#310 backend answer without them, and the alternative - trusting the field and handing
+ * `undefined` arrays to the store - turns a missing feature into a crash on the load path.
+ */
+export function planAnchorsOf(plan: DivePlan): LoadedPlanAnchors | null {
+  const raw: unknown = plan.anchors;
+  if (raw === null || typeof raw !== 'object') return null;
+  const a = raw as Partial<LoadedPlanAnchors>;
+  if (
+    !Array.isArray(a.waypoints) ||
+    !Array.isArray(a.marked_points) ||
+    !Array.isArray(a.stage_drop_overrides)
+  ) {
+    return null;
+  }
+  return {
+    origin: a.origin ?? null,
+    endpoint: a.endpoint ?? null,
+    waypoints: a.waypoints,
+    marked_points: a.marked_points,
+    stage_drop_overrides: a.stage_drop_overrides,
+  };
+}
+
+/** Anchor live plan pins, index-aligned with `refs`; `null` = that ref names no real station. */
+export function planAnchorsForRefs(refs: StationRef[]): Promise<(PlanAnchor | null)[]> {
+  return invokeIpc<(PlanAnchor | null)[]>(
+    'plan_anchors_for_refs',
+    { refs },
+    { purpose: 'anchor the live dive-plan pins', fields: { count: refs.length } }
+  );
+}
+
+/** Re-resolve anchors to today's numbering; `null` = the anchor no longer names a station. */
+export function planRefsForAnchors(anchors: PlanAnchor[]): Promise<(StationRef | null)[]> {
+  return invokeIpc<(StationRef | null)[]>(
+    'plan_refs_for_anchors',
+    { anchors },
+    { purpose: 're-resolve the dive-plan pins after a survey edit', fields: { count: anchors.length } }
   );
 }

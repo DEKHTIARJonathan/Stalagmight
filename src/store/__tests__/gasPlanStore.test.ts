@@ -1,8 +1,16 @@
-import { describe, it, expect, beforeEach } from 'vitest';
-import { useGasPlanStore, selectIsPlanDirty, MAX_SEGMENTS } from '../gasPlanStore';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+// The store takes backend anchors for its pins on a debounce (#310). Nothing here exercises that
+// path, and an un-mocked capture would reach for a Tauri bridge that does not exist under vitest.
+vi.mock('../../utils/divePlanApi', () => ({
+  planAnchorsForRefs: vi.fn(async () => []),
+  planRefsForAnchors: vi.fn(async () => []),
+}));
+
+import { useGasPlanStore, selectIsPlanDirty } from '../gasPlanStore';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import { defaultConfig } from '../../types/config';
-import type { GasReachField } from '../../types/ipc.generated';
+import type { GasConfig, GasReachField } from '../../types/ipc.generated';
 
 const fakeField = (): GasReachField => ({
   station_refs: [],
@@ -259,12 +267,12 @@ describe('gasPlanStore segments (#317)', () => {
     expect(useGasPlanStore.getState().segments).toHaveLength(3);
   });
 
-  it('stays synced at the way-point cap too (MAX_SEGMENTS mirrors MAX_WAYPOINTS + 1)', () => {
+  it('stays synced at the way-point cap too (64 way points -> 65 spans)', () => {
     for (let i = 0; i < 70; i++) {
       useGasPlanStore.getState().addWaypoint({ section_id: 9, station_index: i });
     }
     expect(useGasPlanStore.getState().waypoints).toHaveLength(64);
-    expect(useGasPlanStore.getState().segments).toHaveLength(MAX_SEGMENTS);
+    expect(useGasPlanStore.getState().segments).toHaveLength(65);
   });
 
   it('addWaypoint splits the last span; both halves inherit the split segment\'s values', () => {
@@ -366,6 +374,69 @@ describe('gasPlanStore segments (#317)', () => {
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
   });
 
+  it('normalises a loaded plan that carries NO segments (every pre-#317 .plnx)', () => {
+    // The regression this pins: `merge_segments_for_surviving_waypoints([], ..)` returns `[]`
+    // unconditionally, `applyLoadedPlan` took the snapshot verbatim, and add/remove way point
+    // both ASSUME the length invariant already holds - so they never healed it. Every plan
+    // written before segments existed loaded with zero rows in the Segments tab, for a route
+    // with two spans.
+    useGasPlanStore.getState().addWaypoint(a);
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().reset();
+    useGasPlanStore.getState().applyLoadedPlan(1, { ...snapshot, segments: [] });
+    expect(useGasPlanStore.getState().waypoints).toHaveLength(1);
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: null, on_scooter: false },
+      { speed_m_per_min: null, on_scooter: false },
+    ]);
+  });
+
+  it('truncates a loaded plan that carries MORE segments than it has spans', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(1, {
+      ...snapshot,
+      waypoints: [],
+      segments: [
+        { speed_m_per_min: 12, on_scooter: false },
+        { speed_m_per_min: 30, on_scooter: true },
+        { speed_m_per_min: 40, on_scooter: true },
+      ],
+    });
+    // Truncated from the END, so span 0 keeps the pace the diver set for it.
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 12, on_scooter: false },
+    ]);
+  });
+
+  it('a normalised plan stays length-synced through the next add and remove', () => {
+    // The healing has to leave the store in the state the setters assume, not merely look right
+    // once: `removeWaypoint` indexes `segments[index + 1]` with no fallback of its own.
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore
+      .getState()
+      .applyLoadedPlan(1, { ...snapshot, waypoints: [a, b], segments: [] });
+    expect(useGasPlanStore.getState().segments).toHaveLength(3);
+    useGasPlanStore.getState().addWaypoint(c);
+    expect(useGasPlanStore.getState().segments).toHaveLength(4);
+    useGasPlanStore.getState().removeWaypoint(1);
+    expect(useGasPlanStore.getState().segments).toHaveLength(3);
+  });
+
+  it('setSegments pads or truncates to the live span count', () => {
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().setSegments([{ speed_m_per_min: 7, on_scooter: false }]);
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 7, on_scooter: false },
+      { speed_m_per_min: null, on_scooter: false },
+    ]);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 7, on_scooter: false },
+      { speed_m_per_min: 8, on_scooter: false },
+      { speed_m_per_min: 9, on_scooter: false },
+    ]);
+    expect(useGasPlanStore.getState().segments).toHaveLength(2);
+  });
+
   it('reset restores the single default segment (no leak across plan sessions)', () => {
     useGasPlanStore.getState().addWaypoint(a);
     useGasPlanStore.getState().setSegments([
@@ -448,6 +519,12 @@ describe('gasPlanStore marked points (#298)', () => {
   });
 });
 
+/** A persisted gas config that differs from the compiled default only where asked. */
+const gas = (overrides: Partial<GasConfig> = {}): GasConfig => ({
+  ...structuredClone(defaultConfig.gas),
+  ...overrides,
+});
+
 describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
   beforeEach(() => {
     useGasPlanStore.getState().reset();
@@ -509,6 +586,16 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     expect(useGasPlanStore.getState().loadedPlanBaseline).toBeNull();
   });
 
+  it('markHydrated seeds the Settings-only baseline, so a later sync is not read as an edit', () => {
+    useGasPlanStore.getState().markHydrated(gas({ jump_rmv_multiplier: 3 }));
+    expect(useGasPlanStore.getState().lastSeenPersistedGas?.jump_rmv_multiplier).toBe(3);
+    // Same values arriving from the panel's first sync must not count as a change.
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 3 }));
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(
+      defaultConfig.gas.jump_rmv_multiplier
+    );
+  });
+
   it('markHydrated sets the session seed flag; reset clears it (re-seed on new session)', () => {
     // Gates the panel's one-time config seed so re-entering Plan mode does not clobber
     // a loaded plan / working inputs (the store persists across mode switches now).
@@ -517,5 +604,94 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     expect(useGasPlanStore.getState().hydrated).toBe(true);
     useGasPlanStore.getState().reset();
     expect(useGasPlanStore.getState().hydrated).toBe(false);
+  });
+});
+
+/**
+ * Settings-only gas fields, mirrored into the working config mid-session (#317).
+ *
+ * The bug this replaces: the marker for "what did Settings last say" lived in a `useRef` inside
+ * `GasPlanPanel`, which UNMOUNTS on every mode switch. So the sequence a diver actually performs -
+ * open Plan, go to Survey, configure a scooter in Settings, come back - threw the marker away and
+ * re-seeded it from the NEW value, making a real edit look like a first observation. The rig never
+ * appeared, and there is no in-panel control that could have explained why.
+ */
+describe('gasPlanStore Settings-only gas sync (#317)', () => {
+  const rig = (speed: number) => ({
+    primary: { speed_m_per_min: speed, burn_minutes: 120, label: null },
+    backup: { speed_m_per_min: speed, burn_minutes: 60, label: null },
+    range_reserve_fraction: 0.1,
+  });
+
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('ignores the first observation, then adopts a later change', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(45) }));
+    // The hydrate seed already applied this config; treating it as an edit would clobber a
+    // loaded plan's own rig with the diver's personal default on every panel mount.
+    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(60) }));
+    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(60);
+  });
+
+  it('survives a panel REMOUNT - the marker is store state, not a component ref', () => {
+    // A remount re-runs the panel's hydrate. If that re-seeded the marker, the edit below would
+    // read as a first observation and be swallowed. This is the exact #317 M2 regression, and it
+    // only reproduces across an unmount: a test that merely re-renders cannot see it.
+    useGasPlanStore.getState().markHydrated(gas({ dpv: null }));
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null }));
+    // ... diver leaves Plan mode (panel unmounts), sets up a scooter, comes back (panel remounts,
+    // hydrate runs again against the already-hydrated store).
+    useGasPlanStore.getState().markHydrated(gas({ dpv: rig(45) }));
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(45) }));
+    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(45);
+  });
+
+  it('applies with a plan loaded, and the plan goes DIRTY rather than the edit being dropped', () => {
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(4, snapshot);
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 1.5 }));
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 2.5 }));
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(2.5);
+    // Deliberate: the setting has no in-panel control, so silently ignoring it while a plan is
+    // open would be indistinguishable from a broken setting. The diver saves or discards.
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(true);
+    // And the baseline is NOT rebaselined - that would hide the divergence it just created.
+    expect(useGasPlanStore.getState().loadedPlanBaseline?.gas_config.jump_rmv_multiplier).toBe(
+      snapshot.gas_config.jump_rmv_multiplier
+    );
+  });
+
+  it('nulls the cached reachField - all three fields are gas inputs', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ include_reference_legs: false }));
+    useGasPlanStore.getState().setReachField(fakeField());
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ include_reference_legs: true }));
+    expect(useGasPlanStore.getState().reachField).toBeNull();
+  });
+
+  it('a no-change call is a true no-op (same state object, no wasted refetch)', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 1.5 }));
+    const before = useGasPlanStore.getState();
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 1.5 }));
+    expect(useGasPlanStore.getState()).toBe(before);
+  });
+
+  it('does not share a nested reference with the persisted config it copied from', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null }));
+    const persisted = gas({ dpv: rig(45) });
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(persisted);
+    expect(useGasPlanStore.getState().gasConfig.dpv).not.toBe(persisted.dpv);
+  });
+
+  it('reset clears the marker, so a new project re-seeds instead of comparing across projects', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 1.5 }));
+    expect(useGasPlanStore.getState().lastSeenPersistedGas).not.toBeNull();
+    useGasPlanStore.getState().reset();
+    expect(useGasPlanStore.getState().lastSeenPersistedGas).toBeNull();
   });
 });

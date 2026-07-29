@@ -2,11 +2,17 @@
  * Undo/redo of a section reverse must move the frontend's positional refs back
  * with it (#24).
  *
- * The hazard: a reverse renumbers station `i` to `N - i`, and the gas-plan pins
- * plus the distance-gradient origin are plain `StationRef`s. Undo restores the
- * old numbering but leaves those refs where the forward mirror put them - still
- * IN RANGE, now naming the opposite physical station, and (for the plan) written
- * straight into the saved dive plan. No error is ever raised.
+ * The hazard: a reverse renumbers station `i` to `N - i`, and the
+ * distance-gradient origin is a plain `StationRef`. Undo restores the old
+ * numbering but leaves it where the forward mirror put it - still IN RANGE, now
+ * naming the opposite physical station, so the penetration ramp silently
+ * re-roots from the far end while still looking correct. No error is raised.
+ *
+ * The GAS PLAN's pins used to ride along here and no longer do (#310): they hold
+ * backend anchors and are re-resolved around every mutation, which is
+ * reverse-proof by construction. One test below pins that they are NOT mirrored
+ * a second time; the anchor round trip itself is covered in
+ * `gasPlanAnchors.test.ts`.
  *
  * `executeUndoRedo` therefore re-mirrors the sections the backend reports on the
  * result as renumbered (`CommandResult.reversed_sections`, populated for a
@@ -147,29 +153,9 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     useProjectStore.setState({ stations: line(REVERSED), project: null });
   });
 
-  it('mirrors the plan pins back when an undo flips the numbering', async () => {
-    const gas = useGasPlanStore.getState();
-    gas.setOrigin(ref(3));
-    gas.setEndpoint(ref(2));
-    gas.addWaypoint(ref(1));
-    gas.addMarkedPoint(ref(0));
-    gas.setStageDropOverride(0, ref(2));
-
-    serveState(line(FORWARD), [reversed(3)]);
-    await useProjectStore.getState().undo();
-
-    const after = useGasPlanStore.getState();
-    expect(after.origin).toEqual(ref(0));
-    expect(after.endpoint).toEqual(ref(1));
-    expect(after.waypoints).toEqual([ref(2)]);
-    expect(after.markedPoints[0]?.station).toEqual(ref(3));
-    expect(after.stageDropOverrides[0]).toEqual(ref(1));
-  });
-
   it('mirrors the distance-gradient origin and clears armed tool state', async () => {
     useUIStore.setState({ distanceGradientOrigin: ref(3) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(3) });
-    // With the plan empty, the distance origin has to be enough on its own.
     serveState(line(FORWARD), [reversed(3)]);
     await useProjectStore.getState().undo();
 
@@ -177,30 +163,45 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     expect(useUIStore.getState().selection).toBeNull();
   });
 
-  it('re-mirrors on redo too, and on a multi-step undo_to', async () => {
+  it('leaves the GAS PLAN pins to the anchor round trip instead (#310)', async () => {
+    // Mirroring them HERE as well would apply the shift twice, landing each pin back on the
+    // station the reverse moved it off. `executeUndoRedo` re-resolves them from backend anchors
+    // before this runs - see `gasPlanAnchors.test.ts`, which drives that half end to end.
     useGasPlanStore.getState().setOrigin(ref(3));
+    useGasPlanStore.getState().addWaypoint(ref(1));
+
+    serveState(line(FORWARD), [reversed(3)]);
+    await useProjectStore.getState().undo();
+
+    const after = useGasPlanStore.getState();
+    expect(after.origin).toEqual(ref(3));
+    expect(after.waypoints).toEqual([ref(1)]);
+  });
+
+  it('re-mirrors on redo too, and on a multi-step undo_to', async () => {
+    useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     serveState(line(FORWARD), [reversed(3)]);
     await useProjectStore.getState().redo();
-    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
 
     // And back again through the history dropdown's multi-step path, which
     // reports one entry per reversing step it walked past.
     useProjectStore.setState({ stations: line(FORWARD) });
     serveState(line(REVERSED), [reversed(3)]);
     await useProjectStore.getState().undoTo(2);
-    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
   });
 
-  it('leaves the pins alone on an undo that did not renumber anything', async () => {
-    useGasPlanStore.getState().setOrigin(ref(3));
+  it('leaves the origin alone on an undo that did not renumber anything', async () => {
+    useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     // No `reversed_sections` on the wire: an ordinary undo must not churn the
-    // plan.
+    // distance ramp.
     serveState(line(REVERSED));
     await useProjectStore.getState().undo();
 
-    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
     expect(useUIStore.getState().selection).toBeNull();
   });
 
@@ -209,13 +210,11 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // both reversed and moved the section leaves its stations matching NEITHER
     // the old numbering nor its mirror, so the geometry reports nothing while
     // the numbering really did flip. The backend says so outright instead.
-    useGasPlanStore.getState().setOrigin(ref(3));
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
 
     serveState(line(REVERSED_AND_MOVED), [reversed(3)]);
     await useProjectStore.getState().undo();
 
-    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
   });
 
@@ -226,13 +225,13 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // per-entry replay would drag onto an end station (`9 -> 0 -> 7`), because
     // each replayed mirror clamps, and it is what the identity map would clamp to
     // `maxIndex` if `applyReverseAftermath` ran at all.
-    useGasPlanStore.getState().setOrigin(ref(9));
+    useUIStore.setState({ distanceGradientOrigin: ref(9) });
     useUIStore.getState().setSelection({ type: 'station', stationRef: ref(2) });
 
     serveState(line(REVERSED), [reversed(7), reversed(7)]);
     await useProjectStore.getState().undoTo(1);
 
-    expect(useGasPlanStore.getState().origin).toEqual(ref(9));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(9));
     // The four UI clears are gated on the same "did anything actually renumber"
     // question, and a cancelled-out range did not: the user's selection and
     // half-staged merge are still valid.
@@ -244,12 +243,12 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // mirrored against 4 shots then 3, so the net map is `i -> 3 - (4 - i)`, i.e.
     // one station down. Cancelling the repeat (parity) would leave the pin at 3;
     // dividing by the post-range count alone would send it to 0.
-    useGasPlanStore.getState().setOrigin(ref(3));
+    useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     serveState(line(FORWARD), [reversed(4), reversed(3)]);
     await useProjectStore.getState().undoTo(2);
 
-    expect(useGasPlanStore.getState().origin).toEqual(ref(2));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
   });
 
   it('mirrors what a PARTIALLY failed undo_to already applied', async () => {
@@ -257,26 +256,24 @@ describe('projectStore undo/redo re-mirrors positional refs (#24)', () => {
     // backend attaches them to the failure return. Ignoring the field on
     // `success === false` leaves the pins on the opposite physical stations with
     // only a step-N-of-M toast to explain it.
-    useGasPlanStore.getState().setOrigin(ref(3));
     useUIStore.setState({ distanceGradientOrigin: ref(1) });
 
     serveState(line(FORWARD), [reversed(3)], 'Undo failed at step 2 of 3: boom');
     const result = await useProjectStore.getState().undoTo(2);
 
     expect(result.success).toBe(false);
-    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
     expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(2));
   });
 
   it('ignores the field on a failure that mutated nothing', async () => {
     // Step 1 of N failing means no step landed, so there is nothing to mirror -
     // and `executeUndoRedo` only reads the field for the partial case.
-    useGasPlanStore.getState().setOrigin(ref(3));
+    useUIStore.setState({ distanceGradientOrigin: ref(3) });
 
     serveState(line(REVERSED), [reversed(3)], 'Undo failed at step 1 of 3: boom');
     await useProjectStore.getState().undoTo(2);
 
-    expect(useGasPlanStore.getState().origin).toEqual(ref(3));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(3));
   });
 });
 
@@ -284,6 +281,7 @@ describe('frontend mutation ordering (#24)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     useGasPlanStore.getState().reset();
+    useUIStore.setState({ distanceGradientOrigin: null });
     useProjectStore.setState({ project: null });
   });
 
@@ -294,7 +292,7 @@ describe('frontend mutation ordering (#24)', () => {
     // operation can finish first and its aftermath lands before the first one's - walking the
     // pins onto a different station, in range and silent.
     const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
-    useGasPlanStore.setState({ origin: ref(1) });
+    useUIStore.setState({ distanceGradientOrigin: ref(1) });
 
     // The FIRST call resolves slowly, the second immediately - so completion order would be
     // reversed if nothing serialised them.
@@ -331,7 +329,7 @@ describe('frontend mutation ordering (#24)', () => {
 
     // Composed in issue order: i -> 7 - i then i -> 6 - i, i.e. 1 -> 6 -> 0.
     // The reverse order would give 1 -> 5 -> 2, a different station.
-    expect(useGasPlanStore.getState().origin).toEqual(ref(0));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(0));
   });
 
   it('never sends a queued command against a project that opened while it waited', async () => {

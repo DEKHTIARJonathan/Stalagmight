@@ -1,11 +1,16 @@
 /**
- * Plan-pin mirroring after a section reverse (#24).
+ * Positional-ref mirroring after a section reverse (#24).
  *
  * The hazard these pin: a reverse renumbers station `i` to `N - i`, so a
  * positional `StationRef` stays IN RANGE and silently names a different physical
- * station. For the gas plan that means the same UI re-prices a different route,
- * with no error - so every assertion here compares against a mirrored index, and
- * every fixture uses a station index that differs from its mirror.
+ * station - the distance ramp silently re-roots from the far end while still
+ * looking correct. So every assertion here compares against a mirrored index,
+ * and every fixture uses a station index that differs from its mirror.
+ *
+ * The GAS PLAN's pins are no longer among them (#310): they hold backend
+ * anchors and are re-resolved around every mutation instead, which is
+ * reverse-proof by construction. Their coverage lives in the store
+ * (`gasPlanAnchors.test.ts`), against the real IPC round trip.
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
@@ -13,14 +18,12 @@ import {
   composeReverseTransforms,
   isIdentityTransform,
   mirrorRef,
-  mirrorPlanPins,
-  planPinsAffected,
   singleReverseTransform,
-  type PlanPins,
   type ReverseTransform,
 } from '../reverseAftermath';
 import { applyReverseAftermath } from '../reverseAftermath';
 import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useUIStore } from '../../store/uiStore';
 import type { Section } from '../../types/project';
 
 const REVERSED = 7;
@@ -29,17 +32,6 @@ const UNTOUCHED = 9;
 const counts = new Map([[REVERSED, singleReverseTransform(7)]]);
 
 const ref = (section_id: number, station_index: number) => ({ section_id, station_index });
-
-function pins(overrides: Partial<PlanPins> = {}): PlanPins {
-  return {
-    origin: null,
-    endpoint: null,
-    waypoints: [],
-    markedPoints: [],
-    stageDropOverrides: [],
-    ...overrides,
-  };
-}
 
 describe('mirrorRef', () => {
   it('maps i to N - i inside a reversed section', () => {
@@ -57,36 +49,16 @@ describe('mirrorRef', () => {
   });
 
   it('clamps a ref that outlived the shots it was dropped on', () => {
-    // Gas pins survive shot deletion (their only reset is a project switch), so
-    // station_index can sit past the end of a now-shorter section. The raw
-    // mirror would go NEGATIVE, and station_index is a u32 on the Rust side -
-    // serde would reject the whole compute_gas_reach_field call and the reach
-    // overlay would fail permanently on one poisoned pin.
+    // The distance origin survives shot deletion (its only reset is a project
+    // switch), so station_index can sit past the end of a now-shorter section.
+    // The raw mirror would go NEGATIVE, and station_index is a u32 on the Rust
+    // side - serde would reject the whole call and the overlay would fail
+    // permanently on one poisoned ref.
     expect(mirrorRef(ref(REVERSED, 12), counts)).toEqual(ref(REVERSED, 0));
     expect(mirrorRef(ref(REVERSED, 8), counts)).toEqual(ref(REVERSED, 0));
     // Exactly at the end still mirrors normally - the clamp must not eat it.
     expect(mirrorRef(ref(REVERSED, 7), counts)).toEqual(ref(REVERSED, 0));
     expect(mirrorRef(ref(REVERSED, 6), counts)).toEqual(ref(REVERSED, 1));
-  });
-
-  it('never emits a negative index through a whole plan', () => {
-    const out = mirrorPlanPins(
-      pins({
-        origin: ref(REVERSED, 40),
-        waypoints: [ref(REVERSED, 9)],
-        markedPoints: [{ station: ref(REVERSED, 30), label: null }],
-        stageDropOverrides: [ref(REVERSED, 99)],
-      }),
-      counts
-    );
-    for (const idx of [
-      out.origin?.station_index,
-      out.waypoints[0]?.station_index,
-      out.markedPoints[0]?.station.station_index,
-      out.stageDropOverrides[0]?.station_index,
-    ]) {
-      expect(idx).toBeGreaterThanOrEqual(0);
-    }
   });
 
   it('leaves an out-of-range ref exactly where it is for an identity transform', () => {
@@ -99,71 +71,6 @@ describe('mirrorRef', () => {
     expect(applyTransform(ref(REVERSED, 12), { shift: 0, sign: 1, maxIndex: 7 })).toEqual(
       ref(REVERSED, 7)
     );
-  });
-});
-
-describe('mirrorPlanPins', () => {
-  it('mirrors every pin kind, and only in the reversed section', () => {
-    const before = pins({
-      origin: ref(REVERSED, 0),
-      endpoint: ref(UNTOUCHED, 1),
-      waypoints: [ref(REVERSED, 2), ref(UNTOUCHED, 3)],
-      markedPoints: [{ station: ref(REVERSED, 1), label: 'restriction' }],
-      stageDropOverrides: [ref(REVERSED, 6), null],
-    });
-
-    expect(mirrorPlanPins(before, counts)).toEqual(
-      pins({
-        origin: ref(REVERSED, 7),
-        endpoint: ref(UNTOUCHED, 1),
-        waypoints: [ref(REVERSED, 5), ref(UNTOUCHED, 3)],
-        markedPoints: [{ station: ref(REVERSED, 6), label: 'restriction' }],
-        stageDropOverrides: [ref(REVERSED, 1), null],
-      })
-    );
-  });
-
-  it('keeps a marked point label attached to its station', () => {
-    const out = mirrorPlanPins(
-      pins({ markedPoints: [{ station: ref(REVERSED, 2), label: 'lead' }] }),
-      counts
-    );
-    expect(out.markedPoints[0]).toEqual({ station: ref(REVERSED, 5), label: 'lead' });
-  });
-
-  it('leaves a null origin/endpoint null rather than inventing station 0', () => {
-    const out = mirrorPlanPins(pins(), counts);
-    expect(out.origin).toBeNull();
-    expect(out.endpoint).toBeNull();
-  });
-});
-
-describe('planPinsAffected', () => {
-  it('is false when no pin sits in a reversed section', () => {
-    expect(planPinsAffected(pins(), counts)).toBe(false);
-    expect(planPinsAffected(pins({ origin: ref(UNTOUCHED, 0) }), counts)).toBe(false);
-  });
-
-  it('detects a pin in any slot', () => {
-    expect(planPinsAffected(pins({ origin: ref(REVERSED, 0) }), counts)).toBe(true);
-    expect(planPinsAffected(pins({ endpoint: ref(REVERSED, 0) }), counts)).toBe(true);
-    expect(planPinsAffected(pins({ waypoints: [ref(REVERSED, 1)] }), counts)).toBe(true);
-    expect(
-      planPinsAffected(
-        pins({ markedPoints: [{ station: ref(REVERSED, 1), label: null }] }),
-        counts
-      )
-    ).toBe(true);
-    expect(
-      planPinsAffected(pins({ stageDropOverrides: [null, ref(REVERSED, 1)] }), counts)
-    ).toBe(true);
-  });
-
-  it('ignores a section whose reverses cancelled out', () => {
-    // Nothing was renumbered there, so re-installing the plan would be pure churn
-    // (and, for an out-of-range pin, an actual move - see the identity test above).
-    const identity = new Map([[REVERSED, { shift: 0, sign: 1 as const, maxIndex: 7 }]]);
-    expect(planPinsAffected(pins({ origin: ref(REVERSED, 2) }), identity)).toBe(false);
   });
 });
 
@@ -292,60 +199,36 @@ describe('composeReverseTransforms', () => {
   });
 });
 
-describe('applyReverseAftermath and the loaded-plan baseline', () => {
+describe('applyReverseAftermath', () => {
   beforeEach(() => {
-    useGasPlanStore.setState({
-      origin: ref(REVERSED, 2),
-      endpoint: null,
-      waypoints: [],
-      markedPoints: [],
-      stageDropOverrides: [],
-      loadedPlanId: 1,
-      loadedPlanBaseline: null,
-    });
+    useGasPlanStore.getState().reset();
+    useUIStore.setState({ distanceGradientOrigin: null });
   });
 
-  it('mirrors the saved-plan baseline alongside the pins', () => {
-    // The baseline holds the same POSITIONAL refs as the live pins. Mirroring one without the
-    // other makes selectIsPlanDirty compare two different numberings and call a plan the diver
-    // never touched unsaved - nagging a save, or blocking a plan switch, over a route that is
-    // still the same physical route.
-    const store = useGasPlanStore.getState();
-    store.applyLoadedPlan(1, {
-      origin: ref(REVERSED, 2),
-      endpoint: null,
-      waypoints: [],
-      diver: store.diver,
-      cylinders: store.cylinders,
-      gas_config: store.gasConfig,
-      stage_drop_overrides: [],
-      marked_points: [],
-      segments: store.segments,
-    });
-
+  it('mirrors the distance-gradient origin', () => {
+    useUIStore.setState({ distanceGradientOrigin: ref(REVERSED, 2) });
     applyReverseAftermath(counts);
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(REVERSED, 5));
+  });
 
+  it('leaves the GAS PLAN pins alone - they are anchor-resolved, not mirrored (#310)', () => {
+    // Mirroring here as well as re-resolving from anchors would apply the shift TWICE, landing
+    // the pin back on the station the reverse moved it off. The seam re-resolves them
+    // (`remapPlanPins`) before this runs; see `gasPlanAnchors.test.ts` for that half.
+    useGasPlanStore.setState({ origin: ref(REVERSED, 2), endpoint: ref(REVERSED, 1) });
+    applyReverseAftermath(counts);
     const after = useGasPlanStore.getState();
-    expect(after.origin).toEqual(ref(REVERSED, 5));
-    expect(after.loadedPlanBaseline?.origin).toEqual(ref(REVERSED, 5));
+    expect(after.origin).toEqual(ref(REVERSED, 2));
+    expect(after.endpoint).toEqual(ref(REVERSED, 1));
   });
 
-  it('leaves a baseline in an untouched section alone', () => {
-    const store = useGasPlanStore.getState();
-    store.applyLoadedPlan(1, {
-      origin: ref(UNTOUCHED, 2),
-      endpoint: null,
-      waypoints: [],
-      diver: store.diver,
-      cylinders: store.cylinders,
-      gas_config: store.gasConfig,
-      stage_drop_overrides: [],
-      marked_points: [],
-      segments: store.segments,
-    });
-
-    applyReverseAftermath(counts);
-
-    expect(useGasPlanStore.getState().loadedPlanBaseline?.origin).toEqual(ref(UNTOUCHED, 2));
+  it('does nothing at all when the range renumbered nothing', () => {
+    // The four UI clears below it are destructive, and a cancelled-out range left the user's
+    // selection and half-staged merge perfectly valid.
+    useUIStore.setState({ distanceGradientOrigin: ref(REVERSED, 2) });
+    useUIStore.getState().setSelection({ type: 'station', stationRef: ref(REVERSED, 3) });
+    applyReverseAftermath(new Map([[REVERSED, { shift: 0, sign: 1 as const, maxIndex: 7 }]]));
+    expect(useUIStore.getState().distanceGradientOrigin).toEqual(ref(REVERSED, 2));
+    expect(useUIStore.getState().selection).not.toBeNull();
   });
 });

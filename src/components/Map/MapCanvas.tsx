@@ -11,7 +11,7 @@ import {
   showsClosureAdjustedNotice,
   type Selection,
 } from '../../store/uiStore';
-import { useGasPlanStore } from '../../store/gasPlanStore';
+import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
 import { isMutatingTool } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
@@ -472,7 +472,6 @@ function MapCanvas() {
   // diver/cylinders/config doesn't re-render via the big uiStore subscription.
   const {
     origin: gasOrigin,
-    endpoint: gasEndpoint,
     waypoints: gasWaypoints,
     segments: gasSegments,
     markedPoints: gasMarkedPoints,
@@ -480,14 +479,12 @@ function MapCanvas() {
     cylinders: gasCylinders,
     gasConfig: gasPlanConfig,
     reachField: gasReachField,
-    stageDropOverrides: gasStageDropOverrides,
     setReachField: setGasReachField,
     setOrigin: setGasOrigin,
     setStageDropOverride: setGasStageDropOverride,
   } = useGasPlanStore(
     useShallow((s) => ({
       origin: s.origin,
-      endpoint: s.endpoint,
       waypoints: s.waypoints,
       segments: s.segments,
       markedPoints: s.markedPoints,
@@ -495,12 +492,14 @@ function MapCanvas() {
       cylinders: s.cylinders,
       gasConfig: s.gasConfig,
       reachField: s.reachField,
-      stageDropOverrides: s.stageDropOverrides,
       setReachField: s.setReachField,
       setOrigin: s.setOrigin,
       setStageDropOverride: s.setStageDropOverride,
     }))
   );
+  // #310: what the pins are allowed to send. A pin the backend could no longer place is withheld
+  // here rather than sent stale - a stale positional ref names a REAL station, just the wrong one.
+  const gasComputeGate = useGasPlanStore(useShallow(selectComputeGate));
 
   // Issue-severity coloring is active when the user enabled it OR while the
   // Warnings tab is open (auto-highlight, gated by the setting). It is DERIVED,
@@ -1965,13 +1964,13 @@ function MapCanvas() {
   // sliders. `origin` null = the entrance (zero-datum) default; the command
   // returns null when no project is open (Ok(None)) or throws on invalid input.
   useEffect(() => {
-    if (!showGasPlan) return undefined;
+    if (!showGasPlan || gasComputeGate.skip) return undefined;
     let cancelled = false;
     invokeIpc<GasReachField | null>(
       'compute_gas_reach_field',
       {
-        origin: gasOrigin ?? null,
-        endpoint: gasEndpoint ?? null,
+        origin: gasComputeGate.origin,
+        endpoint: gasComputeGate.endpoint,
         // Ordered way points (#298): the engine re-bases the whole field through them, so this is
         // a gas input, not a drawing hint.
         waypoints: gasWaypoints,
@@ -1983,9 +1982,9 @@ function MapCanvas() {
         gasConfig: gasPlanConfig,
         // Per-stage drop overrides (#246): the station each ▼ marker was dragged to. Empty when
         // nothing is dragged; the backend clamps each pin before it can move the budget.
-        stageDropOverrides: gasStageDropOverrides,
+        stageDropOverrides: gasComputeGate.stageDropOverrides,
       },
-      { purpose: 'gas reachable-frontier field', fields: { origin: gasOrigin ?? 'entrance' } }
+      { purpose: 'gas reachable-frontier field', fields: { origin: gasComputeGate.origin ?? 'entrance' } }
     )
       .then((field) => { if (!cancelled) { setGasReachField(field); setGasFieldFailed(false); } })
       .catch((e) => {
@@ -1996,7 +1995,7 @@ function MapCanvas() {
         if (!cancelled) { setGasReachField(null); setGasFieldFailed(true); }
       });
     return () => { cancelled = true; };
-  }, [showGasPlan, gasOrigin, gasEndpoint, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, gasStageDropOverrides, project?.modified_at, setGasReachField]);
+  }, [showGasPlan, gasComputeGate, gasWaypoints, gasSegments, gasDiver, gasCylinders, gasPlanConfig, project?.modified_at, setGasReachField]);
 
   // Apply the fetched field to the layer (feature-state + paint swap). Separate
   // from the rebuild path so re-rooting never triggers a feature rebuild.

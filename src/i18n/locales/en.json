@@ -2248,7 +2248,9 @@
       "endpointOutOfReach": "Out of reach on this gas. Turning at {{id}}, on the way there.",
       "endpointUnusable": "Your endpoint can no longer be reached from here. Showing the deepest point in budget instead, at {{id}} - it is not on the way to your endpoint.",
       "warnUnreachable": "Way point {{n}} cannot be reached, so no route can be planned. Remove it, or reconnect the survey.",
-      "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas."
+      "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas.",
+      "unresolvedBadge": "station missing",
+      "warnUnresolved": "Way point {{n}} points at a station that no longer exists. Undo the survey edit, or remove the way point."
     },
     "marked": {
       "label": "Marked points",
@@ -2395,7 +2397,8 @@
     "deleteConfirm": "Delete \"{{name}}\"?",
     "discardConfirm": "Discard unsaved changes to \"{{name}}\"?",
     "staleRefs_one": "{{count}} station this plan referenced no longer exists; it has been cleared.",
-    "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared."
+    "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared.",
+    "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before saving this plan."
   },
   "planTables": {
     "tabs": {

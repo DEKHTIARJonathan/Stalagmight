@@ -5,26 +5,30 @@
  * stored `StationKey` (merges, loop closures, zero datums, station offsets and
  * comments). What it cannot reach is the frontend's own POSITIONAL references -
  * `StationRef { section_id, station_index }` held in UI selection, the merge
- * tool's staging, the move-comment pickup, the distance-gradient origin and the
- * gas plan.
+ * tool's staging, the move-comment pickup and the distance-gradient origin.
  *
  * Those are the dangerous kind of stale: a reverse renumbers station `i` to
  * `N - i`, so every one of them stays *in range* and simply starts naming a
  * different physical station. Nothing errors. The merge tool would merge the
  * wrong end; the distance ramp would silently re-root from the far end while
- * still looking correct; the gas plan would silently re-price a different route,
- * which is a number a diver acts on.
+ * still looking correct.
  *
- * Plan pins and the distance-gradient origin are mirrored (the user's plan and
- * their chosen root stay on the physical stations they picked); selection, merge
- * staging, the move-comment pickup and the comment popover are cleared, matching
- * what every other structural mutation does (ConfirmDialog, BulkDeleteDialog,
- * DeleteShotChoice).
+ * The distance-gradient origin is mirrored (the user's chosen root stays on the
+ * physical station they picked); selection, merge staging, the move-comment
+ * pickup and the comment popover are cleared, matching what every other
+ * structural mutation does (ConfirmDialog, BulkDeleteDialog, DeleteShotChoice).
+ *
+ * The GAS PLAN's pins used to be mirrored here too and no longer are (#310).
+ * Mirroring only ever answered a reverse; a delete or an insert renumbers just
+ * as silently and had no answer at all. The pins now hold backend ANCHORS -
+ * a station named by the shots either side of it - and are re-resolved from
+ * them around every mutation (`flushPlanAnchors` / `remapPlanPins` below), which
+ * is reverse-proof by construction and covers the other edits for free.
  *
  * The same mirror has to run again whenever an undo or redo flips the numbering
- * BACK - otherwise Ctrl+Z restores the old numbering while the pins stay
- * mirrored onto the opposite physical stations, which then persists into the
- * saved plan. The backend answers "which sections, against which shot count"
+ * BACK - otherwise Ctrl+Z restores the old numbering while the origin stays
+ * mirrored onto the opposite physical station. The backend answers "which
+ * sections, against which shot count"
  * outright on `CommandResult.reversed_sections`, because the geometry cannot: a
  * reverse keeps every world coordinate, so a section that was reversed AND moved
  * in one action matches neither arrangement afterwards.
@@ -37,8 +41,7 @@
  */
 import type { Section, SectionId, StationRef } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
-import type { DivePlanSnapshot } from '../types/ipc.generated';
-import { useGasPlanStore } from '../store/gasPlanStore';
+import { selectHasPins, useGasPlanStore } from '../store/gasPlanStore';
 import { useUIStore } from '../store/uiStore';
 
 /**
@@ -127,80 +130,24 @@ export function mirrorRef(
   return applyTransform(ref, transform);
 }
 
-function mirrorNullable(
-  ref: StationRef | null,
-  transforms: Map<SectionId, ReverseTransform>
-): StationRef | null {
-  return ref === null ? null : mirrorRef(ref, transforms);
-}
-
-/** The pieces of the gas plan that are keyed by station position. */
-export interface PlanPins {
-  origin: StationRef | null;
-  endpoint: StationRef | null;
-  waypoints: StationRef[];
-  markedPoints: { station: StationRef; label: string | null }[];
-  stageDropOverrides: (StationRef | null)[];
-}
-
 /**
- * Rewrite every plan pin that sits in a renumbered section onto its mirrored
- * station. Pins in other sections are returned untouched (by identity where
- * possible, so an unaffected plan produces no spurious state change).
+ * The gas plan's half of the aftermath, either side of a survey mutation (#310).
+ *
+ * Split in two because the two halves have to straddle the edit: the anchors must be taken while
+ * the pins still describe the survey the diver placed them on, and re-resolved once the backend
+ * has applied the edit. Both are no-ops for a plan with no pins, which is why the mutation seam
+ * can call them unconditionally.
  */
-export function mirrorPlanPins(
-  pins: PlanPins,
-  transforms: Map<SectionId, ReverseTransform>
-): PlanPins {
-  return {
-    origin: mirrorNullable(pins.origin, transforms),
-    endpoint: mirrorNullable(pins.endpoint, transforms),
-    waypoints: pins.waypoints.map((w) => mirrorRef(w, transforms)),
-    markedPoints: pins.markedPoints.map((m) => ({
-      ...m,
-      station: mirrorRef(m.station, transforms),
-    })),
-    stageDropOverrides: pins.stageDropOverrides.map((s) => mirrorNullable(s, transforms)),
-  };
+export function flushPlanAnchors(): Promise<void> {
+  const plan = useGasPlanStore.getState();
+  return selectHasPins(plan) ? plan.flushAnchorCapture() : Promise.resolve();
 }
 
-/** The pin subset of a persisted snapshot, in `PlanPins` (camelCase) shape. */
-function planPinsOfSnapshot(snapshot: DivePlanSnapshot): PlanPins {
-  return {
-    origin: snapshot.origin,
-    endpoint: snapshot.endpoint,
-    waypoints: snapshot.waypoints,
-    markedPoints: snapshot.marked_points,
-    stageDropOverrides: snapshot.stage_drop_overrides,
-  };
-}
-
-/** `snapshot` with its pins replaced; the gas inputs are untouched. */
-function snapshotWithPins(snapshot: DivePlanSnapshot, pins: PlanPins): DivePlanSnapshot {
-  return {
-    ...snapshot,
-    origin: pins.origin,
-    endpoint: pins.endpoint,
-    waypoints: pins.waypoints,
-    marked_points: pins.markedPoints,
-    stage_drop_overrides: pins.stageDropOverrides,
-  };
-}
-
-/** True when any pin sits in a section this operation actually renumbered. */
-export function planPinsAffected(
-  pins: PlanPins,
-  transforms: Map<SectionId, ReverseTransform>
-): boolean {
-  const inReversed = (ref: StationRef | null) =>
-    ref !== null && flipsSection(transforms, ref.section_id);
-  return (
-    inReversed(pins.origin) ||
-    inReversed(pins.endpoint) ||
-    pins.waypoints.some((w) => inReversed(w)) ||
-    pins.markedPoints.some((m) => inReversed(m.station)) ||
-    pins.stageDropOverrides.some((s) => inReversed(s))
-  );
+/** Re-resolve the plan pins against the survey as it now stands. Must run BEFORE the project
+ *  refetch, so the reach field is recomputed from corrected pins rather than stale ones. */
+export function remapPlanPins(): Promise<void> {
+  const plan = useGasPlanStore.getState();
+  return selectHasPins(plan) ? plan.remapPinsFromAnchors() : Promise.resolve();
 }
 
 /**
@@ -266,22 +213,9 @@ export function composeReverseTransforms(
 export function applyReverseAftermath(transforms: Map<SectionId, ReverseTransform>): void {
   if (Array.from(transforms.values()).every(isIdentityTransform)) return;
 
-  const plan = useGasPlanStore.getState();
-  const baseline = plan.loadedPlanBaseline;
-  // The saved-plan baseline holds the same positional refs as the live pins, so it has to move
-  // with them or `selectIsPlanDirty` compares the two against different numberings and calls an
-  // untouched plan unsaved. Mirrored independently of the pins: a loaded plan can have a pin in
-  // a reversed section even when the CURRENT pins have been edited away from it.
-  const mirroredBaseline =
-    baseline !== null && planPinsAffected(planPinsOfSnapshot(baseline), transforms)
-      ? snapshotWithPins(baseline, mirrorPlanPins(planPinsOfSnapshot(baseline), transforms))
-      : null;
-  if (planPinsAffected(plan, transforms) || mirroredBaseline !== null) {
-    // Mirrored, not cleared: the diver picked these stations, and the point of a
-    // reverse is that the physical cave did not move.
-    plan.applyReversedPins(mirrorPlanPins(plan, transforms), mirroredBaseline);
-  }
-
+  // The gas plan is deliberately absent here (#310): its pins and its saved-plan baseline are
+  // re-resolved from backend anchors by `remapPlanPins`, which the same seam already awaited
+  // before this ran. Mirroring them a second time would apply the shift twice.
   const ui = useUIStore.getState();
   const origin = ui.distanceGradientOrigin;
   if (origin !== null && flipsSection(transforms, origin.section_id)) {
