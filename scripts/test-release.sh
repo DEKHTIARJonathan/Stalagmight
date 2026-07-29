@@ -137,6 +137,17 @@ else
   refute "no tag created" has_tag "$D" v6.6.6
 fi
 
+echo "== case 6: --no-tag bumps and commits but creates no tag =="
+D=$(fresh_clone case6)
+if "$D/scripts/release.sh" 5.5.5 --no-edit --no-tag >/dev/null 2>&1; then
+  assert "package.json bumped"      test "$(version_of "$D")" = "5.5.5"
+  assert "changelog moved"          grep -q '^## \[5\.5\.5\]' "$D/CHANGELOG.md"
+  assert "committed, tree clean"    tree_clean "$D"
+  refute "no tag created"           has_tag "$D" v5.5.5
+else
+  fail "release.sh --no-tag exited non-zero"
+fi
+
 echo "== release-notes.sh =="
 NOTES="$PROJECT_ROOT/scripts/release-notes.sh"
 FIXTURE="$WORK/CHANGELOG.md"

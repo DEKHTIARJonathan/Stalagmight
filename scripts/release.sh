@@ -52,11 +52,13 @@ require_one_match() {
 VERSION_ARG=""
 NO_EDIT=false
 DRY_RUN=false
+NO_TAG=false
 
 for arg in "$@"; do
   case "$arg" in
     --no-edit) NO_EDIT=true ;;
     --dry-run) DRY_RUN=true ;;
+    --no-tag) NO_TAG=true ;;
     -*) echo "Unknown flag: $arg" >&2; exit 1 ;;
     *) VERSION_ARG="$arg" ;;
   esac
@@ -241,6 +243,18 @@ git -C "$PROJECT_ROOT" add \
   CHANGELOG.md
 
 git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION"
+
+if [ "$NO_TAG" = true ]; then
+  echo ""
+  echo "Prepared v$NEW_VERSION (no tag created)"
+  echo ""
+  echo "Next steps:"
+  echo "  git push"
+  echo "  git tag v$NEW_VERSION-rc1 && git push origin v$NEW_VERSION-rc1   # a candidate"
+  echo "  git tag v$NEW_VERSION     && git push origin v$NEW_VERSION       # the release"
+  exit 0
+fi
+
 git -C "$PROJECT_ROOT" tag -a "v$NEW_VERSION" -m "Release v$NEW_VERSION"
 
 echo ""

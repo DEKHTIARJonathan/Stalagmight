@@ -41,12 +41,18 @@ an RC *is* that release, built early - so the notes are written once.
 
 ## Release candidates
 
-Cut as many as you like before the real thing:
+Bump once, then cut as many candidates as you like before the real thing:
 
 ```bash
+./scripts/release.sh 0.5.0 --no-edit --no-tag      # bump + changelog, no tag
+git push
 git tag v0.5.0-rc1 && git push origin v0.5.0-rc1   # then rc2, rc3, ...
 git tag v0.5.0     && git push origin v0.5.0       # the real one
 ```
+
+`--no-tag` matters: without it `release.sh` creates `v0.5.0` immediately, which
+would either publish the real release early or sit on the wrong commit once
+further fixes land before `rc2`.
 
 - **The version files stay at the plain `0.5.0`.** The candidate lives only in
   the tag. This is not a style choice: the Windows MSI bundler rejects a
@@ -99,6 +105,7 @@ git push origin master && git push origin --tags
 |------|--------|
 | `--no-edit` | Skip opening `$EDITOR` on the changelog (required for Claude) |
 | `--dry-run` | Print what would happen without making changes |
+| `--no-tag` | Bump, move the changelog and commit, but create no tag - use when the next thing you cut is a candidate (`v0.5.0-rc1`) rather than the release |
 
 ## CI/CD Workflows
 
