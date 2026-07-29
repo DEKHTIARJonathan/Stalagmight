@@ -178,7 +178,15 @@ export default function OpenFromSpeleoDbDialog() {
     setBusy(true);
     setError(null);
     const outcome = await adoptRemote(project);
-    if (outcome.status === 'error') surfaceOpenError(outcome.message, outcome.reLogin);
+    if (outcome.status === 'ambiguous') {
+      // #258: same release the open handler makes, and for the same reason - adoption
+      // raises the picker on its own account when the Ariane tree moves under the
+      // confirm, and this dialog stays mounted underneath the overlay. Without it the
+      // list stays frozen behind a choice the user can still cancel.
+      setBusy(false);
+    } else if (outcome.status === 'error') {
+      surfaceOpenError(outcome.message, outcome.reLogin);
+    }
   };
 
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });

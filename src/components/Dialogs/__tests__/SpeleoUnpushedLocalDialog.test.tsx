@@ -252,4 +252,41 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     await userEvent.click(screen.getByTestId('speleodb-unpushed-local-cancel'));
     expect(closeDialogMock).toHaveBeenCalled();
   });
+
+  it('[#258] releases busy when the ADOPT turns ambiguous, so the picker can be cancelled', async () => {
+    // Adoption raises the picker on its own account - the Ariane tree can change while
+    // the confirm sits open, and the backend answers with a fresh candidate set. This
+    // branch had also just cleared `pendingAdopt`, so holding `busy` left a prompt with
+    // no confirm on it AND every dismissal route disabled: cancelling the picker handed
+    // back to a dialog that could not be closed.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_open_project_discarding_local')
+        return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: [
+            { entry_path: 'a/ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
+            { entry_path: 'b/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+          ],
+          dump_candidate_kind: 'ariane',
+        });
+      return undefined;
+    });
+
+    render(<SpeleoUnpushedLocalDialog />);
+    // Arm, then confirm the destructive take-remote, which routes to the adopt confirm.
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await waitFor(() => expect(screen.getByTestId('speleodb-adopt-confirm')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('speleodb-adopt-confirm-btn'));
+
+    // The picker is up, and this prompt is usable again underneath it.
+    await waitFor(() => expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-unpushed-local-cancel')).not.toBeDisabled(),
+    );
+  });
 });

@@ -138,7 +138,15 @@ export default function SpeleoUnpushedLocalDialog() {
     setBusy(true);
     setError(null);
     const outcome = await adoptRemote(summary, { discardLocal: true });
-    if (outcome.status === 'error') {
+    if (outcome.status === 'ambiguous') {
+      // [#258] Adoption raises the picker on its own account, not only by inheriting
+      // one: the Ariane tree can change while the confirm above sits open, and the
+      // backend then answers with a fresh candidate set. Same release as
+      // `handleTakeRemote`, and it matters more here - this branch has ALSO just
+      // cleared `pendingAdopt`, so a held `busy` left a prompt with no confirm on it
+      // and no way out, and the picker's cancel had nothing to hand back to.
+      setBusy(false);
+    } else if (outcome.status === 'error') {
       setError(outcome.message);
       if (outcome.reLogin) clearSession();
       setBusy(false);

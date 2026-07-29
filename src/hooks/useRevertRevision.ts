@@ -273,6 +273,21 @@ export function useRevertRevision() {
         return { kind: 'lock_failed' };
       }
 
+      // The acquire is itself a round trip, and the restore on the other side of it is
+      // the destructive step - it replaces the whole working tree. So the identity is
+      // checked once more here, where a mismatch still costs nothing but the lock we
+      // just took.
+      //
+      // Handing that lock back is the point: every other failure arm below unwinds
+      // what it acquired, and walking away from a server mutex because the project
+      // changed would strand it for the holder's whole session. `done(null)` is the
+      // release verb that skips the push - correct by construction here, because the
+      // restore that sets the dirty bit has not run yet.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        await done(null);
+        return { kind: 'project_changed' };
+      }
+
       onStep?.('restoring');
       try {
         // Quiet: this restore is a middle step, and its toast tells the user to push -

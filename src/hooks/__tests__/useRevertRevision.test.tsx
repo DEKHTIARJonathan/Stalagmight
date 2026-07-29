@@ -542,6 +542,34 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(issued()).toEqual(['speleodb_dump_candidates']);
   });
 
+  it('hands back the lock it just took when the project changed during the acquire', async () => {
+    // The acquire is a round trip of its own, and the restore on the other side of it
+    // replaces the whole working tree. Walking away without releasing would strand a
+    // server mutex for the rest of the holder's session, so the mismatch unwinds like
+    // every other failure arm - and `done(null)` is correct here by construction,
+    // because the restore that sets the dirty bit has not run.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    // Acquired, released, and never restored.
+    expect(issued()).toEqual([
+      'speleodb_dump_candidates',
+      'speleodb_start_editing',
+      'speleodb_done',
+    ]);
+  });
+
   it('does not probe on the retry - the answer is already in hand', async () => {
     ipc({
       speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
