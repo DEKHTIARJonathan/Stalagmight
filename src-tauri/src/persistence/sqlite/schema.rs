@@ -1158,6 +1158,20 @@ impl Database {
             // release, and the `.stalx` it described (the sibling `.tml`) is no
             // longer written either.
             self.conn.execute("DROP TABLE IF EXISTS collab_state", [])?;
+            // The persisted undo history has to go with it, for the same reason
+            // v11->v12 and v12->v13 drop theirs. `Command` is an internally
+            // tagged enum with no catch-all, so a stored
+            // `{"type":"apply_collab_changes"}` entry no longer deserializes -
+            // and `load_from_persisted_with_timestamps` skips a bad entry
+            // WITHOUT truncating, keeping the entries on both sides. That
+            // leaves a HOLE: the surviving older entries (position-keyed
+            // `ShotSnapshot`s, and the `ProjectSnapshotPair` the apply itself
+            // wrote) would replay against a tree that still carries the applied
+            // changes, silently reverting them or shifting every station past
+            // the apply's inserts. `UNDO_FORMAT_SAFE_VERSION` is 7, so a v14
+            // file reaches here with its stacks intact and would hit exactly
+            // that. The history is not worth the risk.
+            self.drop_legacy_undo_history()?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.

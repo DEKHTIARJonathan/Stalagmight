@@ -9,7 +9,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * Destructive confirm for permanently deleting a project from disk (#118).
  *
  * Distinct from "Remove from recent" (which only forgets the entry): this hands
- * the project's files to the OS delete - the Trash where the platform provides
+ * the project's `.stalx` to the OS delete - the Trash where the platform provides
  * one, otherwise a permanent remove. Opened via
  * `openDialog('delete-project', { path, name })` from the GlobalView context menu
  * and the metadata panel.
@@ -77,7 +77,7 @@ export default function DeleteProjectDialog() {
         </p>
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-          This removes the local files{' '}
+          This removes the local file{' '}
           <span className="font-medium break-all">{fileNames}</span> from disk.{' '}
           {isRemote
             ? 'The project stays on SpeleoDB and can be downloaded again, but any local changes not yet pushed to SpeleoDB will be lost.'

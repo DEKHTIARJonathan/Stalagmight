@@ -65,12 +65,15 @@ export interface LoadProjectFullResultWithSoa extends LoadProjectFullResult {
  * version check below is the only thing standing between a format change and a
  * silently misdecoded project.
  *
- * 3 covers two changes that landed in the same unreleased version:
+ * 3 covered two changes that landed in the same unreleased version:
  * - #27: the per-shot flags byte carries a 2-bit `ShotKind` discriminant in
  *   bits 0-1 instead of a single `is_reference` bit, so a v2 reader would
  *   decode a Reference (2) as "not virtual".
  * - #270: the envelope carries `is_remote`, so the SpeleoDB read-only gate
  *   settles with the load.
+ *
+ * 4 drops the header's `collab` field with Ariane collaboration mode: a v3
+ * reader would misread the envelope from that field onwards.
  */
 const EXPECTED_VERSION = 4;
 /** f32 fields per shot. Mirror of SHOT_FLOAT_FIELDS in Rust. */

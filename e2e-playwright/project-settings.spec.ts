@@ -58,4 +58,38 @@ test.describe('Project Settings', () => {
       )
       .toBe(2);
   });
+
+  test('Cancel discards a staged name edit', async ({ page }) => {
+    // Both surviving tabs stage their edits in local state and commit only inside
+    // handleSave, so Cancel must leave the .stalx untouched. That contract had no
+    // coverage left after the collab-toggle test (its only exercise of
+    // project-settings-cancel) was removed with collaboration mode, and nothing
+    // would catch a General input that started writing through on change.
+    await createProject(page, 'Proj Settings');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapIdle(page);
+
+    await page.getByTestId('detail-tab-details').click();
+    await page.getByTestId('open-project-settings').click();
+    await page.getByTestId('project-settings-name').fill('Renamed Away');
+    await page.getByTestId('project-settings-cancel').click();
+    await expect(page.getByTestId('project-settings-dialog')).toHaveCount(0);
+
+    const name = async () =>
+      page.evaluate(
+        () =>
+          (
+            window as unknown as {
+              __E2E_TEST__?: {
+                projectStore: { getState: () => { project: { name: string } | null } };
+              };
+            }
+          ).__E2E_TEST__?.projectStore.getState().project?.name,
+      );
+    await expect.poll(name).toBe('Proj Settings');
+
+    // Reopening re-seeds from the project, so the discarded text is gone.
+    await page.getByTestId('open-project-settings').click();
+    await expect(page.getByTestId('project-settings-name')).toHaveValue('Proj Settings');
+  });
 });

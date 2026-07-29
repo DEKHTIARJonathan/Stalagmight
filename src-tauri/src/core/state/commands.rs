@@ -314,8 +314,8 @@ impl AppState {
 
     /// Shared structural-edit epilogue for the custom `execute_*` paths that
     /// bypass [`Self::execute`]'s gated epilogue (TML import).
-    /// Converts sole-bridge closures to merges and reconciles derived offsets,
-    /// then reports whether this edit INTRODUCED a CRITICAL integrity violation
+    /// Reconciles derived offsets, then reports whether this edit INTRODUCED a
+    /// CRITICAL integrity violation
     /// (dangling ref / out-of-range index / non-finite geometry). A caller that
     /// captured a pre-edit snapshot rolls back to it when this returns `true`,
     /// giving these paths the same "block corruption at the source" guarantee the
@@ -493,10 +493,10 @@ impl AppState {
         // Read-only edit gate (#191, D-B6): reject mutations on a remote project
         // opened read-only, BUT lifecycle commands (Save/Open/Close/Create/
         // MergeProjects) always pass through (autosave must not be blocked).
-        // `execute_move_comment` and `apply_collab_changes` are reached via this
-        // `execute()` (early `return self.execute_move_comment(..)` and the
-        // `ApplyCollabChanges` arm), so they inherit this guard - see the
-        // chokepoint enumeration test (`gate_rejects_every_mutation_entrypoint`).
+        // `execute_move_comment` is reached via this `execute()` (an early
+        // `return self.execute_move_comment(..)`), so it inherits this guard -
+        // see the chokepoint enumeration test
+        // (`gate_rejects_every_mutation_entrypoint`).
         if !Self::is_lifecycle_passthrough(&cmd) {
             if let Err(f) = self.guard_mutation(&cmd.description()) {
                 return f;
