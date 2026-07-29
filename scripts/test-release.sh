@@ -59,6 +59,12 @@ fresh_clone() {
   sha="$(git -C "$PROJECT_ROOT" rev-parse HEAD)"
   rm -rf "$dir"
   git clone --quiet --local --no-hardlinks "$PROJECT_ROOT" "$dir"
+  # Give the clone its own identity. Several commits land here that this script
+  # does not make itself - release.sh's, and the fixture commits below - so a
+  # machine with no global user.name/user.email (a fresh runner or container)
+  # would fail them with "Author identity unknown".
+  git -C "$dir" config user.email "test@example.invalid"
+  git -C "$dir" config user.name "release test"
   # Detach at the exact commit under test rather than trusting which branch the
   # clone checked out, which works the same on a branch and in CI's detached HEAD.
   git -C "$dir" checkout --quiet --detach "$sha"
@@ -67,8 +73,7 @@ fresh_clone() {
   # assert on a clean tree without seeing this copy as a modification.
   cp "$PROJECT_ROOT/scripts/release.sh" "$dir/scripts/release.sh"
   git -C "$dir" add scripts/release.sh
-  git -C "$dir" -c user.email=test@example.invalid -c user.name=test \
-    commit --quiet --allow-empty -m "test: script under test"
+  git -C "$dir" commit --quiet --allow-empty -m "test: script under test"
   echo "$dir"
 }
 
