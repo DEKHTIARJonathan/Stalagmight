@@ -122,6 +122,38 @@ pub(super) fn pull_dating(tip: Option<String>, advisory: Option<String>) -> Pull
     }
 }
 
+/// A server-reported topology tip, accepted only if it can safely be interpolated
+/// into a by-hash download URL. [#258]
+///
+/// The tip arrives over the wire and `download_dump_at_hash` puts it straight into an
+/// authenticated request path - the same boundary `speleodb_restore_revision` and the
+/// lock-free probe both cross `validate_hexsha` before building that URL. Being
+/// server-derived is no licence to skip it: the value is exactly as trustworthy as the
+/// box we happen to be pointed at, and a malformed one reshapes the request rather
+/// than failing it. Pinning the download to a sha is what made this a live path, so
+/// the check has to come with it.
+///
+/// A rejected tip answers `None`, which every caller already handles: the dump is
+/// fetched at plain HEAD, and `None` is also what says it is undatable - so nothing is
+/// recalled against it and nothing is recorded. Fail closed, and never issue the
+/// by-hash request at all.
+///
+/// The sha is deliberately kept out of the log line. It is the untrusted value, and a
+/// warning is not worth handing it a way into whatever reads the logs.
+pub(super) fn usable_tip(tip: Option<String>, project_id: &str) -> Option<String> {
+    let sha = tip?;
+    if validate_hexsha(&sha).is_ok() {
+        return Some(sha);
+    }
+    tracing::warn!(
+        project_id = %project_id,
+        len = sha.len(),
+        "server history reported a tip that is not a usable revision id; falling back \
+         to an undated HEAD download"
+    );
+    None
+}
+
 /// Trust-boundary check on the lock-free probe's inputs. [#258]
 ///
 /// Both ids reach an authenticated request path, so both are validated exactly as
@@ -513,7 +545,13 @@ impl AppState {
         // route revisions through the auto-drop (a dead token there must force
         // re-login). (#197 review.)
         let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
+            // Through `usable_tip`: what comes back is about to be interpolated into an
+            // authenticated by-hash URL, so it crosses the same boundary the restore
+            // and the probe cross before building one.
+            Ok(history) => usable_tip(
+                sync::tip_of(&history.commits).map(str::to_owned),
+                &project_id,
+            ),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
@@ -682,7 +720,7 @@ impl AppState {
         // adoption then asks again through the picker it already hosts.
         let adopt_at = self
             .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
-            .map(|(tip, _)| tip)
+            .map(|(tip, _)| usable_tip(tip, &project_id))
             .unwrap_or_else(|e| {
                 tracing::warn!(
                     error = %e,
@@ -1051,8 +1089,8 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry, ArianeRoute,
-        DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
+        classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry, usable_tip,
+        ArianeRoute, DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
@@ -1355,6 +1393,50 @@ mod tests {
             "BASE must come from the sha adoption downloaded by hash, through the same \
              split that keeps the advisory fallback off the choice dating"
         );
+    }
+
+    /// [#258] The tip that pins the by-hash download comes off the wire, and it lands
+    /// in an authenticated request path - so it crosses the same boundary the restore
+    /// and the probe cross before building one of those URLs. Server-derived is not
+    /// trusted: it is only ever as trustworthy as the box we are pointed at.
+    ///
+    /// A rejection is a fallback, not a failure. `None` sends the caller to the plain
+    /// HEAD download AND marks the result undatable, so no by-hash request is built
+    /// and no choice can be recalled against it.
+    #[test]
+    fn a_tip_that_could_reshape_the_download_url_is_not_used_to_build_one() {
+        let project = "99999999-9999-9999-9999-999999999999";
+
+        assert_eq!(
+            usable_tip(Some(TIP.to_owned()), project),
+            Some(TIP.to_owned())
+        );
+        assert_eq!(
+            usable_tip(Some("abc1234".to_owned()), project),
+            Some("abc1234".to_owned()),
+            "a short prefix is a legitimate git id and must still pin the download"
+        );
+        assert_eq!(usable_tip(None, project), None);
+
+        for hostile in [
+            "../../user",
+            "abc1234?x=y",
+            "abc1234#frag",
+            "abc/1234",
+            "abc 1234",
+            "abc1234\n",
+            "abc1234\u{0}",
+            "abc123",  // 6 chars - under the floor, so not an id at all
+            "abc123g", // non-hex
+            "",
+        ] {
+            assert_eq!(
+                usable_tip(Some(hostile.to_owned()), project),
+                None,
+                "`{hostile}` must never reach the by-hash URL; the caller falls back \
+                 to plain HEAD and treats the dump as undatable"
+            );
+        }
     }
 
     /// [#258] BASE may fall back to the caller's advisory sha; a CHOICE DATE may not.
