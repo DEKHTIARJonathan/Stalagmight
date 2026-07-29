@@ -78,3 +78,8 @@ describe('GasSettings numeric fields use PositiveNumberField (#241)', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 });
+
+// DPV rig UI + the M5 cross-language twin tests moved with the rig editor to
+// src/components/SingleSystemView/DpvRigEditor.test.tsx and
+// src/utils/__tests__/dpv.test.ts (#317 - the rig moved out of Settings into Plan
+// mode's Equipment tab).

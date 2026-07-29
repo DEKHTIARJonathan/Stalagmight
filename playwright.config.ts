@@ -20,14 +20,24 @@ const prodServer =
   process.env.PW_PROD_SERVER === '1' ||
   (process.env.PW_PROD_SERVER !== '0' && !!process.env.CI);
 
+// PW_PORT points the whole run - server, baseURL, reuse probe - at another port.
+// Default 1420 keeps CI and the interactive loop exactly as before. The escape
+// hatch exists because `reuseExistingServer` attaches to WHOEVER holds 1420: a
+// dev server left running from another clone/worktree silently serves ITS code
+// and every spec tests the wrong tree (bit this repo twice; see the in-flight
+// board's port map). A validated integer only - anything else falls back.
+const envPort = Number(process.env.PW_PORT);
+const port =
+  process.env.PW_PORT !== undefined && Number.isInteger(envPort) && envPort > 0 ? envPort : 1420;
+
 // vite-plugin-istanbul already sets forceBuildInstrument, so coverage works on
 // the built bundle too - it just needs VITE_COVERAGE at build time, not serve time.
 const buildEnv = coverageEnabled ? 'VITE_COVERAGE=1 VITE_E2E=1' : 'VITE_E2E=1';
 const devServerCommand = prodServer
-  ? `${buildEnv} pnpm exec vite build && pnpm exec vite preview --port 1420 --strictPort`
+  ? `${buildEnv} pnpm exec vite build && pnpm exec vite preview --port ${port} --strictPort`
   : coverageEnabled
-    ? 'VITE_COVERAGE=1 pnpm dev'
-    : 'pnpm dev';
+    ? `VITE_COVERAGE=1 pnpm dev --port ${port}`
+    : `pnpm dev --port ${port}`;
 
 // Retries: CI gets 2; locally 1, so a single timing blip under load (e.g. the
 // pre-push @smoke gate on a 1-worker headless VM) doesn't abort an otherwise-
@@ -85,7 +95,7 @@ export default defineConfig({
   // Shared settings for all projects
   use: {
     // Base URL for the Vite dev server
-    baseURL: 'http://localhost:1420',
+    baseURL: `http://localhost:${port}`,
     locale: 'en-US',
 
     // Collect trace when retrying a failed test
@@ -118,7 +128,7 @@ export default defineConfig({
   // Run local dev server before starting tests
   webServer: {
     command: devServerCommand,
-    url: 'http://localhost:1420',
+    url: `http://localhost:${port}`,
     // Never reuse a server in the built-bundle mode: an already-running dev
     // server on 1420 would be silently reused and the run would test unbundled
     // source instead of the bundle it was asked for.

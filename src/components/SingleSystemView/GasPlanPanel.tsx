@@ -1,10 +1,12 @@
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { Fragment, useCallback, useEffect, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { defaultConfig } from '../../types/config';
+import { flushGasConfigWrite, queueGasConfigWrite } from '../../utils/gasConfigDisk';
 import { formatStationId } from '../../utils/formatters';
+import { formatFixed } from '../../i18n/format';
 import {
   formatGasLength,
   formatPressure,
@@ -43,24 +45,15 @@ const REQUIRED_STAGES: Record<ReservePreset, number> = {
  *  backend guard remains, for a hand-edited `.plnx`. */
 const MAX_MARKED_LABEL_CHARS = 120;
 
-// Persist the swim speed into the saved config (the same gas.swim_speed_m_per_min
-// Settings edits). Reads the LATEST saved config at call time, so a debounced/flushed
-// write always merges against current state rather than a stale snapshot. Module-scope
-// so the debounced callbacks below stay dependency-free.
-function writeSwimSpeedToDisk(v: number): void {
-  const saved = useProjectStore.getState().config;
-  if (saved) {
-    void useProjectStore.getState().updateConfig({
-      ...saved,
-      gas: { ...saved.gas, swim_speed_m_per_min: v },
-    });
-  }
+/** One-way runtime readout (#317), always in minutes - the engine's own value, never re-derived. */
+function formatRouteRuntime(min: number): string {
+  return `${formatFixed(min, undefined, 1)} min`;
 }
 
 /**
  * Gas & route-planning setup sidebar (#38). The right Dock slot while in Plan mode:
  * origin, diver RMV, gas strategy + per-stage reserve, units, and the plan readout. The cylinder
- * rig editor lives in the bottom panel's "Cylinders" tab (see PlanTablesPanel) - this sidebar
+ * rig editor lives in the bottom panel's "Equipment" tab (see PlanTablesPanel) - this sidebar
  * reads the cylinders only to compute the turn / drop pressures. Every input nulls the cached
  * field via gasPlanStore, so MapCanvas refetches + repaints the reachable overlay. Volumes follow
  * the master units toggle; RMV flips L·min⁻¹ ↔ cuft·min⁻¹.
@@ -77,6 +70,7 @@ export function GasPlanPanel() {
     gasConfig,
     reachField,
     stageDropOverrides,
+    unresolved,
     pushyAck,
     setOrigin,
     setEndpoint,
@@ -99,6 +93,7 @@ export function GasPlanPanel() {
       gasConfig: s.gasConfig,
       reachField: s.reachField,
       stageDropOverrides: s.stageDropOverrides,
+      unresolved: s.unresolved,
       pushyAck: s.pushyAck,
       setOrigin: s.setOrigin,
       setEndpoint: s.setEndpoint,
@@ -133,36 +128,42 @@ export function GasPlanPanel() {
       ...structuredClone(cfg?.gas ?? defaultConfig.gas),
       units: masterImperial ? 'imperial' : 'metric',
     });
-    useGasPlanStore.getState().markHydrated();
+    // Pass the config the seed came from so `syncSettingsOnlyGasFields` (below) has its
+    // "already observed" baseline from the moment of hydration, regardless of which of
+    // this component's two effects React happens to run first.
+    useGasPlanStore.getState().markHydrated(cfg?.gas ?? defaultConfig.gas);
   }, [setGasConfig]);
 
-  // Swim-speed disk-persist debounce (#241): the in-memory working config updates
-  // immediately on every keystroke, but the disk write is trailing-debounced so a fast
-  // typist doesn't fire one config save per keystroke (each save reloads config + drops
-  // the LSQ solve). Cancel any pending write when a newer value arrives, so only the
-  // LATEST value is ever persisted regardless of write-completion order.
-  const swimSpeedPersistRef = useRef<{
-    timer: ReturnType<typeof setTimeout>;
-    value: number;
-  } | null>(null);
-  // Flush any pending write immediately (used on unmount so a value typed within the
-  // debounce window right before leaving Plan mode still reaches disk -- the pre-debounce
-  // code persisted every keystroke, so dropping the last one would be a regression).
-  const flushSwimSpeed = useCallback(() => {
-    const pending = swimSpeedPersistRef.current;
-    if (!pending) return;
-    clearTimeout(pending.timer);
-    swimSpeedPersistRef.current = null;
-    writeSwimSpeedToDisk(pending.value);
-  }, []);
-  useEffect(() => flushSwimSpeed, [flushSwimSpeed]);
+  // Mirror any Settings-only gas field EDITED IN SETTINGS during this session into the working
+  // config (#317): the jump RMV multiplier and the include-reference-legs toggle have no
+  // in-panel control at all, so Settings is their only source - which made the seed-once
+  // `hydrated` gate above (deliberately, #244: re-seeding on every mode-switch remount would
+  // clobber working inputs and a loaded plan) swallow them entirely: edit one after Plan mode has
+  // already opened once this session and it would never appear, with nothing on screen to explain
+  // why.
+  //
+  // The diffing this needs to stay safe - apply an actual edit, but leave a loaded plan's own
+  // values alone when Settings did not change - must survive a PANEL REMOUNT (this component
+  // remounts on every mode switch), so it lives in the store (`syncSettingsOnlyGasFields`), not a
+  // component ref: a ref resets on remount and loses exactly the "last observed" memory this needs.
+  const persistedGasConfig = useProjectStore((s) => s.config?.gas ?? defaultConfig.gas);
+  useEffect(() => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(persistedGasConfig);
+  }, [persistedGasConfig]);
+
+  // Swim-speed disk persist (#241, shared queue since the #317 review round): the in-memory
+  // working config updates immediately on every keystroke; the disk write goes through
+  // `queueGasConfigWrite` (trailing-debounced, merged, serialized against the rig editor's
+  // writes - see utils/gasConfigDisk.ts). Flush on unmount so a value typed within the
+  // debounce window right before leaving Plan mode still reaches disk.
+  useEffect(
+    () => () => {
+      void flushGasConfigWrite();
+    },
+    []
+  );
   const persistSwimSpeed = useCallback((v: number) => {
-    if (swimSpeedPersistRef.current) clearTimeout(swimSpeedPersistRef.current.timer);
-    const timer = setTimeout(() => {
-      swimSpeedPersistRef.current = null;
-      writeSwimSpeedToDisk(v);
-    }, 450);
-    swimSpeedPersistRef.current = { timer, value: v };
+    queueGasConfigWrite({ swim_speed_m_per_min: v });
   }, []);
 
   const units = gasConfig.units;
@@ -187,6 +188,12 @@ export function GasPlanPanel() {
   // lag a keystroke behind the store, and warning about a way point the user just removed reads
   // as a bug.
   const stalledWaypoint = stalledIdx >= 0 && stalledIdx < waypoints.length ? stalledIdx : null;
+  // A way point whose anchor no longer resolves to a station (a survey edit removed both of its
+  // neighbouring shots). Distinct from a stall: the engine is never asked while one exists, so it
+  // outranks the stall warning below.
+  const unresolvedIdx = unresolved.waypoints.findIndex(Boolean);
+  const unresolvedWaypoint =
+    unresolvedIdx >= 0 && unresolvedIdx < waypoints.length ? unresolvedIdx : null;
   // Over budget = the detour alone costs more gas than the diver has. Distinct from a stall
   // (which is "cannot be reached at all") and gets its own, actionable message.
   const waypointsOverBudget =
@@ -268,6 +275,19 @@ export function GasPlanPanel() {
   const routeMaxDepth = reachField?.route_max_depth_m ?? null;
   const routeAvgDepth = reachField?.route_avg_depth_m ?? null;
 
+  // Scooter (DPV) readout (#317) - every value here is read straight off the field, never
+  // re-derived. Runtime is shown whenever a route exists, rig or not (the segment speed still
+  // applies either way - see gas_reach_field_without_a_rig_ignores_the_scooter_flag); the range
+  // comparison and the turn reason need a configured rig, since with none nothing is scootered.
+  const routeRuntimeMin = reachField?.route_runtime_min ?? null;
+  const hasDpvRig = gasConfig.dpv != null;
+  const scooterDistance = reachField?.scooter_distance_m ?? null;
+  const scooterRangeLimit = reachField?.scooter_range_limit_m ?? null;
+  // ⚠ The engine's own answer - comparing scooterDistance against scooterRangeLimit looks
+  // equivalent and is not: the route already stops at whichever cap bound first, so the two read
+  // as merely equal in exactly the case being asked about (GasReachField::turn_on_scooter_range).
+  const turnOnScooterRange = reachField?.turn_on_scooter_range === true;
+
   // Advanced strategies route through an inline acknowledgment the first time per session: the
   // staged (Half-Minus) presets AND Free, which lets the diver set reserves by hand (incl. a
   // zero-reserve plan), so it's at least as advanced as the staged ones. All-thirds and an
@@ -282,7 +302,7 @@ export function GasPlanPanel() {
   };
   const confirmPushy = () => {
     if (!pendingPushy) return;
-    // Re-check: the rig may have lost stages while the ack panel was open (the Cylinders tab is
+    // Re-check: the rig may have lost stages while the ack panel was open (the Equipment tab is
     // visible alongside it). Only apply if the rig still satisfies the strategy - otherwise we'd
     // show a staged strategy selected on a stage-short rig while the backend falls back to
     // All-thirds (broken UI/backend parity). Insufficient → dismiss without applying.
@@ -398,6 +418,11 @@ export function GasPlanPanel() {
                     <span className="font-mono flex-1">
                       {formatStationId(w.section_id, w.station_index)}
                     </span>
+                    {unresolved.waypoints[i] && (
+                      <span className="text-error" data-testid="gas-waypoint-unresolved">
+                        {t('gasPanel.route.unresolvedBadge')}
+                      </span>
+                    )}
                     {/* Cumulative gas at this way point, straight from the engine - the panel must
                         never re-derive a budget-dependent number (#233 lesson). `null` means the
                         chain stalled here or before it. */}
@@ -450,7 +475,12 @@ export function GasPlanPanel() {
             {waypoints.length > 0 && (
               <p className="text-xs opacity-60 mt-0.5">{t('gasPanel.route.waypointsHint')}</p>
             )}
-            {stalledWaypoint !== null && (
+            {unresolvedWaypoint !== null && (
+              <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
+                {t('gasPanel.route.warnUnresolved', { n: unresolvedWaypoint + 1 })}
+              </p>
+            )}
+            {unresolvedWaypoint === null && stalledWaypoint !== null && (
               <p className="text-xs text-error mt-1" data-testid="gas-waypoint-warning">
                 {t('gasPanel.route.warnUnreachable', { n: stalledWaypoint + 1 })}
               </p>
@@ -768,6 +798,40 @@ export function GasPlanPanel() {
                         {formatGasLength(routeAvgDepth, units, 1)}
                       </dd>
                     </>
+                  )}
+                  {routeRuntimeMin != null && (
+                    <>
+                      <dt className="opacity-70" title={t('gasPanel.readout.routeRuntimeHint')}>
+                        {t('gasPanel.readout.routeRuntime')}
+                      </dt>
+                      <dd
+                        data-testid="gas-readout-route-runtime"
+                        className="text-right font-mono"
+                        title={t('gasPanel.readout.routeRuntimeHint')}
+                      >
+                        {formatRouteRuntime(routeRuntimeMin)}
+                      </dd>
+                    </>
+                  )}
+                  {hasDpvRig && scooterRangeLimit != null && (
+                    <>
+                      <dt className="opacity-70" title={t('gasPanel.readout.scooterRangeHint')}>
+                        {t('gasPanel.readout.scooterRange')}
+                      </dt>
+                      <dd data-testid="gas-readout-scooter-range" className="text-right font-mono">
+                        {formatGasLength(scooterDistance ?? 0, units)}
+                        {' / '}
+                        {formatGasLength(scooterRangeLimit, units)}
+                      </dd>
+                    </>
+                  )}
+                  {hasDpvRig && turnOnScooterRange && (
+                    <div
+                      data-testid="gas-readout-scooter-turn-warning"
+                      className="col-span-2 text-warning"
+                    >
+                      {t('gasPanel.readout.turnOnScooterRange')}
+                    </div>
                   )}
                 </>
               )}

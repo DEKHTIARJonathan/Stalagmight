@@ -8,8 +8,8 @@ use tauri::AppHandle;
 use crate::cache::TileCache;
 use crate::config::{ClosureAdjustmentConfig, Config, GasConfig};
 use crate::models::{
-    AlongLineResult, Cylinder, DistanceField, Diver, GasReachField, Project, RulerEndpoint,
-    Station, StationAnchor, StationRef,
+    AlongLineResult, Cylinder, DistanceField, Diver, GasReachField, PlanSegment, Project,
+    RulerEndpoint, Station, StationAnchor, StationRef,
 };
 use crate::persistence::Database;
 use crate::tilemap_cache::TilemapCache;
@@ -518,6 +518,7 @@ impl AppState {
         origin: Option<&StationRef>,
         endpoint: Option<&StationRef>,
         waypoints: &[StationRef],
+        segments: &[PlanSegment],
         diver: &Diver,
         cylinders: &[Cylinder],
         gas_config: &GasConfig,
@@ -528,6 +529,7 @@ impl AppState {
             origin,
             endpoint,
             waypoints,
+            segments,
             diver,
             cylinders,
             gas_config,

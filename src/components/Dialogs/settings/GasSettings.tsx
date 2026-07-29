@@ -15,11 +15,12 @@ import { Toggle } from '../../common/Toggle';
  *  - swim speed - the exit-leg (and symmetric survey-in) speed, default 10 m/min;
  *  - jump RMV multiplier - gas bump on reference/jump legs (tying in a jump is extra
  *    work), >= 1.0, default 1.0; 1.5 is a useful value.
- * Both are clamped server-side in GasConfig::normalize. Client-side, PositiveNumberField
- * rejects a non-positive entry at the field itself (it reverts to the last valid value on
- * blur, no error message); a sub-minimum positive jump multiplier (0 < jump < 1) still
- * commits and is caught by the validation effect below, which blocks Save via the error
- * indicator instead.
+ * The DPV rig is planned in Plan mode's Equipment tab (#317), not here.
+ * Swim speed / jump multiplier are clamped server-side in GasConfig::normalize.
+ * Client-side, PositiveNumberField rejects a non-positive entry at the field itself (it reverts
+ * to the last valid value on blur, no error message); a sub-minimum positive jump multiplier
+ * (0 < jump < 1) still commits and is caught by the validation effect below, which blocks Save
+ * via the error indicator instead.
  */
 export function GasSettings({
   config,

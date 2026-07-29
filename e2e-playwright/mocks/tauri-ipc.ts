@@ -181,6 +181,92 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       const mockShotId = (sectionId: number, seq: number): number =>
         sectionId * MOCK_FEATURE_ID_STRIDE + seq;
 
+      // #310: live plan pins are kept as opaque ANCHORS beside their positional refs, so a
+      // survey edit that renumbers stations doesn't silently retarget them. The real backend
+      // names a station by the shots on either side of it (core/state/dive_plan.rs's
+      // `PlanAnchor`); this mock mirrors that NEIGHBOUR-PAIR semantics only - no reverse-parity
+      // or terminal-shot-length tracking, since the mock only needs to survive the shot
+      // add/delete an e2e can actually drive. The anchor shape below is this mock's own and is
+      // opaque to the app (`PlanAnchor` is `unknown` on the TS side).
+      interface MockPlanRefLite {
+        section_id: number;
+        station_index: number;
+      }
+      interface MockPlanAnchor {
+        section_id: number;
+        before_shot_uuid: string | null;
+        after_shot_uuid: string | null;
+      }
+      interface MockShotRef {
+        id: number;
+        uuid?: string;
+      }
+      interface MockSectionRef {
+        id: number;
+        shots: MockShotRef[];
+      }
+      const sectionForAnchor = (sectionId: number): MockSectionRef | undefined =>
+        (currentProject?.sections as MockSectionRef[] | undefined)?.find(
+          (s) => s.id === sectionId,
+        );
+      /** Describe the station at `ref` by the uuids of its neighbouring shots (station `i` sits
+       *  between shot `i-1` and shot `i`; a section end has no neighbour on that side). `null`
+       *  when the section is gone or the index is out of range - mirrors the backend's
+       *  `to_anchor`. */
+      const refToAnchor = (ref: MockPlanRefLite | null | undefined): MockPlanAnchor | null => {
+        if (!ref) return null;
+        const section = sectionForAnchor(ref.section_id);
+        if (!section || ref.station_index < 0 || ref.station_index > section.shots.length) {
+          return null;
+        }
+        const before = ref.station_index > 0 ? section.shots[ref.station_index - 1] : undefined;
+        const after =
+          ref.station_index < section.shots.length ? section.shots[ref.station_index] : undefined;
+        return {
+          section_id: ref.section_id,
+          before_shot_uuid: before?.uuid ?? null,
+          after_shot_uuid: after?.uuid ?? null,
+        };
+      };
+      /** Place an anchor against the project as it stands now, following the backend's
+       *  `resolve_anchor` rules: with BOTH neighbours found the station is the boundary between
+       *  them regardless of which now comes first (`pa < pb ? pa+1 : pa` - the order-agnosticism
+       *  is what makes a reverse a no-op for interior stations); with one side that was NEVER
+       *  recorded (a section END at capture), the station follows its sole shot to whichever end
+       *  it currently touches (a reverse carries station 0 to station N and back); with one side
+       *  recorded but deleted, the surviving side keeps its directional meaning. `null` only when
+       *  NEITHER uuid is found anymore. */
+      const anchorToRef = (anchor: MockPlanAnchor | null | undefined): MockPlanRefLite | null => {
+        if (!anchor) return null;
+        const section = sectionForAnchor(anchor.section_id);
+        if (!section) return null;
+        const find = (u: string | null) =>
+          u ? section.shots.findIndex((s) => s.uuid === u) : -1;
+        const pa = find(anchor.before_shot_uuid);
+        const pb = find(anchor.after_shot_uuid);
+        const n = section.shots.length;
+        if (pa >= 0 && pb >= 0) {
+          return { section_id: anchor.section_id, station_index: pa < pb ? pa + 1 : pa };
+        }
+        if (pa >= 0) {
+          if (anchor.after_shot_uuid === null) {
+            // Tail-end station at capture: stay on the end its shot touches now.
+            const idx = pa === 0 ? 0 : n;
+            return { section_id: anchor.section_id, station_index: idx };
+          }
+          return { section_id: anchor.section_id, station_index: pa + 1 };
+        }
+        if (pb >= 0) {
+          if (anchor.before_shot_uuid === null) {
+            // Head-end station at capture: stay on the end its shot touches now.
+            const idx = pb === n - 1 ? n : 0;
+            return { section_id: anchor.section_id, station_index: idx };
+          }
+          return { section_id: anchor.section_id, station_index: pb };
+        }
+        return null;
+      };
+
       // `section_offsets` reaches the mock in TWO shapes, so nothing may index it
       // directly. `create_project_full` / `import_sections` / `execute_gpx_import`
       // build the JS `Record<sectionId, [dx, dy]>`, while the binary envelope
@@ -1365,6 +1451,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'load_dive_plan': {
             const found = mockDivePlans.find((p) => p.id === args?.id);
             if (!found) throw new Error('That dive plan no longer exists.');
+            // #310: this mock keeps a plan's refs POSITIONAL (unlike the real `.plnx`, which
+            // canonicalizes to shot-uuid anchors on save), so the anchors below are derived
+            // fresh at load time against the CURRENT survey - exactly what a real load would
+            // hand back for a plan whose refs happen to still be current.
+            const snap = (found.snapshot ?? {}) as {
+              origin?: MockPlanRefLite | null;
+              endpoint?: MockPlanRefLite | null;
+              waypoints?: MockPlanRefLite[];
+              marked_points?: Array<{ station: MockPlanRefLite; label?: string | null }>;
+              stage_drop_overrides?: Array<MockPlanRefLite | null>;
+            };
             return {
               meta: {
                 id: found.id,
@@ -1374,6 +1471,15 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               },
               snapshot: found.snapshot,
               stale_ref_count: 0,
+              anchors: {
+                origin: refToAnchor(snap.origin ?? null),
+                endpoint: refToAnchor(snap.endpoint ?? null),
+                waypoints: (snap.waypoints ?? []).map((w) => refToAnchor(w)),
+                marked_points: (snap.marked_points ?? []).map((m) => refToAnchor(m.station)),
+                stage_drop_overrides: (snap.stage_drop_overrides ?? []).map((r) =>
+                  refToAnchor(r ?? null),
+                ),
+              },
             };
           }
           case 'save_dive_plan': {
@@ -1418,6 +1524,27 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             }
             return null;
           }
+
+          // #310: anchor / re-resolve live plan pins across a survey edit. Recorded together in
+          // one call log (both commands round-trip the same opaque anchor shape).
+          case 'plan_anchors_for_refs': {
+            const refs = (args?.refs ?? []) as Array<MockPlanRefLite | null>;
+            const anchors = refs.map((ref) => refToAnchor(ref));
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
+            calls.push({ cmd: 'plan_anchors_for_refs', refs, anchors });
+            win.__MOCK_ANCHOR_CALLS__ = calls;
+            return anchors;
+          }
+          case 'plan_refs_for_anchors': {
+            const anchors = (args?.anchors ?? []) as Array<MockPlanAnchor | null>;
+            const refs = anchors.map((a) => anchorToRef(a));
+            const win = window as unknown as Record<string, unknown>;
+            const calls = (win.__MOCK_ANCHOR_CALLS__ as unknown[]) ?? [];
+            calls.push({ cmd: 'plan_refs_for_anchors', anchors, refs });
+            win.__MOCK_ANCHOR_CALLS__ = calls;
+            return refs;
+          }
           case 'compute_gas_reach_field': {
             // Record every call's inputs so drag e2e can assert the dragged station was sent as a
             // per-stage override (#246). Keyed on the camelCase arg the frontend actually invokes with.
@@ -1431,6 +1558,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // #298: the ordered way points, so an e2e can assert the pick reached the engine
                 // and in what order.
                 waypoints: args?.waypoints ?? [],
+                // #317: the per-span speed + propulsion, so an e2e can assert a segment edit
+                // reached the engine rather than only re-rendering the table.
+                segments: args?.segments ?? [],
+                // #317: the rig itself, so disabling it can be proven at the REQUEST - the
+                // readout that gates on it also gates on the client-side `hasDpvRig` flag, which
+                // flips a render tick before any recompute round-trips.
+                dpv: (args?.gasConfig as { dpv?: unknown } | undefined)?.dpv ?? null,
               });
               win.__MOCK_GAS_REACH_CALLS__ = calls;
             }
@@ -1473,6 +1607,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               conservative_tank_gas?: boolean;
               swim_speed_m_per_min?: number;
               survey_speed_m_per_min?: number | null;
+              dpv?: {
+                primary?: { speed_m_per_min?: number; burn_minutes?: number };
+                backup?: { speed_m_per_min?: number; burn_minutes?: number };
+                range_reserve_fraction?: number;
+              } | null;
             };
             const cylinders = (args?.cylinders ?? []) as Array<{
               role?: string;
@@ -1697,7 +1836,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             // stand-in over the linear e2e seed, not the engine's tie-aware, asymmetrically-priced
             // walk. It does honour the one property the UI is asserted on - the exit leg is swum at
             // `swim_speed_m_per_min` while the way in uses the survey speed when one is set - so a
-            // spec can tell the two axes apart. The exact math is pinned by the Rust tests.
+            // spec can tell the two axes apart. The real engine additionally rides a SCOOTERED span
+            // out at the span's own pace (#317); no spec asserts the exit half's numbers, so this
+            // stand-in does not model that. The exact math is pinned by the Rust tests.
             const inSpeed = gasConfig.survey_speed_m_per_min ?? gasConfig.swim_speed_m_per_min ?? 10;
             const outSpeed = gasConfig.swim_speed_m_per_min ?? 10;
             const routeGasAt = (r: { section_id: number; station_index: number }) => {
@@ -1759,6 +1900,91 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               );
               return j >= 0 ? j : null;
             });
+            // Scooter + per-segment readouts (#317). Same standing caveat as the drop math above:
+            // a shape-correct stand-in for UI wiring, NOT the engine's rule. In particular the mock
+            // does NOT enforce the range cap on `reachable` / `turn_frontier` - the engine ANDs it
+            // into both masks, and the Rust unit tests are the source of truth for that. So an e2e
+            // here may assert that the readout rows render the numbers it was handed; it may NOT
+            // assert which stations grey out under a rig.
+            //
+            // With no rig (`dpv: null`, which is what both mock config blocks ship) every value
+            // below is inert, so the 31 existing gas specs - all calibrated against the fixed
+            // 1500 L budget and `|x| * 20` field - are untouched.
+            const segmentArgs = (args?.segments ?? []) as Array<{
+              speed_m_per_min?: number | null;
+              on_scooter?: boolean;
+            }>;
+            const rig = gasConfig.dpv ?? null;
+            const unitRange = (u?: { speed_m_per_min?: number; burn_minutes?: number }) =>
+              (u?.speed_m_per_min ?? 0) * (u?.burn_minutes ?? 0);
+            // Twin of `MAX_DPV_RANGE_RESERVE_FRACTION` (src-tauri/src/config/gas.rs) and its
+            // frontend mirror (`MAX_DPV_RANGE_RESERVE_FRACTION` in GasSettings.tsx) - both clamp
+            // the reserve fraction to [0, 0.9] before applying it.
+            const clampedReserveFraction = Math.min(
+              0.9,
+              Math.max(0, rig?.range_reserve_fraction ?? 0),
+            );
+            const scooter_range_limit_m = rig
+              ? Math.max(
+                  0,
+                  Math.min(unitRange(rig.primary), unitRange(rig.backup)) *
+                    (1 - clampedReserveFraction),
+                )
+              : null;
+            // Which segment each route leg belongs to: way points split the route, so leg j sits in
+            // the segment named by how many way points the route has already passed at that point.
+            const routeIndexOf = (r: { section_id: number; station_index: number }) =>
+              routeRefsOrdered.findIndex(
+                (x) => x.section_id === r.section_id && x.station_index === r.station_index,
+              );
+            const waypointRouteIdx = waypointArgs.map(routeIndexOf).filter((i) => i >= 0);
+            const segmentAtLeg = (legIdx: number) =>
+              waypointRouteIdx.filter((wi) => wi <= legIdx).length;
+            // Twin of `MIN_SEGMENT_SPEED_M_PER_MIN`/`MAX_SEGMENT_SPEED_M_PER_MIN` in gas/scooter.rs
+            // ([0.1, 1000] m/min) - the engine falls back to the plan speed outside this range
+            // rather than accepting whatever was stored, and the mock must refuse the same values
+            // or an e2e asserting an out-of-range speed's effect could pass against the mock while
+            // diverging from the backend.
+            const isSegmentSpeedInRange = (v: number | null | undefined): v is number =>
+              typeof v === 'number' && v >= 0.1 && v <= 1000;
+            let scooter_distance_m = 0;
+            let route_runtime_min: number | null = null;
+            if (routePts.length > 1) {
+              let minutes = 0;
+              for (let i = 1; i < routePts.length; i += 1) {
+                const a = routePts[i - 1];
+                const b = routePts[i];
+                const seg = Math.hypot(b.x - a.x, b.y - a.y, b.z - a.z);
+                const s = segmentArgs[segmentAtLeg(i - 1)];
+                // A span with no speed of its own is flown at the PLAN's speed, not a hardcoded
+                // one - mirroring `resolve_segments` (gas/scooter.rs). Getting this wrong is how
+                // the real engine once stopped honouring the configured swim speed entirely.
+                const speed = isSegmentSpeedInRange(s?.speed_m_per_min) ? s.speed_m_per_min : inSpeed;
+                minutes += seg / speed;
+                if (rig && s?.on_scooter) scooter_distance_m += seg;
+              }
+              route_runtime_min = minutes;
+            }
+            // The park point is DERIVED, never placed: the boundary after the last scootered
+            // segment. Null when nothing is scootered, and when the units are carried all the way
+            // to the turnaround (the last segment is scootered, so its boundary is the turn).
+            let scooter_drop_ref: { section_id: number; station_index: number } | null = null;
+            if (rig) {
+              let lastOn = -1;
+              for (let i = 0; i < segmentArgs.length; i += 1) {
+                if (segmentArgs[i]?.on_scooter) lastOn = i;
+              }
+              if (lastOn >= 0 && lastOn + 1 < segmentArgs.length) {
+                scooter_drop_ref = waypointArgs[lastOn] ?? null;
+              }
+            }
+            // NOT `scooter_distance_m > scooter_range_limit_m` - that is verbatim the naive
+            // per-route comparison `GasReachField::turn_on_scooter_range`'s own doc
+            // (models/project/gas/model.rs) says the UI must not re-derive: the route already
+            // stops at whichever cap bound first, so the two read as merely equal in exactly
+            // the case being asked about. No spec asserts this value; hardcoded false rather
+            // than guess at the real (cave-scoped) rule.
+            const turn_on_scooter_range = false;
             return {
               station_refs: stations.map((s) => s.station_ref),
               gas_to_reach,
@@ -1782,6 +2008,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               route_profile,
               stage_drop_route_indices,
               waypoint_route_indices,
+              scooter_distance_m,
+              scooter_range_limit_m,
+              scooter_drop_ref,
+              route_runtime_min,
+              turn_on_scooter_range,
             };
           }
 
@@ -1807,6 +2038,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const rawShots = Array.isArray(args?.shots) ? (args?.shots as Array<Record<string, unknown>>) : [];
             const shots = rawShots.map((shot, index) => ({
               id: mockShotId(sectionCounter, index),
+              // #310: a deterministic, stable uuid per shot - the neighbour-pair anchors above
+              // key off this, exactly as the real backend keys off `Shot.uuid`.
+              uuid: `mock-shot-uuid-${mockShotId(sectionCounter, index)}`,
               azimuth_in: (shot.azimuth_in as number) ?? 0,
               azimuth_out: (shot.azimuth_out as number) ?? 0,
               length: (shot.length as number) ?? 0,
@@ -3730,9 +3964,25 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return { success: true };
           }
 
-          case 'delete_shot':
+          case 'delete_shot': {
             console.log('[Mock IPC] delete_shot called with:', args);
+            // #310: a plain no-op response left every station index unchanged, so nothing
+            // could ever be renumbered to test a live anchored pin against. Splice the shot
+            // out in place - the real backend's `remove_shot_with_rewire` shortens the section
+            // by one shot the same way, shifting every later station down by one index.
+            if (currentProject && args) {
+              const sectionId = args.sectionId as number;
+              const shotId = args.shotId as number;
+              const section = (
+                currentProject.sections as Array<{ id: number; shots: Array<{ id: number }> }>
+              ).find((s) => s.id === sectionId);
+              if (section) {
+                const idx = section.shots.findIndex((sh) => sh.id === shotId);
+                if (idx >= 0) section.shots.splice(idx, 1);
+              }
+            }
             return { success: true };
+          }
 
           case 'delete_last_shot_and_section':
             console.log('[Mock IPC] delete_last_shot_and_section called with:', args);

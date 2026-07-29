@@ -102,6 +102,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.move_station",
     "command.parse_gpx",
     "command.parse_tml",
+    "command.plan_anchors_for_refs",
+    "command.plan_refs_for_anchors",
     "command.preview_delete_shot",
     "command.push_frontend_log",
     "command.redo",
@@ -943,7 +945,10 @@ mod tests {
         //       command.reverse_section, undo-after.reverse_section,
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .reverse-section = 689.
-        assert_eq!(EVENT_NAMES.len(), 689);
+        //   + 2 plan-anchor round-trip commands (#310, the live-pin half of what the
+        //       `.plnx` already did on save):
+        //       command.plan_{anchors_for_refs,refs_for_anchors} = 691.
+        assert_eq!(EVENT_NAMES.len(), 691);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

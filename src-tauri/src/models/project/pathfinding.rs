@@ -696,9 +696,53 @@ impl Project {
         adj: &[Vec<(usize, f64)>],
         roots: &[usize],
     ) -> (Vec<f64>, Vec<usize>) {
-        let n = adj.len();
+        // Riders scaled to 0 accumulate nothing, so passing `adj` as its own rider graph is
+        // CORRECT - but it is not free. Every plain Dijkstra now allocates two extra
+        // `vec![f64::INFINITY; n]` and does two multiply-adds per successful relaxation, and this is
+        // the entry point the distance-gradient overlay runs over the whole survey graph.
+        //
+        // The trade is still right: one heap loop, maintained and tested once, against two
+        // near-identical copies that would drift. The costs are O(n) memory and a constant factor on
+        // the relaxation - not another graph walk - so they stay well under the heap operations that
+        // dominate. If a profile ever says otherwise, the fix is a rider-count generic, not a fork.
+        let (dist, _, pred) = Self::dijkstra_scaled_with_riders(adj, adj, roots, 1.0, [0.0, 0.0]);
+        (dist, pred)
+    }
+
+    /// [`dijkstra_with_preds`](Self::dijkstra_with_preds) over a **scaled** cost graph that also
+    /// carries two positionally-aligned **rider** quantities along each shortest path.
+    ///
+    /// Edge `k` of node `u` costs `cost[u][k].1 x cost_scale` and contributes
+    /// `rider[u][k].1 x rider_scales[j]` to rider `j`. `cost` and `rider` must therefore describe
+    /// the same edges in the same order - guaranteed when both come from
+    /// [`build_survey_graph_weighted`](Self::build_survey_graph_weighted), whose edge-emission
+    /// order is fixed by contract. Aligning by POSITION rather than by node pair is deliberate:
+    /// `adj` can hold parallel edges between one pair (a shot plus a merge/closure tie), so a
+    /// pair-keyed lookup would have to guess which one Dijkstra actually relaxed.
+    ///
+    /// The scaling exists so one graph build serves many weightings: the gas engine prices a leg as
+    /// `basis x (rmv / speed)` and varies only that scalar per plan segment (#317).
+    ///
+    /// ⚠ **A rider is the second quantity along the COST-optimal path, not its own minimum.** The
+    /// caller wants what the chosen route costs in the rider's units, not the different route that
+    /// would minimise the rider. For the gas engine that is both the honest reading (the diver flies
+    /// one route, the gas-optimal one) and the conservative one: scooter distance along the
+    /// gas-optimal path is by definition `>=` the achievable minimum, so a cap on it can only ever
+    /// under-state reach. Do not "fix" this into a second search.
+    ///
+    /// `cost_scale` must be finite and positive, or an infinite edge could stop reading as
+    /// unreachable; callers validate their speeds at the config boundary.
+    pub(super) fn dijkstra_scaled_with_riders(
+        cost: &[Vec<(usize, f64)>],
+        rider: &[Vec<(usize, f64)>],
+        roots: &[usize],
+        cost_scale: f64,
+        rider_scales: [f64; 2],
+    ) -> (Vec<f64>, [Vec<f64>; 2], Vec<usize>) {
+        let n = cost.len();
         let mut dist = vec![f64::INFINITY; n];
         let mut pred = vec![usize::MAX; n];
+        let mut riders = [vec![f64::INFINITY; n], vec![f64::INFINITY; n]];
 
         #[derive(Copy, Clone, PartialEq)]
         struct Node(f64, usize);
@@ -723,6 +767,8 @@ impl Project {
             // filtered by the `d > dist[u]` check below - no need to dedup here.
             if r < n {
                 dist[r] = 0.0;
+                riders[0][r] = 0.0;
+                riders[1][r] = 0.0;
                 heap.push(std::cmp::Reverse(Node(0.0, r)));
             }
         }
@@ -730,16 +776,25 @@ impl Project {
             if d > dist[u] {
                 continue;
             }
-            for &(v, w) in &adj[u] {
-                let nd = d + w;
+            // `u` is only ever popped after it was relaxed (or seeded as a root), so both riders are
+            // finite here.
+            let (ru0, ru1) = (riders[0][u], riders[1][u]);
+            // `rider[u]` is aligned with `cost[u]` edge-for-edge, so the same index `k` names the
+            // same edge in both. A shorter rider row would mean the two graphs came from different
+            // builds; charge nothing for the unmatched edge rather than panicking.
+            for (k, &(v, w)) in cost[u].iter().enumerate() {
+                let nd = d + w * cost_scale;
                 if nd < dist[v] {
                     dist[v] = nd;
                     pred[v] = u;
+                    let r = rider[u].get(k).map_or(0.0, |&(_, rw)| rw);
+                    riders[0][v] = ru0 + r * rider_scales[0];
+                    riders[1][v] = ru1 + r * rider_scales[1];
                     heap.push(std::cmp::Reverse(Node(nd, v)));
                 }
             }
         }
-        (dist, pred)
+        (dist, riders, pred)
     }
 
     /// Resolve the project's zero-datum stations to their indices in `stations`.

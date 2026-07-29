@@ -1570,8 +1570,8 @@ export const useUIStore = create<UIStore>((set) => ({
       set({ detailPanelOpen: true });
     }
     if (mode === 'plan') {
-      // Plan also pins the bottom Dock open so the Cylinders/Profile tabs are visible
-      // without hunting for a closed dock.
+      // Plan also pins the bottom Dock open so the Equipment/Segments/Profile tabs are
+      // visible without hunting for a closed dock.
       set({ dataTableOpen: true, dataTableMode: 'pin' });
     }
     // Export shows the read-only map + export stub. We do NOT reset the gas store on

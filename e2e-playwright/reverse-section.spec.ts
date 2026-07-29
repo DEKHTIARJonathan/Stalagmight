@@ -721,6 +721,7 @@ test.describe('Reverse Section', () => {
         origin,
         endpoint: null,
         waypoints: [],
+        segments: [],
         diver: gas.diver,
         cylinders: gas.cylinders,
         gas_config: gas.gasConfig,

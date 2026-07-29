@@ -211,6 +211,57 @@ describe('ProfileChart (#299)', () => {
     expect(toasts[0]).toContain('Cannot export over the open project file');
   });
 
+  /**
+   * #317 fix pass: a pin the backend can no longer place (#310) is withheld from the compute gate
+   * and blocks Save - the export door was the one place still reading the raw store pins, so it
+   * would happily write a document routed through whichever station the STALE positional ref now
+   * names.
+   */
+  it('disables both export buttons, with a title that changes to explain why, while any plan pin is unresolved', () => {
+    seed(fakeField());
+    const { rerender } = render(<ProfileChart />);
+    const copyBtn = screen.getByTestId('plan-profile-copy');
+    const xmlBtn = screen.getByTestId('plan-profile-export-xml');
+    expect(copyBtn).not.toBeDisabled();
+    const resolvedCopyTitle = copyBtn.getAttribute('title');
+    const resolvedXmlTitle = xmlBtn.getAttribute('title');
+
+    useGasPlanStore.setState({
+      unresolved: {
+        origin: true,
+        endpoint: false,
+        waypoints: [],
+        markedPoints: [],
+        stageDropOverrides: [],
+      },
+    });
+    rerender(<ProfileChart />);
+
+    expect(copyBtn).toBeDisabled();
+    expect(xmlBtn).toBeDisabled();
+    // The title must actually explain the NEW reason, not keep showing the plain export hint - a
+    // disabled control with a stale hint is as misleading as no gate at all.
+    expect(copyBtn.getAttribute('title')).not.toBe(resolvedCopyTitle);
+    expect(xmlBtn.getAttribute('title')).not.toBe(resolvedXmlTitle);
+    expect(copyBtn.getAttribute('title')).toBe(xmlBtn.getAttribute('title'));
+  });
+
+  it('re-enables both export buttons once the unresolved pin clears', () => {
+    seed(fakeField());
+    useGasPlanStore.setState({
+      unresolved: {
+        origin: false,
+        endpoint: false,
+        waypoints: [],
+        markedPoints: [],
+        stageDropOverrides: [],
+      },
+    });
+    render(<ProfileChart />);
+    expect(screen.getByTestId('plan-profile-copy')).not.toBeDisabled();
+    expect(screen.getByTestId('plan-profile-export-xml')).not.toBeDisabled();
+  });
+
   it('sends the plan as it is at click time, not as it was at render time', async () => {
     // The XML path awaits a save dialog first; on Android that dialog is an in-app picker the user
     // can edit the plan behind. A render-time closure would export a plan that is no longer on

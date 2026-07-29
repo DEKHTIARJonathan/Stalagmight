@@ -106,10 +106,10 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
         survey_rmv_multiplier: f64::NAN,    // invalid -> default 1.0
         stressed_rmv_multiplier: 0.0,       // invalid -> default 1.5
         jump_rmv_multiplier: 0.5,           // below 1.0 (would cut gas) -> default 1.5
-        dpv: Some(DpvProfile {
-            speed_m_per_min: -5.0,
-            burn_minutes: None,
-            range_m: None,
+        dpv: Some(DpvRig {
+            primary: dpv_unit(-5.0, 90.0),
+            backup: dpv_unit(50.0, 60.0),
+            range_reserve_fraction: 0.2,
         }),
         ..GasConfig::default()
     };
@@ -119,7 +119,95 @@ fn test_gas_config_normalize_clamps_invalid_speeds_and_multipliers() {
     assert_eq!(config.survey_rmv_multiplier, 1.0);
     assert_eq!(config.stressed_rmv_multiplier, 1.5);
     assert_eq!(config.jump_rmv_multiplier, 1.5); // clamped up to the default: a jump is never less work
-    assert_eq!(config.dpv, None); // bad DPV speed drops the profile
+    assert_eq!(config.dpv, None); // bad DPV speed drops the whole rig
+}
+
+fn dpv_unit(speed: f64, burn: f64) -> DpvUnit {
+    DpvUnit {
+        speed_m_per_min: speed,
+        burn_minutes: burn,
+    }
+}
+
+#[test]
+fn test_gas_config_normalize_drops_the_whole_rig_when_either_unit_is_invalid() {
+    // Repairing one unit is not an option: the cap is `min(range)` over the pair, so inventing a
+    // backup would silently SET the penetration limit from a number nobody entered. Dropping the
+    // rig removes the cap instead - which is safe only because `resolve_segments` then also forces
+    // every span off the scooter, so nothing is flown on a unit that does not exist.
+    for (primary, backup) in [
+        (dpv_unit(55.0, 0.0), dpv_unit(50.0, 60.0)), // zero burn
+        (dpv_unit(55.0, 90.0), dpv_unit(f64::NAN, 60.0)), // NaN speed
+        (dpv_unit(55.0, 90.0), dpv_unit(50.0, -1.0)), // negative burn
+        (dpv_unit(f64::INFINITY, 90.0), dpv_unit(50.0, 60.0)),
+    ] {
+        let mut config = GasConfig {
+            dpv: Some(DpvRig {
+                primary,
+                backup,
+                range_reserve_fraction: 0.2,
+            }),
+            ..GasConfig::default()
+        };
+        config.normalize();
+        assert_eq!(config.dpv, None);
+    }
+}
+
+#[test]
+fn test_gas_config_normalize_guards_the_dpv_range_reserve() {
+    let rig = |fraction| GasConfig {
+        dpv: Some(DpvRig {
+            primary: dpv_unit(55.0, 90.0),
+            backup: dpv_unit(50.0, 60.0),
+            range_reserve_fraction: fraction,
+        }),
+        ..GasConfig::default()
+    };
+    // A NEGATIVE reserve would credit MORE range than the units carry (over-stating reach, the
+    // unsafe direction), so it resets to the default rather than being clamped to 0.
+    for bad in [-0.1, f64::NAN] {
+        let mut config = rig(bad);
+        config.normalize();
+        assert_eq!(
+            config.dpv.unwrap().range_reserve_fraction,
+            default_dpv_range_reserve_fraction()
+        );
+    }
+    // At/above 1.0 the cap would be zero and every scootered station would read unreachable with
+    // no explanation. That is useless rather than dangerous, so it caps instead of resetting.
+    let mut config = rig(2.0);
+    config.normalize();
+    assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.9);
+    // A legitimate value is left alone.
+    let mut config = rig(0.35);
+    config.normalize();
+    assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.35);
+    // The unclamped default is 0.1 - confirmed literally, not just by round-tripping through the
+    // same function the resets above already call.
+    assert_eq!(default_dpv_range_reserve_fraction(), 0.1);
+}
+
+#[test]
+fn test_gas_config_normalize_clamps_dpv_range_reserve_at_the_cap_boundary() {
+    // ⚠ CROSS-LANGUAGE PIN. The Settings > Gas panel previews the DPV usable range before any
+    // plan exists (`GasSettings.tsx`), so it duplicates this clamp in TypeScript rather than
+    // reading it off a computed field - a duplicated clamp drifts silently (the #233
+    // gauge-divergence class), so both sides pin the exact same boundary and the twin is named
+    // in each so a change to either breaks a test that says where its counterpart lives.
+    //
+    // Twin: `the usable-range preview clamps a reserve above the cap down to 0.9` in
+    // `src/components/Dialogs/settings/GasSettings.test.tsx`.
+    let mut config = GasConfig {
+        dpv: Some(DpvRig {
+            primary: dpv_unit(55.0, 90.0),
+            backup: dpv_unit(50.0, 60.0),
+            range_reserve_fraction: 0.95,
+        }),
+        ..GasConfig::default()
+    };
+    config.normalize();
+    assert_eq!(config.dpv.unwrap().range_reserve_fraction, 0.9);
 }
 
 #[test]
@@ -276,6 +364,66 @@ fn test_gas_config_deserializes_with_reserve_profile_missing() {
             .expect("partial reserve_profile loads");
     assert_eq!(partial.reserve_profile.stage_reserve_bar, 40.0);
     assert_eq!(partial.reserve_profile.recalc_hold_stage2_bar, 100.0); // missing member defaults
+}
+
+#[test]
+fn test_gas_config_dpv_old_shape_degrades_to_none_without_losing_the_rest_of_the_config() {
+    // #317 replaced the old `DpvProfile { speed_m_per_min, burn_minutes: Option<f64>,
+    // range_m: Option<f64> }` shape with `DpvRig`. A config written by a previous build still
+    // carries a `[dpv]` table in the OLD shape. Erroring on that one field would fail the WHOLE
+    // parse, and `Config::load().unwrap_or_default()` then silently resets EVERY setting in the
+    // file - not just the DPV block. The `dpv` field must instead degrade to `None`, and every
+    // other, unrelated setting in the same file (here a customized swim speed) must survive.
+    let toml_str = r#"
+units = "metric"
+swim_speed_m_per_min = 7.5
+
+[dpv]
+speed_m_per_min = 45.0
+burn_minutes = 60.0
+range_m = 2700.0
+"#;
+    let config: GasConfig =
+        toml::from_str(toml_str).expect("an old-shape dpv table must not fail the whole parse");
+    assert_eq!(config.dpv, None);
+    assert_eq!(
+        config.swim_speed_m_per_min, 7.5,
+        "an unrelated customized setting in the same file must survive the dpv shape change"
+    );
+}
+
+#[test]
+fn test_gas_config_dpv_current_shape_round_trips() {
+    let toml_str = r#"
+units = "metric"
+
+[dpv]
+range_reserve_fraction = 0.2
+
+[dpv.primary]
+speed_m_per_min = 45.0
+burn_minutes = 60.0
+
+[dpv.backup]
+speed_m_per_min = 30.0
+burn_minutes = 40.0
+"#;
+    let config: GasConfig = toml::from_str(toml_str).expect("a current-shape dpv table must parse");
+    let rig = config
+        .dpv
+        .expect("a well-formed dpv table must deserialize to Some");
+    assert_eq!(rig.primary.speed_m_per_min, 45.0);
+    assert_eq!(rig.primary.burn_minutes, 60.0);
+    assert_eq!(rig.backup.speed_m_per_min, 30.0);
+    assert_eq!(rig.backup.burn_minutes, 40.0);
+    assert_eq!(rig.range_reserve_fraction, 0.2);
+}
+
+#[test]
+fn test_gas_config_dpv_missing_defaults_to_none() {
+    let config: GasConfig =
+        toml::from_str("units = \"metric\"\n").expect("gas config without a dpv table loads");
+    assert_eq!(config.dpv, None);
 }
 
 #[test]

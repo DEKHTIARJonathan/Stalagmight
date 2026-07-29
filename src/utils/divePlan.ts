@@ -4,6 +4,7 @@ import type {
   DivePlanSnapshot,
   GasConfig,
   MarkedPoint,
+  PlanSegment,
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 
@@ -26,6 +27,9 @@ export interface DivePlanInputs {
   gasConfig: GasConfig;
   stageDropOverrides: (StationRef | null)[];
   markedPoints: MarkedPoint[];
+  /** #317: per-span pace/propulsion; a plain gas input like the rest above (no free-text label
+   *  to trim, unlike `markedPoints`), so it round-trips into the snapshot verbatim. */
+  segments: PlanSegment[];
 }
 
 /** Build the persisted snapshot (snake_case IPC shape) from the live store inputs. */
@@ -51,6 +55,7 @@ export function divePlanSnapshotOf(i: DivePlanInputs): DivePlanSnapshot {
       const trimmed = m.label?.trim();
       return { ...m, label: trimmed ? trimmed : null };
     }),
+    segments: i.segments,
   };
 }
 

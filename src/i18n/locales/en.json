@@ -2211,7 +2211,9 @@
       "endpointOutOfReach": "Out of reach on this gas. Turning at {{id}}, on the way there.",
       "endpointUnusable": "Your endpoint can no longer be reached from here. Showing the deepest point in budget instead, at {{id}} - it is not on the way to your endpoint.",
       "warnUnreachable": "Way point {{n}} cannot be reached, so no route can be planned. Remove it, or reconnect the survey.",
-      "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas."
+      "warnOverBudget": "The way points alone use more gas than the budget allows. Remove one, or carry more gas.",
+      "unresolvedBadge": "station missing",
+      "warnUnresolved": "Way point {{n}} points at a station that no longer exists. Undo the survey edit, or remove the way point."
     },
     "marked": {
       "label": "Marked points",
@@ -2275,7 +2277,7 @@
       "usableHint": "Penetration gas: how much you'll breathe off this tank on the way in before turning. Computed by the strategy; editable under Free.",
       "usableAria": "Usable gas for {{tank}}",
       "colRole": "Role",
-      "editHint": "Edit your cylinders in the Cylinders tab below."
+      "editHint": "Edit your cylinders in the Equipment tab below."
     },
     "roles": {
       "back_gas": "Back gas",
@@ -2304,6 +2306,11 @@
       "routeDistanceHint": "One-way swum line distance from the origin to the turnaround (the sum of the route's legs).",
       "maxDepth": "Max depth",
       "avgDepth": "Average depth",
+      "routeRuntime": "One-way runtime",
+      "routeRuntimeHint": "Time to fly/swim the route to the turnaround, at each segment's own speed.",
+      "scooterRange": "Scooter range used",
+      "scooterRangeHint": "Battery range the scootered legs consume, against this rig's usable one-way range (primary/backup pair, less the reserve). Riding slower than cruise drains the battery clock, not the odometer, so a slow leg uses more range than line.",
+      "turnOnScooterRange": "Turning on scooter range, not gas.",
       "computing": "Computing…"
     },
     "map": {
@@ -2311,6 +2318,7 @@
       "dropOverReserveTooltip": "Stage {{n}} drop: moved past reserve (breathing into reserve gas)",
       "dropAria": "Stage {{n}} drop point: drag or use arrow keys to move it along the route, Delete to reset",
       "finalTurnTooltip": "Turn around here",
+      "scooterDropTooltip": "Scooters parked here - the passage beyond is swum",
       "turnMarkerTooltip": "Click to set as endpoint",
       "turnMarkerAria": "Candidate route endpoint - activate to set as endpoint",
       "waypointTooltip": "Way point {{n}} - click to remove, right-click for route options",
@@ -2318,6 +2326,65 @@
       "markedTooltip": "Marked point - click to remove, right-click for route options",
       "markedAria": "Marked point {{n}} - activate to remove it",
       "markedLabelledAria": "Marked point: {{label}} - activate to remove it"
+    },
+    "segments": {
+      "colFrom": "From",
+      "colTo": "To",
+      "colSpeed": "Speed",
+      "colScooter": "DPV",
+      "origin": "Origin",
+      "waypointN": "WP {{n}}",
+      "endpoint": "Endpoint",
+      "onward": "Onward",
+      "noRigHint": "Add a DPV rig in the Equipment tab to plan scooter legs.",
+      "speedAria": "Speed for the {{from}} to {{to}} leg",
+      "scooterAria": "Riding a DPV for the {{from}} to {{to}} leg",
+      "parkHere": "Parked here",
+      "parkHereHint": "The DPV is parked at this point - derived from the scootered legs above, not set directly.",
+      "resetSpeed": "Reset",
+      "resetSpeedHint": "Return to the plan's swim speed",
+      "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
+    },
+    "dpv": {
+      "title": "DPV",
+      "enabled": {
+        "label": "DPV",
+        "help": "A rig is a primary scooter plus a mandatory backup - a scootered dive with no backup is not planned at all. Off (default): no scooter, penetration is limited by gas alone.",
+        "aria": "Enable a DPV for route planning"
+      },
+      "primarySpeed": {
+        "label": "Primary speed (m/min)",
+        "labelImperial": "Primary speed (ft/min)",
+        "help": "Cruising speed of the primary scooter.",
+        "aria": "Primary scooter speed in meters per minute",
+        "ariaImperial": "Primary scooter speed in feet per minute"
+      },
+      "primaryBurn": {
+        "label": "Primary burn time (min)",
+        "help": "Run time of the primary scooter at cruising speed.",
+        "aria": "Primary scooter burn time in minutes"
+      },
+      "backupSpeed": {
+        "label": "Backup speed (m/min)",
+        "labelImperial": "Backup speed (ft/min)",
+        "help": "Cruising speed of the mandatory backup scooter, ridden out on the return leg.",
+        "aria": "Backup scooter speed in meters per minute",
+        "ariaImperial": "Backup scooter speed in feet per minute"
+      },
+      "backupBurn": {
+        "label": "Backup burn time (min)",
+        "help": "Run time of the backup scooter at cruising speed.",
+        "aria": "Backup scooter burn time in minutes"
+      },
+      "rangeReserve": {
+        "label": "Range reserve (%)",
+        "help": "Fraction of the weaker unit's range held back for an ageing battery or flow, e.g. 20%. Applied proportionally, not as a flat distance.",
+        "aria": "DPV range reserve percentage"
+      },
+      "usableRange": {
+        "label": "Usable range",
+        "help": "One-way penetration allowance this rig buys: the weaker unit's range (not halved - primary flies in, backup flies out), less the reserve."
+      }
     }
   },
   "modeCarousel": {
@@ -2340,11 +2407,13 @@
     "deleteConfirm": "Delete \"{{name}}\"?",
     "discardConfirm": "Discard unsaved changes to \"{{name}}\"?",
     "staleRefs_one": "{{count}} station this plan referenced no longer exists; it has been cleared.",
-    "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared."
+    "staleRefs_other": "{{count}} stations this plan referenced no longer exist; they have been cleared.",
+    "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before saving this plan."
   },
   "planTables": {
     "tabs": {
-      "cylinders": "Cylinders",
+      "equipment": "Equipment",
+      "segments": "Segments",
       "profile": "Profile"
     },
     "profile": {
@@ -2372,7 +2441,8 @@
         "xmlFilter": "Subsurface XML",
         "written": "Dive profile exported",
         "failed": "Dive profile export failed",
-        "clipboardUnavailable": "Copy failed - clipboard unavailable"
+        "clipboardUnavailable": "Copy failed - clipboard unavailable",
+        "unresolvedPins": "A route point no longer matches a station in the survey. Re-place it before exporting."
       },
       "aria": "Dive profile: max depth {{depth}}, {{distance}} penetration, about {{runtime}} minutes round trip."
     }

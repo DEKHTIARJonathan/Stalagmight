@@ -2,6 +2,7 @@
 import type { Cylinder } from "./Cylinder";
 import type { Diver } from "./Diver";
 import type { GasConfig } from "./GasConfig";
+import type { PlanSegment } from "./PlanSegment";
 import type { StationRef } from "./StationRef";
 
-export interface DiveProfileRequest { origin: StationRef | null, endpoint: StationRef | null, waypoints: Array<StationRef>, diver: Diver, cylinders: Array<Cylinder>, gas_config: GasConfig, stage_drop_overrides: Array<StationRef | null>, }
+export interface DiveProfileRequest { origin: StationRef | null, endpoint: StationRef | null, waypoints: Array<StationRef>, segments: Array<PlanSegment>, diver: Diver, cylinders: Array<Cylinder>, gas_config: GasConfig, stage_drop_overrides: Array<StationRef | null>, }

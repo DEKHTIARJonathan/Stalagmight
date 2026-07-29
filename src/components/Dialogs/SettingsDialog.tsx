@@ -78,16 +78,26 @@ function getChangedFields(originalConfig: Config, currentConfig: Config): Set<st
 }
 
 /**
- * Get category-specific defaults from defaultConfig.
+ * Get category-specific defaults from defaultConfig. Exported for its unit test.
+ *
+ * `current` supplies the fields a category reset must PRESERVE: the DPV rig lives on `gas` in
+ * the data model but is planned in Plan mode's Equipment tab (#317), not on the Gas settings
+ * page - so resetting that page must not silently destroy equipment it no longer displays
+ * (the working plan store would keep the rig, and the engine would keep planning a scootered
+ * dive over a config that silently lost it).
  */
-function getCategoryDefaults(category: SettingsCategory, resolvedTheme: ResolvedTheme = 'dark'): Partial<Config> {
+export function getCategoryDefaults(
+  category: SettingsCategory,
+  resolvedTheme: ResolvedTheme = 'dark',
+  current?: Config
+): Partial<Config> {
   switch (category) {
     case 'general':
       return { general: { ...defaultConfig.general } };
     case 'units':
       return { units: { ...defaultConfig.units } };
     case 'gas':
-      return { gas: { ...defaultConfig.gas } };
+      return { gas: { ...defaultConfig.gas, dpv: current ? current.gas.dpv : defaultConfig.gas.dpv } };
     case 'display':
       return {
         display: getThemedDisplayDefaults(resolvedTheme),
@@ -578,7 +588,7 @@ export default function SettingsDialog() {
   const handleConfirmReset = useCallback(() => {
     if (!localConfig) return;
 
-    const defaults = getCategoryDefaults(activeCategory, resolvedTheme);
+    const defaults = getCategoryDefaults(activeCategory, resolvedTheme, localConfig);
     setLocalConfig(mergeConfig(localConfig, defaults));
     setShowResetConfirm(false);
   }, [localConfig, activeCategory, resolvedTheme]);

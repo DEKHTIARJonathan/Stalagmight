@@ -12,6 +12,9 @@ pub(crate) fn ata(depth_m: f64) -> f64 {
 }
 
 /// Gas-consumption rate (L/min) at depth: the surface RMV scaled by ambient pressure.
+///
+/// Reference physics: since #317 the engine prices edges through [`edge_gas_basis`], so the only
+/// remaining caller is [`edge_gas`].
 pub(crate) fn gas_rate(rmv_l_per_min: f64, depth_m: f64) -> f64 {
     rmv_l_per_min * ata(depth_m)
 }
@@ -28,6 +31,12 @@ pub(crate) fn avg_depth(z_from: f64, z_to: f64) -> f64 {
 ///
 /// Precondition: `speed_m_per_min > 0` - guaranteed for config-sourced speeds by
 /// `GasConfig::normalize`; any other caller must validate before calling.
+///
+/// Since #317 the reach field does NOT price its graph edges through this: it uses
+/// `edge_gas_basis x (rmv / speed)` so one graph build serves every plan segment. The #299 exit-leg
+/// profile still calls it directly, and it remains the canonical statement of the physics -
+/// `edge_gas_matches_basis_times_scalar` pins the two forms against each other so they cannot
+/// drift.
 pub(crate) fn edge_gas(
     rmv_l_per_min: f64,
     speed_m_per_min: f64,
@@ -37,6 +46,20 @@ pub(crate) fn edge_gas(
 ) -> f64 {
     let rate = gas_rate(rmv_l_per_min, avg_depth(z_from, z_to));
     rate * (length_m / speed_m_per_min)
+}
+
+/// The **speed- and RMV-independent** half of [`edge_gas`]: `ata(avg_depth) x length`.
+///
+/// `edge_gas = rmv x ata(avg_depth) x length / speed`, so everything that varies per plan *segment*
+/// (#317 - the diver's pace, and whether they are on a scooter) collapses into the single scalar
+/// `rmv / speed`. Pricing an edge is then `basis x scalar`, which is what lets the gas graph be
+/// built **once** and re-weighted per segment by one multiplication instead of being rebuilt.
+///
+/// Keep this factorisation in mind before "simplifying" either function into the other: they are
+/// deliberately two evaluation orders of the same product, and `edge_gas` is the one whose exact
+/// arithmetic the golden tests pin.
+pub(crate) fn edge_gas_basis(length_m: f64, z_from: f64, z_to: f64) -> f64 {
+    ata(avg_depth(z_from, z_to)) * length_m
 }
 
 /// Convert a SAC (surface air consumption, bar/min measured against a reference

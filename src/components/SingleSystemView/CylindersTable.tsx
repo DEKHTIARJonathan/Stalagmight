@@ -10,7 +10,8 @@ import type { CylRole } from '../../types/ipc.generated';
 const CYL_ROLES: readonly CylRole[] = ['back_gas', 'stage', 'dil_out', 'bailout', 'deco'];
 
 /**
- * The diver's cylinder set - the "Cylinders" tab of the Plan-mode bottom panel (#38).
+ * The diver's cylinder set - the top block of the Plan-mode bottom panel's "Equipment" tab
+ * (#38; the DPV rig editor sits below it, #317).
  * Add tanks from presets, edit fill pressure + role, remove. Budget-role rows (back
  * gas / stage) are emphasised; the rest are dimmed (they don't count toward the swim-in
  * budget - PRD §5.3). Edits flow to gasPlanStore, which nulls the cached reach field so
@@ -51,7 +52,9 @@ export function CylindersTable() {
   };
 
   return (
-    <div className="h-full overflow-auto p-3 text-sm text-text-primary" data-testid="cylinders-table">
+    // No h-full here: this block stacks above the DPV editor inside the Equipment tab's own
+    // scroll container, and claiming full height pushed the DPV below the fold (#317 feedback).
+    <div className="p-3 text-sm text-text-primary" data-testid="cylinders-table">
       <table className="w-full text-left">
         <thead className="text-xs uppercase tracking-wide opacity-60">
           <tr>

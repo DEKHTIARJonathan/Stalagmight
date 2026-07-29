@@ -1,9 +1,44 @@
 use tauri::Manager;
 
 use crate::config::GasConfig;
-use crate::core::state::dive_plan::MAX_WAYPOINTS;
+use crate::core::state::dive_plan::{MAX_SEGMENTS, MAX_WAYPOINTS};
 use crate::core::AppState;
-use crate::models::{Cylinder, Diver, GasReachField, StationRef};
+use crate::models::{Cylinder, Diver, GasReachField, PlanSegment, StationRef};
+
+/// Bound a plan's per-span segment list, mirroring the way-point cap in [`validate_plan_inputs`].
+///
+/// Kept separate from that function only because it is newer: both doors into the engine call it
+/// (`compute_gas_reach_field` here, `render_profile_for` in `commands::export`), and the `.plnx`
+/// write path caps segments on its own. Fold it into `validate_plan_inputs` when that signature is
+/// next touched.
+///
+/// REJECT rather than truncate, for the same reason the way-point cap does: a segment is the diver's
+/// statement about how a span is flown, and quietly dropping the last few would fly them at the plan
+/// speed on no scooter instead - slower and cheaper on gas, so the reported reach could only grow.
+///
+/// The per-span bound is the same rule at the route's actual size: `resolve_segments` reads only
+/// `waypoints + 1` spans, so rows past that would be silently inert at this door - while the
+/// `.plnx` load path FOLDS an over-long tail into the last retained span, conservatively. A
+/// request with more rows than the route has spans is describing a dive this plan cannot fly;
+/// reject it rather than let the two doors quietly disagree about which rows count.
+pub(crate) fn validate_plan_segments(
+    segments: &[PlanSegment],
+    waypoint_count: usize,
+) -> Result<(), String> {
+    if segments.len() > MAX_SEGMENTS {
+        return Err(format!(
+            "Too many plan segments: {} (max {MAX_SEGMENTS}).",
+            segments.len()
+        ));
+    }
+    if segments.len() > waypoint_count + 1 {
+        return Err(format!(
+            "More plan segments than route spans: {} for {waypoint_count} way point(s).",
+            segments.len()
+        ));
+    }
+    Ok(())
+}
 
 /// Validate a plan's inputs before they reach the engine, and normalize its config.
 ///
@@ -81,6 +116,10 @@ pub async fn compute_gas_reach_field(
     // The frontend always sends it (empty when the plan has none). Each is re-resolved by the
     // engine; an entry that no longer resolves stalls the plan rather than being skipped.
     waypoints: Vec<StationRef>,
+    // Per-span speed + propulsion (#317), one entry per route span (`waypoints.len() + 1`). The
+    // frontend always sends it; an empty or mis-sized list is reconciled by the engine to the
+    // config speed with no scooter, which is the pre-#317 field exactly.
+    segments: Vec<PlanSegment>,
     diver: Diver,
     cylinders: Vec<Cylinder>,
     gas_config: GasConfig,
@@ -94,6 +133,7 @@ pub async fn compute_gas_reach_field(
     // amplifier guard on the hottest path there is.
     let (diver, cylinders, gas_config) =
         validate_plan_inputs(&waypoints, diver, cylinders, gas_config)?;
+    validate_plan_segments(&segments, waypoints.len())?;
 
     let field = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
@@ -101,6 +141,7 @@ pub async fn compute_gas_reach_field(
             origin.as_ref(),
             endpoint.as_ref(),
             &waypoints,
+            &segments,
             &diver,
             &cylinders,
             &gas_config,
@@ -112,4 +153,47 @@ pub async fn compute_gas_reach_field(
     // Err rather than collapsing it to Ok(None) - which is reserved for "no project open".
     .map_err(|e| format!("gas reach computation failed: {e}"))?;
     Ok(field)
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::unwrap_used,
+    reason = "tests assert on a known-Err result; a failed unwrap should fail the test"
+)]
+mod tests {
+    use super::{validate_plan_segments, MAX_SEGMENTS};
+    use crate::models::PlanSegment;
+
+    fn span() -> PlanSegment {
+        PlanSegment {
+            speed_m_per_min: Some(55.0),
+            on_scooter: true,
+        }
+    }
+
+    #[test]
+    fn the_segment_list_is_capped_at_the_ipc_boundary() {
+        // The way-point cap exists "so the limit cannot be walked past by a caller that never
+        // touches a file"; the segment list arrived at the same door with no such bound, even
+        // though the `.plnx` write path caps it.
+        assert!(validate_plan_segments(&[], 0).is_ok());
+        assert!(validate_plan_segments(&vec![span(); MAX_SEGMENTS], MAX_SEGMENTS - 1).is_ok());
+
+        let err =
+            validate_plan_segments(&vec![span(); MAX_SEGMENTS + 1], MAX_SEGMENTS).unwrap_err();
+        assert!(err.contains("Too many plan segments"), "{err}");
+    }
+
+    #[test]
+    fn segments_beyond_the_route_span_count_are_rejected() {
+        // An in-cap list can still outrun the route: `resolve_segments` reads only
+        // `waypoints + 1` spans, so before this bound a request with no way points and a slow or
+        // scootered SECOND row sailed through validation with that row silently inert - while the
+        // `.plnx` load path folds the same tail conservatively. Reject the disagreement at the
+        // door.
+        assert!(validate_plan_segments(&vec![span(); 2], 1).is_ok());
+
+        let err = validate_plan_segments(&vec![span(); 2], 0).unwrap_err();
+        assert!(err.contains("More plan segments than route spans"), "{err}");
+    }
 }

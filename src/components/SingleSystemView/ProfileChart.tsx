@@ -2,7 +2,7 @@ import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { useShallow } from 'zustand/react/shallow';
-import { useGasPlanStore } from '../../store/gasPlanStore';
+import { selectHasUnresolvedPins, useGasPlanStore } from '../../store/gasPlanStore';
 import { useUIStore } from '../../store/uiStore';
 import { getThemeColor } from '../../utils/themeColors';
 import { formatGasLength } from '../../utils/formatGas';
@@ -39,10 +39,10 @@ const MIN_LABELLED_HEIGHT = 130;
  * same vectors it derives the Plan readout's distance and depth from - so this chart cannot drift
  * from the numbers in the sidebar beside it.
  *
- * The two axes are not interchangeable views of one shape. The engine prices the way in at the
- * survey speed and the way out at the (never slower) exit speed, so the turnaround sits at the
- * halfway mark on the distance axis but later than halfway on the time axis. That difference is the
- * point of the toggle.
+ * The two axes are not interchangeable views of one shape. The engine prices the way in per span
+ * (survey or segment pace) and the way home at the swim speed - except a scootered span, which
+ * rides out at its own pace - so the turnaround sits at the halfway mark on the distance axis but
+ * not on the time axis. That difference is the point of the toggle.
  *
  * Hand-rolled SVG, matching the map legends - no charting dependency. A passive consumer of the
  * store: `MapCanvas` owns the compute, and this must never trigger one.
@@ -50,8 +50,12 @@ const MIN_LABELLED_HEIGHT = 130;
 export function ProfileChart() {
   const { t } = useTranslation();
   const gradientId = useId();
-  const { reachField, units } = useGasPlanStore(
-    useShallow((s) => ({ reachField: s.reachField, units: s.gasConfig.units }))
+  const { reachField, units, hasUnresolvedPins } = useGasPlanStore(
+    useShallow((s) => ({
+      reachField: s.reachField,
+      units: s.gasConfig.units,
+      hasUnresolvedPins: selectHasUnresolvedPins(s),
+    }))
   );
   const [axis, setAxis] = useState<ProfileAxis>('distance');
   const containerRef = useRef<HTMLDivElement | null>(null);
@@ -73,7 +77,12 @@ export function ProfileChart() {
 
   return (
     <div className="h-full flex flex-col" data-testid="plan-profile">
-      <ProfileHeader axis={axis} onAxis={setAxis} exportable={geo !== null} />
+      <ProfileHeader
+        axis={axis}
+        onAxis={setAxis}
+        exportable={geo !== null}
+        unresolvedPins={hasUnresolvedPins}
+      />
       <div ref={containerRef} className="flex-1 min-h-0 px-2 pb-2" data-testid="plan-profile-plot">
         {geo ? (
           <ProfilePlot geo={geo} units={units} size={size} gradientId={gradientId} />
@@ -96,10 +105,12 @@ function ProfileHeader({
   axis,
   onAxis,
   exportable,
+  unresolvedPins,
 }: {
   axis: ProfileAxis;
   onAxis: (a: ProfileAxis) => void;
   exportable: boolean;
+  unresolvedPins: boolean;
 }) {
   const { t } = useTranslation();
   return (
@@ -125,7 +136,7 @@ function ProfileHeader({
           </button>
         ))}
       </div>
-      <ProfileExportControls enabled={exportable} />
+      <ProfileExportControls enabled={exportable} unresolvedPins={unresolvedPins} />
     </div>
   );
 }
@@ -139,7 +150,13 @@ function ProfileHeader({
  * error), and every one of them is surfaced: a refusal that silently un-greys the button reads as
  * "the file was written", which is the failure mode this app's mutation paths are audited for.
  */
-function ProfileExportControls({ enabled }: { enabled: boolean }) {
+function ProfileExportControls({
+  enabled,
+  unresolvedPins,
+}: {
+  enabled: boolean;
+  unresolvedPins: boolean;
+}) {
   const { t } = useTranslation();
   const showToast = useUIStore((s) => s.showToast);
   const [busy, setBusy] = useState(false);
@@ -175,6 +192,7 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
       origin: s.origin,
       endpoint: s.endpoint,
       waypoints: s.waypoints,
+      segments: s.segments,
       diver: s.diver,
       cylinders: s.cylinders,
       gas_config: s.gasConfig,
@@ -188,6 +206,18 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
         filters: exportSaveFilters(t('planTables.profile.export.xmlFilter'), 'xml'),
       });
       if (!path) return;
+      // Re-check what the render-time `disabled` proved BEFORE the await: the dialog is not
+      // modal everywhere (Android's in-app picker), so an edit behind it can strand a pin
+      // after the button's gate passed - and `currentRequest()` would then export a route
+      // through the stale positional ref the Save gate refuses.
+      if (selectHasUnresolvedPins(useGasPlanStore.getState())) {
+        throw new Error(
+          t(
+            'planTables.profile.export.unresolvedPins',
+            'A route point no longer matches a station in the survey. Re-place it before exporting.'
+          )
+        );
+      }
       await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
       showToast(t('planTables.profile.export.written'), 'profile-export-ok');
     });
@@ -206,14 +236,25 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
       copiedTimer.current = window.setTimeout(() => setCopied(false), 2000);
     });
 
+  // A pin the backend can no longer place (#310) is withheld from the compute gate (`selectComputeGate`)
+  // and blocks Save - an export must refuse it too, or it writes a document routed through whichever
+  // station the STALE positional ref now happens to name, which the diver never chose and Save would
+  // never have persisted.
+  const disabledReason = unresolvedPins
+    ? t(
+        'planTables.profile.export.unresolvedPins',
+        'A route point no longer matches a station in the survey. Re-place it before exporting.'
+      )
+    : undefined;
+
   return (
     <div className="flex gap-1">
       <button
         type="button"
         onClick={onCopy}
-        disabled={!enabled || busy}
+        disabled={!enabled || unresolvedPins || busy}
         data-testid="plan-profile-copy"
-        title={t('planTables.profile.export.copyHint')}
+        title={disabledReason ?? t('planTables.profile.export.copyHint')}
         className="px-2 py-0.5 text-xs border border-border rounded disabled:opacity-40"
       >
         {copied ? t('planTables.profile.export.copied') : t('planTables.profile.export.copy')}
@@ -221,9 +262,9 @@ function ProfileExportControls({ enabled }: { enabled: boolean }) {
       <button
         type="button"
         onClick={onExport}
-        disabled={!enabled || busy}
+        disabled={!enabled || unresolvedPins || busy}
         data-testid="plan-profile-export-xml"
-        title={t('planTables.profile.export.xmlHint')}
+        title={disabledReason ?? t('planTables.profile.export.xmlHint')}
         className="px-2 py-0.5 text-xs border border-border rounded disabled:opacity-40"
       >
         {t('planTables.profile.export.xml')}

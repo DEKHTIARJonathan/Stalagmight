@@ -316,7 +316,7 @@ export default class SurveyLayer {
   private gasReachState: GasReachFeatureState | null = null;
   // Gas route highlight (#233): the current picked-route legs. Re-applied after every source
   // rebuild (its own GeoJSON source survives setData, but a feature rebuild re-pushes the data).
-  private gasRouteLegs: RouteLeg[] = [];
+  private gasRouteLegs: (RouteLeg & { color: string })[] = [];
   // Measured along-line path (#26): the path's shots AND stations, tinted in a
   // user-configurable color by the dedicated custom measure-path layer.
   private measuredPathIds: Set<number> | null = null;
@@ -775,7 +775,7 @@ export default class SurveyLayer {
       type: 'line',
       source: this.sourceId + '-gas-route',
       paint: {
-        'line-color': '#22d3ee',
+        'line-color': ['coalesce', ['get', 'segmentColor'], '#22d3ee'],
         'line-width': 4,
         'line-opacity': ['case', ['==', ['get', 'isJump'], true], 0.45, 0.9],
       },
@@ -1701,8 +1701,8 @@ export default class SurveyLayer {
    * `setData()`); the legs are stored so `flushUpdate` re-pushes them after a feature
    * rebuild. `[]` clears it.
    */
-  setGasRoute(legs: RouteLeg[]): void {
-    this.gasRouteLegs = legs;
+  setGasRoute(legs: RouteLeg[], colors: string[] = []): void {
+    this.gasRouteLegs = legs.map((leg, i) => ({ ...leg, color: colors[i] ?? '#22d3ee' }));
     this.applyGasRoute();
   }
 
@@ -1733,7 +1733,7 @@ export default class SurveyLayer {
         {
           type: 'Feature' as const,
           geometry: { type: 'LineString' as const, coordinates: [from, to] },
-          properties: { isJump: leg.is_jump },
+          properties: { isJump: leg.is_jump, segmentColor: leg.color },
         },
       ];
     });

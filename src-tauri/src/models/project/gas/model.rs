@@ -177,6 +177,35 @@ pub struct Team {
     pub mode: PlanMode,
 }
 
+/// One span of the planned route, with the pace and propulsion the diver plans to use on it (#317).
+///
+/// Segments are bounded by the ordered way points (#298), so a plan has exactly
+/// `waypoints.len() + 1` of them: segment `k` runs from way point `k-1` to way point `k`, and the
+/// last covers the open reach field past the final way point. Reusing the way points as boundaries
+/// is what keeps this free of any new anchor type to place, resolve, persist and degrade.
+///
+/// ⚠ **`on_scooter` covers both towing and parking, and that is deliberate.** Pushing a scooter
+/// through a restriction and leaving it parked there are numerically identical - swim-speed gas,
+/// zero scooter range consumed - and differ only in narrative. So the drop point is *derived* (the
+/// boundary after the last scootered segment) rather than being a separate thing to place. A
+/// consequence worth keeping: no unflyable plan is representable, because a swim segment between
+/// two scooter segments is just a tow.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize, TS)]
+pub struct PlanSegment {
+    /// Travel speed on this span (m/min), or `None` to fly it at the plan's own speed
+    /// (`survey_speed_m_per_min` falling back to `swim_speed_m_per_min`). Gas is
+    /// `rmv x ata(avg_depth) x length / speed`, so this is the only per-segment quantity the reach
+    /// field needs.
+    ///
+    /// ⚠ **`None` is load-bearing, not a convenience.** The frontend always sends a full-length
+    /// list, so a plain `f64` here would mean every span always carries an explicit number and the
+    /// diver's configured swim / survey speed could never reach the engine again - which is exactly
+    /// what shipped and had to be fixed. Only a span the diver has actually edited holds a number.
+    pub speed_m_per_min: Option<f64>,
+    /// Whether this span is flown under scooter power, and so spends the rig's usable range.
+    pub on_scooter: bool,
+}
+
 /// Result of the gas-weighted reachability compute - the gas analogue of `DistanceField`.
 /// Per-station gas-to-reach from the origin (one-way, in-leg), the reachable mask under the
 /// reserve budget, and the turn frontier (reachable stations with an unreachable neighbour).
@@ -199,11 +228,13 @@ pub struct RouteLeg {
 /// the origin, so it describes the whole round trip the budget is sized for.
 ///
 /// The two directions are **not** symmetric, and that is the point of shipping both. Distance
-/// mirrors exactly - the diver swims the same line back - but the engine prices the way IN at the
-/// survey speed and survey RMV (`gas.rs`'s `in_speed` / `in_rmv`, the basis of every gas number in
-/// this struct) and the way OUT at `swim_speed_m_per_min` with the diver's base RMV, which
-/// `GasConfig::normalize` guarantees is the faster of the two. So the return leg is shorter in time
-/// and cheaper in gas than the identical distance was on the way in.
+/// mirrors exactly - the diver swims the same line back - but the engine prices the way IN at each
+/// route span's own speed (#317, defaulting to the survey speed) on the survey RMV - the basis of
+/// every gas and time number in this struct - and the way OUT at `swim_speed_m_per_min` with the
+/// diver's base RMV, which `GasConfig::normalize` guarantees is no slower than the survey speed. So
+/// a swum return leg is shorter in time and cheaper in gas than the identical distance was on the
+/// way in; a span the diver SCOOTERED in is charged the swim pace going out, which over-states the
+/// exit rather than under-stating it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, TS)]
 pub struct RouteProfilePoint {
     /// Position along the route's station sequence, 0 = origin. A way-point route can revisit a
@@ -223,8 +254,9 @@ pub struct RouteProfilePoint {
     /// `budget_litres`: that budget is the one-way penetration allowance (the reserve fraction is
     /// what pays for the return), so the round trip legitimately finishes above it.
     pub gas_l: f64,
-    /// Cumulative elapsed time (minutes) on arrival here. Not a deco schedule - no ascent, no stops,
-    /// no decompression is modelled anywhere in this app.
+    /// Cumulative elapsed time (minutes) on arrival here, at each span's own speed - so the last
+    /// outbound point IS `route_runtime_min`, not a re-derivation of it. Not a deco schedule - no
+    /// ascent, no stops, no decompression is modelled anywhere in this app.
     pub elapsed_min: f64,
     /// `false` for the mirrored return leg.
     pub outbound: bool,
@@ -334,4 +366,39 @@ pub struct GasReachField {
     /// as `stage_drop_route_indices`. `None` from the first way point that stalls, matching
     /// `waypoint_gas_litres`.
     pub waypoint_route_indices: Vec<Option<u32>>,
+    /// Scooter range (metres) spent from the origin to the turnaround - the quantity
+    /// [`Self::scooter_range_limit_m`] caps. Counts only the route's spans whose segment is
+    /// `on_scooter`, so a plan that parks the units partway reports what it spent up to the park and
+    /// nothing beyond it. `0.0` when nothing is flown on a scooter.
+    ///
+    /// ⚠ This is the scootered LINE only for a span flown at the units' cruise speed, which is the
+    /// normal case and every plan before #317. Below cruise it is larger than the line: the cap is
+    /// `burn x cruise`, so it converts battery minutes into metres at cruise and only there, and a
+    /// span ridden slower spends the allowance faster than it covers ground.
+    pub scooter_distance_m: f64,
+    /// The rig's usable one-way range (metres): the weaker unit's `burn x cruising speed`, less the
+    /// conservatism margin. `None` when the plan has no DPV rig, in which case the cap is infinite
+    /// and only gas binds - exactly the pre-scooter behaviour.
+    pub scooter_range_limit_m: Option<f64>,
+    /// Where the scooters end up: the boundary after the last scootered segment. `None` when the
+    /// units are carried all the way to the turnaround, and when nothing is flown on a scooter at
+    /// all. Derived, never placed by the diver - see [`PlanSegment`].
+    pub scooter_drop_ref: Option<StationRef>,
+    /// One-way runtime (minutes) along the planned route, at each segment's own speed. The engine's
+    /// first time-valued output; `None` when nothing is reachable.
+    pub route_runtime_min: Option<f64>,
+    /// Whether the **scooter range**, rather than gas, is what limits the dive: true when lifting
+    /// the DPV range cap would move the turnaround FARTHER than where this plan turns.
+    ///
+    /// Scoped to the dive's own turn, never to the cave. "Some station the diver has the gas for is
+    /// out of range" sounds like the same statement and is a false-positive machine: it fires on any
+    /// unvisited pocket beyond the rig's reach however comfortably the dive makes its endpoint, and
+    /// since gas scales with depth while range scales with length alone, one shallow distant passage
+    /// trips it on plans the scooter never constrained at all.
+    ///
+    /// The UI must not re-derive this. Comparing `scooter_distance_m` against
+    /// `scooter_range_limit_m` looks equivalent and is not - the route already stops at the cap, so
+    /// the two read as merely equal in exactly the case being asked about. Same class of mistake as
+    /// re-deriving [`Self::turn_toward_endpoint`], and as the #233 gauge divergence.
+    pub turn_on_scooter_range: bool,
 }

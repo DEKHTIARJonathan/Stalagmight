@@ -14,9 +14,10 @@ use std::path::PathBuf;
 
 use super::AppState;
 use crate::config::GasConfig;
+use crate::models::project::gas::{MAX_SEGMENT_SPEED_M_PER_MIN, MIN_SEGMENT_SPEED_M_PER_MIN};
 use crate::models::{
-    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, Project, StationKey,
-    StationRef, DIVE_PLAN_SCHEMA_VERSION,
+    Cylinder, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, MarkedPoint, PlanAnchorSet,
+    PlanSegment, Project, StationKey, StationRef, DIVE_PLAN_SCHEMA_VERSION,
 };
 use crate::persistence::plnx::{PlnxMeta, PlnxStore};
 
@@ -38,10 +39,34 @@ const MAX_MARKED_LABEL_CHARS: usize = 120;
 /// (reject - see `commands::gas`), so the bound cannot be walked past from any direction.
 pub(crate) const MAX_WAYPOINTS: usize = 64;
 
+/// Upper bound on a plan's per-span pace/propulsion segments (#317). A plan has exactly one
+/// segment per span, and a span is bounded by way points, so the ceiling on segments tracks the
+/// ceiling on way points plus the one span left over on either end: `waypoints.len() + 1`.
+pub(crate) const MAX_SEGMENTS: usize = MAX_WAYPOINTS + 1;
+
 /// Upper bound on a plan's marked points (#298). They cost nothing in the engine - they never
 /// reach it - but each one is a DOM element plus a station lookup on the frontend, so the same
 /// hand-edited-file reasoning applies.
 const MAX_MARKED_POINTS: usize = 500;
+
+/// Upper bound on ONE call to the anchor-translation pair (#310), which unlike every sibling list
+/// had no bound at all. Each entry costs a section scan under the project mutex - the same lock the
+/// map, the data table and every mutation contend for - so an unbounded batch is a lock-hold
+/// amplifier, not merely slow.
+///
+/// Derived from the caps that already bound what a plan can hold, rather than picked:
+///
+/// ```text
+///   2                   origin + endpoint
+/// + MAX_WAYPOINTS       the ordered way points
+/// + MAX_MARKED_POINTS   the marked points
+/// + MAX_WAYPOINTS       stage-drop overrides (capped at the way-point bound on load)
+/// = 630 pins in one plan
+/// x 2                   the frontend legitimately re-anchors the LIVE plan and its saved
+///                       baseline in one pass
+/// = 1260
+/// ```
+const MAX_PLAN_ANCHOR_BATCH: usize = 2 * (2 + MAX_WAYPOINTS + MAX_MARKED_POINTS + MAX_WAYPOINTS);
 
 /// The open project's `.plnx` sibling path plus the identity we stamp/verify it
 /// with (`created_at` is immutable, so it survives a file rename).
@@ -128,6 +153,14 @@ struct PersistedDivePlanSnapshot {
     stage_drop_overrides: Vec<Option<StoredAnchor>>,
     #[serde(default)]
     marked_points: Vec<PersistedMarkedPoint>,
+    /// Per-span pace/propulsion (#317), persisted VERBATIM: a segment names a span between way
+    /// points, not a station, so there is no reference inside it to canonicalize - no
+    /// `PersistedSegment` mirror type is needed here, unlike `PersistedMarkedPoint` above. What
+    /// still needs handling is the INDEXING: dropping way point `k` on load merges spans `k` and
+    /// `k+1` into one, so `segments` must be reconciled against which way points survived - see
+    /// `merge_segments_for_surviving_waypoints`.
+    #[serde(default)]
+    segments: Vec<PlanSegment>,
 }
 
 /// On-disk form of a [`MarkedPoint`] (#298): the annotated station as a stable anchor.
@@ -154,8 +187,11 @@ struct PersistedMarkedPoint {
 /// `a`/`b` are the two neighbours as they stood at save time, `None` for the free end of a
 /// terminal station. They are NOT ordered - resolution derives the side from the current
 /// positions, so it reads the same after a reverse.
+///
+/// `pub` only so it can appear inside [`StoredAnchor`] on the IPC boundary (#310); every field
+/// stays private to this module, which is what makes an anchor opaque to the frontend.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-struct PlanAnchor {
+pub struct PlanAnchor {
     section_id: crate::models::SectionId,
     #[serde(default)]
     a: Option<String>,
@@ -201,8 +237,33 @@ struct PlanAnchor {
     /// before, and a reverse is untouched (length is invariant, and `parity` handles the side).
     /// The one false positive is editing this shot's length AND extending that same end before
     /// the plan is next loaded, which yields a "re-pin this" warning rather than a wrong route.
+    ///
+    /// ⚠ Compared as a LENGTH within a relative tolerance, never bit-for-bit - see
+    /// [`terminal_length_matches`]. Bit equality is not survivable now that an anchor crosses
+    /// the IPC boundary (#310): this is a full 64-bit integer, JavaScript has only doubles, and
+    /// the shortest-round-trip decimal `JSON.stringify` writes for one differs from the original
+    /// in its low bits. Those are the low MANTISSA bits of the encoded length, so the length
+    /// itself survives to ~1e-13 relative - orders of magnitude finer than the thing this field
+    /// exists to detect.
     #[serde(default)]
     terminal_shot_length_bits: Option<u64>,
+}
+
+/// Whether a terminal anchor's recorded shot length still describes `shot_length`.
+///
+/// Deliberately NOT `saved_bits == shot.length.to_bits()`. What this guard detects is a SPLIT,
+/// which shortens the shot by at least `MIN_SPLIT_CHILD_LENGTH_M` (0.01 m) - a difference nine
+/// orders of magnitude larger than the tolerance here. Exact bit equality bought nothing over
+/// that and is not preserved by a JSON round trip through JavaScript, where a `u64` is a double
+/// (see `terminal_shot_length_bits`).
+fn terminal_length_matches(saved_bits: u64, shot_length: f64) -> bool {
+    let saved = f64::from_bits(saved_bits);
+    if !saved.is_finite() || !shot_length.is_finite() {
+        return false;
+    }
+    // Relative, floored at 1.0 so a sub-metre shot is not held to an absurd absolute bound.
+    let scale = saved.abs().max(shot_length.abs()).max(1.0);
+    (saved - shot_length).abs() <= 1e-9 * scale
 }
 
 impl PlanAnchor {
@@ -352,7 +413,7 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
             let moved = pa
                 .or(pb)
                 .and_then(|p| section.shots.get(p))
-                .is_none_or(|shot| shot.length.to_bits() != saved_bits);
+                .is_none_or(|shot| !terminal_length_matches(saved_bits, shot.length));
             if moved {
                 return None;
             }
@@ -372,9 +433,13 @@ fn resolve_anchor(project: &Project, anchor: &PlanAnchor) -> Option<StationRef> 
 /// field, so only a pre-#24 blob can match it and a pair-form blob falls through. Reversing the
 /// order would make `PlanAnchor` - whose fields all default - swallow legacy rows and quietly
 /// blank every reference in them.
+///
+/// `pub` since #310, when it started crossing the IPC boundary so the frontend can hold a live
+/// plan pin as an anchor rather than an index. It is re-exported as `crate::models::StoredAnchor`
+/// and is OPAQUE there: no public constructor, no public fields, and `unknown` in TS.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(untagged)]
-enum StoredAnchor {
+pub enum StoredAnchor {
     Legacy(StationKey),
     Pair(PlanAnchor),
 }
@@ -387,27 +452,222 @@ fn resolve_stored(project: &Project, stored: &StoredAnchor) -> Option<StationRef
     }
 }
 
-/// Resolve a stored anchor; an unplaceable one increments `stale` and yields `None`.
-fn from_anchor_opt(
+/// Resolve a stored LIST of anchors, DROPPING any that no longer place (each counted into
+/// `stale`), and reporting - as a same-length boolean mask over the INPUT positions - which
+/// entries survived, echoing back the anchor each surviving ref came from. Used for the way
+/// points and marked points (#298), where - unlike the single optional origin/endpoint - there is
+/// no "null it out" slot: a dangling entry simply leaves the list, and the UI warns off
+/// `stale_ref_count`. Dropping is also what keeps a loaded plan safe to compute: the engine
+/// treats an unresolvable way point as a hard stall, so carrying a dead one through would blank
+/// the whole field on load.
+///
+/// The mask exists for `segments` (#317): the segment list is positional against way points, so
+/// reconciling it after a drop needs to know exactly WHICH way point vanished, not just how many.
+/// See `merge_segments_for_surviving_waypoints`. The echoed anchors exist for #310: the loaded
+/// plan hands them to the frontend so a live pin stays anchor-backed rather than positional.
+fn from_anchors_with_survival(
+    project: &Project,
+    anchors: Vec<StoredAnchor>,
+    stale: &mut u32,
+) -> (Vec<StationRef>, Vec<Option<StoredAnchor>>, Vec<bool>) {
+    let mut refs = Vec::with_capacity(anchors.len());
+    let mut kept = Vec::with_capacity(anchors.len());
+    let mut survived = Vec::with_capacity(anchors.len());
+    for a in anchors {
+        match from_anchor(project, &a, stale) {
+            Some(r) => {
+                refs.push(r);
+                kept.push(Some(a));
+                survived.push(true);
+            }
+            None => survived.push(false),
+        }
+    }
+    (refs, kept, survived)
+}
+
+/// Resolve an optional anchor, keeping the anchor itself when it placed (#310).
+///
+/// The pair is what every single-slot reference needs: the positional ref for this session, and
+/// the anchor it came from so the pin can be re-placed after the next survey edit. A dangling
+/// anchor yields `(None, None)` - there is no sense in handing back a pin that does not place.
+fn resolve_keeping_anchor(
     project: &Project,
     anchor: Option<StoredAnchor>,
     stale: &mut u32,
-) -> Option<StationRef> {
-    let anchor = anchor?;
-    from_anchor(project, &anchor, stale)
+) -> (Option<StationRef>, Option<StoredAnchor>) {
+    let Some(anchor) = anchor else {
+        return (None, None);
+    };
+    match from_anchor(project, &anchor, stale) {
+        Some(r) => (Some(r), Some(anchor)),
+        None => (None, None),
+    }
 }
 
-/// Resolve a stored LIST of anchors, DROPPING any that no longer place (each counted into
-/// `stale`). Used for the way points and marked points (#298), where - unlike the single
-/// optional origin/endpoint - there is no "null it out" slot: a dangling entry simply leaves the
-/// list, and the UI warns off `stale_ref_count`. Dropping is also what keeps a loaded plan safe
-/// to compute: the engine treats an unresolvable way point as a hard stall, so carrying a dead
-/// one through would blank the whole field on load.
-fn from_anchors(project: &Project, anchors: Vec<StoredAnchor>, stale: &mut u32) -> Vec<StationRef> {
-    anchors
-        .into_iter()
-        .filter_map(|a| from_anchor(project, &a, stale))
-        .collect()
+/// A span the diver never gave a speed of its own: it flies at the plan speed, off the scooter.
+fn inherited_segment() -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: None,
+        on_scooter: false,
+    }
+}
+
+/// The speed a span will ACTUALLY be flown at, which is the only basis on which two spans can be
+/// compared.
+///
+/// The validity filter is not a nicety: it is the engine's, deliberately, because a stored number
+/// the engine will not honour must not be allowed to win a comparison here either. `resolve_segments`
+/// (`models/project/gas/scooter.rs`) falls back to the plan speed for anything outside
+/// `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`, so a hand-edited `.plnx` holding a
+/// denormal like `1e-320` would otherwise read as "the slowest span there is" to the fold below,
+/// which would keep it - and the engine would then discard it and fly the merged span at the PLAN
+/// speed, faster than either half. That is the exact direction these merges exist to prevent, so
+/// both sides have to agree on which numbers are real.
+fn effective_speed(seg: &PlanSegment, plan_speed: f64) -> f64 {
+    seg.speed_m_per_min
+        .filter(|v| (MIN_SEGMENT_SPEED_M_PER_MIN..=MAX_SEGMENT_SPEED_M_PER_MIN).contains(v))
+        .unwrap_or(plan_speed)
+}
+
+/// Collapse two adjacent spans into one, conservatively - the arithmetic shared by every place a
+/// segment boundary disappears (#317).
+///
+/// Both fields go the direction that can only ever make the merged span cost MORE, never less:
+///
+/// - **Speed: the slower of the two.** Gas is `rmv x ata(depth) x length / speed`, so the slower
+///   span is the dearer one. "Slower" is decided on the EFFECTIVE speeds, which is why `plan_speed`
+///   is a parameter: a span with no speed of its own inherits the plan's, and comparing `None`
+///   against a number without resolving it first would pick the wrong half in one direction or the
+///   other. A tie keeps `prev`, so a span inheriting the plan speed keeps inheriting it rather than
+///   being frozen at whatever the plan speed happened to be that day.
+/// - **`on_scooter`: OR, not AND.** The flag spends the rig's usable range, and range is a CAP
+///   (`scootered <= limit`), so LESS spend means MORE reach. ANDing was therefore the
+///   reach-EXTENDING direction, not the safe one: merging `{55, true}` with `{55, false}` under AND
+///   kept the speed at 55 and dropped the whole first span's range spend, so the plan reached
+///   further than either half allowed. Assuming the merged span is scootered spends its range, and
+///   spending range can only pull the turn point closer.
+fn fold_segments(prev: PlanSegment, next: PlanSegment, plan_speed: f64) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: if effective_speed(&next, plan_speed) < effective_speed(&prev, plan_speed)
+        {
+            next.speed_m_per_min
+        } else {
+            prev.speed_m_per_min
+        },
+        on_scooter: prev.on_scooter || next.on_scooter,
+    }
+}
+
+/// Force the `segments.len() == waypoint_count + 1` invariant, FOLDING any excess rather than
+/// dropping it (#317).
+///
+/// Everything downstream - the panel's table, the engine's per-span re-weighting, the store's
+/// add/remove-way-point arithmetic - takes the invariant as given and none of them heal a
+/// violation, so it has to be established on the way past. Both directions are reachable: a plan
+/// written before segments existed carries zero rows, and a hand-edited `.plnx` carries any number
+/// at all.
+///
+/// A short list is PADDED with inherited spans - the file described those spans, it simply did not
+/// describe the later ones, and an unedited span has always meant "fly it at the plan speed".
+///
+/// A long list is FOLDED into the final retained span with [`fold_segments`], never truncated. A
+/// bare truncate silently discards the diver's statement about how those spans are flown, and every
+/// field it discards is discarded in the reach-extending direction: a dropped slow speed becomes the
+/// plan speed (cheaper on gas), a dropped `on_scooter` stops spending range. Folding keeps the
+/// slowest speed and any scooter use, so an over-long list can only ever cost more than the file
+/// claimed.
+fn normalize_segment_count(
+    mut segments: Vec<PlanSegment>,
+    waypoint_count: usize,
+    plan_speed: f64,
+) -> Vec<PlanSegment> {
+    // A plan always has at least the one span from the origin into the open field, so `want >= 1`
+    // and the fold below always has a span to fold INTO.
+    let want = waypoint_count + 1;
+    if segments.len() > want {
+        let tail = segments.split_off(want);
+        if let Some(last) = segments.last_mut() {
+            for seg in tail {
+                *last = fold_segments(*last, seg, plan_speed);
+            }
+        }
+    } else {
+        segments.resize_with(want, inherited_segment);
+    }
+    segments
+}
+
+/// Merge a persisted segment list against which way points survived resolution (#317).
+///
+/// ⚠ **This is not the backend half of the store's `mergeSegments`.** The names line up and the
+/// arithmetic is shared, but they answer different questions and neither can stand in for the
+/// other: this one reconciles DANGLING ANCHORS on load - way points the survey no longer
+/// contains, which the user never touched and may not know about - while the store's version
+/// implements the user pressing "remove this way point". Only the conservative arithmetic in
+/// [`fold_segments`] is common to both, and that is what the tests on either side pin. Do not
+/// "unify" them; a change to one is not automatically a change the other wants.
+///
+/// Segments are positional against way points (`segments.len() == waypoints.len() + 1`): span
+/// `k` runs between way point `k-1` and way point `k` (span 0 runs from the origin, the last span
+/// covers the open reach field past the final way point). When way point `j` is DROPPED (its
+/// station no longer resolves), the two spans it used to separate collapse into one - the diver's
+/// actual route no longer stops there, so there is no longer a boundary across which two
+/// different speeds could apply.
+///
+/// `survived[j]` reports whether way point `j` (0-indexed into the pre-drop list) resolved - the
+/// mask [`from_anchors_with_survival`] returns. A length mismatch against `segments` is only
+/// reachable via a hand-edited `.plnx` (the trusted write path always saves
+/// `segments.len() == waypoints.len() + 1`), and it IS reachable here: this runs on the raw
+/// persisted list, before `normalize_segment_count` settles the length. It degrades gracefully by
+/// treating any waypoint position past the end of `survived` as surviving, so a malformed file
+/// can only ever leave a span un-merged, never merge across a boundary the mask does not
+/// actually describe.
+fn merge_segments_for_surviving_waypoints(
+    segments: Vec<PlanSegment>,
+    survived: &[bool],
+    plan_speed: f64,
+) -> Vec<PlanSegment> {
+    let last_index = segments.len().saturating_sub(1);
+    let mut merged = Vec::new();
+    let mut pending: Option<PlanSegment> = None;
+    for (j, seg) in segments.into_iter().enumerate() {
+        pending = Some(match pending {
+            None => seg,
+            Some(prev) => fold_segments(prev, seg, plan_speed),
+        });
+        let waypoint_survived = survived.get(j).copied().unwrap_or(true);
+        if j == last_index || waypoint_survived {
+            if let Some(finished) = pending.take() {
+                merged.push(finished);
+            }
+        }
+    }
+    merged
+}
+
+/// The speed a span with no speed of its own is flown at: the plan's survey speed, or its swim
+/// speed when the plan is symmetric.
+fn plan_speed_of(config: &GasConfig) -> f64 {
+    config
+        .survey_speed_m_per_min
+        .unwrap_or(config.swim_speed_m_per_min)
+}
+
+/// Bound one anchor-translation batch (#310), mirroring the way-point and segment caps.
+///
+/// REJECT rather than truncate, for the reason those two do: the two commands are index-aligned
+/// with their input, so a short answer would silently re-anchor only the first `N` pins and leave
+/// the rest of the plan holding stale ones - the caller has no way to tell that from a batch where
+/// the tail genuinely did not place. The bound is far past any real plan (see
+/// [`MAX_PLAN_ANCHOR_BATCH`]), so this is unreachable from normal use.
+fn validate_anchor_batch(len: usize) -> Result<(), String> {
+    if len > MAX_PLAN_ANCHOR_BATCH {
+        return Err(format!(
+            "Too many plan anchors: {len} (max {MAX_PLAN_ANCHOR_BATCH})."
+        ));
+    }
+    Ok(())
 }
 
 /// Truncate to at most `max` CHARACTERS (not bytes), so a multi-byte label can never be cut
@@ -495,12 +755,57 @@ impl AppState {
             .ok_or_else(|| "That dive plan no longer exists.".to_string())?;
         let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&row.snapshot_json)
             .map_err(|e| format!("Could not parse the dive plan: {e}"))?;
-        let (snapshot, stale_ref_count) = self.resolve_persisted(persisted)?;
+        let (snapshot, anchors, stale_ref_count) = self.resolve_persisted(persisted)?;
         Ok(DivePlan {
             meta: to_meta(row.meta),
             snapshot,
             stale_ref_count,
+            anchors,
         })
+    }
+
+    /// Describe each of `refs` by the shots its station sits between (#310), index-aligned with
+    /// the input. A ref that names no live station yields `None` - the same "it does not place"
+    /// answer the save path gets, rather than an error that would fail a whole batch.
+    ///
+    /// This is the live-pin half of what the `.plnx` has always done on save: the frontend holds
+    /// the anchor beside the positional ref, so a survey edit moves the pin with its station
+    /// instead of silently rebinding it to whatever slid into that index.
+    pub fn plan_anchors_for_refs(
+        &self,
+        refs: Vec<StationRef>,
+    ) -> Result<Vec<Option<StoredAnchor>>, String> {
+        validate_anchor_batch(refs.len())?;
+        let guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let Some(project) = guard.as_ref() else {
+            return Err("No project open.".to_string());
+        };
+        Ok(refs
+            .into_iter()
+            .map(|r| to_anchor(project, Some(r)))
+            .collect())
+    }
+
+    /// Place each anchor against the survey as it stands now (#310), index-aligned with the
+    /// input; `None` where it no longer places. The read half of [`Self::plan_anchors_for_refs`],
+    /// and the same resolution the load path uses - including the legacy pre-#24 form, since an
+    /// anchor the frontend is holding may have come straight out of an old `.plnx`.
+    pub fn plan_refs_for_anchors(
+        &self,
+        anchors: Vec<StoredAnchor>,
+    ) -> Result<Vec<Option<StationRef>>, String> {
+        validate_anchor_batch(anchors.len())?;
+        let guard = self
+            .project
+            .lock()
+            .map_err(|_| "Failed to lock project".to_string())?;
+        let Some(project) = guard.as_ref() else {
+            return Err("No project open.".to_string());
+        };
+        Ok(anchors.iter().map(|a| resolve_stored(project, a)).collect())
     }
 
     /// Save (insert when `id` is `None`, else update) a plan next to the open
@@ -647,15 +952,29 @@ impl AppState {
                 .map(|o| to_anchor(project, *o))
                 .collect(),
             marked_points,
+            // Normalised, not truncated. A segment past `waypoints.len() + 1` describes a span that
+            // cannot exist for ANY plan, so unlike a dangling way point (refused above) there is
+            // nothing to refuse the write over - but the data in it is still the diver's statement
+            // about how a span is flown, and `take()` dropped it in the reach-extending direction.
+            // `normalize_segment_count` folds it in instead; way points are capped just above, so
+            // the result is `<= MAX_SEGMENTS` by construction and that separate cap can no longer
+            // bind here.
+            segments: normalize_segment_count(
+                snap.segments.clone(),
+                snap.waypoints.len(),
+                plan_speed_of(&snap.gas_config),
+            ),
         })
     }
 
     /// Resolve a persisted (key) snapshot back to the IPC (`StationRef`) form against the
-    /// open project, nulling dangling anchors and counting them into `stale_ref_count`.
+    /// open project, nulling dangling anchors and counting them into `stale_ref_count`. Also
+    /// returns the anchors the surviving refs came from, so the loaded plan's live pins stay
+    /// anchor-backed without a second round trip (#310).
     fn resolve_persisted(
         &self,
         p: PersistedDivePlanSnapshot,
-    ) -> Result<(DivePlanSnapshot, u32), String> {
+    ) -> Result<(DivePlanSnapshot, PlanAnchorSet, u32), String> {
         let guard = self
             .project
             .lock()
@@ -664,42 +983,63 @@ impl AppState {
             return Err("No project open.".to_string());
         };
         let mut stale = 0u32;
-        let origin = from_anchor_opt(project, p.origin, &mut stale);
-        let endpoint = from_anchor_opt(project, p.endpoint, &mut stale);
+        let (origin, origin_anchor) = resolve_keeping_anchor(project, p.origin, &mut stale);
+        let (endpoint, endpoint_anchor) = resolve_keeping_anchor(project, p.endpoint, &mut stale);
         // The caps are re-applied HERE, not only on save: the threat they exist for is a
         // hand-edited `.plnx`, which by definition never crosses the write path. Every way point
         // costs the engine a full extra Dijkstra and every marked point a DOM node plus a station
         // lookup, so an unbounded list from a doctored file would be a compute amplifier on every
         // recompute. Truncating (rather than refusing the load) keeps the rest of the plan usable.
-        let waypoints = from_anchors(
+        let (waypoints, waypoint_anchors, waypoints_survived) = from_anchors_with_survival(
             project,
             p.waypoints.into_iter().take(MAX_WAYPOINTS).collect(),
             &mut stale,
         );
+        // Segments are positional against the PRE-drop way points, so the merge must run against
+        // the survival mask above BEFORE anything about waypoints changes shape - see
+        // `merge_segments_for_surviving_waypoints`. It runs on the RAW persisted list (any
+        // length): the mask describes the input positions, so trimming first would misalign it.
+        let plan_speed = plan_speed_of(&p.gas_config);
+        let segments =
+            merge_segments_for_surviving_waypoints(p.segments, &waypoints_survived, plan_speed);
+        // The load side of the `segments.len() == waypoints.len() + 1` invariant (#317), which a
+        // plan written before segments existed (zero rows) and a hand-edited file (any number of
+        // rows) both violate. Way points are already capped just above, so `waypoints.len() + 1 <=
+        // MAX_SEGMENTS` holds by construction and that separate cap can no longer bind here.
+        let segments = normalize_segment_count(segments, waypoints.len(), plan_speed);
         // Capped on the way IN like the way points and marked points, and for the same reason:
         // the threat is a hand-edited `.plnx`, which by definition never crosses the write
         // path. One entry per stage cylinder is the real bound (`gas.rs` already truncates the
         // engine side to the plan's cylinder count), so anything past the way-point cap is
         // doctored data, and each entry costs a station lookup on every load.
-        let stage_drop_overrides = p
-            .stage_drop_overrides
-            .into_iter()
-            .take(MAX_WAYPOINTS)
-            .map(|k| from_anchor_opt(project, k, &mut stale))
-            .collect();
-        let marked_points = p
-            .marked_points
-            .into_iter()
-            .take(MAX_MARKED_POINTS)
-            .filter_map(|m| {
-                from_anchor(project, &m.station, &mut stale).map(|station| MarkedPoint {
-                    station,
-                    // Same reasoning as the list caps: the save path rejects an over-long label,
-                    // but a doctored file bypasses it entirely, so truncate on the way in.
-                    label: m.label.map(|l| truncate_chars(l, MAX_MARKED_LABEL_CHARS)),
-                })
-            })
-            .collect();
+        let mut stage_drop_overrides = Vec::new();
+        let mut stage_drop_anchors = Vec::new();
+        for k in p.stage_drop_overrides.into_iter().take(MAX_WAYPOINTS) {
+            let (r, a) = resolve_keeping_anchor(project, k, &mut stale);
+            stage_drop_overrides.push(r);
+            stage_drop_anchors.push(a);
+        }
+        let mut marked_points = Vec::new();
+        let mut marked_point_anchors = Vec::new();
+        for m in p.marked_points.into_iter().take(MAX_MARKED_POINTS) {
+            let Some(station) = from_anchor(project, &m.station, &mut stale) else {
+                continue;
+            };
+            marked_points.push(MarkedPoint {
+                station,
+                // Same reasoning as the list caps: the save path rejects an over-long label,
+                // but a doctored file bypasses it entirely, so truncate on the way in.
+                label: m.label.map(|l| truncate_chars(l, MAX_MARKED_LABEL_CHARS)),
+            });
+            marked_point_anchors.push(Some(m.station));
+        }
+        let anchors = PlanAnchorSet {
+            origin: origin_anchor,
+            endpoint: endpoint_anchor,
+            waypoints: waypoint_anchors,
+            marked_points: marked_point_anchors,
+            stage_drop_overrides: stage_drop_anchors,
+        };
         let snapshot = DivePlanSnapshot {
             origin,
             endpoint,
@@ -709,8 +1049,9 @@ impl AppState {
             gas_config: p.gas_config,
             stage_drop_overrides,
             marked_points,
+            segments,
         };
-        Ok((snapshot, stale))
+        Ok((snapshot, anchors, stale))
     }
 }
 
@@ -739,6 +1080,28 @@ mod tests {
         let sec = project
             .add_section(SectionData {
                 shots: vec![make_shot(), make_shot(), make_shot()],
+                ..Default::default()
+            })
+            .id;
+        project.ensure_shot_uuids();
+        (project, sec)
+    }
+
+    /// A one-section project with 6 shots (stations 0..=6), for the #317 segment-merge test:
+    /// it needs headroom for an origin, three way points, and an endpoint - five distinct
+    /// stations - without any of them coinciding.
+    fn project_6_shots() -> (Project, u32) {
+        let mut project = Project::new("Test".to_string(), None);
+        let sec = project
+            .add_section(SectionData {
+                shots: vec![
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                    make_shot(),
+                ],
                 ..Default::default()
             })
             .id;
@@ -939,7 +1302,7 @@ mod tests {
         for idx in 0..=3 {
             let anchor = to_anchor(&project, Some(StationRef::new(sec, idx)));
             assert_eq!(
-                from_anchor_opt(&project, anchor, &mut stale),
+                resolve_keeping_anchor(&project, anchor, &mut stale).0,
                 Some(StationRef::new(sec, idx))
             );
         }
@@ -1208,12 +1571,13 @@ mod tests {
                 station: only,
                 label: Some("wp".to_string()),
             }],
+            segments: Vec::new(),
         };
 
         let persisted = state
             .to_persisted(&snapshot)
             .expect("a way point on a shot-less section must not be refused");
-        let (back, stale) = state.resolve_persisted(persisted).unwrap();
+        let (back, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
         assert_eq!(back.origin, Some(only));
         assert_eq!(back.endpoint, Some(only));
@@ -1293,7 +1657,10 @@ mod tests {
     fn from_key_leaves_none_refs_untouched_and_uncounted() {
         let (project, _sec) = project_3_shots();
         let mut stale = 0;
-        assert_eq!(from_anchor_opt(&project, None, &mut stale), None);
+        assert_eq!(
+            resolve_keeping_anchor(&project, None, &mut stale),
+            (None, None)
+        );
         assert_eq!(stale, 0);
     }
 
@@ -1311,6 +1678,7 @@ mod tests {
                 station: StationRef::new(sec, 2),
                 label: Some("photo".to_string()),
             }],
+            segments: Vec::new(),
         }
     }
 
@@ -1332,7 +1700,7 @@ mod tests {
         // Delete shot 0: the physical station that was at index 2 is now at index 1.
         project.sections[0].shots.remove(0);
         *state.project.lock().unwrap() = Some(project);
-        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+        let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         // The plan's ORIGIN was the section's first station, and deleting the first shot deletes
         // that station outright - so it is correctly reported gone rather than quietly re-bound.
@@ -1367,7 +1735,7 @@ mod tests {
         assert!(project.reverse_section(sec, false));
         *state.project.lock().unwrap() = Some(project);
 
-        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+        let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0);
         // The plan was saved with origin 0, endpoint 3, way point 2 and a marked point at 2.
         // Those physical stations are now numbered 3, 0, 1 and 1.
@@ -1452,7 +1820,7 @@ mod tests {
 
         project.sections.clear(); // every anchoring shot is gone
         *state.project.lock().unwrap() = Some(project);
-        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+        let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
 
         assert!(snapshot.waypoints.is_empty());
         assert!(snapshot.marked_points.is_empty());
@@ -1525,8 +1893,9 @@ mod tests {
                 };
                 MAX_MARKED_POINTS + 25
             ],
+            segments: Vec::new(),
         };
-        let (snapshot, _stale) = state.resolve_persisted(persisted).unwrap();
+        let (snapshot, _anchors, _stale) = state.resolve_persisted(persisted).unwrap();
 
         assert_eq!(snapshot.waypoints.len(), MAX_WAYPOINTS);
         assert_eq!(snapshot.marked_points.len(), MAX_MARKED_POINTS);
@@ -1559,6 +1928,9 @@ mod tests {
         let persisted: PersistedDivePlanSnapshot = serde_json::from_str(&json).unwrap();
         assert!(persisted.waypoints.is_empty());
         assert!(persisted.marked_points.is_empty());
+        // Same claim holds for #317's addition: the blob predates segments too, and it must not
+        // become unloadable either.
+        assert!(persisted.segments.is_empty());
     }
 
     /// A `.plnx` written before #24 stores `{section_id, anchor}` and must keep working. The
@@ -1592,7 +1964,7 @@ mod tests {
 
         let state = AppState::new().unwrap();
         *state.project.lock().unwrap() = Some(project);
-        let (snapshot, stale) = state.resolve_persisted(persisted).unwrap();
+        let (snapshot, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
         assert_eq!(stale, 0, "an upgrade must not strand anyone's route");
         assert_eq!(snapshot.origin, Some(StationRef::new(sec, 0)));
         assert_eq!(snapshot.endpoint, Some(StationRef::new(sec, 2)));
@@ -1631,5 +2003,742 @@ mod tests {
         assert!(state
             .save_dive_plan(None, "Plan".to_string(), snapshot)
             .is_ok());
+    }
+
+    #[test]
+    fn segments_round_trip_when_the_survey_is_unchanged() {
+        // Unlike origin/endpoint/waypoints, a segment carries no station of its own (#317 - see
+        // the model doc comment), so with nothing dangling there is nothing to merge: the list
+        // must pass through save+load unchanged.
+        let (project, sec) = project_3_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.segments = vec![
+            PlanSegment {
+                speed_m_per_min: Some(12.0),
+                on_scooter: true,
+            },
+            PlanSegment {
+                speed_m_per_min: Some(20.0),
+                on_scooter: false,
+            },
+        ];
+        let persisted = state.to_persisted(&snapshot).unwrap();
+        let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(stale, 0);
+        assert_eq!(resolved.segments, snapshot.segments);
+    }
+
+    #[test]
+    fn dropping_a_waypoint_merges_its_two_adjacent_segments_to_the_slower_speed_and_ors_the_flag() {
+        // THE #317 headline case. Segments are positional against way points, so dropping way
+        // point `j` collapses the spans on either side of it (segments `j` and `j+1`) into one.
+        // The merge must go the direction that can only cost MORE on both fields - the slower of
+        // the two speeds (dearer gas), and scootered if EITHER half was (spends range, and range
+        // is a cap, so spending it can only pull the turn point closer).
+        //
+        // The two segments to merge are built so neither "take the first", "take the second",
+        // "max speed" nor "AND the flag" reproduces the correct answer: only min(speed) + (a || b)
+        // lands on {8.0, true}.
+        let (mut project, sec) = project_6_shots();
+        let state = AppState::new().unwrap();
+
+        let snapshot = DivePlanSnapshot {
+            origin: Some(StationRef::new(sec, 0)),
+            endpoint: Some(StationRef::new(sec, 6)),
+            waypoints: vec![
+                StationRef::new(sec, 1),
+                StationRef::new(sec, 3),
+                StationRef::new(sec, 5),
+            ],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: vec![
+                PlanSegment {
+                    speed_m_per_min: Some(20.0),
+                    on_scooter: true,
+                }, // origin -> waypoint 0
+                PlanSegment {
+                    speed_m_per_min: Some(8.0),
+                    on_scooter: false,
+                }, // waypoint 0 -> waypoint 1 (merges away)
+                PlanSegment {
+                    speed_m_per_min: Some(15.0),
+                    on_scooter: true,
+                }, // waypoint 1 -> waypoint 2 (merges away)
+                PlanSegment {
+                    speed_m_per_min: Some(30.0),
+                    on_scooter: true,
+                }, // waypoint 2 -> endpoint
+            ],
+        };
+
+        *state.project.lock().unwrap() = Some(project.clone());
+        let persisted = state.to_persisted(&snapshot).unwrap();
+
+        // Make way point 1's anchor unplaceable. Since #24 an anchor stores the PAIR of shots it
+        // sits between and survives losing either one, so both of station 3's neighbours (shot
+        // indices 2 and 3) have to go - the shape `resolve_anchor` reports as `(None, None)`.
+        // Way points 0 and 2 keep at least one of their own neighbours and still place.
+        project.sections[0].shots.remove(3);
+        project.sections[0].shots.remove(2);
+        *state.project.lock().unwrap() = Some(project);
+        let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
+
+        assert_eq!(stale, 1, "only way point 1's anchor should dangle");
+        assert_eq!(resolved.waypoints.len(), 2);
+        assert_eq!(resolved.segments.len(), 3);
+        assert_eq!(
+            resolved.segments[0],
+            PlanSegment {
+                speed_m_per_min: Some(20.0),
+                on_scooter: true,
+            },
+            "the untouched leading segment must pass through unchanged"
+        );
+        assert_eq!(
+            resolved.segments[1],
+            PlanSegment {
+                speed_m_per_min: Some(8.0),
+                on_scooter: true,
+            },
+            "the merged span must take the SLOWER speed and be scootered if EITHER half was"
+        );
+        assert_eq!(
+            resolved.segments[2],
+            PlanSegment {
+                speed_m_per_min: Some(30.0),
+                on_scooter: true,
+            },
+            "the untouched trailing segment must pass through unchanged"
+        );
+    }
+
+    /// The flag on its own, with the speeds held equal so nothing else can carry the result.
+    ///
+    /// `on_scooter` only ever spends the rig's usable RANGE, and range is a cap
+    /// (`scootered <= limit`), so less spend means more reach. ANDing the flag was therefore the
+    /// reach-EXTENDING direction dressed up as the safe one: the merged span below keeps its 55
+    /// m/min - identical gas - while dropping the whole first span's range spend, so the plan
+    /// reaches further than either half allowed.
+    #[test]
+    fn a_merged_span_is_scootered_when_either_half_was() {
+        let merged = merge_segments_for_surviving_waypoints(
+            vec![
+                PlanSegment {
+                    speed_m_per_min: Some(55.0),
+                    on_scooter: true,
+                },
+                PlanSegment {
+                    speed_m_per_min: Some(55.0),
+                    on_scooter: false,
+                },
+            ],
+            // The single way point between them no longer resolves, so the two spans collapse.
+            &[false],
+            10.0,
+        );
+        assert_eq!(
+            merged,
+            vec![PlanSegment {
+                speed_m_per_min: Some(55.0),
+                on_scooter: true,
+            }],
+            "with the gas unchanged, dropping the range spend can only extend reach"
+        );
+    }
+
+    /// The merge and the engine must agree on which stored speeds are REAL.
+    ///
+    /// `resolve_segments` honours only `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`
+    /// and flies anything else at the plan speed. A merge that ranked speeds on a looser domain
+    /// would hand a denormal from a hand-edited `.plnx` the "slowest span" prize and keep it - and
+    /// the engine would then discard it and fly the merged span at the plan's 10 m/min, FASTER than
+    /// either half, which is the exact direction the merge exists to prevent.
+    #[test]
+    fn a_speed_the_engine_will_not_honour_never_wins_the_merge() {
+        let merged = merge_segments_for_surviving_waypoints(
+            vec![
+                PlanSegment {
+                    // Below MIN_SEGMENT_SPEED_M_PER_MIN: the engine flies this span at 10.0.
+                    speed_m_per_min: Some(1e-320),
+                    on_scooter: false,
+                },
+                PlanSegment {
+                    speed_m_per_min: Some(3.0),
+                    on_scooter: false,
+                },
+            ],
+            &[false],
+            10.0,
+        );
+        assert_eq!(
+            merged.len(),
+            1,
+            "the way point dangled, so the two spans collapse"
+        );
+        assert_eq!(
+            merged[0].speed_m_per_min,
+            Some(3.0),
+            "3 m/min is the slowest speed either half will ACTUALLY be flown at"
+        );
+    }
+
+    #[test]
+    fn an_over_long_segment_list_is_folded_into_the_closing_span_not_truncated() {
+        // A hand-edited `.plnx` (and a caller that never touches a file) can carry any number of
+        // segments; a plan has exactly `waypoints.len() + 1` spans. Both directions have to settle
+        // that, and neither may do it by dropping the excess: every field a truncate discards is
+        // discarded in the reach-extending direction - a dropped slow speed becomes the plan speed
+        // (cheaper gas), a dropped `on_scooter` stops spending range.
+        //
+        // So the tail here carries values DISTINCT from the spans that survive: the two retained
+        // spans inherit (10 m/min, no scooter), the tail runs at 5 and closes at 3 with the scooter
+        // on. A truncate leaves the closing span inheriting; the fold leaves it {3.0, true}.
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_3_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+
+        let mut long_list = vec![inherited_segment(), inherited_segment()];
+        long_list.extend(std::iter::repeat_n(
+            PlanSegment {
+                speed_m_per_min: Some(5.0),
+                on_scooter: false,
+            },
+            MAX_SEGMENTS + 24,
+        ));
+        long_list.push(PlanSegment {
+            speed_m_per_min: Some(3.0),
+            on_scooter: true,
+        });
+        let folded = PlanSegment {
+            speed_m_per_min: Some(3.0),
+            on_scooter: true,
+        };
+
+        // Save-side. The snapshot carries one way point, so two spans - and `MAX_SEGMENTS` never
+        // gets to bind, because `waypoints.len() + 1` is the tighter line.
+        let mut snapshot = snapshot_with_route_points(sec);
+        snapshot.segments = long_list.clone();
+        let persisted = state.to_persisted(&snapshot).unwrap();
+        assert_eq!(persisted.segments.len(), 2);
+        assert_eq!(
+            persisted.segments[1], folded,
+            "the discarded tail's slowest speed and its scooter use must reach the disk"
+        );
+
+        // Load-side, which is where a doctored file actually enters.
+        let mut doctored = persisted;
+        doctored.segments = long_list;
+        let (resolved, _anchors, _stale) = state.resolve_persisted(doctored).unwrap();
+        assert_eq!(resolved.waypoints.len(), 1);
+        assert_eq!(resolved.segments.len(), 2);
+        assert_eq!(
+            resolved.segments[1], folded,
+            "and again on the way back in - a load must not drop it either"
+        );
+    }
+
+    /// Every plan written before #317 has NO segments at all, and nothing downstream heals that:
+    /// the panel's table renders one row per stored segment, the engine re-weights per span, and
+    /// the store's add/remove-way-point arithmetic indexes into the list assuming it is already
+    /// the right length. So a legacy plan loaded with zero rows silently loses the whole feature
+    /// for that plan until the user adds and removes a way point.
+    ///
+    /// The load path is the only chokepoint every plan passes through, so the invariant is
+    /// established there.
+    #[test]
+    fn a_plan_saved_before_segments_existed_loads_one_segment_per_span() {
+        let (project, sec) = project_6_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project.clone());
+
+        let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
+        let persisted = PersistedDivePlanSnapshot {
+            origin: Some(anchor(0)),
+            endpoint: Some(anchor(6)),
+            waypoints: vec![anchor(1), anchor(3), anchor(5)],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            // The whole point: a pre-#317 blob has no `segments` key at all, which serde defaults
+            // to exactly this.
+            segments: Vec::new(),
+        };
+
+        let (resolved, _anchors, stale) = state.resolve_persisted(persisted).unwrap();
+        assert_eq!(stale, 0);
+        assert_eq!(resolved.waypoints.len(), 3);
+        assert_eq!(
+            resolved.segments.len(),
+            4,
+            "three way points bound four spans, so a loaded plan must always carry four segments"
+        );
+        // A padded span must INHERIT the plan speed rather than being frozen at some default the
+        // diver never chose - `None` is what the engine reads as "fly this at the plan speed".
+        assert!(resolved
+            .segments
+            .iter()
+            .all(|s| s.speed_m_per_min.is_none() && !s.on_scooter));
+    }
+
+    /// A short-but-not-empty list is the same defect, and is what a `.plnx` written by a build
+    /// between the segment field landing and this normalisation looks like.
+    #[test]
+    fn a_short_segment_list_is_padded_rather_than_left_misaligned() {
+        let (project, sec) = project_6_shots();
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project.clone());
+
+        let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
+        let persisted = PersistedDivePlanSnapshot {
+            origin: Some(anchor(0)),
+            endpoint: Some(anchor(6)),
+            waypoints: vec![anchor(1), anchor(3), anchor(5)],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: vec![PlanSegment {
+                speed_m_per_min: Some(42.0),
+                on_scooter: true,
+            }],
+        };
+
+        let (resolved, _anchors, _stale) = state.resolve_persisted(persisted).unwrap();
+        assert_eq!(resolved.segments.len(), 4);
+        // Padding appends; the spans the file DID describe keep their values and their positions.
+        assert_eq!(resolved.segments[0].speed_m_per_min, Some(42.0));
+        assert!(resolved.segments[0].on_scooter);
+        assert!(resolved.segments[3].speed_m_per_min.is_none());
+    }
+
+    /// An `AppState` holding `project`, for the #310 command-level tests.
+    fn state_with(project: Project) -> AppState {
+        let state = AppState::new().unwrap();
+        *state.project.lock().unwrap() = Some(project);
+        state
+    }
+
+    #[test]
+    fn plan_anchor_round_trip_is_identity_on_an_untouched_project() {
+        let (project, sec) = project_3_shots();
+        let state = state_with(project);
+
+        let refs: Vec<_> = (0..=3).map(|i| StationRef::new(sec, i)).collect();
+        let anchors = state.plan_anchors_for_refs(refs.clone()).unwrap();
+        assert!(
+            anchors.iter().all(Option::is_some),
+            "every live station must be describable"
+        );
+        let back = state
+            .plan_refs_for_anchors(anchors.into_iter().flatten().collect())
+            .unwrap();
+        assert_eq!(back, refs.into_iter().map(Some).collect::<Vec<_>>());
+    }
+
+    /// THE #310 guarantee, at the command boundary this time: a pin the frontend is holding must
+    /// follow its physical station across a survey edit rather than rebinding to whatever slid
+    /// into the old index.
+    ///
+    /// The `assert_ne` is the injection: it pins that the naive positional answer - keeping the
+    /// ref the frontend already had - is a DIFFERENT station here, so a version of
+    /// `plan_refs_for_anchors` that echoed its input would fail rather than pass by coincidence.
+    #[test]
+    fn an_anchored_pin_follows_its_station_across_an_upstream_shot_delete() {
+        let (mut project, sec) = project_3_shots();
+        let pinned = StationRef::new(sec, 2);
+        let state = state_with(project.clone());
+        let anchors = state.plan_anchors_for_refs(vec![pinned]).unwrap();
+        let anchor = anchors[0].clone().expect("station 2 anchors");
+
+        // Delete shot 0: the physical station that was station 2 is now station 1.
+        project.sections[0].shots.remove(0);
+        let state = state_with(project);
+
+        let back = state.plan_refs_for_anchors(vec![anchor]).unwrap();
+        assert_eq!(back, vec![Some(StationRef::new(sec, 1))]);
+        assert_ne!(
+            back[0],
+            Some(pinned),
+            "the positional ref the frontend was holding now names a different station - if it \
+             did not, this test could not tell an anchored pin from an echoed one"
+        );
+    }
+
+    /// The mirror case: an insert upstream pushes the station DOWN the numbering.
+    #[test]
+    fn an_anchored_pin_follows_its_station_across_an_upstream_insert() {
+        let (mut project, sec) = project_3_shots();
+        let pinned = StationRef::new(sec, 2);
+        let state = state_with(project.clone());
+        let anchor = state.plan_anchors_for_refs(vec![pinned]).unwrap()[0]
+            .clone()
+            .expect("station 2 anchors");
+
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project
+            .insert_shot_before(sec, first, make_shot(), None, None)
+            .unwrap();
+        let state = state_with(project);
+
+        let back = state.plan_refs_for_anchors(vec![anchor]).unwrap();
+        assert_eq!(back, vec![Some(StationRef::new(sec, 3))]);
+        assert_ne!(back[0], Some(pinned));
+    }
+
+    /// A reverse renumbers the whole section, and the terminal pins are the ones that need the
+    /// parity correction (`after_a` alone is expressed in traversal terms, which a reverse
+    /// flips). All four stations must come back naming the same physical spot.
+    #[test]
+    fn anchored_pins_survive_a_section_reverse() {
+        let (mut project, sec) = project_3_shots();
+        let refs: Vec<_> = (0..=3).map(|i| StationRef::new(sec, i)).collect();
+        let state = state_with(project.clone());
+        let anchors: Vec<_> = state
+            .plan_anchors_for_refs(refs.clone())
+            .unwrap()
+            .into_iter()
+            .flatten()
+            .collect();
+        assert_eq!(anchors.len(), 4);
+
+        assert!(project.reverse_section(sec, false));
+        let state = state_with(project);
+
+        let back = state.plan_refs_for_anchors(anchors).unwrap();
+        let expected: Vec<_> = (0..=3).map(|i| Some(StationRef::new(sec, 3 - i))).collect();
+        assert_eq!(back, expected);
+        assert_ne!(
+            back,
+            refs.into_iter().map(Some).collect::<Vec<_>>(),
+            "a reverse genuinely renumbers, so echoing the input would not produce this"
+        );
+    }
+
+    /// An anchor names the two shots its station sits between and survives losing either one.
+    /// Losing BOTH leaves nothing in the file that can name the station, and the honest answer is
+    /// `None` - the frontend drops that pin and tells the diver, rather than being handed a
+    /// plausible neighbour.
+    #[test]
+    fn a_pin_whose_both_neighbouring_shots_are_deleted_no_longer_places() {
+        let (mut project, sec) = project_3_shots();
+        let state = state_with(project.clone());
+        let anchor = state
+            .plan_anchors_for_refs(vec![StationRef::new(sec, 2)])
+            .unwrap()[0]
+            .clone()
+            .expect("station 2 anchors");
+
+        // Station 2's neighbours are shot indices 1 and 2; remove the later one first so the
+        // earlier index stays valid.
+        project.sections[0].shots.remove(2);
+        project.sections[0].shots.remove(1);
+        let state = state_with(project);
+
+        assert_eq!(
+            state.plan_refs_for_anchors(vec![anchor]).unwrap(),
+            vec![None]
+        );
+    }
+
+    /// A ref naming no live station is `None`, not an error - one bad pin in a batch must not
+    /// fail the other pins with it.
+    #[test]
+    fn an_unanchorable_ref_is_none_without_failing_the_batch() {
+        let (project, sec) = project_3_shots();
+        let state = state_with(project);
+        let anchors = state
+            .plan_anchors_for_refs(vec![
+                StationRef::new(sec, 1),
+                StationRef::new(sec + 99, 0),
+                StationRef::new(sec, 9),
+            ])
+            .unwrap();
+        assert!(anchors[0].is_some());
+        assert!(anchors[1].is_none(), "no such section");
+        assert!(anchors[2].is_none(), "no such station in that section");
+    }
+
+    /// The anchors the load path already had in hand are handed out with the plan, so opening a
+    /// plan seeds the live pins without a second round trip - and index-aligned with the RESOLVED
+    /// lists, which is the part that is easy to get wrong when a dangling entry has been dropped.
+    #[test]
+    fn a_loaded_plan_carries_the_anchors_its_refs_resolved_from() {
+        let temp = TempDir::new().unwrap();
+        let (mut project, sec) = project_6_shots();
+        project.file_path = Some(temp.path().join("cave.stalx"));
+        let state = state_with(project);
+
+        let snapshot = DivePlanSnapshot {
+            origin: Some(StationRef::new(sec, 0)),
+            endpoint: Some(StationRef::new(sec, 6)),
+            waypoints: vec![StationRef::new(sec, 1), StationRef::new(sec, 3)],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: vec![None, Some(StationRef::new(sec, 5))],
+            marked_points: vec![MarkedPoint {
+                station: StationRef::new(sec, 4),
+                label: None,
+            }],
+            segments: Vec::new(),
+        };
+        let saved = state
+            .save_dive_plan(None, "Plan".to_string(), snapshot)
+            .unwrap();
+
+        let plan = state.load_dive_plan(saved.id).unwrap();
+        assert_eq!(plan.stale_ref_count, 0);
+        assert!(plan.anchors.origin.is_some());
+        assert!(plan.anchors.endpoint.is_some());
+        assert_eq!(plan.anchors.waypoints.len(), plan.snapshot.waypoints.len());
+        assert_eq!(
+            plan.anchors.marked_points.len(),
+            plan.snapshot.marked_points.len()
+        );
+        assert_eq!(
+            plan.anchors.stage_drop_overrides.len(),
+            plan.snapshot.stage_drop_overrides.len()
+        );
+        assert!(plan.anchors.stage_drop_overrides[0].is_none());
+        assert!(plan.anchors.stage_drop_overrides[1].is_some());
+
+        // The handed-out anchors must be the real thing: placing them again reproduces exactly
+        // the refs the snapshot carries.
+        let waypoint_anchors: Vec<_> = plan.anchors.waypoints.iter().flatten().cloned().collect();
+        assert_eq!(
+            state.plan_refs_for_anchors(waypoint_anchors).unwrap(),
+            plan.snapshot
+                .waypoints
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// A dropped way point must leave BOTH lists together, or every anchor after it names the
+    /// wrong pin - the same positional trap the anchors exist to close.
+    #[test]
+    fn a_dropped_waypoint_leaves_the_anchor_list_aligned() {
+        let (mut project, sec) = project_6_shots();
+        let anchor = |i| to_anchor(&project, Some(StationRef::new(sec, i))).unwrap();
+        let persisted = PersistedDivePlanSnapshot {
+            origin: None,
+            endpoint: None,
+            waypoints: vec![anchor(1), anchor(3), anchor(5)],
+            diver: default_persisted_diver(),
+            cylinders: Vec::new(),
+            gas_config: GasConfig::default(),
+            stage_drop_overrides: Vec::new(),
+            marked_points: Vec::new(),
+            segments: Vec::new(),
+        };
+
+        // Strand the middle way point: station 3 sits between shot indices 2 and 3, and an anchor
+        // survives losing either one, so both have to go.
+        project.sections[0].shots.remove(3);
+        project.sections[0].shots.remove(2);
+        let state = state_with(project);
+
+        let (resolved, anchors, stale) = state.resolve_persisted(persisted).unwrap();
+        assert_eq!(stale, 1);
+        assert_eq!(resolved.waypoints.len(), 2);
+        assert_eq!(anchors.waypoints.len(), 2);
+        let placed: Vec<_> = state
+            .plan_refs_for_anchors(anchors.waypoints.into_iter().flatten().collect())
+            .unwrap();
+        assert_eq!(
+            placed,
+            resolved
+                .waypoints
+                .iter()
+                .copied()
+                .map(Some)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    /// Serde must carry EVERY field of the untagged enum across the wire, not just the ones a
+    /// default fixture happens to exercise.
+    ///
+    /// The section is reversed first on purpose: on a virgin section `parity` is `false` and the
+    /// two terminal stations are the only ones with a length fingerprint, so a field that failed
+    /// to serialize would round-trip to its default and look identical. Reversing sets `parity`
+    /// true, and asserting the whole struct then actually pins it. (An earlier version of this
+    /// test did not, and `#[serde(skip)]` on `parity` passed it.)
+    #[test]
+    fn an_anchor_survives_a_plain_serde_round_trip() {
+        let (mut project, sec) = project_3_shots();
+        assert!(project.reverse_section(sec, false));
+        assert!(
+            project.get_section(sec).unwrap().reverse_parity,
+            "the fixture must actually carry a non-default parity"
+        );
+        let state = state_with(project);
+        for i in 0..=3 {
+            let anchor = state
+                .plan_anchors_for_refs(vec![StationRef::new(sec, i)])
+                .unwrap()[0]
+                .clone()
+                .expect("anchors");
+            let json = serde_json::to_string(&anchor).unwrap();
+            let back: StoredAnchor = serde_json::from_str(&json).unwrap();
+            assert_eq!(back, anchor, "the untagged enum must round-trip exactly");
+            assert_eq!(
+                state.plan_refs_for_anchors(vec![back]).unwrap(),
+                vec![Some(StationRef::new(sec, i))]
+            );
+        }
+    }
+
+    /// What a `u64` becomes after a trip through JavaScript.
+    ///
+    /// `JSON.parse` has no integer type, so it widens the value to a double; `JSON.stringify`
+    /// then writes the shortest decimal that identifies that double, which for a 64-bit value is
+    /// not the value you started with. Rust's own shortest-round-trip float printing produces the
+    /// same digits, so this is a faithful stand-in without a JS engine.
+    fn through_javascript(bits: u64) -> u64 {
+        let as_double = bits as f64;
+        format!("{as_double}").parse::<u64>().unwrap_or(bits)
+    }
+
+    /// An anchor handed to the frontend and handed straight back must still place.
+    ///
+    /// The hazard is `terminal_shot_length_bits`: a full 64-bit fingerprint that JavaScript
+    /// cannot hold exactly. Comparing it bit-for-bit made a round-tripped terminal anchor report
+    /// STALE the moment its section was extended - the diver's pin vanishing with a "re-pin this"
+    /// warning after an edit that never touched it. Comparing the decoded LENGTH within a
+    /// tolerance is immune, and is a strictly better guard anyway: it detects a split, which
+    /// changes the length by at least a centimetre.
+    #[test]
+    fn an_anchor_survives_the_round_trip_through_javascript() {
+        let (mut project, sec) = project_n_shots(2);
+        let state = state_with(project.clone());
+        let anchor = state
+            .plan_anchors_for_refs(vec![StationRef::new(sec, 0)])
+            .unwrap()[0]
+            .clone()
+            .expect("the entrance anchors");
+
+        // Mangle exactly the way a trip through the frontend does.
+        let mut value = serde_json::to_value(&anchor).unwrap();
+        let field = value
+            .get_mut("terminal_shot_length_bits")
+            .expect("a terminal anchor records its shot's length");
+        let original = field.as_u64().expect("stored as an integer");
+        let mangled = through_javascript(original);
+        assert_ne!(
+            mangled, original,
+            "if this ever holds, JavaScript grew a 64-bit integer and the guard below is moot"
+        );
+        *field = serde_json::Value::from(mangled);
+        let returned: StoredAnchor = serde_json::from_value(value).unwrap();
+
+        // Extend the section past the pinned station. This is the ONLY shape that reads the
+        // fingerprint at all, and it must resolve: nothing was split.
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project
+            .insert_shot_before(sec, first, make_shot(), None, None)
+            .unwrap();
+        let state = state_with(project);
+
+        assert_eq!(
+            state.plan_refs_for_anchors(vec![returned]).unwrap(),
+            vec![Some(StationRef::new(sec, 1))],
+            "a pin must not go stale merely because it was held by the frontend for a moment"
+        );
+    }
+
+    /// ...and the guard it relies on still fires for the thing it exists to catch. A split is
+    /// nine orders of magnitude larger than the tolerance, so widening the comparison cannot have
+    /// blunted it.
+    #[test]
+    fn the_terminal_length_guard_still_catches_a_split_after_a_javascript_round_trip() {
+        let (mut project, sec) = project_n_shots(2);
+        let state = state_with(project.clone());
+        let anchor = state
+            .plan_anchors_for_refs(vec![StationRef::new(sec, 0)])
+            .unwrap()[0]
+            .clone()
+            .expect("the entrance anchors");
+
+        let mut value = serde_json::to_value(&anchor).unwrap();
+        let field = value.get_mut("terminal_shot_length_bits").unwrap();
+        let mangled = through_javascript(field.as_u64().unwrap());
+        *field = serde_json::Value::from(mangled);
+        let returned: StoredAnchor = serde_json::from_value(value).unwrap();
+
+        let first = project.get_section(sec).unwrap().shots[0].id;
+        project.split_shot_at_distance(sec, first, 0.5).unwrap();
+        let state = state_with(project);
+
+        assert_eq!(
+            state.plan_refs_for_anchors(vec![returned]).unwrap(),
+            vec![None],
+            "the station cannot be named after the split, so it must not be guessed"
+        );
+    }
+
+    #[test]
+    fn plan_anchor_commands_refuse_when_no_project_is_open() {
+        let state = AppState::new().unwrap();
+        assert!(state.plan_anchors_for_refs(Vec::new()).is_err());
+        assert!(state.plan_refs_for_anchors(Vec::new()).is_err());
+    }
+
+    /// Both anchor commands are bounded, like every other list a plan can hold.
+    ///
+    /// They are the one pair that never had a cap, and each entry costs a section scan under the
+    /// project mutex - the lock the map, the data table and every mutation contend for - so an
+    /// unbounded batch holds that lock for as long as the caller cares to make it. The bound is
+    /// derived from the plan's own caps and doubled for the live-plus-baseline pass the frontend
+    /// legitimately makes, so a real plan can never reach it.
+    #[test]
+    fn the_anchor_commands_refuse_an_over_long_batch() {
+        let (project, sec) = project_3_shots();
+        let anchor = to_anchor(&project, Some(StationRef::new(sec, 2))).unwrap();
+        let state = state_with(project);
+        let station = StationRef::new(sec, 2);
+
+        // Exactly at the cap is fine - the boundary is inclusive, and every entry is answered.
+        assert_eq!(
+            state
+                .plan_anchors_for_refs(vec![station; MAX_PLAN_ANCHOR_BATCH])
+                .unwrap()
+                .len(),
+            MAX_PLAN_ANCHOR_BATCH
+        );
+        assert_eq!(
+            state
+                .plan_refs_for_anchors(vec![anchor.clone(); MAX_PLAN_ANCHOR_BATCH])
+                .unwrap()
+                .len(),
+            MAX_PLAN_ANCHOR_BATCH
+        );
+
+        // One past it is refused outright rather than answered short: the reply is index-aligned
+        // with the input, so a truncated answer would silently leave the tail of the plan holding
+        // stale pins, indistinguishable from pins that genuinely no longer place.
+        let err = state
+            .plan_anchors_for_refs(vec![station; MAX_PLAN_ANCHOR_BATCH + 1])
+            .unwrap_err();
+        assert!(err.contains("Too many plan anchors"), "got: {err}");
+        let err = state
+            .plan_refs_for_anchors(vec![anchor; MAX_PLAN_ANCHOR_BATCH + 1])
+            .unwrap_err();
+        assert!(err.contains("Too many plan anchors"), "got: {err}");
     }
 }

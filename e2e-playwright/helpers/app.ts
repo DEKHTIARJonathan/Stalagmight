@@ -95,6 +95,34 @@ export async function createSectionViaStore(page: Page, section: SectionSeed): P
   }, section);
 }
 
+/**
+ * Delete shot `shotIndex` of section 1 directly via the store (#310) - the same
+ * `delete_shot` command the UI's confirm/shift-geometry paths issue, without the
+ * dialog chrome a repro doesn't need. Renumbers every later station down by one in
+ * the mock, so it can drive a live anchor (e.g. a way-point pin) out from under it.
+ */
+export async function deleteShotAt(page: Page, shotIndex: number): Promise<void> {
+  await page.evaluate(async (idx) => {
+    const e2e = (
+      window as unknown as {
+        __E2E_TEST__: {
+          projectStore: {
+            getState: () => {
+              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
+              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
+            };
+          };
+        };
+      }
+    ).__E2E_TEST__;
+    const state = e2e.projectStore.getState();
+    const sec = state.project.sections[0];
+    const shot = sec.shots[idx];
+    if (!shot) throw new Error(`no shot at index ${idx}`);
+    await state.deleteShot(sec.id, shot.id);
+  }, shotIndex);
+}
+
 export async function seedProjectWithSections(page: Page, sections: SectionSeed[]): Promise<void> {
   for (const section of sections) {
     await createSectionViaStore(page, section);

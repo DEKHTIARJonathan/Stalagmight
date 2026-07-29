@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
   seedProjectWithSections,
+  deleteShotAt,
   waitForDrawnStations,
   getStationScreenPositions,
   readCanvasPixel,
@@ -273,6 +274,19 @@ async function stageDropOverrides(page: Page): Promise<Array<StationRefLite | nu
   );
 }
 
+/** The `endpoint` argument the LAST compute_gas_reach_field call was invoked with (#310). */
+async function lastGasReachEndpoint(page: Page): Promise<StationRefLite | null> {
+  return page.evaluate(() => {
+    const calls =
+      (
+        window as unknown as {
+          __MOCK_GAS_REACH_CALLS__?: Array<{ endpoint: StationRefLite | null }>;
+        }
+      ).__MOCK_GAS_REACH_CALLS__ ?? [];
+    return calls.length ? calls[calls.length - 1].endpoint : null;
+  });
+}
+
 /** The `stage_drop_overrides` argument the LAST compute_gas_reach_field call was invoked with. */
 async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite | null>> {
   return page.evaluate(() => {
@@ -284,6 +298,48 @@ async function lastGasReachOverrides(page: Page): Promise<Array<StationRefLite |
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
     return calls.length ? calls[calls.length - 1].stageDropOverrides : [];
   });
+}
+
+type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
+
+/** The `segments` argument the LAST compute_gas_reach_field call was invoked with (#317) - the
+ *  wiring guard for the Segments table: a table that only re-rendered itself would leave this
+ *  stale, since only `setSegments` (which nulls `reachField`) triggers a refetch. */
+async function lastGasReachSegments(page: Page): Promise<PlanSegmentLite[]> {
+  return page.evaluate(() => {
+    const calls =
+      (
+        window as unknown as {
+          __MOCK_GAS_REACH_CALLS__?: Array<{ segments: PlanSegmentLite[] }>;
+        }
+      ).__MOCK_GAS_REACH_CALLS__ ?? [];
+    return calls.length ? calls[calls.length - 1].segments : [];
+  });
+}
+
+/** The `dpv` field the LAST compute_gas_reach_field call's `gasConfig` carried (#317) - proves a
+ *  rig toggle reached the actual REQUEST, not just the client-side `hasDpvRig` flag the readout
+ *  also gates on (that flag flips a render tick before any recompute round-trips). */
+async function lastGasReachDpv(page: Page): Promise<unknown> {
+  return page.evaluate(() => {
+    const calls =
+      (
+        window as unknown as {
+          __MOCK_GAS_REACH_CALLS__?: Array<{ dpv: unknown }>;
+        }
+      ).__MOCK_GAS_REACH_CALLS__ ?? [];
+    return calls.length ? calls[calls.length - 1].dpv : undefined;
+  });
+}
+
+/** Enable a DPV rig from the Plan-mode bottom panel's "Equipment" tab (#317, moved out of
+ *  Settings). Requires Plan mode already entered with the bottom panel visible - unlike the old
+ *  Settings dialog, there is no route to the rig editor before `plan-tables-panel` exists. */
+async function enableDpvRig(page: Page): Promise<void> {
+  await expect(page.locator('[data-testid="plan-tables-panel"]')).toBeVisible({ timeout: 3000 });
+  await page.locator('[data-testid="plan-tab-equipment"]').click();
+  await page.locator('[data-testid="toggle-dpv-enabled"]').click();
+  await expect(page.locator('[data-testid="dpv-rig-fields"]')).toBeVisible();
 }
 
 test.describe('Gas planning', () => {
@@ -436,7 +492,7 @@ test.describe('Gas planning', () => {
     expect(timePath).not.toContain('NaN');
 
     // Switching tabs away and back keeps the chart (the tab state is local + transient).
-    await page.locator('[data-testid="plan-tab-cylinders"]').click();
+    await page.locator('[data-testid="plan-tab-equipment"]').click();
     await expect(page.locator('[data-testid="cylinders-table"]')).toBeVisible();
     await page.locator('[data-testid="plan-tab-profile"]').click();
     await expect(page.locator('[data-testid="plan-profile-svg"]')).toBeVisible();
@@ -491,13 +547,15 @@ test.describe('Gas planning', () => {
     );
     expect(sent.format).toBe('subsurface-xml');
     expect(sent.path.endsWith('.xml')).toBe(true);
-    // The whole input tuple, not just the endpoints.
+    // The whole input tuple, not just the endpoints. `segments` joined in #317: without them an
+    // exported profile would be priced at the config swim speed for a scootered dive.
     expect(Object.keys(sent.request).sort()).toEqual([
       'cylinders',
       'diver',
       'endpoint',
       'gas_config',
       'origin',
+      'segments',
       'stage_drop_overrides',
       'waypoints',
     ]);
@@ -860,6 +918,43 @@ test.describe('Gas planning', () => {
       .toEqual({ section_id: 1, station_index: 2 });
     // The origin pick must NOT double as an endpoint pick - they are separate route roles.
     expect(await gasEndpoint(page)).toBeNull();
+  });
+
+  test('#310: a live endpoint pin follows its physical station across an upstream shot delete', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Station 8 of the 11-station seed (10 shots): before = shot[7], after = shot[8].
+    await openPlanMenu(page, 8);
+    await planMenuItem(page, 'Set as endpoint').click();
+    await expect
+      .poll(() => gasEndpoint(page), { timeout: 2000 })
+      .toEqual({ section_id: 1, station_index: 8 });
+
+    // Deleting shot 0 (upstream of station 8) shifts every later station down by one, so the
+    // SAME physical station - once station 8 - is now station 7. A positional ref that is
+    // never re-anchored stays the literal `station_index: 8`, which after this edit names a
+    // DIFFERENT physical station (the one that used to be station 9) - the #310 bug: the pin
+    // silently retargets instead of following its station or dropping out.
+    const WRONG_OLD_BEHAVIOUR_INDEX = 8;
+    const CORRECT_INDEX = 7;
+
+    await enterMode(page, 'survey');
+    await deleteShotAt(page, 0);
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // Discriminating assertion: the corrected ref must reach the engine, and it must NOT be
+    // the stale literal index - which remains a perfectly valid (if wrong) station in the
+    // shrunken 10-station project, so a regression here would still produce SOME endpoint,
+    // just the wrong one, and pass a weaker "is not null" check.
+    await expect
+      .poll(() => lastGasReachEndpoint(page), { timeout: 3000 })
+      .toEqual({ section_id: 1, station_index: CORRECT_INDEX });
+    const sent = await lastGasReachEndpoint(page);
+    expect(sent?.station_index).not.toBe(WRONG_OLD_BEHAVIOUR_INDEX);
   });
 
   test('way points: add, reorder, remove - order reaches the engine @smoke', async ({ page }) => {
@@ -1418,5 +1513,249 @@ test.describe('Gas planning', () => {
       )
       .toBeGreaterThan(0);
     await expect(page.locator('[data-testid="gas-readout-over-reserve-warning"]')).toBeVisible();
+  });
+
+  test('Segments tab: one row per span; a way point adds a row, removing it takes it away (#317) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await expect(page.locator('[data-testid="segments-table"]')).toBeVisible();
+
+    // No way points yet -> exactly one segment, spanning the whole route (entrance -> onward).
+    await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(1);
+    await expect(page.locator('[data-testid="segment-row-0"]')).toContainText('Entrance');
+    await expect(page.locator('[data-testid="segment-row-0"]')).toContainText('Onward');
+    await expect(page.locator('[data-testid="segment-speed-0"]')).toBeVisible();
+    await expect(page.locator('[data-testid="segment-scooter-0"]')).toBeVisible();
+
+    // A way point splits the span it falls in - one MORE segment per way point, not per station.
+    await openPlanMenu(page, 2);
+    await planMenuItem(page, 'Set as way point').click();
+    await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
+    await openPlanMenu(page, 4);
+    await planMenuItem(page, 'Set as way point').click();
+    await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(3);
+
+    // Removing a way point merges the two spans it used to separate back into one row.
+    await page.locator('[data-testid="gas-waypoint-remove"]').first().click();
+    await expect(page.locator('[data-testid^="segment-row-"]')).toHaveCount(2);
+  });
+
+  test('editing a segment speed reaches the backend, not just a local re-render (#317) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    const speed = page.locator('[data-testid="segment-speed-0"]');
+    // Shows the plan's own speed (the default swim speed, 10 m/min metric) without adopting it.
+    await expect(speed).toHaveValue(/^10(\.0)?$/);
+    // ...and the request carries NO speed for that span, so the engine applies the configured one.
+    // Sending a number here - even the right one - is exactly what disabled the swim-speed setting
+    // in the first pass, while every screen assertion above still passed.
+    await expect
+      .poll(
+        async () => {
+          const segs = await lastGasReachSegments(page);
+          return segs.length === 0 ? 'no-compute-yet' : segs[0].speed_m_per_min;
+        },
+        { timeout: 3000 }
+      )
+      .toBeNull();
+
+    await speed.fill('23');
+    await speed.blur();
+
+    // The wiring guard: `setSegments` nulls the cached field, so this is only reachable if the
+    // edit flowed all the way to a recompute request - a table that only re-rendered its own
+    // local state would pass every other assertion in this file and still fail here.
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0]?.speed_m_per_min, { timeout: 3000 })
+      .toBe(23);
+  });
+
+  test('the DPV scooter checkbox is disabled without a configured rig, and the readout has no scooter row (#317) @smoke', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+
+    // The runtime row is engine-derived and rig-independent - it appears from the first route
+    // resolve regardless of DPV.
+    await expect(page.locator('[data-testid="gas-readout-route-runtime"]')).toBeVisible({
+      timeout: 3000,
+    });
+    // No rig configured (the seeded default has none) -> no scooter distance/range row.
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toHaveCount(0);
+
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await expect(page.locator('[data-testid="segments-table"]')).toBeVisible();
+    await expect(page.locator('[data-testid="segment-scooter-0"]')).toBeDisabled();
+    await expect(page.locator('[data-testid="segments-no-rig-hint"]')).toBeVisible();
+  });
+
+  test('configuring a DPV rig in the Equipment tab enables the segment scooter checkbox and its readout row (#317)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await enableDpvRig(page);
+
+    // With a rig configured, the scooter distance/range row appears (even before anything is
+    // scootered - it starts at 0 of the rig's usable range) and the checkbox is live.
+    const readout = page.locator('[data-testid="gas-readout-scooter-range"]');
+    await expect(readout).toBeVisible({ timeout: 3000 });
+    // Pin the mock's copy of `DpvRig::usable_range_m` (src-tauri/src/config/gas.rs) AND
+    // `src/utils/dpv.ts`'s `makeDefaultDpvRig` (primary 45 m/min x 60 min, backup 45 m/min x 45
+    // min, range_reserve_fraction 0.1 - the toggle's "enable" default): `min(45*60, 45*45) *
+    // (1 - 0.1)` = `min(2700, 2025) * 0.9` = `2025 * 0.9` = 1822.5, which the metric formatter
+    // rounds and groups to "1,823 m". Nothing is scootered yet, so the distance half reads "0 m".
+    // The editor's own readout must show the identical figure - both format the same `DpvRig`.
+    await expect(readout).toHaveText('0 m / 1,823 m');
+    await expect(page.locator('[data-testid="dpv-usable-range-value"]')).toHaveText('1,823 m');
+
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await expect(page.locator('[data-testid="segment-scooter-0"]')).toBeEnabled();
+    await expect(page.locator('[data-testid="segments-no-rig-hint"]')).toHaveCount(0);
+  });
+
+  test('a DPV rig configured in one Plan-mode entry survives leaving to Survey and coming back (#317)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toHaveCount(0);
+    await enableDpvRig(page);
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
+      timeout: 3000,
+    });
+
+    // Leaving Plan unmounts the panel (and the rig editor with it); the gas store itself persists
+    // across mode switches (#244), so re-entering must find the rig exactly as it was left,
+    // without a project reload.
+    await enterMode(page, 'survey');
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await expect(page.locator('[data-testid="gas-readout-scooter-range"]')).toBeVisible({
+      timeout: 3000,
+    });
+    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await expect(page.locator('[data-testid="toggle-dpv-enabled"]')).toHaveAttribute(
+      'aria-checked',
+      'true',
+    );
+  });
+
+  test('the scooter park marker appears mid-route and disappears once every segment is scootered (#317)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await enableDpvRig(page);
+
+    // Two way points -> three segments, so the middle one is a genuine middle span, not an end one.
+    await openPlanMenu(page, 2);
+    await planMenuItem(page, 'Set as way point').click();
+    await openPlanMenu(page, 4);
+    await planMenuItem(page, 'Set as way point').click();
+    await expect.poll(() => gasWaypoints(page), { timeout: 2000 }).toHaveLength(2);
+
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await expect(page.locator('[data-testid="segment-row-2"]')).toBeVisible();
+
+    // Scooter the middle segment (1) only - the last (2) stays swum: the units are parked at the
+    // boundary between them, not carried all the way to the turnaround.
+    await page.locator('[data-testid="segment-scooter-1"]').check();
+    await expect
+      .poll(() => page.locator('[data-testid="gas-scooter-drop-marker"]').count(), { timeout: 3000 })
+      .toBeGreaterThan(0);
+    // The table names the very same boundary the map derives the marker from.
+    await expect(page.locator('[data-testid="segment-park-1"]')).toBeVisible();
+
+    // Scooter the last segment too - the units now run all the way to the turnaround, so there is
+    // nothing left to park at. This is the ONLY way to clear the derived marker: it is never
+    // placed directly (see the Map tooltip / SegmentsTable's parkHereHint).
+    await page.locator('[data-testid="segment-scooter-2"]').check();
+    await expect
+      .poll(() => page.locator('[data-testid="gas-scooter-drop-marker"]').count(), { timeout: 3000 })
+      .toBe(0);
+    await expect(page.locator('[data-testid="segment-park-1"]')).toHaveCount(0);
+  });
+
+  test('unticking a scootered segment resets it at the backend, not just the checkbox (#317)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await enableDpvRig(page);
+
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    const checkbox = page.locator('[data-testid="segment-scooter-0"]');
+    await checkbox.check();
+    // Ticking auto-fills the rig's primary speed onto a span still inheriting the plan speed
+    // (`SegmentsTable`'s `setScooter` contract) - confirms the fixture is actually scootered
+    // before the untick under test.
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0]?.speed_m_per_min, { timeout: 3000 })
+      .toBe(45);
+
+    await checkbox.uncheck();
+    // The wiring guard: unticking must reach the backend with the span fully reset -
+    // `on_scooter: false` AND the auto-filled speed cleared back to `null` (inheriting the plan
+    // speed again). A table that only re-rendered its own local state, or that cleared the
+    // checkbox but left the auto-filled speed behind, would still leave a span priced at scooter
+    // pace with no scooter under it - the unsafe direction `setScooter` exists to close.
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0], { timeout: 3000 })
+      .toEqual({ on_scooter: false, speed_m_per_min: null });
+  });
+
+  test('disabling the DPV rig reaches the backend with no rig, resets scootered segments, and persists (#317)', async ({
+    page,
+  }) => {
+    await enterMode(page, 'plan');
+    await expect(page.locator('[data-testid="gas-panel"]')).toBeVisible({ timeout: 3000 });
+    await enableDpvRig(page);
+
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await page.locator('[data-testid="segment-scooter-0"]').check();
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0]?.on_scooter, { timeout: 3000 })
+      .toBe(true);
+
+    await page.locator('[data-testid="plan-tab-equipment"]').click();
+    await page.locator('[data-testid="toggle-dpv-enabled"]').click();
+    await expect(page.locator('[data-testid="dpv-rig-fields"]')).toHaveCount(0);
+
+    // The next compute request carries no rig at all - not just the client-side `hasDpvRig` flag
+    // that happens to hide the readout - AND `setDpvRig`'s removal path resets every segment that
+    // was scootered (#317).
+    await expect.poll(() => lastGasReachDpv(page), { timeout: 3000 }).toBeNull();
+    await page.locator('[data-testid="plan-tab-segments"]').click();
+    await expect
+      .poll(async () => (await lastGasReachSegments(page))[0], { timeout: 3000 })
+      .toEqual({ on_scooter: false, speed_m_per_min: null });
+
+    // The disable is a real config write, not just an in-memory reset - `DpvRigEditor` writes
+    // through to the saved config on every commit, the same persisted-write contract the
+    // swim-speed field has ("Plan swim speed persists to the saved config", above).
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () =>
+            (
+              window as unknown as {
+                __E2E_TEST__: {
+                  projectStore: {
+                    getState: () => { config: { gas: { dpv: unknown } } | null };
+                  };
+                };
+              }
+            ).__E2E_TEST__.projectStore.getState().config?.gas.dpv,
+        ),
+      )
+      .toBeNull();
   });
 });

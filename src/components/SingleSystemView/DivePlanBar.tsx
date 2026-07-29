@@ -1,13 +1,18 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
-import { selectIsPlanDirty, useGasPlanStore } from '../../store/gasPlanStore';
+import {
+  selectHasUnresolvedPins,
+  selectIsPlanDirty,
+  useGasPlanStore,
+} from '../../store/gasPlanStore';
 import { useProjectStore } from '../../store/projectStore';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import {
   deleteDivePlan,
   listDivePlans,
   loadDivePlan,
+  planAnchorsOf,
   saveDivePlan,
 } from '../../utils/divePlanApi';
 import type { DivePlanMeta } from '../../types/ipc.generated';
@@ -38,6 +43,10 @@ export function DivePlanBar() {
     }))
   );
   const isDirty = useGasPlanStore(selectIsPlanDirty);
+  // #310: a pin the backend can no longer place must not be written into a `.plnx`. The backend's
+  // own `to_persisted` refuses it too, but that refusal arrives as an error string after the diver
+  // has already named the plan; blocking here says which plan is unsavable and why, up front.
+  const pinsUnresolved = useGasPlanStore(selectHasUnresolvedPins);
   // The .plnx sits next to the .stalx, so plans need a saved project (a file path).
   // A deferred new project HAS a reserved file_path that was never written,
   // and the backend refuses .plnx persistence until the first real save
@@ -100,7 +109,7 @@ export function DivePlanBar() {
       try {
         const plan = await loadDivePlan(id);
         if (projectKey() !== key) return; // project switched mid-flight
-        applyLoadedPlan(id, plan.snapshot);
+        applyLoadedPlan(id, plan.snapshot, planAnchorsOf(plan));
         setStaleCount(plan.stale_ref_count);
       } catch (e) {
         setError(String(e));
@@ -188,8 +197,9 @@ export function DivePlanBar() {
     }
   }, [loadedPlanId, clearLoadedPlan, refresh]);
 
-  const canSave = loadedPlanId !== null && loadedName !== null && isDirty && hasPath && !busy;
-  const canSaveAs = hasPath && !busy;
+  const canSave =
+    loadedPlanId !== null && loadedName !== null && isDirty && hasPath && !busy && !pinsUnresolved;
+  const canSaveAs = hasPath && !busy && !pinsUnresolved;
   const canDelete = loadedPlanId !== null && !busy;
 
   return (
@@ -267,6 +277,15 @@ export function DivePlanBar() {
       {!hasPath && (
         <p className="text-xs opacity-70" data-testid="dive-plan-needs-save">
           {t('divePlanBar.needsSavedProject')}
+        </p>
+      )}
+
+      {pinsUnresolved && (
+        <p
+          className="text-xs p-2 rounded bg-error-10 border border-error-30 text-error"
+          data-testid="dive-plan-unresolved-pins"
+        >
+          {t('divePlanBar.unresolvedPins')}
         </p>
       )}
 

@@ -6,6 +6,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { formatVolume } from '../../utils/formatGas';
 import { GAS_NEAR, GAS_FAR } from '../../utils/gasReach';
+import { segmentColor } from '../../utils/segmentColors';
 import type { GasReachField, GasUnits } from '../../types/ipc.generated';
 
 interface GasLegendProps {
@@ -105,16 +106,17 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
         data-testid="gas-legend-key"
         style={{ display: 'flex', flexDirection: 'column', gap: 3, marginTop: 2, color: textColor }}
       >
-        {/* The route line itself (#298). Both rows use the exact colour and opacity the
-            `survey-gas-route` layer paints, so the key cannot drift from the map. */}
+        {/* The route line itself (#298). Both rows mirror the `survey-gas-route` layer's paint:
+            its data-driven opacity (swum vs jump), and its per-segment identity colors (#317) -
+            with way points the swatch shows the same first segment colors the map draws. */}
         {field.route.length > 0 && (
           <>
             <KeyRow label={t('map.gasLegend.key.route')}>
-              <RouteSwatch opacity={0.9} />
+              <RouteSwatch opacity={0.9} segmentCount={waypointCount + 1} />
             </KeyRow>
             {field.route.some((leg) => leg.is_jump) && (
               <KeyRow label={t('map.gasLegend.key.routeJump')}>
-                <RouteSwatch opacity={0.45} />
+                <RouteSwatch opacity={0.45} segmentCount={waypointCount + 1} />
               </KeyRow>
             )}
           </>
@@ -196,23 +198,28 @@ export function GasLegend({ field, units, visible }: GasLegendProps) {
   );
 }
 
-/** The route-highlight colour, kept in step with the `survey-gas-route` layer's paint. */
-const ROUTE_LINE_COLOR = '#22d3ee';
-
 /** A short line swatch standing in for the drawn route (#298). `opacity` mirrors the layer's
- *  data-driven line-opacity: full for a swum leg, faded for a jump leg. */
-function RouteSwatch({ opacity }: { opacity: number }) {
+ *  data-driven line-opacity: full for a swum leg, faded for a jump leg. `segmentCount` mirrors
+ *  the layer's per-segment `line-color` (#317): with way points the route is painted one
+ *  identity color per segment, so the swatch shows the first few of those colors as stripes;
+ *  with none it is the single `segmentColor(0)` cyan the layer falls back to. */
+function RouteSwatch({ opacity, segmentCount }: { opacity: number; segmentCount: number }) {
+  const stripes = Math.max(1, Math.min(segmentCount, 4));
   return (
-    <span
-      style={{
-        width: 14,
-        height: 3,
-        borderRadius: 2,
-        background: ROUTE_LINE_COLOR,
-        opacity,
-        flexShrink: 0,
-      }}
-    />
+    <span style={{ display: 'flex', gap: 1, flexShrink: 0 }}>
+      {Array.from({ length: stripes }, (_, i) => (
+        <span
+          key={i}
+          style={{
+            width: Math.round(14 / stripes),
+            height: 3,
+            borderRadius: 2,
+            background: segmentColor(i),
+            opacity,
+          }}
+        />
+      ))}
+    </span>
   );
 }
 

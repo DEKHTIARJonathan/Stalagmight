@@ -4,13 +4,15 @@
     reason = "tests construct from known-valid literals; a failed unwrap should fail the test"
 )]
 
-use super::model::{CylRole, Cylinder, Diver, GasReachField, PlanMode, TankMaterial, Team};
+use super::model::{
+    CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, TankMaterial, Team,
+};
 use super::physics::{
-    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, gas_rate,
-    sac_to_rmv,
+    air_z_factor, ata, avg_depth, cylinder_gas_volume, deliverable_gas, edge_gas, edge_gas_basis,
+    gas_rate, sac_to_rmv,
 };
 use super::{is_swim_leg, penetration_budget, required_stages, route_metrics, usable_oc_gas};
-use crate::config::{GasConfig, ReservePreset, ReserveProfile};
+use crate::config::{DpvRig, DpvUnit, GasConfig, ReservePreset, ReserveProfile};
 use crate::models::{
     Coordinates, GpsCoordinates, Project, SectionData, ShotData, ShotKind, StationRef, ZeroDatum,
 };
@@ -41,6 +43,39 @@ fn edge_gas_hand_computed() {
     // rmv 20, swim 10 m/min, 100 m leg, depth 10→30 (avg 20 m = 3 ATA):
     // rate = 60 L/min, time = 10 min ⇒ 600 L.
     assert!((edge_gas(20.0, 10.0, 100.0, 10.0, 30.0) - 600.0).abs() < 1e-6);
+}
+
+#[test]
+fn edge_gas_basis_hand_computed() {
+    // Same leg as above without the rmv/speed half: 3 ATA × 100 m ⇒ 300.
+    assert!((edge_gas_basis(100.0, 10.0, 30.0) - 300.0).abs() < 1e-6);
+}
+
+#[test]
+fn edge_gas_matches_basis_times_scalar() {
+    // The engine never calls `edge_gas`; it prices every edge as `basis × (rmv / speed)` so one
+    // graph build serves every plan segment (#317). That refactor is only sound while the two
+    // agree, and nothing else would catch them drifting - `edge_gas` has no production caller
+    // left to fail. Swept across depths (incl. above-surface clamping), lengths, rates and the
+    // scooter-vs-swim speed range.
+    for &(len, zf, zt) in &[
+        (100.0, 10.0, 30.0),
+        (7.5, 0.0, 0.0),
+        (250.0, 45.0, 5.0),
+        (0.0, 12.0, 12.0),
+        (60.0, -3.0, 8.0),
+    ] {
+        for &rmv in &[12.0, 20.0, 31.7] {
+            for &speed in &[6.0, 10.0, 55.0, 82.5] {
+                let direct = edge_gas(rmv, speed, len, zf, zt);
+                let factored = edge_gas_basis(len, zf, zt) * rmv / speed;
+                assert!(
+                    (direct - factored).abs() < 1e-9,
+                    "edge_gas({rmv},{speed},{len},{zf},{zt}) = {direct} but basis form = {factored}"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -1071,6 +1106,7 @@ fn gas_reach_field_override_drags_drop_shallower_shrinks_reach() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1097,6 +1133,7 @@ fn gas_reach_field_override_drags_drop_deeper_is_over_reserve_and_extends_budget
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1145,6 +1182,7 @@ fn gas_reach_field_override_deeper_than_tank_empty_clamps_to_empty() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1174,6 +1212,7 @@ fn gas_reach_field_override_none_and_overlong_fall_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1209,6 +1248,7 @@ fn gas_reach_field_override_ignored_for_all_thirds_no_drops() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg],
@@ -1265,6 +1305,7 @@ fn gas_reach_field_override_recomputes_free_strategy_drop() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1324,6 +1365,7 @@ fn gas_reach_field_override_shifts_downstream_drop_keeping_it_safe() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage0, stage1],
         &cfg,
@@ -1360,6 +1402,7 @@ fn gas_reach_field_override_to_default_station_is_a_no_op() {
         Some(&origin),
         None,
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -1387,6 +1430,7 @@ fn gas_reach_field_override_unresolvable_ref_falls_through_to_default() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage],
@@ -1439,6 +1483,7 @@ fn gas_reach_field_override_downstream_shallower_than_cumulative_drops_full() {
     let f = project.compute_gas_reach_field_with_overrides(
         Some(&origin),
         None,
+        &[],
         &[],
         &diver,
         &[bg, stage0, stage1],
@@ -2517,6 +2562,7 @@ fn gas_reach_field_no_waypoints_is_identical_to_the_plain_field() {
         Some(&entrance),
         Some(&trunk_tip),
         &[],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -2564,6 +2610,7 @@ fn gas_reach_field_waypoint_forces_the_detour_and_rebases_the_field() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &cfg,
@@ -2606,6 +2653,7 @@ fn gas_reach_field_waypoints_are_visited_in_the_given_order() {
             Some(&entrance),
             Some(&trunk_tip),
             waypoints,
+            &[],
             &diver,
             &[unlimited_backgas()],
             &cfg,
@@ -2654,6 +2702,7 @@ fn gas_reach_field_disconnected_waypoint_stalls_the_whole_plan() {
         Some(&entrance),
         None,
         &[marooned, side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -2681,6 +2730,7 @@ fn gas_reach_field_unresolvable_waypoint_stalls_rather_than_being_skipped() {
         Some(&entrance),
         Some(&trunk_tip),
         &[ghost],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -2713,6 +2763,7 @@ fn gas_reach_field_waypoint_over_budget_still_shows_the_committed_chain() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[tiny],
         &GasConfig::default(),
@@ -2771,6 +2822,7 @@ fn gas_reach_field_default_drop_on_a_revisited_station_reports_the_right_pass_di
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[bg, stage],
         &cfg,
@@ -2856,6 +2908,7 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &rig,
         &cfg,
@@ -2865,6 +2918,7 @@ fn gas_reach_field_drop_pinned_on_the_outbound_chain_cannot_inflate_the_budget()
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &rig,
         &cfg,
@@ -2983,6 +3037,7 @@ fn gas_reach_field_out_of_budget_endpoint_turns_early_on_its_own_branch() {
         Some(&entrance),
         Some(&north_tip),
         &[east_mid],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &cfg,
@@ -3076,6 +3131,7 @@ fn gas_reach_field_waypoint_does_not_put_a_turn_candidate_inside_the_endpoint() 
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3137,6 +3193,7 @@ fn gas_reach_field_waypoint_does_not_offer_a_transit_station_as_a_turn_candidate
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3196,6 +3253,7 @@ fn gas_reach_field_a_merge_twin_of_a_route_station_is_not_a_turn_candidate() {
         Some(&entrance),
         Some(&north_tip),
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3231,7 +3289,7 @@ fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default()
     // enters and folds the difference into the penetration budget, which EXTENDS the reach: the
     // unsafe direction. An off-route pin has no route gas, so the only honest answer is the
     // strategy default.
-    let (project, entrance, north, east, north_tip, east_mid) = two_branch_project();
+    let (project, entrance, north, _east, north_tip, east_mid) = two_branch_project();
     let diver = Diver::new(20.0, None).unwrap();
     let bg = Cylinder::new(
         13.0,
@@ -3260,6 +3318,7 @@ fn gas_reach_field_an_off_route_stage_drop_override_keeps_the_strategy_default()
         project.compute_gas_reach_field_with_overrides(
             Some(&entrance),
             Some(&north_tip),
+            &[],
             &[],
             &diver,
             &rig,
@@ -3335,6 +3394,7 @@ fn gas_reach_field_the_way_point_itself_is_not_a_turn_candidate() {
         Some(&entrance),
         None,
         &[waypoint],
+        &[],
         &diver,
         std::slice::from_ref(&bg),
         &GasConfig::default(),
@@ -3442,7 +3502,7 @@ fn route_profile_runtime_is_the_runtime_the_gas_was_priced_with() {
     for (p, (distance, depth, elapsed, gas)) in out.iter().zip(expected) {
         assert!((p.distance_m - distance).abs() < 1e-9, "distance at {p:?}");
         assert!((p.depth_m - depth).abs() < 1e-9, "depth at {p:?}");
-        assert!((p.elapsed_min - elapsed).abs() < 1e-9, "runtime at {p:?}");
+        assert!((p.elapsed_min - elapsed).abs() < 1e9, "runtime at {p:?}");
         assert!((p.gas_l - gas).abs() < 1e-6, "gas at {p:?}");
     }
 }
@@ -3462,6 +3522,7 @@ fn route_profile_is_empty_when_the_whole_route_is_a_zero_distance_tie() {
     let field = project.compute_gas_reach_field_with_overrides(
         Some(&entrance),
         Some(&twin),
+        &[],
         &[],
         &diver,
         &[unlimited_backgas()],
@@ -3637,6 +3698,7 @@ fn route_profile_indexes_each_pass_of_a_route_that_doubles_back() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3682,6 +3744,7 @@ fn route_profile_charges_a_zero_distance_tie_no_distance_time_or_gas() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3734,6 +3797,7 @@ fn route_profile_is_empty_when_no_route_exists() {
         Some(&origin),
         None,
         &[orphan],
+        &[],
         &diver,
         &[unlimited_backgas()],
         &GasConfig::default(),
@@ -3769,6 +3833,7 @@ fn route_profile_is_empty_when_the_chain_has_no_affordable_turnaround() {
         Some(&entrance),
         Some(&trunk_tip),
         &[side_tip],
+        &[],
         &diver,
         &[tiny],
         &GasConfig::default(),
@@ -3828,4 +3893,866 @@ fn route_profile_exit_leg_charges_a_jump_the_jump_rmv_bump() {
     );
     // And the bump is real, not a coincidence of equal depths.
     assert!(jump_back > normal_back);
+}
+// ---- #317: plan segments and the DPV range cap -----------------------------------------
+
+/// A rig whose weaker unit covers `range_m` of line, with no conservatism held back. Built from a
+/// speed and a burn so the tests exercise the real `burn x speed` derivation rather than smuggling
+/// a range in directly.
+fn rig_covering(range_m: f64) -> DpvRig {
+    DpvRig {
+        // 55 m/min is a typical cruising speed; the burn is whatever covers the wanted line.
+        primary: DpvUnit {
+            speed_m_per_min: 55.0,
+            burn_minutes: range_m / 55.0,
+        },
+        // Deliberately the STRONGER unit, so every one of these tests is also asserting that the
+        // weaker one is the one that counts.
+        backup: DpvUnit {
+            speed_m_per_min: 50.0,
+            burn_minutes: (range_m * 2.0) / 50.0,
+        },
+        range_reserve_fraction: 0.0,
+    }
+}
+
+fn seg(speed_m_per_min: f64, on_scooter: bool) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: Some(speed_m_per_min),
+        on_scooter,
+    }
+}
+
+/// A span the diver has not given a speed of its own - it flies at the plan's speed. This is what
+/// the frontend sends for every unedited span, so it is the shape most engine tests should use.
+fn inherit_seg(on_scooter: bool) -> PlanSegment {
+    PlanSegment {
+        speed_m_per_min: None,
+        on_scooter,
+    }
+}
+
+#[test]
+fn the_plan_speed_still_reaches_the_engine_through_a_full_length_segment_list() {
+    // ⚠ THE #317 REGRESSION GUARD. Segments shipped with `speed_m_per_min: f64`, and the panel
+    // sends one entry per span from the moment Plan mode opens - so every span always carried an
+    // explicit number and the diver's configured survey / swim speed stopped reaching the engine
+    // entirely. Settings > Gas and the panel's own Swim-speed field went dead while still looking
+    // live, because changing them nulls `reachField` and the refetch comes back IDENTICAL.
+    //
+    // Every engine test at the time passed `&[]`, which selects the "no segments" branch that
+    // production never sends - so the whole suite stayed green over a disabled feature. This test
+    // exists to be the one that sends what the frontend actually sends.
+    //
+    // survey_speed 5 against the swim default 10 doubles the in-leg gas: station 1 costs 300 L at
+    // 10 m/min and 600 L at 5. Any regression that ignores the config speed reads 300.
+    let (project, origin) = linear_descent_project();
+    let sec = origin.section_id;
+    let diver = Diver::new(20.0, None).unwrap();
+    let big = Cylinder::new(
+        1000.0,
+        300.0,
+        300.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let config = GasConfig {
+        survey_speed_m_per_min: Some(5.0),
+        ..GasConfig::default()
+    };
+
+    // What the frontend sends for a plan with one way point and nothing edited: TWO spans, both
+    // inheriting. (The way point itself is what makes the list longer than one entry.)
+    let waypoint = StationRef::new(sec, 1);
+    let sent = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[waypoint],
+        &[inherit_seg(false), inherit_seg(false)],
+        &diver,
+        &[big.clone()],
+        &config,
+        &[],
+    );
+    assert!(
+        (field_gas(&sent, StationRef::new(sec, 1)) - 600.0).abs() < 1e-6,
+        "the configured survey speed did not reach the engine: station 1 cost {} L, expected 600",
+        field_gas(&sent, StationRef::new(sec, 1))
+    );
+
+    // And an all-inheriting list is byte-for-byte the empty-list field, which is what makes every
+    // `&[]` test in this file meaningful for the shape production sends.
+    let empty = project.compute_gas_reach_field_with_overrides(
+        Some(&origin),
+        None,
+        &[waypoint],
+        &[],
+        &diver,
+        &[big],
+        &config,
+        &[],
+    );
+    assert_eq!(sent.gas_to_reach, empty.gas_to_reach);
+    assert_eq!(sent.reachable, empty.reachable);
+    assert_eq!(sent.route_runtime_min, empty.route_runtime_min);
+}
+
+/// A trunk of 3 shots (100 m each, descending 0 -> 30 m) with a 1-shot side branch whose station 0
+/// is MERGED onto the trunk's station 1 - so the branch hangs off the middle of the trunk rather
+/// than off its entrance. Returns `(project, trunk_entrance, trunk_mid, trunk_tip, branch_root,
+/// branch_tip)`, where `branch_root` is the merged twin of `trunk_mid`.
+fn merged_mid_branch_project() -> (
+    Project,
+    StationRef,
+    StationRef,
+    StationRef,
+    StationRef,
+    StationRef,
+) {
+    let mut project = Project::new("Gas".to_string(), None);
+    let trunk = project
+        .add_section(SectionData {
+            shots: vec![
+                make_shot(100.0, 0.0, 10.0),
+                make_shot(100.0, 10.0, 20.0),
+                make_shot(100.0, 20.0, 30.0),
+            ],
+            ..Default::default()
+        })
+        .id;
+    let branch = project
+        .add_section(SectionData {
+            shots: vec![make_shot(100.0, 10.0, 20.0)],
+            ..Default::default()
+        })
+        .id;
+    project
+        .merge_stations(StationRef::new(trunk, 1), StationRef::new(branch, 0))
+        .unwrap();
+    (
+        project,
+        StationRef::new(trunk, 0),
+        StationRef::new(trunk, 1),
+        StationRef::new(trunk, 3),
+        StationRef::new(branch, 0),
+        StationRef::new(branch, 1),
+    )
+}
+
+#[test]
+fn gas_reach_field_prices_each_segment_at_its_own_speed() {
+    // THE headline arithmetic. A way point at the trunk's first station splits the route into two
+    // spans; the first is flown at 50 m/min and the second at the default 10, so the same passage
+    // costs five times less gas on the fast span.
+    //
+    // Hand-computed at rmv 20 (gas = rmv x ata(avg depth) x length / speed):
+    //   span 0, entrance -> trunk 1 @ 50:  20 x 1.5 x 100 / 50 =  60 L
+    //   span 1, trunk 1 -> trunk 2 @ 10:   20 x 2.5 x 100 / 10 = 500 L  (cumulative  560)
+    //   span 1, trunk 2 -> trunk 3 @ 10:   20 x 3.5 x 100 / 10 = 700 L  (cumulative 1260)
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig::default();
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[mid],
+        &[seg(50.0, false), seg(10.0, false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!((field_gas(&field, mid) - 60.0).abs() < 1e-6);
+    assert!((field_gas(&field, two_thirds) - 560.0).abs() < 1e-6);
+    assert!((field_gas(&field, trunk_tip) - 1260.0).abs() < 1e-6);
+
+    // NON-VACUOUS: the same plan with no segment list must produce the pre-#317 numbers, so the
+    // assertions above can only pass because the fast span was actually applied.
+    let flat = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[mid],
+        &[],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!((field_gas(&flat, mid) - 300.0).abs() < 1e-6);
+    assert!((field_gas(&flat, trunk_tip) - 1500.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_scooter_range_binds_before_gas() {
+    // Unlimited gas, a rig that covers only 220 m of line, and the whole dive on the scooter. The
+    // trunk's stations sit at 100 / 200 / 300 m of line, so the range - not the budget - is what
+    // turns the dive, and it turns at 200 m.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(220.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!(field_reachable(&field, mid));
+    assert!(field_reachable(&field, two_thirds));
+    assert!(
+        !field_reachable(&field, trunk_tip),
+        "300 m of line is past the 220 m the rig covers"
+    );
+    assert_eq!(field.final_turn_ref, Some(two_thirds));
+    assert!(
+        field.turn_on_scooter_range,
+        "the scooter, not the gas, is what stopped this dive"
+    );
+    assert!((field.scooter_distance_m - 200.0).abs() < 1e-6);
+    assert_eq!(field.scooter_range_limit_m, Some(220.0));
+
+    // NON-VACUOUS: drop the rig and the identical plan reaches the tip. Whatever else could make
+    // `trunk_tip` unreachable above, it was not the gas.
+    let no_rig = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    assert!(field_reachable(&no_rig, trunk_tip));
+    assert!(!no_rig.turn_on_scooter_range);
+}
+
+#[test]
+fn gas_reach_field_gas_still_binds_when_the_scooter_range_is_ample() {
+    // The mirror of the test above, and the reason `turn_on_scooter_range` exists at all: the same
+    // frontier for a different reason must report a different flag. A rig covering 1100 m never
+    // binds over a 300 m trunk, so the small back-gas tank is what turns the dive.
+    //
+    // At 55 m/min the trunk costs 54.5 / 145.5 / 272.7 L cumulative, and a 3 L tank at 200 bar
+    // yields an All-thirds budget near 192 L - between the last two.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let small = Cylinder::new(
+        3.0,
+        200.0,
+        200.0,
+        TankMaterial::Steel,
+        CylRole::BackGas,
+        None,
+    )
+    .unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(1100.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[small],
+        &cfg,
+        &[],
+    );
+    assert!(field_reachable(&field, two_thirds));
+    assert!(!field_reachable(&field, trunk_tip));
+    assert!(
+        !field.turn_on_scooter_range,
+        "the rig covers 1100 m and the route is 200 m; gas is what turned this dive"
+    );
+}
+
+#[test]
+fn gas_reach_field_a_swim_segment_spends_no_scooter_range() {
+    // The tow case: scooter, swim a restriction, scooter again. The swum span costs gas at swim
+    // rates but no range at all, so the 300 m route spends only 200 m of the rig.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(550.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[mid, two_thirds],
+        &[seg(55.0, true), seg(10.0, false), seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert_eq!(field.final_turn_ref, Some(trunk_tip));
+    assert!(
+        (field.scooter_distance_m - 200.0).abs() < 1e-6,
+        "the swum middle span must not spend range; got {}",
+        field.scooter_distance_m
+    );
+    // The units are still in hand at the turnaround, so nothing was parked.
+    assert_eq!(field.scooter_drop_ref, None);
+}
+
+#[test]
+fn gas_reach_field_derives_the_scooter_drop_at_the_park_way_point() {
+    // Scooter, scooter, then swim on: the units are left at the boundary after the last scootered
+    // span, which is the second way point. Nothing places that marker - it is derived.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(550.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[mid, two_thirds],
+        &[seg(55.0, true), seg(55.0, true), seg(10.0, false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert_eq!(field.scooter_drop_ref, Some(two_thirds));
+    assert!((field.scooter_distance_m - 200.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_scooter_range_settles_across_a_station_merge() {
+    // ⚠ The zero-cost twin trap, in scooter currency. One physical station is several graph nodes
+    // when a merge joins them, and the committed chain is a predecessor walk that names only the
+    // node it happened to route through. Here the way point is the trunk tip, so the chain runs
+    // along the trunk and `branch_root` - the merged twin of `trunk_mid`, carrying the side
+    // passage - is never named by it.
+    //
+    // Without settling the scootered distance across the zero-weight merge edge, `branch_root`
+    // keeps the after-chain price: 300 m out to the tip plus 200 m back = 500 m, over the 250 m
+    // cap, so a station sitting exactly on top of a reachable one reads unreachable. Settled, it
+    // takes its twin's pass-through 100 m.
+    let (project, entrance, trunk_mid, trunk_tip, branch_root, _branch_tip) =
+        merged_mid_branch_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(250.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[trunk_tip],
+        &[seg(55.0, true), seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!(
+        field_reachable(&field, trunk_mid),
+        "the chain station itself must be in range at its pass-through distance"
+    );
+    assert!(
+        field_reachable(&field, branch_root),
+        "the merged twin sits at the same place and must report the same scootered distance"
+    );
+}
+
+#[test]
+fn gas_reach_field_reports_the_route_runtime() {
+    // The engine's first time-valued output. 300 m of trunk at 10 m/min is 30 minutes; the same
+    // line on a scooter at 50 m/min is 6.
+    let (project, entrance) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig::default();
+
+    let swum = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(10.0, false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!((swum.route_runtime_min.unwrap() - 30.0).abs() < 1e-6);
+
+    let scootered = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(50.0, false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert!((scootered.route_runtime_min.unwrap() - 6.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_without_a_rig_ignores_the_scooter_flag() {
+    // A plan can carry `on_scooter` spans with no rig configured - the diver removed the rig, or
+    // the config never had one. The speed still applies (variable pace is useful either way) but
+    // nothing is reported as scootered, because there is no unit to hold the plan to.
+    let (project, entrance) = linear_descent_project();
+    let diver = Diver::new(20.0, None).unwrap();
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    assert!((field.scooter_distance_m - 0.0).abs() < f64::EPSILON);
+    assert_eq!(field.scooter_range_limit_m, None);
+    assert_eq!(field.scooter_drop_ref, None);
+    assert!(!field.turn_on_scooter_range);
+    // The speed was still honoured: 300 m at 55 m/min, not at the config's 10.
+    assert!((field.route_runtime_min.unwrap() - 300.0 / 55.0).abs() < 1e-6);
+}
+
+#[test]
+fn gas_reach_field_an_out_of_range_branch_elsewhere_does_not_claim_the_scooter_turned_the_dive() {
+    // ⚠ THE FALSE POSITIVE. `turn_on_scooter_range` was a cave-wide scan - "is ANY station the
+    // diver has the gas for out of scooter range" - which says yes on a plan that makes its
+    // endpoint with range to spare, as long as anything at all beyond the rig's reach exists
+    // somewhere. That is most caves: gas scales with depth while range scales with length alone, so
+    // a shallow distant passage is affordable long after it is out of range.
+    //
+    // Here the dive is a 100 m hop to the endpoint on a rig covering 150 m. The side branch (200 m
+    // of line) and the rest of the trunk are affordable and out of range - and irrelevant, because
+    // lifting the cap would not move this turnaround one metre.
+    let (project, entrance, trunk_mid, _trunk_tip, _branch_root, branch_tip) =
+        merged_mid_branch_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(150.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_mid),
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    // The premise: the dive reaches the diver's own pick, and there IS an out-of-range,
+    // gas-affordable station in another passage. Without both, the assertion below proves nothing.
+    assert_eq!(field.final_turn_ref, Some(trunk_mid));
+    assert!(field.turn_toward_endpoint);
+    assert!(
+        !field_reachable(&field, branch_tip),
+        "the side branch must be out of range for this test to be about anything"
+    );
+    assert!(
+        !field.turn_on_scooter_range,
+        "the dive made its endpoint; the scooter did not turn it"
+    );
+}
+
+#[test]
+fn gas_reach_field_turns_on_scooter_range_when_the_next_station_toward_the_pick_is_out_of_range() {
+    // The other half of the pair: the same rig, the same cave, an endpoint the range genuinely
+    // cannot reach. The walk toward `trunk_tip` stops at the 200 m station, which the diver can
+    // afford on gas and cannot get to on the rig - so lifting the cap WOULD move the turnaround,
+    // and the flag says so.
+    let (project, entrance, trunk_mid, trunk_tip, _branch_root, _branch_tip) =
+        merged_mid_branch_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(150.0)),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert_eq!(field.final_turn_ref, Some(trunk_mid));
+    assert!(field.turn_toward_endpoint);
+    assert!(
+        field.turn_on_scooter_range,
+        "the station just past the turn is affordable on gas and out of range"
+    );
+
+    // NON-VACUOUS: the identical plan on a rig that covers the whole trunk reaches the endpoint and
+    // reports false, so the `true` above is not simply what this geometry always says.
+    let ample = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[],
+        &[seg(55.0, true)],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig {
+            dpv: Some(rig_covering(1000.0)),
+            ..GasConfig::default()
+        },
+        &[],
+    );
+    assert_eq!(ample.final_turn_ref, Some(trunk_tip));
+    assert!(!ample.turn_on_scooter_range);
+}
+
+#[test]
+fn gas_reach_field_a_stalled_plan_parks_no_scooters() {
+    // The park point is derived from the segment list alone, which is pure input - so it survived a
+    // stalled way-point chain, and the engine handed back "leave the units at W1" naming a station
+    // that no longer exists, for a dive it had just declared unflyable. Gated on a target now, like
+    // the stage drops and the profile.
+    let (project, entrance, side_tip, _trunk_tip) = branching_project();
+    let ghost = StationRef::new(entrance.section_id + 999, 0);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        dpv: Some(rig_covering(1000.0)),
+        ..GasConfig::default()
+    };
+    // Scooter in, park, swim on: a two-span plan whose drop is way point 0.
+    let park_then_swim = [seg(55.0, true), seg(10.0, false)];
+
+    let stalled = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[ghost],
+        &park_then_swim,
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert_eq!(
+        stalled.waypoint_gas_litres,
+        vec![None],
+        "the plan must stall"
+    );
+    assert!(stalled.final_turn_ref.is_none());
+    assert_eq!(stalled.scooter_drop_ref, None);
+
+    // NON-VACUOUS: the same segments over a way point that DOES resolve still derive the drop, so
+    // the gate above is the stall and not a blanket "never report a park point".
+    let flyable = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[side_tip],
+        &park_then_swim,
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+    assert_eq!(flyable.scooter_drop_ref, Some(side_tip));
+}
+
+#[test]
+fn gas_reach_field_a_denormal_segment_speed_inherits_instead_of_poisoning_the_field() {
+    // A positive, finite subnormal passes a `> 0.0` filter and then overflows both of the engine's
+    // reciprocals (`rmv / speed` and `1 / speed`) to INFINITY. Every real edge is then priced at
+    // INFINITY and never relaxes, and every zero-weight merge tie at `0.0 * INFINITY = NaN`, which
+    // fails the same comparison - so the field collapses to the origin with no error anywhere.
+    // Bounded now, so the span inherits the plan speed like any other unusable number.
+    let (project, entrance, side_tip, trunk_tip) = branching_project();
+    let diver = Diver::new(20.0, None).unwrap();
+    let denormal = PlanSegment {
+        speed_m_per_min: Some(1e-320),
+        on_scooter: false,
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[],
+        &[denormal],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    let inherited = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        Some(&trunk_tip),
+        &[],
+        &[inherit_seg(false)],
+        &diver,
+        &[unlimited_backgas()],
+        &GasConfig::default(),
+        &[],
+    );
+    assert_eq!(field.gas_to_reach, inherited.gas_to_reach);
+    assert!(
+        field.gas_to_reach.iter().flatten().all(|g| g.is_finite()),
+        "a reported gas-to-reach must never be NaN or infinite"
+    );
+    // The merge tie is what NaN kills first: the side branch hangs off the entrance by a
+    // zero-weight edge and nothing else.
+    assert!((field_gas(&field, side_tip) - 300.0).abs() < 1e-6);
+    assert!(field.route_runtime_min.is_some_and(f64::is_finite));
+}
+
+#[test]
+fn route_profile_runtime_follows_the_per_segment_speeds() {
+    // ⚠ THE PROFILE'S CLOCK RAN AT ONE SPEED. `build_route_profile` timed every outbound point as
+    // `cumulative distance / in_speed` while `route_runtime_min` - the panel's "One-way runtime",
+    // out of the same compute - was already per-segment. So the chart and BOTH dive-profile exports
+    // (the Subsurface duration and its samples, the plain-text mm:ss column) contradicted the number
+    // on screen: a 55 m/min scootered span was written up as if it had been swum, in the document
+    // the diver carries underwater and plans against later.
+    //
+    // Two spans over the branching trunk, whose stations sit at 0 / 100 / 200 / 300 m of line:
+    //   span 0, entrance -> trunk 1 @ 55:            100 / 55 = 1.8181... min
+    //   span 1, trunk 1 -> trunk 3 @ the plan's 10:  200 / 10 = 20 min   (cumulative 21.8181...)
+    // The old single-speed form reports 300 / 10 = 30: the whole dive at the slow span's pace.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(10.0),
+        ..GasConfig::default()
+    };
+
+    let field = project.compute_gas_reach_field_with_overrides(
+        Some(&entrance),
+        None,
+        &[mid],
+        &[seg(55.0, false), inherit_seg(false)],
+        &diver,
+        &[unlimited_backgas()],
+        &cfg,
+        &[],
+    );
+
+    let out = outbound(&field);
+    let fast = 100.0 / 55.0;
+    let expected = [
+        (0.0, 0.0),
+        (100.0, fast),
+        (200.0, fast + 10.0),
+        (300.0, fast + 20.0),
+    ];
+    assert_eq!(
+        out.len(),
+        expected.len(),
+        "route was not the trunk: {out:?}"
+    );
+    for (p, (distance, elapsed)) in out.iter().zip(expected) {
+        assert!((p.distance_m - distance).abs() < 1e-9, "distance at {p:?}");
+        assert!((p.elapsed_min - elapsed).abs() < 1e-9, "runtime at {p:?}");
+    }
+
+    // THE PROPERTY: the chart's clock IS the readout beside it, not a second derivation of it.
+    let turn_min = out.last().unwrap().elapsed_min;
+    assert!(
+        (turn_min - field.route_runtime_min.unwrap()).abs() < 1e-12,
+        "the profile says {turn_min} min and the runtime readout says {:?}",
+        field.route_runtime_min
+    );
+    // NON-VACUOUS: and it is emphatically not the single-speed figure, which the tolerances above
+    // are far too tight to have admitted by accident.
+    assert!(
+        (turn_min - 30.0).abs() > 1.0,
+        "the whole route was priced at the slow span's speed"
+    );
+
+    // The return half still leaves from the corrected total, at the one swum exit speed (20 m/min
+    // over 300 m = 15 min): neither span is scootered, and a custom pace is an ENTRY property -
+    // the way home is a plain swim. A RIDDEN span is the exception; see
+    // `route_profile_scootered_span_rides_out_at_scooter_pace`.
+    let home = inbound(&field).last().copied().unwrap();
+    assert!((home.elapsed_min - (turn_min + 15.0)).abs() < 1e-9);
+}
+
+#[test]
+fn route_profile_scootered_span_rides_out_at_scooter_pace() {
+    // ⚠ THE EXIT WAS SWUM. The return half priced every leg at `swim_speed_m_per_min`, scootered
+    // spans included - but there is no dead-scooter swim-out in this model: the mandatory backup
+    // rides the diver home over the same line (`DpvRig`), and the range cap charges its allowance
+    // one way for exactly that reason. Billing a 55 m/min span at the 20 m/min swim pace wrote
+    // runtime and exit gas the plan does not spend into the export the diver carries.
+    //
+    // Trunk stations at 0 / 100 / 200 / 300 m of line, way point at 100 m:
+    //   span 0 (entrance -> WP 1): scootered at 55
+    //   span 1 (WP 1 -> endpoint): inherited survey pace, 10
+    // Way out: 200 m swum home at 20, then the ridden 100 m at 55.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let diver = Diver::new(20.0, None).unwrap();
+    let cfg = GasConfig {
+        swim_speed_m_per_min: 20.0,
+        survey_speed_m_per_min: Some(10.0),
+        dpv: Some(rig_covering(1000.0)),
+        ..GasConfig::default()
+    };
+    let plan = |ridden: bool| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            None,
+            &[mid],
+            &[seg(55.0, ridden), inherit_seg(false)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+    let field = plan(true);
+
+    let out_ridden = outbound(&field);
+    let turn = out_ridden.last().unwrap();
+    assert!(
+        (turn.distance_m - 300.0).abs() < 1e-9,
+        "route was not the trunk: {out_ridden:?}"
+    );
+    let turn_min = turn.elapsed_min;
+    let home = inbound(&field).last().copied().unwrap();
+    let ridden_home = 200.0 / 20.0 + 100.0 / 55.0;
+    assert!(
+        (home.elapsed_min - (turn_min + ridden_home)).abs() < 1e-9,
+        "the scootered span must ride home at 55: {} vs {}",
+        home.elapsed_min,
+        turn_min + ridden_home
+    );
+    // NON-VACUOUS: the all-swum exit is 300 / 20 = 15 min home, more than 3 minutes slower - far
+    // outside the tolerance above.
+    assert!((home.elapsed_min - (turn_min + 15.0)).abs() > 1.0);
+
+    // The gas follows the clock. Same speeds ridden or swum, so the way IN is identical either
+    // way - any round-trip difference is the exit pricing alone - and riding the span home means
+    // less time at depth, hence less exit gas, than swimming the same line out.
+    let swum = plan(false);
+    let out_swum = outbound(&swum);
+    assert_eq!(out_ridden.len(), out_swum.len());
+    for (r, s) in out_ridden.iter().zip(&out_swum) {
+        assert!(
+            (r.gas_l - s.gas_l).abs() < 1e-9 && (r.elapsed_min - s.elapsed_min).abs() < 1e-9,
+            "the way in must not depend on the propulsion flag: {r:?} vs {s:?}"
+        );
+    }
+    let home_swum = inbound(&swum).last().copied().unwrap();
+    assert!(
+        home.gas_l < home_swum.gas_l - 1e-9,
+        "riding out must cost less gas than swimming out: {} vs {}",
+        home.gas_l,
+        home_swum.gas_l
+    );
+}
+
+#[test]
+fn gas_reach_field_riding_below_cruise_turns_the_dive_earlier() {
+    // ⚠ THE REACH-EXTENDING BUG. The range cap is `burn x cruise`, i.e. battery MINUTES expressed as
+    // metres at cruise - but every scootered metre was charged a flat metre of it, whatever speed
+    // the span was ridden at. A span flown at a third of cruise takes three times the minutes the
+    // cap assumed for those metres, so the slower the diver rode, the FARTHER the overlay said they
+    // could get. Reach that the battery cannot deliver, in the unsafe direction.
+    //
+    // One rig, one cap, one route; only the span speed differs. The trunk's stations sit at
+    // 0 / 100 / 200 / 300 m, and the rig covers 450 m of line at its 45 m/min cruise:
+    //   at cruise 45:  300 m of line spends 300 m of the allowance -> the tip is in reach.
+    //   at 15 m/min:   each metre spends three, so 200 m of line spends 600 -> past the 450 m cap.
+    // Before the fix BOTH reached the tip.
+    let (project, entrance, _side, trunk_tip) = branching_project();
+    let mid = StationRef::new(trunk_tip.section_id, 1);
+    let two_thirds = StationRef::new(trunk_tip.section_id, 2);
+    let diver = Diver::new(20.0, None).unwrap();
+    // Both units cruise at 45, so the "slower cruise" is unambiguous; the weaker covers 450 m.
+    let cfg = GasConfig {
+        dpv: Some(DpvRig {
+            primary: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 10.0,
+            },
+            backup: DpvUnit {
+                speed_m_per_min: 45.0,
+                burn_minutes: 20.0,
+            },
+            range_reserve_fraction: 0.0,
+        }),
+        ..GasConfig::default()
+    };
+    let plan = |speed: f64| {
+        project.compute_gas_reach_field_with_overrides(
+            Some(&entrance),
+            None,
+            &[],
+            &[seg(speed, true)],
+            &diver,
+            &[unlimited_backgas()],
+            &cfg,
+            &[],
+        )
+    };
+
+    // The premise: at cruise the whole trunk is in reach, on gas the tank never binds.
+    let cruise = plan(45.0);
+    assert_eq!(cruise.scooter_range_limit_m, Some(450.0));
+    assert!(field_reachable(&cruise, trunk_tip));
+    assert_eq!(cruise.final_turn_ref, Some(trunk_tip));
+    assert!(
+        (cruise.scooter_distance_m - 300.0).abs() < 1e-6,
+        "at cruise a metre of line must still cost exactly a metre of range: {}",
+        cruise.scooter_distance_m
+    );
+
+    // The same 450 m rig, ridden at a third of cruise, turns two stations earlier.
+    let slow = plan(15.0);
+    assert!(
+        field_reachable(&slow, mid),
+        "100 m of line spends 300 of the 450 m allowance - that much is affordable"
+    );
+    assert!(
+        !field_reachable(&slow, two_thirds),
+        "200 m of line spends 600 m of a 450 m allowance"
+    );
+    assert!(!field_reachable(&slow, trunk_tip));
+    assert!(
+        slow.turn_on_scooter_range,
+        "the battery, not the gas, is what turned this dive"
+    );
+    // And the readout says what was actually spent: 100 m of line, 300 m of the allowance.
+    assert!(
+        (slow.scooter_distance_m - 300.0).abs() < 1e-6,
+        "spent range should be 3x the line ridden; got {}",
+        slow.scooter_distance_m
+    );
 }

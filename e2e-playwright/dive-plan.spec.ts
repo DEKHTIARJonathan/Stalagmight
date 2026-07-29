@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, type SectionSeed } from './helpers/app';
+import { seedProjectWithSections, deleteShotAt, type SectionSeed } from './helpers/app';
 
 /**
  * E2E for dive-plan persistence (#244): the "Previous dive plans" bar in Plan mode
@@ -28,6 +28,7 @@ const sectionSeeds: SectionSeed[] = [
 
 type PlanMetaLite = { id: number; name: string };
 type StationRefLite = { section_id: number; station_index: number };
+type PlanSegmentLite = { speed_m_per_min: number | null; on_scooter: boolean };
 
 type E2EWindow = {
   __E2E_TEST__?: {
@@ -38,12 +39,14 @@ type E2EWindow = {
         loadedPlanId: number | null;
         waypoints: StationRefLite[];
         markedPoints: { station: StationRefLite; label: string | null }[];
+        segments: PlanSegmentLite[];
         setDiver: (d: { rmv_l_per_min: number; label: string | null }) => void;
         addWaypoint: (ref: StationRefLite) => void;
         removeWaypoint: (index: number) => void;
         addMarkedPoint: (ref: StationRefLite) => void;
         removeMarkedPoint: (index: number) => void;
         setMarkedPointLabel: (index: number, label: string) => void;
+        setSegments: (segments: PlanSegmentLite[]) => void;
       };
     };
   };
@@ -224,6 +227,48 @@ test.describe('Dive-plan persistence (#244)', () => {
     ]);
   });
 
+  test('segments (per-span pace/propulsion) survive a save/load round trip (#317)', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      // A way point splits the default single segment into two; edit both away from their
+      // defaults so a round trip that silently dropped the edits (or fell back to fresh
+      // defaults) would be caught.
+      gas.addWaypoint({ section_id: 1, station_index: 2 });
+      gas.setSegments([
+        { speed_m_per_min: 22, on_scooter: true },
+        { speed_m_per_min: 8, on_scooter: false },
+      ]);
+    });
+    await saveAs(page, 'With segments');
+
+    // Load a second, bare plan so the inputs genuinely change, then come back to the first: a
+    // round trip that never left the store would pass even if nothing were persisted.
+    await page.evaluate(() => {
+      const gas = (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState();
+      gas.removeWaypoint(0);
+    });
+    await saveAs(page, 'Bare');
+
+    const plans = await savedPlans(page);
+    const withSegments = plans.find((p) => p.name === 'With segments');
+    expect(withSegments).toBeDefined();
+    await page.locator('[data-testid="dive-plan-select"]').selectOption(String(withSegments!.id));
+    await expect.poll(() => loadedPlanId(page), { timeout: 3000 }).toBe(withSegments!.id);
+
+    const restored = await page.evaluate(
+      () => (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().segments,
+    );
+    expect(restored).toEqual([
+      { speed_m_per_min: 22, on_scooter: true },
+      { speed_m_per_min: 8, on_scooter: false },
+    ]);
+  });
+
   test('editing after load shows the unsaved badge; Save clears it @smoke', async ({ page }) => {
     await giveProjectAPath(page);
     await enterPlan(page);
@@ -306,5 +351,64 @@ test.describe('Dive-plan persistence (#244)', () => {
 
     await expect.poll(() => savedPlans(page).then((p) => p.length), { timeout: 3000 }).toBe(0);
     expect(await loadedPlanId(page)).toBeNull();
+  });
+
+  test('#310: losing both neighbours of a pinned way point marks it unresolved and blocks Save', async ({
+    page,
+  }) => {
+    await giveProjectAPath(page);
+    await enterPlan(page);
+
+    // Way point at station 3 of the 6-shot seed (7 stations, 0..6): neighbours are shot[2]
+    // (before) and shot[3] (after), both interior - deleting both leaves nothing left to
+    // anchor this pin to.
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
+        section_id: 1,
+        station_index: 3,
+      });
+    });
+    await saveAs(page, 'Stall repro');
+
+    // A second way point dirties the plan against its just-saved baseline, so Save is enabled
+    // for a reason OTHER than the stall below - proving the assertions that follow are actually
+    // driven by the anchor loss, not by a plan that just happened to already block saving.
+    await page.evaluate(() => {
+      (window as unknown as E2EWindow).__E2E_TEST__!.gasPlanStore.getState().addWaypoint({
+        section_id: 1,
+        station_index: 6,
+      });
+    });
+    await expect(page.locator('[data-testid="dive-plan-save"]')).toBeEnabled();
+
+    await deleteShotAt(page, 2);
+    await deleteShotAt(page, 2); // shot[3] is now at index 2 after the first delete.
+
+    // The #310 fix landed in this same branch: losing both neighbours of a pinned way point
+    // marks that pin unresolved (`gasPlanStore.ts`'s `unresolved.waypoints`, per the doc comment
+    // "a flagged pin is never sent to the gas engine and blocks a Save"), and `GasPlanPanel.tsx`
+    // renders `data-testid="gas-waypoint-unresolved"` on the affected row (~:449). Both the store
+    // predicate and the DOM testid are asserted below so the test pins the mechanism, not just
+    // one layer of it.
+    await expect
+      .poll(
+        () =>
+          page.evaluate(
+            () =>
+              (
+                window as unknown as {
+                  __E2E_TEST__?: {
+                    gasPlanStore: { getState: () => { unresolved: { waypoints: boolean[] } } };
+                  };
+                }
+              ).__E2E_TEST__?.gasPlanStore.getState().unresolved.waypoints[0] ?? false,
+          ),
+        { timeout: 3000 },
+      )
+      .toBe(true);
+    await expect(page.locator('[data-testid="gas-waypoint-unresolved"]').first()).toBeVisible({
+      timeout: 3000,
+    });
+    await expect(page.locator('[data-testid="dive-plan-save"]')).toBeDisabled();
   });
 });

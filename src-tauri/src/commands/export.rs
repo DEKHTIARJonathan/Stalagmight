@@ -6,7 +6,7 @@ use crate::config::GasConfig;
 use crate::core::loading::{LoadingPhase, ProgressEmitter};
 use crate::core::AppState;
 use crate::export::{ExportImageOptions, ProfileFormat};
-use crate::models::{Cylinder, Diver, Project, StationRef};
+use crate::models::{Cylinder, Diver, PlanSegment, Project, StationRef};
 
 /// True when `target` resolves to the same file on disk as the open project's
 /// `.stalx` at `existing`. Image export writes raw bytes (`std::fs::write` /
@@ -330,6 +330,10 @@ pub struct DiveProfileRequest {
     pub origin: Option<StationRef>,
     pub endpoint: Option<StationRef>,
     pub waypoints: Vec<StationRef>,
+    /// Per-span speed + propulsion (#317). Carried so the exported profile is priced at the same
+    /// speeds the plan on screen is - a profile rendered at the config swim speed for a scootered
+    /// dive would understate runtime and overstate gas, in a document the diver acts on later.
+    pub segments: Vec<PlanSegment>,
     pub diver: Diver,
     pub cylinders: Vec<Cylinder>,
     pub gas_config: GasConfig,
@@ -338,7 +342,8 @@ pub struct DiveProfileRequest {
 
 /// Recompute the reach field for `request` and render its profile in `format`.
 ///
-/// Runs `validate_plan_inputs` exactly as `compute_gas_reach_field` does. Skipping it would make
+/// Runs `validate_plan_inputs` and `validate_plan_segments` exactly as `compute_gas_reach_field`
+/// does. Skipping them would make
 /// this the one entry point where a NaN RMV or an uncapped way-point list reaches the engine - and
 /// unlike the compute, which would just show nothing, this path renders a document the diver
 /// carries underwater.
@@ -361,10 +366,12 @@ fn render_profile_for(
         request.cylinders,
         request.gas_config,
     )?;
+    crate::commands::gas::validate_plan_segments(&request.segments, request.waypoints.len())?;
     let field = project.compute_gas_reach_field_with_overrides(
         request.origin.as_ref(),
         request.endpoint.as_ref(),
         &request.waypoints,
+        &request.segments,
         &diver,
         &cylinders,
         &gas_config,
@@ -589,6 +596,7 @@ mod tests {
             origin: None,
             endpoint: None,
             waypoints,
+            segments: Vec::new(),
             diver: Diver {
                 rmv_l_per_min: 20.0,
                 label: None,
@@ -607,6 +615,26 @@ mod tests {
         assert!(
             err.contains("Too many way points"),
             "the export path skipped validate_plan_inputs: {err}"
+        );
+
+        // Same wiring proof for the segment cap - the second validator this door owes. Without the
+        // call an over-long list is inert in the engine (it only reads waypoints+1 spans), so the
+        // request would fail with the no-route message instead - distinguishable, not vacuous.
+        let over_segments = DiveProfileRequest {
+            segments: vec![
+                PlanSegment {
+                    speed_m_per_min: None,
+                    on_scooter: false,
+                };
+                crate::core::state::dive_plan::MAX_SEGMENTS + 1
+            ],
+            ..request(Vec::new())
+        };
+        let err =
+            render_profile_for(&project, over_segments, ProfileFormat::PlainText).unwrap_err();
+        assert!(
+            err.contains("Too many plan segments"),
+            "the export path skipped validate_plan_segments: {err}"
         );
 
         // The control: an in-cap plan gets PAST validation and fails for the other reason, proving
@@ -632,6 +660,7 @@ mod tests {
                     origin: None,
                     endpoint: None,
                     waypoints: Vec::new(),
+                    segments: Vec::new(),
                     diver: Diver {
                         rmv_l_per_min: 20.0,
                         label: None,
