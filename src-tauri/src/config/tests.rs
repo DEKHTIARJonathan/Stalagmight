@@ -1793,6 +1793,35 @@ fn test_save_to_path_and_load_roundtrip() {
 }
 
 #[test]
+fn test_column_widths_survive_a_save_load_roundtrip() {
+    // The property #334 is actually about: a width set in one session is still
+    // there in the next. That crosses a process boundary, so it has to be proven
+    // against a real file rather than the in-memory config an IPC round trip
+    // reads back.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.panels.data_table_shot_column_widths = std::collections::BTreeMap::from([
+        ("length".to_string(), 210),
+        ("comment".to_string(), 480),
+    ]);
+    config.panels.data_table_station_column_widths =
+        std::collections::BTreeMap::from([("_zeroDatum".to_string(), 96)]);
+
+    config.save_to_path(&path).unwrap();
+    let loaded = Config::load_from_path(&path).unwrap();
+
+    assert_eq!(loaded.panels.data_table_shot_column_widths["length"], 210);
+    assert_eq!(loaded.panels.data_table_shot_column_widths["comment"], 480);
+    assert_eq!(
+        loaded.panels.data_table_station_column_widths["_zeroDatum"],
+        96
+    );
+}
+
+#[test]
 fn test_non_default_webkit_memory_survives_save_load_roundtrip() {
     // Regression: `webkit_memory` is `#[serde(skip_serializing)]`, so
     // `toml::to_string_pretty` drops it. `save_to_path` must re-append the
