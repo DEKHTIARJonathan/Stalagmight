@@ -1649,7 +1649,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
 
   // Permanently delete a project's files from disk (destructive - distinct from
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
-  // files to the OS delete; on success we refresh both the loaded list and the
+  // file to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
   deleteProject: async (path: string) => {
     try {

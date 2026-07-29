@@ -5795,6 +5795,71 @@ fn migrate_v12_rejects_a_shot_with_one_out_of_range_leg() {
     );
 }
 
+/// v14 -> v15 removes the `collab_state` table AND the persisted undo history.
+///
+/// Dropping the table is the visible half. The undo drop is the load-bearing one:
+/// `Command` is an internally tagged enum with no catch-all, so an entry stored as
+/// `{"type":"apply_collab_changes"}` no longer deserializes - and the loader SKIPS a
+/// bad entry rather than truncating, keeping the entries on both sides of it. A v14
+/// file reaches this migration with its stacks intact (`UNDO_FORMAT_SAFE_VERSION` is
+/// 7), so without the drop a user who had applied collaborator changes would undo
+/// straight through the hole and replay stale entries over the applied edits.
+#[test]
+fn migrate_v15_drops_collab_state_and_the_undo_history() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("v14.stalx");
+
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("V14".to_string(), None))
+            .unwrap();
+        // A v14 file as it would exist in the wild: the sidecar table, plus an undo
+        // entry naming a command this build can no longer deserialize, plus one it
+        // still can (so the test would catch a drop that only removed the bad row).
+        db.conn
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS collab_state (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     state_json TEXT NOT NULL
+                 );
+                 INSERT INTO collab_state (id, state_json) VALUES (1, '{\"enabled\":true}');",
+            )
+            .unwrap();
+        for (seq, cmd) in [
+            r#"{"type":"apply_collab_changes"}"#,
+            r#"{"type":"update_project_settings"}"#,
+        ]
+        .iter()
+        .enumerate()
+        {
+            db.conn
+                .execute(
+                    "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
+                     VALUES (?1, ?2, ?3, ?4)",
+                    rusqlite::params![seq as i64, cmd, "null", "2026-01-01T00:00:00Z"],
+                )
+                .unwrap();
+        }
+        db.set_user_version(14).unwrap();
+    }
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
+    assert!(
+        !db.table_exists("collab_state").unwrap(),
+        "v15 must drop the collab sidecar table, not leave a dead one in every file"
+    );
+    let undo_rows: i64 = db
+        .conn
+        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(
+        undo_rows, 0,
+        "the whole undo stack must go: skipping only the undeserializable entry \
+         would leave a hole that replays stale entries over the applied changes"
+    );
+}
+
 /// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`.
 ///
 /// Nothing changed meaning - `Shot::average_azimuth` used Rust's truncated `%`, which

@@ -667,11 +667,16 @@ fn test_merge_projects_preserves_station_comments() {
 }
 
 #[test]
-fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
-    // Auto-save must NEVER persist a broken project: a save with unresolvable
-    // cross-references is refused (no file written) for BOTH manual and auto-save,
-    // so corruption never reaches disk. The user is told it didn't run and restores
-    // integrity via Repair, after which saves resume.
+fn save_blocks_on_dangling_refs() {
+    // A save with unresolvable cross-references is refused outright (no file
+    // written), so corruption never reaches disk. The user is told it didn't run
+    // and restores integrity via Repair, after which saves resume.
+    //
+    // This covers autosave too, and there is nothing extra to assert for it: the
+    // backend has no manual-vs-auto distinction any more. `Command::SaveProject`
+    // carries only a path, and the frontend's `isAutosave` never crosses IPC (it
+    // only quiets UI churn - see projectStore.saveAutosaveQuiet.test.ts), so the
+    // debounced autosave reaches exactly the code exercised below.
     let temp_dir = TempDir::new().unwrap();
     let state = AppState::new().unwrap();
 
@@ -692,28 +697,11 @@ fn save_blocks_on_dangling_refs_for_both_manual_and_autosave() {
 
     let stalx = temp_dir.path().join("dangle.stalx");
 
-    // Manual save is blocked and writes nothing.
-    let manual = state.execute(Command::SaveProject {
+    let result = state.execute(Command::SaveProject {
         path: Some(stalx.clone()),
     });
-    assert!(!manual.success, "manual save must block on dangling refs");
-    assert!(
-        !stalx.exists(),
-        "a blocked manual save must not write a file"
-    );
-
-    // Auto-save is ALSO blocked - it must never persist a broken project.
-    let auto = state.execute(Command::SaveProject {
-        path: Some(stalx.clone()),
-    });
-    assert!(
-        !auto.success,
-        "auto-save must also block on dangling refs (never persist a broken project)"
-    );
-    assert!(
-        !stalx.exists(),
-        "a blocked auto-save must not write a file either"
-    );
+    assert!(!result.success, "save must block on dangling refs");
+    assert!(!stalx.exists(), "a blocked save must not write a file");
 }
 
 #[test]

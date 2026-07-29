@@ -54,10 +54,28 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
 | `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
+| `shot.uuid` | `UUID` / `UU` | Emitted for every REAL/VIRTUAL forward shot; omitted on the synthesized shots (START, CLOSURE, reversed and pre-zero-datum legs), which have no 1:1 Stalagmight shot behind them. See [Shot UUIDs](#shot-uuids). |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
 | - | `Profiletype` / `PT` | Always `VERTICAL` |
 | - | `Excluded` / `EXC` | Always `false` |
+
+## Shot UUIDs
+
+Every real forward shot carries its persistent `shot.uuid` into the export as
+`<UUID>` (`<UU>` in `.tmlu`). This is what makes a re-export of an unchanged
+project **byte-identical**, which the SpeleoDB push depends on: the `.tml` is
+rendered as a sidecar so the server can regenerate GeoJSON, and the UUID gives
+each feature a stable top-level `id`. `Project::ensure_shot_uuids` settles the
+UUIDs before every save and before that render, so nothing is minted per-export
+(a project loaded but never saved is the one case where a UUID is minted on the
+fly, and it is persisted by the next save).
+
+The importer does **not** read the element back: a fresh import mints its own
+shot identities, so `<UUID>` is write-only as far as Stalagmight is concerned.
+It exists for the SpeleoDB render and for any consumer that wants a stable
+per-shot key. Ariane 26+ round-trips it; Ariane 25 and older drop it silently,
+which is harmless here.
 
 ## Topology
 
