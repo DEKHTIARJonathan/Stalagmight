@@ -165,7 +165,7 @@ export function useAutoSave(): AutoSaveState {
 
           savingRef.current = true;
           setStatus('saving');
-          const result = await store.saveProject();
+          const result = await store.saveProject(undefined, true);
           // saveProject sets isDirty=false on success, which triggers the
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {

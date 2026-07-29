@@ -250,7 +250,15 @@ interface ProjectStore {
   loadProject: (path: string) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
-  saveProject: (path?: string) => Promise<CommandResult>;
+  /**
+   * Save the project. `isAutosave` is FRONTEND-ONLY - it is not sent over IPC and
+   * the backend save is identical either way. It suppresses two bits of UI churn
+   * on the debounced background save: the save-permission dialog (which would
+   * otherwise reopen on every retry while folder access is denied) and the
+   * post-save integrity re-check (skipped unless the project entered the save
+   * already flagged, since the save path auto-heals some issues).
+   */
+  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
@@ -1230,7 +1238,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  saveProject: async (path?: string) => {
+  saveProject: async (path?: string, isAutosave?: boolean) => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
     // non-finite geometry in memory before persisting, which mutates the backend
     // project - so afterward the frontend's mirror can be stale. Those heals only
@@ -1276,8 +1284,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
-      // the next load.
-      void get().checkProjectIntegrity();
+      // the next load. Skip on a clean autosave to avoid churn - BUT still
+      // re-check when the project entered the save flagged (hadIntegrityIssues),
+      // because the save path auto-heals some issues (duplicate UUIDs / orphan
+      // offsets) on autosave too; without this the banner would stay stale after
+      // an autosave silently cleared them.
+      if (!isAutosave || hadIntegrityIssues) {
+        void get().checkProjectIntegrity();
+      }
     } else {
       const permission = isPermissionError(result.error);
       // Never surface the raw "FS_PERMISSION_DENIED:" marker in error state
@@ -1288,8 +1302,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           : (result.error ?? 'Failed to save project'),
       });
       // A filesystem permission denial (e.g. macOS forgot folder access after
-      // an update) needs actionable guidance, not a raw error.
-      if (permission) {
+      // an update) needs actionable guidance, not a raw error. Skip on autosave
+      // so we don't reopen the dialog on every debounced retry.
+      if (permission && !isAutosave) {
         useUIStore.getState().openDialog('save-permission', {
           detail: result.error,
           context: 'save',

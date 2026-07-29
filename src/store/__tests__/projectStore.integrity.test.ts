@@ -397,10 +397,10 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
     expect(getProjectStateCalled).toBe(false);
   });
 
-  it('re-checks integrity after a save that healed the project', async () => {
-    // The save path auto-heals dup UUIDs / orphan offsets. We must re-check when
-    // the project entered the save flagged, or the banner stays stale after the
-    // heal silently cleared it.
+  it('re-checks integrity after an AUTOSAVE that healed the project', async () => {
+    // The save path auto-heals dup UUIDs / orphan offsets on autosave too. Even on
+    // autosave we must re-check when the project entered the save flagged, or the
+    // banner stays stale after the heal silently cleared it.
     useProjectStore.setState({
       project: { file_path: '/p.stalx' } as never,
       integrityIssues: ['duplicate shot UUID'],
@@ -414,7 +414,7 @@ describe('projectStore integrity banner dismiss lifecycle', () => {
       return undefined;
     });
 
-    await useProjectStore.getState().saveProject('/p.stalx');
+    await useProjectStore.getState().saveProject('/p.stalx', true); // isAutosave
     // checkProjectIntegrity is fire-and-forget; let it resolve.
     await new Promise((r) => setTimeout(r, 0));
 
