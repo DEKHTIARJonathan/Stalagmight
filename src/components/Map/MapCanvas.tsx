@@ -3815,6 +3815,9 @@ function MapCanvas() {
       data-map-loaded={mapLoaded ? 'true' : 'false'}
       data-active-tool={activeTool}
       data-placement-mode={placementMode ? 'true' : 'false'}
+      /* (#24) Ctrl BELIEVED down, which the swallowed-release guard can get wrong.
+         The cursor cannot stand in for it - the drag drives that too. */
+      data-ctrl-held={ctrlHeld ? 'true' : 'false'}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

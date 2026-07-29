@@ -459,12 +459,53 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.move(cx, cy);
       await page.mouse.down();
       await page.mouse.move(cx + 60, cy + 60, { steps: 6 });
+
+      // The release has to land INSIDE the suppression window or this test proves
+      // nothing: the ordinary keyup path would clear the flag, leaving nothing latched
+      // for the pointer listeners to recover, and they could be deleted with the test
+      // still green. Two separate Playwright calls cannot guarantee that - each is its
+      // own round trip, and the guard reads BOTH a `< 50ms` elapsed check and a flag
+      // that a 50ms timer clears.
+      //
+      // So the mouseup and the release are dispatched in ONE task. The guard measures
+      // from the mouseup it sees here, which makes the elapsed time zero, and the timer
+      // that would clear the flag cannot run while this block is still executing. The
+      // window is satisfied by construction rather than by luck.
+      await page.evaluate(() => {
+        window.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, ctrlKey: true }));
+        window.dispatchEvent(new KeyboardEvent('keyup', { key: 'Control', bubbles: true }));
+      });
+      // Assert it WAS swallowed - the half that was missing, and the half that has to
+      // read the LATCH rather than the cursor. `grab` and `grabbing` are also driven
+      // by the drag itself, so a cursor assertion here passed even with both recovery
+      // listeners deleted; `data-ctrl-held` is the belief the listeners correct.
+      //
+      // A settle rather than a poll, because this proves a state does NOT change and a
+      // poll would accept the pre-update value. No pointer event may intervene: both
+      // recovery listeners are exactly what the rest of the test exercises.
+      await page.waitForTimeout(100);
+      await expect(canvas).toHaveAttribute('data-ctrl-held', 'true');
+
+      // Now the recovery, driven the way the listener contracts: an event reporting
+      // `ctrlKey: false` is proof the key is up, whatever the swallowed release left
+      // behind. It has to be dispatched rather than performed, because the release
+      // above was synthetic - Playwright's own keyboard still holds Control, so every
+      // REAL pointer event it sends honestly reports `ctrlKey: true` and the listener
+      // is right to ignore it. Releasing Playwright's Control instead would send a
+      // second, unsuppressed keyup and clear the flag through the keyboard path,
+      // proving nothing about the pointer.
+      await page.evaluate(() => {
+        window.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, ctrlKey: false }));
+      });
+      await expect(canvas).toHaveAttribute('data-ctrl-held', 'false');
+
+      // Release for real now that the claim is proved, so the toolbar click below runs
+      // with the input state a user would have.
       await page.mouse.up();
       await page.keyboard.up('Control');
 
-      // Switch tools BY MOUSE, so no key event follows to correct the flag. Measure
-      // is standalone on the toolbar (the move tools sit behind a group flyout) and
-      // is itself a Ctrl+pan tool, so a latched flag still resolves to `grab` here.
+      // Switch tools BY MOUSE. Measure is standalone on the toolbar (the move tools
+      // sit behind a group flyout).
       await page.getByTestId('tool-measure').click();
       await waitForActiveTool(page, 'measure');
 
