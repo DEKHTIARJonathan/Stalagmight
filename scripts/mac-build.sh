@@ -170,19 +170,22 @@ ok "Production build complete"
 # to do here, and it is the more useful job, because an invalid signature is not
 # a warning the user can dismiss - macOS calls the app "damaged" and refuses to
 # open it at all (#350).
-APP_BUNDLE="$CARGO_TARGET/release/bundle/macos/Stalagmight.app"
-if [[ -d "$APP_BUNDLE" ]]; then
-  info "Verifying Stalagmight.app code signature"
-  # --deep --strict is the check that matters: a bundle carrying only the Rust
-  # linker's ad-hoc signature, with no sealed resources, still looks signed to a
-  # plain `codesign -dv` but fails here.
-  if codesign --verify --deep --strict "$APP_BUNDLE" 2>/dev/null; then
-    ok "Ad-hoc signed (users can right-click → Open to bypass Gatekeeper)"
-  else
-    warn "Stalagmight.app is NOT validly signed - macOS will call it damaged"
-    warn "  check bundle.macOS.signingIdentity in src-tauri/tauri.conf.json"
-    codesign --verify --deep --strict "$APP_BUNDLE" || true
+# Checks the app inside the DMG, not the loose bundle beside it, via the same
+# script the release workflow runs. Verifying the loose .app would pass on the
+# exact bug this guards: signing used to happen after the DMG was built, so the
+# loose copy was signed while the shipped one was not.
+DMG_OUT="$CARGO_TARGET/release/bundle/dmg"
+if [[ -d "$DMG_OUT" ]] && compgen -G "$DMG_OUT/*.dmg" >/dev/null; then
+  info "Verifying the code signature of the app inside the DMG"
+  # Hard failure, not a warning. An unopenable bundle is the one defect that is
+  # invisible until a human tries to launch it, so a yellow line a maintainer can
+  # scroll past while the script still exits 0 is not enough.
+  if ! "$PROJECT_DIR/scripts/verify-macos-signature.sh" "$DMG_OUT"; then
+    die "The app inside the DMG is NOT validly signed, so macOS will call it damaged. Check bundle.macOS.signingIdentity in src-tauri/tauri.conf.json"
   fi
+  ok "Signature valid (not notarized: first launch still has to be allowed once)"
+else
+  warn "No DMG found in $DMG_OUT - skipping signature verification"
 fi
 
 # ── Step 7: Report artifacts ────────────────────────────────────────────────

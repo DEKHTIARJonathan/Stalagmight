@@ -66,8 +66,11 @@ fi
 
 printf '%s\n' "$BODY"
 
-# Nothing here is code-signed, so every platform interposes a warning on first
-# launch. Tell recipients how to get past it, and what to check first.
+# Nothing here is notarized, so every platform interposes a warning on first
+# launch. Tell recipients how to get past it, and what to check first. The macOS
+# bullet leads with the xattr command on purpose: it works on every macOS
+# version, whereas the Control-click override was removed in macOS 15, so the
+# menu path differs by version and the command does not.
 cat <<'FOOTER'
 
 ---
@@ -78,9 +81,11 @@ The macOS build is **Apple Silicon only** (M1 and later). There is no Intel buil
 no maintainer has an Intel Mac, so an architecture-specific bug there could not be
 reproduced or fixed. Intel users should build from source instead.
 
-These builds are not code-signed, so the first launch is blocked on every platform.
+None of these builds are notarized, so the first launch is blocked on every
+platform and you have to allow it once. The macOS app is ad-hoc signed, which is
+what lets it launch at all once allowed; Windows and Linux are unsigned.
 
-- **macOS**: right-click `Stalagmight.app` and choose **Open**, then confirm. Or clear the quarantine flag: `xattr -dr com.apple.quarantine /Applications/Stalagmight.app`
+- **macOS**: clear the quarantine flag, which works on every macOS version: `xattr -dr com.apple.quarantine /Applications/Stalagmight.app`. Alternatively, open it once from **System Settings > Privacy & Security**, where a blocked app appears with an **Open Anyway** button. On macOS 14 and earlier you can instead right-click the app and choose **Open**; that shortcut no longer works on macOS 15+.
 - **Windows**: SmartScreen shows "Windows protected your PC". Choose **More info**, then **Run anyway**.
 - **Linux**: install the `.deb` or `.rpm`, or `chmod +x` the `.AppImage` and run it.
 

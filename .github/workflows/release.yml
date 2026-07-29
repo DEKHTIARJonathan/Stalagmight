@@ -99,26 +99,15 @@ jobs:
       # DMG is built. Verify the app inside the DMG, because that is the artifact
       # someone actually downloads, and a silent regression here is invisible
       # until a human tries to launch it. See #350.
+      # Shared with scripts/mac-build.sh so the local build and the release check
+      # cannot drift apart - two copies of this check with different artifacts is
+      # how rc1 shipped in the first place. `matrix.os` matches the idiom used by
+      # the Linux step above; a skipped step here would mean a green publish, so
+      # the condition is worth keeping boring and consistent.
       - name: Verify the shipped macOS app is validly signed
-        if: runner.os == 'macOS'
+        if: matrix.os == 'macos-latest'
         shell: bash
-        run: |
-          set -euo pipefail
-          shopt -s nullglob
-          dmgs=( "$BUNDLE_DIR"/dmg/*.dmg )
-          [ ${#dmgs[@]} -eq 1 ] || { echo "::error::expected 1 DMG, found ${#dmgs[@]}"; exit 1; }
-          MNT="$(mktemp -d)"
-          cleanup() { hdiutil detach "$MNT" -quiet 2>/dev/null || true; }
-          trap cleanup EXIT
-          hdiutil attach "${dmgs[0]}" -nobrowse -readonly -mountpoint "$MNT"
-          APP="$MNT/Stalagmight.app"
-          [ -d "$APP" ] || { echo "::error::no Stalagmight.app inside the DMG"; exit 1; }
-          codesign -dv --verbose=2 "$APP"
-          # --deep --strict is what the rc1 bundle failed: a signature with no
-          # sealed resources and no _CodeSignature directory is rejected here,
-          # while a plain `codesign -dv` still prints a signature and looks fine.
-          codesign --verify --deep --strict --verbose=2 "$APP"
-          echo "macOS bundle signature verified"
+        run: ./scripts/verify-macos-signature.sh "$BUNDLE_DIR/dmg"
       - name: Collect release artifacts
         shell: bash
         run: |

@@ -180,11 +180,28 @@ assert "candidate is labelled as one" \
 assert "unmoved version falls back to Unreleased" \
   bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v9.9.9 | grep -q "unreleased thing"'
 
-# Every release explains how to install an unsigned build and how to check it.
+# Every release explains how to get past the first-launch block and how to check
+# what was downloaded.
 assert "installing footer present" \
   bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "SHA256SUMS"'
 assert "apple silicon caveat present" \
   bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "Apple Silicon only"'
+
+# The signing claim in this footer went stale once already: the very change that
+# made the macOS app signable (#350) was about to publish notes still saying the
+# builds were unsigned, because the fix updated the changelog and docs but not the
+# script that generates what recipients read. Pin both directions, so a future
+# signing change has to update this text deliberately rather than silently ship a
+# contradiction.
+refute "footer no longer claims the builds are unsigned" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "not code-signed"'
+assert "footer says macOS is ad-hoc signed" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "ad-hoc signed"'
+# The quarantine command is the one instruction that holds on every macOS version;
+# the Control-click override was removed in macOS 15, so it cannot be the only path
+# offered.
+assert "footer gives the version-independent quarantine command" \
+  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 | grep -q "xattr -dr com.apple.quarantine"'
 
 # An empty changelog must still yield a usable body, never nothing.
 printf '%s\n' '# Changelog' '' '## [Unreleased]' '' > "$WORK/empty.md"

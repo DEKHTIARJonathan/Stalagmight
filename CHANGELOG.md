@@ -7,10 +7,6 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
-### Fixed
-
-- macOS: the released `.app` would not open at all, reporting "damaged and can't be opened". No signing identity was configured, so Tauri skipped code signing and the bundle shipped with only the Rust linker's ad-hoc signature on the inner binary, which macOS rejects as invalid rather than merely unsigned. The app is now ad-hoc signed before the DMG is built, and the release workflow verifies the app inside the DMG. First launch still shows the usual unnotarized-app warning, which right-click then **Open** dismisses ([#350](https://github.com/Stalagmight/Stalagmight/issues/350))
-
 ### Changed
 
 - CI: GitHub Actions bumped to versions that run on Node.js 24, ahead of the Node.js 20 runtime deprecation ([#351](https://github.com/Stalagmight/Stalagmight/issues/351))
@@ -68,7 +64,7 @@ between divers.
 - **Walls (`.wpj` / `.srv`) survey import** - imports David McKenzie's Walls format from the Import menu, drag-and-drop, or <kbd>Ctrl+I</kbd>. A `.wpj` project tree, or a standalone `.srv`, is parsed into linked, GPS-positioned sections with merges, loop closures and one GPS anchor per connected part of the cave. The dialog offers per-survey selection, a splay toggle, comments-on-stations, duplicate-file detection and live counts
 - **Export mode** - a large what-you-see-is-what-you-get preview over the map, driven by the same controls as the export dialog, rendering the closure-adjusted geometry the live map shows. A **Color** dropdown matches the survey map (PNG and PDF; SVG stays monochrome), and a **Comments & Labels** section mirrors the Display tab ([#239](https://github.com/Stalagmight/Stalagmight/issues/239), [#240](https://github.com/Stalagmight/Stalagmight/issues/240))
 - **Windows support** - the app builds, runs, saves and loads satellite tiles on Windows
-- **Downloads for macOS and Windows, not just Linux** - releases attach `.dmg` (macOS, Apple Silicon only), `.msi` and `-setup.exe` (Windows) alongside `.deb`, `.rpm` and `.AppImage`. There is no Intel Mac build: no maintainer has Intel hardware, so an architecture-specific bug there could not be reproduced or fixed. Nothing is code-signed yet, so each release explains how to get past Gatekeeper and SmartScreen, and ships a `SHA256SUMS` generated on the machine that built the binaries ([#324](https://github.com/Stalagmight/Stalagmight/issues/324), [#323](https://github.com/Stalagmight/Stalagmight/issues/323))
+- **Downloads for macOS and Windows, not just Linux** - releases attach `.dmg` (macOS, Apple Silicon only), `.msi` and `-setup.exe` (Windows) alongside `.deb`, `.rpm` and `.AppImage`. There is no Intel Mac build: no maintainer has Intel hardware, so an architecture-specific bug there could not be reproduced or fixed. Nothing is notarized, and only macOS is signed at all (ad-hoc, which is what keeps it launchable), so each release explains how to get past Gatekeeper and SmartScreen, and ships a `SHA256SUMS` generated on the machine that built the binaries ([#324](https://github.com/Stalagmight/Stalagmight/issues/324), [#323](https://github.com/Stalagmight/Stalagmight/issues/323))
 
 #### Interface
 
@@ -92,6 +88,10 @@ between divers.
 - **Licensed under AGPL-3.0-or-later** - with contribution guidelines ([CONTRIBUTING.md](CONTRIBUTING.md)) and a security policy ([SECURITY.md](SECURITY.md)), in preparation for a public release
 
 ### Fixed
+
+#### Packaging
+
+- **macOS: the `.app` in the DMG could not be opened at all**, with macOS reporting it as "damaged". The download was intact; the bundle was never signed. Without a signing identity Tauri skips code signing entirely, leaving only the Rust linker's ad-hoc signature on the inner binary, with no sealed resources and no `_CodeSignature` - a state macOS rejects as *invalid* rather than merely unsigned, and an invalid signature is refused outright. The app is now ad-hoc signed before the DMG is built, and the release workflow verifies the app inside the DMG, since that is the file people download. The build is still not notarized, so first launch is still blocked and has to be allowed once (see the Installing notes on the release) ([#350](https://github.com/Stalagmight/Stalagmight/issues/350))
 
 #### Survey correctness
 
