@@ -103,20 +103,49 @@ function settingsOnlyFieldsOf(gas: GasConfig): SettingsOnlyGasFields {
 /**
  * Force `segments` to the one-per-span invariant: exactly `waypointCount + 1` entries.
  *
- * The setters below all preserve that length, but two inputs arrive from outside them: a `.plnx`
+ * The TS mirror of `normalize_segment_count` (core/state/dive_plan.rs), down to the fold rule.
+ *
+ * The setters below all preserve the length, but two inputs arrive from outside them: a `.plnx`
  * written before #317 existed carries NO segments at all, and a hand-built list can be any length.
  * Left alone, a short list means the Segments tab renders fewer rows than the route has spans and
  * the engine prices the missing ones at the plan speed while the panel shows nothing for them.
- * Padding is the conservative repair - a fresh span inherits the plan speed and no scooter, which
- * is the same thing an unedited span has always meant.
+ *
+ * A short list is PADDED with inherited spans - the file described those spans and simply did not
+ * describe the later ones, which is what an unedited span has always meant.
+ *
+ * A long list is FOLDED into the final retained span, never truncated. A bare truncate throws away
+ * the diver's statement about how those spans are flown, and it throws every field away in the
+ * REACH-EXTENDING direction: a discarded slow speed reverts to the plan speed (cheaper gas per
+ * metre), a discarded `on_scooter` stops spending range. The fold keeps the slowest effective speed
+ * and any scooter use, so an over-long list can only ever cost more than the file claimed.
  */
-function normalizeSegments(segments: PlanSegment[], waypointCount: number): PlanSegment[] {
+function normalizeSegments(
+  segments: PlanSegment[],
+  waypointCount: number,
+  speed: number
+): PlanSegment[] {
   const want = waypointCount + 1;
   if (segments.length === want) return segments;
+  // `want >= 1` always - a plan has at least the span from the origin into the open field - so
+  // there is always a span to fold INTO.
   const out = segments.slice(0, want);
   while (out.length < want) out.push(defaultSegment());
+  for (const tail of segments.slice(want)) {
+    out[want - 1] = mergeSegments(out[want - 1]!, tail, speed);
+  }
   return out;
 }
+
+/**
+ * The speed domain the ENGINE will actually fly, mirrored here so a merge reads the same number the
+ * engine would. Rust twins: `MIN_SEGMENT_SPEED_M_PER_MIN` / `MAX_SEGMENT_SPEED_M_PER_MIN` in
+ * `models/project/gas/scooter.rs`, where the reasoning lives - the engine divides by the speed
+ * twice, so a denormal or a wild value overflows the edge cost to `Infinity`/`NaN` and the field
+ * collapses. Anything outside the range inherits the plan speed instead, so a merge that compared
+ * the raw number would rank a span the engine is going to ignore.
+ */
+const MIN_SEGMENT_SPEED_M_PER_MIN = 0.1;
+const MAX_SEGMENT_SPEED_M_PER_MIN = 1000;
 
 /**
  * Collapse two spans into one when the way point between them goes away.
@@ -125,16 +154,27 @@ function normalizeSegments(segments: PlanSegment[], waypointCount: number): Plan
  * despite the identical arithmetic: that one reconciles a loaded plan whose anchors no longer
  * resolve, this one implements the panel's remove-way-point button. They share only the tie rule -
  * the SLOWER effective speed wins, a tie keeps `before` (so a span inheriting the plan speed keeps
- * inheriting it), and `on_scooter` is ANDed - because either half taken alone would understate the
- * gas the merged span costs. The cross-language tests below pin that arithmetic in both places; the
- * two callers are free to diverge in everything else.
+ * inheriting it), and `on_scooter` is ORed. Both directions are the conservative one, and they are
+ * conservative for OPPOSITE reasons: the slower speed spends more GAS per metre, while the scooter
+ * flag spends RANGE and nothing else - it buys no reduced breathing rate - so dropping it would
+ * hand the merged span free scooter range and REACH FURTHER than either half could. The
+ * cross-language tests below pin that arithmetic in both places; the two callers are free to
+ * diverge in everything else.
  */
 function mergeSegments(before: PlanSegment, after: PlanSegment, speed: number): PlanSegment {
-  const effective = (s: PlanSegment) => s.speed_m_per_min ?? speed;
+  const effective = (s: PlanSegment) => {
+    const v = s.speed_m_per_min;
+    return v !== null &&
+      Number.isFinite(v) &&
+      v >= MIN_SEGMENT_SPEED_M_PER_MIN &&
+      v <= MAX_SEGMENT_SPEED_M_PER_MIN
+      ? v
+      : speed;
+  };
   return {
     speed_m_per_min:
       effective(after) < effective(before) ? after.speed_m_per_min : before.speed_m_per_min,
-    on_scooter: before.on_scooter && after.on_scooter,
+    on_scooter: before.on_scooter || after.on_scooter,
   };
 }
 
@@ -152,8 +192,14 @@ export interface PlanPinRefs {
   stageDropOverrides: (StationRef | null)[];
 }
 
-/** One value per pin slot, in `PlanPinRefs` shape. */
-interface Slotted<T> {
+/**
+ * One value per pin slot, in `PlanPinRefs` shape.
+ *
+ * Named for the SLOTS, not for anchors: `PlanAnchorSet` is already the GENERATED type for the
+ * backend's own anchor bundle (`src/types/ipc/PlanAnchorSet.ts`, snake_case fields), and two types
+ * with one name and different field casing is how a wrong one gets imported.
+ */
+export interface PinSlots<T> {
   origin: T | null;
   endpoint: T | null;
   waypoints: (T | null)[];
@@ -161,11 +207,9 @@ interface Slotted<T> {
   stageDropOverrides: (T | null)[];
 }
 
-/** A backend anchor per pin; `null` = that pin has no anchor (never captured, or it named no
- *  station), which means a re-resolve leaves it exactly where it is. */
-export type PlanAnchorSet = Slotted<PlanAnchor>;
-
-/** Pins the backend could no longer resolve, in `PlanPinRefs` shape. */
+/** Pins the backend could no longer resolve, in `PlanPinRefs` shape. Always exactly as long as the
+ *  pin arrays it indexes - every setter that adds, drops or reorders a pin moves its flag with it,
+ *  and every round trip re-derives the whole set (see `deriveFlags`). */
 export interface PlanPinFlags {
   origin: boolean;
   endpoint: boolean;
@@ -182,8 +226,98 @@ const NO_FLAGS: PlanPinFlags = {
   stageDropOverrides: [],
 };
 
+/** All-clear flags sized to `pins`, for a pin set that was just installed wholesale. */
+function noFlagsFor(pins: PlanPinRefs): PlanPinFlags {
+  return {
+    origin: false,
+    endpoint: false,
+    waypoints: pins.waypoints.map(() => false),
+    markedPoints: pins.markedPoints.map(() => false),
+    stageDropOverrides: pins.stageDropOverrides.map(() => false),
+  };
+}
+
+/**
+ * The flags after a ROUTE-input change: `patch`'s slots go back to placeable, and the stage-drop
+ * flags are dropped alongside the pinned drops that every route input clears.
+ *
+ * A flag only means anything next to the pin it indexes, so it has to travel with it. Left to
+ * itself, `unresolved.waypoints` keeps its old length past a remove and every later flag lands on
+ * the wrong row; `unresolved.stageDropOverrides` outlives the drops entirely and blocks Save for a
+ * pin that no longer exists.
+ */
+function routeInputFlags(f: PlanPinFlags, patch: Partial<PlanPinFlags> = {}): PlanPinFlags {
+  return { ...f, stageDropOverrides: [], ...patch };
+}
+
+/** Nothing came back for this slot - no anchor, or no ref. */
+function unplaced(value: unknown): boolean {
+  return value === null || value === undefined;
+}
+
+/**
+ * Which pins the backend could not place, from a reply aligned to `pins`.
+ *
+ * One rule for BOTH round trips: a slot is unresolved when it holds a ref and the backend handed
+ * back nothing for it - no anchor (capture) or no ref (re-resolve). Deriving the whole set rather
+ * than patching it is what keeps the flags from drifting out of step with the pins they index.
+ * Clearing is asymmetric on purpose: a REMAP that re-resolves the original anchor (e.g. after a
+ * survey undo) clears a flag; a CAPTURE never does (see `preserveFlaggedSlots`).
+ */
+function deriveFlags<T>(pins: PlanPinRefs, placed: PinSlots<T>): PlanPinFlags {
+  return {
+    origin: pins.origin !== null && unplaced(placed.origin),
+    endpoint: pins.endpoint !== null && unplaced(placed.endpoint),
+    waypoints: pins.waypoints.map((_w, i) => unplaced(placed.waypoints[i])),
+    markedPoints: pins.markedPoints.map((_m, i) => unplaced(placed.markedPoints[i])),
+    stageDropOverrides: pins.stageDropOverrides.map(
+      (d, i) => d !== null && unplaced(placed.stageDropOverrides[i])
+    ),
+  };
+}
+
+/**
+ * Merge a fresh capture over the previous anchors, keeping the OLD anchor for every slot that is
+ * currently flagged unresolved. A flagged slot's ref is known-stale, so the anchor the backend just
+ * built from it names whichever station slid into that index - adopting it would be the #310
+ * rebinding with extra steps. The old anchor still names the original station and lets a survey
+ * undo bring the pin back. `prev === null` (nothing captured yet) keeps the slot un-anchored.
+ */
+function preserveFlaggedSlots(
+  fresh: PinSlots<PlanAnchor>,
+  prev: PinSlots<PlanAnchor> | null,
+  flagged: PlanPinFlags
+): PinSlots<PlanAnchor> {
+  const keep = <T,>(f: boolean, freshV: T | null, prevV: T | null): T | null =>
+    f ? prevV : freshV;
+  return {
+    origin: keep(flagged.origin, fresh.origin, prev?.origin ?? null),
+    endpoint: keep(flagged.endpoint, fresh.endpoint, prev?.endpoint ?? null),
+    waypoints: fresh.waypoints.map((v, i) =>
+      keep(flagged.waypoints[i] === true, v, prev?.waypoints[i] ?? null)
+    ),
+    markedPoints: fresh.markedPoints.map((v, i) =>
+      keep(flagged.markedPoints[i] === true, v, prev?.markedPoints[i] ?? null)
+    ),
+    stageDropOverrides: fresh.stageDropOverrides.map((v, i) =>
+      keep(flagged.stageDropOverrides[i] === true, v, prev?.stageDropOverrides[i] ?? null)
+    ),
+  };
+}
+
+/** Slot-wise OR: a flag that was up stays up (a capture never clears - see `captureAnchors`). */
+function orFlags(a: PlanPinFlags, b: PlanPinFlags): PlanPinFlags {
+  return {
+    origin: a.origin || b.origin,
+    endpoint: a.endpoint || b.endpoint,
+    waypoints: a.waypoints.map((v, i) => v || b.waypoints[i] === true),
+    markedPoints: a.markedPoints.map((v, i) => v || b.markedPoints[i] === true),
+    stageDropOverrides: a.stageDropOverrides.map((v, i) => v || b.stageDropOverrides[i] === true),
+  };
+}
+
 /** Every filled slot, in slot order - the order the two IPC calls' arrays are aligned to. */
-function collectPresent<T>(s: Slotted<T>): T[] {
+function collectPresent<T>(s: PinSlots<T>): T[] {
   const out: T[] = [];
   const push = (v: T | null) => {
     if (v !== null && v !== undefined) out.push(v);
@@ -197,7 +331,7 @@ function collectPresent<T>(s: Slotted<T>): T[] {
 }
 
 /** The inverse of `collectPresent`: scatter a reply back over the slots that were filled. */
-function redistribute<T, U>(shape: Slotted<T>, values: (U | null)[]): Slotted<U> {
+function redistribute<T, U>(shape: PinSlots<T>, values: (U | null)[]): PinSlots<U> {
   let next = 0;
   const take = (v: T | null): U | null =>
     v === null || v === undefined ? null : (values[next++] ?? null);
@@ -287,11 +421,11 @@ interface GasPlanState {
    * exact pin set they were captured against, so a reply that raced a pin edit is dropped instead
    * of being scattered over slots that have since moved.
    */
-  anchors: PlanAnchorSet | null;
+  anchors: PinSlots<PlanAnchor> | null;
   anchoredPins: PlanPinRefs | null;
   /** The same, for `loadedPlanBaseline`'s pins - so a renumbering edit re-resolves the dirty-check
    *  baseline too and an untouched plan does not read as unsaved afterwards. */
-  baselineAnchors: PlanAnchorSet | null;
+  baselineAnchors: PinSlots<PlanAnchor> | null;
   baselineAnchoredPins: PlanPinRefs | null;
   /** Pins whose anchor no longer resolves to a station (the shots on BOTH sides are gone). The pin
    *  and its anchor are kept - a survey undo can bring the station back - but a flagged pin is
@@ -502,15 +636,36 @@ async function captureAnchors(): Promise<void> {
   // Drop a reply that raced a pin edit. The anchors are positional within THIS request, so
   // scattering them over a pin set that has since changed would hand slot N's anchor to a
   // different station - the exact silent mis-binding the anchors exist to prevent.
+  //
+  // ⚠ The guard compares pin VALUES, not project identity, so it leans on `reset()` running
+  // synchronously on every project load (`uiStore.applyDisplaySettings`): that clears the pins
+  // before any await can resume, so a reply from the outgoing project finds a pin set that no
+  // longer matches and is dropped. A load path that swapped the survey WITHOUT resetting the store
+  // would defeat it - two projects can hold identical refs.
   const after = useGasPlanStore.getState();
   if (!deepEqual(pinRefsOf(after), livePins)) return;
   if (!deepEqual(pinRefsOfSnapshot(after.loadedPlanBaseline), basePins)) return;
+  const freshAnchors = redistribute(livePins, taken.slice(0, liveRefs.length));
+  // The flags fall straight out of the reply: a ref the backend cannot anchor names no real
+  // station. BUT a slot that is ALREADY flagged is exempt: its kept ref is known-stale, and the
+  // station now sitting at that index is whatever slid into it - anchoring it here would bind the
+  // wrong station and clear the flag against it, the exact rebinding #310 exists to prevent. A
+  // flagged slot keeps its previous anchor (a survey undo can still resolve the ORIGINAL station
+  // through it) and its flag; only a remap that re-resolves that original anchor, or the user
+  // explicitly re-placing the pin (whose setter clears the flag first), may unlock it.
+  const liveAnchors = preserveFlaggedSlots(freshAnchors, after.anchors, after.unresolved);
+  const flags = orFlags(deriveFlags(livePins, liveAnchors), after.unresolved);
+  const flagsChanged = !deepEqual(flags, after.unresolved);
   useGasPlanStore.setState({
-    anchors: redistribute(livePins, taken.slice(0, liveRefs.length)),
+    anchors: liveAnchors,
     anchoredPins: livePins,
     baselineAnchors:
       basePins === null ? null : redistribute(basePins, taken.slice(liveRefs.length)),
     baselineAnchoredPins: basePins,
+    unresolved: flags,
+    // A flag change moves what the engine is allowed to see (`selectComputeGate`), so the painted
+    // field describes inputs that are no longer the ones in force - blanked exactly like a pin move.
+    ...(flagsChanged ? { reachField: null, lastReachField: null } : {}),
   });
 }
 
@@ -576,15 +731,10 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     const baselineIntact = deepEqual(basePins, pinRefsOfSnapshot(now.loadedPlanBaseline));
 
     const liveOut = redistribute(anchors, resolved.slice(0, liveAnchors.length));
-    const flags: PlanPinFlags = {
-      origin: anchors.origin !== null && liveOut.origin === null,
-      endpoint: anchors.endpoint !== null && liveOut.endpoint === null,
-      waypoints: anchors.waypoints.map((a, i) => a !== null && liveOut.waypoints[i] === null),
-      markedPoints: anchors.markedPoints.map((a, i) => a !== null && liveOut.markedPoints[i] === null),
-      stageDropOverrides: anchors.stageDropOverrides.map(
-        (a, i) => a !== null && liveOut.stageDropOverrides[i] === null
-      ),
-    };
+    // Derived from the PINS, not from which slots happened to hold an anchor - the same rule the
+    // capture uses. A pinned ref with no anchor at all is just as unplaceable as one whose anchor
+    // stopped resolving, and reading it as "fine" would hand it straight to the engine.
+    const flags = deriveFlags(pinsAtCapture, liveOut);
     // An unresolved pin KEEPS its old ref: the station may come back on an undo, and dropping the
     // diver's chosen lead because a shot was deleted is a worse answer than showing it as stalled.
     const kept = <T>(next: T | null, current: T): T => next ?? current;
@@ -617,7 +767,8 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
             ),
           };
     const baselineMoved = nextBasePins !== null && !deepEqual(nextBasePins, basePins);
-    if (!moved && !baselineMoved && deepEqual(flags, now.unresolved)) return;
+    const flagsChanged = !deepEqual(flags, now.unresolved);
+    if (!moved && !baselineMoved && !flagsChanged) return;
     const baseline = now.loadedPlanBaseline;
     set({
       origin: nextPins.origin,
@@ -646,7 +797,13 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       // The pins moved, so the painted field and the menu-shape fallback both describe a route
       // through stations that are no longer the ones pinned. Blanked exactly like every other
       // route-input change; the refetch this triggers re-derives them.
-      ...(moved ? { reachField: null, lastReachField: null } : {}),
+      //
+      // A flag change counts as a move even when no ref did. `selectComputeGate` withholds a
+      // flagged pin - and STALLS the whole compute on a flagged way point - so the field on screen
+      // was computed from inputs that are no longer the ones in force, and the gate then blocks
+      // every refetch that would have replaced it. Left alone it stays painted indefinitely, with
+      // the panel's numbers reading as current.
+      ...(moved || flagsChanged ? { reachField: null, lastReachField: null } : {}),
     });
   },
 
@@ -658,18 +815,49 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       set({ lastSeenPersistedGas: next });
       return;
     }
-    if (deepEqual(s.lastSeenPersistedGas, next)) return;
+    // FIELD BY FIELD, never as a triple. These three share nothing but the accident of having no
+    // in-panel control, and copying all of them because ONE moved overwrites the other two with
+    // whatever Settings happens to hold - so nudging the jump multiplier would swap a loaded plan's
+    // whole scooter rig for the app default, in the one place a plan's own snapshot is allowed to
+    // move underneath it.
+    const prev = s.lastSeenPersistedGas;
+    const patch: Partial<SettingsOnlyGasFields> = {};
+    if (!deepEqual(prev.dpv, next.dpv)) patch.dpv = next.dpv;
+    if (prev.jump_rmv_multiplier !== next.jump_rmv_multiplier) {
+      patch.jump_rmv_multiplier = next.jump_rmv_multiplier;
+    }
+    if (prev.include_reference_legs !== next.include_reference_legs) {
+      patch.include_reference_legs = next.include_reference_legs;
+    }
+    if (Object.keys(patch).length === 0) return;
     // Deep-cloned for the same reason the hydrate seed is: the working config must never share a
     // nested reference with the live persisted config.
     set({
-      gasConfig: { ...s.gasConfig, ...structuredClone(next) },
+      gasConfig: { ...s.gasConfig, ...structuredClone(patch) },
       lastSeenPersistedGas: next,
       reachField: null,
     });
   },
 
-  setOrigin: (origin) => set({ origin, reachField: null, stageDropOverrides: [] }),
-  setEndpoint: (endpoint) => set({ endpoint, reachField: null, stageDropOverrides: [] }),
+  // Every pin setter maintains `unresolved` alongside the pins it moves (#310). Picking a pin
+  // CLEARS its flag: the flag says "the backend could not place the ref this slot held", and the
+  // slot no longer holds it. Without that, one dangling origin latched the flag forever and
+  // `selectComputeGate` went on nulling every replacement the diver clicked - the field silently
+  // rooting at the entrance while the origin star sat where they put it.
+  setOrigin: (origin) =>
+    set((s) => ({
+      origin,
+      reachField: null,
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved, { origin: false }),
+    })),
+  setEndpoint: (endpoint) =>
+    set((s) => ({
+      endpoint,
+      reachField: null,
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved, { endpoint: false }),
+    })),
   // Way points are a ROUTE input: every edit re-bases the whole field, so they clear the cached
   // field and the pinned drops exactly like setEndpoint. Marked points are pure annotation and
   // deliberately do NOT - clearing the field there would flash the overlay off for nothing.
@@ -696,6 +884,9 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
         segments: [...s.segments.slice(0, -1), splitSeg, { ...splitSeg }],
         reachField: null,
         stageDropOverrides: [],
+        unresolved: routeInputFlags(s.unresolved, {
+          waypoints: [...s.unresolved.waypoints, false],
+        }),
       };
     }),
   removeWaypoint: (index) =>
@@ -703,10 +894,11 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       if (index < 0 || index >= s.waypoints.length) return {};
       // Dropping way point `index` collapses the two spans it used to separate - segment
       // `index` (leading into it) and segment `index + 1` (leading on from it) - into one.
-      // The merge takes the SLOWER of the two speeds and requires BOTH halves to have been
-      // scootered: the safe direction, mirroring the backend's own reconciliation of a stale
-      // way point on load (`merge_segments_for_surviving_waypoints`, core/state/dive_plan.rs).
-      // Either half taken alone would understate the gas the merged span actually costs.
+      // The merge takes the SLOWER of the two speeds and keeps the scooter flag if EITHER half
+      // had it: the safe direction on both counts, mirroring the backend's own reconciliation of
+      // a stale way point on load (`merge_segments_for_surviving_waypoints`,
+      // core/state/dive_plan.rs). A slower span costs more gas per metre; a scootered one spends
+      // range without buying any gas back, so forgetting the flag would extend the plan's reach.
       // Both spans always exist: `segments` is normalised to `waypoints.length + 1` at every
       // entry point, and `index` is in range, so `index + 1` is at most the last span.
       const merged: PlanSegment = mergeSegments(
@@ -719,6 +911,13 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
         segments: [...s.segments.slice(0, index), merged, ...s.segments.slice(index + 2)],
         reachField: null,
         stageDropOverrides: [],
+        // The flags are indexed by way point, so the dropped one's flag has to go with it. Leaving
+        // it behind leaves `selectComputeGate.skip` true against a way point that no longer exists
+        // - the panel's warning is bounded by `waypoints.length` and disappears, so the plan stops
+        // computing with nothing on screen saying why.
+        unresolved: routeInputFlags(s.unresolved, {
+          waypoints: s.unresolved.waypoints.filter((_f, i) => i !== index),
+        }),
       };
     }),
   moveWaypoint: (index, delta) =>
@@ -731,11 +930,33 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       const moved = next[index]!;
       next[index] = next[to]!;
       next[to] = moved;
-      // `segments` is deliberately NOT permuted (#317). A segment is bounded by TWO way points, so
-      // there is no segment that "belongs to" the one being moved and could travel with it. The
-      // pace pattern is therefore POSITIONAL: span 1 keeps its speed and propulsion whatever the
-      // diver reorders the route into. Length-sync holds trivially since a swap changes no counts.
-      return { waypoints: next, reachField: null, stageDropOverrides: [] };
+      const flags = s.unresolved.waypoints.slice();
+      const movedFlag = flags[index] ?? false;
+      flags[index] = flags[to] ?? false;
+      flags[to] = movedFlag;
+
+      // Segments do NOT travel with the way point - a span is bounded by two of them, so none
+      // belongs to the one being moved - but they cannot simply stay put either (#317). Span `k`
+      // joins way points `k-1` and `k` (the origin and the open field standing in at the ends), so
+      // swapping `lo` with `hi` re-attaches spans `lo`, `lo+1`, `hi` and `hi+1` to different
+      // physical passages. Those are RESET to the inherited default - the state a freshly created
+      // leg gets - rather than kept, so a pace or a scooter flag the diver set for one passage is
+      // never silently applied to another.
+      //
+      // The single exception is the span BETWEEN an adjacent pair (`lo+1 === hi`): it still joins
+      // the same two points, only walked the other way round, so it keeps what it was given.
+      // Length-sync holds trivially - a swap changes no counts.
+      const lo = Math.min(index, to);
+      const hi = Math.max(index, to);
+      const rebound = new Set([lo, lo + 1, hi, hi + 1]);
+      if (hi === lo + 1) rebound.delete(lo + 1);
+      return {
+        waypoints: next,
+        segments: s.segments.map((seg, k) => (rebound.has(k) ? defaultSegment() : seg)),
+        reachField: null,
+        stageDropOverrides: [],
+        unresolved: routeInputFlags(s.unresolved, { waypoints: flags }),
+      };
     }),
   // A segment is a GAS INPUT: its speed divides straight into every edge cost on that span
   // (`gas = rmv x ata(depth) x length / speed`), so a slower span costs more gas and reaches less
@@ -745,21 +966,31 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   // `setCylinders`/`setGasConfig`.
   setSegments: (segments) =>
     set((s) => ({
-      segments: normalizeSegments(segments, s.waypoints.length),
+      segments: normalizeSegments(segments, s.waypoints.length, planSpeed(s.gasConfig)),
       reachField: null,
       stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved),
     })),
   addMarkedPoint: (ref) =>
     set((s) =>
       s.markedPoints.length >= MAX_MARKED_POINTS
         ? {}
-        : { markedPoints: [...s.markedPoints, { station: ref, label: null }] },
+        : {
+            markedPoints: [...s.markedPoints, { station: ref, label: null }],
+            unresolved: { ...s.unresolved, markedPoints: [...s.unresolved.markedPoints, false] },
+          },
     ),
   removeMarkedPoint: (index) =>
     set((s) =>
       index < 0 || index >= s.markedPoints.length
         ? {}
-        : { markedPoints: s.markedPoints.filter((_m, i) => i !== index) },
+        : {
+            markedPoints: s.markedPoints.filter((_m, i) => i !== index),
+            unresolved: {
+              ...s.unresolved,
+              markedPoints: s.unresolved.markedPoints.filter((_f, i) => i !== index),
+            },
+          },
     ),
   setMarkedPointLabel: (index, label) =>
     set((s) => {
@@ -776,9 +1007,27 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       next[index] = { ...next[index]!, label: label === '' ? null : label };
       return { markedPoints: next };
     }),
-  setDiver: (diver) => set({ diver, reachField: null, stageDropOverrides: [] }),
-  setCylinders: (cylinders) => set({ cylinders, reachField: null, stageDropOverrides: [] }),
-  setGasConfig: (gasConfig) => set({ gasConfig, reachField: null, stageDropOverrides: [] }),
+  setDiver: (diver) =>
+    set((s) => ({
+      diver,
+      reachField: null,
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved),
+    })),
+  setCylinders: (cylinders) =>
+    set((s) => ({
+      cylinders,
+      reachField: null,
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved),
+    })),
+  setGasConfig: (gasConfig) =>
+    set((s) => ({
+      gasConfig,
+      reachField: null,
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved),
+    })),
   // `lastReachField` only ever moves forward to a real field - it is never nulled here, so it
   // survives the refetch window. `reset()` clears both, so it cannot leak across a project switch.
   setReachField: (reachField) =>
@@ -802,7 +1051,13 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       const next = s.stageDropOverrides.slice();
       while (next.length <= index) next.push(null);
       next[index] = ref;
-      return { stageDropOverrides: next };
+      // Padded and cleared in lockstep with the drops: a flag left over from a previous drop at
+      // this index would mask the one the diver just pinned out of `selectComputeGate` and block
+      // Save, for a pin that is now perfectly placeable.
+      const flags = s.unresolved.stageDropOverrides.slice();
+      while (flags.length < next.length) flags.push(false);
+      flags[index] = false;
+      return { stageDropOverrides: next, unresolved: { ...s.unresolved, stageDropOverrides: flags } };
     });
   },
 
@@ -811,13 +1066,20 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     // number; either way the panel and the engine need exactly one per span from the first render.
     const normalized: DivePlanSnapshot = {
       ...snapshot,
-      segments: normalizeSegments(snapshot.segments, snapshot.waypoints.length),
+      // The PLAN's own speed, not the working config's: the snapshot brings its gas config with it
+      // and is installed wholesale below, so folding against anything else would rank the spans on
+      // a pace this plan is never flown at.
+      segments: normalizeSegments(
+        snapshot.segments,
+        snapshot.waypoints.length,
+        planSpeed(snapshot.gas_config)
+      ),
     };
     const pins = pinRefsOfSnapshot(normalized)!;
     // The backend resolved these refs FROM these anchors moments ago, so they are already correct
     // for the pins being installed - seeding them here saves the load path a capture round trip
     // and, more importantly, closes the window where a survey edit could land against no anchors.
-    const seeded: PlanAnchorSet | null =
+    const seeded: PinSlots<PlanAnchor> | null =
       anchors === null || anchors === undefined
         ? null
         : {
@@ -846,7 +1108,11 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       anchoredPins: seeded === null ? null : pins,
       baselineAnchors: seeded,
       baselineAnchoredPins: seeded === null ? null : pins,
-      unresolved: NO_FLAGS,
+      // All-clear, but SIZED to the pins being installed rather than the empty `NO_FLAGS`: the
+      // flags are length-synced from the first render, so the next capture derives an identical
+      // set instead of reading as a change and blanking the field for nothing. (The backend drops
+      // a pin whose anchor no longer places, so a loaded plan's pins are placeable by definition.)
+      unresolved: noFlagsFor(pins),
     });
   },
   markPlanSaved: (planId, baseline) =>

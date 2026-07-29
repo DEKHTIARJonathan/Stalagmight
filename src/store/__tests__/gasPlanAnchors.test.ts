@@ -172,6 +172,114 @@ describe('gas-plan pins follow their station across a renumbering edit (#310)', 
     expect(gate.stageDropOverrides[1]).toEqual(at(indexOf('e')));
   });
 
+  it('blanks the cached field when a pin is only FLAGGED, with no ref moving', async () => {
+    // The flag alone changes what the engine is allowed to see, and a flagged way point STALLS
+    // the compute outright - so the field on screen was priced from inputs that are no longer in
+    // force, and the gate then blocks every refetch that would have replaced it. Left painted, the
+    // map and every panel readout show pre-mutation numbers indefinitely, reading as current.
+    // Deleting the LAST station is the discriminator: no other index moves, so `moved` is false
+    // and only the flag transition can trigger the blank.
+    useGasPlanStore.getState().addWaypoint(at(indexOf('e')));
+    await capture();
+    useGasPlanStore.setState({
+      reachField: { budget_litres: 1 } as never,
+      lastReachField: { budget_litres: 1 } as never,
+    });
+
+    order = order.filter((id) => id !== 'e');
+    await remap();
+
+    const after = useGasPlanStore.getState();
+    expect(after.unresolved.waypoints).toEqual([true]);
+    expect(after.waypoints).toEqual([at(4)]); // non-vacuous: the ref itself did not move
+    expect(after.reachField).toBeNull();
+    expect(after.lastReachField).toBeNull();
+  });
+
+  it('picking a NEW origin clears the flag, so the field roots where the diver put it', async () => {
+    // The flag says "the backend could not place the ref this slot HELD". Clicking a new origin
+    // replaces that ref, so the flag is stale the instant it lands - and while it stood,
+    // `selectComputeGate` nulled every replacement the diver picked and the field silently rooted
+    // at the entrance, with the origin star sitting exactly where they put it.
+    useGasPlanStore.getState().setOrigin(at(indexOf('b')));
+    await capture();
+    order = order.filter((id) => id !== 'b');
+    await remap();
+    expect(useGasPlanStore.getState().unresolved.origin).toBe(true);
+    expect(selectComputeGate(useGasPlanStore.getState()).origin).toBeNull();
+
+    useGasPlanStore.getState().setOrigin(at(indexOf('d')));
+
+    const after = useGasPlanStore.getState();
+    expect(after.unresolved.origin).toBe(false);
+    expect(selectComputeGate(after).origin).toEqual(at(indexOf('d')));
+  });
+
+  it('dropping a stalled way point un-stalls the plan', async () => {
+    // `unresolved.waypoints` is indexed by way point, so a flag left behind by a remove keeps
+    // `skip` true against a way point that no longer exists. The panel's warning is bounded by
+    // `waypoints.length`, so it disappears at the same moment - the plan stops computing and
+    // nothing on screen says why.
+    useGasPlanStore.getState().addWaypoint(at(indexOf('c')));
+    await capture();
+    order = order.filter((id) => id !== 'c');
+    await remap();
+    expect(selectComputeGate(useGasPlanStore.getState()).skip).toBe(true);
+
+    useGasPlanStore.getState().removeWaypoint(0);
+
+    const after = useGasPlanStore.getState();
+    expect(after.waypoints).toEqual([]);
+    expect(after.unresolved.waypoints).toEqual([]);
+    expect(selectComputeGate(after).skip).toBe(false);
+  });
+
+  it('moveWaypoint carries each flag with its own way point', async () => {
+    useGasPlanStore.getState().addWaypoint(at(indexOf('c')));
+    useGasPlanStore.getState().addWaypoint(at(indexOf('e')));
+    await capture();
+    order = order.filter((id) => id !== 'c');
+    await remap();
+    expect(useGasPlanStore.getState().unresolved.waypoints).toEqual([true, false]);
+
+    useGasPlanStore.getState().moveWaypoint(0, 1);
+
+    const after = useGasPlanStore.getState();
+    // The stalled way point is now second, and so is its badge. Leaving the flags in place would
+    // badge the healthy row and hand the stalled ref straight to the engine.
+    expect(after.waypoints[1]).toEqual(at(2));
+    expect(after.unresolved.waypoints).toEqual([false, true]);
+  });
+
+  it('a route-input change drops the stage-drop flags along with the drops', async () => {
+    // Every route-input setter clears `stageDropOverrides`. A flag that outlived its drop keeps
+    // `selectHasUnresolvedPins` true forever, which blocks Save over a pin that no longer exists.
+    useGasPlanStore.getState().setStageDropOverride(0, at(indexOf('b')));
+    await capture();
+    order = order.filter((id) => id !== 'b');
+    await remap();
+    expect(selectHasUnresolvedPins(useGasPlanStore.getState())).toBe(true);
+
+    useGasPlanStore.getState().setEndpoint(at(indexOf('d')));
+
+    const after = useGasPlanStore.getState();
+    expect(after.stageDropOverrides).toEqual([]);
+    expect(after.unresolved.stageDropOverrides).toEqual([]);
+    expect(selectHasUnresolvedPins(after)).toBe(false);
+  });
+
+  it('a capture flags a pin that names no station, without waiting for a mutation', async () => {
+    // The flags fall out of the capture reply: `plan_anchors_for_refs` hands back `null` for a ref
+    // that names nothing, which is the same fact the re-resolve reports. Deriving them in both
+    // places is what keeps them in step with the pins rather than latched from one round trip.
+    useGasPlanStore.getState().setEndpoint(at(99));
+    await capture();
+
+    const after = useGasPlanStore.getState();
+    expect(after.unresolved.endpoint).toBe(true);
+    expect(selectComputeGate(after).endpoint).toBeNull();
+  });
+
   it('returns the SAME drops array when nothing is flagged (no refetch loop)', () => {
     useGasPlanStore.getState().setStageDropOverride(0, at(2));
     const s = useGasPlanStore.getState();
@@ -395,5 +503,36 @@ describe('projectStore re-resolves the plan pins around every mutation (#310)', 
     await useProjectStore.getState().deleteShot(SECTION, 1);
     expect(planAnchorsForRefs).not.toHaveBeenCalled();
     expect(planRefsForAnchors).not.toHaveBeenCalled();
+  });
+
+  it('a capture never re-anchors a FLAGGED pin, so editing another pin cannot rebind it', async () => {
+    // Way point on station 'c', anchored, then 'c' vanishes entirely: the remap keeps the ref
+    // (index 2, which now names 'd') and flags the slot.
+    const g = useGasPlanStore.getState();
+    g.addWaypoint(at(indexOf('c')));
+    await capture();
+    order.splice(indexOf('c'), 1);
+    await remap();
+    expect(useGasPlanStore.getState().unresolved.waypoints[0]).toBe(true);
+
+    // The diver now edits a DIFFERENT pin, which flushes a fresh capture. The backend would
+    // happily anchor the flagged slot's stale ref - index 2 currently names 'd' - and that anchor
+    // must NOT be adopted: adopting it clears the flag against the wrong station, the #310
+    // rebinding with extra steps.
+    useGasPlanStore.getState().setEndpoint(at(0));
+    await capture();
+    const s = useGasPlanStore.getState();
+    expect(s.unresolved.waypoints[0]).toBe(true);
+    expect(s.anchors?.waypoints[0]).toEqual({ id: 'c' });
+    // The unflagged slot DID get its fresh anchor - preservation is per-slot, not a bail-out.
+    expect(s.anchors?.endpoint).toEqual({ id: 'a' });
+
+    // The kept original anchor is what lets a survey undo bring the pin back: restore 'c' and the
+    // next remap clears the flag onto the ORIGINAL station.
+    order.splice(2, 0, 'c');
+    await remap();
+    const healed = useGasPlanStore.getState();
+    expect(healed.unresolved.waypoints[0]).toBe(false);
+    expect(healed.waypoints[0]).toEqual(at(indexOf('c')));
   });
 });

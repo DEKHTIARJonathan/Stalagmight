@@ -386,3 +386,97 @@ describe('frontend mutation ordering (#24)', () => {
     expect(secondResult.error).toContain('project changed');
   });
 });
+
+/**
+ * The window the #310 anchor flush opened in both mutation seams.
+ *
+ * `flushPlanAnchors` is a real IPC round trip, and it sits BETWEEN the project-switch guard and
+ * the `invokeIpc` that dispatches the edit. Project load/create/close do not go through the
+ * mutation queue, so one can land while the flush is in flight - and `args` were captured against
+ * the OUTGOING project. Section ids are small per-project integers, so they would mostly RESOLVE
+ * in whatever is now open: the wrong survey is edited, silently, and the guard that exists to stop
+ * exactly that already ran before the window existed.
+ *
+ * Both tests park the flush on a deferred `plan_anchors_for_refs` and open a project across it.
+ */
+describe('a project that opens during the anchor flush cancels the mutation (#310)', () => {
+  const stations = line([0, 1, 2, 3, 4, 5, 6, 7]);
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    useGasPlanStore.getState().reset();
+    useUIStore.setState({ distanceGradientOrigin: null });
+    useProjectStore.setState({ project: null });
+  });
+
+  /**
+   * Serve the refresh IPCs, hold `plan_anchors_for_refs` until released, and record every command
+   * that is not part of the anchor/refresh chatter - i.e. the mutations.
+   */
+  function serveHeldFlush() {
+    let release: (() => void) | undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const mutations: string[] = [];
+    const openProject = { createdAt: '2026-01-01T00:00:00Z' };
+    invokeIpcMock.mockImplementation(async (command: string) => {
+      switch (command) {
+        case 'plan_anchors_for_refs':
+          await held;
+          return [{ id: 'endpoint' }];
+        case 'plan_refs_for_anchors':
+          return [ref(3)];
+        case 'get_project_state':
+          return {
+            project: { ...projectWith(stations), created_at: openProject.createdAt },
+            stations,
+            stats: null,
+            frozen_shots: [],
+          };
+        case 'can_undo':
+        case 'can_redo':
+          return false;
+        case 'get_project_warnings':
+          return [];
+        case 'check_project_integrity':
+          return { messages: [], save_blocked: false };
+        default:
+          mutations.push(command);
+          return { success: true, warnings: [], error: null, section_ids: [] };
+      }
+    });
+    return { release: () => release?.(), mutations, openProject };
+  }
+
+  /** Open project B while the entry is parked on its flush. */
+  function switchProjectTo(createdAt: string, openProject: { createdAt: string }) {
+    openProject.createdAt = createdAt;
+    useProjectStore.setState({
+      project: { ...projectWith(stations), created_at: createdAt } as never,
+    });
+  }
+
+  it.each([
+    ['executeCommand', () => useProjectStore.getState().reverseSection(SECTION, false), 'reverse_section'],
+    ['executeUndoRedo', () => useProjectStore.getState().undo(), 'undo'],
+  ])('%s never dispatches once the flush loses its project', async (_seam, run, command) => {
+    const { release, mutations, openProject } = serveHeldFlush();
+    // A pin placed moments ago is still sitting on the debounce, so the seam's flush is a genuine
+    // round trip rather than the usual no-op.
+    useGasPlanStore.getState().setEndpoint(ref(3));
+    useProjectStore.setState({ project: projectWith(stations) as never });
+
+    const pending = run();
+    // Let the entry reach its flush and park there, rather than being refused before it starts.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    switchProjectTo('2099-12-31T00:00:00Z', openProject);
+    release();
+    const result = await pending;
+
+    expect(mutations).not.toContain(command);
+    expect(mutations).toHaveLength(0);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('project changed');
+  });
+});

@@ -284,10 +284,14 @@ describe('gasPlanStore segments (#317)', () => {
     ]);
   });
 
-  it('removeWaypoint merges its two adjacent spans to the SLOWER speed and ANDs on_scooter', () => {
-    // Two way points -> 3 segments; dropping way point 0 merges segments 0 and 1. Built so
-    // neither "take the first", "take the second", "max", nor "OR the flag" reproduces the
-    // right answer - only min(speed) + (a && b) lands on {8, false}, mirroring the Rust
+  it('removeWaypoint merges its two adjacent spans to the SLOWER speed and ORs on_scooter', () => {
+    // Two way points -> 3 segments; dropping way point 0 merges segments 0 and 1. The two halves
+    // of the answer come from OPPOSITE sides - speed 8 from the second span, the scooter flag from
+    // the first - so no single-side rule ("take the first", "take the second") reproduces it, and
+    // neither does max(speed) nor AND(flag). Both directions are the conservative one, for
+    // opposite reasons: a slower span costs more gas per metre, while `on_scooter` spends RANGE and
+    // buys no reduced breathing rate, so dropping the flag would hand the merged span free scooter
+    // range and reach FURTHER than either half could. Mirrors the Rust
     // `merge_segments_for_surviving_waypoints` reconciliation on a stale-way-point load.
     useGasPlanStore.getState().addWaypoint(a);
     useGasPlanStore.getState().addWaypoint(b);
@@ -298,8 +302,57 @@ describe('gasPlanStore segments (#317)', () => {
     ]);
     useGasPlanStore.getState().removeWaypoint(0);
     expect(useGasPlanStore.getState().segments).toEqual([
-      { speed_m_per_min: 8, on_scooter: false },
+      { speed_m_per_min: 8, on_scooter: true },
       { speed_m_per_min: 30, on_scooter: true },
+    ]);
+  });
+
+  it('removeWaypoint ranks the spans on the domain the ENGINE flies, not on the raw number', () => {
+    // 2000 m/min is outside `[MIN_SEGMENT_SPEED_M_PER_MIN, MAX_SEGMENT_SPEED_M_PER_MIN]`, so
+    // `resolve_segments` (gas/scooter.rs) ignores it and flies that span at the plan speed - 10
+    // here, which makes it the SLOWER of the pair and the one that must win. Ranking the stored
+    // number instead makes it the fastest span in the plan, the merge keeps 20, and the merged
+    // span is then priced at 20 m/min: less gas per metre and more reach than the diver has. A
+    // stored 2000 reaches here from a hand-edited or badly round-tripped `.plnx`.
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 20, on_scooter: false },
+      { speed_m_per_min: 2000, on_scooter: false },
+      { speed_m_per_min: 9, on_scooter: false },
+    ]);
+    useGasPlanStore.getState().removeWaypoint(0);
+    // Carrying the out-of-domain value forward is the point: the engine reads it as "inherit the
+    // plan speed", which is exactly the pace the merged span has to be flown at.
+    expect(useGasPlanStore.getState().segments[0]).toEqual({
+      speed_m_per_min: 2000,
+      on_scooter: false,
+    });
+  });
+
+  it('moveWaypoint resets the two OUTER spans and keeps the one between the swapped pair', () => {
+    // Three way points -> four spans. Span `k` joins way points `k-1` and `k` (origin and open
+    // field standing in at the ends), so swapping way points 1 and 2 leaves span 2 joining the
+    // same two stations - only walked the other way - while spans 1 and 3 now describe legs that
+    // did not exist before. Keeping their values would apply a pace, or a scooter flag, to a
+    // passage it was never set for; span 0 is untouched either way.
+    useGasPlanStore.getState().addWaypoint(a);
+    useGasPlanStore.getState().addWaypoint(b);
+    useGasPlanStore.getState().addWaypoint(c);
+    useGasPlanStore.getState().setSegments([
+      { speed_m_per_min: 5, on_scooter: false },
+      { speed_m_per_min: 11, on_scooter: true },
+      { speed_m_per_min: 22, on_scooter: false },
+      { speed_m_per_min: 33, on_scooter: true },
+    ]);
+
+    useGasPlanStore.getState().moveWaypoint(1, 1);
+
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 5, on_scooter: false },
+      { speed_m_per_min: null, on_scooter: false },
+      { speed_m_per_min: 22, on_scooter: false },
+      { speed_m_per_min: null, on_scooter: false },
     ]);
   });
 
@@ -391,20 +444,28 @@ describe('gasPlanStore segments (#317)', () => {
     ]);
   });
 
-  it('truncates a loaded plan that carries MORE segments than it has spans', () => {
+  it('FOLDS a loaded plan that carries more segments than it has spans, never truncates', () => {
+    // A bare `slice(0, want)` discards the diver's statement about those spans, and discards every
+    // field in the REACH-EXTENDING direction: a dropped slow speed reverts to the plan speed
+    // (cheaper gas per metre) and a dropped `on_scooter` stops spending range. The fold keeps the
+    // slowest effective speed and any scooter use, mirroring `normalize_segment_count`
+    // (core/state/dive_plan.rs).
+    //
+    // The three values are distinct and land in three different places: the retained span inherits
+    // (10 m/min), tail[0] contributes only the scooter flag, tail[1] only the speed. So truncating,
+    // keeping the last tail entry, or keeping the first each give a different - wrong - answer.
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(1, {
       ...snapshot,
       waypoints: [],
       segments: [
-        { speed_m_per_min: 12, on_scooter: false },
+        { speed_m_per_min: null, on_scooter: false },
         { speed_m_per_min: 30, on_scooter: true },
-        { speed_m_per_min: 40, on_scooter: true },
+        { speed_m_per_min: 3, on_scooter: false },
       ],
     });
-    // Truncated from the END, so span 0 keeps the pace the diver set for it.
     expect(useGasPlanStore.getState().segments).toEqual([
-      { speed_m_per_min: 12, on_scooter: false },
+      { speed_m_per_min: 3, on_scooter: true },
     ]);
   });
 
@@ -422,7 +483,7 @@ describe('gasPlanStore segments (#317)', () => {
     expect(useGasPlanStore.getState().segments).toHaveLength(3);
   });
 
-  it('setSegments pads or truncates to the live span count', () => {
+  it('setSegments pads or folds to the live span count', () => {
     useGasPlanStore.getState().addWaypoint(a);
     useGasPlanStore.getState().setSegments([{ speed_m_per_min: 7, on_scooter: false }]);
     expect(useGasPlanStore.getState().segments).toEqual([
@@ -432,9 +493,14 @@ describe('gasPlanStore segments (#317)', () => {
     useGasPlanStore.getState().setSegments([
       { speed_m_per_min: 7, on_scooter: false },
       { speed_m_per_min: 8, on_scooter: false },
-      { speed_m_per_min: 9, on_scooter: false },
+      { speed_m_per_min: 4, on_scooter: true },
     ]);
-    expect(useGasPlanStore.getState().segments).toHaveLength(2);
+    // The overflow is folded into the closing span, not dropped: 4 is slower than 8 and the
+    // scooter flag survives.
+    expect(useGasPlanStore.getState().segments).toEqual([
+      { speed_m_per_min: 7, on_scooter: false },
+      { speed_m_per_min: 4, on_scooter: true },
+    ]);
   });
 
   it('reset restores the single default segment (no leak across plan sessions)', () => {
@@ -672,6 +738,30 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
     useGasPlanStore.getState().setReachField(fakeField());
     useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ include_reference_legs: true }));
     expect(useGasPlanStore.getState().reachField).toBeNull();
+  });
+
+  it('adopts ONLY the field that moved, so a jump edit cannot swap a loaded plan\'s rig', () => {
+    // The three fields share nothing but the accident of having no in-panel control. Diffing them
+    // as a TRIPLE and then spreading all three copies the two that did NOT change - so nudging the
+    // jump multiplier in Settings silently retires the rig the loaded plan was built around, in
+    // the one place a plan's snapshot is allowed to move underneath it.
+    useGasPlanStore.getState().markHydrated(gas({ dpv: null, jump_rmv_multiplier: 1.5 }));
+    const snapshot = divePlanSnapshotOf({
+      ...useGasPlanStore.getState(),
+      gasConfig: gas({ dpv: rig(45), jump_rmv_multiplier: 1.5 }),
+    });
+    useGasPlanStore.getState().applyLoadedPlan(3, snapshot);
+    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(45);
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+
+    // Settings still holds no scooter; the diver changes only the jump multiplier.
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null, jump_rmv_multiplier: 2.5 }));
+
+    const after = useGasPlanStore.getState();
+    expect(after.gasConfig.jump_rmv_multiplier).toBe(2.5);
+    expect(after.gasConfig.dpv).toEqual(snapshot.gas_config.dpv);
+    // And the plan is dirty for that one field alone - not for a rig it never lost.
+    expect(after.loadedPlanBaseline?.gas_config.dpv).toEqual(snapshot.gas_config.dpv);
   });
 
   it('a no-change call is a true no-op (same state object, no wasted refetch)', () => {
