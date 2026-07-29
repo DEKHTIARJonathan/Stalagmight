@@ -1030,49 +1030,62 @@ mod tests {
     }
 
     /// [#258] A push writes the canonical name and touches nothing else, so a
-    /// remembered NONCANONICAL entry is pre-push data the instant the push lands.
-    /// Left in place it was a silent rollback: the next same-session open or
-    /// fast-forward extracted that stale database and stamped it with the new server
-    /// revision, publishing a commit that claims to hold work it does not.
+    /// remembered entry is pre-push data the instant the push lands. Left in place it
+    /// was a silent rollback: the next same-session open or fast-forward extracted
+    /// that stale database and stamped it with the new server revision, publishing a
+    /// commit that claims to hold work it does not.
     #[test]
-    fn a_push_forgets_a_noncanonical_choice_but_keeps_the_canonical_one() {
+    fn a_landed_push_forgets_every_remembered_choice() {
         let state = AppState::new().expect("state");
         let project = "55555555-5555-5555-5555-555555555555";
 
-        // The choice a user made against an ambiguous dump, then pushed.
-        state.speleodb_remember_dump_entry(project, "backup/old.stalx");
-        state.speleodb_forget_stale_dump_entry(project);
-        assert_eq!(
-            state.speleodb_recalled_dump_entry(project),
-            None,
-            "a non-canonical choice must not survive the push that made it stale"
-        );
-
-        // The canonical pick is the one name the push itself wrote, so it stays and
-        // the user is not re-asked. Any folder, since TARGET_FOLDER is the server's.
-        for canonical in ["project.stalx", "misc/project.stalx"] {
-            state.speleodb_remember_dump_entry(project, canonical);
-            state.speleodb_forget_stale_dump_entry(project);
+        // A canonical BASENAME earns no exemption, and this is the case that proves
+        // why: with two of them in the tree, the one the user picked may be the
+        // backup, and the push updates the other. A name that only says "could be
+        // the target" cannot license keeping it - the same conclusion
+        // `Dump::entry_details` reaches about the same predicate.
+        for entry in [
+            "backup/old.stalx",
+            "backup/project.stalx",
+            "misc/project.stalx",
+            "project.stalx",
+        ] {
+            state.speleodb_remember_dump_entry(project, entry);
+            state.speleodb_forget_dump_entry(project);
             assert_eq!(
-                state.speleodb_recalled_dump_entry(project).as_deref(),
-                Some(canonical),
-                "`{canonical}` is what the push wrote, so it is still current"
+                state.speleodb_recalled_dump_entry(project),
+                None,
+                "`{entry}` must not survive a push: nothing here proves it is the \
+                 file the upload actually replaced"
             );
         }
     }
 
-    /// The rule above is only worth anything if the push actually applies it, and a
-    /// confirmed upload is the one place a new revision exists. A source scan because
-    /// reaching the real thing needs a server: the failure being guarded is someone
-    /// adding a push path that forgets to invalidate, which is structural.
+    /// The rule above is only worth anything if every landing path applies it, and
+    /// "landed" is not the same set as "returned Confirmed". A source scan because
+    /// reaching the real thing needs a server; the failure being guarded is someone
+    /// adding - or quietly un-routing - a push arm, which is structural.
     #[test]
-    fn the_confirmed_push_invalidates_the_remembered_entry() {
+    fn every_landing_push_arm_invalidates_the_remembered_entry() {
+        // Definition plus the three arms that conclude a revision exists: the 200,
+        // the 304 (our content is already there - the upload that put it there is
+        // what made the recall stale, whichever attempt returns), and the adopted
+        // prior push. A count below this means an arm stopped invalidating, which
+        // silently restores the stale-recall rollback.
         assert_eq!(
-            speleodb_prod_matches("speleodb_forget_stale_dump_entry(", &[]),
+            speleodb_prod_matches("speleodb_revision_landed(", &[]),
+            4,
+            "expected one definition plus the three landing arms (200, 304, adopted \
+             prior push)"
+        );
+        // And that the invalidation itself has exactly one caller - this helper - so
+        // producing the outcome and dropping the recall cannot drift apart.
+        assert_eq!(
+            speleodb_prod_matches("speleodb_forget_dump_entry(", &[]),
             2,
-            "expected one definition plus exactly one caller - the confirmed-upload \
-             arm. A second caller means another path is invalidating (or a push path \
-             stopped doing so, which silently restores the stale-recall rollback)."
+            "the recall must be dropped through `speleodb_revision_landed` alone; a \
+             second caller means some path invalidates without concluding a landing \
+             (or vice versa)"
         );
     }
 

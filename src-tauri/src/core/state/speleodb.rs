@@ -872,36 +872,50 @@ impl AppState {
         session.chosen_dump_entries.get(project_id).cloned()
     }
 
-    /// [#258] Forget a remembered entry that a push has just made stale.
+    /// [#258] Forget this project's remembered dump entry.
     ///
-    /// A push always uploads under the canonical wire name and leaves every other
-    /// `.stalx` in the tree untouched. So a user who chose, say, `backup/old.stalx`
-    /// held a name that was correct when they answered and is PRE-PUSH data the
-    /// moment their push lands - and the recall is per session, not per open, so the
-    /// next open or fast-forward extracted that stale database and then stamped it
-    /// with the new server revision. That is a silent rollback of their own work,
-    /// published under a commit that claims to contain it.
+    /// A push uploads under the canonical wire name and leaves every other `.stalx`
+    /// in the tree untouched. The recall is per SESSION, so a user who chose, say,
+    /// `backup/old.stalx` held a name that was correct when they answered and is
+    /// PRE-PUSH data the moment their push lands - and the next open or fast-forward
+    /// extracted that stale database, then stamped it with the new server revision.
+    /// A silent rollback of their own work, published under a commit that claims to
+    /// contain it.
     ///
-    /// Forgotten rather than rebound to the canonical path, because there may not be
-    /// one to bind to: the upload target's FOLDER is the server's `TARGET_FOLDER`
-    /// and not part of the contract, so the post-push tree can hold two entries with
-    /// the canonical basename and no way to tell which is the target. Forgetting
-    /// costs at most one more question, and only for someone who already answered a
-    /// genuinely ambiguous one.
+    /// UNCONDITIONAL, and that is the whole point. Sparing a choice whose basename
+    /// is canonical looks safe and is not: a basename can only say the path COULD be
+    /// the upload target, never that it is - the folder is the server's
+    /// `TARGET_FOLDER` and not part of the contract, so `backup/project.stalx` and
+    /// `misc/project.stalx` can both exist and someone who picked the backup was
+    /// spared on the strength of a name that proves nothing. The push then updates
+    /// the real target and leaves their pick stale, which is the exact rollback this
+    /// is here to prevent. `Dump::entry_details` reaches the same conclusion about
+    /// the same predicate and declines to badge either entry as canonical.
     ///
-    /// A canonical choice survives: the push wrote exactly that file, so it is the
-    /// one name still guaranteed current.
-    pub(super) fn speleodb_forget_stale_dump_entry(&self, project_id: &str) {
-        let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
-        };
-        let stale = session
-            .chosen_dump_entries
-            .get(project_id)
-            .is_some_and(|entry| !crate::speleodb::dump::has_canonical_basename(entry));
-        if stale {
+    /// Rebinding to the target would be better than forgetting and is not available:
+    /// the upload response carries the commit sha and the project, never the stored
+    /// path. Forgetting costs one more question, and only for someone whose project
+    /// is ambiguous at all.
+    pub(super) fn speleodb_forget_dump_entry(&self, project_id: &str) {
+        if let Ok(mut session) = self.speleodb_session_lock() {
             session.chosen_dump_entries.remove(project_id);
         }
+    }
+
+    /// Conclude that a push landed a revision on the server, invalidating anything
+    /// this session remembered about which file to read (#258).
+    ///
+    /// One helper rather than an invalidation call beside each arm, so producing the
+    /// outcome and dropping the recall cannot be done separately. Every arm that
+    /// concludes an upload landed goes through it - including the two that conclude
+    /// it landed EARLIER rather than just now: the adopted prior push, and the 304
+    /// that proves our content is already the server's.
+    ///
+    /// NOT every `PushOutcome::Confirmed`: the dirty-bit gate also reports Confirmed
+    /// when there was nothing to push, and no upload means nothing has moved.
+    fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
+        self.speleodb_forget_dump_entry(project_id);
+        PushOutcome::Confirmed
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -2263,7 +2277,8 @@ impl AppState {
                     l.last_edit_at = None;
                 })
                 .map_err(local_dto)?;
-                return Ok(PushOutcome::Confirmed);
+                // The prior push DID land; this arm only recognises it late.
+                return Ok(self.speleodb_revision_landed(project_id));
             }
             // A stranger's commit, OR a server inconsistency (non-linear / multi-root
             // / a recorded BASE with no tip): never overwrite or guess - surface the
@@ -2411,13 +2426,7 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                // [#258] The bytes just landed under the canonical name, so any
-                // remembered NONCANONICAL entry now points at pre-push data. Dropped
-                // here, at the one place a new revision is confirmed, rather than at
-                // each verb that pushes. The 304 path deliberately does not: nothing
-                // was uploaded, so nothing the recall names has moved.
-                self.speleodb_forget_stale_dump_entry(project_id);
-                Ok(PushOutcome::Confirmed)
+                Ok(self.speleodb_revision_landed(project_id))
             }
             Err(e) => {
                 // 304: the remote tree already matches - clear dirty (same push-start
@@ -2433,7 +2442,11 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    return Ok(PushOutcome::Confirmed);
+                    // A 304 does not mean nothing ever landed. The documented
+                    // recovery adopts a prior upload whose response was lost, then
+                    // re-uploads identical content - and it is THAT upload which made
+                    // the recall stale, whatever this attempt returns.
+                    return Ok(self.speleodb_revision_landed(project_id));
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
                 // don't know whether it landed - stay dirty, recover via ancestry
