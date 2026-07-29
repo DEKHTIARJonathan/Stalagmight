@@ -23,8 +23,6 @@ export function makeDefaultDpvRig(): DpvRig {
     range_reserve_fraction: DEFAULT_DPV_RANGE_RESERVE_FRACTION,
   };
 }
-export const DEFAULT_DPV_RIG = makeDefaultDpvRig();
-
 /** A unit with no meaningful range (mirrors `dpv_unit_is_valid` in gas.rs). */
 export function dpvUnitInvalid(unit: DpvUnit): boolean {
   return (
@@ -33,6 +31,17 @@ export function dpvUnitInvalid(unit: DpvUnit): boolean {
     !Number.isFinite(unit.burn_minutes) ||
     unit.burn_minutes <= 0
   );
+}
+
+/**
+ * A rig the ENGINE will drop whole: `GasConfig::normalize` (gas.rs) nulls the rig when EITHER
+ * unit is invalid, rather than repairing one field. The reserve fraction is deliberately not
+ * part of this - normalize clamps/resets an out-of-domain reserve and KEEPS the rig. Consumed
+ * by the `.plnx` load path, which mirrors the engine's drop so the panel never shows a rig the
+ * engine is not actually range-capping.
+ */
+export function dpvRigInvalid(rig: DpvRig): boolean {
+  return dpvUnitInvalid(rig.primary) || dpvUnitInvalid(rig.backup);
 }
 
 /**

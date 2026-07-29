@@ -444,6 +444,44 @@ describe('gasPlanStore segments (#317)', () => {
     ]);
   });
 
+  it('drops an engine-invalid rig on load, from the working config AND the baseline', () => {
+    // Mirrors `GasConfig::normalize`'s drop-the-whole-rig rule at the compute door
+    // (`validate_plan_inputs`): a hand-edited .plnx carrying a zero-burn unit would otherwise
+    // show a live rig toggle + usable-range figure while the engine plans rig-less - the #233
+    // effective-state class. The baseline is normalized identically, so the freshly loaded
+    // plan reads clean rather than instantly dirty.
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(7, {
+      ...snapshot,
+      gas_config: {
+        ...snapshot.gas_config,
+        dpv: {
+          primary: { speed_m_per_min: 45, burn_minutes: 0 },
+          backup: { speed_m_per_min: 45, burn_minutes: 45 },
+          range_reserve_fraction: 0.1,
+        },
+      },
+    });
+    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+  });
+
+  it('keeps a valid loaded rig untouched (the load-time drop is unit-invalidity only)', () => {
+    const rig = {
+      primary: { speed_m_per_min: 45, burn_minutes: 60 },
+      backup: { speed_m_per_min: 45, burn_minutes: 45 },
+      // Out-of-domain reserve does NOT drop the rig - normalize clamps it and keeps the rig,
+      // and the editor preview normalizes for display the same way.
+      range_reserve_fraction: 5.0,
+    };
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(8, {
+      ...snapshot,
+      gas_config: { ...snapshot.gas_config, dpv: rig },
+    });
+    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(rig);
+  });
+
   it('FOLDS a loaded plan that carries more segments than it has spans, never truncates', () => {
     // A bare `slice(0, want)` discards the diver's statement about those spans, and discards every
     // field in the REACH-EXTENDING direction: a dropped slow speed reverts to the plan speed

@@ -2277,7 +2277,7 @@
       "usableHint": "Penetration gas: how much you'll breathe off this tank on the way in before turning. Computed by the strategy; editable under Free.",
       "usableAria": "Usable gas for {{tank}}",
       "colRole": "Role",
-      "editHint": "Edit your cylinders in the Cylinders tab below."
+      "editHint": "Edit your cylinders in the Equipment tab below."
     },
     "roles": {
       "back_gas": "Back gas",

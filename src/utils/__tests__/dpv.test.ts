@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DEFAULT_DPV_RANGE_RESERVE_FRACTION,
   MAX_DPV_RANGE_RESERVE_FRACTION,
+  dpvRigInvalid,
   dpvUnitInvalid,
   dpvUsableRangeM,
   normalizedReserveFraction,
@@ -112,5 +113,28 @@ describe('normalizedReserveFraction branch asymmetry (twin of Rust GasConfig::no
     // boundary check on the shared constant now that the guard lives in DpvRigEditor's per-field
     // clamp rather than a Settings validation effect.
     expect(normalizedReserveFraction(0.9)).toBe(0.9);
+  });
+});
+
+describe('dpvRigInvalid (the engine drop rule: GasConfig::normalize nulls the rig whole)', () => {
+  const valid = { speed_m_per_min: 45, burn_minutes: 60 };
+  it('either invalid unit condemns the rig; the reserve fraction never does', () => {
+    expect(dpvRigInvalid({ primary: valid, backup: valid, range_reserve_fraction: 0.1 })).toBe(false);
+    expect(
+      dpvRigInvalid({
+        primary: { speed_m_per_min: 45, burn_minutes: 0 },
+        backup: valid,
+        range_reserve_fraction: 0.1,
+      })
+    ).toBe(true);
+    expect(
+      dpvRigInvalid({
+        primary: valid,
+        backup: { speed_m_per_min: -1, burn_minutes: 45 },
+        range_reserve_fraction: 0.1,
+      })
+    ).toBe(true);
+    // An out-of-domain reserve keeps the rig - normalize clamps/resets it instead of dropping.
+    expect(dpvRigInvalid({ primary: valid, backup: valid, range_reserve_fraction: 99 })).toBe(false);
   });
 });

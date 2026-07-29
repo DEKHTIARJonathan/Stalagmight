@@ -14,6 +14,7 @@ import type {
 } from '../types/ipc.generated';
 import type { StationRef } from '../types/project';
 import { deepEqual, divePlanSnapshotOf, divePlanSnapshotsEqual } from '../utils/divePlan';
+import { dpvRigInvalid } from '../utils/dpv';
 import {
   planAnchorsForRefs,
   planRefsForAnchors,
@@ -1093,6 +1094,18 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
     // number; either way the panel and the engine need exactly one per span from the first render.
     const normalized: DivePlanSnapshot = {
       ...snapshot,
+      // An engine-invalid rig (speed or burn <= 0) is dropped WHOLE, mirroring what
+      // `GasConfig::normalize` does at the compute door (`validate_plan_inputs`) - the engine
+      // will plan rig-less either way, so keeping it here would show a live toggle and a
+      // usable-range figure over a plan the engine is not actually range-capping (the #233
+      // effective-state rule). Only reachable from a hand-edited `.plnx`: the editor cannot
+      // construct one, and the config file normalizes on load. Dropped from the BASELINE too
+      // (this whole normalized snapshot is the baseline), so a freshly loaded plan stays
+      // clean rather than instantly dirty.
+      gas_config:
+        snapshot.gas_config.dpv && dpvRigInvalid(snapshot.gas_config.dpv)
+          ? { ...snapshot.gas_config, dpv: null }
+          : snapshot.gas_config,
       // The PLAN's own speed, not the working config's: the snapshot brings its gas config with it
       // and is installed wholesale below, so folding against anything else would rank the spans on
       // a pace this plan is never flown at.
