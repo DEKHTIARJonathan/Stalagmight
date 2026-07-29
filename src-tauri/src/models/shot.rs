@@ -98,8 +98,8 @@ pub(crate) fn pitch_from_components(horizontal: f64, dz: f64) -> f64 {
 ///   false-shortcut risk #77 closed with.
 ///
 /// Both still export to Ariane TML as `VIRTUAL` (there is only one virtual
-/// category there), and collab reconcile compares only [`Shot::is_virtual`], so
-/// the Jump/Reference axis never produces sync noise.
+/// category there), so the Jump/Reference axis is local-only: it does not
+/// survive an export and re-import through `.tml`.
 ///
 /// The initial kind is chosen once at import by the chain classifier
 /// (`models::project::classify`); it is never recomputed afterwards.
@@ -202,7 +202,8 @@ impl ShotKind {
 pub struct Shot {
     /// Internal immutable ID, regenerated on load from sequence order.
     /// Use [`Shot::uuid`] instead when you need an identity that survives
-    /// save/load - the collaboration round-trip with Ariane relies on it.
+    /// save/load: station cross-references anchor to it
+    /// (`StationKey::AfterShot`), and the Ariane export emits it as `<UUID>`.
     pub id: ShotId,
     /// Persistent v4 UUID minted at shot creation, stable across saves
     /// and reloads.  Emitted into the TML on export so Ariane 26+ can
@@ -547,7 +548,7 @@ impl Shot {
     }
 
     /// Create a new shot from shot data.  A fresh v4 UUID is minted for
-    /// collaboration identity (see `Shot::uuid`); call [`Shot::with_uuid`]
+    /// persistent shot identity (see `Shot::uuid`); call [`Shot::with_uuid`]
     /// instead when restoring a shot from a persisted UUID.
     pub fn new(id: ShotId, data: ShotData) -> Self {
         Self::with_uuid(id, data, Some(uuid::Uuid::new_v4().to_string()))

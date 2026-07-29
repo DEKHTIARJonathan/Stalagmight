@@ -30,12 +30,11 @@
 //! cell reclassifies in one click (and fill-drags down a run), and that
 //! `gas.include_reference_legs` can restore the old inclusive behaviour.
 //!
-//! There are exactly three call sites, and each is a point where a shot's
+//! There are exactly two call sites, and each is a point where a shot's
 //! virtualness is *established* rather than edited: import finalize
-//! (`command_import.rs`), the one-shot post-migration backfill
-//! (`project_load.rs`), and collab apply for shots a partner just turned
-//! VIRTUAL in Ariane (`collab.rs`). It deliberately never runs anywhere else,
-//! so a later merge cannot silently flip a kind under the user.
+//! (`command_import.rs`) and the one-shot post-migration backfill
+//! (`project_load.rs`). It deliberately never runs anywhere else, so a later
+//! merge cannot silently flip a kind under the user.
 //!
 //! # Scope
 //!
@@ -47,7 +46,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use crate::models::{SectionId, ShotId, ShotKind, StationRef};
+use crate::models::{SectionId, ShotKind, StationRef};
 
 use super::Project;
 
@@ -66,25 +65,13 @@ pub enum ClassifyScope<'a> {
     /// Rewrite only shots in these sections - what an import uses. Everything
     /// else still informs the graph, it just never gets written.
     Sections(&'a HashSet<SectionId>),
-    /// Rewrite only these individual shots. The collab apply path needs this
-    /// granularity: a partner flipping one shot to VIRTUAL in Ariane must not
-    /// re-kind the rest of the section around it.
-    ///
-    /// Keyed by `(section_id, shot_id)`, not `shot_id` alone. Shot ids are
-    /// minted as `section_id * FEATURE_ID_STRIDE + seq`, so they are only
-    /// project-unique while no section exceeds `FEATURE_ID_STRIDE` shots - and
-    /// the set this scope is built from comes from a collaborator's `.tml`,
-    /// which is untrusted input. Carrying the section makes the filter correct
-    /// without depending on that invariant.
-    Shots(&'a HashSet<(SectionId, ShotId)>),
 }
 
 impl ClassifyScope<'_> {
-    fn allows(&self, section_id: SectionId, shot_id: ShotId) -> bool {
+    fn allows(&self, section_id: SectionId) -> bool {
         match self {
             ClassifyScope::WholeProject => true,
             ClassifyScope::Sections(ids) => ids.contains(&section_id),
-            ClassifyScope::Shots(ids) => ids.contains(&(section_id, shot_id)),
         }
     }
 }
@@ -235,7 +222,7 @@ impl Project {
             };
             let section_id = section.id;
             if let Some(shot) = section.shots.get_mut(shot_idx) {
-                if scope.allows(section_id, shot.id) && shot.kind != kind {
+                if scope.allows(section_id) && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;
                 }
@@ -259,7 +246,7 @@ impl Project {
         for section in &mut self.sections {
             let section_id = section.id;
             for shot in &mut section.shots {
-                if !scope.allows(section_id, shot.id) {
+                if !scope.allows(section_id) {
                     continue;
                 }
                 if shot.kind.is_virtual() && shot.kind != kind {

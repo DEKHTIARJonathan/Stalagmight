@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use chrono::Utc;
 use rusqlite::params;
 
@@ -41,7 +41,6 @@ impl Database {
             DELETE FROM loop_closures;
             DELETE FROM imported_file_hashes;
             DELETE FROM imported_section_hashes;
-            DELETE FROM collab_state;
             DELETE FROM project;
             ",
         )?;
@@ -88,10 +87,12 @@ impl Database {
                 // Note: We don't store shot.id - it's regenerated on load based on sequence_order
                 // The database uses auto-increment for the id column.
                 // `shot.uuid` IS persisted - it's the only stable identity
-                // a shot has across save/load and the basis for the
-                // collaboration round-trip with Ariane.  Mint one lazily
-                // here for any shot that arrived without (e.g. loaded
-                // from a pre-v6 .stalx) so we never write NULL twice.
+                // a shot has across save/load: station cross-references
+                // anchor to it (`StationKey::AfterShot`), resolved-warning
+                // rows are keyed by it, and the Ariane export emits it as
+                // `<UUID>`.  Mint one lazily here for any shot that arrived
+                // without (e.g. loaded from a pre-v6 .stalx) so we never
+                // write NULL twice.
                 let uuid = shot
                     .uuid
                     .clone()
@@ -134,7 +135,7 @@ impl Database {
         // A dangling endpoint is SKIPPED, never collapsed to (section, 0): the
         // app-layer save gate already blocks this, but the persistence layer must
         // not crash (PK collision) or write a phantom for any path that reaches
-        // it directly (collab sibling write, salvage).
+        // it directly (salvage).
         for merge in &project.station_merges {
             let (Some(a), Some(b)) = (
                 project.resolve_key(&merge.station_a),
@@ -214,15 +215,6 @@ impl Database {
             tx.execute(
                 "INSERT INTO station_comments (section_id, station_index, comment) VALUES (?1, ?2, ?3)",
                 params![sr.section_id, sr.station_index, comment],
-            )?;
-        }
-
-        // Save collaboration state (single-row JSON blob)
-        if let Some(collab) = &project.collab {
-            let json = serde_json::to_string(collab).context("Failed to serialize collab state")?;
-            tx.execute(
-                "INSERT INTO collab_state (id, state_json) VALUES (1, ?1)",
-                params![json],
             )?;
         }
 

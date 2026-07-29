@@ -1,5 +1,4 @@
 pub mod cache;
-pub mod collab;
 pub mod config;
 pub mod debug;
 pub mod dive_plan;

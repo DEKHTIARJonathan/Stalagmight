@@ -92,25 +92,26 @@ impl AppState {
     ///
     /// The destructive counterpart to
     /// [`remove_from_recent_projects`](Self::remove_from_recent_projects), which
-    /// only forgets the entry. The project's `.stalx` (and, when
-    /// `delete_collab_sibling` is set, its same-stem `.tml` collab file) are handed
-    /// to the OS's own delete via [`send_to_trash`]: on macOS they land in the
-    /// Trash, on Linux in the freedesktop trash where one exists. The app keeps no
-    /// undo trail of its own - recovery, if any, is whatever the OS provides.
+    /// only forgets the entry. The project's `.stalx` is handed to the OS's own
+    /// delete via [`send_to_trash`]: on macOS it lands in the Trash, on Linux in
+    /// the freedesktop trash where one exists. The app keeps no undo trail of its
+    /// own - recovery, if any, is whatever the OS provides. A same-stem `.tml`
+    /// next to the project is never touched: it is an unrelated file as far as
+    /// this app is concerned.
     ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
     /// open project is cleared so a later autosave can't recreate the file we
     /// just removed.
     ///
-    /// The primary `.stalx` is trashed first: if *that* fails the call returns a
-    /// failure with recents untouched (nothing was destroyed). Once it succeeds
-    /// the project is gone, so any later problem - the collab `.tml` sibling
-    /// failing to trash, or the recents persist failing - is reported as a
-    /// non-fatal [`CommandResult::warnings`] entry while the call still returns
-    /// success and drops the recents entry. Returning a failure after the file is
-    /// already trashed would strand a "File not found" zombie row in the UI.
-    pub fn delete_project(&self, path: PathBuf, delete_collab_sibling: bool) -> CommandResult {
+    /// The `.stalx` is trashed first: if *that* fails the call returns a failure
+    /// with recents untouched (nothing was destroyed). Once it succeeds the
+    /// project is gone, so a later problem - the recents persist failing - is
+    /// reported as a non-fatal [`CommandResult::warnings`] entry while the call
+    /// still returns success and drops the recents entry. Returning a failure
+    /// after the file is already trashed would strand a "File not found" zombie
+    /// row in the UI.
+    pub fn delete_project(&self, path: PathBuf) -> CommandResult {
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
         // destructive has happened yet, so abort cleanly - recents stay untouched
         // and the caller can retry. (Tolerant of a file that's already gone.)
@@ -122,33 +123,11 @@ impl AppState {
 
         // From here on the project IS deleted as far as the user is concerned, so
         // the rest is best-effort and MUST still drop the recents entry - otherwise
-        // a later failure (sibling `.tml`, config persist) would strand a
-        // "File not found" zombie row, because the frontend skips its refresh on
-        // `!success`. Collect non-fatal problems as warnings and still report
-        // overall success so the UI prunes the deleted project from its list.
+        // a later failure (the config persist) would strand a "File not found"
+        // zombie row, because the frontend skips its refresh on `!success`.
+        // Collect non-fatal problems as warnings and still report overall success
+        // so the UI prunes the deleted project from its list.
         let mut warnings: Vec<ValidationWarning> = Vec::new();
-
-        // The sibling `.tml` is removed only when the caller confirms it's this
-        // project's collab file - a same-stem `.tml` next to a non-collab project
-        // may be an unrelated/imported Ariane file the user was never warned about,
-        // so we leave it alone.
-        if delete_collab_sibling {
-            let tml = path.with_extension("tml");
-            if tml != path && tml.exists() {
-                if let Err(e) = send_to_trash(&tml) {
-                    let msg = format!(
-                        "Project deleted, but its collab file {} could not be removed: {e}",
-                        tml.display()
-                    );
-                    tracing::warn!("{}", msg);
-                    warnings.push(ValidationWarning {
-                        code: "delete_project_sibling_failed".to_string(),
-                        message: msg,
-                        severity: WarningSeverity::Warning,
-                    });
-                }
-            }
-        }
 
         // Drop it from the recent list. Best-effort: a project that was never in
         // recents (or already removed) should still delete cleanly.
@@ -186,8 +165,7 @@ impl AppState {
     }
 
     /// Rename a project's display name on disk by path, without requiring it to
-    /// be the open project. Used by the recent-projects metadata panel. Mirrors
-    /// [`set_collab_enabled_for_path`](Self::set_collab_enabled_for_path): a
+    /// be the open project. Used by the recent-projects metadata panel: a
     /// targeted DB update, plus keeping the open project's in-memory name in
     /// sync if it happens to be the same file.
     pub fn set_project_name_for_path(&self, path: PathBuf, name: String) -> CommandResult {
@@ -201,8 +179,8 @@ impl AppState {
             Err(e) => return CommandResult::failure(format!("Failed to open project: {e}")),
         };
 
-        // Read-only edit gate (#191, D-B6): like `set_collab_enabled_for_path`,
-        // this renames a `.stalx` BY PATH - usually NOT the open AppState project
+        // Read-only edit gate (#191, D-B6): this renames a `.stalx` BY PATH -
+        // usually NOT the open AppState project
         // - so the transient `edit_enabled` flag (which describes the *open*
         // project) can only speak for it when the path IS the currently open
         // project. Compute the open-project identity FIRST, BEFORE the disk write,

@@ -295,20 +295,10 @@ impl Database {
             [],
         )?;
 
-        // Ensure collab_state table exists (schema v5: collaboration mode).
-        // Single-row JSON blob holding the project's CollabState.
-        self.conn.execute(
-            "CREATE TABLE IF NOT EXISTS collab_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                state_json TEXT NOT NULL
-            )",
-            [],
-        )?;
-
         // Ensure speleo_link table exists (schema v9: SpeleoDB hand-off identity
         // + dirty bit, #189). This CREATE IF NOT EXISTS is what makes the table
-        // appear on open_existing() of a legacy v8 file (mirrors the collab_state
-        // pattern, not the shot_uuid ALTER pattern). No ALTER, no backfill. The
+        // appear on open_existing() of a legacy v8 file (a whole-table
+        // CREATE-IF-NOT-EXISTS, not the shot_uuid conditional-ALTER pattern). No ALTER, no backfill. The
         // DDL is byte-identical to init_schema's so the carry-forward fence
         // (PRESERVED_SPELEOLINK_COLUMNS) holds on either open shape.
         self.conn.execute(
@@ -379,8 +369,10 @@ impl Database {
             tracing::info!("Added last_verify_at column to speleo_link table (schema v11)");
         }
 
-        // Add uuid column to shots table (schema v5→v6: per-shot UUIDs
-        // for collaboration round-trip identity).  We don't backfill
+        // Add uuid column to shots table (schema v5→v6: per-shot UUIDs,
+        // the stable station identity every cross-reference anchors to
+        // (`StationKey::AfterShot`) and the `<UUID>` the Ariane export
+        // emits).  We don't backfill
         // existing rows here - `load_project` lazily mints a UUID for
         // any row that comes back with NULL, and the next save persists
         // it.  That keeps the migration cost a single ALTER TABLE for
@@ -829,23 +821,6 @@ impl Database {
     ///   could never fire, so there is no dismissal to clear - and after normalisation it
     ///   starts firing correctly, which is the user-visible signal that these shots were
     ///   touched.
-    /// * **The collab sidecar baseline.** Unlike v11 to v12, no TML convention changed
-    ///   here, and the sibling is not a rendering of the mean: the exporter writes the raw
-    ///   `azimuth_in` (`export::tml`, the `azimuth: shot.azimuth_in` legs), and both
-    ///   `parsers::tml::normalize_tml_shot` and `models::collab::geo_key` apply the same
-    ///   `rem_euclid(360.0)` this migration wraps with. That agreement is now
-    ///   unconditional: the migration writes through
-    ///   [`crate::models::normalize_azimuth`], so every migrated reading is in
-    ///   `[0, 360)` and `rem_euclid` returns it untouched on the reconcile side. (Before
-    ///   that clamp there was a boundary hole - a reading in `[-2.84e-14, 0)` migrated to
-    ///   exactly `360.0`, which `geo_key` then wrapped to `0.0`, so the two disagreed.)
-    ///   So a migrated project and an untouched sibling agree on every field reconcile
-    ///   compares. Dropping the provenance would cost real data instead:
-    ///   `compute_collab` bails while `last_export_tml_sha256` is `None`,
-    ///   so the reconcile dialog never opens and the next save overwrites the
-    ///   collaborator's unmerged edits with no prompt. See
-    ///   [`crate::models::Project::invalidate_collab_baseline`] for the runtime policy,
-    ///   which empties the baseline and deliberately keeps the sha for the same reason.
     /// * **`section_offsets`.** These are the one derived value that a corrected bearing
     ///   really can leave inconsistent, and they are still left alone - deliberately, not by
     ///   omission. An offset is an ACCUMULATED translation: `adjust_section_offset` adds or
@@ -1019,10 +994,6 @@ impl Database {
     ///    meaning actually changed: `LENGTH_BELOW_DEPTH_CHANGE` compares length
     ///    against the depth change and never reads pitch, so its dismissals are
     ///    still valid.
-    ///
-    /// The collab sidecar baseline is handled separately, by
-    /// [`Self::invalidate_collab_tml_baseline`], because it goes stale whether
-    /// or not any stored shot moved.
     fn invalidate_pre_pitch_flip_state(&self, flipped_sections: &[i64]) -> Result<()> {
         self.drop_legacy_undo_history()?;
 
@@ -1044,57 +1015,6 @@ impl Database {
             }
         }
 
-        Ok(())
-    }
-
-    /// Drop the collab sidecar provenance. Sole caller: the v11 to v12 upgrade.
-    ///
-    /// This is a last resort, not a routine precaution, and no later migration should
-    /// reach for it without the same justification. It clears
-    /// `last_export_tml_sha256`, and `compute_collab` bails while that is `None`: no
-    /// reconcile dialog can open, so the next save overwrites whatever the
-    /// collaborator has since put in the sibling `.tml`, silently. The runtime policy
-    /// is the safe shape - [`crate::models::Project::invalidate_collab_baseline`]
-    /// empties `shot_baseline` and deliberately KEEPS the sha, which is enough for
-    /// every invalidation whose cause is a local renumbering.
-    ///
-    /// v11 to v12 earns it because the sibling itself becomes unreadable rather than
-    /// merely out of date - re-exporting is the only way back to a comparable file, and
-    /// a phantom-inclination reconcile would do more damage than the lost prompt. That
-    /// is not true of a migration that only rewrites how a value is spelled: v13 to v14
-    /// normalises stored azimuths and deliberately leaves this alone (see
-    /// [`Self::migrate_azimuths_to_canonical_range`]).
-    ///
-    /// Unlike the stored-shot flip, this is unconditional for a pre-v12 project.
-    /// The TML sign convention changed on both sides of the boundary at once
-    /// (`parsers::tml::inclination_to_pitch` and
-    /// `export::tml::pitch_to_inclination`), so a sibling `.tml` written by an
-    /// older build is in the old frame no matter whether any stored section was
-    /// in it. A project whose sections were all already +down, so the migration
-    /// flipped nothing, still has a stale sidecar: reconciling against it would
-    /// report a phantom inclination edit on every shot with a non-zero pitch,
-    /// and applying that would reverse the stored value.
-    ///
-    /// Clearing the hash makes `compute_collab` return early, so the next save
-    /// re-exports the sibling in the new frame and reseeds the baseline.
-    fn invalidate_collab_tml_baseline(&self) -> Result<()> {
-        if !self.table_exists("collab_state")? {
-            return Ok(());
-        }
-        let updated = self.conn.execute(
-            "UPDATE collab_state
-             SET state_json = json_remove(
-                     json_remove(state_json, '$.last_export_tml_sha256'),
-                     '$.shot_baseline')
-             WHERE id = 1
-               AND json_extract(state_json, '$.last_export_tml_sha256') IS NOT NULL",
-            [],
-        )?;
-        if updated > 0 {
-            tracing::info!(
-                "Cleared collab sidecar baseline; the .tml will be re-exported before the next reconcile"
-            );
-        }
         Ok(())
     }
 
@@ -1200,18 +1120,15 @@ impl Database {
             // is re-derived from the rows themselves, so a flip that committed
             // alone would look already-correct on the next open: the migration
             // would decline, the invalidation would never run, and v12 would be
-            // stamped over permanently stale undo history, warning dismissals
-            // and collab baseline. One transaction removes that window. The
-            // invalidation runs on this same connection, so its statements join
-            // this transaction.
+            // stamped over permanently stale undo history and warning
+            // dismissals. One transaction removes that window. The invalidation
+            // runs on this same connection, so its statements join this
+            // transaction.
             let tx = self.conn.unchecked_transaction()?;
             let flipped = Self::migrate_pitch_to_down_convention(&tx)?;
             if !flipped.is_empty() {
                 self.invalidate_pre_pitch_flip_state(&flipped)?;
             }
-            // Unconditional: the sidecar goes stale on the convention change
-            // itself, not on any stored shot moving.
-            self.invalidate_collab_tml_baseline()?;
             tx.commit()?;
         }
         if current < 13 {
@@ -1230,11 +1147,17 @@ impl Database {
         if current < 14 {
             // One transaction only to batch the per-row UPDATEs: the callee issues one
             // `execute` per affected shot and documents that the caller wraps them.
-            // Nothing else runs here - in particular the collab sidecar is NOT
-            // invalidated, for the reasons on the callee's doc.
             let tx = self.conn.unchecked_transaction()?;
             Self::migrate_azimuths_to_canonical_range(&tx)?;
             tx.commit()?;
+        }
+        if current < 15 {
+            // Ariane collaboration mode is gone: drop its single-row sidecar
+            // table outright rather than leaving a dead one in every existing
+            // file. Destructive but inert - nothing reads it after this
+            // release, and the `.stalx` it described (the sibling `.tml`) is no
+            // longer written either.
+            self.conn.execute("DROP TABLE IF EXISTS collab_state", [])?;
         }
         self.set_user_version(SCHEMA_VERSION)?;
         // Keep project-level schema_version in sync with PRAGMA user_version.
@@ -1351,12 +1274,6 @@ impl Database {
                 comment TEXT NOT NULL,
                 PRIMARY KEY (section_id, station_index),
                 FOREIGN KEY (section_id) REFERENCES sections(id) ON DELETE CASCADE
-            );
-
-            -- Collaboration mode state (single-row JSON blob; schema v5)
-            CREATE TABLE IF NOT EXISTS collab_state (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                state_json TEXT NOT NULL
             );
 
             -- SpeleoDB single-writer hand-off link (schema v9). Single row id=1.

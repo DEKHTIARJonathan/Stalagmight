@@ -74,7 +74,6 @@ impl AppState {
             | MoveStation { .. }
             | MoveComment { .. }
             | Batch { .. }
-            | ApplyCollabChanges
             | RepairIntegrity
             | UpdateProjectSettings => false,
         }
@@ -230,8 +229,7 @@ impl AppState {
             | RemoveZeroDatum { .. }
             | MoveSection { .. }
             | MoveSegment { .. }
-            | MoveStation { .. }
-            | ApplyCollabChanges => GEOMETRY_ONLY,
+            | MoveStation { .. } => GEOMETRY_ONLY,
         }
     }
 
@@ -580,9 +578,7 @@ impl AppState {
                 self.create_project(name.clone(), location.clone())
             }
             Command::OpenProject { path } => self.open_project(path.clone()),
-            Command::SaveProject { path, is_autosave } => {
-                self.save_project(path.clone(), *is_autosave)
-            }
+            Command::SaveProject { path } => self.save_project(path.clone()),
             Command::CloseProject => self.close_project(),
             Command::CreateSection {
                 name,
@@ -676,7 +672,6 @@ impl AppState {
                 output_name.clone(),
                 *archive_originals,
             ),
-            Command::ApplyCollabChanges => self.apply_collab_changes(),
             // Never routed here: repair is applied via `repair_project_integrity`,
             // which records its own snapshot-pair undo entry. Present only for match
             // exhaustiveness.
@@ -1015,10 +1010,7 @@ mod integrity_capability_tests {
         // INERT (no geometry, no refs).
         assert_eq!(caps(&Command::CloseProject), (false, false, false));
         assert_eq!(
-            caps(&Command::SaveProject {
-                path: None,
-                is_autosave: false
-            }),
+            caps(&Command::SaveProject { path: None }),
             (false, false, false)
         );
         // RepairIntegrity never runs through execute(); it is classified INERT.
