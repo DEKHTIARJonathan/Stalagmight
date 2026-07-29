@@ -1965,7 +1965,15 @@ function MapCanvas() {
   // sliders. `origin` null = the entrance (zero-datum) default; the command
   // returns null when no project is open (Ok(None)) or throws on invalid input.
   useEffect(() => {
-    if (!showGasPlan || gasComputeGate.skip) return undefined;
+    if (!showGasPlan) return undefined;
+    if (gasComputeGate.skip) {
+      // A stalled plan (#310) runs NO compute at all, and the store has already nulled the
+      // field - flag it like a failed fetch, or `overlayApplyAction` reads the null field as
+      // "recompute in flight" and holds the last ramp's reachable colors under the
+      // unresolved-pin warning indefinitely. The next successful fetch clears the flag.
+      setGasFieldFailed(true);
+      return undefined;
+    }
     let cancelled = false;
     invokeIpc<GasReachField | null>(
       'compute_gas_reach_field',

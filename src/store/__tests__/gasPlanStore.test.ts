@@ -7,7 +7,7 @@ vi.mock('../../utils/divePlanApi', () => ({
   planRefsForAnchors: vi.fn(async () => []),
 }));
 
-import { useGasPlanStore, selectIsPlanDirty } from '../gasPlanStore';
+import { useGasPlanStore, selectIsPlanDirty, selectHasPins } from '../gasPlanStore';
 import { divePlanSnapshotOf } from '../../utils/divePlan';
 import { defaultConfig } from '../../types/config';
 import type { GasConfig, GasReachField } from '../../types/ipc.generated';
@@ -482,6 +482,38 @@ describe('gasPlanStore segments (#317)', () => {
     expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(rig);
   });
 
+  it('grounds scootered spans when the load drops an invalid rig, exactly like setDpvRig(null)', () => {
+    // The engine gates `on_scooter` off without a rig but still flies the span's auto-filled
+    // scooter pace, and a latent flag would spring back to life on the next rig install - a
+    // scootered plan reappearing from a rig the load just refused.
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(9, {
+      ...snapshot,
+      waypoints: [{ section_id: 1, station_index: 1 }],
+      segments: [
+        { speed_m_per_min: 45, on_scooter: true },
+        { speed_m_per_min: 12, on_scooter: false },
+      ],
+      gas_config: {
+        ...snapshot.gas_config,
+        dpv: {
+          primary: { speed_m_per_min: 45, burn_minutes: 0 },
+          backup: { speed_m_per_min: 45, burn_minutes: 45 },
+          range_reserve_fraction: 0.1,
+        },
+      },
+    });
+    const s = useGasPlanStore.getState();
+    expect(s.gasConfig.dpv).toBeNull();
+    // The scootered span is fully reset; a swum span's hand-set pace survives.
+    expect(s.segments).toEqual([
+      { speed_m_per_min: null, on_scooter: false },
+      { speed_m_per_min: 12, on_scooter: false },
+    ]);
+    // The baseline got the same scrub, so the loaded plan still reads clean.
+    expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
+  });
+
   it('FOLDS a loaded plan that carries more segments than it has spans, never truncates', () => {
     // A bare `slice(0, want)` discards the diver's statement about those spans, and discards every
     // field in the REACH-EXTENDING direction: a dropped slow speed reverts to the plan speed
@@ -722,6 +754,22 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
     expect(selectIsPlanDirty(s)).toBe(false);
   });
 
+  it('selectHasPins counts BASELINE pins, so the anchor round trip survives clearing the live ones', () => {
+    // Load a plan with an endpoint, then clear it live: `selectIsPlanDirty` still compares
+    // against the baseline's ref, which a renumbering edit would silently rebind if the
+    // mutation seam read "no live pins" as "nothing to remap".
+    const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
+    useGasPlanStore.getState().applyLoadedPlan(3, {
+      ...snapshot,
+      endpoint: { section_id: 1, station_index: 4 },
+    });
+    useGasPlanStore.getState().setEndpoint(null);
+    expect(selectHasPins(useGasPlanStore.getState())).toBe(true);
+    // Unloading the plan drops the baseline, and with it the last reason to anchor anything.
+    useGasPlanStore.getState().clearLoadedPlan();
+    expect(selectHasPins(useGasPlanStore.getState())).toBe(false);
+  });
+
   it('becomes dirty when an input diverges from the loaded baseline', () => {
     const snapshot = divePlanSnapshotOf(useGasPlanStore.getState());
     useGasPlanStore.getState().applyLoadedPlan(1, snapshot);
@@ -903,6 +951,18 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
     // ...but dpv is not - a Settings-side rig change must never overwrite whatever the panel's
     // own DPV editor is holding.
     expect(s.gasConfig.dpv).toBeNull();
+  });
+
+  it('a sync clears pinned stage drops, like every other route-input setter', () => {
+    // The jump multiplier re-prices legs and the reference toggle changes the graph - either can
+    // move the route and its drop positions, so a ▼ dragged on the old route must not be sent
+    // into the recompute against the new one.
+    useGasPlanStore.getState().markHydrated(gas({ jump_rmv_multiplier: 1.5 }));
+    useGasPlanStore.getState().setStageDropOverride(0, { section_id: 1, station_index: 2 });
+    expect(useGasPlanStore.getState().stageDropOverrides).toHaveLength(1);
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 2.5 }));
+    expect(useGasPlanStore.getState().stageDropOverrides).toEqual([]);
+    expect(useGasPlanStore.getState().unresolved.stageDropOverrides).toEqual([]);
   });
 
   it('reset clears the marker, so a new project re-seeds instead of comparing across projects', () => {

@@ -39,10 +39,10 @@ const MIN_LABELLED_HEIGHT = 130;
  * same vectors it derives the Plan readout's distance and depth from - so this chart cannot drift
  * from the numbers in the sidebar beside it.
  *
- * The two axes are not interchangeable views of one shape. The engine prices the way in at the
- * survey speed and the way out at the (never slower) exit speed, so the turnaround sits at the
- * halfway mark on the distance axis but later than halfway on the time axis. That difference is the
- * point of the toggle.
+ * The two axes are not interchangeable views of one shape. The engine prices the way in per span
+ * (survey or segment pace) and the way home at the swim speed - except a scootered span, which
+ * rides out at its own pace - so the turnaround sits at the halfway mark on the distance axis but
+ * not on the time axis. That difference is the point of the toggle.
  *
  * Hand-rolled SVG, matching the map legends - no charting dependency. A passive consumer of the
  * store: `MapCanvas` owns the compute, and this must never trigger one.
@@ -206,6 +206,18 @@ function ProfileExportControls({
         filters: exportSaveFilters(t('planTables.profile.export.xmlFilter'), 'xml'),
       });
       if (!path) return;
+      // Re-check what the render-time `disabled` proved BEFORE the await: the dialog is not
+      // modal everywhere (Android's in-app picker), so an edit behind it can strand a pin
+      // after the button's gate passed - and `currentRequest()` would then export a route
+      // through the stale positional ref the Save gate refuses.
+      if (selectHasUnresolvedPins(useGasPlanStore.getState())) {
+        throw new Error(
+          t(
+            'planTables.profile.export.unresolvedPins',
+            'A route point no longer matches a station in the survey. Re-place it before exporting.'
+          )
+        );
+      }
       await exportDiveProfile(ensureExtension(path, '.xml'), 'subsurface-xml', currentRequest());
       showToast(t('planTables.profile.export.written'), 'profile-export-ok');
     });

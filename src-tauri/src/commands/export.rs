@@ -366,7 +366,7 @@ fn render_profile_for(
         request.cylinders,
         request.gas_config,
     )?;
-    crate::commands::gas::validate_plan_segments(&request.segments)?;
+    crate::commands::gas::validate_plan_segments(&request.segments, request.waypoints.len())?;
     let field = project.compute_gas_reach_field_with_overrides(
         request.origin.as_ref(),
         request.endpoint.as_ref(),

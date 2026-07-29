@@ -846,6 +846,12 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       gasConfig: { ...s.gasConfig, ...structuredClone(patch) },
       lastSeenPersistedGas: next,
       reachField: null,
+      // Either field can move the route and its drop positions (the jump multiplier re-prices
+      // legs, the reference toggle changes the graph), so pinned drops clear exactly as every
+      // other gas/route-input setter clears them - a ▼ dragged on the old route must not be
+      // sent into the recompute against the new one.
+      stageDropOverrides: [],
+      unresolved: routeInputFlags(s.unresolved),
     });
   },
 
@@ -1090,27 +1096,37 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
   },
 
   applyLoadedPlan: (planId, snapshot, anchors) => {
+    // An engine-invalid rig (speed or burn <= 0) is dropped WHOLE, mirroring what
+    // `GasConfig::normalize` does at the compute door (`validate_plan_inputs`) - the engine
+    // will plan rig-less either way, so keeping it here would show a live toggle and a
+    // usable-range figure over a plan the engine is not actually range-capping (the #233
+    // effective-state rule). Only reachable from a hand-edited `.plnx`: the editor cannot
+    // construct one, and the config file normalizes on load. Dropped from the BASELINE too
+    // (this whole normalized snapshot is the baseline), so a freshly loaded plan stays
+    // clean rather than instantly dirty.
+    const rigDropped =
+      snapshot.gas_config.dpv != null && dpvRigInvalid(snapshot.gas_config.dpv);
     // A plan written before segments existed carries none, and a hand-edited one can carry any
     // number; either way the panel and the engine need exactly one per span from the first render.
     const normalized: DivePlanSnapshot = {
       ...snapshot,
-      // An engine-invalid rig (speed or burn <= 0) is dropped WHOLE, mirroring what
-      // `GasConfig::normalize` does at the compute door (`validate_plan_inputs`) - the engine
-      // will plan rig-less either way, so keeping it here would show a live toggle and a
-      // usable-range figure over a plan the engine is not actually range-capping (the #233
-      // effective-state rule). Only reachable from a hand-edited `.plnx`: the editor cannot
-      // construct one, and the config file normalizes on load. Dropped from the BASELINE too
-      // (this whole normalized snapshot is the baseline), so a freshly loaded plan stays
-      // clean rather than instantly dirty.
-      gas_config:
-        snapshot.gas_config.dpv && dpvRigInvalid(snapshot.gas_config.dpv)
-          ? { ...snapshot.gas_config, dpv: null }
-          : snapshot.gas_config,
+      gas_config: rigDropped
+        ? { ...snapshot.gas_config, dpv: null }
+        : snapshot.gas_config,
       // The PLAN's own speed, not the working config's: the snapshot brings its gas config with it
       // and is installed wholesale below, so folding against anything else would rank the spans on
       // a pace this plan is never flown at.
+      //
+      // Dropping the rig also grounds every scootered span, exactly as `setDpvRig(null)` does
+      // live: the engine gates `on_scooter` off without a rig but still flies the span's
+      // auto-filled scooter pace, and a flag left latent here would spring back to life on the
+      // next rig install - a scootered plan reappearing from a rig the load just refused.
       segments: normalizeSegments(
-        snapshot.segments,
+        rigDropped
+          ? snapshot.segments.map((seg) =>
+              seg.on_scooter ? { on_scooter: false, speed_m_per_min: null } : seg
+            )
+          : snapshot.segments,
         snapshot.waypoints.length,
         planSpeed(snapshot.gas_config)
       ),
@@ -1189,9 +1205,15 @@ export function selectIsPlanDirty(s: GasPlanState): boolean {
 }
 
 /** #310: whether the plan pins anything at all - what lets the mutation seam skip the whole
- *  anchor round trip (two IPC calls per edit) for the overwhelmingly common empty plan. */
+ *  anchor round trip (two IPC calls per edit) for the overwhelmingly common empty plan. The
+ *  BASELINE's pins count too: a loaded plan whose live pins were all cleared still compares
+ *  against baseline refs (`selectIsPlanDirty`), and skipping the round trip would leave those
+ *  in the old numbering after a renumbering edit - the exact silent rebind the baseline anchors
+ *  exist to prevent. */
 export function selectHasPins(s: GasPlanState): boolean {
-  return collectPresent(pinRefsOf(s)).length > 0;
+  if (collectPresent(pinRefsOf(s)).length > 0) return true;
+  const base = pinRefsOfSnapshot(s.loadedPlanBaseline);
+  return base !== null && collectPresent(base).length > 0;
 }
 
 /** #310: any pin the backend could no longer place. Blocks a Save - persisting a pin the backend

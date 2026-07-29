@@ -15,10 +15,25 @@ use crate::models::{Cylinder, Diver, GasReachField, PlanSegment, StationRef};
 /// REJECT rather than truncate, for the same reason the way-point cap does: a segment is the diver's
 /// statement about how a span is flown, and quietly dropping the last few would fly them at the plan
 /// speed on no scooter instead - slower and cheaper on gas, so the reported reach could only grow.
-pub(crate) fn validate_plan_segments(segments: &[PlanSegment]) -> Result<(), String> {
+///
+/// The per-span bound is the same rule at the route's actual size: `resolve_segments` reads only
+/// `waypoints + 1` spans, so rows past that would be silently inert at this door - while the
+/// `.plnx` load path FOLDS an over-long tail into the last retained span, conservatively. A
+/// request with more rows than the route has spans is describing a dive this plan cannot fly;
+/// reject it rather than let the two doors quietly disagree about which rows count.
+pub(crate) fn validate_plan_segments(
+    segments: &[PlanSegment],
+    waypoint_count: usize,
+) -> Result<(), String> {
     if segments.len() > MAX_SEGMENTS {
         return Err(format!(
             "Too many plan segments: {} (max {MAX_SEGMENTS}).",
+            segments.len()
+        ));
+    }
+    if segments.len() > waypoint_count + 1 {
+        return Err(format!(
+            "More plan segments than route spans: {} for {waypoint_count} way point(s).",
             segments.len()
         ));
     }
@@ -118,7 +133,7 @@ pub async fn compute_gas_reach_field(
     // amplifier guard on the hottest path there is.
     let (diver, cylinders, gas_config) =
         validate_plan_inputs(&waypoints, diver, cylinders, gas_config)?;
-    validate_plan_segments(&segments)?;
+    validate_plan_segments(&segments, waypoints.len())?;
 
     let field = tauri::async_runtime::spawn_blocking(move || {
         let state = app_handle.state::<AppState>();
@@ -161,10 +176,24 @@ mod tests {
         // The way-point cap exists "so the limit cannot be walked past by a caller that never
         // touches a file"; the segment list arrived at the same door with no such bound, even
         // though the `.plnx` write path caps it.
-        assert!(validate_plan_segments(&[]).is_ok());
-        assert!(validate_plan_segments(&vec![span(); MAX_SEGMENTS]).is_ok());
+        assert!(validate_plan_segments(&[], 0).is_ok());
+        assert!(validate_plan_segments(&vec![span(); MAX_SEGMENTS], MAX_SEGMENTS - 1).is_ok());
 
-        let err = validate_plan_segments(&vec![span(); MAX_SEGMENTS + 1]).unwrap_err();
+        let err =
+            validate_plan_segments(&vec![span(); MAX_SEGMENTS + 1], MAX_SEGMENTS).unwrap_err();
         assert!(err.contains("Too many plan segments"), "{err}");
+    }
+
+    #[test]
+    fn segments_beyond_the_route_span_count_are_rejected() {
+        // An in-cap list can still outrun the route: `resolve_segments` reads only
+        // `waypoints + 1` spans, so before this bound a request with no way points and a slow or
+        // scootered SECOND row sailed through validation with that row silently inert - while the
+        // `.plnx` load path folds the same tail conservatively. Reject the disagreement at the
+        // door.
+        assert!(validate_plan_segments(&vec![span(); 2], 1).is_ok());
+
+        let err = validate_plan_segments(&vec![span(); 2], 0).unwrap_err();
+        assert!(err.contains("More plan segments than route spans"), "{err}");
     }
 }
