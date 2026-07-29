@@ -847,7 +847,21 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
-  setSession: (s) =>
+  setSession: (s) => {
+    // [#258] A refresh that comes back logged-OUT is an ending, whatever raised it.
+    // This action is the benign one - every project load and every Settings open calls
+    // it, and it deliberately does not bump `sessionGeneration` - so it cannot simply
+    // tear down. But the ONE transition it can carry is a real session loss, and an
+    // overlay left standing across it is a picker offering to retry against an account
+    // nobody is signed in to. Suppressing NEW pickers is not enough; one already open
+    // has to go too.
+    //
+    // Routed through `clearSession` rather than a second teardown beside it: that is
+    // where the pending cancel is fired, the dismissal telemetry recorded, and every
+    // stale link field reset - all of which are just as due here.
+    if (get().session?.loggedIn === true && !s.logged_in) {
+      get().clearSession();
+    }
     set({
       session: {
         loggedIn: s.logged_in,
@@ -857,7 +871,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         storage: s.storage ?? null,
         keychain: s.keychain,
       },
-    }),
+    });
+  },
 
   refreshSession: async () => {
     try {

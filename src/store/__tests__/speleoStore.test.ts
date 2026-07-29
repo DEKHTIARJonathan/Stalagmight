@@ -74,6 +74,77 @@ describe('speleoStore', () => {
       });
     });
 
+    it('[#258] a refresh that reports logged-out tears down an OPEN picker', () => {
+      // Suppressing NEW pickers after a logged-out refresh is only half of it: one
+      // already on screen offers to retry against an account nobody is signed in to,
+      // and `setSession` is the benign action every project load and Settings open
+      // calls, so nothing else was going to close it. The cancel has to fire too, or a
+      // caller suspended on the question is left waiting forever.
+      useSpeleoStore.getState().setSession({
+        logged_in: true,
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+      });
+      const onCancel = vi.fn();
+      useSpeleoStore
+        .getState()
+        .openDumpPicker(
+          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false }],
+          'stalx',
+          async () => {},
+          onCancel,
+        );
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+
+      useSpeleoStore.getState().setSession({
+        logged_in: false,
+        user_email: null,
+        endpoint: 'https://x/',
+        keychain_backed: false,
+        storage: null,
+        keychain: 'available',
+      });
+
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+      expect(onCancel).toHaveBeenCalled();
+      // The refresh's own report still lands - this is a teardown, not a veto.
+      expect(useSpeleoStore.getState().session?.loggedIn).toBe(false);
+    });
+
+    it('[#258] a benign logged-in refresh leaves an open picker alone', () => {
+      // The other half: a project load and reopening Settings both call this, and a
+      // picker raised by an open in flight must survive them.
+      useSpeleoStore.getState().setSession({
+        logged_in: true,
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+      });
+      useSpeleoStore
+        .getState()
+        .openDumpPicker(
+          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false }],
+          'stalx',
+          async () => {},
+        );
+
+      useSpeleoStore.getState().setSession({
+        logged_in: true,
+        user_email: 'u@x',
+        endpoint: 'https://x/',
+        keychain_backed: true,
+        storage: 'keychain',
+        keychain: 'available',
+      });
+
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+    });
+
     it('clearSession degrades an active edit to read-only', () => {
       useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
       useSpeleoStore
