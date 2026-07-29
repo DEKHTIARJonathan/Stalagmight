@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- CI: GitHub Actions bumped to versions that run on Node.js 24, ahead of the Node.js 20 runtime deprecation ([#351](https://github.com/Stalagmight/Stalagmight/issues/351))
+
 ## [0.5.0] - 2026-07-29
 
 The first release with builds for all three platforms. The headline additions are

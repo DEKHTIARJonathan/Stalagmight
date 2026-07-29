@@ -33,7 +33,7 @@ jobs:
     outputs:
       run: ${{ steps.changed.outputs.run }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - id: changed
@@ -57,9 +57,9 @@ jobs:
     # Slower box than hosted (~44m at 2 workers); generous headroom over 60.
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@v4
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -128,7 +128,7 @@ jobs:
       # dev-server-didn't-start failure (no artifacts) doesn't warn.
       - name: Upload E2E report (failures & flakes)
         if: failure() || steps.summary.outputs.issues == 'true'
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: nightly-e2e-report
           path: |

@@ -87,7 +87,7 @@ jobs:
       # hosted (rust-cache sets it too).
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # tauri/gtk build deps. Hosted installs them; the self-hosted runner
       # image bakes them, so skip the apt-get there.
@@ -116,8 +116,8 @@ jobs:
         with:
           workspaces: src-tauri
 
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
