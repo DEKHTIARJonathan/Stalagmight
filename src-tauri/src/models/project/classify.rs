@@ -244,11 +244,12 @@ impl Project {
         debug_assert!(kind.is_virtual(), "only the virtual kinds make sense here");
         let mut changed = 0;
         for section in &mut self.sections {
-            let section_id = section.id;
+            // Section-level predicate since `ClassifyScope` lost its per-shot
+            // variant, so it belongs outside the shot loop.
+            if !scope.allows(section.id) {
+                continue;
+            }
             for shot in &mut section.shots {
-                if !scope.allows(section_id) {
-                    continue;
-                }
                 if shot.kind.is_virtual() && shot.kind != kind {
                     shot.kind = kind;
                     changed += 1;

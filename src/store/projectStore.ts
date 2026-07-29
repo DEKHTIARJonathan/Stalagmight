@@ -1026,14 +1026,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // every held lock reads as "locked by other").
         void useSpeleoStore.getState().refreshSession();
 
-        const detectOpId = clientOpId;
-        const isStillCurrentLoad = (): boolean => {
-          const state = get();
-          return (
-            state.project !== null &&
-            state.loading.clientOpId === detectOpId
-          );
-        };
         // #27: shots whose stored `kind` this build could not read. The backend
         // already failed them closed to Reference (so nothing routes through a
         // leg it could not parse) and hands them over exactly once, but that is
@@ -1051,7 +1043,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             { loadingId: result.loadingId },
             { purpose: 'resolve unreadable shot kinds' }
           );
-          if (isStillCurrentLoad() && found.length > 0) {
+          // Staleness guard: a user who switched or closed the project while the
+          // IPC was in flight must not get a dialog about a file that is no
+          // longer open.
+          const st = get();
+          if (st.project !== null && st.loading.clientOpId === clientOpId && found.length > 0) {
             useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
           }
         } catch {

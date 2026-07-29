@@ -6,7 +6,7 @@ import { ValidationSettings } from './settings/ValidationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
 import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
-import type { SettingsCategory } from './SettingsSidebar';
+import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -14,7 +14,9 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 
-type ProjectSettingsTab = 'general' | 'validation' | 'speleodb';
+// A compiler-checked subset of SettingsCategory, so these tabs can never drift
+// from the shared id helpers they are paired with.
+type ProjectSettingsTab = Extract<SettingsCategory, 'general' | 'validation' | 'speleodb'>;
 // The local (always-shown) tabs; the remote-only 'speleodb' tab is appended below.
 const TABS: readonly ProjectSettingsTab[] = ['general', 'validation'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
@@ -42,11 +44,6 @@ export function ProjectSettingsDialog() {
     })),
   );
   const panelIdBase = useId();
-  // Same id format as SettingsSidebar's getTabId/getPanelId. The validation tab's
-  // ids therefore still match what ValidationSettings emits for its
-  // aria-labelledby/panel id.
-  const tabId = (tk: ProjectSettingsTab) => `${panelIdBase}-tab-${tk}`;
-  const panelId = (tk: ProjectSettingsTab) => `${panelIdBase}-panel-${tk}`;
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
   const renderedTabs = useMemo<readonly ProjectSettingsTab[]>(
@@ -149,10 +146,10 @@ export function ProjectSettingsDialog() {
               {renderedTabs.map((tk) => (
                 <button
                   key={tk}
-                  id={tabId(tk)}
+                  id={getTabId(panelIdBase, tk)}
                   role="tab"
                   aria-selected={tab === tk}
-                  aria-controls={panelId(tk)}
+                  aria-controls={getPanelId(panelIdBase, tk)}
                   onClick={() => setTab(tk)}
                   className={`w-full text-left px-3 py-1.5 rounded text-sm ${tab === tk ? 'bg-accent-10 text-text-primary' : 'text-text-secondary hover:bg-background-50'}`}
                   data-testid={`project-settings-tab-${tk}`}
@@ -164,7 +161,7 @@ export function ProjectSettingsDialog() {
 
             <div className="flex-1 min-w-0 overflow-auto p-4">
               {tab === 'general' && (
-                <div role="tabpanel" id={panelId('general')} aria-labelledby={tabId('general')}>
+                <div role="tabpanel" id={getPanelId(panelIdBase, 'general')} aria-labelledby={getTabId(panelIdBase, 'general')}>
                   <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
                     <SettingRow
                       label={t('dialogs.projectSettings.name.label')}
@@ -203,7 +200,7 @@ export function ProjectSettingsDialog() {
                 />
               )}
               {tab === 'speleodb' && isRemote && (
-                <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
+                <div role="tabpanel" id={getPanelId(panelIdBase, 'speleodb')} aria-labelledby={getTabId(panelIdBase, 'speleodb')}>
                   <ProjectSettingsSpeleoStub />
                 </div>
               )}
