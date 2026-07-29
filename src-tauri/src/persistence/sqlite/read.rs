@@ -139,22 +139,6 @@ impl Database {
             "load_metadata timings"
         );
 
-        // Fast collab-on check: the recent-projects panel surfaces this
-        // without opening the project, so we can't call the full
-        // `load_collab_state` here (it deserialises the whole baseline).
-        // Just probe the `enabled` flag from the JSON blob.
-        let collab_enabled: bool = self
-            .conn
-            .query_row(
-                "SELECT json_extract(state_json, '$.enabled') FROM collab_state WHERE id = 1",
-                [],
-                |row| row.get::<_, Option<i64>>(0),
-            )
-            .ok()
-            .flatten()
-            .map(|v| v != 0)
-            .unwrap_or(false);
-
         // The linked SpeleoDB project UUID (#201), so the recents/GlobalView list can
         // match this entry against a single lock scan. The `speleo_link` row is a
         // singleton (`CHECK(id = 1)`) with a NOT NULL project_id, so this doubles as
@@ -181,7 +165,6 @@ impl Database {
             station_count,
             gps_center,
             gps_bounds,
-            collab_enabled,
             is_remote,
             speleodb_project_id,
         })
@@ -599,9 +582,6 @@ impl Database {
         // Load station comments
         let station_comments = self.load_station_comments()?;
 
-        // Load collaboration state (None for pre-v5 projects or when off)
-        let collab = self.load_collab_state()?;
-
         // Per-project validation thresholds (#57). The DB layer has no access to
         // the global config, so legacy projects (no row) fall back to the
         // hardcoded default here; the AppState open paths re-check for absence
@@ -659,7 +639,6 @@ impl Database {
             imported_file_hashes,
             imported_section_hashes,
             next_closure_id,
-            collab,
             validation,
             cascade_deferred: false,
             section_index_cache,
@@ -859,45 +838,11 @@ impl Database {
         Ok(comments)
     }
 
-    /// Load collaboration state from the single-row `collab_state` table.
-    /// Returns `None` for pre-v5 projects (table absent) or when no row is present.
-    fn load_collab_state(&self) -> Result<Option<crate::models::CollabState>> {
-        let table_exists: bool = self
-            .conn
-            .query_row(
-                "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='collab_state'",
-                [],
-                |row| row.get::<_, i64>(0),
-            )
-            .map(|c| c > 0)
-            .unwrap_or(false);
-
-        if !table_exists {
-            return Ok(None);
-        }
-
-        let json: Option<String> = self
-            .conn
-            .query_row(
-                "SELECT state_json FROM collab_state WHERE id = 1",
-                [],
-                |row| row.get::<_, String>(0),
-            )
-            .ok();
-
-        match json {
-            Some(j) => Ok(Some(
-                serde_json::from_str(&j).context("Failed to deserialize collab state")?,
-            )),
-            None => Ok(None),
-        }
-    }
-
     /// Load the SpeleoDB hand-off link from the single-row `speleo_link` table
     /// (schema v9, #189). Returns `None` for pre-v9 projects (table absent) or
     /// when no row is present.
     ///
-    /// Deliberately `pub` (unlike the private `load_collab_state`): it is called
+    /// Deliberately `pub`: it is called
     /// cross-module from `core/state/speleodb.rs` (stamp-on-pull readback) and
     /// the #190/#191 tests. `base_commit_sha` is read as `Option<String>` so an
     /// on-disk NULL stays `None` (never coerced to `""`).

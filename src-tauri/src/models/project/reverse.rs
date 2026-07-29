@@ -294,8 +294,10 @@ impl Project {
         };
 
         // Ids belong to positions, not records: the shot that was 1 becomes N.
-        // Identity (uuid) travels with the record instead, so collab reconcile
-        // sees moved shots rather than a wholesale delete+add.
+        // Identity (uuid) travels with the record instead, so the station
+        // anchors keyed on it (undo/redo `AfterShot`, `shot_uuid_index`) follow
+        // the shot to its mirrored position rather than pointing at whatever
+        // record inherited its old id.
         let ids: Vec<_> = section.shots.iter().map(|s| s.id).collect();
         let uuids: Vec<_> = section.shots.iter().map(|s| s.uuid.clone()).collect();
         let mut data: Vec<ShotData> = section.shots.iter().map(Shot::to_shot_data).collect();
@@ -380,13 +382,6 @@ impl Project {
             }
             rebuilt.get(&key).cloned().unwrap_or(key)
         });
-
-        // Reconcile matches a returned shot to its baseline entry by UUID but
-        // applies the edit to `shots[entry.shot_index]`, and the reverse just
-        // permuted every index in this section.  Until the next save re-exports
-        // the sibling `.tml`, a collaborator's edit would land on the mirrored
-        // shot - drop the baseline so the reconcile is deferred, not misapplied.
-        self.invalidate_collab_baseline();
 
         // Flip the orientation marker (#24). Recorded HERE, at the mutation, so no caller can
         // reverse a section without it: the least-squares gauge reads it to stay on the same
@@ -862,57 +857,6 @@ mod tests {
             let uuid = shot.uuid.clone().unwrap();
             assert_eq!(project.shot_uuid_index.get(&(id, uuid)), Some(&(i as u32)));
         }
-    }
-
-    /// The collab baseline's identity key is `(section_id, shot_index)`; a reverse
-    /// invalidates every one of this section's slots at once. Reconcile matches by
-    /// UUID but *applies* by that index, so a collaborator's edit arriving before
-    /// the next save would overwrite the mirrored shot. Dropping the baseline
-    /// defers the reconcile until the next export re-seeds it.
-    #[test]
-    fn reverse_invalidates_a_stale_collab_baseline() {
-        use crate::models::{CollabState, ShotBaselineEntry};
-
-        let (mut project, id) =
-            project_with_shots(vec![shot(0.0, 1.0, 0.0, 0.0), shot(90.0, 2.0, 0.0, 0.0)]);
-        let uuid = project.get_section(id).unwrap().shots[0]
-            .uuid
-            .clone()
-            .unwrap();
-        project.collab = Some(CollabState {
-            enabled: true,
-            sibling_tml_relative: "sibling.tml".to_string(),
-            last_export_tml_sha256: Some("deadbeef".to_string()),
-            shot_baseline: vec![ShotBaselineEntry {
-                section_id: id,
-                shot_index: 0,
-                ariane_id: 1,
-                uuid,
-                geo_key: String::new(),
-                section_name: String::new(),
-                station_comment: None,
-            }],
-            section_name_map: Vec::new(),
-            synthetic_section_names: Vec::new(),
-            last_reconcile_at: None,
-            write_tml_on_autosave: true,
-        });
-
-        assert!(project.reverse_section(id, false));
-
-        let collab = project.collab.as_ref().unwrap();
-        assert!(
-            collab.shot_baseline.is_empty(),
-            "a reverse must drop the index-keyed baseline"
-        );
-        assert_eq!(
-            collab.last_export_tml_sha256.as_deref(),
-            Some("deadbeef"),
-            "the sha is provenance, not baseline: clearing it would stop \
-             `compute_collab` ever noticing the sibling changed, and would disarm \
-             the leftover-sibling warning"
-        );
-        assert!(collab.enabled, "collab itself stays on");
     }
 
     /// `section_offsets` has no finite guard of its own, and `save_project`

@@ -57,24 +57,16 @@ impl Database {
     ///   silently wiping pitch/LRUD/comment/marker/temperature - the same hazard
     ///   `drop_legacy_undo_history` guards against. Stripping here is what makes
     ///   every adopt-remote path (`do_load_project_full`) start with a clean slate.
-    /// - `collab_state` - the LOCAL Ariane-collab wiring (sibling `.tml` filesystem
-    ///   path, baseline, per-machine autosave toggle). Meaningless to a remote
-    ///   collaborator and never theirs to inherit.
-    const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &[
-        "display_settings",
-        "undo_stack",
-        "redo_stack",
-        "collab_state",
-    ];
+    const PUSH_SNAPSHOT_LOCAL_TABLES: &[&str] = &["display_settings", "undo_stack", "redo_stack"];
 
     /// The subset of [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] whose strip is FATAL to the
     /// push: these carry the pusher's edit history, which is both the privacy leak
     /// and the data-CORRUPTION vector on adopt (#194 b3). If they cannot be emptied
     /// the snapshot must not be uploaded at all.
     ///
-    /// The others (`display_settings`, `collab_state`) are privacy-neutral local
-    /// prefs / wiring: aborting a push over them would be a worse outcome for the
-    /// user than the (harmless) leak, so a failure there stays a warning.
+    /// The other (`display_settings`) is a privacy-neutral local pref: aborting a
+    /// push over it would be a worse outcome for the user than the (harmless)
+    /// leak, so a failure there stays a warning.
     ///
     /// "Subset" is LOAD-BEARING, not descriptive: the strip loop iterates
     /// `PUSH_SNAPSHOT_LOCAL_TABLES` and only consults this list to decide how loudly

@@ -33,10 +33,6 @@ use stalagmight_lib::core::command::{
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
 };
-use stalagmight_lib::core::reconcile::{
-    AddedSection, AddedShot, CollabChangeSet, CollabFieldChange, CollabWarning, EditedShot,
-    MatchQuality, RemovedShot, SectionMetaChange,
-};
 use stalagmight_lib::core::state::VirtualShotMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
 use stalagmight_lib::logging::{LogsSince, RingLogEntry};
@@ -46,15 +42,14 @@ use stalagmight_lib::models::placement_suggest::{
 };
 use stalagmight_lib::models::{
     AlongLineResult, ClosurePair, ClosurePreview, ClosureRef, ClosureStrategy, ClosureUpdate,
-    CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
-    DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
-    ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanAnchorSet, PlanMode,
-    PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
-    RouteProfilePoint, RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats,
-    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station,
-    StationMergeWire, StationPair, StationRef, SurveyDirection, TankMaterial, Team,
-    UnrecognisedShotKind, ZeroDatumWire,
+    ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact, DeleteShotRangeImpact,
+    DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver, ExistingShotUpdate,
+    FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement, ImportSectionConfig,
+    LoopClosureWire, MarkedPoint, PathShot, PlanAnchorSet, PlanMode, PlanSegment, Project,
+    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
+    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
+    ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire, StationPair,
+    StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -108,18 +103,6 @@ fn main() {
 
     // Project/model types
     export::<Project>(&out_dir);
-    // Collaboration mode
-    export::<CollabState>(&out_dir);
-    export::<ShotBaselineEntry>(&out_dir);
-    export::<CollabChangeSet>(&out_dir);
-    export::<CollabFieldChange>(&out_dir);
-    export::<AddedShot>(&out_dir);
-    export::<EditedShot>(&out_dir);
-    export::<RemovedShot>(&out_dir);
-    export::<AddedSection>(&out_dir);
-    export::<SectionMetaChange>(&out_dir);
-    export::<CollabWarning>(&out_dir);
-    export::<MatchQuality>(&out_dir);
     export::<ProjectMetadata>(&out_dir);
     // [Track B] SpeleoDB hand-off link (#189)
     export::<SpeleoLink>(&out_dir);
@@ -370,18 +353,6 @@ fn main() {
         "IntegrityCheckResult",
         "ValidationWarning",
         "WarningSeverity",
-        // Collaboration mode
-        "CollabState",
-        "ShotBaselineEntry",
-        "CollabChangeSet",
-        "CollabFieldChange",
-        "AddedShot",
-        "EditedShot",
-        "RemovedShot",
-        "AddedSection",
-        "SectionMetaChange",
-        "CollabWarning",
-        "MatchQuality",
         "DisplaySettings",
         "LoadingPhase",
         "LoadingProgress",

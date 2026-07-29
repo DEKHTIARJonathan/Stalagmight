@@ -333,7 +333,7 @@ impl AppState {
             std::fs::create_dir_all(parent)
                 .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         }
-        let save = self.save_project(Some(dest.clone()), false);
+        let save = self.save_project(Some(dest.clone()));
         if !save.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "failed to write project into the SpeleoDB cache: {}",

@@ -61,7 +61,6 @@ impl Project {
             station_count: stats.station_count,
             gps_center,
             gps_bounds,
-            collab_enabled: self.collab.as_ref().is_some_and(|c| c.enabled),
             // [Track B] (#189) is_remote is DERIVED from the on-disk speleo_link
             // table (load_metadata), which this in-memory Project does not carry.
             // The recent-projects listing goes through Database::load_metadata

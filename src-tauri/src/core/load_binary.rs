@@ -66,9 +66,8 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 
 /// Wire-format version. Bumped if the byte layout changes. The JS decoder
 /// rejects mismatches so a stale frontend can't silently misread.
-/// Bumped from 1 → 2 to include `ProjectHeaderBinary.collab` so the
-/// frontend's load-time collaboration detection has the project's
-/// CollabState available without a separate round-trip.
+/// Bumped from 1 → 2 to include a `ProjectHeaderBinary.collab` field, which
+/// v4 removed again (see below).
 /// Bumped from 2 → 3 for two independent layout changes that landed in the
 /// same unreleased version, so one bump covers both:
 /// - #27: the per-shot flags byte now carries a 2-bit `ShotKind` in bits 0-1
@@ -77,7 +76,10 @@ pub const STATION_UINT_STRIDE: usize = STATION_UINT_FIELDS * 4;
 /// - #270: the envelope includes `is_remote`, so the frontend's SpeleoDB
 ///   read-only gate resolves synchronously with the load instead of defaulting
 ///   open until `speleodb_link_status` answers.
-pub const BINARY_FORMAT_VERSION: u32 = 3;
+/// Bumped from 3 → 4 when Ariane collaboration mode was removed: the header
+/// no longer carries a `collab` field, so a stale frontend would misread the
+/// envelope from that field onwards.
+pub const BINARY_FORMAT_VERSION: u32 = 4;
 
 #[derive(Serialize)]
 pub struct LoadProjectFullBinaryResult {
@@ -150,11 +152,6 @@ pub struct ProjectHeaderBinary {
     pub station_comments_map: Vec<(StationRef, String)>,
     pub imported_file_hashes: Vec<String>,
     pub imported_section_hashes: Vec<String>,
-    /// Collaboration state - preserves `Project.collab` across the
-    /// binary IPC envelope.  Without this the frontend's
-    /// `result.project.collab` is undefined and the load-time collab
-    /// detection (collab-mode `loadProject` hook) silently never runs.
-    pub collab: Option<crate::models::CollabState>,
     /// Per-project validation thresholds (#57), so binary-loaded projects keep
     /// their own config instead of falling back to the global defaults.
     pub validation: crate::config::ValidationConfig,
@@ -371,7 +368,6 @@ pub fn encode(result: LoadProjectFullResult) -> Result<Vec<u8>> {
         station_comments_map,
         imported_file_hashes: project.imported_file_hashes,
         imported_section_hashes: project.imported_section_hashes,
-        collab: project.collab,
         validation: project.validation,
     };
 

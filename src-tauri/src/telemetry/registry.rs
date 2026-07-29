@@ -121,6 +121,9 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.save_display_setting",
     "command.save_dive_plan",
     "command.save_project",
+    // Recent-projects rename-by-path command (recent-projects metadata panel;
+    // project need not be open).
+    "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
     "command.set_zero_datum",
@@ -457,18 +460,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.compass-import",
     "dialog-cancel.compass-import",
     "dwell.dialog.compass-import",
-    // Collaboration-mode IPC commands (Ariane sibling .tml workflow).
-    "command.set_collab_enabled",
-    "command.set_collab_enabled_for_path",
-    "command.set_project_name_for_path",
-    "command.get_collab_state",
-    "command.detect_collab_changes",
-    "command.apply_collab_changes",
-    "command.collab_sibling_when_disabled",
-    // collab-review dialog (action/cancel/dwell trio).
-    "action.dialog.collab-review",
-    "dialog-cancel.collab-review",
-    "dwell.dialog.collab-review",
     // SVG stick-map export preview command.
     "command.preview_svg_export",
     // Folder-access permission guidance dialog (action/cancel/dwell trio).
@@ -591,7 +582,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.placement",
     "active-dwell.dialog.delete-shot-choice",
     "active-dwell.dialog.compass-import",
-    "active-dwell.dialog.collab-review",
     "active-dwell.dialog.save-permission",
     // Active-dwell mirrors for the dialogs master added (#57/#95/#118).
     "active-dwell.dialog.project-settings",
@@ -973,7 +963,14 @@ mod tests {
         //       finds its context stale after acquiring can hand back what IT took
         //       without surrendering a lock inherited from a sibling session on the
         //       same account: command.speleodb_release_lock_acquired_here = 697.
-        assert_eq!(EVENT_NAMES.len(), 697);
+        //   - 10 retired collaboration-mode events (Ariane sibling .tml workflow
+        //       removed entirely, not via REMOVED_COMMANDS/REMOVED_DIALOGS):
+        //       command.{set_collab_enabled, set_collab_enabled_for_path,
+        //       get_collab_state, detect_collab_changes, apply_collab_changes,
+        //       collab_sibling_when_disabled},
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .collab-review removed = 687.
+        assert_eq!(EVENT_NAMES.len(), 687);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

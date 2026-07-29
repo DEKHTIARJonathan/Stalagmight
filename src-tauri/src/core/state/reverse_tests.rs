@@ -1113,7 +1113,6 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
         state
             .execute(Command::SaveProject {
                 path: Some(temp.path().join("cave.stalx")),
-                is_autosave: false,
             })
             .success
     );
@@ -1154,14 +1153,7 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
             .success
     );
     // The save is where the row's position key would be re-read as an identity.
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: None,
-                is_autosave: false,
-            })
-            .success
-    );
+    assert!(state.execute(Command::SaveProject { path: None }).success);
 
     let rows = state.load_resolved_warnings().unwrap();
     assert_eq!(rows.len(), 1, "the ignore must survive the reverse");
@@ -1171,103 +1163,6 @@ fn reverse_keeps_a_position_keyed_ignore_on_its_own_shot() {
         "the ignore must stay on the shot it was taken on, not migrate to the \
          shot the reverse moved onto that position (which is {:?})",
         uuids.last()
-    );
-}
-
-/// `Project`'s `Serialize` includes `collab`, so a snapshot-pair undo reinstates the
-/// EXPORT PROVENANCE from before the command - and undo does not un-write the sibling
-/// `.tml`. The reverse makes the damage concrete:
-///
-/// ```text
-///   reverse (baseline cleared) -> save (re-exports the .tml, seeds baseline B')
-///                              -> undo (resurrects baseline B and sha S)
-/// ```
-///
-/// `compute_collab` then sees a sibling whose sha no longer matches the resurrected S and
-/// reports it as collaborator-changed, after which `apply_changeset` writes every matched
-/// edit at baseline B's PRE-reverse `shot_index` - scrambling the section.
-#[test]
-fn undoing_a_reverse_does_not_resurrect_the_pre_reverse_collab_provenance() {
-    let temp = tempfile::TempDir::new().unwrap();
-    let state = AppState::new().unwrap();
-
-    let mut project = Project::new("Collab".to_string(), None);
-    let section_id = project
-        .add_section(crate::models::SectionData {
-            name: Some("Main".to_string()),
-            shots: vec![
-                shot(0.0, 10.0, 0.0, 1.0),
-                shot(90.0, 5.0, 1.0, 2.0),
-                shot(200.0, 7.0, 2.0, 3.0),
-            ],
-            ..Default::default()
-        })
-        .id;
-    project.collab = Some(crate::models::CollabState::new("collab.tml".to_string()));
-    state.set_project_for_tests(project);
-
-    let collab_now = || {
-        let guard = state.project.lock().unwrap();
-        guard.as_ref().unwrap().collab.clone().unwrap()
-    };
-
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: Some(temp.path().join("collab.stalx")),
-                is_autosave: false,
-            })
-            .success
-    );
-    let before = collab_now();
-    assert_eq!(
-        before.shot_baseline.len(),
-        3,
-        "first export seeds a baseline"
-    );
-    let sha_before = before.last_export_tml_sha256.unwrap();
-
-    assert!(
-        state
-            .execute(Command::ReverseSection {
-                section_id,
-                swap_left_right: false,
-            })
-            .success
-    );
-    assert!(
-        state
-            .execute(Command::SaveProject {
-                path: None,
-                is_autosave: false,
-            })
-            .success
-    );
-    let after = collab_now();
-    let sha_after = after.last_export_tml_sha256.clone().unwrap();
-    assert_ne!(
-        sha_before, sha_after,
-        "the reverse changed the exported .tml"
-    );
-    assert_eq!(
-        after.shot_baseline.len(),
-        3,
-        "the save re-seeded the baseline"
-    );
-
-    let undone = state.undo();
-    assert!(undone.success, "{:?}", undone.error);
-    let collab = collab_now();
-    assert_eq!(
-        collab.last_export_tml_sha256.as_deref(),
-        Some(sha_after.as_str()),
-        "the .tml on disk is still the post-reverse export, so its sha must not rewind - \
-         otherwise every later open reports a phantom collaborator edit"
-    );
-    assert!(
-        collab.shot_baseline.is_empty(),
-        "a baseline whose shot_index values name the other layout must be dropped, not \
-         restored: reconcile applies edits positionally"
     );
 }
 
@@ -1416,7 +1311,6 @@ fn batch_reversing_one_section_twice_reports_nothing_and_leaves_the_plnx_alone()
         state
             .execute(Command::SaveProject {
                 path: Some(temp.path().join("cave.stalx")),
-                is_autosave: false,
             })
             .success
     );
@@ -1494,7 +1388,6 @@ fn batch_a_b_a_reports_only_b() {
         state
             .execute(Command::SaveProject {
                 path: Some(temp.path().join("cave.stalx")),
-                is_autosave: false,
             })
             .success
     );
@@ -1550,7 +1443,6 @@ fn a_null_uuid_warning_row_survives_a_double_reverse_in_one_batch() {
         state
             .execute(Command::SaveProject {
                 path: Some(temp.path().join("cave.stalx")),
-                is_autosave: false,
             })
             .success
     );
@@ -1740,7 +1632,6 @@ fn the_gauge_survives_a_save_and_reload() {
         state
             .execute(Command::SaveProject {
                 path: Some(path.clone()),
-                is_autosave: false,
             })
             .success
     );

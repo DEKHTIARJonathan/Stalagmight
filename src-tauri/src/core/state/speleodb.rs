@@ -2605,7 +2605,7 @@ impl AppState {
         // shot identity + geometry. Rendering first would ship a `.tml` built from
         // the un-healed project for a legacy file carrying within-section duplicate
         // UUIDs or non-finite values (#196).
-        if !self.save_project(None, true).success {
+        if !self.save_project(None).success {
             return Err(local_dto(SpeleoDbError::Io(
                 "failed to flush project before push".to_owned(),
             )));
@@ -3694,47 +3694,6 @@ mod tests {
         assert!(
             vacuum < upload_call,
             "the VACUUM snapshot must be taken before upload_auto streams it (#195)"
-        );
-    }
-
-    #[test]
-    fn push_renders_via_pure_export_tml_not_the_collab_pipeline() {
-        // #196 b1 + b5: the push renders the .tml through the PURE export_tml and
-        // never routes through the Ariane-collab pipeline - export_tml_with_baseline
-        // (whose baseline would be discarded) is not called, and nothing in the push
-        // writes the collab sibling, so CollabState / reconcile.rs / sibling-.tml stay
-        // untouched. Pin it structurally (like the BASE-advance + quiescent tripwires)
-        // since "not called" can't be observed at runtime.
-        let src = include_str!("speleodb.rs");
-        let prod = src
-            .split("#[cfg(test)]")
-            .next()
-            .expect("production region precedes the test module");
-
-        // The render fn body renders via the pure export_tml (the doc comment that
-        // mentions export_tml_with_baseline precedes the fn, so a body scan excludes it).
-        let render = prod
-            .split_once("fn speleodb_render_tml")
-            .map(|(_, rest)| rest)
-            .and_then(|rest| rest.split("\n    fn ").next())
-            .expect("render fn body precedes the next method");
-        assert!(
-            render.contains("export::tml::export_tml("),
-            "the push must render the .tml via the pure export_tml"
-        );
-        // Match the CALL syntax ("name(") rather than the bare symbol, so a future
-        // doc/comment mentioning these fns can't flip the assertion (#197 review).
-        assert!(
-            !render.contains("export_tml_with_baseline("),
-            "the push render must NOT call the baseline/collab export (the baseline is discarded)"
-        );
-        // Nothing in the push ever CALLS the Ariane-collab sibling writer. Scanned
-        // across the whole family: an absence assertion pinned to one file passes
-        // vacuously the moment its subject moves to a sibling (#275).
-        assert_eq!(
-            speleodb_prod_matches("write_collab_sibling(", &[]),
-            0,
-            "the push must never call write_collab_sibling - sibling-.tml stays untouched (#196 b5)"
         );
     }
 

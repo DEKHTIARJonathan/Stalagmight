@@ -54,7 +54,14 @@ use std::path::Path;
 /// a `.stalx` renders identically either side of that fix. See
 /// `migrate_azimuths_to_canonical_range`. No column changes, so the carry-forward
 /// fence is unaffected.
-const SCHEMA_VERSION: i32 = 14;
+///
+/// v15 drops the single-row `collab_state` table: Ariane collaboration mode was
+/// removed, so nothing reads or writes it. Destructive, but inert - the table only
+/// ever held local sidecar wiring (the sibling `.tml` path, the per-shot export
+/// baseline and a per-machine autosave toggle), never survey data. Existing files
+/// take the migration once on open; an older build opening a v15 file still works
+/// (it warns about the newer version and recreates the table on its own writes).
+const SCHEMA_VERSION: i32 = 15;
 
 /// Schema version at which persisted undo/redo payloads became safe to replay.
 ///

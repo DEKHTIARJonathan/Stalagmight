@@ -1414,13 +1414,6 @@ pub fn run() {
             commands::export::preview_svg_export,
             commands::export::export_dive_profile,
             commands::export::render_dive_profile_text,
-            // Collaboration mode
-            commands::collab::set_collab_enabled,
-            commands::collab::set_collab_enabled_for_path,
-            commands::collab::get_collab_state,
-            commands::collab::detect_collab_changes,
-            commands::collab::apply_collab_changes,
-            commands::collab::collab_sibling_when_disabled,
             // Config
             commands::config::get_config,
             commands::config::update_config,

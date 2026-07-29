@@ -100,9 +100,6 @@ pub struct TmlShot {
     pub longitude: f64,
     pub closure_to_id: i64,
     pub section: String,
-    /// Ariane 26+ per-shot UUID (`<UUID>`/`<UU>`); `None` for older files.
-    #[serde(default)]
-    pub uuid: Option<String>,
 }
 
 /// Shot type in Ariane.
@@ -152,7 +149,6 @@ struct RawShot {
     excluded: bool,
     latitude: f64,
     longitude: f64,
-    uuid: Option<String>,
 }
 
 // ============================================================================
@@ -186,8 +182,6 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Latitude" | b"LT" => Some("latitude"),
         b"Longitude" | b"LGT" => Some("longitude"),
         b"Name" | b"NM" => Some("name"),
-        // Ariane 26+ per-shot UUID - collab-mode round-trip identity.
-        b"UUID" | b"UU" => Some("uuid"),
         _ => None,
     }
 }
@@ -195,16 +189,6 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
 // ============================================================================
 // XML loading
 // ============================================================================
-
-/// Hex sha256 of a TML/TMLU file's inner XML content (independent of zip
-/// framing), for detecting external edits to a collaboration sibling file.
-pub fn tml_content_sha256(path: &Path) -> Result<String> {
-    use sha2::{Digest, Sha256};
-    let xml = load_xml(path)?;
-    let mut hasher = Sha256::new();
-    hasher.update(xml.as_bytes());
-    Ok(format!("{:x}", hasher.finalize()))
-}
 
 /// Load XML content from a `.tml` (ZIP) or `.tmlu` (plain XML) file.
 fn load_xml(path: &Path) -> Result<String> {
@@ -471,7 +455,6 @@ fn build_raw_shot(fields: &HashMap<&str, String>) -> Result<RawShot> {
         excluded: fields.get("excluded").map(String::as_str) == Some("true"),
         latitude: parse_f64(fields, "latitude"),
         longitude: parse_f64(fields, "longitude"),
-        uuid: fields.get("uuid").filter(|u| !u.is_empty()).cloned(),
     })
 }
 
@@ -930,7 +913,6 @@ fn linearize_section(
                 longitude: s.longitude,
                 closure_to_id: s.closure_to_id,
                 section: s.section.clone(),
-                uuid: s.uuid.clone(),
             })
             .collect();
 
@@ -1487,8 +1469,7 @@ pub(crate) fn resolve_tml_depth_in(
 /// correctly as though Ariane had written it. A standalone `.tml` from a
 /// pre-#296 build holds raw +down pitch here and so imports inverted, with no
 /// migration to repair it; that is accepted rather than sniffed for, since real
-/// Ariane files carry `Inclination` 0 and the collab sidecar is force-exported
-/// by the v12 migration. See `docs/inclination.md`.
+/// Ariane files carry `Inclination` 0. See `docs/inclination.md`.
 pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
     if inclination == 0.0 {
         0.0
@@ -1501,10 +1482,8 @@ pub(crate) fn inclination_to_pitch(inclination: f64) -> f64 {
 ///
 /// This is the SINGLE source of truth for the TML to Stalagmight field mapping
 /// (azimuth `rem_euclid(360)`, depth in/out, inclination to `pitch_in`, LRUD 0
-/// to None, VIRTUAL to a virtual [`ShotKind`]). Both DMP/TML import and the
-/// collaboration reconcile engine call it, so a clean round-trip never appears
-/// as a phantom edit. `depth_in` must already be resolved via
-/// [`resolve_tml_depth_in`].
+/// to None, VIRTUAL to a virtual [`ShotKind`]). `depth_in` must already be
+/// resolved via [`resolve_tml_depth_in`].
 pub(crate) fn normalize_tml_shot(shot: &TmlShot, depth_in: f64) -> ShotData {
     // LRUD: pass through, using None for zero values
     let lrud_opt = |v: f64| {
@@ -1742,7 +1721,6 @@ mod tests {
             longitude: 0.0,
             closure_to_id: -1,
             section: String::new(),
-            uuid: None,
         }
     }
 
@@ -2263,7 +2241,6 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2311,7 +2288,6 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                uuid: None,
                 section: "Test".to_string(),
             }],
             surveyor: None,
@@ -2740,7 +2716,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2771,7 +2746,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "Test".to_string(),
         }];
 
@@ -2807,7 +2781,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "Test".to_string(),
         };
 
@@ -2860,7 +2833,6 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2884,7 +2856,6 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                uuid: None,
                 section: "Test".to_string(),
             },
             TmlShot {
@@ -2908,7 +2879,6 @@ mod tests {
                 latitude: 0.0,
                 longitude: 0.0,
                 closure_to_id: -1,
-                uuid: None,
                 section: "Test".to_string(),
             },
         ];
@@ -2951,7 +2921,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "S".to_string(),
         };
 
@@ -3023,7 +2992,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "S".to_string(),
         };
 
@@ -3105,7 +3073,6 @@ mod tests {
             latitude: 0.0,
             longitude: 0.0,
             closure_to_id: -1,
-            uuid: None,
             section: "S".to_string(),
         };
 

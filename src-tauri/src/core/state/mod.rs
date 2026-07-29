@@ -1,5 +1,4 @@
 mod app_state;
-mod collab;
 mod command_comment;
 mod command_delete_split;
 mod command_import;
@@ -57,6 +56,4 @@ mod tests;
 mod tests_support;
 
 pub use app_state::AppState;
-#[cfg(test)]
-pub(crate) use collab::apply_changeset;
 pub use command_import::VirtualShotMode;
