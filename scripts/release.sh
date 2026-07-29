@@ -16,6 +16,17 @@ set -euo pipefail
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
+# Rewrite a file through sed without `sed -i`, which is not portable: GNU takes
+# no argument, BSD/macOS requires one. Redirecting into the original preserves
+# its mode and inode.
+replace_in_file() {
+  local expr="$1" file="$2" tmp
+  tmp="$(mktemp "${TMPDIR:-/tmp}/release.XXXXXX")"
+  sed "$expr" "$file" > "$tmp"
+  cat "$tmp" > "$file"
+  rm -f "$tmp"
+}
+
 # --- Parse arguments ---
 VERSION_ARG=""
 NO_EDIT=false
@@ -36,7 +47,13 @@ if [ -z "$VERSION_ARG" ]; then
 fi
 
 # --- Read current version from package.json ---
-CURRENT_VERSION=$(grep -oP '"version":\s*"\K[^"]+' "$PROJECT_ROOT/package.json" | head -1)
+# POSIX sed rather than `grep -oP`, which BSD/macOS grep does not support.
+CURRENT_VERSION=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+  "$PROJECT_ROOT/package.json" | head -1)
+if [ -z "$CURRENT_VERSION" ]; then
+  echo "Error: could not read \"version\" from package.json." >&2
+  exit 1
+fi
 echo "Current version: $CURRENT_VERSION"
 
 # --- Compute new version ---
@@ -108,13 +125,31 @@ if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
 fi
 
 # --- Update package.json ---
-sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$PROJECT_ROOT/package.json"
+replace_in_file "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/package.json"
 
 # --- Update tauri.conf.json ---
-sed -i "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" "$PROJECT_ROOT/src-tauri/tauri.conf.json"
+replace_in_file "s/\"version\": \"$CURRENT_VERSION\"/\"version\": \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/src-tauri/tauri.conf.json"
 
 # --- Update Cargo.toml (only the package version line) ---
-sed -i "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" "$PROJECT_ROOT/src-tauri/Cargo.toml"
+replace_in_file "s/^version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" \
+  "$PROJECT_ROOT/src-tauri/Cargo.toml"
+
+# --- Confirm every bump landed ---
+# A sed expression that matches nothing still exits 0, so an unbumped file would
+# otherwise sail through and get tagged as the new version.
+check_bumped() {
+  local file="$1" needle="$2"
+  if ! grep -q "$needle" "$PROJECT_ROOT/$file"; then
+    echo "Error: $file was not updated to $NEW_VERSION (looked for: $needle)." >&2
+    echo "The version string may not be in the expected format. No commit or tag was made." >&2
+    exit 1
+  fi
+}
+check_bumped "package.json" "\"version\": \"$NEW_VERSION\""
+check_bumped "src-tauri/tauri.conf.json" "\"version\": \"$NEW_VERSION\""
+check_bumped "src-tauri/Cargo.toml" "^version = \"$NEW_VERSION\""
 
 # --- Update CHANGELOG.md: move [Unreleased] content under new version header ---
 TODAY=$(date +%Y-%m-%d)
