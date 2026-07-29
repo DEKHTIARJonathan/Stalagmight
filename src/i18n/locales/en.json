@@ -2346,11 +2346,11 @@
       "resetSpeedAria": "Reset the {{from}} to {{to}} leg speed to the plan speed"
     },
     "dpv": {
-      "title": "Scooter (DPV) rig",
+      "title": "DPV",
       "enabled": {
-        "label": "Scooter (DPV) rig",
+        "label": "DPV",
         "help": "A rig is a primary scooter plus a mandatory backup - a scootered dive with no backup is not planned at all. Off (default): no scooter, penetration is limited by gas alone.",
-        "aria": "Enable a DPV rig for route planning"
+        "aria": "Enable a DPV for route planning"
       },
       "primarySpeed": {
         "label": "Primary speed (m/min)",

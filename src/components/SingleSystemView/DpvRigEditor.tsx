@@ -61,7 +61,8 @@ export function DpvRigEditor() {
   };
 
   return (
-    <div className="p-3 border-t border-border text-sm text-text-primary" data-testid="dpv-rig-editor">
+    // mt-3 + the top padding = roughly two text lines below the add-tank row above (#317 feedback).
+    <div className="mt-3 p-3 border-t border-border text-sm text-text-primary" data-testid="dpv-rig-editor">
       <div className="flex items-center justify-between mb-2">
         <h3 className="text-xs uppercase tracking-wide opacity-60 font-semibold">
           {t('gasPanel.dpv.title')}

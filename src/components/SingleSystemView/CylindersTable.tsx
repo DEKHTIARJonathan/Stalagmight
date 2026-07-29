@@ -52,7 +52,9 @@ export function CylindersTable() {
   };
 
   return (
-    <div className="h-full overflow-auto p-3 text-sm text-text-primary" data-testid="cylinders-table">
+    // No h-full here: this block stacks above the DPV editor inside the Equipment tab's own
+    // scroll container, and claiming full height pushed the DPV below the fold (#317 feedback).
+    <div className="p-3 text-sm text-text-primary" data-testid="cylinders-table">
       <table className="w-full text-left">
         <thead className="text-xs uppercase tracking-wide opacity-60">
           <tr>
