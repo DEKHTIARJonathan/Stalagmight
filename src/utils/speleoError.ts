@@ -6,6 +6,7 @@ import type {
   UnpushedLocalEdits,
 } from '../types/ipc.generated';
 import i18n from '../i18n';
+import type { DumpPickerKind } from '../store/speleoStore';
 import { useSpeleoStore } from '../store/speleoStore';
 import { getErrorMessage } from './ipc';
 
@@ -134,4 +135,20 @@ export function dumpCandidates(e: unknown): SpeleoDumpCandidate[] | null {
     (c) => c && typeof c === 'object' && typeof c.entry_path === 'string' && c.entry_path !== '',
   );
   return usable ? payload : null;
+}
+
+/**
+ * [#258] Which ambiguity `dumpCandidates` returned, defaulting to `'stalx'`.
+ *
+ * Read off the DTO rather than inferred from the candidates' extensions: which
+ * kind a set is, is the backend classifier's decision, and re-deriving it here
+ * would be a second copy of that rule with nothing keeping the two in step. The
+ * kind picks the VERB - extract this `.stalx` versus adopt this `ariane.tml` are
+ * different operations - so it is not merely cosmetic.
+ *
+ * Defaults to `'stalx'` for an older backend that sends no kind, which is the
+ * commoner ambiguity and the one whose flow works without adoption.
+ */
+export function dumpCandidateKind(e: unknown): DumpPickerKind {
+  return (e as Partial<SpeleoErrorDto>).dump_candidate_kind === 'ariane' ? 'ariane' : 'stalx';
 }

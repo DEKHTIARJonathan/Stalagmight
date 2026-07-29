@@ -9,6 +9,7 @@ import {
   humanizeSpeleoError,
   unpushedLocalEdits,
   dumpCandidates,
+  dumpCandidateKind,
 } from '../utils/speleoError';
 import { needsSpeleoHandBackPrompt } from '../utils/quit';
 import type {
@@ -119,6 +120,20 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   /** The same replay seam for the discarding open, which has its own retry. */
   const takeRemoteRef = useRef<
     ((s: SpeleoProjectSummary, o?: { entryPath?: string }) => Promise<OpenRemoteOutcome>) | null
+  >(null);
+  /**
+   * [#258] And for adoption, which can raise its OWN ambiguity: the Ariane tree can
+   * change while the adopt confirmation sits open (a single `.tml` becoming several,
+   * or the remembered pick being replaced), and the backend then answers the adopt
+   * with a fresh candidate set rather than a file. Without a replay seam that set
+   * collapsed into a flat error, so the user could not choose from the new tree
+   * without restarting the whole open flow.
+   */
+  const adoptRemoteRef = useRef<
+    ((
+      s: SpeleoProjectSummary,
+      o?: { discardLocal?: boolean; entryPath?: string },
+    ) => Promise<OpenRemoteOutcome>) | null
   >(null);
 
   // Shared tail: a pull (open or adopt) produced a local .stalx - seed the link
@@ -437,7 +452,11 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // each having to recognise the typed action for itself.
         const candidates = dumpCandidates(e);
         if (candidates) {
-          openDumpPicker(candidates, 'stalx', async (entryPath) => {
+          // The kind comes off the DTO rather than being assumed: with no `.stalx`
+          // and several `ariane.tml`, this same branch is offering a choice of file
+          // to ADOPT, and hard-coding `stalx` showed the Open title and button for
+          // it - which also left the Adopt copy with no caller in production.
+          openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
             const retried = await openRemoteRef.current?.(summary, { entryPath });
             // A retry that fails for some OTHER reason must not be swallowed by the
             // dialog: rethrow so the store leaves the picker open and the host
@@ -607,7 +626,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // nowhere to go - on the one path where backing out costs the most.
         const candidates = dumpCandidates(e);
         if (candidates) {
-          openDumpPicker(candidates, 'stalx', async (entryPath) => {
+          openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
             const retried = await takeRemoteRef.current?.(summary, { entryPath });
             if (retried?.status === 'error') throw new Error(retried.message);
             // The pick was an `ariane.tml`: the backend refuses to extract it and
@@ -636,7 +655,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
   const adoptRemote = useCallback(
     async (
       summary: SpeleoProjectSummary,
-      opts: { discardLocal?: boolean } = {},
+      opts: { discardLocal?: boolean; entryPath?: string } = {},
     ): Promise<OpenRemoteOutcome> => {
       /**
        * [#270] The same entry guard `openRemote` runs, re-evaluated HERE - an adopt
@@ -673,8 +692,32 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           latestCommitSha: summary.latest_commit_sha ?? null,
           // Only ever true on the take-remote route, where the loss is confirmed.
           discardLocal: opts.discardLocal === true,
+          // [#258] Present only on a replay from the picker below; absent on a first
+          // attempt, which is what lets the backend classify - and re-ask - normally.
+          entryPath: opts.entryPath ?? null,
         });
       } catch (e) {
+        // [#258] Adoption can raise the ambiguity itself, not just inherit one: the
+        // Ariane tree can change while the confirmation sits open, so the backend
+        // answers with a fresh candidate set. That is a ROUTING signal, and treating
+        // it as a flat error stranded the user - they could not pick from the new
+        // tree without restarting the whole open flow. Replay adoption with the
+        // choice, carrying `discardLocal` so the loss they already confirmed is not
+        // re-asked.
+        const candidates = dumpCandidates(e);
+        if (candidates) {
+          openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
+            const retried = await adoptRemoteRef.current?.(summary, {
+              ...(opts.discardLocal === true ? { discardLocal: true } : {}),
+              entryPath,
+            });
+            // A replay that fails for some OTHER reason must not be swallowed by the
+            // dialog: rethrow so the picker stays open and the host surfaces it,
+            // exactly as the first attempt would have.
+            if (retried?.status === 'error') throw new Error(retried.message);
+          });
+          return { status: 'ambiguous' };
+        }
         return {
           status: 'error',
           message: humanizeSpeleoError(e, t('speleodb.errors.adoptFailed')),
@@ -727,13 +770,14 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         },
       });
     },
-    [finishOpen, handBackRefusal, t],
+    [finishOpen, handBackRefusal, openDumpPicker, t],
   );
 
   useEffect(() => {
     openRemoteRef.current = openRemote;
     takeRemoteRef.current = takeRemoteDiscardingLocal;
-  }, [openRemote, takeRemoteDiscardingLocal]);
+    adoptRemoteRef.current = adoptRemote;
+  }, [openRemote, takeRemoteDiscardingLocal, adoptRemote]);
 
   return { openRemote, adoptRemote, keepLocalCopy, takeRemoteDiscardingLocal };
 }

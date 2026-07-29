@@ -17,7 +17,7 @@
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 
-use super::models::{SpeleoErrorDto, UnpushedLocalEdits};
+use super::models::{DumpCandidateKind, SpeleoErrorDto, UnpushedLocalEdits};
 use super::SpeleoDbError;
 
 /// The decision the caller should take after a SpeleoDB call, derived from the
@@ -229,11 +229,17 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
     };
     // [#258] Same discipline as `unpushed_local`: only the two ambiguity errors
     // carry candidates, so the field stays a sound discriminant on the FE side.
-    let dump_candidates = match err {
-        SpeleoDbError::AmbiguousDump(candidates) | SpeleoDbError::AmbiguousAriane(candidates) => {
-            Some(candidates.clone())
+    // Built from the SAME match so the pair cannot drift: a kind without candidates
+    // (or the reverse) would be a picker with nothing to show, or one that has to
+    // guess which verb it is offering.
+    let (dump_candidates, dump_candidate_kind) = match err {
+        SpeleoDbError::AmbiguousDump(candidates) => {
+            (Some(candidates.clone()), Some(DumpCandidateKind::Stalx))
         }
-        _ => None,
+        SpeleoDbError::AmbiguousAriane(candidates) => {
+            (Some(candidates.clone()), Some(DumpCandidateKind::Ariane))
+        }
+        _ => (None, None),
     };
     let (action, status, message) = match err {
         // Status: carry the parsed human detail WITHOUT the "SpeleoDB returned HTTP
@@ -291,6 +297,7 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         transport,
         unpushed_local,
         dump_candidates,
+        dump_candidate_kind,
     }
 }
 

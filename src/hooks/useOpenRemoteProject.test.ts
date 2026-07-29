@@ -166,6 +166,51 @@ describe('useOpenRemoteProject (#218)', () => {
     expect(onAdoptAfterPick).toHaveBeenCalledWith(SUMMARY, false);
   });
 
+  it('re-opens the picker when ADOPTION itself turns ambiguous (#258)', async () => {
+    // The Ariane tree can change while the adopt confirmation sits open - one `.tml`
+    // becoming several, or the remembered pick being replaced - so the adopt answers
+    // with a fresh candidate set rather than a file. That is a routing signal;
+    // collapsing it into a flat error stranded the user, who could not choose from
+    // the new tree without restarting the entire open flow.
+    const candidates = [
+      { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
+      { entry_path: 'two/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+    ];
+    invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
+      if (cmd === 'speleodb_adopt_ariane') {
+        if (args?.entryPath === 'two/ariane.tml')
+          return Promise.resolve({
+            local_path: '/cache/p1.stalx',
+            type_flipped: true,
+            concurrent_session: false,
+          });
+        return Promise.reject({
+          message: 'more than one Ariane file',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: candidates,
+          dump_candidate_kind: 'ariane',
+        });
+      }
+      return Promise.resolve(null);
+    });
+
+    const outcome = await hook().adoptRemote(SUMMARY, { discardLocal: true });
+    expect(outcome).toEqual({ status: 'ambiguous' });
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+    // Offered with the ADOPT verb, which is only reachable via the carried kind.
+    expect(useSpeleoStore.getState().dumpPickerKind).toBe('ariane');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+
+    await useSpeleoStore.getState().resolveDumpPicker('two/ariane.tml');
+    expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+    // The replay carries the discard the user already confirmed, so the backend's
+    // un-pushed-edits guard does not re-ask a question they have answered.
+    const adoptCalls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'speleodb_adopt_ariane');
+    const replay = adoptCalls[adoptCalls.length - 1];
+    expect(replay?.[1]).toMatchObject({ entryPath: 'two/ariane.tml', discardLocal: true });
+  });
+
   it('raises the picker from the CONFIRMED-DISCARD open too (#258)', async () => {
     // The only route that reaches an ambiguous dump with un-pushed local edits: the
     // guard runs before the download, so a protected open is refused before anything
@@ -1118,6 +1163,9 @@ describe('useOpenRemoteProject (#218)', () => {
       // The ordinary open->adopt route has confirmed no discard, so the backend's
       // un-pushed-edits guard stays armed for it.
       discardLocal: false,
+      // [#258] Absent on a first attempt - that is what lets the backend classify,
+      // and re-ask, normally. Only a replay from the picker carries a pick.
+      entryPath: null,
     });
   });
 

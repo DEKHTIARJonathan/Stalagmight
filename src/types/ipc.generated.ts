@@ -193,6 +193,7 @@ export * from './ipc/SpeleoDbAction';
 export * from './ipc/SpeleoErrorDto';
 export * from './ipc/TransportCause';
 export * from './ipc/SpeleoDumpCandidate';
+export * from './ipc/DumpCandidateKind';
 export * from './ipc/UnpushedLocalEdits';
 export * from './ipc/SpeleoLinkStatus';
 export * from './ipc/RemoteState';

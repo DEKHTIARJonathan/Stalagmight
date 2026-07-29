@@ -68,13 +68,13 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, KeychainReport, Permission, PushResult, RemoteState, SpeleoAdoptResult,
-    SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction, SpeleoDumpCandidate, SpeleoErrorDto,
-    SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
-    SpeleoUserSuggestion, StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits,
-    UpdateResult, Visibility,
+    DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
+    SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
+    SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
+    StartEditingResult, TokenStorage, TransportCause, UnpushedLocalEdits, UpdateResult, Visibility,
 };
 use stalagmight_lib::tile_providers::TileProviderInfo;
 
@@ -334,6 +334,9 @@ fn main() {
     // The un-pushed local work a refused re-pull would have destroyed, carried on
     // SpeleoErrorDto so the FE can offer keep-local vs take-remote-and-discard.
     export::<SpeleoDumpCandidate>(&out_dir);
+    // [#258] Which ambiguity the candidates describe, so the picker offers the right
+    // verb instead of inferring it from their extensions.
+    export::<DumpCandidateKind>(&out_dir);
     export::<UnpushedLocalEdits>(&out_dir);
     // SpeleoDB linked-project status for the action shell (#204) + remote-state (T2c)
     export::<SpeleoLinkStatus>(&out_dir);
@@ -555,6 +558,7 @@ fn main() {
         "SpeleoErrorDto",
         "TransportCause",
         "SpeleoDumpCandidate",
+        "DumpCandidateKind",
         "UnpushedLocalEdits",
         "SpeleoLinkStatus",
         "RemoteState",

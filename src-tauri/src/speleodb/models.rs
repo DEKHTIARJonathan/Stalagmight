@@ -774,6 +774,27 @@ pub struct SpeleoErrorDto {
     /// (`action == Ambiguous`), listing them so the frontend can offer a picker
     /// instead of dead-ending. `None` on every other error.
     pub dump_candidates: Option<Vec<SpeleoDumpCandidate>>,
+    /// [#258] Which ambiguity [`Self::dump_candidates`] describes, set on exactly
+    /// the same errors and `None` on the rest.
+    ///
+    /// Carried rather than inferred from the candidates' extensions: which kind a
+    /// set is, is the classifier's decision, and re-deriving it on the frontend
+    /// would put a second copy of that rule where nothing keeps the two agreeing.
+    /// It changes the verb the picker offers - extracting a `.stalx` and adopting
+    /// an `ariane.tml` are different operations - so guessing it wrong shows the
+    /// wrong dialog rather than merely the wrong wording.
+    pub dump_candidate_kind: Option<DumpCandidateKind>,
+}
+
+/// [#258] Which flavour of ambiguity a picker is being offered for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum DumpCandidateKind {
+    /// Several `.stalx` - the chosen one is extracted.
+    Stalx,
+    /// No `.stalx` and several `ariane.tml` - the chosen one is adopted (imported).
+    Ariane,
 }
 
 /// [#258] One openable file inside an ambiguous project dump, carried on
@@ -896,6 +917,7 @@ mod tests {
             transport: None,
             unpushed_local: None,
             dump_candidates: None,
+            dump_candidate_kind: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token
