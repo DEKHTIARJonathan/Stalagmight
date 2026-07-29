@@ -71,13 +71,25 @@ export function MapTopLeftOverlay({
         <div
           className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
           data-testid={showClosureReadOnly ? 'geometry-readonly-banner' : 'geometry-computing-banner'}
+          role={showClosureComputing ? 'status' : undefined}
         >
-          {showClosureReadOnly && (
+          {showClosureComputing && (
+            <span
+              className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
+              aria-hidden="true"
+              data-testid="geometry-computing-spinner"
+            />
+          )}
+          {showClosureReadOnly && !showClosureComputing && (
             <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
           )}
           {showClosureComputing && (
-            <span className="text-text-secondary" data-testid="geometry-computing">
-              {t('map.geometry.computing')}
+            <span className="text-accent font-medium" data-testid="geometry-computing">
+              {t(
+                showClosureReadOnly
+                  ? 'map.geometry.computingReadOnly'
+                  : 'map.geometry.computing'
+              )}
             </span>
           )}
         </div>
