@@ -45,6 +45,9 @@ mod relationships;
 mod reverse;
 mod stats;
 
+#[cfg(test)]
+mod anchor_fuzz;
+
 pub use classify::ClassifyScope;
 pub use gas::{
     CylRole, Cylinder, Diver, GasReachField, PlanMode, PlanSegment, RouteLeg, RouteProfilePoint,

@@ -5825,21 +5825,17 @@ fn migrate_v15_drops_collab_state_and_the_undo_history() {
                  INSERT INTO collab_state (id, state_json) VALUES (1, '{\"enabled\":true}');",
             )
             .unwrap();
-        for (seq, cmd) in [
-            r#"{"type":"apply_collab_changes"}"#,
-            r#"{"type":"update_project_settings"}"#,
-        ]
-        .iter()
-        .enumerate()
-        {
-            db.conn
-                .execute(
-                    "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
-                     VALUES (?1, ?2, ?3, ?4)",
-                    rusqlite::params![seq as i64, cmd, "null", "2026-01-01T00:00:00Z"],
-                )
-                .unwrap();
-        }
+        db.save_undo_stack(vec![
+            (
+                r#"{"type":"apply_collab_changes"}"#.to_string(),
+                "null".to_string(),
+            ),
+            (
+                r#"{"type":"update_project_settings"}"#.to_string(),
+                "null".to_string(),
+            ),
+        ])
+        .unwrap();
         db.set_user_version(14).unwrap();
     }
 
