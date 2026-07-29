@@ -31,9 +31,6 @@ export default function DeleteProjectDialog() {
     path?.split(/[\\/]/).pop()?.replace(/\.stalx$/i, '') ||
     'this project';
 
-  // Name the actual file the backend will remove, by full path.
-  const fileNames = path ?? name;
-
   // A remote (SpeleoDB) recent is only a local cache copy: deleting it leaves the
   // project on the server (re-openable via Open from SpeleoDB), so we frame it as a
   // local-copy delete rather than a permanent, unrecoverable one.
@@ -78,7 +75,7 @@ export default function DeleteProjectDialog() {
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
           This removes the local file{' '}
-          <span className="font-medium break-all">{fileNames}</span> from disk.{' '}
+          <span className="font-medium break-all">{path ?? name}</span> from disk.{' '}
           {isRemote
             ? 'The project stays on SpeleoDB and can be downloaded again, but any local changes not yet pushed to SpeleoDB will be lost.'
             : 'It cannot be undone.'}
