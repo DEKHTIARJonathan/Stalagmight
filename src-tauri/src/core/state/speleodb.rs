@@ -1016,8 +1016,27 @@ impl AppState {
     /// it unchanged after its write, which keeps concluding and invalidating together
     /// while putting both ahead of anything fallible.
     fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
-        self.speleodb_forget_dump_entry(project_id);
+        self.speleodb_note_prior_push_landed(project_id);
         PushOutcome::Confirmed
+    }
+
+    /// The invalidation on its own, for the arm that concludes a landing WITHOUT
+    /// producing an outcome (#258).
+    ///
+    /// `AdoptThenUpload` is that arm, and it is the reachable one of the two adoption
+    /// plans - `AdoptConfirmed` is documented as forward-compatible only while
+    /// push-start is unpersisted. It establishes exactly what the others do, that a
+    /// prior upload landed, and then keeps going to push on top of it, so it has no
+    /// `PushOutcome` to hand back and cannot use the wrapper above. Routing it through
+    /// the wrapper's `Confirmed` and discarding that would be worse than this split:
+    /// it would read as if the arm had finished.
+    ///
+    /// Leaving it out was a real hole, not a stylistic one. Its own `mutate_link` can
+    /// fail, and the upload it continues into can come back ambiguous - and on either
+    /// path the function returns having proved a revision exists that our remembered
+    /// choice predates, with the choice still standing.
+    fn speleodb_note_prior_push_landed(&self, project_id: &str) {
+        self.speleodb_forget_dump_entry(project_id);
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -2366,6 +2385,13 @@ impl AppState {
             // Our prior (ambiguous) push landed; adopt the tip as BASE, then push the
             // current state on top (a 304 if nothing changed since).
             PushPlan::AdoptThenUpload => {
+                // [#258] This arm PROVES a prior upload landed, so the remembered
+                // choice is stale here just as surely as in the arms that return
+                // Confirmed - and it is the reachable one of the two adoption plans.
+                // Ahead of the fallible write for the usual reason, and ahead of the
+                // upload below because that upload can come back ambiguous and return
+                // without concluding anything.
+                self.speleodb_note_prior_push_landed(project_id);
                 self.speleodb_mutate_link(|l| l.base_commit_sha = tip.clone())
                     .map_err(local_dto)?;
             }

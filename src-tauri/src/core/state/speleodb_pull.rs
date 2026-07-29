@@ -96,6 +96,32 @@ const AMBIGUOUS_NEEDS_REOPEN: &str =
      you chose is not the one this revision was built from; re-open the project to \
      choose which file to use";
 
+/// The two shas a pull derives from one head resolution. [#258]
+///
+/// Deliberately not the same value, which is the whole reason this is a type and not
+/// a `let`. A wrong BASE costs at most a redundant fast-forward on the next Start
+/// editing, so it is allowed to fall back to the caller's advisory sha. A wrong DATE
+/// costs the entire staleness guarantee, and the advisory sha is the worst imaginable
+/// source for one: `latest_commit_sha` is `max(authored_date)`, so it can name the
+/// root creation commit and STAY there across any number of real revisions. A choice
+/// recorded under it would go on matching while the tree moved underneath - the exact
+/// rollback the dating exists to prevent, wearing the mark of a guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct PullDating {
+    /// May date a remembered choice. An authoritative topology tip, or nothing.
+    pub(super) datable: Option<String>,
+    /// Stamps BASE. Falls back to the caller's advisory sha.
+    pub(super) base: Option<String>,
+}
+
+/// Split a resolved tip and the caller's advisory sha into [`PullDating`].
+pub(super) fn pull_dating(tip: Option<String>, advisory: Option<String>) -> PullDating {
+    PullDating {
+        base: tip.clone().or(advisory),
+        datable: tip,
+    }
+}
+
 /// Trust-boundary check on the lock-free probe's inputs. [#258]
 ///
 /// Both ids reach an authenticated request path, so both are validated exactly as
@@ -467,46 +493,64 @@ impl AppState {
         //
         // [Track C] (#188, C5): route through the 401 auto-drop handler before
         // mapping the surfaced SpeleoDbError to the typed DTO ([Track A] D-B2).
-        let zip = self
-            .speleodb_handle_auth(
-                Endpoint::DownloadDump,
-                client::download_dump(&endpoint, &token, insecure_http, &project_id),
-            )
-            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
-
-        // Stamp BASE = the server's TRUE HEAD (the revision-topology leaf), NOT the
-        // list/get_project `latest_commit` field, which is `max(authored_date)` and
-        // ties to the root creation commit (see speleodb_server_head). The dump we
-        // just downloaded IS this HEAD's working tree, so BASE must match it - else
-        // the first Start editing would needlessly fast-forward. Best-effort: fall
-        // back to the caller-supplied SHA if the history can't be fetched (Start
-        // editing then fast-forwards to reconcile).
-        // Fetch the revision history DIRECTLY here (NOT via speleodb_handle_auth) so
-        // a transient/spurious 401 on this best-effort BASE-stamp cannot auto-drop the
-        // whole session mid-open: the dump download above already authenticated with
-        // this token, and the fence simply falls back to latest_commit_sha. Start
-        // editing / Done DO route revisions through the auto-drop (a dead token there
-        // must force re-login). (#197 review.)
+        // Resolve the server's TRUE HEAD (the revision-topology leaf) FIRST, and then
+        // fetch that commit's dump BY HASH.
         //
-        // Resolved HERE, ahead of the classify, because [#258] the same sha is what
-        // dates the dump: a remembered entry is only an answer about the tree it was
-        // given, and this is the only thing on this path that says which tree that is.
-        // It stamped BASE from further down until then, which was too late to be the
-        // yardstick for the choice the classify was already making.
-        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => sync::tip_of(&history.commits)
-                .map(str::to_owned)
-                .or(latest_commit_sha),
+        // The order is the point. Downloading HEAD and asking what HEAD is are two
+        // requests, so a push landing between them hands back commit A's tree
+        // labelled B - and both things that label it matter: BASE is stamped from it,
+        // and [#258] so is the remembered entry choice. A copy of A stamped B looks
+        // current to every later fence, so Start editing sees BASE == B, never
+        // reconciles, and the next push puts A over B. Pinning the download to the
+        // sha we resolved removes the window rather than narrowing it: the bytes, the
+        // date on the choice and BASE are then one immutable object by construction.
+        //
+        // NOT the list/get_project `latest_commit` field, which is
+        // `max(authored_date)` and ties to the root creation commit (see
+        // speleodb_server_head). Fetch the history DIRECTLY here (NOT via
+        // speleodb_handle_auth) so a transient/spurious 401 on this best-effort
+        // resolve cannot auto-drop the whole session mid-open; Start editing / Done DO
+        // route revisions through the auto-drop (a dead token there must force
+        // re-login). (#197 review.)
+        let tip = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => sync::tip_of(&history.commits).map(str::to_owned),
             Err(e) => {
                 tracing::warn!(
                     error = %e,
                     project_id = %project_id,
                     purpose = "resolve server HEAD on pull",
-                    "speleodb_open_project: could not resolve server HEAD; using list latest_commit"
+                    "speleodb_open_project: could not resolve server HEAD; \
+                     falling back to an undated HEAD download"
                 );
-                latest_commit_sha
+                None
             }
         };
+        let zip = self
+            .speleodb_handle_auth(
+                Endpoint::DownloadDump,
+                match tip.as_deref() {
+                    Some(sha) => client::download_dump_at_hash(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &project_id,
+                        sha,
+                    ),
+                    // No resolvable tip (an empty repo, or a history call that failed):
+                    // take HEAD as before. What comes back is then genuinely undatable,
+                    // which `tip` being `None` already says.
+                    None => client::download_dump(&endpoint, &token, insecure_http, &project_id),
+                },
+            )
+            .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
+
+        // [#258] The advisory sha may stamp BASE and may NOT date a choice - see
+        // `PullDating` for why those are different questions.
+        let PullDating {
+            datable,
+            base: base_sha,
+        } = pull_dating(tip, latest_commit_sha);
+        let dated_at = DumpAt::from_sha(datable.as_deref());
 
         // Open the dump once: list entries (to classify) and extract the chosen
         // `.stalx` from the same parsed archive.
@@ -517,7 +561,7 @@ impl AppState {
                 &mut dump,
                 entry_path.as_deref(),
                 ArianeRoute::Adopt,
-                DumpAt::from_sha(base_sha.as_deref()),
+                dated_at,
                 // The pull is where the picker lives: both its verbs carry an
                 // `entryPath`, and all three frontend hosts raise the dialog on the
                 // candidates this reports.
@@ -630,12 +674,40 @@ impl AppState {
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
 
+        // [#258] Resolve the head BEFORE the download and fetch that commit by hash,
+        // for the reason the pull does: two requests mean a push can land between
+        // them, and a tree fetched at A but dated B would let a choice recorded here
+        // be recalled against a dump it never described. Best-effort - an unresolvable
+        // head just means the bytes are undatable, which is what `None` says, and
+        // adoption then asks again through the picker it already hosts.
+        let adopt_at = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
+            .map(|(tip, _)| tip)
+            .unwrap_or_else(|e| {
+                tracing::warn!(
+                    error = %e,
+                    project_id = %project_id,
+                    purpose = "date a remembered Ariane pick on adopt",
+                    "speleodb_adopt_ariane: could not resolve server HEAD; re-asking instead \
+                     of honouring an undatable choice"
+                );
+                None
+            });
         // Download the dump (routed through the auth handler like the pull, so a dead
         // token forces re-login).
         let zip = self
             .speleodb_handle_auth(
                 Endpoint::DownloadDump,
-                client::download_dump(&endpoint, &token, insecure_http, &project_id),
+                match adopt_at.as_deref() {
+                    Some(sha) => client::download_dump_at_hash(
+                        &endpoint,
+                        &token,
+                        insecure_http,
+                        &project_id,
+                        sha,
+                    ),
+                    None => client::download_dump(&endpoint, &token, insecure_http, &project_id),
+                },
             )
             .map_err(|e| dto_for_error(Endpoint::DownloadDump, &e))?;
 
@@ -651,29 +723,11 @@ impl AppState {
         // this path can act on the answer.
         // The picker's answer reaches this command either directly, or - when the
         // ambiguity surfaced on the OPEN path, which refuses a `.tml` and routes
-        // here - through the entry that path recorded for this session.
-        //
-        // [#258] That hand-off is why the tip is resolved the same way the open path
-        // resolves it. The open recorded the answer against the server's TRUE HEAD, so
-        // reading it back against anything else - the caller-supplied
-        // `latest_commit_sha`, which is `max(authored_date)` and can name the root
-        // commit - would never match and the picker would re-ask forever. Best-effort
-        // and deliberately not fatal: an unresolvable head means the answer cannot be
-        // dated, so it is not honoured, and adoption asks again through the picker it
-        // already hosts.
-        let adopt_at = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
-            .map(|(tip, _)| tip)
-            .unwrap_or_else(|e| {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "date a remembered Ariane pick on adopt",
-                    "speleodb_adopt_ariane: could not resolve server HEAD; re-asking instead \
-                     of honouring an undatable choice"
-                );
-                None
-            });
+        // here - through the entry that path recorded for this session. That hand-off
+        // is why `adopt_at` above is the TRUE HEAD and not the caller-supplied
+        // `latest_commit_sha`: the open recorded the answer against the topology tip,
+        // so reading it back against `max(authored_date)` would never match and the
+        // picker would re-ask forever.
         let remembered =
             self.speleodb_recalled_dump_entry(&project_id, DumpAt::from_sha(adopt_at.as_deref()));
         let picked = entry_path
@@ -999,8 +1053,8 @@ impl AppState {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        classify_dump_entry, probe_inputs_valid, resolve_dump_entry, ArianeRoute, DumpAt,
-        StalxAmbiguity, UnopenableDump,
+        classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry, ArianeRoute,
+        DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
@@ -1266,6 +1320,46 @@ mod tests {
         );
     }
 
+    /// [#258] BASE may fall back to the caller's advisory sha; a CHOICE DATE may not.
+    /// Folding the two together is how the guarantee quietly dies: `latest_commit_sha`
+    /// is `max(authored_date)`, so it can name the root commit and stay there while
+    /// revision after revision lands - and a choice recorded under a sha that never
+    /// changes goes on matching for as long as the session lasts, which is exactly the
+    /// unscoped recall this replaced.
+    #[test]
+    fn only_an_authoritative_tip_may_date_a_choice() {
+        let tip = || Some(TIP.to_owned());
+        let advisory = || Some(NEXT.to_owned());
+
+        // With a tip, both answers are that tip - the advisory sha is not consulted.
+        assert_eq!(
+            pull_dating(tip(), advisory()),
+            PullDating {
+                datable: tip(),
+                base: tip(),
+            }
+        );
+
+        // Without one, BASE takes the fallback and the dating does NOT.
+        assert_eq!(
+            pull_dating(None, advisory()),
+            PullDating {
+                datable: None,
+                base: advisory(),
+            },
+            "an unresolvable head must leave the dump undatable even though BASE is \
+             still worth a best-effort stamp"
+        );
+
+        assert_eq!(
+            pull_dating(None, None),
+            PullDating {
+                datable: None,
+                base: None,
+            }
+        );
+    }
+
     /// [#258] A dump nobody can date cannot be shown to match any choice, so it
     /// neither honours one nor records one. Failing closed costs a question; the
     /// alternative is trusting a name on the strength of nothing, which is the whole
@@ -1346,25 +1440,38 @@ mod tests {
     /// adding - or quietly un-routing - a push arm, which is structural.
     #[test]
     fn every_landing_push_arm_invalidates_the_remembered_entry() {
-        // Definition plus the three arms that conclude a revision exists: the 200,
-        // the 304 (our content is already there - the upload that put it there is
-        // what made the recall stale, whichever attempt returns), and the adopted
-        // prior push. A count below this means an arm stopped invalidating, which
-        // silently restores the stale-recall rollback.
+        // Definition plus the three arms that conclude a revision exists AND return an
+        // outcome: the 200, the 304 (our content is already there - the upload that
+        // put it there is what made the recall stale, whichever attempt returns), and
+        // the late-recognised `AdoptConfirmed`. A count below this means an arm stopped
+        // invalidating, which silently restores the stale-recall rollback.
         assert_eq!(
             speleodb_prod_matches("speleodb_revision_landed(", &[]),
             4,
-            "expected one definition plus the three landing arms (200, 304, adopted \
-             prior push)"
+            "expected one definition plus the three landing arms that return an \
+             outcome (200, 304, AdoptConfirmed)"
         );
-        // And that the invalidation itself has exactly one caller - this helper - so
-        // producing the outcome and dropping the recall cannot drift apart.
+        // BOTH adoption plans conclude a prior push landed, and counting only the ones
+        // that return an outcome missed the reachable one: `AdoptThenUpload` adopts the
+        // tip and CONTINUES to push on top, so it has no outcome to hand back - while
+        // `AdoptConfirmed` is documented as forward-compatible only. Enumerating them
+        // separately is what stops a "landing" arm being overlooked because of the
+        // shape of its return.
+        assert_eq!(
+            speleodb_prod_matches("speleodb_note_prior_push_landed(", &[]),
+            3,
+            "expected one definition, the `speleodb_revision_landed` wrapper, and \
+             `AdoptThenUpload` - the adoption plan that concludes a landing without \
+             returning one"
+        );
+        // And that the invalidation itself has exactly one caller - the primitive
+        // above - so concluding a landing and dropping the recall cannot drift apart.
         assert_eq!(
             speleodb_prod_matches("speleodb_forget_dump_entry(", &[]),
             2,
-            "the recall must be dropped through `speleodb_revision_landed` alone; a \
-             second caller means some path invalidates without concluding a landing \
-             (or vice versa)"
+            "the recall must be dropped through `speleodb_note_prior_push_landed` \
+             alone; a second caller means some path invalidates without concluding a \
+             landing (or vice versa)"
         );
     }
 
