@@ -68,7 +68,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       # Actions sets CI=true, which is what stops Tauri's DMG bundler from
       # driving Finder over AppleScript and hanging headless (see mac-build.sh).
+      # shell: bash so the `--` separating tauri args from cargo args is handled
+      # identically everywhere. The Windows default is pwsh, which parses it.
       - name: Build
+        shell: bash
         run: pnpm tauri build ${{ matrix.tauri_args }} -- --features telemetry
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
