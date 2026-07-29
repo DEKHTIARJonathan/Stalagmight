@@ -166,6 +166,12 @@ const CATPPUCCIN_LATTE_BG = { r: 239, g: 241, b: 245 };
 const NORD_BG = { r: 46, g: 52, b: 64 };
 // Catppuccin Mocha theme --cc-background is #1e1e2e -> rgb(30, 30, 46)
 const CATPPUCCIN_MOCHA_BG = { r: 30, g: 30, b: 46 };
+// Light theme --cc-map-background is #faf7f2 -> rgb(250, 247, 242).
+// This is the token themeColors.ts feeds to MapLibre's background layer, so it
+// is what the user perceives as "the app background" (#332).
+const LIGHT_MAP_BG = { r: 250, g: 247, b: 242 };
+// Light theme --cc-stroke-color is #1a120b -> rgb(26, 18, 11)
+const LIGHT_STROKE = { r: 26, g: 18, b: 11 };
 
 test.describe('Theme Switching - Default Dark Theme', () => {
   test.beforeEach(async ({ page }) => {
@@ -277,6 +283,41 @@ test.describe('Theme Switching - Via Settings UI', () => {
     });
 
     assertColorsApproximatelyEqual(bgColor, LIGHT_BG);
+  });
+
+  test('map canvas tokens resolve to light values in light mode', async ({
+    page,
+  }) => {
+    // Regression guard for #332: light mode used to theme only the UI chrome,
+    // leaving the MapLibre background layer on the dark :root value, so the app
+    // still looked dark. Chrome-only assertions above cannot catch that.
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    await selectThemeMode(page, 'Light');
+
+    const saveButton = page.locator(
+      '[data-testid="settings-save-button"]'
+    );
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+
+    await expect(
+      page.locator('[data-testid="settings-dialog"]')
+    ).not.toBeVisible({ timeout: 5000 });
+
+    const { mapBg, strokeColor } = await page.evaluate(() => {
+      const styles = getComputedStyle(document.documentElement);
+      return {
+        mapBg: styles.getPropertyValue('--cc-map-background').trim(),
+        strokeColor: styles.getPropertyValue('--cc-stroke-color').trim(),
+      };
+    });
+
+    assertColorsApproximatelyEqual(mapBg, LIGHT_MAP_BG);
+    // The outline colour has to invert too, or survey lines would be white on a
+    // near-white canvas.
+    assertColorsApproximatelyEqual(strokeColor, LIGHT_STROKE);
   });
 
   test('theme applies immediately on selection before saving', async ({

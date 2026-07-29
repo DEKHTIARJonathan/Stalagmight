@@ -57,10 +57,10 @@ const cssKaleidoEinkTokens = extractTokens(extractBlock(cssSource, '[data-theme=
 const FULL_DARK_THEMES = ['cave', 'dracula', 'one_dark', 'nord', 'catppuccin_mocha'] as const;
 
 /** Light themes only override UI chrome + controls (no map viz tokens). */
-const LIGHT_THEMES = ['light', 'solarized_light', 'catppuccin_latte'] as const;
+const LIGHT_THEMES = ['solarized_light', 'catppuccin_latte'] as const;
 
 /** Light themes with full token sets (including map visualization overrides). */
-const FULL_LIGHT_THEMES = ['kaleido_eink'] as const;
+const FULL_LIGHT_THEMES = ['kaleido_eink', 'light'] as const;
 
 const cssTokensByTheme: Record<string, Record<string, string>> = {
   dark: cssDarkTokens,

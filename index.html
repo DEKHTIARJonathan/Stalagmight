@@ -5,8 +5,27 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stalagmight</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <style>
+      /* Anti-flash initial paint, covering only the frame before Tailwind loads
+         and useTheme stamps data-theme on <html>. It follows the OS preference
+         so light-mode users no longer get a dark flash, and hands over to the
+         theme token as soon as data-theme exists. Do not reintroduce a
+         hard-coded background on <body>: an inline style there outranks its own
+         bg-background class and pins the app dark in every theme (#332). */
+      html {
+        background-color: #1a1a2e;
+      }
+      @media (prefers-color-scheme: light) {
+        html {
+          background-color: #f5f0e8;
+        }
+      }
+      html[data-theme] {
+        background-color: var(--cc-background);
+      }
+    </style>
   </head>
-  <body class="bg-background text-text-primary" style="background-color: #1a1a2e;">
+  <body class="bg-background text-text-primary">
     <div id="root"></div>
     <div id="dialog-root"></div>
     <script type="module" src="/src/main.tsx"></script>

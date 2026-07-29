@@ -130,6 +130,29 @@ export const themeTokens = {
     '--cc-map-scale-border': '#d4c5a9',
     '--cc-map-scale-text': '#1a120b',
 
+    // Map Visualization - warm paper canvas, dark ink outlines
+    '--cc-map-background': '#faf7f2',
+    '--cc-snap-color': '#c0392b',
+    '--cc-hover-highlight': '#b8860b',
+    '--cc-select-highlight': '#3a8a82',
+    '--cc-stroke-color': '#1a120b',
+    '--cc-stroke-light': 'rgba(26, 18, 11, 0.25)',
+    '--cc-text-halo': '#faf7f2',
+    '--cc-text-halo-alt': 'rgba(250, 247, 242, 0.85)',
+    '--cc-station-default': '#6b5b4a',
+    '--cc-gray-line': '#9c8b78',
+    '--cc-gray-text': '#6b5b4a',
+    '--cc-grid-default': '#ddd0bb',
+    '--cc-zero-datum': '#b8860b',
+    '--cc-compass-color': '#1a120b',
+    '--cc-depth-shallow': '#3a8a82',
+    '--cc-depth-deep': '#c0392b',
+    '--cc-depth-text': '#1a120b',
+
+    // Canvas Preview
+    '--cc-preview-bg': '#faf7f2',
+    '--cc-preview-text': '#1a120b',
+
     // Opacity Variants: accent
     '--cc-accent-5': 'rgba(58, 138, 130, 0.05)',
     '--cc-accent-10': 'rgba(58, 138, 130, 0.1)',
@@ -892,7 +915,10 @@ export const themeTokens = {
   },
 } as const;
 
-// Map visuals stay dark; these tokens must not be overridden in light theme.
+// Map-visualization tokens. Chrome-only light themes ("solarized_light",
+// "catppuccin_latte") deliberately leave these unset so the canvas inherits the
+// dark values from :root; full light themes ("light", "kaleido_eink") override
+// them all. Tests enforce both halves.
 export const darkOnlyTokenNames = [
   '--cc-map-background',
   '--cc-snap-color',
