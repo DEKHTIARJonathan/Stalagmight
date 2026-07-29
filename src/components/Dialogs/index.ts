@@ -42,7 +42,6 @@ export { default as ZeroDatumConfigDialog } from './ZeroDatumConfigDialog';
 export { default as OrphanPlacementDialog } from './OrphanPlacementDialog';
 export { default as KeyboardShortcutsDialog } from './KeyboardShortcutsDialog';
 export { default as TelemetryOptInDialog } from './TelemetryOptInDialog';
-export { default as CollabReviewDialog } from './CollabReviewDialog';
 export { default as OpenFromSpeleoDbDialog } from './OpenFromSpeleoDbDialog';
 export { default as PublishToSpeleoDbDialog } from './PublishToSpeleoDbDialog';
 export { default as SpeleoDoneDialog } from './SpeleoDoneDialog';

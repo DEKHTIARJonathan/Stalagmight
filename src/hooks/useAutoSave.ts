@@ -165,11 +165,7 @@ export function useAutoSave(): AutoSaveState {
 
           savingRef.current = true;
           setStatus('saving');
-          // Mark this as an autosave so the backend's collab-sibling
-          // write path can honour `CollabState.write_tml_on_autosave`
-          // (skip the .tml rewrite when the user has it off).  Manual
-          // saves stay `false`.
-          const result = await store.saveProject(undefined, true);
+          const result = await store.saveProject();
           // saveProject sets isDirty=false on success, which triggers the
           // subscriber above to flash "saved".  On failure we handle here.
           if (!result.success) {

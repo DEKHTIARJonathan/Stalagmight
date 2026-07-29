@@ -1,7 +1,7 @@
 /**
  * Hook-composition coverage for `useEditingBlocked()` (src/hooks/useEditingBlocked.ts,
  * #275 canonical-gating sweep) - the shared hook `DataTable.tsx`, `SectionsPanel.tsx`,
- * `WarningResolution.tsx`, `DetailPanel.tsx`, `CollabReviewDialog.tsx`,
+ * `WarningResolution.tsx`, `DetailPanel.tsx`,
  * `useProjectMenuItems.tsx`, and `Toolbar.tsx` all now call to derive their local
  * `editingBlocked` gate. `uiStore.isMapReadOnly.test.ts` already covers the
  * appMode/geometryMode truth table for the plain-function form; this covers the SAME

@@ -38,7 +38,7 @@ import type {
 } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { Config } from '../types/config';
-import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
+import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
 import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
@@ -250,14 +250,7 @@ interface ProjectStore {
   loadProject: (path: string) => Promise<LoadProjectOutcome>;
   /** Create a new project (legacy, still supported) */
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
-  /**
-   * Save the project.  `isAutosave` should be set to `true` from the
-   * autosave hook so the Rust side can honour
-   * `CollabState.write_tml_on_autosave` and skip the sibling `.tml`
-   * write when the user has disabled it.  Manual / Save-As flows
-   * leave it `false` (the default) so the .tml is always written.
-   */
-  saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
+  saveProject: (path?: string) => Promise<CommandResult>;
   /**
    * Persist the project after a DMP import completes (#92). Imports bypass the
    * dirty/save machinery, so the change would otherwise be lost. For a NEW
@@ -332,7 +325,7 @@ interface ProjectStore {
   unresolveWarning: (sectionId: number, shotId: number, warningCode: string) => Promise<void>;
   loadRecentProjects: () => Promise<void>;
   removeFromRecentProjects: (path: string) => Promise<CommandResult>;
-  deleteProject: (path: string, deleteCollabSibling: boolean) => Promise<CommandResult>;
+  deleteProject: (path: string) => Promise<CommandResult>;
   mergeProjects: (sourcePaths: string[], outputPath: string, outputName: string, archiveOriginals: boolean) => Promise<CommandResult>;
 
   createSection: (data: SectionData) => Promise<CommandResult>;
@@ -399,15 +392,8 @@ interface ProjectStore {
   executeWallsImport: (path: string, fileHash?: string | null, commentsOnStations?: boolean, includeSplays?: boolean, selectedSurveys?: number[] | null) => Promise<CommandResult>;
   // Per-project settings (#57): name + validation thresholds, stored in the .stalx
   updateProjectSettings: (name: string, validation: Config['validation']) => Promise<CommandResult>;
-  // Collaboration mode
-  setCollabEnabled: (enabled: boolean) => Promise<CommandResult>;
-  setCollabEnabledForPath: (path: string, enabled: boolean) => Promise<CommandResult>;
   /** Rename a recent project's display name by path (project need not be open). */
   setProjectNameForPath: (path: string, name: string) => Promise<CommandResult>;
-  getCollabState: () => Promise<CollabState | null>;
-  detectCollabChanges: () => Promise<CollabChangeSet | null>;
-  applyCollabChanges: () => Promise<CommandResult>;
-  checkCollabSibling: () => Promise<string | null>;
   parseGpx: (path: string) => Promise<GpxFile>;
   executeGpxImport: (path: string, fileHash: string | null, importWaypoints: boolean, importTracks: boolean, importRoutes: boolean, sectionPlacements: GpxSectionPlacement[], depthInverted: boolean) => Promise<CommandResult>;
   calculateFileHash: (path: string) => Promise<string>;
@@ -1032,16 +1018,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // every held lock reads as "locked by other").
         void useSpeleoStore.getState().refreshSession();
 
-        // Collaboration mode (non-blocking, best-effort): if the project
-        // has collab on AND the sibling .tml was edited externally
-        // (Ariane), offer to reconcile.  When collab is off but a
-        // companion .tml exists, warn the user that Ariane edits won't
-        // flow in and saves won't update it.  Both paths fire
-        // asynchronously so the load returns immediately, and both
-        // re-check `clientOpId` / `loading` state inside `.then` so a
-        // user who navigated away (closeProject, switched projects)
-        // before the IPC resolved doesn't get a dialog or toast for a
-        // project that's no longer open.
         const detectOpId = clientOpId;
         const isStillCurrentLoad = (): boolean => {
           const state = get();
@@ -1054,18 +1030,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // already failed them closed to Reference (so nothing routes through a
         // leg it could not parse) and hands them over exactly once, but that is
         // a substitution the user never agreed to - ask what they should be.
-        // Guarded by the same staleness check as the collab prompt: a user who
-        // switched projects before this resolved must not get a dialog about a
-        // file that is no longer open.
-        //
-        // AWAITED, and it gates the collab prompt below. `openDialog` REPLACES
-        // whatever is showing rather than queueing, so two fire-and-forget
-        // prompts racing means whichever resolves second silently dismisses the
-        // other. That is not symmetric: the collaboration changeset is
-        // re-detected on the next open and costs nothing to defer, while this
-        // list has already been consumed from the backend - losing this dialog
+        // Staleness-guarded: a user who switched projects before this resolved
+        // must not get a dialog about a file that is no longer open. The list
+        // has already been consumed from the backend, so losing this dialog
         // loses the prompt for the session, leaving substitutions unreviewed.
-        let promptedForUnknownKinds = false;
         try {
           const found = await invokeIpc<UnrecognisedShotKind[]>(
             'take_unrecognised_shot_kinds',
@@ -1077,54 +1045,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           );
           if (isStillCurrentLoad() && found.length > 0) {
             useUIStore.getState().openDialog('unrecognised-shot-kind', { shots: found });
-            promptedForUnknownKinds = true;
           }
         } catch {
           /* best-effort: the shots are already safely Reference either way */
-        }
-
-        if (promptedForUnknownKinds) {
-          // Skip the collaboration prompt for this load rather than letting it
-          // stomp the dialog above. Nothing is lost: detect_collab_changes does
-          // not consume, so the next open re-offers it.
-        } else if (result.project.collab?.enabled) {
-          void get()
-            .detectCollabChanges()
-            .then((cs) => {
-              if (!isStillCurrentLoad()) return;
-              if (
-                cs &&
-                cs.shots_added.length +
-                  cs.shots_edited.length +
-                  cs.shots_removed.length +
-                  cs.sections_added.length +
-                  cs.section_meta_changed.length >
-                  0
-              ) {
-                useUIStore.getState().openDialog('collab-review', { changeSet: cs });
-              }
-            })
-            .catch(() => {
-              /* detection is best-effort; ignore errors */
-            });
-        } else {
-          void get()
-            .checkCollabSibling()
-            .then((siblingName) => {
-              if (!isStillCurrentLoad()) return;
-              if (siblingName) {
-                useUIStore
-                  .getState()
-                  .showToast(
-                    i18n.t('dialogs.collabReview.siblingWarning', { siblingName }),
-                    'collab-sibling-warning',
-                    'warning'
-                  );
-              }
-            })
-            .catch(() => {
-              /* best-effort; ignore errors */
-            });
         }
 
         return { success: true };
@@ -1307,7 +1230,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  saveProject: async (path?: string, isAutosave?: boolean) => {
+  saveProject: async (path?: string) => {
     // The Rust save path heals duplicate shot UUIDs / orphan section offsets /
     // non-finite geometry in memory before persisting, which mutates the backend
     // project - so afterward the frontend's mirror can be stale. Those heals only
@@ -1317,7 +1240,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     const hadIntegrityIssues = get().integrityIssues.length > 0;
     const result = await invokeIpc<CommandResult>(
       'save_project',
-      { path, isAutosave: isAutosave ?? false },
+      { path },
       { purpose: 'persist project changes', fields: { path } }
     );
     if (result.success) {
@@ -1333,24 +1256,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // rebuild + republish, briefly blanking all geometry (#mem).
         if (project && project.file_path !== result.saved_path) {
           set({ project: { ...project, file_path: result.saved_path } });
-          // On the first save / Save As the backend derives the sibling
-          // name from the final .stalx stem (e.g. `cave.stalx` →
-          // `cave.tml`).  The in-memory `project.collab.sibling_tml_relative`
-          // is still the pre-save placeholder (e.g. `collaboration.tml`)
-          // until we refresh - the Project Details panel would otherwise
-          // mislead the user about which companion file was actually
-          // written.  Refresh the collab state when collab is on.
-          if (project.collab?.enabled) {
-            try {
-              const fresh = await get().getCollabState();
-              const current = get().project;
-              if (fresh && current) {
-                set({ project: { ...current, collab: fresh } });
-              }
-            } catch {
-              /* best-effort refresh; ignore IPC errors */
-            }
-          }
         }
       }
       // Lightweight: just refresh undo/redo availability
@@ -1371,14 +1276,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       }
       // Don't let geometric corruption persist silently: re-check after save so
       // drifted merges surface in the integrity banner this session, not only on
-      // the next load. Skip on a clean autosave to avoid churn - BUT still re-check
-      // when the project entered the save flagged (hadIntegrityIssues), because the
-      // save path auto-heals some issues (duplicate UUIDs / orphan offsets) on
-      // autosave too; without this the banner/dialog would stay stale after an
-      // autosave silently cleared them.
-      if (!isAutosave || hadIntegrityIssues) {
-        void get().checkProjectIntegrity();
-      }
+      // the next load.
+      void get().checkProjectIntegrity();
     } else {
       const permission = isPermissionError(result.error);
       // Never surface the raw "FS_PERMISSION_DENIED:" marker in error state
@@ -1389,9 +1288,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           : (result.error ?? 'Failed to save project'),
       });
       // A filesystem permission denial (e.g. macOS forgot folder access after
-      // an update) needs actionable guidance, not a raw error. Skip on autosave
-      // so we don't reopen the dialog on every debounced retry.
-      if (permission && !isAutosave) {
+      // an update) needs actionable guidance, not a raw error.
+      if (permission) {
         useUIStore.getState().openDialog('save-permission', {
           detail: result.error,
           context: 'save',
@@ -1738,11 +1636,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   // removeFromRecentProjects, which only forgets the entry). The backend hands the
   // files to the OS delete; on success we refresh both the loaded list and the
   // config so the project disappears from the available AND "missing" recent rows.
-  deleteProject: async (path: string, deleteCollabSibling: boolean) => {
+  deleteProject: async (path: string) => {
     try {
       const result = await invokeIpc<CommandResult>(
         'delete_project',
-        { path, deleteCollabSibling },
+        { path },
         { purpose: 'permanently delete project', fields: { path } }
       );
       if (result.success) {
@@ -2235,28 +2133,11 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
     }
   },
 
-  // Collaboration mode
   updateProjectSettings: async (name: string, validation: Config['validation']) => {
     return executeCommand(
       'update_project_settings',
       { name, validation },
       { purpose: 'update per-project settings' }
-    );
-  },
-
-  setCollabEnabled: async (enabled: boolean) => {
-    return executeCommand(
-      'set_collab_enabled',
-      { enabled },
-      { purpose: 'toggle collaboration mode' }
-    );
-  },
-
-  setCollabEnabledForPath: async (path: string, enabled: boolean) => {
-    return executeCommand(
-      'set_collab_enabled_for_path',
-      { path, enabled },
-      { purpose: 'toggle collaboration mode for a recent project', fields: { path } }
     );
   },
 
@@ -2267,31 +2148,6 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'rename a recent project', fields: { path } }
     );
   },
-
-  getCollabState: async () => {
-    return await invokeIpc<CollabState | null>('get_collab_state', undefined, {
-      purpose: 'read collaboration state',
-    });
-  },
-
-  detectCollabChanges: async () => {
-    return await invokeIpc<CollabChangeSet | null>('detect_collab_changes', undefined, {
-      purpose: 'detect collaborator .tml changes',
-    });
-  },
-
-  applyCollabChanges: async () => {
-    return executeCommand('apply_collab_changes', {}, {
-      purpose: 'apply collaborator changes',
-    });
-  },
-
-  checkCollabSibling: async () => {
-    return await invokeIpc<string | null>('collab_sibling_when_disabled', undefined, {
-      purpose: 'warn about an unsynced Ariane sibling file',
-    });
-  },
-
 
   parseGpx: async (path: string) => {
     return await invokeIpc<GpxFile>('parse_gpx', { path }, {
