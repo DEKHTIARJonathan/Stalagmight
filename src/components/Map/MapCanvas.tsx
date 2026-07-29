@@ -2702,16 +2702,21 @@ function MapCanvas() {
      * mouse - neither of which is a key event, so `ctrlHeld` stayed latched and the
      * pan grab followed them onto the tool they had just chosen.
      *
-     * Skipped while a Ctrl+pan is actually running: Ctrl is known to be down for the
-     * duration by construction, so nothing needs deducing, and that is exactly the
-     * window in which the platform's modifier reporting is not to be trusted - the
-     * spurious keyups this whole guard exists for are fired from these very events.
+     * Deliberately NOT skipped while a Ctrl+pan is running. Exempting that window
+     * looked safer and was not: the release is swallowed precisely at the end of a
+     * drag, so a click landing inside the same 50ms - reaching straight for the
+     * toolbar, which is the whole scenario - was exempted too, and the flag stayed
+     * latched until some later stray mouse move happened to clear it. The quirk
+     * being worked around is spurious KEYUPS, not mis-reported mouse modifiers; the
+     * Ctrl+pan mouseup handler already trusts `e.ctrlKey` the same way. And the flag
+     * only drives the cursor - the pan itself runs off `ctrlPanActiveRef` - so even
+     * on a platform that did lie here the cost is a cursor, not a broken gesture.
      *
      * Re-setting `false` when it is already `false` is free: React bails out of the
      * render when the state is unchanged, which is the common case on every move.
      */
     const clearIfReleased = (e: MouseEvent | PointerEvent) => {
-      if (!e.ctrlKey && !ctrlPanActiveRef.current) setCtrlHeld(false);
+      if (!e.ctrlKey) setCtrlHeld(false);
     };
 
     window.addEventListener('keydown', handleKeyDown);
