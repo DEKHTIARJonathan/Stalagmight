@@ -563,13 +563,15 @@ test.describe('Gas planning', () => {
     );
     expect(sent.format).toBe('subsurface-xml');
     expect(sent.path.endsWith('.xml')).toBe(true);
-    // The whole input tuple, not just the endpoints.
+    // The whole input tuple, not just the endpoints. `segments` joined in #317: without them an
+    // exported profile would be priced at the config swim speed for a scootered dive.
     expect(Object.keys(sent.request).sort()).toEqual([
       'cylinders',
       'diver',
       'endpoint',
       'gas_config',
       'origin',
+      'segments',
       'stage_drop_overrides',
       'waypoints',
     ]);
