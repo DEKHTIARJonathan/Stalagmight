@@ -71,9 +71,10 @@ pub enum UndoData {
         shot_data: ShotData,
         /// Position in the section's shot list (for re-insertion)
         position: usize,
-        /// The deleted shot's stable collaboration UUID, so undo restores the
-        /// same identity (cross-references and Ariane matching anchor on it)
-        /// rather than minting a fresh one. `None` for legacy persisted entries.
+        /// The deleted shot's persistent UUID, so undo restores the same
+        /// identity (station cross-references anchor on it via
+        /// `StationKey::AfterShot`) rather than minting a fresh one. `None` for
+        /// legacy persisted entries.
         #[serde(default)]
         uuid: Option<String>,
     },
@@ -99,9 +100,9 @@ pub enum UndoData {
         after_shot_id: Option<ShotId>,
         #[serde(default)]
         before_shot_id: Option<ShotId>,
-        /// The shot's stable collaboration UUID at creation. Redo restores it via
+        /// The shot's persistent UUID at creation. Redo restores it via
         /// `Shot::with_uuid` so the recreated shot keeps the same identity that
-        /// cross-references (`AfterShot(uuid)`) and Ariane matching anchor on.
+        /// station cross-references (`AfterShot(uuid)`) anchor on.
         /// `None` for legacy persisted entries written before this field existed
         /// (redo then mints a fresh UUID, the pre-fix behavior).
         #[serde(default)]

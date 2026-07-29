@@ -242,9 +242,9 @@ impl AppState {
         }
 
         // Reject non-finite geometry in overlap-interpolation updates before
-        // any mutation: this path arrives from the collab .tml reconcile
-        // (attacker-controllable input) and must hold the same invariant as
-        // update_shot (#275).
+        // any mutation: these arrive from the DMP import wizard's overlap
+        // resolution, i.e. from parsed file content, and must hold the same
+        // invariant as update_shot (#275).
         for update in &existing_shot_updates {
             if !update.updates.all_finite() {
                 return CommandResult::failure(format!(

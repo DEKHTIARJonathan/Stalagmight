@@ -378,7 +378,7 @@ impl AppState {
         let live_shot_uuids = project.shot_uuid_by_position();
         // Guarantee every shot has a stable UUID at runtime, not just after the
         // next save: pre-v6 files load shots with uuid=None, and station identity
-        // (and the Ariane collaboration round-trip) anchors on the shot UUID. The
+        // anchors on the shot UUID. The
         // minted UUIDs persist on the next save (matching save_project's call).
         project.ensure_shot_uuids();
         match db.backfill_resolved_warning_uuids(&live_shot_uuids) {
