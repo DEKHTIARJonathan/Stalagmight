@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -318,6 +318,13 @@ pub struct PanelsConfig {
     /// Shots-table hidden column keys
     #[serde(default = "default_data_table_hidden_columns")]
     pub data_table_shot_hidden_columns: Vec<String>,
+    /// Shots-table column widths in pixels, keyed by grid column key. A missing
+    /// key means "no override", so the column keeps its declared width. BTreeMap
+    /// rather than HashMap so the serialized TOML key order is stable: this is
+    /// rewritten on every column resize, and a nondeterministic order would
+    /// reshuffle the config file on each save.
+    #[serde(default)]
+    pub data_table_shot_column_widths: BTreeMap<String, u32>,
     /// Shots-table azimuth display: "avg" | "inout" | "off"
     #[serde(default = "default_azimuth_mode")]
     pub data_table_azimuth_mode: String,
@@ -330,6 +337,10 @@ pub struct PanelsConfig {
     /// Stations-table hidden column keys (both coordinate pairs start hidden)
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+    /// Stations-table column widths in pixels, keyed by grid column key.
+    /// See `data_table_shot_column_widths` for why this is a BTreeMap.
+    #[serde(default)]
+    pub data_table_station_column_widths: BTreeMap<String, u32>,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
     pub sections_panel_open: bool,
@@ -370,6 +381,25 @@ impl PanelsConfig {
         normalize_panel_mode(&mut self.sections_panel_mode);
         normalize_panel_mode(&mut self.detail_panel_mode);
         normalize_panel_mode(&mut self.data_table_mode);
+        normalize_column_widths(&mut self.data_table_shot_column_widths);
+        normalize_column_widths(&mut self.data_table_station_column_widths);
+    }
+}
+
+/// Smallest column width the grid can render legibly, and the widest it will
+/// persist. Mirrors MIN_COL_WIDTH / MAX_COL_WIDTH in
+/// src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx.
+const MIN_COLUMN_WIDTH: u32 = 40;
+const MAX_COLUMN_WIDTH: u32 = 2000;
+
+/// Clamp persisted column widths into the range the grid can actually render.
+/// The frontend clamps while dragging, but the load path did not - so a
+/// hand-edited or older config could supply a 0-pixel column (invisible, and
+/// un-resizable because there is no border left to grab) or a 100000-pixel one
+/// that pushes every later column off-screen.
+pub(crate) fn normalize_column_widths(widths: &mut BTreeMap<String, u32>) {
+    for width in widths.values_mut() {
+        *width = (*width).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
     }
 }
 

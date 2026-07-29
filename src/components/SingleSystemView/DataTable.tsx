@@ -579,6 +579,10 @@ export default function DataTable({ sections }: DataTableProps) {
   const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(
     () => new Set(STATION_DEFAULT_HIDDEN)
   );
+  // Manual column widths, keyed by column key. Empty = every column keeps its
+  // declared width. The grid commits these on resize release, not per mousemove.
+  const [shotColumnWidths, setShotColumnWidths] = useState<Record<string, number>>({});
+  const [stationColumnWidths, setStationColumnWidths] = useState<Record<string, number>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // Wraps both the eye trigger and its anchored dropdown, so an outside-mousedown
   // check can treat the whole control as "inside".
@@ -688,6 +692,10 @@ export default function DataTable({ sections }: DataTableProps) {
     const stationHidden = panelsConfig.data_table_station_hidden_columns;
     setHiddenStationCols(new Set(stationHidden));
     setStationColumnOrder(panelsConfig.data_table_station_column_order);
+    const shotWidths = panelsConfig.data_table_shot_column_widths;
+    const stationWidths = panelsConfig.data_table_station_column_widths;
+    setShotColumnWidths(shotWidths);
+    setStationColumnWidths(stationWidths);
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
       panelsConfig.data_table_shot_hidden_columns,
@@ -695,6 +703,8 @@ export default function DataTable({ sections }: DataTableProps) {
       inclination,
       panelsConfig.data_table_station_column_order,
       stationHidden,
+      shotWidths,
+      stationWidths,
     ]);
   }, [panelsConfig]);
   useEffect(() => {
@@ -708,6 +718,8 @@ export default function DataTable({ sections }: DataTableProps) {
       inclinationMode,
       stationColumnOrder,
       stationHidden,
+      shotColumnWidths,
+      stationColumnWidths,
     ]);
     if (snapshot === lastSavedViewRef.current) return undefined;
     const timer = setTimeout(() => {
@@ -721,6 +733,8 @@ export default function DataTable({ sections }: DataTableProps) {
           inclinationMode,
           stationColumnOrder,
           stationHiddenColumns: stationHidden,
+          columnWidths: shotColumnWidths,
+          stationColumnWidths,
         },
         { purpose: 'persist data-table view state' }
       )
@@ -730,7 +744,16 @@ export default function DataTable({ sections }: DataTableProps) {
         .catch((e) => console.error('Failed to save data-table view state:', e));
     }, 500);
     return () => clearTimeout(timer);
-  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
+  }, [
+    shotColumnOrder,
+    hiddenShotCols,
+    azimuthMode,
+    inclinationMode,
+    stationColumnOrder,
+    hiddenStationCols,
+    shotColumnWidths,
+    stationColumnWidths,
+  ]);
 
   // Close on outside mousedown / external scroll / resize (shared hook). The
   // dropdown is position:fixed at a captured rect (useAnchoredFixedMenu), so any
@@ -1846,6 +1869,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
+                columnWidths={shotColumnWidths}
+                onColumnWidthsChange={setShotColumnWidths}
               />
             ) : sectionStations.length === 0 ? (
               <div className="flex items-center justify-center h-full text-text-secondary">
@@ -1872,6 +1897,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 hiddenColumns={stationHiddenColumns}
                 columnOrder={stationColumnOrder}
                 onColumnOrderChange={setStationColumnOrder}
+                columnWidths={stationColumnWidths}
+                onColumnWidthsChange={setStationColumnWidths}
               />
             )
           ) : (

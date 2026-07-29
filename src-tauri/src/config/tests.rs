@@ -2693,6 +2693,30 @@ fn test_panels_config_normalize_clamps_sizes() {
 }
 
 #[test]
+fn test_panels_config_normalize_clamps_column_widths() {
+    // config.toml is hand-editable, so the load path has to repair widths the
+    // grid cannot render: 0 is invisible and un-resizable (no border to grab),
+    // and a huge value pushes every later column off-screen.
+    let mut p = PanelsConfig {
+        data_table_shot_column_widths: std::collections::BTreeMap::from([
+            ("collapsed".to_string(), 0),
+            ("runaway".to_string(), 100_000),
+            ("sane".to_string(), 150),
+        ]),
+        data_table_station_column_widths: std::collections::BTreeMap::from([(
+            "tiny".to_string(),
+            7,
+        )]),
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+    assert_eq!(p.data_table_shot_column_widths["collapsed"], 40); // up to min
+    assert_eq!(p.data_table_shot_column_widths["runaway"], 2000); // down to max
+    assert_eq!(p.data_table_shot_column_widths["sane"], 150); // untouched
+    assert_eq!(p.data_table_station_column_widths["tiny"], 40);
+}
+
+#[test]
 fn test_panels_config_normalize_repairs_invalid_mode() {
     let mut p = PanelsConfig {
         sections_panel_mode: "Hover".to_string(), // wrong case
