@@ -2,6 +2,10 @@ name: Release
 on:
   push:
     tags: ['v*']
+  # Rehearsal path. A dispatch runs verify + the full build matrix but stops
+  # short of publishing (the release job is tag-gated), so the per-platform
+  # bundle paths and globs can be proven without cutting a tag first.
+  workflow_dispatch:
 
 jobs:
   # Gate the release on the checks the tagged commit should already have passed.
@@ -10,10 +14,19 @@ jobs:
   # note Windows needs STALAGMIGHT_TEST_MANIFEST=1 (see scripts/test.ps1).
   verify:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
+      # Cached here but deliberately NOT in `build`: this job compiles only to
+      # run tests, while `build` produces the binaries people install, and those
+      # are worth the cold compile.
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
       - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
       - uses: actions/setup-node@v4
         with:
@@ -51,6 +64,12 @@ jobs:
             tauri_args: ''
             bundle_dir: src-tauri/target/release/bundle
     runs-on: ${{ matrix.os }}
+    # macOS and Windows runners bill at a multiple of the Linux rate, and the
+    # DMG bundler has a known way to hang (see the build step). Without a ceiling
+    # the default is 6 hours on the most expensive runner in the matrix.
+    timeout-minutes: 60
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - name: Install Linux build dependencies
@@ -101,6 +120,22 @@ jobs:
             echo "::error::No artifacts found in $BUNDLE_DIR"
             exit 1
           fi
+      # Nothing is code-signed, and the release notes tell recipients how to
+      # click past the OS warning, so give them something to check the download
+      # against. Computed on the runner that built the bytes.
+      - name: Checksum this platform's artifacts
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          # macOS has shasum, not sha256sum.
+          if command -v sha256sum >/dev/null 2>&1; then
+            SUM="sha256sum"
+          else
+            SUM="shasum -a 256"
+          fi
+          $SUM * > "$RUNNER_TEMP/sums"
+          mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
+          cat "SHA256SUMS-${{ matrix.name }}"
       - uses: actions/upload-artifact@v4
         with:
           name: release-${{ matrix.name }}
@@ -109,7 +144,10 @@ jobs:
 
   release:
     needs: build
+    # Only a tag publishes. A workflow_dispatch rehearsal stops after `build`.
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     permissions:
       contents: write
     steps:
@@ -119,6 +157,29 @@ jobs:
           path: release-artifacts
           merge-multiple: true
       - run: ls -lh release-artifacts/
+      # `needs: build` already blocks a partial matrix from reaching this job.
+      # This re-checks the artifacts themselves, so completeness does not rest
+      # on that single upstream edge, and confirms the bytes still match what
+      # the build runners hashed.
+      - name: Verify checksums and assemble SHA256SUMS
+        shell: bash
+        working-directory: release-artifacts
+        run: |
+          cat SHA256SUMS-* > "$RUNNER_TEMP/SHA256SUMS"
+          rm SHA256SUMS-*
+          mv "$RUNNER_TEMP/SHA256SUMS" SHA256SUMS
+          sha256sum -c SHA256SUMS
+          # At least one installable per platform. Grouped by platform rather
+          # than asserting every extension, so a bundler dropping (say) the .rpm
+          # doesn't block an otherwise complete release.
+          shopt -s nullglob
+          linux=( *.deb *.rpm *.AppImage )
+          macos=( *.dmg )
+          windows=( *.msi *.exe )
+          [ ${#linux[@]}   -gt 0 ] || { echo "::error::no Linux artifact";   exit 1; }
+          [ ${#macos[@]}   -gt 0 ] || { echo "::error::no macOS artifact";   exit 1; }
+          [ ${#windows[@]} -gt 0 ] || { echo "::error::no Windows artifact"; exit 1; }
+          echo "SHA256SUMS:"; cat SHA256SUMS
       # Extract changelog section for this version
       - name: Extract changelog
         id: changelog
@@ -141,6 +202,9 @@ jobs:
           echo "$BODY" > /tmp/release-body.md
           # Nothing here is code-signed, so every platform interposes a warning
           # on first launch. Tell recipients how to get past it.
+          # The blank line after FOOTER is load-bearing: without it the `---`
+          # attaches to the preceding changelog line and renders as a heading
+          # rather than a rule. Don't tidy it away.
           cat >> /tmp/release-body.md <<'FOOTER'
 
           ---
@@ -152,6 +216,15 @@ jobs:
           - **macOS**: right-click `Stalagmight.app` and choose **Open**, then confirm. Or clear the quarantine flag: `xattr -dr com.apple.quarantine /Applications/Stalagmight.app`
           - **Windows**: SmartScreen shows "Windows protected your PC". Choose **More info**, then **Run anyway**.
           - **Linux**: install the `.deb` or `.rpm`, or `chmod +x` the `.AppImage` and run it.
+
+          Those steps ask you to override a security warning, so check what you
+          downloaded first. `SHA256SUMS` is attached to this release and was
+          generated on the runner that built the binaries:
+
+          ```
+          sha256sum -c SHA256SUMS        # Linux
+          shasum -a 256 -c SHA256SUMS    # macOS
+          ```
           FOOTER
       # Create release and upload assets
       - name: Create release and upload artifacts
