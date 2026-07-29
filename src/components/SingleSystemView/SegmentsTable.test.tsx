@@ -11,10 +11,13 @@ import userEvent from '@testing-library/user-event';
 import { SegmentsTable } from './SegmentsTable';
 import { useGasPlanStore } from '../../store/gasPlanStore';
 import { defaultConfig } from '../../types/config';
+import { segmentColor } from '../../utils/segmentColors';
 import type { GasReachField } from '../../types/ipc.generated';
 
 const A = { section_id: 1, station_index: 2 };
 const B = { section_id: 1, station_index: 5 };
+const C = { section_id: 1, station_index: 8 };
+const D = { section_id: 1, station_index: 11 };
 
 function fakeField(overrides: Partial<GasReachField> = {}): GasReachField {
   return {
@@ -63,11 +66,34 @@ describe('SegmentsTable', () => {
     expect(screen.getByTestId('segment-row-2')).toHaveTextContent('Onward');
   });
 
-  it('labels the origin instead of Entrance once one is set', () => {
+  it('labels the origin instead of Entrance once one is set, keeping the station id as a tooltip', () => {
     useGasPlanStore.getState().setOrigin(A);
     render(<SegmentsTable />);
-    expect(screen.getByTestId('segment-row-0')).toHaveTextContent('1:2');
-    expect(screen.queryByTestId('segment-row-0')).not.toHaveTextContent('Entrance');
+    const row = screen.getByTestId('segment-row-0');
+    expect(row).toHaveTextContent('Origin');
+    expect(row).not.toHaveTextContent('Entrance');
+    expect(row).not.toHaveTextContent('1:2');
+    expect(row.querySelector('td')).toHaveAttribute('title', '1:2');
+  });
+
+  it('labels every boundary by role: origin, each way point in order, and the endpoint', () => {
+    useGasPlanStore.getState().setOrigin(A);
+    useGasPlanStore.getState().addWaypoint(B);
+    useGasPlanStore.getState().addWaypoint(C);
+    useGasPlanStore.getState().setEndpoint(D);
+    render(<SegmentsTable />);
+
+    const row0 = screen.getByTestId('segment-row-0');
+    expect(row0).toHaveTextContent('Origin');
+    expect(row0).toHaveTextContent('WP 1');
+
+    const row1 = screen.getByTestId('segment-row-1');
+    expect(row1).toHaveTextContent('WP 1');
+    expect(row1).toHaveTextContent('WP 2');
+
+    const row2 = screen.getByTestId('segment-row-2');
+    expect(row2).toHaveTextContent('WP 2');
+    expect(row2).toHaveTextContent('Endpoint');
   });
 
   it('shows the plan speed on a span the diver has not given one, without writing it into the plan', () => {
@@ -180,7 +206,11 @@ describe('SegmentsTable', () => {
     expect(segment?.speed_m_per_min).toBe(12);
   });
 
-  it('unticking on_scooter does not change the speed', async () => {
+  it('unticking on_scooter always resets the speed to inherited, even if it was set by the tick', async () => {
+    // #317 fix pass: the tick auto-fills the rig's primary speed onto an inheriting span (see
+    // the previous test); leaving that number behind on untick would silently price the span at
+    // a scooter pace the diver no longer has - the unsafe direction. Untick must always return
+    // the span to `speed_m_per_min: null`, never keep whatever value happens to be sitting there.
     const user = userEvent.setup();
     useGasPlanStore.setState({
       gasConfig: {
@@ -191,7 +221,7 @@ describe('SegmentsTable', () => {
           range_reserve_fraction: 0.2,
         },
       },
-      segments: [{ speed_m_per_min: 24, on_scooter: true }],
+      segments: [{ speed_m_per_min: 45, on_scooter: true }],
     });
     render(<SegmentsTable />);
 
@@ -199,7 +229,24 @@ describe('SegmentsTable', () => {
 
     const segment = useGasPlanStore.getState().segments[0];
     expect(segment?.on_scooter).toBe(false);
-    expect(segment?.speed_m_per_min).toBe(24);
+    expect(segment?.speed_m_per_min).toBeNull();
+  });
+
+  it('gives each row a color chip matching the map route highlight color for that segment', () => {
+    useGasPlanStore.getState().addWaypoint(A);
+    useGasPlanStore.getState().addWaypoint(B);
+    render(<SegmentsTable />);
+
+    expect(screen.getByTestId('segment-color-0')).toHaveStyle({
+      backgroundColor: segmentColor(0),
+    });
+    expect(screen.getByTestId('segment-color-1')).toHaveStyle({
+      backgroundColor: segmentColor(1),
+    });
+    expect(screen.getByTestId('segment-color-2')).toHaveStyle({
+      backgroundColor: segmentColor(2),
+    });
+    expect(screen.getByTestId('segment-color-0')).toHaveAttribute('aria-hidden', 'true');
   });
 
   it('marks the segment boundary the engine names as the DPV park point, and no other', () => {

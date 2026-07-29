@@ -198,86 +198,77 @@ describe('GasPlanPanel scooter (DPV) readout (#317)', () => {
 });
 
 /**
- * #317: the DPV rig (and, alongside it, the jump RMV multiplier / include-reference-legs
- * toggle) has NO in-panel control, so Settings is its only source. The panel's seed-once
- * `hydrated` gate (#244, which exists so a mode-switch remount cannot clobber working inputs or
- * a loaded plan) therefore swallowed it entirely: configure a scooter after opening Plan mode
- * even once and the rig never appeared, with nothing on screen to explain why.
+ * #317: the jump RMV multiplier (alongside the include-reference-legs toggle) has NO in-panel
+ * control, so Settings is its only source. The panel's seed-once `hydrated` gate (#244, which
+ * exists so a mode-switch remount cannot clobber working inputs or a loaded plan) therefore
+ * swallowed it entirely: nudge the jump multiplier after opening Plan mode even once and the new
+ * value never appeared, with nothing on screen to explain why.
  *
  * The fix mirrors a Settings-only field EDITED IN SETTINGS during the session into the working
  * config via `gasPlanStore.syncSettingsOnlyGasFields`, keyed on the persisted value changing
- * rather than differing - which is what keeps a loaded plan's own rig from being silently
+ * rather than differing - which is what keeps a loaded plan's own value from being silently
  * overwritten by a personal default it was never planned on. That diffing lives in the STORE, not
  * a component ref, because the panel remounts on every mode switch and a ref would lose its
  * "already observed this session" memory exactly when the fix needs it most (see the remount
  * test below - the bug this replaced was that exact ref losing its memory on remount).
+ *
+ * (The DPV rig used to be probed here too. It now has its own in-panel editor and its own store
+ * setter, `setDpvRig` - see `gasPlanStore.test.ts` - so it is no longer part of this sync.)
  */
-describe('GasPlanPanel DPV rig sync (#317)', () => {
-  it('picks up a rig configured in Settings while the panel stays mounted', () => {
+describe('GasPlanPanel Settings-only gas sync (#317)', () => {
+  it('picks up a jump-multiplier edit made in Settings while the panel stays mounted', () => {
     // `hydrated: true` from beforeEach is the whole point: this is the state the bug lived in.
     const { rerender } = render(<GasPlanPanel />);
-    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(
+      defaultConfig.gas.jump_rmv_multiplier
+    );
 
-    // The diver opens Settings > Gas and configures their scooters.
+    // The diver opens Settings > Gas and changes the jump multiplier.
     const next = structuredClone(defaultConfig) as Config;
-    next.gas.dpv = RIG;
+    next.gas.jump_rmv_multiplier = 2.5;
     useProjectStore.setState({ config: next });
     rerender(<GasPlanPanel />);
 
-    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(RIG);
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(2.5);
   });
 
-  it('picks up a rig configured in Settings AFTER the panel unmounts and remounts (mode switch)', () => {
+  it('picks up a jump-multiplier edit made in Settings AFTER the panel unmounts and remounts (mode switch)', () => {
     // THE regression test: a real `unmount()` + fresh `render()`, not `rerender()` of the same
     // instance. `rerender` cannot reproduce the bug this guards - it never destroys the component,
     // so a component-local ref would still have its memory intact and the test would pass even
     // with the broken mechanism reinstated. The realistic flow is "leave Plan mode (unmounts the
-    // panel), configure the scooter in Settings, come back to Plan (a brand-new component
+    // panel), change the jump multiplier in Settings, come back to Plan (a brand-new component
     // instance)".
     const { unmount } = render(<GasPlanPanel />);
-    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(
+      defaultConfig.gas.jump_rmv_multiplier
+    );
     unmount();
 
     const next = structuredClone(defaultConfig) as Config;
-    next.gas.dpv = RIG;
+    next.gas.jump_rmv_multiplier = 2.5;
     useProjectStore.setState({ config: next });
 
     render(<GasPlanPanel />);
-    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(RIG);
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(2.5);
   });
 
-  it('deep-clones the rig so editing the working copy cannot mutate the persisted config', () => {
-    const { rerender } = render(<GasPlanPanel />);
-    const next = structuredClone(defaultConfig) as Config;
-    next.gas.dpv = structuredClone(RIG);
-    useProjectStore.setState({ config: next });
-    rerender(<GasPlanPanel />);
-
-    const working = useGasPlanStore.getState().gasConfig.dpv;
-    expect(working).not.toBe(next.gas.dpv);
-    expect(working?.primary).not.toBe(next.gas.dpv?.primary);
-  });
-
-  it('leaves a loaded plan’s own rig alone when Settings did not change', () => {
+  it('leaves a loaded plan’s own jump multiplier alone when Settings did not change', () => {
     // THE adversarial case, and the reason this syncs on CHANGE rather than on difference. A plan
-    // carries its own rig in its snapshot; a dive planned on a different scooter must not be
-    // re-rigged just because the diver's personal default disagrees. A naive "if working !==
-    // persisted, copy persisted" would fail here, so this is what separates the two designs.
-    const planRig: DpvRig = {
-      primary: { speed_m_per_min: 40, burn_minutes: 30 },
-      backup: { speed_m_per_min: 35, burn_minutes: 30 },
-      range_reserve_fraction: 0.1,
-    };
+    // carries its own gas config in its snapshot; a dive planned on a different jump multiplier
+    // must not be re-configured just because the diver's personal default disagrees. A naive "if
+    // working !== persisted, copy persisted" would fail here, so this is what separates the two
+    // designs.
     const settingsConfig = structuredClone(defaultConfig) as Config;
-    settingsConfig.gas.dpv = RIG;
+    settingsConfig.gas.jump_rmv_multiplier = 2.5;
     useProjectStore.setState({ config: settingsConfig });
     useGasPlanStore.setState({
-      gasConfig: { ...structuredClone(defaultConfig.gas), dpv: planRig },
+      gasConfig: { ...structuredClone(defaultConfig.gas), jump_rmv_multiplier: 3.5 },
     });
 
     const { rerender } = render(<GasPlanPanel />);
     rerender(<GasPlanPanel />);
 
-    expect(useGasPlanStore.getState().gasConfig.dpv).toEqual(planRig);
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(3.5);
   });
 });

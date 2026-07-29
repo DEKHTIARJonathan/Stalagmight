@@ -148,8 +148,8 @@ export function GasPlanPanel() {
   }, [setGasConfig]);
 
   // Mirror any Settings-only gas field EDITED IN SETTINGS during this session into the working
-  // config (#317): the DPV rig, the jump RMV multiplier and the include-reference-legs toggle
-  // have no in-panel control at all, so Settings is their only source - which made the seed-once
+  // config (#317): the jump RMV multiplier and the include-reference-legs toggle have no
+  // in-panel control at all, so Settings is their only source - which made the seed-once
   // `hydrated` gate above (deliberately, #244: re-seeding on every mode-switch remount would
   // clobber working inputs and a loaded plan) swallow them entirely: edit one after Plan mode has
   // already opened once this session and it would never appear, with nothing on screen to explain

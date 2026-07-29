@@ -514,6 +514,76 @@ describe('gasPlanStore segments (#317)', () => {
   });
 });
 
+/**
+ * `setDpvRig` (#317). The bug this closes: removing the rig used to leave every segment exactly
+ * as it was, so a span the diver had marked scootered kept flying at the auto-filled scooter
+ * speed with no rig behind it any more - the engine priced gas at a pace the diver could no
+ * longer sustain, and the field/route read further than the dive could actually go.
+ */
+describe('gasPlanStore setDpvRig (#317)', () => {
+  const rig = (speed: number) => ({
+    primary: { speed_m_per_min: speed, burn_minutes: 120, label: null },
+    backup: { speed_m_per_min: speed, burn_minutes: 60, label: null },
+    range_reserve_fraction: 0.1,
+  });
+
+  beforeEach(() => {
+    useGasPlanStore.getState().reset();
+  });
+
+  it('removing the rig resets every scootered segment to swim pace (the unsafe direction closed)', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: rig(45) },
+      segments: [
+        { speed_m_per_min: 45, on_scooter: true },
+        { speed_m_per_min: 10, on_scooter: false },
+      ],
+      reachField: fakeField(),
+    });
+
+    useGasPlanStore.getState().setDpvRig(null);
+
+    const s = useGasPlanStore.getState();
+    expect(s.gasConfig.dpv).toBeNull();
+    expect(s.segments[0]).toEqual({ speed_m_per_min: null, on_scooter: false });
+    expect(s.reachField).toBeNull();
+  });
+
+  it("leaves a non-scootered segment's explicit speed alone when the rig is removed", () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: rig(45) },
+      segments: [{ speed_m_per_min: 8, on_scooter: false }],
+    });
+
+    useGasPlanStore.getState().setDpvRig(null);
+
+    // A manually typed swim-pace speed has nothing to do with the rig - it is left untouched.
+    expect(useGasPlanStore.getState().segments[0]).toEqual({
+      speed_m_per_min: 8,
+      on_scooter: false,
+    });
+  });
+
+  it('installing a rig leaves segments untouched', () => {
+    useGasPlanStore.setState({
+      gasConfig: { ...defaultConfig.gas, dpv: null },
+      segments: [{ speed_m_per_min: 45, on_scooter: true }],
+    });
+
+    useGasPlanStore.getState().setDpvRig(rig(60));
+
+    const s = useGasPlanStore.getState();
+    expect(s.gasConfig.dpv).toEqual(rig(60));
+    expect(s.segments[0]).toEqual({ speed_m_per_min: 45, on_scooter: true });
+  });
+
+  it('nulls the cached reachField (a gas input, like setGasConfig)', () => {
+    useGasPlanStore.setState({ reachField: fakeField() });
+    useGasPlanStore.getState().setDpvRig(rig(45));
+    expect(useGasPlanStore.getState().reachField).toBeNull();
+  });
+});
+
 describe('gasPlanStore marked points (#298)', () => {
   const at = { section_id: 2, station_index: 3 };
 
@@ -678,9 +748,9 @@ describe('gasPlanStore dive-plan dirty tracking (#244)', () => {
  *
  * The bug this replaces: the marker for "what did Settings last say" lived in a `useRef` inside
  * `GasPlanPanel`, which UNMOUNTS on every mode switch. So the sequence a diver actually performs -
- * open Plan, go to Survey, configure a scooter in Settings, come back - threw the marker away and
- * re-seeded it from the NEW value, making a real edit look like a first observation. The rig never
- * appeared, and there is no in-panel control that could have explained why.
+ * open Plan, go to Survey, nudge the jump multiplier in Settings, come back - threw the marker
+ * away and re-seeded it from the NEW value, making a real edit look like a first observation. The
+ * new value never appeared, and there is no in-panel control that could have explained why.
  */
 describe('gasPlanStore Settings-only gas sync (#317)', () => {
   const rig = (speed: number) => ({
@@ -694,26 +764,28 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
   });
 
   it('ignores the first observation, then adopts a later change', () => {
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(45) }));
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 2 }));
     // The hydrate seed already applied this config; treating it as an edit would clobber a
-    // loaded plan's own rig with the diver's personal default on every panel mount.
-    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+    // loaded plan's own multiplier with the diver's personal default on every panel mount.
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(
+      defaultConfig.gas.jump_rmv_multiplier
+    );
 
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(60) }));
-    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(60);
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 3 }));
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(3);
   });
 
   it('survives a panel REMOUNT - the marker is store state, not a component ref', () => {
     // A remount re-runs the panel's hydrate. If that re-seeded the marker, the edit below would
     // read as a first observation and be swallowed. This is the exact #317 M2 regression, and it
     // only reproduces across an unmount: a test that merely re-renders cannot see it.
-    useGasPlanStore.getState().markHydrated(gas({ dpv: null }));
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null }));
-    // ... diver leaves Plan mode (panel unmounts), sets up a scooter, comes back (panel remounts,
-    // hydrate runs again against the already-hydrated store).
-    useGasPlanStore.getState().markHydrated(gas({ dpv: rig(45) }));
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: rig(45) }));
-    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(45);
+    useGasPlanStore.getState().markHydrated(gas({ jump_rmv_multiplier: 1.5 }));
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 1.5 }));
+    // ... diver leaves Plan mode (panel unmounts), nudges the jump multiplier, comes back (panel
+    // remounts, hydrate runs again against the already-hydrated store).
+    useGasPlanStore.getState().markHydrated(gas({ jump_rmv_multiplier: 2.5 }));
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ jump_rmv_multiplier: 2.5 }));
+    expect(useGasPlanStore.getState().gasConfig.jump_rmv_multiplier).toBe(2.5);
   });
 
   it('applies with a plan loaded, and the plan goes DIRTY rather than the edit being dropped', () => {
@@ -733,35 +805,42 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
     );
   });
 
-  it('nulls the cached reachField - all three fields are gas inputs', () => {
+  it('nulls the cached reachField - both fields are gas inputs', () => {
     useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ include_reference_legs: false }));
     useGasPlanStore.getState().setReachField(fakeField());
     useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ include_reference_legs: true }));
     expect(useGasPlanStore.getState().reachField).toBeNull();
   });
 
-  it('adopts ONLY the field that moved, so a jump edit cannot swap a loaded plan\'s rig', () => {
-    // The three fields share nothing but the accident of having no in-panel control. Diffing them
-    // as a TRIPLE and then spreading all three copies the two that did NOT change - so nudging the
-    // jump multiplier in Settings silently retires the rig the loaded plan was built around, in
-    // the one place a plan's snapshot is allowed to move underneath it.
-    useGasPlanStore.getState().markHydrated(gas({ dpv: null, jump_rmv_multiplier: 1.5 }));
+  it("adopts ONLY the field that moved, so a jump edit cannot flip a loaded plan's reference-legs toggle", () => {
+    // The two fields share nothing but the accident of having no in-panel control. Diffing them
+    // as a PAIR and then spreading both copies the one that did NOT change - so nudging the jump
+    // multiplier in Settings would silently flip the reference-legs toggle the loaded plan was
+    // built around, in the one place a plan's snapshot is allowed to move underneath it.
+    useGasPlanStore.getState().markHydrated(
+      gas({ jump_rmv_multiplier: 1.5, include_reference_legs: true })
+    );
     const snapshot = divePlanSnapshotOf({
       ...useGasPlanStore.getState(),
-      gasConfig: gas({ dpv: rig(45), jump_rmv_multiplier: 1.5 }),
+      gasConfig: gas({ jump_rmv_multiplier: 1.5, include_reference_legs: false }),
     });
     useGasPlanStore.getState().applyLoadedPlan(3, snapshot);
-    expect(useGasPlanStore.getState().gasConfig.dpv?.primary.speed_m_per_min).toBe(45);
+    expect(useGasPlanStore.getState().gasConfig.include_reference_legs).toBe(false);
     expect(selectIsPlanDirty(useGasPlanStore.getState())).toBe(false);
 
-    // Settings still holds no scooter; the diver changes only the jump multiplier.
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null, jump_rmv_multiplier: 2.5 }));
+    // Settings still holds the same reference-legs toggle; the diver changes only the jump
+    // multiplier.
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(
+      gas({ jump_rmv_multiplier: 2.5, include_reference_legs: true })
+    );
 
     const after = useGasPlanStore.getState();
     expect(after.gasConfig.jump_rmv_multiplier).toBe(2.5);
-    expect(after.gasConfig.dpv).toEqual(snapshot.gas_config.dpv);
-    // And the plan is dirty for that one field alone - not for a rig it never lost.
-    expect(after.loadedPlanBaseline?.gas_config.dpv).toEqual(snapshot.gas_config.dpv);
+    expect(after.gasConfig.include_reference_legs).toBe(snapshot.gas_config.include_reference_legs);
+    // And the plan is dirty for that one field alone - not for a toggle it never lost.
+    expect(after.loadedPlanBaseline?.gas_config.include_reference_legs).toBe(
+      snapshot.gas_config.include_reference_legs
+    );
   });
 
   it('a no-change call is a true no-op (same state object, no wasted refetch)', () => {
@@ -771,11 +850,21 @@ describe('gasPlanStore Settings-only gas sync (#317)', () => {
     expect(useGasPlanStore.getState()).toBe(before);
   });
 
-  it('does not share a nested reference with the persisted config it copied from', () => {
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null }));
-    const persisted = gas({ dpv: rig(45) });
-    useGasPlanStore.getState().syncSettingsOnlyGasFields(persisted);
-    expect(useGasPlanStore.getState().gasConfig.dpv).not.toBe(persisted.dpv);
+  it('does not mirror a persisted dpv change - that field now has its own setter (setDpvRig)', () => {
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(gas({ dpv: null, jump_rmv_multiplier: 1.5 }));
+    expect(useGasPlanStore.getState().gasConfig.dpv).toBeNull();
+
+    // Settings gains a rig, and the jump multiplier moves too, in the SAME call.
+    useGasPlanStore.getState().syncSettingsOnlyGasFields(
+      gas({ dpv: rig(45), jump_rmv_multiplier: 2.5 })
+    );
+
+    const s = useGasPlanStore.getState();
+    // jump_rmv_multiplier is still a Settings-only field and syncs...
+    expect(s.gasConfig.jump_rmv_multiplier).toBe(2.5);
+    // ...but dpv is not - a Settings-side rig change must never overwrite whatever the panel's
+    // own DPV editor is holding.
+    expect(s.gasConfig.dpv).toBeNull();
   });
 
   it('reset clears the marker, so a new project re-seeds instead of comparing across projects', () => {

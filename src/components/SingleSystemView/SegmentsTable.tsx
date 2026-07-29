@@ -5,6 +5,7 @@ import { PositiveNumberField } from '../common/PositiveNumberField';
 import { formatStationId } from '../../utils/formatters';
 import { speedFromDisplay, speedToDisplay } from '../../utils/formatGas';
 import { clamp } from '../../utils/clamp';
+import { segmentColor } from '../../utils/segmentColors';
 import type { StationRef } from '../../types/project';
 
 /**
@@ -66,11 +67,13 @@ export function SegmentsTable() {
   // Every boundary the panel can NAME, in visit order: before segment 0 (the origin, or the
   // entrance default), each way point in between, and after the last segment (the chosen
   // endpoint, or nothing when the route simply ends wherever the budget does). Segment k
-  // spans boundary[k] -> boundary[k + 1].
+  // spans boundary[k] -> boundary[k + 1]. Labeled by ROLE (Origin/WP n/Endpoint), not by
+  // station id - the id is still discoverable via a `title` tooltip (`boundaryRefs`) for
+  // whichever boundaries actually resolve to one.
   const boundaryLabels = [
-    origin ? formatStationId(origin.section_id, origin.station_index) : t('gasPanel.origin.entrance'),
-    ...waypoints.map((w) => formatStationId(w.section_id, w.station_index)),
-    t('gasPanel.segments.onward'),
+    origin ? t('gasPanel.segments.origin') : t('gasPanel.origin.entrance'),
+    ...waypoints.map((_, k) => t('gasPanel.segments.waypointN', { n: k + 1 })),
+    endpoint ? t('gasPanel.segments.endpoint') : t('gasPanel.segments.onward'),
   ];
   const boundaryRefs: (StationRef | null)[] = [origin, ...waypoints, endpoint];
 
@@ -95,21 +98,26 @@ export function SegmentsTable() {
   // one.
   const resetSpeed = (idx: number) =>
     setSegments(segments.map((seg, i) => (i === idx ? { ...seg, speed_m_per_min: null } : seg)));
-  // Ticking on_scooter on a span still inheriting the plan speed (`speed_m_per_min: null`) also
-  // fixes that span's speed to the rig's primary. Riding a span at swim pace while the range model
-  // spends the rig's range by METRES (not by time) would understate the real battery drain - the
-  // two only agree once the span's speed actually matches what it's flown at. A row with its own
-  // explicit speed keeps it; unticking changes nothing (the speed the diver set doesn't stop being
-  // true just because the checkbox comes back off).
+  // The scooter checkbox and the speed field are kept in a symmetric contract: ticking
+  // on_scooter on a span still inheriting the plan speed (`speed_m_per_min: null`) auto-fills
+  // the rig's primary speed onto it (riding at swim pace while the range model spends the
+  // rig's range by METRES, not by time, would understate the real battery drain - the two
+  // only agree once the span's speed actually matches what it's flown at); unticking
+  // reverses that - it always returns the span to inheriting (`speed_m_per_min: null`),
+  // never leaves the auto-filled number behind. A span that never had a speed of its own
+  // still doesn't get one from a tick+untick round trip. The unsafe direction this closes:
+  // untick-but-keep-the-speed left the span priced at a scooter pace with no scooter under
+  // it, silently overstating range/understating gas until the diver noticed and hit Reset.
   const setScooter = (idx: number, onScooter: boolean) =>
     setSegments(
       segments.map((seg, i) => {
         if (i !== idx) return seg;
+        if (!onScooter) return { ...seg, on_scooter: false, speed_m_per_min: null };
         const speed =
-          onScooter && seg.speed_m_per_min == null && gasConfig.dpv
+          seg.speed_m_per_min == null && gasConfig.dpv
             ? gasConfig.dpv.primary.speed_m_per_min
             : seg.speed_m_per_min;
-        return { ...seg, on_scooter: onScooter, speed_m_per_min: speed };
+        return { ...seg, on_scooter: true, speed_m_per_min: speed };
       })
     );
 
@@ -129,10 +137,31 @@ export function SegmentsTable() {
             const from = boundaryLabels[idx] ?? '';
             const to = boundaryLabels[idx + 1] ?? '';
             const parksAfter = sameStation(dropRef, boundaryRefs[idx + 1] ?? null);
+            // Role labels (Origin/WP n/Endpoint) name the boundary; the underlying station id,
+            // when the boundary resolves to one, stays reachable as a tooltip rather than on
+            // the row itself.
+            const fromRef = boundaryRefs[idx] ?? null;
+            const toRef = boundaryRefs[idx + 1] ?? null;
+            const fromTitle = fromRef
+              ? formatStationId(fromRef.section_id, fromRef.station_index)
+              : undefined;
+            const toTitle = toRef ? formatStationId(toRef.section_id, toRef.station_index) : undefined;
             return (
               <tr className="border-t border-border" key={idx} data-testid={`segment-row-${idx}`}>
-                <td className="py-1 pr-3 font-mono">{from}</td>
-                <td className="py-1 pr-3 font-mono">
+                <td className="py-1 pr-3 font-mono" title={fromTitle}>
+                  <span
+                    aria-hidden="true"
+                    data-testid={`segment-color-${idx}`}
+                    className="inline-block rounded-sm mr-2"
+                    style={{
+                      width: '10px',
+                      height: '10px',
+                      backgroundColor: segmentColor(idx),
+                    }}
+                  />
+                  {from}
+                </td>
+                <td className="py-1 pr-3 font-mono" title={toTitle}>
                   {to}
                   {parksAfter && (
                     <span

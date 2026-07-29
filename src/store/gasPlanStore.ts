@@ -6,6 +6,7 @@ import type {
   Cylinder,
   Diver,
   DivePlanSnapshot,
+  DpvRig,
   GasConfig,
   GasReachField,
   MarkedPoint,
@@ -83,18 +84,15 @@ export function planSpeed(gasConfig: GasConfig): number {
  * The gas settings with NO control anywhere in the Plan panel (#317).
  *
  * Every other gas field is editable in-panel, so mirroring a Settings edit into it would fight the
- * diver's own working value. These three have Settings as their only source, which the seed-once
- * `hydrated` gate would otherwise swallow entirely: configure a scooter after having opened Plan
- * mode once and the rig never appears, with nothing on screen to explain why.
+ * diver's own working value. These two have Settings as their only source, which the seed-once
+ * `hydrated` gate would otherwise swallow entirely: nudge the jump multiplier after having opened
+ * Plan mode once and the new value never appears, with nothing on screen to explain why. (The DPV
+ * rig is NOT one of these - it has its own in-panel editor and its own setter, `setDpvRig`.)
  */
-export type SettingsOnlyGasFields = Pick<
-  GasConfig,
-  'dpv' | 'jump_rmv_multiplier' | 'include_reference_legs'
->;
+export type SettingsOnlyGasFields = Pick<GasConfig, 'jump_rmv_multiplier' | 'include_reference_legs'>;
 
 function settingsOnlyFieldsOf(gas: GasConfig): SettingsOnlyGasFields {
   return {
-    dpv: gas.dpv,
     jump_rmv_multiplier: gas.jump_rmv_multiplier,
     include_reference_legs: gas.include_reference_legs,
   };
@@ -481,6 +479,18 @@ interface GasPlanState {
   setDiver: (diver: Diver) => void;
   setCylinders: (cylinders: Cylinder[]) => void;
   setGasConfig: (gasConfig: GasConfig) => void;
+  /**
+   * #317: install (or, with `null`, remove) the diver's DPV rig - a gas input, but edited from its
+   * own in-panel editor rather than a `setGasConfig` patch, so it gets its own setter.
+   *
+   * Removing the rig also resets every segment with `on_scooter: true` back to `{on_scooter: false,
+   * speed_m_per_min: null}`. Left alone, a segment the diver had marked scootered keeps flying at
+   * whatever speed the rig auto-filled (e.g. 45 m/min) with no rig behind it any more - the engine
+   * would go on pricing gas at a pace the diver can no longer sustain, so the field and the route
+   * both stay too long, the unsafe direction. A segment with no `on_scooter` flag is untouched: an
+   * explicit swim-pace speed the diver typed by hand has nothing to do with the rig.
+   */
+  setDpvRig: (rig: DpvRig | null) => void;
   setReachField: (reachField: GasReachField | null) => void;
   setPushyAck: (ack: boolean) => void;
   /** #244: mark the gas config seeded for this session (see `hydrated`). `persistedGas` is the
@@ -815,14 +825,13 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       set({ lastSeenPersistedGas: next });
       return;
     }
-    // FIELD BY FIELD, never as a triple. These three share nothing but the accident of having no
-    // in-panel control, and copying all of them because ONE moved overwrites the other two with
-    // whatever Settings happens to hold - so nudging the jump multiplier would swap a loaded plan's
-    // whole scooter rig for the app default, in the one place a plan's own snapshot is allowed to
-    // move underneath it.
+    // FIELD BY FIELD, never as a pair. These two share nothing but the accident of having no
+    // in-panel control, and copying both because ONE moved overwrites the other with whatever
+    // Settings happens to hold - so nudging the jump multiplier would silently flip a loaded
+    // plan's reference-legs toggle too, in the one place a plan's own snapshot is allowed to move
+    // underneath it.
     const prev = s.lastSeenPersistedGas;
     const patch: Partial<SettingsOnlyGasFields> = {};
-    if (!deepEqual(prev.dpv, next.dpv)) patch.dpv = next.dpv;
     if (prev.jump_rmv_multiplier !== next.jump_rmv_multiplier) {
       patch.jump_rmv_multiplier = next.jump_rmv_multiplier;
     }
@@ -1028,6 +1037,24 @@ export const useGasPlanStore = create<GasPlanState>((set, get) => ({
       stageDropOverrides: [],
       unresolved: routeInputFlags(s.unresolved),
     })),
+  setDpvRig: (rig) =>
+    set((s) => {
+      // Only a REMOVAL (a rig was in force, and now none is) resets segments. Installing a rig, or
+      // swapping one rig for another, leaves every segment's speed/scooter flag exactly as the
+      // diver left it - there is nothing unsafe about a scootered span with a rig still behind it.
+      const removed = s.gasConfig.dpv !== null && rig === null;
+      return {
+        gasConfig: { ...s.gasConfig, dpv: rig },
+        segments: removed
+          ? s.segments.map((seg) =>
+              seg.on_scooter ? { on_scooter: false, speed_m_per_min: null } : seg
+            )
+          : s.segments,
+        reachField: null,
+        stageDropOverrides: [],
+        unresolved: routeInputFlags(s.unresolved),
+      };
+    }),
   // `lastReachField` only ever moves forward to a real field - it is never nulled here, so it
   // survives the refetch window. `reset()` clears both, so it cannot leak across a project switch.
   setReachField: (reachField) =>
