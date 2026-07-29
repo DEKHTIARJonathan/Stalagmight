@@ -796,24 +796,22 @@ impl AppState {
         let _ = std::fs::remove_file(&tml_scratch);
         adopt?;
 
-        // Stamp BASE = the server's TRUE HEAD (revision-topology leaf), mirroring the
-        // pull (see `speleodb_open_project`): fetch revisions directly (NOT via the
-        // auth handler) so a spurious 401 on this best-effort stamp can't auto-drop the
-        // session mid-adopt; fall back to the caller-supplied SHA on failure.
-        let base_sha = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
-            Ok(history) => sync::tip_of(&history.commits)
-                .map(str::to_owned)
-                .or(latest_commit_sha),
-            Err(e) => {
-                tracing::warn!(
-                    error = %e,
-                    project_id = %project_id,
-                    purpose = "resolve server HEAD on adopt",
-                    "speleodb_adopt_ariane: could not resolve server HEAD; using list latest_commit"
-                );
-                latest_commit_sha
-            }
-        };
+        // BASE = the commit this project was actually built from, which is the one
+        // already resolved above and downloaded by hash - NOT a second lookup here.
+        //
+        // A second lookup reintroduces the window the by-hash download closed, and on
+        // the worst possible side of it. The import between them is slow (parse the
+        // `.tml`, build the project, save it), so a revision landing during it is not
+        // exotic; the copy would then be A-derived content stamped BASE = B, and
+        // stamped `has_unpushed_edits` too. Start editing reads BASE == tip and calls
+        // it UpToDate, so nothing ever fast-forwards, and the push then reads base ==
+        // tip and plans a plain Upload - putting A over B with no divergence raised.
+        // Silently overwriting the very revision that landed while we were importing.
+        //
+        // Keeping the original sha instead means BASE is A, so if B did land the copy
+        // is honestly behind: the fence sees a commit that is not ours and raises the
+        // divergence prompt, which is the outcome the user can act on.
+        let PullDating { base: base_sha, .. } = pull_dating(adopt_at, latest_commit_sha);
 
         // Stamp the hand-off link onto the saved `.stalx`. `has_unpushed_edits = true`:
         // the adopted `.stalx` is content the server does not have yet, so the first
@@ -1317,6 +1315,45 @@ mod tests {
             ),
             "the tree moved under the choice, so the user has to be asked again \
              rather than handed the pre-push file"
+        );
+    }
+
+    /// [#258] Adoption must resolve the server head ONCE and stamp BASE from that same
+    /// sha - the commit it downloaded by hash - rather than looking it up again after
+    /// the import.
+    ///
+    /// A second lookup reopens the window the by-hash download closed, on the worst
+    /// side of it. The import between them is slow (parse, build, save), so a revision
+    /// landing during it is ordinary; the copy is then A-derived content stamped
+    /// BASE = B and `has_unpushed_edits`. Start editing reads BASE == tip and calls it
+    /// UpToDate so nothing fast-forwards, and the push reads base == tip and plans a
+    /// plain Upload - putting A over B with no divergence raised, which silently
+    /// overwrites the very revision that landed during the import.
+    ///
+    /// Guarded by SOURCE, like the pull's guard-before-download ordering above and for
+    /// the same reason: reaching the real thing needs a server that can advance its
+    /// head mid-import. The live orchestration tests are where a behavioural version
+    /// would go.
+    #[test]
+    fn adoption_stamps_base_from_the_commit_it_downloaded_not_a_later_lookup() {
+        let src = prod_source();
+        let start = src
+            .find("fn speleodb_adopt_ariane")
+            .expect("the adoption verb is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert_eq!(
+            body.matches("client::get_revisions(").count()
+                + body.matches("speleodb_server_head(").count(),
+            1,
+            "adoption must resolve the head exactly once; a second lookup after the \
+             import is what lets an A-derived project be stamped BASE = B"
+        );
+        assert!(
+            body.contains("pull_dating(adopt_at"),
+            "BASE must come from the sha adoption downloaded by hash, through the same \
+             split that keeps the advisory fallback off the choice dating"
         );
     }
 
