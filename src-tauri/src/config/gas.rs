@@ -4,7 +4,7 @@
 //! (it was already at the 1500-LOC freeze line). Re-exported from `config` via
 //! `pub use gas::*`, so `crate::config::GasConfig` etc. resolve unchanged.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use ts_rs::TS;
 
 fn default_true() -> bool {
@@ -136,7 +136,6 @@ pub struct DpvUnit {
     pub speed_m_per_min: f64,
     /// Burn time at cruising speed (minutes).
     pub burn_minutes: f64,
-    pub label: Option<String>,
 }
 
 impl DpvUnit {
@@ -238,8 +237,29 @@ pub struct GasConfig {
     pub conservative_tank_gas: bool,
     /// Optional DPV rig (#317). `None` = no scooter, and the engine behaves exactly as it did
     /// before scooters existed: the range cap is infinite and never binds.
-    #[serde(default)]
+    ///
+    /// Deserialized via [`lenient_dpv`] rather than the plain derive: this field replaced the
+    /// old `DpvProfile` shape, and a config written by a previous build carries a `[gas.dpv]`
+    /// table that no longer fits `DpvRig`. Erroring here would fail the WHOLE config parse -
+    /// `Config::load().unwrap_or_default()` then silently resets every OTHER setting because one
+    /// optional block changed shape. An incompatible `dpv` value degrades to `None` instead,
+    /// exactly as if the key were absent.
+    #[serde(default, deserialize_with = "lenient_dpv")]
     pub dpv: Option<DpvRig>,
+}
+
+/// Tolerant deserializer for [`GasConfig::dpv`] (#317). Captures the raw value as a
+/// `serde_json::Value` first - this works through any self-describing `Deserializer`
+/// (TOML's included), since `Value`'s own `Deserialize` impl only relies on `deserialize_any`,
+/// not on the JSON wire format - and only then attempts `DpvRig`. A value that does not fit
+/// (an old-shape `DpvProfile` table, a stray scalar, anything) degrades to `None` rather than
+/// failing the field, so one shape change can never take down the rest of the config.
+fn lenient_dpv<'de, D>(deserializer: D) -> Result<Option<DpvRig>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    Ok(serde_json::from_value::<DpvRig>(value).ok())
 }
 
 impl Default for GasConfig {
