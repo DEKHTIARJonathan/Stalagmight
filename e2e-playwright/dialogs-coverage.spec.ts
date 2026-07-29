@@ -164,8 +164,9 @@ test.describe('Dialog Coverage - Draw Shot', () => {
     const leftInput = dialog.locator('label:has-text("Left")').locator('..').locator('input');
     await leftInput.fill('0.8');
 
-    const referenceToggle = dialog.locator('input[type="checkbox"]');
-    await referenceToggle.check();
+    // #27 replaced the boolean "reference" checkbox with the 3-way shot kind, so
+    // marking this shot a reference is now a select, not a toggle.
+    await dialog.getByTestId('draw-shot-kind').selectOption('Reference');
 
     await dialog.getByRole('button', { name: 'Create Shot' }).click();
     await expect(dialog).not.toBeVisible({ timeout: 5000 });

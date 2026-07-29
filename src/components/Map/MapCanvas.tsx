@@ -2561,18 +2561,28 @@ function MapCanvas() {
       move_comment: 'crosshair',
     };
 
+    // In supported tools with Ctrl held, show grab cursor for panning
+    const base =
+      CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld ? 'grab' : cursors[activeTool] ?? 'default';
+
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
     // Force zoom-in cursor for zoom tool even when hovering over features
     if (!isHoveringFeature || activeTool === 'zoom') {
-      // In supported tools with Ctrl held, show grab cursor for panning
-      if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
-        map.current.getCanvas().style.cursor = 'grab';
-      } else {
-        map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
-      }
+      map.current.getCanvas().style.cursor = base;
     }
-  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode]);
+    // Hand the same value to SurveyLayer, which writes this property too and needs
+    // something to fall back to when nothing is hovered. It cannot derive `base`
+    // itself - the tool map and the Ctrl-held grab both live here - and without it
+    // its own recomputes (which continue after this passive effect has run for the
+    // last time) reset the cursor to a bare arrow (#24). Unconditional: it is the
+    // RESTING cursor, true whether or not something is hovered right now.
+    surveyLayerRef.current?.setBaseCursor(base);
+    // `mapLoaded` is a dependency for the hand-off above, not for the write: on the
+    // first run the layer does not exist yet, and none of the other deps change on
+    // map load, so without it the starting tool's resting cursor would never reach
+    // SurveyLayer at all.
+  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode, mapLoaded]);
 
   // Disable map drag pan for tools that need custom interaction
   // (Ctrl+drag panning is handled by custom implementation, not dragPan)
