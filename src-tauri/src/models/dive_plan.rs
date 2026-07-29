@@ -11,6 +11,12 @@ use ts_rs::TS;
 use crate::config::GasConfig;
 use crate::models::{Cylinder, Diver, PlanSegment, StationRef};
 
+/// The `.plnx` storage form of a station reference, re-exported here so it can cross the IPC
+/// boundary (#310). Defined next to the code that builds and places it
+/// (`core::state::dive_plan`); its fields stay private to that module on purpose - see
+/// [`PlanAnchorSet`] for why the frontend must treat one as opaque.
+pub use crate::core::state::dive_plan::{PlanAnchor, StoredAnchor};
+
 /// Payload schema version stamped into every saved snapshot. Bump only on a
 /// breaking change to `DivePlanSnapshot`; additive changes need no bump because
 /// unknown fields are ignored and missing fields default (serde, config-style).
@@ -87,6 +93,38 @@ pub struct DivePlanMeta {
     pub updated_at: String,
 }
 
+/// The anchors behind a plan's station references (#310), index-aligned with the lists in
+/// [`DivePlanSnapshot`].
+///
+/// A `StationRef` is POSITIONAL, so it silently rebinds to whichever station slid into that
+/// index when the survey is edited. The plan file has never had that problem - it stores
+/// anchors and re-places them on load - but a plan being edited in Plan mode lived only as
+/// refs. Handing the anchors out lets the frontend hold each live pin the way the file does.
+///
+/// ⚠ **An anchor is OPAQUE to the frontend**: TS sees `unknown`, the fields are private to
+/// `core::state::dive_plan`, and the only legal things to do with one are store it and hand it
+/// back to `plan_refs_for_anchors`. Nothing outside this crate should build, inspect or
+/// interpolate one - the shape is a persistence detail that has already changed once (#24).
+#[derive(Debug, Clone, Default, Serialize, Deserialize, TS)]
+pub struct PlanAnchorSet {
+    #[ts(type = "unknown | null")]
+    pub origin: Option<StoredAnchor>,
+    #[ts(type = "unknown | null")]
+    pub endpoint: Option<StoredAnchor>,
+    /// Index-aligned with the RESOLVED `waypoints`: a dangling way point leaves both lists
+    /// together, so every entry here is populated. The `Option` is for shape, not for absence.
+    #[ts(type = "Array<unknown | null>")]
+    pub waypoints: Vec<Option<StoredAnchor>>,
+    /// Index-aligned with the resolved `marked_points`, same as `waypoints`.
+    #[ts(type = "Array<unknown | null>")]
+    pub marked_points: Vec<Option<StoredAnchor>>,
+    /// Index-aligned with `stage_drop_overrides`, which KEEPS its slots (an override that no
+    /// longer places is nulled rather than dropped, because its position names a stage), so a
+    /// `None` here is a genuinely absent or dangling override.
+    #[ts(type = "Array<unknown | null>")]
+    pub stage_drop_overrides: Vec<Option<StoredAnchor>>,
+}
+
 /// A loaded dive plan: its metadata, the snapshot to apply, and how many station
 /// references no longer resolve against the current survey (nulled on load; the UI
 /// warns when > 0). See section 6 of the design doc.
@@ -95,6 +133,11 @@ pub struct DivePlan {
     pub meta: DivePlanMeta,
     pub snapshot: DivePlanSnapshot,
     pub stale_ref_count: u32,
+    /// The anchors the resolved snapshot came from, so loading a plan seeds the live pins
+    /// without a second round trip (#310). Defaults when absent so an older blob - or a test
+    /// fixture - still deserializes.
+    #[serde(default)]
+    pub anchors: PlanAnchorSet,
 }
 
 #[cfg(test)]

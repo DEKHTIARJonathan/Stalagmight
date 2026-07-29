@@ -6,7 +6,7 @@
 use tauri::Manager;
 
 use crate::core::AppState;
-use crate::models::{DivePlan, DivePlanMeta, DivePlanSnapshot};
+use crate::models::{DivePlan, DivePlanMeta, DivePlanSnapshot, StationRef, StoredAnchor};
 
 /// List the dive plans stored next to the open project (newest first). Empty when
 /// there is no saved project or no `.plnx` yet.
@@ -54,6 +54,52 @@ pub async fn save_dive_plan(
     {
         Ok(res) => res,
         Err(e) => Err(format!("save dive plan failed: {e}")),
+    }
+}
+
+/// Describe live plan pins as stable anchors (#310), index-aligned with `refs`; `None` for a ref
+/// that names no live station.
+///
+/// Read-only, and the reason it exists: a `StationRef` is positional, so a plan being edited in
+/// Plan mode silently rebinds its pins when a survey edit renumbers stations. The `.plnx` never
+/// had that problem because it stores anchors - this hands the same anchors to the frontend for
+/// the plan it is holding in memory. An anchor is OPAQUE on the wire (`unknown` in TS): store it
+/// and give it back to [`plan_refs_for_anchors`], nothing else.
+#[tauri::command]
+pub async fn plan_anchors_for_refs(
+    app_handle: tauri::AppHandle,
+    refs: Vec<StationRef>,
+) -> Result<Vec<Option<StoredAnchor>>, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        app_handle
+            .state::<AppState>()
+            .inner()
+            .plan_anchors_for_refs(refs)
+    })
+    .await
+    {
+        Ok(res) => res,
+        Err(e) => Err(format!("plan anchors for refs failed: {e}")),
+    }
+}
+
+/// Place anchors against the survey as it stands now (#310), index-aligned with `anchors`;
+/// `None` for one that no longer places. The read half of [`plan_anchors_for_refs`].
+#[tauri::command]
+pub async fn plan_refs_for_anchors(
+    app_handle: tauri::AppHandle,
+    anchors: Vec<StoredAnchor>,
+) -> Result<Vec<Option<StationRef>>, String> {
+    match tauri::async_runtime::spawn_blocking(move || {
+        app_handle
+            .state::<AppState>()
+            .inner()
+            .plan_refs_for_anchors(anchors)
+    })
+    .await
+    {
+        Ok(res) => res,
+        Err(e) => Err(format!("plan refs for anchors failed: {e}")),
     }
 }
 

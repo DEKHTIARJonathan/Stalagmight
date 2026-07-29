@@ -49,12 +49,12 @@ use stalagmight_lib::models::{
     CollabState, ConnectivityResult, Coordinates, CylRole, Cylinder, DeleteShotImpact,
     DeleteShotRangeImpact, DistanceField, DivePlan, DivePlanMeta, DivePlanSnapshot, Diver,
     ExistingShotUpdate, FrozenShotRef, GasReachField, GpsBounds, GpsCoordinates, ImportPlacement,
-    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanMode, PlanSegment, Project,
-    ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg, RouteProfilePoint,
-    RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats, SectionUpdates, Shot,
-    ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station, StationMergeWire,
-    StationPair, StationRef, SurveyDirection, TankMaterial, Team, UnrecognisedShotKind,
-    ZeroDatumWire,
+    ImportSectionConfig, LoopClosureWire, MarkedPoint, PathShot, PlanAnchorSet, PlanMode,
+    PlanSegment, Project, ProjectMetadata, ProjectStats, ProjectWarning, RangeDeleteKind, RouteLeg,
+    RouteProfilePoint, RulerEndpoint, Section, SectionData, SectionRelationships, SectionStats,
+    SectionUpdates, Shot, ShotBaselineEntry, ShotData, ShotKind, ShotUpdates, SpeleoLink, Station,
+    StationMergeWire, StationPair, StationRef, SurveyDirection, TankMaterial, Team,
+    UnrecognisedShotKind, ZeroDatumWire,
 };
 use stalagmight_lib::parsers::compass::{CompassFile, CompassSurveySummary};
 use stalagmight_lib::parsers::dmp::{DmpDirection, DmpFile, DmpSection, DmpShot, DmpShotType};
@@ -137,6 +137,7 @@ fn main() {
     export::<MarkedPoint>(&out_dir);
     export::<DivePlanSnapshot>(&out_dir);
     export::<DivePlanMeta>(&out_dir);
+    export::<PlanAnchorSet>(&out_dir);
     export::<DivePlan>(&out_dir);
     export::<RouteLeg>(&out_dir);
     export::<RouteProfilePoint>(&out_dir);
@@ -396,6 +397,7 @@ fn main() {
         "MarkedPoint",
         "DivePlanSnapshot",
         "DivePlanMeta",
+        "PlanAnchorSet",
         "DivePlan",
         "RouteLeg",
         "RouteProfilePoint",

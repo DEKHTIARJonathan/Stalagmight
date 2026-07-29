@@ -1273,6 +1273,8 @@ pub fn run() {
             commands::dive_plan::load_dive_plan,
             commands::dive_plan::save_dive_plan,
             commands::dive_plan::delete_dive_plan,
+            commands::dive_plan::plan_anchors_for_refs,
+            commands::dive_plan::plan_refs_for_anchors,
             // Project commands
             commands::project::update_project_settings,
             commands::project::save_project,
