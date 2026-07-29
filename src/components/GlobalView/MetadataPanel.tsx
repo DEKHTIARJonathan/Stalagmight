@@ -99,7 +99,7 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
 
-  // Destructive: permanently delete the project files (distinct from the
+  // Destructive: permanently delete the project file (distinct from the
   // forget-only Remove above). Routes through the shared confirm dialog.
   const handleDeleteProject = useCallback(() => {
     if (singleProject?.file_path) {

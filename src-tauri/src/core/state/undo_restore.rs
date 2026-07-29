@@ -176,9 +176,10 @@ impl AppState {
             return CommandResult::failure(format!("Section {section_id} not found"));
         };
 
-        // Recreate the shot with its original ID and UUID so cross-references and
-        // Ariane matching keep anchoring on the same identity. `uuid: None`
-        // (legacy entry) mints a fresh one.
+        // Recreate the shot with its original ID and UUID so the restored shot
+        // keeps the identity station cross-references anchor on
+        // (`StationKey::AfterShot`) and the Ariane export emits as `<UUID>`.
+        // `uuid: None` (legacy entry) mints a fresh one.
         let shot = Shot::with_uuid(original_shot_id, data, uuid);
 
         // Update next_shot_id if needed to avoid collisions

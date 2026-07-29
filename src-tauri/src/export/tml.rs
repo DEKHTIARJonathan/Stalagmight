@@ -1937,7 +1937,7 @@ mod tests {
     #[test]
     fn ensure_shot_uuids_makes_legacy_render_byte_stable() {
         // #196 guard: a legacy project whose shots have NO UUID would otherwise
-        // get a fresh ephemeral UUID minted per export (pick_uuid's last resort),
+        // get a fresh ephemeral UUID minted per export (shot_export_uuid's last resort),
         // making renders differ. ensure_shot_uuids() mints stable UUIDs up front.
         let mut project = simple_project();
         for section in &mut project.sections {

@@ -491,7 +491,7 @@ impl Command {
             Command::OpenProject { path } => {
                 format!("Open project '{}'", path.display())
             }
-            Command::SaveProject { path, .. } => match path {
+            Command::SaveProject { path } => match path {
                 Some(p) => format!("Save project to '{}'", p.display()),
                 None => "Save project".to_string(),
             },

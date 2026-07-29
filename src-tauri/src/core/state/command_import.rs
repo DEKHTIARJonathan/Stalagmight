@@ -1029,15 +1029,15 @@ impl AppState {
             }
         }
 
-        // Block corruption at the source: convert sole-bridge closures, reconcile
-        // derived offsets, and reject the whole import if it produced critical
+        // Block corruption at the source: reconcile derived
+        // offsets, and reject the whole import if it produced critical
         // corruption (dangling refs / non-finite geometry) rather than committing
         // and later persisting it. This custom path bypasses execute()'s guard, so
         // it must run the same epilogue itself (#integrity Root 4 / catalog #19).
         // An import only ADDS sections/merges/closures (its closures are loops over
         // the spanning-tree merges, never sole bridges), so it can't strand a
-        // section behind a closure - skip the O(closures × connectivity)
-        // sole-bridge conversion that otherwise dominated a large import.
+        // section behind a closure - which is why the epilogue runs no
+        // sole-bridge conversion at all.
         if self.finalize_structural_edit(pre_had_critical) {
             self.rollback_project(&before_snapshot);
             tracing::error!(

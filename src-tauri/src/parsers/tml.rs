@@ -1437,11 +1437,7 @@ fn topological_sort_configs(configs: &mut Vec<ImportSectionConfig>) {
 ///
 /// `prev_depth` is the previous real shot's cumulative depth (`None` for the first
 /// shot in a section), `start_depth` the parent station's cumulative depth.
-pub(crate) fn resolve_tml_depth_in(
-    shot: &TmlShot,
-    prev_depth: Option<f64>,
-    start_depth: f64,
-) -> f64 {
+fn resolve_tml_depth_in(shot: &TmlShot, prev_depth: Option<f64>, start_depth: f64) -> f64 {
     if shot.depth_in != -1.0 {
         shot.depth_in
     } else {
