@@ -27,6 +27,7 @@ import {
 import { getErrorMessage, invokeIpc } from '../../utils/ipc';
 import { buildDistanceFeatureState, overlayApplyAction } from '../../utils/distanceGradient';
 import { buildGasReachFeatureState } from '../../utils/gasReach';
+import { segmentColor, routeLegSegmentIndices } from '../../utils/segmentColors';
 import { buildMeasuredPathIds, buildMeasuredStationIds, MEASURE_TINT } from '../../utils/measurePath';
 import { computeImmovableStationKeys } from '../../utils/immovableStations';
 import { installMapE2eHooks } from '../../dev/mapE2eHooks';
@@ -2036,7 +2037,10 @@ function MapCanvas() {
   useEffect(() => {
     if (!surveyLayerRef.current || !mapLoaded) return;
     if (showGasPlan && gasReachField && project) {
-      surveyLayerRef.current.setGasRoute(gasReachField.route);
+      surveyLayerRef.current.setGasRoute(
+        gasReachField.route,
+        routeLegSegmentIndices(gasReachField).map(segmentColor),
+      );
     } else {
       surveyLayerRef.current.setGasRoute([]);
     }
