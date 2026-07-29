@@ -556,6 +556,7 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       }
       if (cmd === 'speleodb_restore_revision') return RESTORED;
       if (cmd === 'speleodb_done') return { kind: 'released' };
+      if (cmd === 'speleodb_release_lock') return null;
       return null;
     });
 
@@ -566,8 +567,31 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(issued()).toEqual([
       'speleodb_dump_candidates',
       'speleodb_start_editing',
-      'speleodb_done',
+      'speleodb_release_lock',
     ]);
+    // BY ID. `done` is argument-free and acts on whatever is OPEN - which this branch
+    // has just proved is a different project - and `message: null` picks the commit
+    // message rather than suppressing the upload, so unwinding through it would push
+    // the replacement whenever that project happened to be dirty and editable.
+    expect(argsOf('speleodb_release_lock')).toEqual({ projectId: 'p1' });
+    expect(issued()).not.toContain('speleodb_done');
+  });
+
+  it('still reports the project change when the release of that lock fails', async () => {
+    // The outcome is already decided by then. Reporting a release failure instead
+    // would name the smaller problem, and the stranded lock stays visible in the
+    // held-lock resume prompt either way.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_release_lock') throw { message: 'offline', action: 'Retry' };
+      return null;
+    });
+
+    expect(await run()).toEqual({ kind: 'project_changed' });
   });
 
   it('does not probe on the retry - the answer is already in hand', async () => {

@@ -280,11 +280,25 @@ export function useRevertRevision() {
       //
       // Handing that lock back is the point: every other failure arm below unwinds
       // what it acquired, and walking away from a server mutex because the project
-      // changed would strand it for the holder's whole session. `done(null)` is the
-      // release verb that skips the push - correct by construction here, because the
-      // restore that sets the dirty bit has not run yet.
+      // changed would strand it for the holder's whole session.
+      //
+      // BY ID, and emphatically not through `done`. Every verb this composite
+      // otherwise uses is argument-free and acts on whatever is open - which is the
+      // very thing this branch has just proved is no longer the project we mean. So
+      // `done(null)` would have unwound against the REPLACEMENT, and worse than
+      // uselessly: `message: None` picks the commit message, it does not suppress the
+      // upload, so a replacement that is dirty and editable would have been PUSHED by
+      // an error path. `speleodb_release_lock` takes the id and targets an arbitrary
+      // held project, which is exactly the shape this needs.
+      //
+      // Best-effort: a failed release is reported as a warning and nothing more. The
+      // outcome is already decided by then, and the honest alternative - reporting a
+      // release failure instead of the project change - would name the smaller
+      // problem. The stranded lock remains visible in the held-lock resume prompt.
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-        await done(null);
+        await invokeIpc<null>('speleodb_release_lock', { projectId }).catch((e: unknown) => {
+          console.warn('revert: could not release the lock taken before the project changed', e);
+        });
         return { kind: 'project_changed' };
       }
 
