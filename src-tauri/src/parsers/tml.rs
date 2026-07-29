@@ -181,6 +181,14 @@ fn normalize_key_bytes(name: &[u8]) -> Option<&'static str> {
         b"Excluded" | b"EXC" => Some("excluded"),
         b"Latitude" | b"LT" => Some("latitude"),
         b"Longitude" | b"LGT" => Some("longitude"),
+        // `Name`/`NM` is deliberately absent. Ariane uses it as a per-shot
+        // marker, not a name: `export/tml.rs` writes "START" on the START shot,
+        // "CLOSURE:CLOSURE" on closures and "" everywhere else, and keeps doing
+        // so because Ariane expects the element. Shot type comes from `Type`/`TY`,
+        // so nothing on this side would ever read the value - mapping it just put
+        // a string in the fields map for no reader. (The cave name and the section
+        // name are different keys entirely: `caveName` in the file-level metadata
+        // match, and `Section`/`SC` above.)
         _ => None,
     }
 }
