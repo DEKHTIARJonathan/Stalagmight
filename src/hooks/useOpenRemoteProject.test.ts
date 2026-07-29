@@ -1443,6 +1443,28 @@ describe('useOpenRemoteProject (#218)', () => {
       expect(outcome).toMatchObject({ status: 'error' });
     });
 
+    it('does not raise a picker once a refresh has reported the session logged out', async () => {
+      // `setSession` writes whatever the backend reports and does NOT bump the
+      // generation - it is the benign refresh a project load and Settings both
+      // trigger - so a reply that comes back `logged_in: false` leaves a session
+      // object behind at the same generation. The picker must not open for it.
+      useSpeleoStore.setState({ session: session() });
+      invokeIpcMock.mockImplementation((c: string) => {
+        if (c !== 'speleodb_open_project') return Promise.resolve(null);
+        useSpeleoStore.setState({ session: { ...session(), loggedIn: false } });
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: CANDIDATES,
+          dump_candidate_kind: 'stalx',
+        });
+      });
+
+      await hook().openRemote(SUMMARY);
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+    });
+
     it('still reports an ordinary replay failure without dropping the session', async () => {
       // The other half of the same branch: only `reLogin` ends the session. A replay
       // that fails for any other reason has to leave the picker up, with its reason

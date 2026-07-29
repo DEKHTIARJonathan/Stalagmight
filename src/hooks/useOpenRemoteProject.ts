@@ -459,11 +459,23 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
    * documents: it is bumped by a login or an ending and NOT by the benign refreshes a
    * project load and Settings both trigger, so an identity check would fire on those
    * and suppress a picker that should have opened.
+   *
+   * The generation alone is not quite enough, though, and the gap is exactly one of
+   * those benign refreshes: `setSession` writes whatever the backend reports, so a
+   * refresh that comes back `logged_in: false` leaves a session object behind at the
+   * SAME generation. That case is covered here rather than by wiring a teardown into
+   * `setSession`, which every project load and Settings open calls - it would fire far
+   * beyond this question.
+   *
+   * `!== false`, not `=== true`: a session that is merely ABSENT is not evidence of a
+   * logout, it is a store that has not been seeded yet, and demanding one would make
+   * raising the picker conditional on a status poll having landed first. Only a
+   * positive `loggedIn: false` says the session ended under us.
    */
-  const sessionStillCurrent = useCallback(
-    (issuedAt: number): boolean => useSpeleoStore.getState().sessionGeneration === issuedAt,
-    [],
-  );
+  const sessionStillCurrent = useCallback((issuedAt: number): boolean => {
+    const { sessionGeneration, session } = useSpeleoStore.getState();
+    return sessionGeneration === issuedAt && session?.loggedIn !== false;
+  }, []);
 
   const openRemote = useCallback(
     async (

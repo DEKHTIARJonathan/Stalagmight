@@ -438,8 +438,10 @@ impl AppState {
             StalxAmbiguity::Ask,
         ) {
             Ok(_) => Ok(None),
-            Err(SpeleoDbError::AmbiguousDump(candidates))
-            | Err(SpeleoDbError::AmbiguousAriane(candidates)) => Ok(Some(candidates)),
+            Err(
+                SpeleoDbError::AmbiguousDump(candidates)
+                | SpeleoDbError::AmbiguousAriane(candidates),
+            ) => Ok(Some(candidates)),
             Err(_) => Ok(None),
         }
     }
