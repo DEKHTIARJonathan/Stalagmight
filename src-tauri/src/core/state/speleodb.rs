@@ -913,6 +913,16 @@ impl AppState {
     ///
     /// NOT every `PushOutcome::Confirmed`: the dirty-bit gate also reports Confirmed
     /// when there was nothing to push, and no upload means nothing has moved.
+    ///
+    /// CALL IT BEFORE THE LOCAL BOOKKEEPING, not after. Every arm records the landing
+    /// into the link row, and every one of those writes can fail; a `?` between the
+    /// upload and this call returns with a choice we already know is stale still
+    /// standing, and the next verb that honours the recall extracts that pre-push
+    /// entry and stamps it with the new tip. The landing is a fact about the SERVER
+    /// the moment the upload returns - nothing local can un-land it, so nothing local
+    /// belongs in front of it. Each arm therefore binds the outcome here and returns
+    /// it unchanged after its write, which keeps concluding and invalidating together
+    /// while putting both ahead of anything fallible.
     fn speleodb_revision_landed(&self, project_id: &str) -> PushOutcome {
         self.speleodb_forget_dump_entry(project_id);
         PushOutcome::Confirmed
@@ -2271,14 +2281,18 @@ impl AppState {
             // the prior push landed and no edit followed, so adopt the tip and clear
             // dirty without a redundant re-push.
             PushPlan::AdoptConfirmed => {
+                // The prior push DID land; this arm only recognises it late. Concluded
+                // ahead of the fallible link write, like the 200 and 304 arms: the
+                // recall went stale when that upload landed, so a failure to record
+                // the adoption locally must not be what leaves it standing.
+                let landed = self.speleodb_revision_landed(project_id);
                 self.speleodb_mutate_link(|l| {
                     l.base_commit_sha = tip.clone();
                     l.has_unpushed_edits = false;
                     l.last_edit_at = None;
                 })
                 .map_err(local_dto)?;
-                // The prior push DID land; this arm only recognises it late.
-                return Ok(self.speleodb_revision_landed(project_id));
+                return Ok(landed);
             }
             // A stranger's commit, OR a server inconsistency (non-linear / multi-root
             // / a recorded BASE with no tip): never overwrite or guess - surface the
@@ -2391,6 +2405,16 @@ impl AppState {
             // it). BASE advances: the uploaded snapshot IS the new base; a kept late
             // edit is a clean second commit on top of it.
             Ok(pushed) => {
+                // Conclude the landing FIRST, before any fallible local bookkeeping.
+                // A 200 means the revision is on the server; the recall went stale at
+                // that moment, not when we finished writing the link row. Leaving the
+                // invalidation after the `?` below meant a disk/db failure returned
+                // with a choice we already knew was stale still standing - and the
+                // next discarding open would extract that pre-push entry and stamp it
+                // with the new tip, which is the exact rollback the recall drop is
+                // here to prevent. The outcome is held and returned unchanged, so the
+                // "landed" conclusion and the invalidation still cannot drift apart.
+                let landed = self.speleodb_revision_landed(project_id);
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
@@ -2426,12 +2450,18 @@ impl AppState {
                     }
                 })
                 .map_err(local_dto)?;
-                Ok(self.speleodb_revision_landed(project_id))
+                Ok(landed)
             }
             Err(e) => {
                 // 304: the remote tree already matches - clear dirty (same push-start
                 // guard as the 200 path), BASE unchanged.
                 if matches!(&e, SpeleoDbError::Status { status: 304, .. }) {
+                    // A 304 does not mean nothing ever landed. The documented recovery
+                    // adopts a prior upload whose response was lost, then re-uploads
+                    // identical content - and it is THAT upload which made the recall
+                    // stale, whatever this attempt returns. Concluded ahead of the
+                    // fallible link write for the same reason as the 200 arm.
+                    let landed = self.speleodb_revision_landed(project_id);
                     self.speleodb_mutate_link(|l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
@@ -2442,11 +2472,7 @@ impl AppState {
                         }
                     })
                     .map_err(local_dto)?;
-                    // A 304 does not mean nothing ever landed. The documented
-                    // recovery adopts a prior upload whose response was lost, then
-                    // re-uploads identical content - and it is THAT upload which made
-                    // the recall stale, whatever this attempt returns.
-                    return Ok(self.speleodb_revision_landed(project_id));
+                    return Ok(landed);
                 }
                 // Ambiguous (retried-then-exhausted 5xx, or a transport drop): we
                 // don't know whether it landed - stay dirty, recover via ancestry
