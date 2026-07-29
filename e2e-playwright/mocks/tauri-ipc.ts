@@ -228,25 +228,41 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           after_shot_uuid: after?.uuid ?? null,
         };
       };
-      /** Place an anchor against the project as it stands now: the boundary right after its
-       *  surviving "before" neighbour, or - failing that - right at its surviving "after"
-       *  neighbour. `null` only when NEITHER uuid is found anymore (mirrors the backend: a
-       *  single surviving neighbour is enough to replace a station that shifted). */
+      /** Place an anchor against the project as it stands now, following the backend's
+       *  `resolve_anchor` rules: with BOTH neighbours found the station is the boundary between
+       *  them regardless of which now comes first (`pa < pb ? pa+1 : pa` - the order-agnosticism
+       *  is what makes a reverse a no-op for interior stations); with one side that was NEVER
+       *  recorded (a section END at capture), the station follows its sole shot to whichever end
+       *  it currently touches (a reverse carries station 0 to station N and back); with one side
+       *  recorded but deleted, the surviving side keeps its directional meaning. `null` only when
+       *  NEITHER uuid is found anymore. */
       const anchorToRef = (anchor: MockPlanAnchor | null | undefined): MockPlanRefLite | null => {
         if (!anchor) return null;
         const section = sectionForAnchor(anchor.section_id);
         if (!section) return null;
-        const beforeIdx = anchor.before_shot_uuid
-          ? section.shots.findIndex((s) => s.uuid === anchor.before_shot_uuid)
-          : -1;
-        if (beforeIdx >= 0) {
-          return { section_id: anchor.section_id, station_index: beforeIdx + 1 };
+        const find = (u: string | null) =>
+          u ? section.shots.findIndex((s) => s.uuid === u) : -1;
+        const pa = find(anchor.before_shot_uuid);
+        const pb = find(anchor.after_shot_uuid);
+        const n = section.shots.length;
+        if (pa >= 0 && pb >= 0) {
+          return { section_id: anchor.section_id, station_index: pa < pb ? pa + 1 : pa };
         }
-        const afterIdx = anchor.after_shot_uuid
-          ? section.shots.findIndex((s) => s.uuid === anchor.after_shot_uuid)
-          : -1;
-        if (afterIdx >= 0) {
-          return { section_id: anchor.section_id, station_index: afterIdx };
+        if (pa >= 0) {
+          if (anchor.after_shot_uuid === null) {
+            // Tail-end station at capture: stay on the end its shot touches now.
+            const idx = pa === 0 ? 0 : n;
+            return { section_id: anchor.section_id, station_index: idx };
+          }
+          return { section_id: anchor.section_id, station_index: pa + 1 };
+        }
+        if (pb >= 0) {
+          if (anchor.before_shot_uuid === null) {
+            // Head-end station at capture: stay on the end its shot touches now.
+            const idx = pb === n - 1 ? n : 0;
+            return { section_id: anchor.section_id, station_index: idx };
+          }
+          return { section_id: anchor.section_id, station_index: pb };
         }
         return null;
       };
