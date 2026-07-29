@@ -2562,8 +2562,8 @@ function MapCanvas() {
     };
 
     // In supported tools with Ctrl held, show grab cursor for panning
-    const base =
-      CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld ? 'grab' : cursors[activeTool] ?? 'default';
+    const ctrlPan = CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld;
+    const base = ctrlPan ? 'grab' : cursors[activeTool] ?? 'default';
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
@@ -2577,7 +2577,7 @@ function MapCanvas() {
     // its own recomputes (which continue after this passive effect has run for the
     // last time) reset the cursor to a bare arrow (#24). Unconditional: it is the
     // RESTING cursor, true whether or not something is hovered right now.
-    surveyLayerRef.current?.setBaseCursor(base);
+    surveyLayerRef.current?.setBaseCursor(base, ctrlPan);
     // `mapLoaded` is a dependency for the hand-off above, not for the write: on the
     // first run the layer does not exist yet, and none of the other deps change on
     // map load, so without it the starting tool's resting cursor would never reach
@@ -2653,6 +2653,15 @@ function MapCanvas() {
   // Track Ctrl key for cursor updates and box/zoom select cancellation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Recover from a genuine Ctrl release that the keyup workaround below
+      // swallowed. That suppression cannot tell a spurious keyup from a real one at
+      // the moment it fires - but the two diverge immediately afterwards: with the
+      // key still physically down every later event reports `ctrlKey: true`, so an
+      // event reporting `false` is proof the key is up. Without this, one release
+      // timed inside the 50ms window latched `ctrlHeld` on until the user pressed
+      // and released Ctrl again - leaving the pan grab over every tool they
+      // switched to, since no further keyup was ever coming.
+      if (!e.ctrlKey) setCtrlHeld(false);
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
@@ -2662,6 +2671,9 @@ function MapCanvas() {
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      // Same recovery as on keydown: releasing any OTHER key also proves whether
+      // Ctrl is still down.
+      if (e.key !== 'Control' && !e.ctrlKey) setCtrlHeld(false);
       if (e.key === 'Control') {
         // WORKAROUND: Tauri/WebKit fires spurious Ctrl keyup events at the moment of
         // mousedown/mouseup while holding Ctrl. Only suppress keyups that occur within

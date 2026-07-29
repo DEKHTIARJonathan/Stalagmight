@@ -206,6 +206,15 @@ export default class SurveyLayer {
    */
   private baseCursor = '';
 
+  /**
+   * Whether {@link baseCursor} is a MODE cursor (the Ctrl-held pan grab) rather
+   * than the tool's own resting one. A mode outranks the Move Station/Shot arrow
+   * below: that arrow exists only to stop MapLibre's *default* grab showing
+   * through off-feature, so letting it beat a grab the user is deliberately
+   * holding Ctrl for inverts what it is there to do.
+   */
+  private baseCursorForced = false;
+
   // Anchored section IDs (for fading when Move Segment tool is active)
   private anchoredSectionIds: Set<number> = new Set();
 
@@ -1384,9 +1393,15 @@ export default class SurveyLayer {
    *  when a dim set changes, not only when the hovered id changes - the anchored
    *  and immovable sets arrive asynchronously, and without a recompute the cursor
    *  disagrees with the highlight until the pointer leaves the feature (#301). */
-  /** Tell this layer the active tool's resting cursor, and re-derive from it. */
-  public setBaseCursor(cursor: string): void {
+  /**
+   * Tell this layer the active tool's resting cursor, and re-derive from it.
+   *
+   * `forced` marks a mode cursor (the Ctrl-held pan grab) that must also outrank
+   * the Move Station/Shot arrow - see {@link baseCursorForced}.
+   */
+  public setBaseCursor(cursor: string, forced = false): void {
     this.baseCursor = cursor;
+    this.baseCursorForced = forced;
     this.refreshHoverCursor();
   }
 
@@ -1422,7 +1437,7 @@ export default class SurveyLayer {
     // through when the pointer is not over a movable feature.
     this.map.getCanvas().style.cursor = showPointer
       ? 'pointer'
-      : useArrowFallback
+      : useArrowFallback && !this.baseCursorForced
         ? 'default'
         : this.baseCursor;
     if (this.shouldLogInteraction() && suppressReason) {
