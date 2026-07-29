@@ -302,7 +302,7 @@
     "src/store/networkStore.ts": 13,
     "src/store/projectStore.ts": 1454,
     "src/store/speleoStore.ts": 623,
-    "src/store/uiStore.ts": 1238,
+    "src/store/uiStore.ts": 1240,
     "src/theme/syntacticPalette.ts": 154,
     "src/theme/tokens.ts": 737,
     "src/types/cache.ts": 1,
