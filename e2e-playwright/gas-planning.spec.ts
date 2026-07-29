@@ -2,6 +2,7 @@ import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
 import {
   seedProjectWithSections,
+  deleteShotAt,
   waitForDrawnStations,
   getStationScreenPositions,
   readCanvasPixel,
@@ -285,31 +286,6 @@ async function lastGasReachEndpoint(page: Page): Promise<StationRefLite | null> 
       ).__MOCK_GAS_REACH_CALLS__ ?? [];
     return calls.length ? calls[calls.length - 1].endpoint : null;
   });
-}
-
-/** Delete shot `shotIndex` of section 1 directly via the store - the same command
- *  (`delete_shot`) the UI's confirm/shift-geometry paths issue, without the dialog chrome
- *  a #310 repro doesn't need. Renumbers every later station down by one in the mock. */
-async function deleteShotAt(page: Page, shotIndex: number): Promise<void> {
-  await page.evaluate(async (idx) => {
-    const e2e = (
-      window as unknown as {
-        __E2E_TEST__: {
-          projectStore: {
-            getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
-              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
-            };
-          };
-        };
-      }
-    ).__E2E_TEST__;
-    const state = e2e.projectStore.getState();
-    const sec = state.project.sections[0];
-    const shot = sec.shots[idx];
-    if (!shot) throw new Error(`no shot at index ${idx}`);
-    await state.deleteShot(sec.id, shot.id);
-  }, shotIndex);
 }
 
 /** The `stage_drop_overrides` argument the LAST compute_gas_reach_field call was invoked with. */

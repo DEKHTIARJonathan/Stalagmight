@@ -1,6 +1,6 @@
 import { test, expect, Page } from './fixtures/coverage';
 import { setupTauriMocks } from './mocks/tauri-ipc';
-import { seedProjectWithSections, type SectionSeed } from './helpers/app';
+import { seedProjectWithSections, deleteShotAt, type SectionSeed } from './helpers/app';
 
 /**
  * E2E for dive-plan persistence (#244): the "Previous dive plans" bar in Plan mode
@@ -88,31 +88,6 @@ async function setProjectPath(page: Page, path: string | null): Promise<void> {
 /** Give the open project a file path (a saved project) so the bar is enabled. */
 async function giveProjectAPath(page: Page): Promise<void> {
   await setProjectPath(page, '/tmp/dive-plan-e2e.stalx');
-}
-
-/** Delete shot `shotIndex` of section 1 directly via the store (#310) - the same `delete_shot`
- *  command the UI's confirm/shift-geometry paths issue. Renumbers every later station down by
- *  one in the mock, so it can drive a live pin's anchor out from under it. */
-async function deleteShotAt(page: Page, shotIndex: number): Promise<void> {
-  await page.evaluate(async (idx) => {
-    const e2e = (
-      window as unknown as {
-        __E2E_TEST__: {
-          projectStore: {
-            getState: () => {
-              project: { sections: Array<{ id: number; shots: Array<{ id: number }> }> };
-              deleteShot: (sectionId: number, shotId: number) => Promise<unknown>;
-            };
-          };
-        };
-      }
-    ).__E2E_TEST__;
-    const state = e2e.projectStore.getState();
-    const sec = state.project.sections[0];
-    const shot = sec.shots[idx];
-    if (!shot) throw new Error(`no shot at index ${idx}`);
-    await state.deleteShot(sec.id, shot.id);
-  }, shotIndex);
 }
 
 async function setDiverRmv(page: Page, rmv: number): Promise<void> {
@@ -409,13 +384,12 @@ test.describe('Dive-plan persistence (#244)', () => {
     await deleteShotAt(page, 2);
     await deleteShotAt(page, 2); // shot[3] is now at index 2 after the first delete.
 
-    // ASSUMPTION (for reconciliation): as of this writing, the #310 fix is still being built by
-    // another agent. `unresolved.waypoints[0]` mirrors the `PlanPinFlags` shape + doc comment
-    // already present on `gasPlanStore.ts` ("a flagged pin is never sent to the gas engine and
-    // blocks a Save") - the store-level source of truth this assertion is written against.
-    // `gas-waypoint-unresolved` is an INVENTED per-row testid (no such indicator exists in
-    // GasPlanPanel yet); if the real one lands under a different name, only this one locator
-    // needs to change.
+    // The #310 fix landed in this same branch: losing both neighbours of a pinned way point
+    // marks that pin unresolved (`gasPlanStore.ts`'s `unresolved.waypoints`, per the doc comment
+    // "a flagged pin is never sent to the gas engine and blocks a Save"), and `GasPlanPanel.tsx`
+    // renders `data-testid="gas-waypoint-unresolved"` on the affected row (~:449). Both the store
+    // predicate and the DOM testid are asserted below so the test pins the mechanism, not just
+    // one layer of it.
     await expect
       .poll(
         () =>

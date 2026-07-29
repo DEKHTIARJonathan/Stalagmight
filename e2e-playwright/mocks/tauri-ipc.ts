@@ -1911,11 +1911,18 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const rig = gasConfig.dpv ?? null;
             const unitRange = (u?: { speed_m_per_min?: number; burn_minutes?: number }) =>
               (u?.speed_m_per_min ?? 0) * (u?.burn_minutes ?? 0);
+            // Twin of `MAX_DPV_RANGE_RESERVE_FRACTION` (src-tauri/src/config/gas.rs) and its
+            // frontend mirror (`MAX_DPV_RANGE_RESERVE_FRACTION` in GasSettings.tsx) - both clamp
+            // the reserve fraction to [0, 0.9] before applying it.
+            const clampedReserveFraction = Math.min(
+              0.9,
+              Math.max(0, rig?.range_reserve_fraction ?? 0),
+            );
             const scooter_range_limit_m = rig
               ? Math.max(
                   0,
                   Math.min(unitRange(rig.primary), unitRange(rig.backup)) *
-                    (1 - (rig.range_reserve_fraction ?? 0)),
+                    (1 - clampedReserveFraction),
                 )
               : null;
             // Which segment each route leg belongs to: way points split the route, so leg j sits in
@@ -1927,6 +1934,13 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             const waypointRouteIdx = waypointArgs.map(routeIndexOf).filter((i) => i >= 0);
             const segmentAtLeg = (legIdx: number) =>
               waypointRouteIdx.filter((wi) => wi <= legIdx).length;
+            // Twin of `MIN_SEGMENT_SPEED_M_PER_MIN`/`MAX_SEGMENT_SPEED_M_PER_MIN` in gas/scooter.rs
+            // ([0.1, 1000] m/min) - the engine falls back to the plan speed outside this range
+            // rather than accepting whatever was stored, and the mock must refuse the same values
+            // or an e2e asserting an out-of-range speed's effect could pass against the mock while
+            // diverging from the backend.
+            const isSegmentSpeedInRange = (v: number | null | undefined): v is number =>
+              typeof v === 'number' && v >= 0.1 && v <= 1000;
             let scooter_distance_m = 0;
             let route_runtime_min: number | null = null;
             if (routePts.length > 1) {
@@ -1939,7 +1953,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 // A span with no speed of its own is flown at the PLAN's speed, not a hardcoded
                 // one - mirroring `resolve_segments` (gas/scooter.rs). Getting this wrong is how
                 // the real engine once stopped honouring the configured swim speed entirely.
-                const speed = s?.speed_m_per_min && s.speed_m_per_min > 0 ? s.speed_m_per_min : inSpeed;
+                const speed = isSegmentSpeedInRange(s?.speed_m_per_min) ? s.speed_m_per_min : inSpeed;
                 minutes += seg / speed;
                 if (rig && s?.on_scooter) scooter_distance_m += seg;
               }
