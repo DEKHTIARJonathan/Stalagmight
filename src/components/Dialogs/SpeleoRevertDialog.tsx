@@ -159,6 +159,14 @@ export default function SpeleoRevertDialog() {
         // The remote moved on: the divergence dialog has already taken the dialog
         // slot from us. Touching it here would tear down the prompt that replaced us.
         return;
+      case 'project_changed':
+        // A different project is open than the one this dialog is about, so every
+        // control on it now points somewhere it should not - including the armed
+        // discard, which would be spent against the wrong survey. Nothing was taken
+        // and nothing was written, so there is nothing to unwind and nothing to
+        // report; just leave, and by the same route Cancel would take.
+        dismiss();
+        return;
       case 'needs_discard':
         setNeedsDiscard(true);
         setLockHeld(outcome.lockHeld);

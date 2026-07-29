@@ -91,6 +91,12 @@ export type RevertOutcome =
       the lock. Never produced while the copy is dirty: there the lock is kept on
       purpose and a composite retry would be refused by the un-pushed pre-flight. */
   | { kind: 'awaiting_dump_choice'; candidates: SpeleoDumpCandidate[] }
+  /** [#258] The open project changed while the composite was waiting on the dump
+      probe, so everything after that point would be about a different project than
+      the one this revert was asked for. Nothing was taken and nothing was written -
+      the probe is deliberately the one step that needs no lock, which is why this
+      can only be produced from before the acquire. */
+  | { kind: 'project_changed' }
   | { kind: 'push_failed' }
   /** The edit gate dropped mid-flight (usually a 401 auto-drop): nothing uploaded,
       nothing released, and - unlike `push_failed` - no lock held to retry with. */
@@ -208,10 +214,22 @@ export function useRevertRevision() {
       // download when this session already settled the question - which it usually
       // has, since opening the project settles it and opening takes no lock.
       if (!entryPath) {
+        // Which project this composite is about, captured ACROSS the probe. The probe
+        // is the only step here that can involve a dump download, so it is also the
+        // longest, and nothing downstream of it names the project the way this call
+        // does: `startEditing()` takes no argument and locks whatever is open now,
+        // while `restoreRevision` targets the captured `projectId`. A swap in between
+        // therefore takes a write lock on one project and checks a revision out of
+        // another - and the candidates would open a picker describing a server tree
+        // nobody is looking at any more.
+        const askedFor = useSpeleoStore.getState().remoteProjectId;
         const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
           'speleodb_dump_candidates',
           { projectId, hexsha },
         ).catch(() => null);
+        if (useSpeleoStore.getState().remoteProjectId !== askedFor) {
+          return { kind: 'project_changed' };
+        }
         if (candidates && candidates.length > 0) {
           return { kind: 'awaiting_dump_choice', candidates };
         }

@@ -474,6 +474,33 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     expect(issued()).toEqual(['speleodb_dump_candidates']);
   });
 
+  it('abandons the composite when the open project changes under the probe', async () => {
+    // The probe is the only step here that can involve a dump download, so it is the
+    // longest, and it is the last point at which the project is still named: after it
+    // `startEditing()` takes no argument and locks whatever is open NOW, while the
+    // restore still targets the captured id. A swap in between would take a write
+    // lock on one project and check a revision out of another - and the candidates
+    // would raise a picker describing a server tree nobody is looking at.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') {
+        // The user closes this dialog and opens something else while the probe is
+        // still in flight.
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return AMBIGUOUS.dump_candidates;
+      }
+      if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    // Nothing acquired, nothing written - so there is nothing to unwind either.
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
   it('does not probe on the retry - the answer is already in hand', async () => {
     ipc({
       speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
