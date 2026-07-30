@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
-import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../../store/speleoStore';
+import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent, speleoOpenProjectStillIs } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
@@ -110,8 +110,9 @@ export function SpeleoRevisionHistory() {
   const handleView = async (rev: SpeleoRevision, entryPath?: string) => {
     if (!projectId) return;
     setPendingId(rev.id);
-    // Captured BEFORE the request; the ambiguity catch checks it.
+    // Captured BEFORE the request; the ambiguity catch checks both.
     const issuedAt = speleoSessionIssuedAt();
+    const issuedFor = projectId;
     try {
       await restoreRevision({
         projectId,
@@ -127,8 +128,17 @@ export function SpeleoRevisionHistory() {
       // and re-entering HERE rather than the hook means the retry's own failure
       // lands in the toast below, exactly as a first attempt's would.
       const candidates = dumpCandidates(e);
-      // [#258 review] Same issuing-session guard the open verbs use.
-      if (candidates && speleoSessionStillCurrent(issuedAt)) {
+      // [#258 review] Same issuing-session guard the open verbs use, PLUS the project
+      // one they must not use. A View binds to whatever is open, so dismissing this
+      // dialog and opening something else while the download is out would raise project
+      // A's picker over project B - and its retry cannot succeed, because the backend
+      // binds a revision swap to the open project. The owning component is unmounted by
+      // then too, so the picker could only sit there showing the mismatch.
+      if (
+        candidates &&
+        speleoSessionStillCurrent(issuedAt) &&
+        speleoOpenProjectStillIs(issuedFor)
+      ) {
         openDumpPicker(candidates, 'stalx', (chosen) => handleView(rev, chosen));
         return;
       }

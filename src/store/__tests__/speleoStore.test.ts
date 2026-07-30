@@ -1119,6 +1119,65 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     expect(useSpeleoStore.getState().dumpPickerError).toBeNull();
   });
 
+  it('[#258 review] releases the displaced owner when a SECOND flow raises a picker', async () => {
+    // Two flows really can be in flight: the revision history disables View while its
+    // own download runs but leaves Revert live, so a revert probe can raise a picker
+    // and the older View download can then raise another over it. The displaced revert
+    // keeps `busy` deliberately - its cancel is what releases it - so dropping that
+    // callback left a dialog with every control and every dismissal route disabled.
+    const revertCancel = vi.fn();
+    useSpeleoStore
+      .getState()
+      .openDumpPicker(
+        [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
+        'stalx',
+        async () => {},
+        revertCancel,
+      );
+
+    // The older download lands and takes the picker over.
+    useSpeleoStore
+      .getState()
+      .openDumpPicker(
+        [{ entry_path: 'b.stalx', size_bytes: 2, modified: null }],
+        'stalx',
+        async () => {},
+      );
+
+    expect(revertCancel).toHaveBeenCalledTimes(1);
+    // ...and the newcomer owns the picker, undisturbed.
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('b.stalx');
+  });
+
+  it('[#258 review] does NOT release the flow when its own retry re-raises', async () => {
+    // The other half, and why this cannot just always fire. A retry that meets a fresh
+    // ambiguity re-raises from inside the same suspended flow; releasing its cancel
+    // there would un-suspend it out from under the picker that just replaced it.
+    const cancel = vi.fn();
+    useSpeleoStore.getState().openDumpPicker(
+      [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
+      'stalx',
+      async () => {
+        useSpeleoStore
+          .getState()
+          .openDumpPicker(
+            [{ entry_path: 'c.stalx', size_bytes: 3, modified: null }],
+            'stalx',
+            async () => {},
+            cancel,
+          );
+      },
+      cancel,
+    );
+
+    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
+    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('c.stalx');
+  });
+
   it('lets a retry that lost its picker settle without touching the one that replaced it', async () => {
     // Confirming is a network round trip of unbounded length, so the picker it began
     // on can be gone by the time it settles - closed, re-raised on a moved tree, or

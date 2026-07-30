@@ -254,6 +254,22 @@ export function speleoSessionStillCurrent(issuedAt: number): boolean {
   return sessionGeneration === issuedAt && session?.loggedIn !== false;
 }
 
+/**
+ * Whether the project a request was issued FOR is still the one open. [#258]
+ *
+ * The companion to {@link speleoSessionStillCurrent}, for the verbs that act on the
+ * OPEN project - restore, View, revert. Their session can be perfectly current while
+ * the project underneath has changed: start a View, dismiss the SpeleoDB dialog, open
+ * something else, and the download returns to raise project A's picker over project B,
+ * whose retry the backend then refuses because a revision swap binds to what is open.
+ *
+ * Deliberately NOT applied to the open verbs - they exist to change which project is
+ * open, so for them a mismatch is the goal rather than the hazard.
+ */
+export function speleoOpenProjectStillIs(projectId: string | null): boolean {
+  return useSpeleoStore.getState().remoteProjectId === projectId;
+}
+
 export interface SpeleoLinkSnapshot {
   link: SpeleoLinkState | null;
   projectLinkKind: ProjectLinkKind;
@@ -458,6 +474,13 @@ interface SpeleoStore {
       the session-loss reset below also has to fire it: a caller that suspended a
       flow on this question is left with a modal it cannot dismiss otherwise. */
   dumpPickerCancel: (() => void) | null;
+  /**
+   * True while a picker's own retry is running, so a re-raise from inside it is known
+   * to CONTINUE the suspended flow rather than displace someone else's. Without the
+   * distinction, `openDumpPicker` either strands a displaced owner (firing nothing) or
+   * releases a flow that is still suspended (firing always).
+   */
+  dumpPickerReplacing: boolean;
   /** Answer the storage question: persist the tier + the settled refusal, and move
       the held token there (no re-login - the backend still has it).
       Resolves the tier the key ACTUALLY LANDED ON, which is not always the one that
@@ -951,8 +974,24 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   dumpPickerError: null,
   dumpPickerRetry: null,
   dumpPickerCancel: null,
+  dumpPickerReplacing: false,
 
   openDumpPicker: (candidates, kind, retry, onCancel) => {
+    // Whoever was suspended on the PREVIOUS question has to be released, because this
+    // raise takes their picker away and their cancel with it.
+    //
+    // Two flows really can be in flight at once: the revision history disables View
+    // while its own download runs but leaves Revert live, so a revert probe can raise a
+    // picker and the older View download can then raise another over it. The displaced
+    // revert kept `busy` deliberately - its cancel is what releases it - so dropping
+    // that callback left a dialog with every control and every dismissal route
+    // disabled.
+    //
+    // NOT on a continuation, though. When a retry re-raises with a fresh candidate set,
+    // the same flow is still suspended on the same question and firing its cancel would
+    // release it out from under the picker that just replaced it. `dumpPickerReplacing`
+    // is true for exactly that window - see `resolveDumpPicker`.
+    const displaced = get().dumpPickerReplacing ? null : get().dumpPickerCancel;
     // The lifecycle `uiStore.openDialog` runs, done by hand because this overlay
     // deliberately does not take the `activeDialog` slot - and skipping it left the
     // four registered picker events dead, so incidence and cancel counts stayed zero
@@ -968,6 +1007,9 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       dumpPickerRetry: retry,
       dumpPickerCancel: onCancel ?? null,
     });
+    // Clear FIRST, then notify - the same order `closeDumpPicker` documents, so a
+    // handler that re-raises is not wiped by the call that released it.
+    displaced?.();
   },
 
   closeDumpPicker: () => {
@@ -991,7 +1033,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   resolveDumpPicker: async (entryPath) => {
     const retry = get().dumpPickerRetry;
     if (!retry) return;
-    set({ dumpPickerBusy: true, dumpPickerError: null });
+    set({ dumpPickerBusy: true, dumpPickerError: null, dumpPickerReplacing: true });
     try {
       await retry(entryPath);
       // Only act on a picker that is still THIS one. `retry` is the ownership token:
@@ -1042,6 +1084,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       if (get().dumpPickerRetry !== retry) return;
       set({ dumpPickerError: getErrorMessage(e) });
     } finally {
+      set({ dumpPickerReplacing: false });
       // Never un-busy a picker we no longer own: a late loser settling under a
       // NEWER picker would otherwise re-enable its buttons mid-confirm.
       if (get().dumpPickerRetry === retry) set({ dumpPickerBusy: false });
