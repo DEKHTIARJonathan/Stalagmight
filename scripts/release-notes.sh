@@ -62,10 +62,13 @@ if [ -n "$BODY" ]; then
   # stdout into the release body, so anything printed there would be published.
   # Warn rather than fail - a late-breaking entry nobody wants to announce is a
   # legitimate choice, and failing here would block publishing at the last step.
-  if [ -n "$UNRELEASED" ]; then
-    lines=$(printf '%s\n' "$UNRELEASED" | wc -l | tr -d ' ')
+  # Count only lines that carry content: a section holding nothing but `### Fixed`
+  # and blanks has nothing to fold, and a warning that fires on a good state is
+  # how a warning gets ignored. Headings are `#`-prefixed; NF drops blank lines.
+  at_risk=$(printf '%s\n' "$UNRELEASED" | awk '!/^#/ && NF { n++ } END { print n+0 }')
+  if [ "$at_risk" -gt 0 ]; then
     cat >&2 <<WARN
-warning: ${lines} line(s) under '## [Unreleased]' will NOT be published.
+warning: ${at_risk} line(s) under '## [Unreleased]' will NOT be published.
          ${TAG} takes its notes from '## [${BASE_VERSION}]', so entries left under
          [Unreleased] ship inside the build with no mention in the release body.
          Fold them into '## [${BASE_VERSION}]' before tagging, or accept that they

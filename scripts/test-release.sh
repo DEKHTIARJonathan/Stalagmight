@@ -14,6 +14,10 @@ SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
 
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/release-test.XXXXXX")"
+# `set -e` already aborts on a failed mktemp, but everything below feeds `$WORK`
+# to `rm -rf`, so assert it non-empty rather than trusting that one guard - an
+# empty value here turns the cleanup trap into `rm -rf ""` at the repo root.
+[ -n "$WORK" ] && [ -d "$WORK" ] || { echo "mktemp -d produced no work dir" >&2; exit 1; }
 trap 'rm -rf "$WORK"' EXIT
 
 PASS=0
@@ -237,6 +241,15 @@ else
   # CHANGELOG.md is deliberately left rewritten (the operator's notes are in it),
   # and the clean-tree check tolerates exactly that one file, so a re-run is
   # possible without hand-reverting anything.
+  #
+  # This next one is the load-bearing half: release.sh moves the [Unreleased]
+  # content under the new header BEFORE it opens the post-rewrite editor, so a
+  # `## [4.4.4]` section proves the run actually reached that editor. Without it
+  # the porcelain assertion below passes on a COMPLETELY CLEAN tree - `printf '' |
+  # grep -cv ...` prints 0 - so an abort at any earlier pre-flight would look
+  # identical to the revert this case exists to test.
+  assert "the changelog was rewritten, so the editor was reached" \
+    grep -q '^## \[4\.4\.4\]' "$D/CHANGELOG.md"
   assert "only CHANGELOG.md left dirty" \
     bash -c '[ "$(git -C "$1" status --porcelain | grep -cv "^ M CHANGELOG.md$")" -eq 0 ]' _ "$D"
 fi
@@ -309,30 +322,35 @@ printf '%s\n' \
 # This fixture has BOTH a [0.4.0] section and a non-empty [Unreleased], which is
 # the shape that triggers the unfolded-entries warning below. The cases here are
 # about body selection, so they discard stderr; the warning gets its own cases.
+#
+# ⚠ Paths go to `bash -c` as POSITIONAL ARGS, never spliced into the quoted body.
+# `$WORK` comes from `mktemp -d "${TMPDIR:-/tmp}/..."` and `$NOTES` from the
+# checkout path, so a space or a shell metacharacter in either would word-split
+# inside the eval and the case would silently exercise something else.
 # A final tag takes its own section.
 assert "final tag uses its version's section" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "the 0.4.0 thing"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
 refute "final tag has no candidate banner" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "Release candidate"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "Release candidate"' _ "$FIXTURE" "$NOTES"
 
 # A candidate takes the notes of the version it is a candidate for, not its own
 # (nonexistent) section, and says clearly that it is a candidate.
 assert "candidate uses the base version's section" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0-rc1 2>/dev/null | grep -q "the 0.4.0 thing"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$FIXTURE" "$NOTES"
 assert "candidate is labelled as one" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0-rc1 2>/dev/null | grep -q "Release candidate for 0.4.0"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>/dev/null | grep -q "Release candidate for 0.4.0"' _ "$FIXTURE" "$NOTES"
 
 # Before release.sh moves it, a version has no section yet - fall back to
 # [Unreleased] rather than publishing an empty body.
 assert "unmoved version falls back to Unreleased" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v9.9.9 | grep -q "unreleased thing"'
+  bash -c 'CHANGELOG="$1" bash "$2" v9.9.9 | grep -q "unreleased thing"' _ "$FIXTURE" "$NOTES"
 
 # Every release explains how to get past the first-launch block and how to check
 # what was downloaded.
 assert "installing footer present" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "SHA256SUMS"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "SHA256SUMS"' _ "$FIXTURE" "$NOTES"
 assert "apple silicon caveat present" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "Apple Silicon only"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "Apple Silicon only"' _ "$FIXTURE" "$NOTES"
 
 # The signing claim in this footer went stale once already: the very change that
 # made the macOS app signable (#350) was about to publish notes still saying the
@@ -341,30 +359,30 @@ assert "apple silicon caveat present" \
 # signing change has to update this text deliberately rather than silently ship a
 # contradiction.
 refute "footer no longer claims the builds are unsigned" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "not code-signed"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "not code-signed"' _ "$FIXTURE" "$NOTES"
 assert "footer says macOS is ad-hoc signed" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "ad-hoc signed"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "ad-hoc signed"' _ "$FIXTURE" "$NOTES"
 # The quarantine command is the one instruction that holds on every macOS version;
 # the Control-click override was removed in macOS 15, so it cannot be the only path
 # offered.
 assert "footer gives the version-independent quarantine command" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "xattr -dr com.apple.quarantine"' _ "$FIXTURE" "$NOTES"
 
 # --- Entries left under [Unreleased] after the section exists ---
 # Between rc1 and rc2, four fixes sat under [Unreleased] while the tag read
 # `## [0.5.0]`, so they shipped in the binary and appeared nowhere in the notes.
 # Nothing failed; only reading the rendered body caught it.
 assert "warns that unfolded [Unreleased] entries will not publish" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 assert "the warning counts the lines at risk" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>&1 >/dev/null | grep -q "^warning: 1 line(s)"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "^warning: 1 line(s)"' _ "$FIXTURE" "$NOTES"
 assert "a candidate warns too, not just a final tag" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0-rc1 2>&1 >/dev/null | grep -q "will NOT be published"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0-rc1 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 
 # The warning MUST NOT reach stdout: release.yml redirects stdout into the release
 # body, so a warning printed there would be published to every recipient.
 refute "the warning never contaminates the published body" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v0.4.0 2>/dev/null | grep -q "will NOT be published"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 
 # Folded changelog: the section exists and [Unreleased] is empty, which is the
 # state a correctly-prepared tag is cut from. Warning here would train people to
@@ -374,12 +392,31 @@ printf '%s\n' \
   '## [Unreleased]' '' \
   '## [0.4.0] - 2026-01-01' '' '- the 0.4.0 thing' \
   > "$WORK/folded.md"
+# Paired with the refute below on purpose: `release-notes.sh` is `set -euo pipefail`,
+# so a missing or misnamed fixture makes it exit non-zero, print nothing, and the
+# refute passes having tested nothing. This assertion is what proves the invocation
+# actually ran.
+assert "the folded fixture still renders a body" \
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$WORK/folded.md" "$NOTES"
 refute "silent once the entries have been folded in" \
-  bash -c 'CHANGELOG='"$WORK"'/folded.md bash '"$NOTES"' v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"'
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$WORK/folded.md" "$NOTES"
+
+# A section holding only a heading has nothing to fold, so warning about it would
+# be a false alarm - and a warning that fires on a good state is one people learn
+# to ignore. Same pairing as above: prove the run happened before trusting silence.
+printf '%s\n' \
+  '# Changelog' '' \
+  '## [Unreleased]' '' '### Fixed' '' \
+  '## [0.4.0] - 2026-01-01' '' '- the 0.4.0 thing' \
+  > "$WORK/heading-only.md"
+assert "the heading-only fixture still renders a body" \
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>/dev/null | grep -q "the 0.4.0 thing"' _ "$WORK/heading-only.md" "$NOTES"
+refute "silent when [Unreleased] holds only a heading" \
+  bash -c 'CHANGELOG="$1" bash "$2" v0.4.0 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$WORK/heading-only.md" "$NOTES"
 
 # On the fallback path [Unreleased] IS the body, so there is nothing at risk.
 refute "silent when [Unreleased] is what gets published" \
-  bash -c 'CHANGELOG='"$FIXTURE"' bash '"$NOTES"' v9.9.9 2>&1 >/dev/null | grep -q "will NOT be published"'
+  bash -c 'CHANGELOG="$1" bash "$2" v9.9.9 2>&1 >/dev/null | grep -q "will NOT be published"' _ "$FIXTURE" "$NOTES"
 
 # An empty changelog must still yield a usable body, never nothing.
 printf '%s\n' '# Changelog' '' '## [Unreleased]' '' > "$WORK/empty.md"

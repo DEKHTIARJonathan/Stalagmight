@@ -31,11 +31,19 @@ runs.** Two failures live in this one line and both are silent:
   while the reviewers are reading. A symbolic base is not stable for the ~9 minutes they
   run, and a reviewer that re-resolves it mid-review aborts on a tree that moved.
 
+⚠ **Run this as ONE call and read the SHAs out of its output.** Shell state does not
+survive between tool calls, so `BASE=$(...)` set in one call is an empty string in the
+next - and `git diff --name-only "" ""` yields an empty surface, which is precisely the
+false-skip this file warns about below. **From here on, write the literal SHAs into
+every probe and every brief.** There are no variables to reuse.
+
 ```bash
-git fetch --quiet origin master           # read-only, no prompt; never skip it
-BASE=$(git merge-base origin/master HEAD) # immutable
-HEAD_SHA=$(git rev-parse HEAD)            # immutable
-git diff --name-only "$BASE" "$HEAD_SHA" | wc -l
+git fetch --quiet origin master   # writes FETCH_HEAD + remote-tracking refs, nothing else
+echo "BASE=$(git merge-base origin/master HEAD)"
+echo "HEAD_SHA=$(git rev-parse HEAD)"
+echo "BASE_AGE=$(git log -1 --format=%cI origin/master)"
+echo "UNTRACKED:"; git ls-files --others --exclude-standard
+git diff --name-only "$(git merge-base origin/master HEAD)" "$(git rev-parse HEAD)" | wc -l
 ```
 
 ⚠ **Check that count against the change you just made, before launching anything.** If
@@ -43,12 +51,29 @@ the surface is much larger, the base is wrong - stop and fix it; do not review. 
 the count and both SHAs in the run's output, so a wrong base is visible afterwards
 instead of being discovered in the findings.
 
-`merge-base` gives two-dot `git diff "$BASE" "$HEAD_SHA"` the same semantics as
-three-dot `origin/master...HEAD`, while being immutable for the whole run.
+⚠ **A commit-pinned diff cannot see uncommitted work, and reviewers are forbidden
+`git status`** - so an unstaged edit or a forgotten `git add` is invisible to the whole
+review unless you look. That is why `git ls-files --others --exclude-standard` is in the
+block above: name any untracked file that belongs to the change in each brief, or say
+in Coverage that there were none.
 
-Fallbacks, in order, and **never** silently to the local `master` ref: if `git fetch`
-fails (offline, no remote) say so explicitly and use `origin/master` as it stands; if
-there is no PR branch at all, fall back to staged, then unstaged.
+`merge-base` gives the two-dot form the same semantics as three-dot
+`origin/master...HEAD`, while being immutable for the whole run.
+
+Fallbacks, in order, and **never** silently to the local `master` ref:
+
+- **`git fetch` fails** (offline, no remote, or it hangs on a credential prompt - use
+  `GIT_TERMINAL_PROMPT=0` and a `timeout` if you suspect one): say so explicitly, then
+  check `BASE_AGE` before trusting `origin/master`. **A never-pulled `origin/master` is
+  exactly as stale as the local `master` this section exists to avoid** - the real axis
+  is freshness, not remote-versus-local. If it is more than a day old, say so in the
+  verdict; if you cannot establish the base's age at all, stop rather than review
+  against an unknown base.
+- **No PR branch at all**: fall back to staged, then unstaged.
+- **The base and HEAD are the same commit** (reviewing work already on master, which is
+  normal here since changes land directly): pin to the range you actually mean - the
+  last release tag, or the specific commits - and say in Coverage which range you chose
+  and why. Do not report "nothing to review".
 
 Read enough surrounding code to judge correctness; keep findings scoped to the change +
 its blast radius.
@@ -68,23 +93,25 @@ ahead of the reviewers:
 
 ## Diff surface probes
 
-⚠ **Use the SAME pinned `$BASE`/`$HEAD_SHA` Scope resolved - for every probe below and
-for every reviewer brief.** On the staged fallback substitute `--staged`, on the
-unstaged fallback drop the range entirely. Get this wrong and every probe returns empty
-on a real change, gated work is skipped, and the skip is logged with a `why` that is
-false - in the single field the log exists to make trustworthy. An empty surface list on
-a fallback path means **recompute with the right expression**, not *skip*.
+⚠ **Substitute the literal SHAs Scope printed** - shown below as `<BASE>` and `<HEAD>` -
+into every probe and every reviewer brief. `$BASE`/`$HEAD_SHA` are NOT available here:
+shell state does not survive between tool calls, and an empty expansion makes
+`git diff --name-only "" ""` return an empty surface. On the staged fallback substitute
+`--staged`, on the unstaged fallback drop the range entirely. Get this wrong and every
+probe returns empty on a real change, gated work is skipped, and the skip is logged with
+a `why` that is false - in the single field the log exists to make trustworthy. An empty
+surface list on a fallback path means **recompute with the right expression**, not *skip*.
 
 ⚠ **Never write `master...HEAD` here.** That reads the local ref, which is exactly the
 stale-base failure Scope exists to prevent, and it re-resolves on every probe so two
 probes can disagree if a merge lands between them.
 
 ```
-git diff --name-only "$BASE" "$HEAD_SHA"                                  # the surface
-git diff --name-only "$BASE" "$HEAD_SHA" -- '*.ts' '*.tsx'                # TS?
-git diff --name-only "$BASE" "$HEAD_SHA" -- 'src-tauri/'                  # Rust crate?
-git diff --name-only "$BASE" "$HEAD_SHA" -- 'src/'                        # frontend?
-git diff --name-only "$BASE" "$HEAD_SHA" -- 'e2e-playwright/' 'playwright.config.ts'   # Playwright?
+git diff --name-only <BASE> <HEAD>                                  # the surface
+git diff --name-only <BASE> <HEAD> -- '*.ts' '*.tsx'                # TS?
+git diff --name-only <BASE> <HEAD> -- 'src-tauri/'                  # Rust crate?
+git diff --name-only <BASE> <HEAD> -- 'src/'                        # frontend?
+git diff --name-only <BASE> <HEAD> -- 'e2e-playwright/' 'playwright.config.ts'   # Playwright?
 ```
 
 ⚠ Match the TS patterns exactly. `'src/**/*.ts'` looks equivalent and is **not**: git

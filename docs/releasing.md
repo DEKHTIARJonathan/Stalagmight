@@ -15,9 +15,22 @@ Releases are created through Claude Code. The process:
 
 **`CHANGELOG.md` is the release notes.** There is no second place to write them:
 the workflow builds the published body from the changelog via
-`scripts/release-notes.sh`, so whatever is in `## [Unreleased]` when you tag is
-what recipients read. Write it for someone using the app, not for someone
+`scripts/release-notes.sh`. Write it for someone using the app, not for someone
 reading the diff.
+
+⚠ **`## [Unreleased]` is not automatically what gets published.** The script reads
+the tag's own `## [x.y.z]` section and falls back to `[Unreleased]` only when that
+section does not exist yet. Once `release.sh` has created it - which is the state
+every release candidate after the first is cut from - anything written under
+`[Unreleased]` ships inside the build and appears nowhere in its notes. This is not
+hypothetical: four fixes went unannounced that way between `v0.5.0-rc1` and `rc2`.
+**Fold post-candidate entries into the version's own section before tagging.**
+
+`release-notes.sh` warns on stderr when it is about to leave entries behind, but
+that warning is **advisory, not a gate**: nothing calls it before a tag exists.
+`release.sh` never invokes it, and the workflow runs it after the tag is already
+pushed, where the warning reaches only the CI log. Running the preview below is
+what actually catches this.
 
 Preview the exact body before tagging - it is the same script CI runs:
 
