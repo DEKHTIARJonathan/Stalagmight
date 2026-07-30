@@ -34,7 +34,7 @@ export const themeTokens = {
     '--cc-map-scale-border': '#0f3460',
     '--cc-map-scale-text': '#f5f5f5',
 
-    // Map Visualization (dark only)
+    // Map Visualization (see mapVizTokenNames - light and kaleido_eink override these)
     '--cc-map-background': '#1a1a2e',
     '--cc-snap-color': '#ff6b6b',
     '--cc-hover-highlight': '#ffcb77',

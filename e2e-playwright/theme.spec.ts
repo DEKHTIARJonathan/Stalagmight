@@ -329,11 +329,17 @@ test.describe('Theme Switching - Via Settings UI', () => {
     // property off the live map. That needs a project open, which is why the
     // project is created AFTER saving - openSettingsDialog closes the one the
     // beforeEach made, and MapCanvas deletes __stalagmight_map__ on unmount.
-    // What this pins, established by breaking each in turn: the
-    // [resolvedTheme, mapLoaded] effect at MapCanvas.tsx:2317. It does NOT pin
-    // the layer's initial paint at MapCanvas.tsx:1691 - that same effect
-    // re-applies the colour once mapLoaded flips, so a wrong init value is
-    // repaired before this assertion runs and the test stays green.
+    //
+    // What this pins: the map's INITIAL paint, MapCanvas.tsx:1691. Not the
+    // [resolvedTheme, mapLoaded] re-apply at :2317 - the theme is already light
+    // by the time createProject() builds the map, so init alone turns this
+    // assertion green and deleting the re-apply effect would not fail it.
+    // The re-apply path is unreachable from Playwright as the app is shaped
+    // today: openSettingsDialog() starts with goBackToGlobalView(), and the
+    // hamburger that holds Settings only exists in global view, so a project
+    // can never be open across a theme change. If Settings ever becomes
+    // reachable in-project, add a second case that opens a project FIRST and
+    // then switches - that one would pin :2317.
     await openSettingsDialog(page);
     await navigateToAppearance(page);
     await selectThemeMode(page, 'Light');

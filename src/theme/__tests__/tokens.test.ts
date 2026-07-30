@@ -212,8 +212,12 @@ describe('depth gradient legibility', () => {
    * at the time. Pre-existing and out of scope for #332 (which is about the light
    * canvas), but recorded so they cannot quietly get worse. `one_dark` interpolates
    * indigo -> indigo through a mid-blue that sits close to its own dark canvas.
+   *
+   * Carried to 3dp on purpose. The assertion below is `worst >= known`, so every digit
+   * dropped here is slack the ratchet grants a real regression: at 2.59 the ramp could
+   * quietly decay to 2.590 before this failed. The sweep measures 2.5992.
    */
-  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = { one_dark: 2.59 };
+  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = { one_dark: 2.599 };
 
   it.each([...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const])(
     '%s keeps the whole depth ramp at 3:1 or better against its own canvas',

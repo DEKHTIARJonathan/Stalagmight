@@ -152,10 +152,11 @@
      labels stay legible.
      The depth endpoints are navy -> brick rather than the dark theme's teal ->
      coral because getDepthColor interpolates in HSL along the SHORTEST hue path:
-     teal (175) to coral (5) runs through green and yellow, which bottoms out at
-     1.14:1 against this canvas (#f2ef5d at t=0.67) - the ramp, not just the
-     endpoints, has to stay legible. Navy (215) to brick (8) takes the short way
-     round through magenta and never drops below 6.67:1. Same reasoning as
+     teal (175deg) to coral (0deg) runs through green and yellow, which bottoms out
+     at 1.13:1 against this canvas (#eef15d, t=0.65 of the 41-sample sweep the test
+     runs) - the ramp, not just the endpoints, has to stay legible. Navy (211deg) to
+     brick (8deg) takes the short way round through magenta and never drops below
+     6.67:1. Same reasoning as
      kaleido_eink's blue -> red; the hues here are warmer to sit with the cream
      chrome. Pinned by a contrast test, not by these hex values. */
   --cc-map-background: #faf7f2;
