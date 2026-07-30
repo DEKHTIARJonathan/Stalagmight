@@ -61,13 +61,23 @@ pub(super) enum LinkedSpelling {
 /// Degradations, each deliberate:
 ///
 /// - **No link row**: not refused - an unmanaged project.
-/// - **Unreadable / not sqlite**: not refused. It cannot become a second
-///   *usable* copy (it cannot be opened at all), and the full open a few lines
-///   after this probe reports `CORRUPT`/`DATABASE`, which routes to the
-///   corruption-recovery UI - strictly better than a "managed by SpeleoDB
-///   (project unknown)" prompt. This deliberately differs from
-///   `local_copy_state`'s fail-closed rule: that decision is "may I OVERWRITE
-///   this file", this one is "may I open it".
+/// - **The read-only probe cannot answer**: ask again with a READ-WRITE open
+///   before concluding anything (see [`link_row_of`]). "Unreadable" was treated
+///   as "cannot become a second usable copy" and waved through, on the reasoning
+///   that the full open a few lines later would report `CORRUPT`/`DATABASE`
+///   anyway. That reasoning does not hold, and this tree documents why in three
+///   other places: a hot rollback journal (a kill, a power loss) fails a
+///   `SQLITE_OPEN_READ_ONLY` connection with `SQLITE_READONLY_ROLLBACK` while a
+///   read-write open ROLLS IT BACK AND SUCCEEDS. So the one probe that decides
+///   whether a file is a second managed copy answered "no idea, carry on"
+///   precisely when the open it was guarding was about to succeed - and a
+///   foreign copy became fully usable, with a session and lock claims that are
+///   indistinguishable from the canonical copy's by project id alone.
+/// - **Unreadable to BOTH opens**: not refused. Nothing can read a link row out
+///   of it, and the full open right after fails exactly as this probe did, so
+///   the load reports `CORRUPT`/`DATABASE` and routes to the corruption-recovery
+///   UI - strictly better than a "managed by SpeleoDB (project unknown)" prompt
+///   for a file that does not open at all.
 /// - **Link row with an invalid project id**: refused, with
 ///   [`SpeleoManagedFile::can_open_remote`] false. An id that fails the same
 ///   UUID validation the edit verbs use must never be joined into a cache path
@@ -94,11 +104,7 @@ pub(super) enum LinkedSpelling {
 ///   is harmless and stays as spelled, because the rename resolves through it
 ///   into the real directory and lands on the real entry.
 pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpelling {
-    let Some(link) = Database::open_for_metadata(path)
-        .and_then(|db| db.load_speleo_link())
-        .ok()
-        .flatten()
-    else {
+    let Some(link) = link_row_of(path) else {
         return LinkedSpelling::AsSpelled;
     };
     let valid_id = super::speleodb::validate_project_id(&link.project_id).is_ok();
@@ -122,6 +128,49 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpellin
         endpoint: link.endpoint,
         can_open_remote: valid_id,
     })
+}
+
+/// The `speleo_link` row of the `.stalx` at `path`, read the cheapest way that
+/// can answer.
+///
+/// Read-only FIRST, because that is the answer for every ordinary file and it
+/// neither migrates nor mmaps a file this probe may be about to refuse. But a
+/// read-only connection cannot recover a hot rollback journal - it fails with
+/// `SQLITE_READONLY_ROLLBACK` where the read-write open a few lines later rolls
+/// the journal back and succeeds - so a read-only miss is NOT evidence that the
+/// file is unopenable. Escalating is what keeps this probe's verdict aligned
+/// with the open it guards; without it the guard fell open in exactly the state
+/// where the file was about to become a fully usable second managed copy.
+///
+/// The escalation costs a second open in that rare case, and it does write to
+/// the file (rolling the journal back). That is not a new intrusion: it is the
+/// open that was going to happen a few lines later regardless, moved earlier so
+/// its result can be judged before the session commits to it.
+///
+/// `None` covers both "no link row" (an unmanaged project) and "neither open
+/// could read one" - the caller treats them the same, and the full open
+/// immediately after reports the unreadable case far better than this probe
+/// could (see [`foreign_link_in`]'s degradation list). Both handles are dropped
+/// before returning, which matters on Windows: SQLite holds the file without
+/// `FILE_SHARE_DELETE` and the real open follows immediately.
+fn link_row_of(path: &Path) -> Option<crate::models::SpeleoLink> {
+    match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
+        Ok(link) => link,
+        Err(read_only_error) => Database::open_existing(path)
+            .and_then(|db| db.load_speleo_link())
+            .inspect_err(|e| {
+                tracing::warn!(
+                    path = %path.display(),
+                    read_only_error = %read_only_error,
+                    error = %e,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Neither open could read a speleo_link row; the load reports the \
+                     open failure itself"
+                );
+            })
+            .ok()
+            .flatten(),
+    }
 }
 
 /// Whether the LAST component of `path` is itself a symlink.
@@ -230,6 +279,45 @@ mod tests {
         matches!(spelling, LinkedSpelling::AsSpelled)
     }
 
+    /// The rollback journal SQLite keeps beside `path` mid-transaction.
+    fn journal_of(path: &Path) -> PathBuf {
+        let mut name = path.as_os_str().to_owned();
+        name.push("-journal");
+        PathBuf::from(name)
+    }
+
+    /// Copy `src` to a new path WITH a live, HOT rollback journal - what a kill
+    /// or a power loss mid-write leaves behind.
+    ///
+    /// Dirtying a page is not enough. SQLite writes the journal header's magic
+    /// as ZEROES until it is about to modify the database file itself, exactly
+    /// so that a crash before that point leaves a journal nothing needs to roll
+    /// back. The magic goes in when the page cache SPILLS, which is what a tiny
+    /// `cache_size` plus a few hundred rows forces here. Only then does a copy
+    /// of the pair reproduce the state the fix is about: the database and its
+    /// journal are copied while both are live, and the original is rolled back
+    /// afterwards, so the copy is left holding a hot journal and nobody's lock.
+    fn copy_with_a_hot_journal(src: &Path, dest: &Path) {
+        let conn = rusqlite::Connection::open(src).expect("open the source directly");
+        conn.execute_batch("PRAGMA cache_size = 2; BEGIN IMMEDIATE; CREATE TABLE dirty (x);")
+            .expect("open a write transaction");
+        {
+            let mut insert = conn
+                .prepare("INSERT INTO dirty VALUES (?1)")
+                .expect("prepare");
+            let filler = "x".repeat(400);
+            for _ in 0..500 {
+                insert
+                    .execute([&filler])
+                    .expect("fill until the cache spills");
+            }
+        }
+        std::fs::copy(src, dest).expect("copy the database mid-transaction");
+        std::fs::copy(journal_of(src), journal_of(dest)).expect("copy its live journal");
+        conn.execute_batch("ROLLBACK;")
+            .expect("roll the original back");
+    }
+
     #[test]
     fn a_linked_stalx_outside_the_cache_is_refused() {
         let temp = tempfile::TempDir::new().expect("temp");
@@ -244,6 +332,60 @@ mod tests {
         assert_eq!(managed.project_name, "Linked");
         assert_eq!(managed.endpoint, "http://x/");
         assert!(managed.can_open_remote, "a valid id can be opened remotely");
+    }
+
+    /// The read-only probe is not the last word on whether a file is a second
+    /// managed copy, because it fails in a state where the file is about to open
+    /// perfectly well: a hot rollback journal defeats `SQLITE_OPEN_READ_ONLY`
+    /// (`SQLITE_READONLY_ROLLBACK`) while the read-write open a few lines later
+    /// rolls it back and succeeds. Reading that miss as "cannot become a second
+    /// usable copy" waved a foreign linked file straight through the one guard
+    /// that exists to stop it.
+    #[test]
+    fn a_foreign_copy_is_refused_even_when_only_a_read_write_open_can_read_it() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let foreign = temp.path().join("elsewhere").join("copy.stalx");
+        seed_linked(&foreign, ID);
+
+        let hot = temp.path().join("elsewhere").join("hot.stalx");
+        copy_with_a_hot_journal(&foreign, &hot);
+
+        assert!(
+            Database::open_for_metadata(&hot)
+                .and_then(|db| db.load_speleo_link())
+                .is_err(),
+            "precondition: a read-only connection cannot roll back a hot journal"
+        );
+        assert!(
+            Database::open_existing(&hot).is_ok(),
+            "precondition: a read-write open recovers it, which is the whole problem"
+        );
+        // Re-create it: the read-write open above just rolled the journal back.
+        let hot = temp.path().join("elsewhere").join("hot2.stalx");
+        copy_with_a_hot_journal(&foreign, &hot);
+
+        let managed = refusal(foreign_link_in(Some(&root), &hot))
+            .expect("an unreadable-to-read-only foreign copy is still a foreign copy");
+        assert_eq!(managed.project_id, ID);
+    }
+
+    /// ...but a file NOTHING can read is still left to the open that follows,
+    /// which reports CORRUPT/DATABASE and routes to the recovery UI - better
+    /// than a "managed by SpeleoDB (project unknown)" prompt for a file that
+    /// does not open at all.
+    #[test]
+    fn a_file_neither_open_can_read_is_left_to_the_load_to_report() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let garbage = temp.path().join("not-a-database.stalx");
+        std::fs::write(&garbage, b"this is not sqlite").expect("write garbage");
+
+        assert!(
+            accepted_as_spelled(&foreign_link_in(Some(&root), &garbage)),
+            "nothing can read a link row out of it, and the open right after \
+             reports the real problem"
+        );
     }
 
     #[test]
