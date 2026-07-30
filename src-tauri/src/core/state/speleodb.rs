@@ -938,7 +938,11 @@ impl AppState {
     /// A poisoned session lock silently declines to record, which costs the shortcut
     /// rather than granting one: the same call also fails `speleodb_active_token`, so
     /// the poll has no lock holder to compare against either.
-    fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
+    ///
+    /// `pub(super)` only so the split release in
+    /// [`Self::speleodb_release_captured_lock`] can clear the record too; every other
+    /// writer is in this file.
+    pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.lock_acquired_here = project_id.map(str::to_owned);
         }
@@ -6549,6 +6553,179 @@ mod tests {
                 "a clean held lock is still released on logout"
             );
             assert!(!state.edit_enabled(), "and the edit gate drops either way");
+        });
+    }
+
+    /// [`release_stub`]'s answer plus [`counting_stub`]'s counter.
+    ///
+    /// The two existing stubs each do exactly one half - `release_stub` answers 200
+    /// but records nothing, `counting_stub` records but never answers, so the client
+    /// always sees a failure - and the "a SUCCESSFUL release leaves no warning" case
+    /// needs both at once: without the answer the release fails, and without the count
+    /// the test passes just as happily if no request was ever made.
+    ///
+    /// The count is incremented BEFORE the response goes out, so a test that asserts
+    /// on it after a blocking release has no race to lose.
+    fn answering_counting_stub(
+        project_id: &str,
+    ) -> (
+        String,
+        std::net::TcpListener,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+    ) {
+        use std::io::{Read as _, Write as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let body = format!(r#"{{"id":"{project_id}","name":"Remote"}}"#);
+        let hits = std::sync::Arc::new(AtomicUsize::new(0));
+        let accept_on = listener.try_clone().expect("clone listener");
+        let counter = std::sync::Arc::clone(&hits);
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = accept_on.accept() {
+                counter.fetch_add(1, Ordering::SeqCst);
+                // Drain the request until the socket goes quiet, then answer.
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener, hits)
+    }
+
+    /// The `.stalx` of a project we hold the SpeleoDB write lock on can be DELETED, and
+    /// that has to hand the lock back too.
+    ///
+    /// `close_project_impl` releases before it issues `Command::CloseProject`, but
+    /// `delete_project` tears the session down through the state layer's
+    /// `close_open_project_locked` and so never goes near that command. The lock was
+    /// therefore left held while the `.stalx` - and the `speleo_link` row inside it that
+    /// is the only local record of the lock - was destroyed, and the frontend cleared
+    /// its link state. Nothing local could reach that mutex again: every other diver
+    /// stayed locked out of the project until the server timed it out.
+    ///
+    /// A snapshot taken after the teardown cannot fix it either, which is what makes the
+    /// ordering in `delete_project` load-bearing: the teardown drops the database
+    /// handle, so `speleodb_open_link` would answer `NoRemoteProject` and the release
+    /// would no-op exactly as before.
+    ///
+    /// Asserted by CONTRADICTION on a counting stub: a release that went out is a hit.
+    /// That stub never answers, so the release also FAILS - which is the other half of
+    /// the contract here, and free: the delete must still report `success` (the file is
+    /// gone; failing would strand a zombie recents row) with the failure demoted to a
+    /// warning, because a lock whose local record has just been destroyed is one only
+    /// the held-lock prompt can still clear.
+    ///
+    /// Under `with_isolated_config` because the fixture's `open_project` and the delete
+    /// itself both WRITE the config (the recent-projects list).
+    #[test]
+    fn deleting_the_open_remote_project_releases_its_held_lock() {
+        crate::test_helpers::with_isolated_config(|| {
+            let (base, _listener, hits) = counting_stub();
+            let (_temp, state) = editing_fixture(&base);
+            let path = state
+                .open_project_path()
+                .expect("precondition: the fixture is open and saved");
+            assert!(
+                state.edit_enabled() && !state.force_editing(),
+                "precondition: this session holds the write lock"
+            );
+
+            let result = state.delete_project(path.clone());
+
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "deleting the project we hold the lock on must release it - otherwise \
+                 the server mutex stays held with nothing local left to release it from"
+            );
+            assert!(!path.exists(), "the .stalx really was deleted");
+            assert!(
+                result.success,
+                "the file is gone, so the delete succeeded overall: {:?}",
+                result.error
+            );
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "and the session was torn down"
+            );
+            assert!(
+                result
+                    .warnings
+                    .iter()
+                    .any(|w| w.code == "delete_project_lock_release_failed"),
+                "the stub never answers, so the release failed - which must surface as \
+                 a non-fatal warning, not a failed delete, got {:?}",
+                result.warnings
+            );
+        });
+    }
+
+    /// A release that LANDS leaves no lock warning behind, and a delete with no lock to
+    /// release issues no request at all.
+    ///
+    /// The negative half of the test above, in the two directions that matter: the
+    /// warning is a function of the release OUTCOME rather than something the delete
+    /// emits unconditionally, and the delete does not go near the network for a project
+    /// this session holds nothing on (the read-only fixture never Started editing).
+    #[test]
+    fn a_delete_only_warns_about_a_lock_release_that_failed() {
+        crate::test_helpers::with_isolated_config(|| {
+            // (1) Lock held, stub answers 200: the release goes out AND succeeds.
+            let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+            let (_temp, state) = editing_fixture(&base);
+            let path = state.open_project_path().expect("fixture is open");
+
+            let result = state.delete_project(path.clone());
+
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                1,
+                "the release request was made"
+            );
+            assert!(result.success, "delete succeeded: {:?}", result.error);
+            assert!(
+                !result
+                    .warnings
+                    .iter()
+                    .any(|w| w.code == "delete_project_lock_release_failed"),
+                "a release the server accepted must NOT be reported as a failed one, \
+                 got {:?}",
+                result.warnings
+            );
+            assert!(!path.exists(), "and the .stalx is gone");
+
+            // (2) No lock held (remote, opened read-only): nothing to release, so
+            // nothing is sent and nothing is warned about.
+            let (base, _listener2, hits) = counting_stub();
+            let (_temp, state) = editing_fixture(&base);
+            state.set_edit_enabled(false);
+            let path = state.open_project_path().expect("fixture is open");
+
+            let result = state.delete_project(path);
+
+            assert_eq!(
+                hits.load(std::sync::atomic::Ordering::SeqCst),
+                0,
+                "a read-only open holds no lock, so the delete must not POST a release"
+            );
+            assert!(result.success, "delete succeeded: {:?}", result.error);
+            assert!(
+                result.warnings.is_empty(),
+                "and there is nothing to warn about, got {:?}",
+                result.warnings
+            );
         });
     }
 
