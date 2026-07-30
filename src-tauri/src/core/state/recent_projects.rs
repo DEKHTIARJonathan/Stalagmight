@@ -161,8 +161,39 @@ impl AppState {
         // with the file gone `same_file` can canonicalize neither side and degrades to
         // the same plain path comparison the symlink branch performs, so both notions of
         // identity already agree there.
-        let deleting_the_symlink_itself =
-            std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink());
+        //
+        // The RESULT is kept, not just the boolean, because this one stat is also the
+        // answer to "is there anything here to remove?" further down, and those are two
+        // different questions when the stat FAILS. `is_ok_and` and `Path::exists` both
+        // flatten a failure into `false`, which reads an access denial - the file is
+        // there, we simply may not look at it (a lost macOS folder permission, a parent
+        // directory whose `+x` went away) - as "already gone". Everything downstream
+        // then behaved as though the delete had succeeded: the trash was skipped, the
+        // recents row was pruned, and an open managed project had its captured server
+        // lock handed back under the EXPLICIT-ABANDON policy, which exists precisely
+        // because destroying the `.stalx` forfeits its un-pushed edits. Nothing had
+        // been destroyed, so those edits - and the file - were still there, now behind
+        // a released mutex any other diver could take.
+        let entry = std::fs::symlink_metadata(&path);
+        let deleting_the_symlink_itself = entry
+            .as_ref()
+            .is_ok_and(|meta| meta.file_type().is_symlink());
+
+        // Only a definitive "there is nothing here" may be tolerated as absence.
+        // Anything else is refused BEFORE a single thing is torn down or released -
+        // the session stays open, the lock stays held, recents keeps its row, and the
+        // user gets the access error to act on.
+        if let Err(e) = &entry {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    path = ?path,
+                    error = %e,
+                    purpose = "delete a project",
+                    "Refusing to delete: cannot determine whether the file is there"
+                );
+                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
+            }
+        }
 
         // "Does `candidate` name the file this delete is about to destroy?" - the single
         // predicate behind BOTH the open-project teardown and the recents prune, so the
@@ -361,13 +392,14 @@ impl AppState {
         // on disk has changed yet, so abort cleanly - recents stay untouched and
         // the caller can retry. (Tolerant of a file that's already gone.)
         //
-        // `Path::exists` FOLLOWS symlinks, so on its own it answers `false` for a
-        // DANGLING link and the link itself would never be unlinked - the row would
-        // leave recents while the broken link stayed on disk. `symlink_metadata`
-        // already told us whether something is there without following it, so reuse
-        // that: "there is an entry at this path" is the question that decides whether
-        // there is anything to remove.
-        if path.exists() || deleting_the_symlink_itself {
+        // The stat taken at the top is what decides this, and it is the only thing
+        // allowed to: `Path::exists` FOLLOWS symlinks, so it answers `false` for a
+        // DANGLING link (the row would leave recents while the broken link stayed on
+        // disk) AND for a file it merely cannot reach (see the top of this function
+        // for what that cost). `symlink_metadata` answered both questions honestly
+        // there, an unreadable path has already been refused, so what is left here is
+        // exactly "there is an entry" versus "there is provably nothing".
+        if entry.is_ok() {
             if let Err(e) = send_to_trash(&path) {
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
@@ -554,4 +586,61 @@ fn send_to_trash(path: &Path) -> Result<(), String> {
 #[cfg(test)]
 fn send_to_trash(path: &Path) -> Result<(), String> {
     std::fs::remove_file(path).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+#[expect(
+    clippy::expect_used,
+    reason = "unit test fixtures fail loudly on setup errors"
+)]
+mod tests {
+    use super::AppState;
+
+    /// A path the app cannot STAT is not an absent path, and reading it as one
+    /// was destructive-by-report. `Path::exists` and `is_ok_and` both flatten an
+    /// access denial into `false`, so a project behind a lost folder permission
+    /// looked exactly like a project already gone: the trash was skipped, the
+    /// recents row was pruned, and an open managed project had its captured
+    /// server lock released under the EXPLICIT-ABANDON policy - the policy that
+    /// exists because destroying the `.stalx` forfeits its un-pushed edits. The
+    /// file and those edits were still sitting there, now behind a mutex any
+    /// other diver could take.
+    #[cfg(unix)]
+    #[test]
+    fn a_path_that_cannot_be_stat_ed_is_refused_rather_than_read_as_already_gone() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dir = temp.path().join("locked");
+        std::fs::create_dir(&dir).expect("mkdir");
+        let path = dir.join("project.stalx");
+        std::fs::write(&path, b"still here, and never read").expect("seed the file");
+
+        // Deny everything on the PARENT, which is what a lost folder permission
+        // looks like from here: the file is still on disk, we simply cannot look
+        // at it.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o000))
+            .expect("lock the directory");
+        let stat_denied = std::fs::symlink_metadata(&path).is_err();
+        let state = AppState::new().expect("state");
+        let result = stat_denied.then(|| state.delete_project(path.clone()));
+        // Unlocked before any assertion, so a failing assert cannot leave a
+        // directory the temp-dir cleanup is unable to remove.
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("unlock the directory");
+
+        let Some(result) = result else {
+            // Running as root, where permission bits do not apply - there is no
+            // unreadable path to be had, so there is nothing to assert.
+            return;
+        };
+        assert!(
+            !result.success,
+            "a path we cannot read must not report a successful delete"
+        );
+        assert!(
+            path.exists(),
+            "and nothing may have been removed on the strength of a failed stat"
+        );
+    }
 }
