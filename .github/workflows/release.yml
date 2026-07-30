@@ -18,7 +18,7 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
       # Cached here but deliberately NOT in `build`: this job compiles only to
@@ -27,8 +27,8 @@ jobs:
       - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
           workspaces: src-tauri
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -69,13 +69,13 @@ jobs:
     permissions:
       contents: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Linux build dependencies
         if: matrix.os == 'ubuntu-latest'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf xdg-utils
       - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
-      - uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4.3.0
-      - uses: actions/setup-node@v4
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
           cache: pnpm
@@ -89,6 +89,25 @@ jobs:
         run: pnpm tauri build -- --features telemetry
         env:
           TELEMETRY_ENDPOINT: ${{ secrets.TELEMETRY_ENDPOINT }}
+      # v0.5.0-rc1 shipped a .app that macOS refused to open as "damaged". The
+      # cause was an absent signature rather than a corrupt download: with no
+      # signing identity Tauri skips codesign entirely, leaving only the Rust
+      # linker's ad-hoc signature on the inner binary, which is inconsistent with
+      # the bundle around it. That is an *invalid* signature, and unlike the
+      # ordinary unnotarized-app warning the user cannot click past it. Tauri now
+      # ad-hoc signs via bundle.macOS.signingIdentity, which happens before the
+      # DMG is built. Verify the app inside the DMG, because that is the artifact
+      # someone actually downloads, and a silent regression here is invisible
+      # until a human tries to launch it. See #350.
+      # Shared with scripts/mac-build.sh so the local build and the release check
+      # cannot drift apart - two copies of this check with different artifacts is
+      # how rc1 shipped in the first place. `matrix.os` matches the idiom used by
+      # the Linux step above; a skipped step here would mean a green publish, so
+      # the condition is worth keeping boring and consistent.
+      - name: Verify the shipped macOS app is validly signed
+        if: matrix.os == 'macos-latest'
+        shell: bash
+        run: ./scripts/verify-macos-signature.sh "$BUNDLE_DIR/dmg"
       - name: Collect release artifacts
         shell: bash
         run: |
@@ -114,9 +133,10 @@ jobs:
             echo "::error::No artifacts found in $BUNDLE_DIR"
             exit 1
           fi
-      # Nothing is code-signed, and the release notes tell recipients how to
-      # click past the OS warning, so give them something to check the download
-      # against. Computed on the runner that built the bytes.
+      # Nothing is notarized (macOS is only ad-hoc signed, Windows not at all),
+      # and the release notes tell recipients how to click past the OS warning,
+      # so give them something to check the download against. Computed on the
+      # runner that built the bytes.
       - name: Checksum this platform's artifacts
         shell: bash
         working-directory: release-artifacts
@@ -130,7 +150,7 @@ jobs:
           $SUM * > "$RUNNER_TEMP/sums"
           mv "$RUNNER_TEMP/sums" "SHA256SUMS-${{ matrix.name }}"
           cat "SHA256SUMS-${{ matrix.name }}"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: release-${{ matrix.name }}
           path: release-artifacts/*
@@ -145,8 +165,8 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/download-artifact@v4
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
         with:
           path: release-artifacts
           merge-multiple: true

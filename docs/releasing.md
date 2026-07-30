@@ -78,7 +78,7 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 git add CHANGELOG.md
 git commit -m "docs: update changelog for vX.Y.Z"
 
-# 4. Run release script (bumps versions in 3 files, moves changelog, commits, tags)
+# 4. Run release script (bumps versions in 3 of the 4 version files, moves changelog, commits, tags)
 ./scripts/release.sh patch --no-edit
 
 # 5. Push
@@ -91,7 +91,7 @@ git push origin master && git push origin --tags
 2. Computes new version (major/minor/patch or explicit X.Y.Z)
 3. Verifies no uncommitted changes (except CHANGELOG.md)
 4. Verifies `## [Unreleased]` section is non-empty
-5. Updates version in 3 files:
+5. Updates version in 3 of the 4 files that carry it (see [Version locations](#version-locations) - `src-tauri/Cargo.lock` is not one of them):
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
@@ -140,12 +140,50 @@ git push origin master && git push origin --tags
   the easy one to miss.
 - `fail-fast` is off so every platform reports its own failure, but `release`
   depends on all three builds, so a partial artifact set is never published.
-- Nothing is code-signed. The release notes get an "Installing" footer telling
-  recipients how to get past Gatekeeper and SmartScreen. Because those steps
-  talk people through overriding a security warning, the release also ships a
-  `SHA256SUMS` generated on the runner that built the binaries, and the footer
-  points at it. Signing/notarization is an open decision on
+- **The macOS app is ad-hoc signed; nothing is notarized, and Windows is
+  unsigned.** Tauri signs the app itself, from `bundle.macOS.signingIdentity` in
+  `tauri.conf.json`, which happens before the DMG is built. Do not move signing
+  after the build: v0.5.0-rc1 shipped with no identity set, so Tauri skipped
+  codesign and the bundle carried only the Rust linker's ad-hoc signature on the
+  inner binary. That combination is *invalid* rather than merely unsigned, and
+  macOS reports it as "damaged and can't be opened" with no way for the user to
+  click past it, unlike the ordinary unnotarized warning
+  ([#350](https://github.com/Stalagmight/Stalagmight/issues/350)). The `build`
+  job re-checks the app *inside* the DMG via `scripts/verify-macos-signature.sh`,
+  since that is the artifact people download, and `scripts/mac-build.sh` runs the
+  same script for the same reason. Real Developer ID signing plus notarization
+  needs a paid Apple Developer account and is an open decision on
   [#226](https://github.com/Stalagmight/Stalagmight/issues/226).
+- **What the signature does and does not buy.** `codesign --verify --deep --strict`
+  proves the bundle is internally consistent, which is what makes it launchable at
+  all. It proves nothing about *who* built it: an ad-hoc signature has no
+  certificate and no Team ID, and anyone able to influence the bundle can re-sign
+  it ad-hoc with no key. Integrity against build breakage, not authenticity. Read
+  "signature verified" in a release log accordingly.
+- **Signing also turns on the hardened runtime, with no entitlements.** Tauri's
+  `hardenedRuntime` defaults to `true`, so giving it a `signingIdentity` opts the
+  shipped app into a restricted runtime it never had before (the signature reports
+  `flags=0x10002(adhoc,runtime)`). That is deliberate here, not incidental: it is
+  verified working (the app launches and WKWebView spawns its content processes),
+  it keeps the artifact forward-compatible with notarization, and the binary links
+  only Apple frameworks with no bundled dylibs, so library validation has nothing
+  to reject. If a future dependency needs JIT, a loadable plugin, or a spawned
+  helper, that assumption has to be revisited - either add entitlements or set
+  `"hardenedRuntime": false` explicitly rather than discovering it in a crash.
+- **An ad-hoc signature changes identity every build, which the keychain notices.**
+  The SpeleoDB token is stored via the OS keychain (`src-tauri/src/speleodb/auth.rs`),
+  and a keychain item's ACL is bound to the creating app's code identity. An ad-hoc
+  signature's designated requirement is its cdhash, which differs for every build,
+  so each release is a different app as far as the keychain is concerned and users
+  may be re-prompted for their token after updating. A real Developer ID gives a
+  stable identity and would remove this; it is another argument for #226. A denial
+  is handled safely rather than silently - the token degrades to session-only
+  memory and is never written to disk unless plaintext storage was explicitly
+  opted into.
+- The release notes get an "Installing" footer telling recipients how to get past
+  Gatekeeper and SmartScreen. Because those steps talk people through overriding
+  a security warning, the release also ships a `SHA256SUMS` generated on the
+  runner that built the binaries, and the footer points at it.
 - `verify` runs the test suite on Linux only. Per-platform test runs are tracked
   in [#325](https://github.com/Stalagmight/Stalagmight/issues/325); note Windows
   needs `STALAGMIGHT_TEST_MANIFEST=1` (see `scripts/test.ps1`).
@@ -187,6 +225,36 @@ Do this before the first tag after any change to the build matrix. The
 platform-specific `bundle_dir` values and artifact globs are only really
 confirmed by a run that produces the files.
 
+A rehearsal covers everything except the `release` job, so two things stay
+unproven until a real tag: `actions/download-artifact` and the publish step
+itself. Watch the first tagged run's `release` job rather than assuming.
+
+### The one macOS check no workflow can do
+
+`codesign --verify` proves the signature is well-formed. It does **not** predict
+what Gatekeeper shows a user, because that is a separate assessment of a
+*quarantined* download, and an unnotarized app is rejected either way - `spctl
+--assess` returns `rejected` for our DMG by design. So the difference between the
+dismissible "Apple could not verify" prompt and the terminal "damaged and can't be
+opened" cannot be read off any CI log.
+
+Before announcing a release, open the built DMG once on a Mac that did not build
+it, and note which dialog appears:
+
+```bash
+# on a second Mac, after downloading the DMG from the release
+open Stalagmight_<version>_aarch64.dmg
+# drag the app out, then launch it and record the exact wording
+```
+
+Building the app locally makes this test lie: the launching Mac has already run
+that exact code, and Gatekeeper caches its verdict per cdhash, so the app opens
+where a stranger's Mac might not. If the dialog offers a way through (System
+Settings ▸ Privacy & Security ▸ **Open Anyway**), the install instructions are
+accurate. If it says "damaged", signing is not sufficient and the release needs
+notarization ([#226](https://github.com/Stalagmight/Stalagmight/issues/226))
+before it can be handed to anyone.
+
 ## Testing the release tooling
 
 ```bash
@@ -205,13 +273,23 @@ Run it after touching either script; it takes a few seconds and needs no network
 
 ## Version locations
 
-The version string lives in 3 files (all updated by the release script):
+The version string lives in 4 tracked files. The release script updates the first
+three, **not** the fourth:
 
-| File | Field |
-|------|-------|
-| `package.json` | `"version"` |
-| `src-tauri/tauri.conf.json` | `"version"` |
-| `src-tauri/Cargo.toml` | `version` |
+| File | Field | Bumped by `release.sh`? |
+|------|-------|-------------------------|
+| `package.json` | `"version"` | yes |
+| `src-tauri/tauri.conf.json` | `"version"` | yes |
+| `src-tauri/Cargo.toml` | `version` | yes |
+| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | **no** |
+
+`Cargo.lock` records the crate's own version, and because nothing here builds with
+`cargo --locked`, a mismatch never fails a build - the next `cargo` invocation just
+rewrites the lock in place, leaving an unexplained dirty file. That is how the lock
+sat at `0.2.0` while everything else said `0.5.0`. It is synced now; teaching
+`release.sh` to keep it in step is
+[#352](https://github.com/Stalagmight/Stalagmight/issues/352). Until that lands,
+check `git status` after a bump and commit the lock with it.
 
 The About dialog reads the version dynamically via `__APP_VERSION__` (injected by Vite from `package.json` at build time).
 

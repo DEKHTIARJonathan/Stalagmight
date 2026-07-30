@@ -73,6 +73,14 @@ Runs the complete build and test pipeline. Assumes `mac-setup.sh` has already be
 5a. `pnpm tauri build --debug --no-bundle -- --features e2e` - E2E debug binary *(only with `--test-e2e`)*
 5b. `./scripts/wdio.sh --skip-build` - WebDriverIO E2E tests *(only with `--test-e2e`)*
 6. `CI=true pnpm tauri build` - production build (`.app` bundle + `.dmg`)
+6a. `./scripts/verify-macos-signature.sh` - checks the code signature of the app
+    *inside* the built DMG, and **fails the build** if it is invalid. Tauri signs
+    the app itself (ad-hoc, from `bundle.macOS.signingIdentity`), so this only
+    verifies; it does not sign. An invalid signature is not a cosmetic problem:
+    macOS reports such a bundle as "damaged" and refuses to open it at all, with
+    no way for the user to click past it
+    ([#350](https://github.com/Stalagmight/Stalagmight/issues/350)). The release
+    workflow runs the same script.
 
 ### Build artifacts
 

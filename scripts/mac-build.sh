@@ -162,12 +162,30 @@ else
 fi
 ok "Production build complete"
 
-# ── Step 6a: Ad-hoc code sign ────────────────────────────────────────────────
-APP_BUNDLE="$CARGO_TARGET/release/bundle/macos/Stalagmight.app"
-if [[ -d "$APP_BUNDLE" ]]; then
-  info "Ad-hoc signing Stalagmight.app"
-  codesign --force --deep -s - "$APP_BUNDLE"
-  ok "Ad-hoc signed (users can right-click → Open to bypass Gatekeeper)"
+# ── Step 6a: Verify the ad-hoc code signature ───────────────────────────────
+# Tauri signs the app itself now, via bundle.macOS.signingIdentity in
+# tauri.conf.json. That matters for ordering: signing has to happen before the
+# DMG is built, and this step used to run after, so the .app on disk got signed
+# while the DMG next to it kept an unsigned copy. Verifying is all that is left
+# to do here, and it is the more useful job, because an invalid signature is not
+# a warning the user can dismiss - macOS calls the app "damaged" and refuses to
+# open it at all (#350).
+# Checks the app inside the DMG, not the loose bundle beside it, via the same
+# script the release workflow runs. Verifying the loose .app would pass on the
+# exact bug this guards: signing used to happen after the DMG was built, so the
+# loose copy was signed while the shipped one was not.
+DMG_OUT="$CARGO_TARGET/release/bundle/dmg"
+if [[ -d "$DMG_OUT" ]] && compgen -G "$DMG_OUT/*.dmg" >/dev/null; then
+  info "Verifying the code signature of the app inside the DMG"
+  # Hard failure, not a warning. An unopenable bundle is the one defect that is
+  # invisible until a human tries to launch it, so a yellow line a maintainer can
+  # scroll past while the script still exits 0 is not enough.
+  if ! "$PROJECT_DIR/scripts/verify-macos-signature.sh" "$DMG_OUT"; then
+    die "The app inside the DMG is NOT validly signed, so macOS will call it damaged. Check bundle.macOS.signingIdentity in src-tauri/tauri.conf.json"
+  fi
+  ok "Signature valid (not notarized: first launch still has to be allowed once)"
+else
+  warn "No DMG found in $DMG_OUT - skipping signature verification"
 fi
 
 # ── Step 7: Report artifacts ────────────────────────────────────────────────
