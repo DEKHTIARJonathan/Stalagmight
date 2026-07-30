@@ -74,9 +74,38 @@ const SCHEMA_VERSION: i32 = 15;
 /// from "restore-to-empty", so files below this version get their persisted
 /// undo/redo stacks dropped on open (see `drop_legacy_undo_history`).
 ///
-/// Deliberately a separate constant from `SCHEMA_VERSION`: future schema bumps
-/// (v8+) must NOT re-drop undo history unless the undo payload format changes
-/// again, in which case bump this constant too.
+/// Deliberately a separate constant from `SCHEMA_VERSION`, but note what that
+/// buys and what it does not. It is the floor for exactly ONE purge - the
+/// unconditional pre-v7 one above - and it is NOT a promise that later
+/// migrations leave persisted history alone. Later migrations drop the stacks
+/// too, and none of them bumped this constant, because none of them changed the
+/// undo payload FORMAT; each removed a shape the payloads can still name:
+///
+/// - **v12→v13** removed the legacy `is_reference` boolean in favour of
+///   `ShotKind`. Old payloads still deserialize: `de_shot_kind` maps a bare
+///   `true` to `Jump`, because a boolean cannot say which virtual kind it meant.
+///   Replaying one after the #27 backfill settled that shot on `Reference` would
+///   make a non-swimmable tie swimmable again, with no classifier pass on an
+///   undo to correct it. Silent MISinterpretation, not a parse failure.
+/// - **v14→v15** removed the `ApplyCollabChanges` `Command` variant with Ariane
+///   collaboration mode. `Command` is internally tagged (`tag = "type"`) with no
+///   catch-all, so a stored `apply_collab_changes` entry stops deserializing
+///   outright - and `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad
+///   entry rather than truncating, keeping the entries on BOTH sides. The stack
+///   loads with a HOLE, and undoing past it replays surviving older entries
+///   (position-keyed `ShotSnapshot`s, the apply's own `ProjectSnapshotPair`)
+///   against a tree they no longer describe.
+///
+/// v11→v12 drops the stacks as well, but conditionally - only when the pitch
+/// flip actually moved a section (see `invalidate_pre_pitch_flip_state`).
+///
+/// So the rule for a future bump is narrower than "any time history is
+/// dropped": bump this constant only when the payload format changes such that
+/// pre-existing entries still PARSE but mean something different across the
+/// whole stack. Removing a `Command` variant, or a field the payloads carry, is
+/// handled instead by calling `drop_legacy_undo_history` from that migration's
+/// own arm in `ensure_schema_version` - which is what v13 and v15 do, and what
+/// any future removal has to do as well.
 const UNDO_FORMAT_SAFE_VERSION: i32 = 7;
 
 /// Maximum number of rows a single raw-table page request may return.

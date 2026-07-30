@@ -167,6 +167,29 @@ jobs:
         env:
           XDG_CONFIG_HOME: ${{ runner.temp }}/config
           TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+      # `src-tauri/bindings/` is a COMMITTED generated tree that nothing consumes
+      # and, until this step, nothing gated. `pnpm gen:ipc-types` does NOT write it
+      # (the generator hardcodes `../src/types/ipc`); ts-rs does, because every
+      # `#[ts(export)]` derive emits an `export_bindings_*` test - so the tree is a
+      # side effect of the `cargo test` step directly above, and this is the only
+      # place in CI where drift is observable. Nothing else would catch a stale
+      # entry: no tsconfig `include` covers it and no module imports from it, which
+      # is exactly why it is easy to hand-edit (or forget) when a type is renamed
+      # or removed. Keep this step immediately after `cargo test`.
+      - name: ts-rs bindings tree matches the checkout
+        run: |
+          # Untracked matters as much as modified: a NEW `#[ts(export)]` type
+          # writes a file `git diff` cannot see, so check for both.
+          untracked=$(git ls-files --others --exclude-standard src-tauri/bindings)
+          if [ -n "$untracked" ]; then
+            echo "Generated but never committed:"
+            printf '%s\n' "$untracked"
+          fi
+          if ! git diff --exit-code src-tauri/bindings || [ -n "$untracked" ]; then
+            echo "::error title=Stale ts-rs bindings::src-tauri/bindings does not match what the Rust tests just generated"
+            echo "Run the Rust tests locally and commit the result; never hand-edit that tree."
+            exit 1
+          fi
       # Clippy deny-level lint gate (issue #147). The crate has a strict
       # [lints.clippy] policy (deny unwrap/expect/panic/print/dbg/...) authored in
       # 17dc4feb; this enforces it so it can't silently rot again. Pedantic lints

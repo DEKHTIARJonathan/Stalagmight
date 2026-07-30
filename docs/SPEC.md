@@ -2137,7 +2137,14 @@ knowing before touching migration code:
 - v12 normalises stored pitch to the +down convention
   (`migrate_pitch_to_down_convention`); see [inclination.md](inclination.md).
 - v15 drops the `collab_state` table, the storage for the since-removed Ariane
-  collaboration baseline.
+  collaboration baseline, and also clears the persisted undo/redo stacks -
+  unconditionally, for every pre-v15 file, via `drop_legacy_undo_history`, which
+  loops both `undo_stack` and `redo_stack`. `UNDO_FORMAT_SAFE_VERSION` is 7, so
+  a v14 file reaches the migration with its history intact, and those payloads
+  can name the removed `apply_collab_changes` command, which no longer
+  deserializes; the loader skips a bad entry without truncating, so the stack
+  would otherwise load with a hole in the middle. v13 drops the stacks the same
+  way, for the legacy `is_reference` boolean.
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.
