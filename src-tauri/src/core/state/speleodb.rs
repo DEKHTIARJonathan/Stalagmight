@@ -58,8 +58,22 @@ pub(crate) struct SpeleoDbSession {
     /// [`AppState::speleodb_remote_state`] hangs on. Deliberately process-local and
     /// never persisted - a lock left over from an earlier run, or one held by a
     /// sibling session on the same account, is no evidence that THIS process pushed
-    /// anything. Written only through [`AppState::speleodb_note_lock_acquired`].
-    lock_acquired_here: Option<String>,
+    /// anything.
+    ///
+    /// Read-modify-written through exactly three helpers, never by a field assignment
+    /// anywhere else, because each such pair has to happen under ONE session-lock
+    /// acquisition - two acquisitions leave a gap a fresh acquisition can land in and
+    /// be erased from (each helper's doc says which gap it is closing):
+    /// [`AppState::speleodb_note_lock_acquired`] (record, or unconditional clear),
+    /// `AppState::speleodb_forget_lock_acquired_if_gate_shut` (clear if the edit gate
+    /// is shut) and [`AppState::speleodb_forget_lock_acquired_for`] (clear if it still
+    /// names one given project).
+    ///
+    /// `pub(super)` rather than private only because the last of those lives with the
+    /// rest of the split delete release in [`super::speleodb_lock_release`], and a
+    /// sibling module cannot see a private field. Nothing else in `core::state` may
+    /// touch it.
+    pub(super) lock_acquired_here: Option<String>,
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -939,10 +953,14 @@ impl AppState {
     /// rather than granting one: the same call also fails `speleodb_active_token`, so
     /// the poll has no lock holder to compare against either.
     ///
-    /// `pub(super)` only so the split release in
-    /// [`Self::speleodb_release_captured_lock`] can clear the record too; every other
-    /// writer is in this file.
-    pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
+    /// Private, and deliberately so again. The split release in
+    /// [`Self::speleodb_release_captured_lock`] used to reach in here for its clear,
+    /// which was the whole of the bug [`Self::speleodb_forget_lock_acquired_for`] now
+    /// exists to prevent: an UNCONDITIONAL clear run after a DEFERRED release erases
+    /// whatever another project's acquisition wrote in the gap. Any caller that clears
+    /// on behalf of one named project wants that helper, not this one; every caller of
+    /// this one is in this file.
+    fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         if let Ok(mut session) = self.speleodb_session_lock() {
             session.lock_acquired_here = project_id.map(str::to_owned);
         }
@@ -961,6 +979,12 @@ impl AppState {
     /// self-conflict this branch set out to fix. Comparing project ids instead does
     /// NOT close this: the poll and the fast-forward are on the same project, so the
     /// ids match and the clear fires anyway.
+    ///
+    /// Which is exactly why this is NOT the same helper as
+    /// [`Self::speleodb_forget_lock_acquired_for`], whose race an id comparison DOES
+    /// close because its interloper is a DIFFERENT project. Same field, same "clear it
+    /// only if it is still legitimate" shape, two different legitimacy tests - see
+    /// there before unifying them.
     ///
     /// Sound because every writer opens the gate BEFORE recording (both
     /// [`Self::speleodb_start_editing`] arms and [`Self::speleodb_update`]'s
@@ -2338,11 +2362,14 @@ impl AppState {
             self.set_edit_enabled(false);
         }
         // Whichever project's lock that was, this process no longer holds it, so an
-        // acquisition recorded for it is over. (Keyed on the released id, so releasing
-        // some OTHER project's lock leaves an open edit session's record alone.)
-        if self.speleodb_lock_acquired_here(&project_id) {
-            self.speleodb_note_lock_acquired(None);
-        }
+        // acquisition recorded for it is over. Keyed on the released id, so releasing
+        // some OTHER project's lock leaves an open edit session's record alone - and
+        // keyed ATOMICALLY, through the shared compare-and-clear. This was a
+        // `speleodb_lock_acquired_here` read followed by a separate
+        // `speleodb_note_lock_acquired(None)` write, i.e. two session-lock
+        // acquisitions, which only NARROWED the window an acquisition landing between
+        // them could be erased in rather than closing it.
+        self.speleodb_forget_lock_acquired_for(&project_id);
         Ok(())
     }
 
@@ -6727,6 +6754,97 @@ mod tests {
                 result.warnings
             );
         });
+    }
+
+    /// The deferred half of the delete release still ends the acquisition it CAPTURED.
+    ///
+    /// The positive direction of the pair below: a conditional clear that never fires
+    /// would pass the interloper test on its own, while leaving a record naming a lock
+    /// this process has just handed back - and `speleodb_remote_state` would keep
+    /// licensing the authorship shortcut on it.
+    #[test]
+    fn a_deferred_release_clears_the_record_for_the_project_it_captured() {
+        let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        // The real sequence: `delete_project` snapshots under the `project` mutex, then
+        // releases once that mutex (and the database handle) are out of the way.
+        let params = state
+            .speleodb_abandon_lock_release_params()
+            .expect("precondition: the fixture holds a lock, so there is a snapshot");
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "precondition: the fixture recorded the acquisition it edits under"
+        );
+
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("the stub answers 200");
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the release request went out"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "a release we asked for ends this process's claim whether or not the POST \
+             landed, so the record it named must be gone"
+        );
+    }
+
+    /// ...but it must not erase an acquisition that landed in the gap it left open.
+    ///
+    /// `speleodb_release_captured_lock` is the one release that clears the record at a
+    /// different moment than it decided to release: `delete_project` drops the
+    /// `project` mutex before the HTTP call, and inside that window another SpeleoDB
+    /// project can be opened and Started editing - which records ITSELF in
+    /// `lock_acquired_here`. The clear used to be unconditional, so it blanked the new
+    /// project's record while releasing the OLD project's lock. Nothing looks broken
+    /// (the new lock is still held, still editable), but its acquisition PROVENANCE is
+    /// gone - and that is the whole licence for the authorship shortcut in
+    /// `speleodb_remote_state`: without `we_hold_the_lock`, `poll_verdict` refuses to
+    /// explain a commit in the BASE..tip gap as our own landed push, so THIS process's
+    /// own next push comes back as a divergence / self-conflict on a project nobody
+    /// else touched, with the status mark routing the next click into the divergence
+    /// dialog.
+    ///
+    /// The second assertion is the other half of the contract, and the reason the fix
+    /// is a compare-and-clear rather than a skip: keeping the interloper's record is
+    /// not a licence to strand the deleted project's server mutex.
+    #[test]
+    fn a_deferred_release_leaves_another_projects_acquisition_alone() {
+        const GAP_ID: &str = "22222222-2222-2222-2222-222222222222";
+
+        let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        let params = state
+            .speleodb_abandon_lock_release_params()
+            .expect("precondition: the fixture holds a lock, so there is a snapshot");
+        assert_eq!(
+            params.project_id, REMOTE_ID,
+            "precondition: the snapshot names the project being deleted"
+        );
+        // Exactly what a successful Start editing on the NEXT project does, in the
+        // window `delete_project` opens by releasing the `project` mutex first.
+        state.speleodb_note_lock_acquired(Some(GAP_ID));
+
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("the stub answers 200");
+
+        assert!(
+            state.speleodb_lock_acquired_here(GAP_ID),
+            "releasing the DELETED project's lock must leave the record the new \
+             project's Start editing wrote: erasing it loses the authorship evidence \
+             for a lock we still hold, and our own next landed push then reports as a \
+             divergence / self-conflict"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "and the deleted project's lock is STILL released - the record is what is \
+             conditional here, never the release"
+        );
     }
 
     #[test]

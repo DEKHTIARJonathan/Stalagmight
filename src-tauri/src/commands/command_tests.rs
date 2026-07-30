@@ -1941,6 +1941,324 @@ fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
     });
 }
 
+/// A DANGLING symlink is still an entry on disk, so deleting it unlinks it.
+///
+/// The removal is guarded on "is there anything at this path", and `Path::exists`
+/// answers that by FOLLOWING the link - so for a broken link it says `false`, the
+/// guard skipped the removal, and the recents row was pruned while the dead link
+/// stayed on disk forever. `symlink_metadata` is the question that actually matches
+/// what `send_to_trash` operates on.
+///
+/// Unix-only for the same reason as the tests below: creating a symlink on Windows
+/// needs Developer Mode or `SeCreateSymbolicLinkPrivilege`.
+#[test]
+#[cfg(unix)]
+fn test_delete_project_unlinks_a_dangling_symlink() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let dir = TempDir::new().unwrap();
+            let link = dir.path().join("dangling.stalx");
+            std::os::unix::fs::symlink(dir.path().join("gone.stalx"), &link).unwrap();
+            assert!(
+                !link.exists(),
+                "precondition: `exists()` follows the link and reports false, which is \
+                 exactly what made the old guard skip the removal"
+            );
+            assert!(
+                fs::symlink_metadata(&link).is_ok(),
+                "precondition: but there IS an entry at that path to unlink"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the dead link the user named must be gone, not left behind under a \
+                 `success: true`"
+            );
+        });
+    });
+}
+
+/// Deleting a SYMLINK to the open project removes the link and NOTHING else: the
+/// referent's `.stalx`, its session and its recents row all survive.
+///
+/// The removal never follows that last hop - `trash::delete`, its `fs::remove_file`
+/// fallback and the deterministic `cfg(test)` `fs::remove_file` all remove the LINK -
+/// so applying referent identity here reported a destruction that had not happened:
+/// the link vanished, and with it the user's open session and the recents row for a
+/// project whose file was still sitting on disk, all under a `success: true`. Identity
+/// is therefore EXACT-PATH when the final component is a symlink.
+///
+/// The `canonicalize` precondition is what makes this non-vacuous: it proves the link
+/// really does resolve to the open project, i.e. that `same_file` WOULD have matched it
+/// and torn the session down.
+///
+/// Unix-only because creating a symlink on Windows needs either Developer Mode or
+/// `SeCreateSymbolicLinkPrivilege`; the production rule itself is platform-neutral
+/// (`symlink_metadata` reports Windows symlinks the same way).
+#[test]
+#[cfg(unix)]
+fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history that must NOT be torn down"
+            );
+
+            let link = dir.path().join("link.stalx");
+            std::os::unix::fs::symlink(&saved_path, &link).unwrap();
+            assert_eq!(
+                link.canonicalize().unwrap(),
+                saved_path.canonicalize().unwrap(),
+                "precondition: the link resolves to the open project, so referent \
+                 identity WOULD have matched it - this is what stops the test being \
+                 vacuous"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the link the user named must be gone"
+            );
+            assert!(
+                saved_path.exists(),
+                "the referent was never named, so it must still be on disk - deleting a \
+                 link must never destroy the project behind it"
+            );
+
+            // The session is still valid: its file is right there.
+            assert_eq!(
+                result.session_closed, None,
+                "the referent's session is still backed by a real file, so nothing may \
+                 be torn down - and the frontend must not be told it was"
+            );
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("the open project must survive the deletion of a link to it")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(saved_path.as_path()),
+                "the open project must still be the referent"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                "the database handle must survive: its file was never deleted"
+            );
+            assert!(
+                history::can_undo(state(&app)),
+                "the undo history must survive: nothing was destroyed that it could \
+                 replay against"
+            );
+            assert!(
+                config::get_config(state(&app))
+                    .general
+                    .recent_projects
+                    .contains(&saved_path),
+                "the referent's recents row must survive - pruning it would cost the \
+                 user their way back to a project that is still on disk"
+            );
+        });
+    });
+}
+
+/// ...but a symlink that IS the path the project was OPENED THROUGH still tears the
+/// session down.
+///
+/// The other half of the exact-path rule, and the reason it is exact-path rather than
+/// "a symlink never closes anything": once the link is gone, a session whose
+/// `file_path` points at it is backed by nothing, so every later autosave, save and
+/// undo persist would target a path that no longer exists. The teardown is what keeps
+/// that from happening.
+///
+/// The recents assertions are also what make this test non-vacuous: under referent
+/// identity the prune took the REFERENT's row too, stranding the user with no route
+/// back to a project that was never deleted.
+#[test]
+#[cfg(unix)]
+fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Save under the real name, close, then reopen THROUGH the link so the
+            // session's own `file_path` is the link rather than the referent.
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let real_path = save_project_to_temp(&app, &dir);
+            assert_success(&project::close_project(state(&app), None));
+
+            let link = dir.path().join("link.stalx");
+            std::os::unix::fs::symlink(&real_path, &link).unwrap();
+            assert_success(&open_project(state(&app), link.clone()));
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("precondition: a project is open")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(link.as_path()),
+                "precondition: the session was opened through the link, so its \
+                 file_path IS the link"
+            );
+            let recents_before = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                recents_before.contains(&link) && recents_before.contains(&real_path),
+                "precondition: both spellings have their own recents row (the save \
+                 stored one, the open through the link the other), got \
+                 {recents_before:?}"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the link must be gone"
+            );
+            assert!(
+                real_path.exists(),
+                "the referent was not named, so it survives even here"
+            );
+
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "the session's own file_path was the link we just removed, so it MUST \
+                 be torn down - leaving it open points every later save at a path that \
+                 no longer exists"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "precondition for the flag: the session really was torn down"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the database handle LEAKED: still open through a link that is gone"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries)",
+                history::get_undo_stack(state(&app)).len()
+            );
+
+            let recents_after = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                !recents_after.contains(&link),
+                "the link's own row must be pruned - its file is gone, so it would be a \
+                 'File not found' zombie: {recents_after:?}"
+            );
+            assert!(
+                recents_after.contains(&real_path),
+                "and the referent's row must NOT be: its .stalx is still on disk and \
+                 that row is now the user's only route to it: {recents_after:?}"
+            );
+        });
+    });
+}
+
+/// A symlink in a PARENT directory is not the same thing at all: the final component is
+/// a real file, the delete really does destroy it, and referent identity still applies.
+///
+/// This is the regression guard for the stat that draws the line.
+/// `symlink_metadata` resolves symlinks in the parent components but not the last one,
+/// which is exactly the distinction the rule needs - swap it for anything that follows
+/// the whole path (`metadata`) and a link to the open project is treated as the project
+/// itself again; swap it for anything that follows none of it and THIS case loses the
+/// teardown that the Windows delete depends on (SQLite holds the file without
+/// `FILE_SHARE_DELETE`, so a missed close means "Access is denied").
+#[test]
+#[cfg(unix)]
+fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let real_dir = dir.path().join("realdir");
+            fs::create_dir(&real_dir).unwrap();
+            assert_success(&project::save_project(
+                state(&app),
+                Some(real_dir.join("project")),
+            ));
+            let saved_path = real_dir.join("project.stalx");
+            assert!(
+                saved_path.exists(),
+                "precondition: the .stalx really is under the real directory"
+            );
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history to tear down"
+            );
+
+            // <dir>/linkdir -> <dir>/realdir, so <dir>/linkdir/project.stalx is a
+            // second spelling of the open project's path - NOT a link to it.
+            let link_dir = dir.path().join("linkdir");
+            std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+            let through_link = link_dir.join("project.stalx");
+            assert!(
+                !fs::symlink_metadata(&through_link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "precondition: only the PARENT is a link - the final component must \
+                 stat as an ordinary file, or this test is exercising the other rule"
+            );
+
+            let result = project::delete_project(state(&app), through_link);
+
+            assert_success(&result);
+            assert!(
+                !saved_path.exists(),
+                "the delete really did destroy the file under the real path, so \
+                 referent identity is the correct reading here"
+            );
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "a second spelling of the open project's path must still close the \
+                 session: on Windows the trash is denied outright while SQLite's handle \
+                 is alive"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the open project must be dropped when its file is deleted through a \
+                 symlinked parent directory"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the database handle LEAKED: still open on a file that was just deleted"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries)",
+                history::get_undo_stack(state(&app)).len()
+            );
+            assert!(
+                !config::get_config(state(&app))
+                    .general
+                    .recent_projects
+                    .contains(&saved_path),
+                "the recents row is stored under the real path and its file is gone, so \
+                 it must be pruned or it becomes a 'File not found' zombie"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_save_project_fails_when_directory_missing() {
     with_config_lock(|| {

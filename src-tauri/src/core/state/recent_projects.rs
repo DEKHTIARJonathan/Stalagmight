@@ -99,6 +99,16 @@ impl AppState {
     /// next to the project is never touched: it is an unrelated file as far as
     /// this app is concerned.
     ///
+    /// A path whose FINAL component is a symlink deletes THE LINK, and only the
+    /// link: the OS delete never follows that last hop, and neither does this
+    /// function's notion of identity. The session is torn down, and recents pruned,
+    /// only for that exact path - never for the project the link pointed at, which
+    /// is still on disk, still openable, and was never named. A symlink in a PARENT
+    /// directory is a different thing entirely: the final component is then a real
+    /// file, the delete really does destroy it, and referent identity
+    /// ([`same_file`](super::project_io::same_file)) applies as usual. The stat that
+    /// distinguishes the two is the first thing the body does.
+    ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
     /// whole session is torn down through
@@ -126,6 +136,59 @@ impl AppState {
     /// drops the recents entry. Returning a failure after the file is already
     /// trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf) -> CommandResult {
+        // Does the FINAL component of `path` name a symlink? That one question decides
+        // which notion of identity everything below uses, so it is answered once, up
+        // front, while the file is still there to be stat'd.
+        //
+        // `symlink_metadata` is precisely the right stat: it resolves symlinks in the
+        // PARENT directories but NOT the last component. That asymmetry is the whole
+        // point, because it mirrors exactly what the removal below destroys:
+        //
+        // - `<dir>/link.stalx` -> `<real>/project.stalx`. The final component is the
+        //   link, and the removal acts on that directory ENTRY rather than on what it
+        //   points at: `fs::remove_file` (the trash fallback, and the deterministic path
+        //   under `cfg(test)`) unlinks the LINK, and handing a symlink to the platform
+        //   trash likewise relocates the link. The referent survives either way, so
+        //   referent identity here would report a destruction that did not happen.
+        // - `<linkdir>/project.stalx` where `linkdir` -> `<realdir>`. The final
+        //   component is an ordinary file and the removal really does destroy
+        //   `<realdir>/project.stalx`, so referent identity is not just safe but
+        //   REQUIRED: this is only a second spelling of that file's path, and the
+        //   Windows delete depends on recognizing it (see the teardown comment below).
+        //
+        // A path with nothing on it at all - which this function tolerates - reports no
+        // symlink, and that is the consistent answer rather than an arbitrary fallback:
+        // with the file gone `same_file` can canonicalize neither side and degrades to
+        // the same plain path comparison the symlink branch performs, so both notions of
+        // identity already agree there.
+        let deleting_the_symlink_itself =
+            std::fs::symlink_metadata(&path).is_ok_and(|meta| meta.file_type().is_symlink());
+
+        // "Does `candidate` name the file this delete is about to destroy?" - the single
+        // predicate behind BOTH the open-project teardown and the recents prune, so the
+        // two can never disagree about what was deleted.
+        //
+        // For a symlink the answer is EXACT-PATH identity, because the link is all we
+        // remove. Applying referent identity there was destructive-by-report: deleting
+        // `<dir>/link.stalx` removed only the link, yet tore down a session opened
+        // through `<real>/project.stalx` and pruned THAT project's recents row - so the
+        // user lost their open session and their way back to a project whose `.stalx`
+        // was still sitting on disk, and the call reported success. The delete dialog
+        // promises to remove the file at the path the user named: nothing else is
+        // destroyed, and nothing else is treated as destroyed. The teardown still fires
+        // when the open project was opened THROUGH the link, so we also never leave a
+        // live session whose `file_path` is a link we just removed.
+        //
+        // Everything else keeps referent identity - see the two comments below for what
+        // each of the callers needs it for.
+        let names_the_deleted_file = |candidate: &Path| {
+            if deleting_the_symlink_itself {
+                candidate == path.as_path()
+            } else {
+                super::project_io::same_file(candidate, &path)
+            }
+        };
+
         // Deleting the file backing the OPEN project tears the whole session down
         // first, for the same two reasons `close_project_if_open_at` closes before
         // a download-replace: SQLite holds a live handle with a 256 MB mmap over
@@ -170,18 +233,21 @@ impl AppState {
         // and `success` is false, so a frontend that keyed the close off `success`
         // kept rendering a phantom project with no backend behind it.
         //
-        // Matched with `same_file`, not `==`, for the same reason
-        // `close_project_if_open_at` does: canonicalization resolves `.`/`..`,
-        // symlinks and (on Windows) case/short-name differences, so a second
-        // spelling of the open project's path still tears the session down. A
-        // plain comparison was survivable while this check only kept an autosave
-        // from resurrecting the file, but the Windows delete now DEPENDS on it
-        // firing - miss it and the trash fails with "Access is denied". When
-        // neither side canonicalizes (the file is already gone, which this
-        // function tolerates) `same_file` falls back to comparing the paths. It
-        // canonicalizes under the lock, i.e. two `stat`-class syscalls inside the
-        // critical section; that is the price of the atomicity above, and it is
-        // bounded work on a path we are about to delete anyway.
+        // Matched on file identity, not `==`, for the same reason
+        // `close_project_if_open_at` does: `same_file`'s canonicalization resolves
+        // `.`/`..`, symlinked parent directories and (on Windows) case/short-name
+        // differences, so a second spelling of the open project's path still tears
+        // the session down. A plain comparison was survivable while this check only
+        // kept an autosave from resurrecting the file, but the Windows delete now
+        // DEPENDS on it firing - miss it and the trash fails with "Access is
+        // denied". When neither side canonicalizes (the file is already gone, which
+        // this function tolerates) `same_file` falls back to comparing the paths.
+        // It canonicalizes under the lock, i.e. two `stat`-class syscalls inside
+        // the critical section; that is the price of the atomicity above, and it is
+        // bounded work on a path we are about to delete anyway. (Deleting a symlink
+        // ITSELF is the one case that does not get referent identity - the removal
+        // leaves the referent alive, so tearing down a session opened through it
+        // would be a teardown for nothing. See `names_the_deleted_file` above.)
         let (session_closed, held_lock) = {
             let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
             // A never-saved project has no `file_path` and so can never be the file
@@ -189,7 +255,7 @@ impl AppState {
             let deleting_open_project = open
                 .as_ref()
                 .and_then(|p| p.file_path.as_deref())
-                .is_some_and(|open_path| super::project_io::same_file(open_path, &path));
+                .is_some_and(names_the_deleted_file);
             let mut held_lock = None;
             if deleting_open_project {
                 // Snapshot what releasing a held SpeleoDB write lock needs, HERE,
@@ -234,17 +300,18 @@ impl AppState {
         // Which recents entries name the file we are about to trash - decided BEFORE
         // it is trashed, because the answer becomes unobtainable afterwards.
         //
-        // The prune below has to use `same_file` semantics for the same reason the
-        // open-project check above does: a delete spelled with a `..` segment,
-        // through a symlink, or (on Windows) in a different case is still a delete of
-        // that row's project, and a `!=` on raw paths trashed the file and left the
-        // row behind - the "File not found" zombie this function's doc promises to
-        // avoid, and an unusually sticky one, since the row's own file no longer
-        // exists for a second delete to remove. But `same_file` CANONICALIZES, and
-        // canonicalization fails on a path whose file is gone: run it after the trash
-        // and both sides fall back to a plain comparison, i.e. back to the `!=` bug.
-        // So the identity comparison happens while the file is still there, and the
-        // prune below only has to match the paths it produced.
+        // The prune has to ask the same identity question the open-project check
+        // above did, and it asks it through the same predicate. A delete spelled with
+        // a `..` segment, through a symlinked parent directory, or (on Windows) in a
+        // different case is still a delete of that row's project, and a `!=` on raw
+        // paths trashed the file and left the row behind - the "File not found"
+        // zombie this function's doc promises to avoid, and an unusually sticky one,
+        // since the row's own file no longer exists for a second delete to remove.
+        // But `same_file` CANONICALIZES, and canonicalization fails on a path whose
+        // file is gone: run it after the trash and both sides fall back to a plain
+        // comparison, i.e. back to the `!=` bug. So the identity comparison happens
+        // while the file is still there, and the prune below only has to match the
+        // paths it produced.
         //
         // Matching on file identity rather than spelling is also what keeps this from
         // over-pruning: two different projects can never canonicalize to one path. An
@@ -253,13 +320,18 @@ impl AppState {
         // DIFFERENT spelling of an ALREADY-missing file - there is nothing left to
         // canonicalize on either side - but that entry is re-openable-then-deletable
         // and "Remove from recent" still clears it.)
+        //
+        // Deleting a symlink ITSELF prunes only rows naming that exact path, because
+        // that is the only file being destroyed: the referent's own row must survive,
+        // or "delete this link" would silently cost the user their way back to a
+        // project that is still on disk.
         let doomed: Vec<PathBuf> = self
             .recent_projects
             .lock()
             .map(|recent| {
                 recent
                     .iter()
-                    .filter(|entry| super::project_io::same_file(entry, &path))
+                    .filter(|entry| names_the_deleted_file(entry.as_path()))
                     .cloned()
                     .collect()
             })
@@ -268,7 +340,14 @@ impl AppState {
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
         // on disk has changed yet, so abort cleanly - recents stay untouched and
         // the caller can retry. (Tolerant of a file that's already gone.)
-        if path.exists() {
+        //
+        // `Path::exists` FOLLOWS symlinks, so on its own it answers `false` for a
+        // DANGLING link and the link itself would never be unlinked - the row would
+        // leave recents while the broken link stayed on disk. `symlink_metadata`
+        // already told us whether something is there without following it, so reuse
+        // that: "there is an entry at this path" is the question that decides whether
+        // there is anything to remove.
+        if path.exists() || deleting_the_symlink_itself {
             if let Err(e) = send_to_trash(&path) {
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
