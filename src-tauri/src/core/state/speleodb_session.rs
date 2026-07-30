@@ -98,6 +98,19 @@ pub(super) struct LockClaim {
     endpoint: String,
     /// The account it was taken as.
     email: String,
+    /// Whether this lock is being held back ON PURPOSE - the close dialog's
+    /// "Keep lock", or the un-pushed-edits veto declining a silent release.
+    ///
+    /// The janitor exists for claims whose session died without ever deciding;
+    /// these decided. Left unmarked they look identical once the project is
+    /// closed - a claim, no project open - and the very next status poll would
+    /// hand back a mutex the user asked to keep, freeing a project whose local
+    /// work has not been pushed for the next editor to lock and push over.
+    ///
+    /// Cleared by a fresh acquisition, which replaces the whole claim: taking
+    /// the lock again is a new decision, and the next release is the ordinary
+    /// one.
+    kept: bool,
 }
 
 impl LockClaim {
@@ -111,7 +124,13 @@ impl LockClaim {
             project_id: project_id.to_owned(),
             endpoint,
             email,
+            kept: false,
         }
+    }
+
+    /// Whether this lock is deliberately held back (see [`LockClaim::kept`]).
+    pub(super) fn is_kept(&self) -> bool {
+        self.kept
     }
 
     /// Whether this claim belongs to the account `(endpoint, email)` names -
@@ -586,6 +605,29 @@ impl AppState {
         outcome
     }
 
+    /// Mark this account's claim on `project_id` as deliberately held back, so
+    /// the janitor leaves it alone (see [`LockClaim::kept`]).
+    ///
+    /// Two callers, one meaning: the close dialog's "Keep lock", and the
+    /// un-pushed-edits veto declining a silent release. Both are decisions -
+    /// the user's, or the data-safety rule's - and the janitor exists for the
+    /// claims nobody ever decided about. Without the mark the two are the same
+    /// state once the project closes (a claim, no project open), so the next
+    /// status poll handed the mutex back and the decision was silently undone.
+    pub(super) fn speleodb_keep_lock_deliberately(&self, project_id: &str) {
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        for claim in &mut session.locks_acquired_here {
+            if claim.project_id == project_id
+                && claim.taken_by(endpoint.as_deref(), email.as_deref())
+            {
+                claim.kept = true;
+            }
+        }
+    }
+
     /// Put a claim back after a clear whose reason turned out not to happen.
     ///
     /// `AppState::delete_project` clears at snapshot time, under the same
@@ -701,11 +743,13 @@ impl AppState {
                 return;
             };
             // One claim per visit - the poll comes back for the rest.
-            let Some(position) = session
-                .locks_acquired_here
-                .iter()
-                .position(|claim| claim.taken_by(Some(&endpoint), me.as_deref()))
-            else {
+            let Some(position) = session.locks_acquired_here.iter().position(|claim| {
+                // Deliberately kept locks are not this cleanup's business: the
+                // user's "Keep lock", or the un-pushed-edits veto, already
+                // decided that this mutex stays held. The janitor is for claims
+                // whose session died without deciding anything.
+                !claim.is_kept() && claim.taken_by(Some(&endpoint), me.as_deref())
+            }) else {
                 // Everything retained belongs to another account or another
                 // deployment. Their tokens are the only ones that can release
                 // them, so hold the records until one of those signs in; using
@@ -713,7 +757,8 @@ impl AppState {
                 // the wrong server or 403 forever.
                 tracing::debug!(
                     purpose = "clean up after a torn-down edit session",
-                    "speleodb: holding stranded claims until their own accounts sign in again"
+                    "speleodb: nothing to clean up - every retained claim is either \
+                     deliberately kept or belongs to another account"
                 );
                 return;
             };
@@ -1413,6 +1458,42 @@ mod tests {
             vec![ID.to_owned()],
             "the live account's claim was found past the head of the list, \
              released, and dropped - and the other account's is untouched"
+        );
+    }
+
+    #[test]
+    fn the_janitor_leaves_a_deliberately_kept_lock_alone() {
+        // Round 14 (P1): "Keep lock" closes the project and holds the mutex on
+        // purpose, and the un-pushed-edits veto does the same on the app's own
+        // authority. Once the project is closed both look exactly like the state
+        // the janitor exists for - a claim, no project open - so without a mark
+        // the very next status poll handed the mutex back and the choice was
+        // undone in silence, freeing a project whose work is still only local.
+        //
+        // The stub answers the release, so a janitor that ignored the mark would
+        // be visible as a claim that disappeared.
+        let (base, _listener) = release_stub(ID);
+        let state = AppState::new().expect("state");
+        sign_in_as(&state, &base, "diver@example.com");
+        state.speleodb_note_lock_acquired(Some(ID));
+        state.speleodb_keep_lock_deliberately(ID);
+
+        state.speleodb_janitor_stranded_claim();
+
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
+            "a lock the user chose to keep is not the janitor's to hand back"
+        );
+
+        // A fresh acquisition is a new decision, and the ordinary cleanup
+        // applies to it again.
+        state.speleodb_note_lock_acquired(Some(ID));
+        state.speleodb_janitor_stranded_claim();
+        assert!(
+            retained_projects(&state).is_empty(),
+            "re-acquiring clears the keep, so the next orphaned claim is \
+             cleaned up as before"
         );
     }
 

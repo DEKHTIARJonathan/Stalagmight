@@ -216,6 +216,40 @@ describe('SpeleoManagedFileDialog', () => {
     expect(ipcCalls()).not.toContain('speleodb_open_project');
     expect(loadProjectMock).not.toHaveBeenCalled();
     expect(screen.queryByTestId('speleodb-managed-file-error')).not.toBeInTheDocument();
+    // And the newer prompt is USABLE: it must not have inherited the previous
+    // one's in-flight `busy`, which would leave every button - Cancel included -
+    // disabled with nothing left to re-enable them.
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-managed-file-cancel')).not.toBeDisabled(),
+    );
+    expect(screen.getByTestId('speleodb-managed-file-remove-link')).not.toBeDisabled();
+  });
+
+  it('a replacement at the SAME path but a different project is still a different prompt', async () => {
+    // The identity is the whole payload, not the path: a file replaced in place
+    // is refused at the same path while naming another project, which is
+    // exactly what the strip command re-checks for backend-side.
+    let releaseList: (projects: unknown[]) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_list_projects'
+        ? new Promise((resolve) => {
+            releaseList = resolve as (projects: unknown[]) => void;
+          })
+        : Promise.resolve(undefined),
+    );
+    render(<SpeleoManagedFileDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-managed-file-open-remote'));
+
+    act(() => {
+      useUIStore.setState({
+        dialogData: { managed: { ...MANAGED, projectId: 'p2', projectName: 'Other Cenote' } },
+      });
+    });
+    releaseList([SUMMARY]);
+
+    await waitFor(() => expect(ipcCalls()).toContain('speleodb_list_projects'));
+    expect(ipcCalls()).not.toContain('speleodb_open_project');
+    expect(loadProjectMock).not.toHaveBeenCalled();
   });
 
   it('strips the link and reopens the same path', async () => {

@@ -49,6 +49,13 @@ pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> Comman
     // link row lives there). Best-effort + gated so the keep-lock path can opt out.
     if release_lock {
         state.speleodb_release_held_lock_best_effort();
+    } else {
+        // "Keep lock": the user chose to hold the server mutex past this close.
+        // Recorded on the claim BEFORE the teardown, while the link row is still
+        // readable - and recorded at all because the stranded-claim janitor
+        // cannot otherwise tell a deliberate keep from a session that died
+        // holding a lock, and would hand this one back on the next status poll.
+        state.speleodb_keep_open_lock_deliberately();
     }
     state.execute(Command::CloseProject)
 }

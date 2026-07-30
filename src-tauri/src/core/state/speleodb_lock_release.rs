@@ -140,6 +140,12 @@ impl AppState {
                 purpose = "avoid stranding un-pushed local edits behind a freed lock",
                 "speleodb: skipping the silent lock release; the project has un-pushed edits"
             );
+            // A DECISION, not an accident, and the record has to say so: once
+            // this project closes, a claim with no project open is exactly what
+            // the stranded-claim janitor cleans up - and it would hand back the
+            // mutex this veto just protected, freeing the project for the next
+            // editor to lock and push over work that is still only local.
+            self.speleodb_keep_lock_deliberately(&link.project_id);
             return None;
         }
         // Same reasoning as the link read above: `speleodb_active_token` returns
@@ -167,6 +173,30 @@ impl AppState {
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
         })
+    }
+
+    /// Record that the OPEN project's lock is being held past this close ON
+    /// PURPOSE - the close dialog's "Keep lock".
+    ///
+    /// Called INSTEAD of a release, and before the teardown, because it reads
+    /// the link row the teardown is about to drop the handle on. A no-op when
+    /// there is no held lock to keep (a local project, a read-only open, a
+    /// force-editor). See [`LockClaim::kept`](super::speleodb_session::LockClaim)
+    /// for what the mark is for: without it the janitor cannot tell this from a
+    /// session that died holding a lock, and hands the mutex back on the next
+    /// status poll.
+    pub(crate) fn speleodb_keep_open_lock_deliberately(&self) {
+        if !self.edit_enabled() || self.force_editing() {
+            return;
+        }
+        if let Ok(link) = self.speleodb_open_link() {
+            tracing::info!(
+                project_id = %link.project_id,
+                purpose = "honour the user's Keep lock choice past the close",
+                "speleodb: keeping the write lock held after closing the project"
+            );
+            self.speleodb_keep_lock_deliberately(&link.project_id);
+        }
     }
 
     /// Best-effort release of a held SpeleoDB write lock when a remote EDIT session

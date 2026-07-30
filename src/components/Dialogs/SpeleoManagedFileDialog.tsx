@@ -67,6 +67,18 @@ export default function SpeleoManagedFileDialog() {
     }
   }, []);
 
+  // When a newer refusal replaces this prompt, the instance's transient state
+  // belongs to the prompt that is gone. Left alone, prompt B inherits A's
+  // `busy` - every button disabled, Escape inert - and A's stale-result path
+  // deliberately updates nothing, so B would stay unusable for good. Keyed on
+  // the whole identity, since a replacement can keep the path.
+  const identity = `${managed?.path ?? ''}|${managed?.projectId ?? ''}|${managed?.endpoint ?? ''}`;
+  useEffect(() => {
+    setBusy(false);
+    setError(null);
+    setPendingAdopt(null);
+  }, [identity]);
+
   if (!managed) return null;
 
   const loggedIn = session?.loggedIn === true;
@@ -84,9 +96,18 @@ export default function SpeleoManagedFileDialog() {
   // in-flight handlers still closed over the OLD file. Anything awaited has to
   // re-check that the prompt is still about the file it started on, or file A's
   // result opens A's project over B's prompt - or writes A's error into it.
-  const stillPrompting = (about: SpeleoManagedFile) =>
-    (useUIStore.getState().dialogData.managed as SpeleoManagedFile | undefined)?.path ===
-    about.path;
+  //
+  // The whole identity, not just the path: a replaced file can be refused at
+  // the SAME path while naming a different project or a different deployment,
+  // which is precisely the case the strip command re-checks for backend-side.
+  const stillPrompting = (about: SpeleoManagedFile) => {
+    const now = useUIStore.getState().dialogData.managed as SpeleoManagedFile | undefined;
+    return (
+      now?.path === about.path &&
+      now?.projectId === about.projectId &&
+      now?.endpoint === about.endpoint
+    );
+  };
 
   const dismiss = () => {
     if (cancelReturnsTo) openDialog(cancelReturnsTo);
