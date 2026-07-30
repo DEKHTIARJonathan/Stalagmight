@@ -6,6 +6,15 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 impl AppState {
+    /// Legacy open, deliberately WITHOUT the canonical-storage guard that
+    /// `do_load_project_full` runs (`foreign_link`): this function has no
+    /// `#[tauri::command]` wrapper and is not in `generate_handler!`, so it is
+    /// unreachable from the webview. Its one production caller is the recovery
+    /// reopen after a failed cache replace (`replace_cache_stalx_abandoning`),
+    /// which always reopens the CANONICAL cache path - refusing there would
+    /// strand the shell on a project the backend no longer has open. If this is
+    /// ever exposed over IPC, the guard question returns; a tripwire test pins
+    /// the non-exposure (`the_legacy_open_project_is_not_exposed_over_ipc`).
     pub(super) fn open_project(&self, path: PathBuf) -> CommandResult {
         tracing::info!(
             path = ?path,
@@ -318,6 +327,27 @@ impl AppState {
                 }
                 early_return_err!(LoadError::not_found(&path.display().to_string()));
             }
+        }
+        // Canonical-storage guard: a `.stalx` carrying a `speleo_link` row that
+        // is not the cache copy for that project is a SECOND local copy of a
+        // managed project, and opening it is what makes two divergent copies
+        // possible. Refuse here, in Phase 0, for three reasons: it is before ANY
+        // state mutation (the Finalizing block below is where the project / db /
+        // edit gate / recents commit); it is before `open_existing`, which
+        // MIGRATES the file and quick_checks every page, neither of which a
+        // refused file should pay or suffer; and the structured refusal lets the
+        // frontend offer the two real choices (open the canonical copy, or drop
+        // the link) instead of a generic load error. It sits after the
+        // already-open guard above, so a project already on screen is never
+        // refused. See `speleodb_foreign` for the probe's degradation rules.
+        if let Some(managed) = self.foreign_link(&path) {
+            tracing::info!(
+                path = ?path,
+                project_id = %managed.project_id,
+                purpose = "keep one local copy per SpeleoDB project",
+                "Refused to open a non-canonical copy of a SpeleoDB project"
+            );
+            early_return_err!(LoadError::speleodb_managed(managed));
         }
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {

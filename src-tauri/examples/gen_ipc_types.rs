@@ -32,6 +32,7 @@ use stalagmight_lib::core::command::{
 };
 use stalagmight_lib::core::loading::{
     CreateProjectFullResult, DisplaySettings, LoadProjectFullResult, LoadingPhase, LoadingProgress,
+    SpeleoManagedFile,
 };
 use stalagmight_lib::core::state::VirtualShotMode;
 use stalagmight_lib::export::{ColorMode, ExportImageOptions, ImageFormat};
@@ -100,6 +101,7 @@ fn main() {
     export::<LoadingProgress>(&out_dir);
     export::<LoadProjectFullResult>(&out_dir);
     export::<CreateProjectFullResult>(&out_dir);
+    export::<SpeleoManagedFile>(&out_dir);
 
     // Project/model types
     export::<Project>(&out_dir);
@@ -358,6 +360,7 @@ fn main() {
         "LoadingProgress",
         "LoadProjectFullResult",
         "CreateProjectFullResult",
+        "SpeleoManagedFile",
         "Project",
         "ProjectMetadata",
         "ProjectStats",
