@@ -91,6 +91,19 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
  *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
+/**
+ * Column widths as sorted entries, for the change-detection snapshot only.
+ *
+ * `JSON.stringify` of an object preserves insertion order, and a resize appends a
+ * newly-overridden column at the end - while the same map comes back from the
+ * backend as an alphabetically-sorted `BTreeMap`. Comparing those two directly
+ * reports a change that isn't one, costing a redundant save-and-resync cycle. The
+ * sibling hidden-column lists are `.sort()`ed just above for the same reason.
+ */
+function stableWidths(widths: Record<string, number>): Array<[string, number]> {
+  return Object.entries(widths).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
  *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
  *  Closes on outside click and Escape (and declares data-dropdown-open so the
@@ -703,8 +716,8 @@ export default function DataTable({ sections }: DataTableProps) {
       inclination,
       panelsConfig.data_table_station_column_order,
       stationHidden,
-      shotWidths,
-      stationWidths,
+      stableWidths(shotWidths),
+      stableWidths(stationWidths),
     ]);
   }, [panelsConfig]);
   useEffect(() => {
@@ -718,8 +731,8 @@ export default function DataTable({ sections }: DataTableProps) {
       inclinationMode,
       stationColumnOrder,
       stationHidden,
-      shotColumnWidths,
-      stationColumnWidths,
+      stableWidths(shotColumnWidths),
+      stableWidths(stationColumnWidths),
     ]);
     if (snapshot === lastSavedViewRef.current) return undefined;
     const timer = setTimeout(() => {

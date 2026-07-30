@@ -23,6 +23,8 @@ import {
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
 import {
   useColumnWidths,
+  computeColumnWidths,
+  MIN_COL_WIDTH,
   MAX_COL_WIDTH,
   AUTOFIT_MAX_COL_WIDTH,
 } from './useColumnWidths';
@@ -56,7 +58,6 @@ function measureEditorText(text: string): number {
 }
 
 const HEADER_HEIGHT = 33;
-const MIN_COL_WIDTH = 40;
 const EDGE_SCROLL_ZONE = 26;
 const GUTTER_WIDTH = 48; // frozen row-number gutter on the left
 
@@ -263,30 +264,16 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     widthsRef,
     applyWidths,
     commitWidths,
+    revertWidths,
   } = useColumnWidths(columnWidths, onColumnWidthsChange);
   // The scroller's inner width, tracked so `grow` columns can absorb the
   // leftover space and the grid fills its container (no empty right gutter).
   const [availWidth, setAvailWidth] = useState(0);
   const colKeys = useMemo(() => visibleColumns.map((c) => c.key), [visibleColumns]);
-  const widths = useMemo(() => {
-    const base = visibleColumns.map((c) => colWidthOverrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH);
-    // Distribute leftover width across grow columns the user hasn't pinned by
-    // resizing (a manual override is a deliberate fixed width). `width` is the
-    // floor, so a grow column never shrinks below its declared size.
-    const growIdx = visibleColumns
-      .map((c, i) => (c.grow && colWidthOverrides[c.key] === undefined ? i : -1))
-      .filter((i) => i >= 0);
-    if (growIdx.length === 0 || availWidth <= 0) return base;
-    const leftover = availWidth - gutterWidth - base.reduce((sum, w) => sum + w, 0);
-    if (leftover <= 0) return base;
-    const add = Math.floor(leftover / growIdx.length);
-    const rem = leftover - add * growIdx.length;
-    const out = base.slice();
-    growIdx.forEach((i, n) => {
-      out[i] = (out[i] ?? 0) + add + (n < rem ? 1 : 0);
-    });
-    return out;
-  }, [visibleColumns, colWidthOverrides, availWidth, gutterWidth]);
+  const widths = useMemo(
+    () => computeColumnWidths(visibleColumns, colWidthOverrides, availWidth, gutterWidth),
+    [visibleColumns, colWidthOverrides, availWidth, gutterWidth],
+  );
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
   const totalWidth = gutterWidth + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
@@ -1788,7 +1775,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     setRowMoveDrop(null);
     setCellMoveDrop(null);
   };
-  cancelDragRef.current = resetDrag;
+  // Abandoning a drag has to undo the width it was previewing, not just clear the
+  // flag: the in-progress value is already in the live map, and every commit
+  // spreads that whole map, so a later resize of an unrelated column would
+  // otherwise persist this one too.
+  cancelDragRef.current = () => {
+    if (resizing.current) revertWidths();
+    resetDrag();
+  };
   onUpRef.current = () => {
     if (colDrag.current?.mode === 'move' && colMoveDrop) {
       reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
@@ -1798,8 +1792,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
-    // Persist the width only once the drag lands. The window-blur path routes to
-    // cancelDragRef instead, so an abandoned resize is deliberately not committed.
+    // Persist the width only once the drag lands. The abandon paths route to
+    // cancelDragRef, which reverts rather than committing.
     if (resizing.current) commitWidths(widthsRef.current);
     resetDrag();
   };

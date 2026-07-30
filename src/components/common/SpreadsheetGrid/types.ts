@@ -27,7 +27,9 @@ export interface GridColumn<Row> {
   /** Let this column absorb leftover horizontal space so the grid fills its
    *  container instead of leaving an empty gutter on the right (e.g. a comment
    *  column). {@link width} is its minimum; extra space is split across all grow
-   *  columns. A manual resize pins the column and opts it out of growing. */
+   *  columns. A manual resize raises that minimum but does not stop the column
+   *  growing - otherwise one resize would strand the layout permanently, since
+   *  widths persist across sessions and nothing clears them. */
   grow?: boolean;
   align?: 'left' | 'center' | 'right';
 

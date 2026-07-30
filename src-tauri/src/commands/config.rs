@@ -121,8 +121,13 @@ pub(crate) fn update_data_table_view_impl(
     if let Some(hidden) = station_hidden_columns {
         config.panels.data_table_station_hidden_columns = hidden;
     }
-    // Clamp on the way in as well as on load: this is the only door the frontend
-    // uses, so a degenerate width never reaches disk in the first place.
+    // Clamp on the way in as well as on load, so a width that arrived here
+    // degenerate is repaired before it reaches disk rather than only on the next
+    // read. NB this is not the only door into these fields: `update_config` takes
+    // a whole `Config` and `Config::save` deliberately skips normalize, so a
+    // caller that goes that way can still store an unclamped value until the next
+    // load repairs it. That gap is pre-existing and applies to every config
+    // field, not just these.
     if let Some(mut widths) = column_widths {
         normalize_column_widths(&mut widths);
         config.panels.data_table_shot_column_widths = widths;

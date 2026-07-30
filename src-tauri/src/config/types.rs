@@ -323,7 +323,19 @@ pub struct PanelsConfig {
     /// rather than HashMap so the serialized TOML key order is stable: this is
     /// rewritten on every column resize, and a nondeterministic order would
     /// reshuffle the config file on each save.
-    #[serde(default)]
+    ///
+    /// Deserialized via [`lenient_column_widths`] rather than the plain derive:
+    /// `#[serde(default)]` only covers an ABSENT table, so a table that is
+    /// present with one unusable value would fail the whole config parse, and
+    /// `Config::load().unwrap_or_default()` then silently resets every OTHER
+    /// setting because one column width was typo'd.
+    ///
+    /// Deliberately NOT `skip_serializing_if` empty, tempting though it is to keep
+    /// two empty tables out of a default config file: the generated
+    /// `defaultConfig.ts` is produced by serializing `Config::default()`, and
+    /// skipping the field there drops a key the generated `PanelsConfig` type
+    /// still requires.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
     pub data_table_shot_column_widths: BTreeMap<String, u32>,
     /// Shots-table azimuth display: "avg" | "inout" | "off"
     #[serde(default = "default_azimuth_mode")]
@@ -338,8 +350,9 @@ pub struct PanelsConfig {
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
     /// Stations-table column widths in pixels, keyed by grid column key.
-    /// See `data_table_shot_column_widths` for why this is a BTreeMap.
-    #[serde(default)]
+    /// See `data_table_shot_column_widths` for the BTreeMap and the tolerant
+    /// deserializer.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
     pub data_table_station_column_widths: BTreeMap<String, u32>,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
@@ -387,10 +400,43 @@ impl PanelsConfig {
 }
 
 /// Smallest column width the grid can render legibly, and the widest it will
-/// persist. Mirrors MIN_COL_WIDTH / MAX_COL_WIDTH in
-/// src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx.
+/// persist. Mirrors `MIN_COL_WIDTH` in
+/// src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx and `MAX_COL_WIDTH`
+/// in src/components/common/SpreadsheetGrid/useColumnWidths.ts. Nothing enforces
+/// that mirror, so change all four together.
 const MIN_COLUMN_WIDTH: u32 = 40;
 const MAX_COLUMN_WIDTH: u32 = 2000;
+
+/// Tolerant deserializer for the data-table column-width maps. Captures the raw
+/// value as a `serde_json::Value` first - this works through any self-describing
+/// `Deserializer`, TOML's included, since `Value`'s own `Deserialize` impl only
+/// relies on `deserialize_any` - then keeps the entries that are usable pixel
+/// widths and DROPS the rest.
+///
+/// Per-entry rather than per-field, so a hand-edited `length = -5` costs that one
+/// column its width instead of taking down the whole `[panels]` table. Same
+/// reasoning as `lenient_dpv` in `config/gas.rs`: erroring here would fail the entire
+/// `toml::from_str::<Config>`, and `Config::load().unwrap_or_default()` would
+/// then reset every unrelated setting in the file. Out-of-range-but-integral
+/// values survive deserialization and are clamped by [`normalize_column_widths`];
+/// negative, fractional and non-numeric ones are not representable as a width at
+/// all and are dropped here.
+fn lenient_column_widths<'de, D>(deserializer: D) -> Result<BTreeMap<String, u32>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = serde_json::Value::deserialize(deserializer)?;
+    let Some(entries) = value.as_object() else {
+        return Ok(BTreeMap::new());
+    };
+    Ok(entries
+        .iter()
+        .filter_map(|(key, raw)| {
+            let width = u32::try_from(raw.as_u64()?).ok()?;
+            Some((key.clone(), width))
+        })
+        .collect())
+}
 
 /// Clamp persisted column widths into the range the grid can actually render.
 /// The frontend clamps while dragging, but the load path did not - so a

@@ -2722,6 +2722,44 @@ fn test_panels_config_normalize_clamps_sizes() {
 }
 
 #[test]
+fn test_unusable_column_width_degrades_per_entry_without_losing_the_rest_of_the_config() {
+    // `#[serde(default)]` covers an ABSENT widths table, not a present one holding a
+    // value that is not a width. Erroring on such a value would fail the WHOLE parse,
+    // and `Config::load().unwrap_or_default()` then silently resets EVERY setting in
+    // the file because one column width was hand-typo'd. The bad ENTRY must drop and
+    // everything else - sibling widths and unrelated panel settings alike - survive.
+    // Mirrors test_gas_config_dpv_old_shape_degrades_to_none_without_losing_the_rest_of_the_config.
+    let toml_str = r#"
+sections_panel_width = 320
+detail_panel_width = 300
+data_table_height = 200
+data_table_azimuth_mode = "inout"
+
+[data_table_shot_column_widths]
+negative = -5
+fractional = 210.5
+textual = "wide"
+absurd = 99999999999
+good = 180
+"#;
+    let panels: PanelsConfig =
+        toml::from_str(toml_str).expect("an unusable width must not fail the whole parse");
+    assert_eq!(
+        panels.data_table_shot_column_widths,
+        std::collections::BTreeMap::from([("good".to_string(), 180)]),
+        "only the representable width survives; the rest drop rather than erroring"
+    );
+    assert_eq!(
+        panels.sections_panel_width, 320,
+        "an unrelated customized setting in the same table must survive a bad width"
+    );
+    assert_eq!(
+        panels.data_table_azimuth_mode, "inout",
+        "a sibling data-table setting must survive a bad width"
+    );
+}
+
+#[test]
 fn test_panels_config_normalize_clamps_column_widths() {
     // config.toml is hand-editable, so the load path has to repair widths the
     // grid cannot render: 0 is invisible and un-resizable (no border to grab),
