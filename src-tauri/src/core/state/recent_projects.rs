@@ -101,10 +101,22 @@ impl AppState {
     ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
-    /// whole session is torn down through [`close_project`](Self::close_project)
-    /// BEFORE the file is handed to the OS - see the call site for why the full
-    /// teardown (and not just clearing `self.project`) and why it has to happen
-    /// first.
+    /// whole session is torn down through
+    /// [`close_open_project_locked`](Self::close_open_project_locked) BEFORE the
+    /// file is handed to the OS - see the call site for why the full teardown (and
+    /// not just clearing `self.project`), why it has to happen first, and why the
+    /// check and the teardown share one lock acquisition.
+    ///
+    /// A teardown that happened is reported back as
+    /// [`CommandResult::session_closed`], on the failure return as well as the
+    /// success one, because the frontend can predict it from neither `success` nor
+    /// the path it asked to delete.
+    ///
+    /// A SpeleoDB write lock this session holds on the deleted project is handed back
+    /// to the server as well - the delete is treated as an explicit abandon, so the
+    /// un-pushed-edits veto does not apply. See the two call sites below for why the
+    /// snapshot and the network release are split across the `project` guard, and why
+    /// the release is sequenced last.
     ///
     /// The `.stalx` is trashed before recents are touched: if *that* fails the
     /// call returns a failure with recents untouched, so the entry stays
@@ -126,21 +138,37 @@ impl AppState {
         // It has to be the FULL teardown, not just `*self.project.lock() = None`:
         // that left the live SQLite handle open on a file that no longer exists,
         // and left the entire undo/redo stack in place so an undo could replay
-        // against the deleted project. `close_project` additionally drops the
-        // database handle, clears the undo stack, drops the display-settings and
+        // against the deleted project. The teardown additionally drops the database
+        // handle, clears the undo stack, drops the display-settings and
         // adjusted-geometry caches, and resets the read-only edit gate plus the
         // force-edit flag so neither leaks into the next open.
         //
-        // Lock ordering: `open_project_path` takes and RELEASES the `project`
-        // lock, and `close_project` then acquires project -> database ->
-        // undo_stack one at a time (never nested), so nothing is held across the
-        // call and there is no ordering hazard. Holding the `project` guard here
-        // would self-deadlock on `close_project`'s first acquisition.
+        // ONE acquisition of the `project` lock covers BOTH the identity check and
+        // the teardown, and that is load-bearing rather than tidiness. Reading the
+        // open path through `open_project_path` (which RELEASES the lock) and only
+        // then calling `close_project` (which re-acquires it) is a TOCTOU: a load
+        // that finished installing project B in the gap made the close tear down
+        // B's SQLite handle and undo stack while this call went on to delete A's
+        // file. Every path that installs a project - `open_project`,
+        // `do_load_project_full`, `create_project`/`create_project_full` - installs
+        // it under THIS lock and only afterwards installs the database handle and
+        // the undo stack, so holding it here orders us strictly before or after such
+        // a load: either we observe the newly-installed project and match nothing,
+        // or we complete the teardown and the load installs its own handles after
+        // we release. `close_project` would self-deadlock under the guard, so this
+        // goes through `close_open_project_locked` - the same teardown with the
+        // guard passed in. (`close_project_if_open_at` still has the older
+        // check-release-close shape; the same restructuring would suit it, but its
+        // callers replace rather than delete, so it is left alone here.)
         //
         // The cost of closing first: if the trash below fails for an unrelated
         // reason (no write access to the parent directory), the project is now
         // closed and its undo history dropped even though the file survives.
         // Recents is untouched in that branch, so the user reopens it from there.
+        // That branch is exactly why the verdict is REPORTED to the frontend
+        // (`with_session_closed` on both returns): the teardown has happened there
+        // and `success` is false, so a frontend that keyed the close off `success`
+        // kept rendering a phantom project with no backend behind it.
         //
         // Matched with `same_file`, not `==`, for the same reason
         // `close_project_if_open_at` does: canonicalization resolves `.`/`..`,
@@ -150,25 +178,100 @@ impl AppState {
         // from resurrecting the file, but the Windows delete now DEPENDS on it
         // firing - miss it and the trash fails with "Access is denied". When
         // neither side canonicalizes (the file is already gone, which this
-        // function tolerates) `same_file` falls back to comparing the paths.
-        if self
-            .open_project_path()
-            .is_some_and(|open| super::project_io::same_file(&open, &path))
-        {
-            tracing::info!(
-                path = ?path,
-                purpose = "release the live handle before deleting the file",
-                "Closing the open project because its .stalx is being deleted"
-            );
-            self.close_project();
-        }
+        // function tolerates) `same_file` falls back to comparing the paths. It
+        // canonicalizes under the lock, i.e. two `stat`-class syscalls inside the
+        // critical section; that is the price of the atomicity above, and it is
+        // bounded work on a path we are about to delete anyway.
+        let (session_closed, held_lock) = {
+            let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
+            // A never-saved project has no `file_path` and so can never be the file
+            // being deleted - same predicate `open_project_path` encodes.
+            let deleting_open_project = open
+                .as_ref()
+                .and_then(|p| p.file_path.as_deref())
+                .is_some_and(|open_path| super::project_io::same_file(open_path, &path));
+            let mut held_lock = None;
+            if deleting_open_project {
+                // Snapshot what releasing a held SpeleoDB write lock needs, HERE,
+                // while the database handle is still alive. Three constraints pin
+                // this shape:
+                //
+                // - It must precede the teardown. The snapshot reads the
+                //   `speleo_link` row through the open database handle, and
+                //   `close_open_project_locked` drops that handle, so a release
+                //   attempted afterwards asks a `None` database for the link, gets
+                //   `NoRemoteProject`, and silently does nothing. That was the bug:
+                //   the `.stalx` and its link row were destroyed and the frontend
+                //   cleared its link state, while the SERVER mutex stayed held and
+                //   blocked every other diver until it timed out.
+                //   `close_project_impl` gets this right by releasing before it
+                //   issues `Command::CloseProject`; this path bypasses that command
+                //   entirely, so it has to do the same thing for itself.
+                // - The NETWORK half must not happen under this guard - see the
+                //   release below. What makes splitting the two halves possible is
+                //   that the snapshot is deliberately local-only: one `speleo_link`
+                //   read plus the session and config locks, no network at all (see
+                //   `speleodb_held_lock_release_params`). Bounded work, and the same
+                //   read every close already performs.
+                // - It is the ABANDON snapshot, not the silent one. Destroying the
+                //   file forfeits any un-pushed edits by the user's own instruction,
+                //   so the veto that protects them on close / quit / switch has
+                //   nothing left to protect here and would only strand the server
+                //   lock. Same reasoning as `speleodb_unlink`, which likewise drops
+                //   the local link and so could never release from this project
+                //   again.
+                held_lock = self.speleodb_abandon_lock_release_params();
+                tracing::info!(
+                    path = ?path,
+                    purpose = "release the live handle before deleting the file",
+                    "Closing the open project because its .stalx is being deleted"
+                );
+                self.close_open_project_locked(&mut open);
+            }
+            (deleting_open_project, held_lock)
+        };
+
+        // Which recents entries name the file we are about to trash - decided BEFORE
+        // it is trashed, because the answer becomes unobtainable afterwards.
+        //
+        // The prune below has to use `same_file` semantics for the same reason the
+        // open-project check above does: a delete spelled with a `..` segment,
+        // through a symlink, or (on Windows) in a different case is still a delete of
+        // that row's project, and a `!=` on raw paths trashed the file and left the
+        // row behind - the "File not found" zombie this function's doc promises to
+        // avoid, and an unusually sticky one, since the row's own file no longer
+        // exists for a second delete to remove. But `same_file` CANONICALIZES, and
+        // canonicalization fails on a path whose file is gone: run it after the trash
+        // and both sides fall back to a plain comparison, i.e. back to the `!=` bug.
+        // So the identity comparison happens while the file is still there, and the
+        // prune below only has to match the paths it produced.
+        //
+        // Matching on file identity rather than spelling is also what keeps this from
+        // over-pruning: two different projects can never canonicalize to one path. An
+        // entry whose own file is missing still matches by exact spelling, through
+        // `same_file`'s own fallback. (What that fallback cannot do is match a
+        // DIFFERENT spelling of an ALREADY-missing file - there is nothing left to
+        // canonicalize on either side - but that entry is re-openable-then-deletable
+        // and "Remove from recent" still clears it.)
+        let doomed: Vec<PathBuf> = self
+            .recent_projects
+            .lock()
+            .map(|recent| {
+                recent
+                    .iter()
+                    .filter(|entry| super::project_io::same_file(entry, &path))
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default();
 
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
         // on disk has changed yet, so abort cleanly - recents stay untouched and
         // the caller can retry. (Tolerant of a file that's already gone.)
         if path.exists() {
             if let Err(e) = send_to_trash(&path) {
-                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
+                return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
+                    .with_session_closed(session_closed);
             }
         }
 
@@ -180,11 +283,13 @@ impl AppState {
         // so the UI prunes the deleted project from its list.
         let mut warnings: Vec<ValidationWarning> = Vec::new();
 
-        // Drop it from the recent list. Best-effort: a project that was never in
-        // recents (or already removed) should still delete cleanly.
+        // Drop it from the recent list, matching the entries identified as the same
+        // file above rather than re-testing the (now deleted) path. Best-effort: a
+        // project that was never in recents (or already removed) leaves `doomed`
+        // empty and should still delete cleanly.
         if let Ok(mut recent) = self.recent_projects.lock() {
             let before = recent.len();
-            recent.retain(|p| p != &path);
+            recent.retain(|p| !doomed.contains(p));
             if recent.len() != before {
                 if let Ok(mut config) = self.config.lock() {
                     config.general.recent_projects.clone_from(&recent);
@@ -203,8 +308,51 @@ impl AppState {
             }
         }
 
+        // Everything local is settled, so now hand back the server lock snapshotted
+        // above. LAST, for two reasons:
+        //
+        // - AFTER the trash, so the release only happens if the abandon that licenses
+        //   it actually did. The early return on a failed trash therefore skips this,
+        //   which is the wanted behaviour: the file, its recents entry and its lock
+        //   are all still the user's to come back to (only the session was torn
+        //   down). Releasing FIRST and then failing to remove the file would hand the
+        //   project's mutex back while un-pushed edits survive locally on a file the
+        //   user still has - exactly the "work stranded behind a freed lock" outcome
+        //   the silent-release veto exists to prevent, arrived at by a different
+        //   route.
+        // - AFTER the recents prune, because this is the only unbounded step in the
+        //   function: an HTTP round trip to a server that may be slow or gone. Doing
+        //   the local work first means a process killed mid-release still leaves a
+        //   consistent recents list rather than a zombie row.
+        //
+        // Best-effort, like every other release: the `.stalx` is already trashed, so
+        // a failure here cannot un-delete it and must not fail the call. It is
+        // surfaced as a warning rather than only logged because the local end of that
+        // lock no longer exists - nothing will retry it from this project, and the
+        // user's only remaining route to the stranded mutex is the held-lock prompt.
+        if let Some(params) = held_lock {
+            if let Err(e) = self.speleodb_release_captured_lock(&params) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "surrender the write lock of a project being deleted",
+                    "speleodb: could not release the deleted project's lock"
+                );
+                warnings.push(ValidationWarning {
+                    code: "delete_project_lock_release_failed".to_string(),
+                    message: format!(
+                        "Project deleted, but its SpeleoDB write lock could not be released: {e}. \
+                         Other divers stay locked out until it expires; you can release it from \
+                         the held-lock prompt."
+                    ),
+                    severity: WarningSeverity::Warning,
+                });
+            }
+        }
+
         tracing::info!(path = ?path, "Deleted project");
-        CommandResult::success().with_warnings(warnings)
+        CommandResult::success()
+            .with_warnings(warnings)
+            .with_session_closed(session_closed)
     }
 
     /// Rename a project's display name on disk by path, without requiring it to

@@ -1,6 +1,6 @@
 use super::AppState;
 use crate::core::{CommandResult, UndoStack};
-use crate::models::SectionId;
+use crate::models::{Project, SectionId};
 use crate::persistence::Database;
 use std::path::PathBuf;
 
@@ -629,12 +629,36 @@ impl AppState {
     /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        {
-            let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: dropping project");
-            *proj = None;
-            tracing::debug!("close_project: project dropped");
-        }
+        let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        self.close_open_project_locked(&mut proj)
+    }
+
+    /// [`close_project`](Self::close_project)'s teardown, with the `project` guard
+    /// supplied by the caller so that a caller which must first DECIDE whether to
+    /// close can decide and close under ONE acquisition.
+    ///
+    /// `delete_project` is that caller: it closes only when the `.stalx` it is
+    /// about to hand to the OS delete is the file backing the open project, and
+    /// doing the check through `open_project_path` (which releases the lock) and
+    /// only then calling `close_project` (which re-acquires it) is a TOCTOU - a
+    /// load that finished installing a DIFFERENT project in that gap had ITS
+    /// database handle and undo stack torn down while the delete went on to remove
+    /// the original file.
+    ///
+    /// Holding `project` across the `database` and `undo_stack` acquisitions below
+    /// is the ordering the rest of the state layer already uses - `save_project`
+    /// holds its `project` guard while it takes both - and no path acquires either
+    /// of those BEFORE `project`, so it cannot deadlock. Calling
+    /// [`close_project`](Self::close_project) with the guard held, by contrast,
+    /// would self-deadlock on its own first acquisition.
+    ///
+    /// The caller owns the poison recovery for the `project` lock (both of this
+    /// function's callers use `PoisonError::into_inner`, for the reason spelled out
+    /// on `close_project`); the locks taken here recover it themselves.
+    pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
+        tracing::debug!("close_project: dropping project");
+        *project = None;
+        tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");
         {

@@ -27,6 +27,14 @@
 //! row (a lock kept back could never be released from this project again), and
 //! take-remote discards the local edits by definition, behind the frontend's
 //! second destroy-confirmation.
+//!
+//! `AppState::delete_project` is the third abandon caller and the only one that
+//! cannot use a single verb: it destroys the `.stalx` the link row lives in, so it
+//! has to snapshot with [`AppState::speleodb_abandon_lock_release_params`] while the
+//! database handle is still alive and release with
+//! [`AppState::speleodb_release_captured_lock`] once its teardown - and the `project`
+//! mutex - are out of the way. Destroying the file is the plainest abandon there is,
+//! which is why it takes the un-vetoed snapshot.
 
 use std::time::Duration;
 
@@ -198,6 +206,47 @@ impl AppState {
                 &p.project_id,
             );
         }
+    }
+
+    /// Run the network half of a release for params captured EARLIER, and REPORT the
+    /// outcome instead of only logging it.
+    ///
+    /// Every verb above snapshots and releases in one breath, which suits any caller
+    /// still holding the database handle the `speleo_link` row is read from. The
+    /// project DELETE (`AppState::delete_project`) can do neither:
+    ///
+    /// - It must snapshot while the handle is alive but release after its own
+    ///   teardown has dropped that handle - and after it has released the `project`
+    ///   mutex, because an HTTP round trip inside that critical section would stall
+    ///   every other state-layer operation for its duration. So the two halves are
+    ///   necessarily separate calls there, with
+    ///   [`AppState::speleodb_abandon_lock_release_params`] as the first one.
+    /// - It has to surface a failure to the user, not just the log. Every other
+    ///   caller leaves a lock whose `.stalx` (and link row) survive, so the release
+    ///   is retryable from the project itself; a delete destroys exactly that, and
+    ///   the user's only remaining route to the stranded mutex is the held-lock
+    ///   prompt - which they will not look for unless they are told.
+    ///
+    /// The ABANDON snapshot is the one to pair this with: a delete forfeits any
+    /// un-pushed edits by definition, so the veto that protects them on
+    /// close / quit / switch has nothing left to protect and would only strand the
+    /// server lock.
+    pub(super) fn speleodb_release_captured_lock(
+        &self,
+        params: &LockReleaseParams,
+    ) -> Result<(), SpeleoDbError> {
+        // The same bookkeeping `speleodb_release_best_effort` does, for the same
+        // reason: a release we asked for ends this process's claim on the lock
+        // whether or not the POST lands, and one that failed leaves behind a lock
+        // this process can no longer account for.
+        self.speleodb_note_lock_acquired(None);
+        client::release_lock(
+            &params.endpoint,
+            &params.token,
+            params.insecure_http,
+            &params.project_id,
+        )
+        .map(|_| ())
     }
 
     /// Snapshot the release params, then run the network release on a detached

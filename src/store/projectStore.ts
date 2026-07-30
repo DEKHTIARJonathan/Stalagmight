@@ -1699,49 +1699,26 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // file is gone, failed the save with "No project open" and surfaced that as
       // a save error.
       //
-      // ASK the backend whether it still has a project, rather than predicting it
-      // from `result.success` plus a string compare against the deleted path.
-      // Both halves of that prediction were wrong, in opposite directions:
+      // The backend REPORTS that teardown as `session_closed` on the delete's own
+      // result, so this is a plain read of a value we already have: no second IPC
+      // call, nothing predicted from the deleted path, and nothing that can throw
+      // between the delete and the state reset. (Asking instead - calling
+      // `get_project_state` and testing it for null - answered the same yes/no
+      // question by making the backend clone the whole project and recompute
+      // coordinates, stats, penetration and frozen shots, which on a 75k-shot
+      // project is seconds of work to learn one bit.)
       //
-      //  - `result.success` is not a precondition for the close. The backend
-      //    closes BEFORE handing the `.stalx` to the OS trash, and it has to:
-      //    SQLite holds the file open without `FILE_SHARE_DELETE`, so on Windows
-      //    the trash fails with "Access is denied" while that handle lives, and a
-      //    close-afterwards would never be reached. A trash that is then denied
-      //    for some other reason (no write access to the parent directory)
-      //    therefore returns FAILURE with the session already gone - and the old
-      //    success-only guard left the frontend rendering a phantom project with
-      //    no backend behind it.
-      //  - the string compare is not what the backend matches with. It uses
-      //    `same_file`, which canonicalizes, so a symlink, a `..` segment or a
-      //    Windows case / short-name variant of the open project's path tears the
-      //    session down while `===` on the raw strings says it did not.
-      //
-      // The backend holds at most ONE project, so "the frontend believes a project
-      // is open and the backend reports none" always means the frontend is stale,
-      // whichever path was deleted - clearing is right. The converse matters just
-      // as much: a backend that still reports a project means the delete hit some
-      // OTHER file (deleting a recent from the global view while working in a
-      // different project), and clearing there would throw away a live project's
-      // state and undo history for nothing.
-      //
-      // Skipped entirely when the frontend has no project, so the common
-      // delete-from-the-global-view case costs no extra round trip.
-      if (get().project) {
-        try {
-          const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
-            purpose: 'check whether deleting the file closed the open project',
-          });
-          if (!state) clearOpenProjectState(set);
-        } catch (e) {
-          // Deliberately swallowed rather than letting it fall into the outer
-          // catch: that would rewrite a SUCCESSFUL delete as `success: false`,
-          // which skips the recents refresh below and strands the "File not
-          // found" zombie row the backend goes out of its way to avoid. If we
-          // can't confirm, leave the frontend state as it stands.
-          console.error('Failed to confirm project state after deleting project:', e);
-        }
-      }
+      // `result.success` is deliberately NOT a precondition. The backend closes
+      // BEFORE handing the `.stalx` to the OS trash, and it has to: SQLite holds
+      // the file open without `FILE_SHARE_DELETE`, so on Windows the trash fails
+      // with "Access is denied" while that handle lives, and a close-afterwards
+      // would never be reached. A trash that is then denied for some other reason
+      // (no write access to the parent directory) therefore returns FAILURE with
+      // the session already gone, and a success-only guard left the frontend
+      // rendering a phantom project with no backend behind it. The recents refresh
+      // below stays success-only for the opposite reason: on that branch the file
+      // survived, so its entry has to stay so the project is re-openable.
+      if (result.session_closed) clearOpenProjectState(set);
       if (result.success) {
         await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }

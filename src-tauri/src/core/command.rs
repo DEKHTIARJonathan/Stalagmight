@@ -256,6 +256,38 @@ pub struct CommandResult {
     /// Path the project was saved to (for SaveProject command)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub saved_path: Option<String>,
+    /// Set when this command TORE DOWN the open project's session - today only
+    /// `delete_project`, and only when the `.stalx` it deleted was the file backing
+    /// the open project (matched with `same_file`).
+    ///
+    /// The frontend has to be TOLD, because neither half of the obvious prediction
+    /// holds:
+    ///
+    /// * `success` is not a precondition. The backend closes BEFORE handing the
+    ///   file to the OS trash, and it must: SQLite holds the file open without
+    ///   `FILE_SHARE_DELETE`, so on Windows the trash is denied while that handle
+    ///   lives and a close-afterwards would never be reached. A trash that then
+    ///   fails for an unrelated reason (no write access to the parent directory)
+    ///   therefore returns FAILURE with the session already gone.
+    /// * the deleted path is not what the backend matched. `same_file`
+    ///   canonicalizes, so a symlink, a `..` segment or a Windows case/short-name
+    ///   variant of the open project's path tears the session down while a `===` on
+    ///   the raw strings says it did not.
+    ///
+    /// Reporting it here also replaces what the frontend used to do instead - call
+    /// `get_project_state` afterwards and test it for null. That answers the same
+    /// yes/no question by cloning the whole project and recomputing station
+    /// coordinates, stats, penetration and frozen shots, which on the 75k-shot
+    /// projects this app is built for made every delete-while-open needlessly slow.
+    ///
+    /// `Option<bool>`, only ever `Some(true)`, for the same wire contract as
+    /// `section_id` / `shot_id` / `saved_path` above: `skip_serializing_if` keeps
+    /// the key absent for every command that closed nothing, and the `Option` is
+    /// what makes ts-rs emit `session_closed?: boolean` rather than a required
+    /// field that would break every existing `CommandResult` literal on the
+    /// frontend (see `reversed_sections` for the same reasoning).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub session_closed: Option<bool>,
     /// The sections whose station NUMBERING this operation reversed (station `i`
     /// became station `N - i`), each carrying the shot count `N` in force at that
     /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo
@@ -364,6 +396,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            session_closed: None,
             reversed_sections: None,
         }
     }
@@ -377,6 +410,7 @@ impl CommandResult {
             section_ids: Vec::new(),
             shot_id: None,
             saved_path: None,
+            session_closed: None,
             reversed_sections: None,
         }
     }
@@ -408,6 +442,21 @@ impl CommandResult {
     /// Attach the saved file path to this result.
     pub fn with_path(mut self, path: String) -> Self {
         self.saved_path = Some(path);
+        self
+    }
+
+    /// Record whether this command tore the open project's session down.
+    ///
+    /// Takes the verdict rather than asserting it so both of `delete_project`'s
+    /// return paths - the success one AND the early failure after a denied trash,
+    /// which is the one the frontend most needs the bit on - can carry it from the
+    /// same variable and neither can forget it. A `false` deliberately leaves the
+    /// field `None` so the key stays off the wire for every command that closed
+    /// nothing (see the field's doc comment); `Some(false)` is never produced.
+    pub fn with_session_closed(mut self, closed: bool) -> Self {
+        if closed {
+            self.session_closed = Some(true);
+        }
         self
     }
 
