@@ -267,7 +267,14 @@ impl AppState {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
-        if session.lock_acquired_here.as_deref() == Some(project_id) {
+        // On the project id alone, deliberately: a CLEAR is safe under any
+        // account (it costs the shortcut, never grants one), and the claim being
+        // dropped here is one this very flow decided to release.
+        if session
+            .lock_acquired_here
+            .as_ref()
+            .is_some_and(|claim| claim.project_id == project_id)
+        {
             session.lock_acquired_here = None;
         }
     }

@@ -73,7 +73,7 @@ pub(crate) struct SpeleoDbSession {
     /// rest of the split delete release in [`super::speleodb_lock_release`], and a
     /// sibling module cannot see a private field. Nothing else in `core::state` may
     /// touch it.
-    pub(super) lock_acquired_here: Option<String>,
+    pub(super) lock_acquired_here: Option<super::speleodb_session::LockClaim>,
     /// [#258] Which dump entry the user picked, per project, for THIS session.
     ///
     /// Deliberately process-local and never persisted. The chosen entry is a
@@ -906,17 +906,41 @@ impl AppState {
     /// whatever another project's acquisition wrote in the gap. Any caller that clears
     /// on behalf of one named project wants that helper, not this one; every caller of
     /// this one is in this file.
+    /// The account is stamped on from the SAME session acquisition the claim is
+    /// written into, so a claim can never name an account other than the one whose
+    /// token the acquire used - see [`super::speleodb_session::LockClaim`] for why
+    /// a bare project id was not enough.
     pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
-        if let Ok(mut session) = self.speleodb_session_lock() {
-            session.lock_acquired_here = project_id.map(str::to_owned);
-        }
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        let claim = project_id
+            .zip(session.endpoint.clone())
+            .zip(session.email.clone());
+        // No account to stamp it with (a logout raced us, or a caller reached here
+        // without a token) means no claim: one that cannot say whose it is can
+        // never be released and must never license the authorship shortcut. Same
+        // direction as the poisoned-lock case above - it costs the shortcut rather
+        // than granting one.
+        session.lock_acquired_here = claim.map(|((project_id, endpoint), email)| {
+            super::speleodb_session::LockClaim::taken(project_id, endpoint, email)
+        });
     }
 
-    /// Whether THIS process took `project_id`'s write lock and is still editing
-    /// under it (see [`Self::speleodb_note_lock_acquired`]).
+    /// Whether THIS process took `project_id`'s write lock, is still editing under
+    /// it, and did so as the account currently signed in (see
+    /// [`Self::speleodb_note_lock_acquired`]).
+    ///
+    /// The account test is what keeps a claim from speaking for a session it has
+    /// nothing to do with: signing out and in as somebody else does not make their
+    /// lock ours, and it must not license the authorship shortcut over their push.
     pub(super) fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
-        self.speleodb_session_lock()
-            .is_ok_and(|session| session.lock_acquired_here.as_deref() == Some(project_id))
+        self.speleodb_session_lock().is_ok_and(|session| {
+            session.lock_acquired_here.as_ref().is_some_and(|claim| {
+                claim.project_id == project_id
+                    && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
+            })
+        })
     }
 
     /// WHICH project this process took a lock on, if it took one and is still editing
@@ -926,7 +950,10 @@ impl AppState {
     /// needs to unwind an acquisition WITHOUT already knowing what got acquired.
     pub(super) fn speleodb_acquired_here_project(&self) -> Option<String> {
         let session = self.speleodb_session_lock().ok()?;
-        session.lock_acquired_here.clone()
+        session
+            .lock_acquired_here
+            .as_ref()
+            .map(|claim| claim.project_id.clone())
     }
 
     /// Hand back a write lock ONLY if this process is the one that took it, and only
@@ -4313,6 +4340,8 @@ mod tests {
     #[test]
     fn the_unwind_releases_only_a_lock_this_process_recorded_taking() {
         let state = AppState::new().expect("state");
+        // A claim carries the account that took it, so there has to be one.
+        *state.speleodb.lock().expect("session lock") = authed_session_at("http://x/");
 
         assert!(
             state.speleodb_acquired_here_project().is_none(),
@@ -4967,6 +4996,9 @@ mod tests {
     #[test]
     fn the_catch_all_clear_defers_to_a_gate_that_reopened_underneath_it() {
         let (_temp, state) = remote_fixture_with_dirty_bit(true);
+        // A claim is stamped with the account that took it, so recording one at
+        // all needs a session to stamp it from (`LockClaim`).
+        *state.speleodb.lock().expect("session lock") = authed_session_at("http://x/");
 
         // This process took the lock and is editing under it - the state a
         // fast-forward lands back in once its in-place reload finishes.
