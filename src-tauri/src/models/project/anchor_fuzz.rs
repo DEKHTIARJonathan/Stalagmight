@@ -1,36 +1,29 @@
-//! Property-based, seeded fuzz tests for cross-reference anchor stability.
+//! Property-based, seeded fuzz test for cross-reference anchor stability.
 //!
 //! Station offsets, station comments, zero datums, loop closures and station
-//! merges all anchor to a *station*, which is identified by the UUID of the shot
-//! that creates it ([`StationKey::AfterShot`]). These properties pin the two
-//! invariants that identity buys us:
+//! merges all anchor to a *station*, identified by the UUID of the shot that
+//! creates it ([`StationKey::AfterShot`]). This pins what that identity buys:
+//! a random interleaving of inserts and deletes never strands an anchor, and a
+//! merge that survives the edits stays colocated.
 //!
-//! 1. a structural edit (insert / delete) never strands an anchor, and
-//! 2. reversing a section neither mints nor drops a shot UUID.
+//! It used to live in the collaboration reconcile fuzz harness, beside the diff
+//! engine that harness tested. It is not about collaboration at all, so it
+//! belongs here, next to the `Project` geometry it constrains. Reverse's own
+//! identity invariants are covered targeted-style in `reverse.rs`
+//! (`reverse_refreshes_the_sections_shot_uuid_index`,
+//! `reverse_keeps_external_refs_on_their_physical_station`), so there is no
+//! randomized reverse property here.
 //!
-//! Both used to be asserted inside the collaboration reconcile fuzz harness,
-//! which lived beside the diff engine it tested. They are not about
-//! collaboration at all, so they outlived it - and they belong here, next to the
-//! `Project` geometry they constrain.
-//!
-//! Dependency-free: a SplitMix64 PRNG plus a generator bounded to a handful of
-//! representative topologies. A failing case prints its seed so it can be pinned
-//! as a fixed-seed regression test. Iteration count is scaled by
-//! `ANCHOR_FUZZ_ITERS` (default 64; bump for local/nightly soak).
+//! Dependency-free: a SplitMix64 PRNG plus one generated topology. A failing
+//! case prints its seed so it can be pinned as a fixed-seed regression test.
+//! Iteration count is scaled by `ANCHOR_FUZZ_ITERS` (default 64).
 
 #![cfg(test)]
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
-use std::collections::HashSet;
+use crate::models::{Project, SectionData, ShotData, StationMerge, StationRef};
 
-use crate::models::{
-    GpsCoordinates, Project, SectionData, ShotData, StationMerge, StationRef, ZeroDatum,
-};
-
-// --------------------------------------------------------------------------
-// PRNG (SplitMix64) - deterministic and reproducible from a seed.
-// --------------------------------------------------------------------------
-
+/// SplitMix64 - deterministic and reproducible from a seed.
 struct Rng(u64);
 
 impl Rng {
@@ -63,24 +56,6 @@ fn iters() -> u64 {
         .and_then(|s| s.parse().ok())
         .unwrap_or(64)
 }
-
-// --------------------------------------------------------------------------
-// Generator.
-// --------------------------------------------------------------------------
-
-/// The topologies the generator can emit. `Plain` has no external station refs
-/// at all, so the ref-remapping paths only light up from `Datum` onwards.
-#[derive(Clone, Copy, Debug)]
-enum Kind {
-    /// One section of N shots.
-    Plain,
-    /// One section with a zero datum on a mid-station.
-    Datum,
-    /// Root + a child merged mid-station.
-    Merge,
-}
-
-const KINDS_ALL: [Kind; 3] = [Kind::Plain, Kind::Datum, Kind::Merge];
 
 /// Depth-continuous shot run starting at `depth`, with within-section distinct
 /// azimuths. Returns the shots and the final station depth.
@@ -118,52 +93,37 @@ fn section(name: &str, shots: Vec<ShotData>) -> SectionData {
     }
 }
 
-fn gen_project(rng: &mut Rng, kind: Kind) -> Project {
+/// Root section plus a child merged into its station 1 - the shape the property
+/// needs, since it puts an external ref on the section being edited.
+fn gen_merged_project(rng: &mut Rng) -> Project {
     let mut p = Project::new("Fuzz".into(), None);
     let root_n = rng.range(1, 5);
     let (root_shots, _) = gen_run(rng, root_n, 0.0);
     let root_station1_depth = root_shots[0].depth_out;
+    p.add_section(section("Main", root_shots));
 
-    match kind {
-        Kind::Plain => {
-            p.add_section(section("Main", root_shots));
-        }
-        Kind::Datum => {
-            p.add_section(section("Main", root_shots));
-            let root_id = p.sections[0].id;
-            let station = rng.range(1, root_n);
-            p.zero_datums.push(ZeroDatum {
-                station_ref: StationRef::new(root_id, station as u32).into(),
-                gps: GpsCoordinates::new(20.0, -87.0, 10.0).unwrap(),
-            });
-        }
-        Kind::Merge => {
-            p.add_section(section("Main", root_shots));
-            // Child "Branch" merged at its station 1 (mid). Its merge station
-            // must sit at the parent depth (continuity).
-            let child_n = rng.range(2, 4);
-            let mut child_shots = gen_run(rng, child_n, root_station1_depth).0;
-            // Make station 1 coincide with the parent depth: flatten shot 0.
-            child_shots[0].depth_in = root_station1_depth;
-            child_shots[0].depth_out = root_station1_depth;
-            // Re-base the rest from the merge depth.
-            let mut d = root_station1_depth;
-            for s in child_shots.iter_mut().skip(1) {
-                let dz = s.depth_out - s.depth_in;
-                s.depth_in = d;
-                s.depth_out = d + dz;
-                d += dz;
-            }
-            p.add_section(section("Branch", child_shots));
-            let root_id = p.sections[0].id;
-            let child_id = p.sections[1].id;
-            p.station_merges.push(StationMerge {
-                station_a: StationRef::new(root_id, 1).into(),
-                station_b: StationRef::new(child_id, 1).into(),
-                merged_at: chrono::Utc::now(),
-            });
-        }
+    // The child's merge station has to sit at the parent depth (continuity), so
+    // flatten its shot 0 and re-base the rest from there.
+    let child_n = rng.range(2, 4);
+    let mut child_shots = gen_run(rng, child_n, root_station1_depth).0;
+    child_shots[0].depth_in = root_station1_depth;
+    child_shots[0].depth_out = root_station1_depth;
+    let mut d = root_station1_depth;
+    for s in child_shots.iter_mut().skip(1) {
+        let dz = s.depth_out - s.depth_in;
+        s.depth_in = d;
+        s.depth_out = d + dz;
+        d += dz;
     }
+    p.add_section(section("Branch", child_shots));
+
+    let root_id = p.sections[0].id;
+    let child_id = p.sections[1].id;
+    p.station_merges.push(StationMerge {
+        station_a: StationRef::new(root_id, 1).into(),
+        station_b: StationRef::new(child_id, 1).into(),
+        merged_at: chrono::Utc::now(),
+    });
     p
 }
 
@@ -176,26 +136,12 @@ fn has_dangling_ref(p: &Project) -> bool {
         .any(|v| v.category.starts_with("dangling_"))
 }
 
-/// Every UUID currently carried by a live shot, project-wide.
-fn live_uuids(p: &Project) -> HashSet<String> {
-    p.sections
-        .iter()
-        .flat_map(|s| s.shots.iter())
-        .map(|s| s.uuid.clone().unwrap_or_default())
-        .collect()
-}
-
-// --------------------------------------------------------------------------
-// Properties.
-// --------------------------------------------------------------------------
-
 /// Property: a random interleaving of shot inserts and deletes on a merged
 /// project never strands a cross-reference (no dangling anchor after ANY edit)
-/// and the surviving merge stays colocated. Anchors must track their physical
-/// station across structural edits without positional ref-shifting.
+/// and the surviving merge stays colocated.
 fn prop_anchors_survive_interleaved_edits(seed: u64) {
     let mut rng = Rng::new(seed);
-    let mut p = gen_project(&mut rng, Kind::Merge);
+    let mut p = gen_merged_project(&mut rng);
     // Canonicalize anchors, exactly as a load does, then confirm it starts sound.
     p.redrive_offsets_after_load();
     assert!(
@@ -236,58 +182,9 @@ fn prop_anchors_survive_interleaved_edits(seed: u64) {
     );
 }
 
-/// Property: reversing a section re-binds identity to the *shot*, never to a
-/// position. The set of live shot UUIDs is therefore unchanged across the
-/// reverse, and no anchor is left dangling by the ref remapping.
-///
-/// Runs over every generated topology, not just `Kind::Plain`: a single section
-/// with no merges and no datums has NO external station refs, so it exercises
-/// none of the read/write ref-remapping a reverse carries for merges, zero
-/// datums, closures and station comments.
-fn prop_reverse_preserves_uuids_and_anchors(seed: u64, kind: Kind) {
-    let mut p = gen_project(&mut Rng::new(seed), kind);
-    p.redrive_offsets_after_load();
-
-    // Section 0 is the root every other generated construct hangs off, so
-    // reversing it is the case that moves a merge / datum / comment anchor.
-    let section_id = p.sections[0].id;
-    let before = live_uuids(&p);
-
-    assert!(
-        p.reverse_section(section_id, false),
-        "seed={seed} kind={kind:?}: reverse failed"
-    );
-
-    assert_eq!(
-        before,
-        live_uuids(&p),
-        "seed={seed} kind={kind:?}: reverse must not mint or drop a shot UUID - \
-         every station anchor keyed on one would move to a different station"
-    );
-    assert!(
-        !has_dangling_ref(&p),
-        "seed={seed} kind={kind:?}: reverse left a dangling cross-reference:\n{:#?}",
-        p.check_structural_integrity()
-    );
-}
-
-// --------------------------------------------------------------------------
-// Drivers.
-// --------------------------------------------------------------------------
-
 #[test]
 fn fuzz_anchors_survive_interleaved_edits() {
     for i in 0..iters() {
         prop_anchors_survive_interleaved_edits(i ^ 0x0A11_0001);
-    }
-}
-
-#[test]
-fn fuzz_reverse_preserves_uuids_and_anchors() {
-    for i in 0..iters() {
-        prop_reverse_preserves_uuids_and_anchors(
-            i ^ 0x0A11_0002,
-            KINDS_ALL[(i as usize) % KINDS_ALL.len()],
-        );
     }
 }
