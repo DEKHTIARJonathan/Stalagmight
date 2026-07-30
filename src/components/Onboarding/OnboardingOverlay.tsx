@@ -47,6 +47,15 @@ const STEP_SCROLL_TOP_PADDING = 10;
 const STEP_SCROLL_MAX_ATTEMPTS = 12;
 const STEP_SCROLL_RETRY_MS = 80;
 const TOOLTIP_SETTLE_DELAY_MS = 220;
+/**
+ * How long to wait for a step's target before giving up on anchoring to it.
+ * A step can out-live its target (the anchoring dialog closed, the control moved
+ * behind a mode switch). Waiting forever leaves a spotlight-less dim with the
+ * card hidden and `locked` swallowing every event - including the Escape that
+ * would dismiss it, since the skip confirmation renders inside that same hidden
+ * card. Give up and center the step instead, so Next/Skip stay reachable (#331).
+ */
+const TARGET_GIVE_UP_DELAY_MS = 1200;
 
 function boundsFromDomRect(rect: DOMRect): RectBounds {
   return {
@@ -650,6 +659,8 @@ export default function OnboardingOverlay({
   const [viewportVersion, setViewportVersion] = useState(0);
   const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
   const [isTooltipSettled, setIsTooltipSettled] = useState(true);
+  // True once we have stopped waiting for a target that never appeared.
+  const [targetUnresolvable, setTargetUnresolvable] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
 
   const isLastStep = stepIndex >= stepCount - 1;
@@ -1012,9 +1023,16 @@ export default function OnboardingOverlay({
 
     if (tooltipTargetSignature === 'none') {
       setIsTooltipSettled(false);
-      return;
+      setTargetUnresolvable(false);
+      const giveUpId = window.setTimeout(() => {
+        setTargetUnresolvable(true);
+      }, TARGET_GIVE_UP_DELAY_MS);
+      return () => {
+        window.clearTimeout(giveUpId);
+      };
     }
 
+    setTargetUnresolvable(false);
     setIsTooltipSettled(false);
     const timeoutId = window.setTimeout(() => {
       setIsTooltipSettled(true);
@@ -1048,8 +1066,12 @@ export default function OnboardingOverlay({
       viewportVersion,
     ]
   );
+  // `targetUnresolvable` short-circuits the anchor wait: the step renders
+  // centered (computeTooltipStyle already centers a null rect) rather than
+  // staying hidden behind a dim the user cannot dismiss.
   const isTooltipAnchorReady =
-    (!hasTargetSelectors || tooltipTargetRect !== null) && isTooltipSettled;
+    targetUnresolvable ||
+    ((!hasTargetSelectors || tooltipTargetRect !== null) && isTooltipSettled);
 
   const overlay = (
     <div

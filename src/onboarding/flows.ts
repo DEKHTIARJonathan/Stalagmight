@@ -54,10 +54,15 @@ const canShowOnboarding = (context: OnboardingContext): boolean =>
   !context.placementModeActive &&
   context.activeDialog === null;
 
+// Placement mode hides the wizard to free the map, but leaves `activeDialog` and
+// the wizard phase set. Without the placement guard a dialog flow starts anyway
+// and anchors to a control that is no longer in the DOM, which locks the screen
+// behind a spotlight-less dim (#331).
 const canShowDialogOnboarding = (context: OnboardingContext): boolean =>
   context.configLoaded &&
   !context.splashVisible &&
-  !context.loadingProject;
+  !context.loadingProject &&
+  !context.placementModeActive;
 
 const canShowPlacementOnboarding = (context: OnboardingContext): boolean =>
   context.configLoaded &&
