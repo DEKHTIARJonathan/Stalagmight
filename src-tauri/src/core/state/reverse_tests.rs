@@ -1052,6 +1052,29 @@ fn reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute() {
         );
     }
 
+    // Nothing the reverse re-keyed was left pointing at a station that no longer
+    // exists. Checked BEFORE the specific merge assertions below, because a stranded
+    // anchor makes every one of them report an uninformative `None`, and because
+    // nothing in the pipeline catches it: a reverse is GEOMETRY_ONLY in
+    // `command_integrity`, whose comment justifies skipping the (expensive) rollback
+    // snapshot with "reverse rewrites its own external refs to the mirrored stations,
+    // so nothing is left dangling". No snapshot means `execute` never runs
+    // `guard_introduced_corruption` here, so a reverse that DID strand an anchor
+    // commits and still reports success - the claim has to be asserted directly. (A
+    // randomized fuzz property used to cover it. The targeted tests that replaced it
+    // check that named anchors resolve, which says nothing about a ref in some OTHER
+    // collection - `map_station_refs` walks merges, closures, datums, offsets and
+    // comments separately, so one can be missed on its own.)
+    let dangling: Vec<_> = project
+        .check_structural_integrity()
+        .into_iter()
+        .filter(|v| v.category.starts_with("dangling_"))
+        .collect();
+    assert!(
+        dangling.is_empty(),
+        "the reverse left a dangling cross-reference: {dangling:#?}"
+    );
+
     // The merge followed the physical station rather than the index, and is still
     // closed - "the epilogue is a no-op" means `realign_merges` found nothing.
     assert_eq!(project.station_merges.len(), 1);
