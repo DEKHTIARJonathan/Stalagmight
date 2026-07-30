@@ -4,7 +4,8 @@
  * full app lifecycle through the protocol: app_start -> screenshot -> store_state
  * -> ipc -> logs -> eval -> app_stop. This proves the transport framing is clean
  * (any stray stdout from the server would break JSON-RPC and fail here) and that
- * every tool round-trips. Run under the repo-pinned Node 22 (see .nvmrc):
+ * every tool round-trips. Run under Node 22 (`nvm use 22`; the repo default in
+ * .nvmrc is 24):
  *
  *   pnpm agent:mcp:smoke
  *

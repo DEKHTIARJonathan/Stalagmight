@@ -4,7 +4,8 @@
  * uses the harness when no live MCP client connection is available, e.g. a
  * subagent whose session-level MCP server is down.
  *
- * Usage (Node 22; .npmrc's use-node-version handles that under pnpm):
+ * Usage (run under Node 22; nothing selects it for you, so switch by hand with
+ * `nvm use 22` - the repo default is Node 24):
  *   pnpm agent:bridge <bridgeDir>
  *
  * Protocol:

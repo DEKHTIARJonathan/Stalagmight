@@ -10,9 +10,11 @@ tool reference, and troubleshooting.
 
 ## Runtime requirement: Node 22
 
-The harness must run under the repo-pinned **Node 22** (`.nvmrc`). webdriverio 9's
-HTTP layer is incompatible with Node >= 23 (fails at `POST /session` with
-`UND_ERR_INVALID_ARG`). Use `nvm use` before running.
+The harness runs under **Node 22**, which is no longer the repo default (`.nvmrc`
+is 24), so switch by hand with `nvm install 22 && nvm use 22` before running.
+webdriverio 9 fails at `POST /session` with `UND_ERR_INVALID_ARG` on other
+majors. See [docs/agent-harness.md](../../docs/agent-harness.md) for why the
+cause is recorded as unconfirmed.
 
 The agent-facing workflow is the `app-harness` skill
 (`.claude/skills/app-harness/SKILL.md`).

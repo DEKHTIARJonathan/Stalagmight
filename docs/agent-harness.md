@@ -13,11 +13,19 @@ For the agent-facing workflow, see the `app-harness` skill
 
 ## Runtime requirement: Node 22
 
-The harness must run under the repo-pinned **Node 22** (`.nvmrc`). WebdriverIO
-9's HTTP layer fails on Node 23+ with `UND_ERR_INVALID_ARG` at `POST /session`
-(a bundled-undici vs built-in-fetch mismatch). `app_start` warns early and
-rethrows that error with guidance. Use `nvm use` (or corepack's pinned Node)
-before starting the server.
+The harness runs under **Node 22**, which is no longer the repo default (`.nvmrc`
+is 24). Nothing selects it for you: switch by hand with `nvm install 22 && nvm
+use 22` before starting the server. `app_start` warns on any other major and
+rethrows `UND_ERR_INVALID_ARG` with guidance.
+
+Node 22 is where the harness has been exercised, not a diagnosed floor. The
+failure at `POST /session` is real, but the cause once recorded here (webdriverio
+handing an `Agent` from its bundled undici to Node's built-in `fetch`, so the two
+undici majors must agree) does **not** match webdriver 9.23.0: it imports `fetch`
+from undici alongside `Agent` and uses the pair together, so they cannot
+disagree. Treat the pin as unverified-above-22 rather than explained. Confirming
+it needs a Linux box, since the harness is Xvfb plus WebKitWebDriver and does not
+run on macOS at all.
 
 ## Architecture
 
@@ -43,7 +51,7 @@ hazards over long runs.
 
 - MCP config: `.mcp.json` registers server `stalagmight-app`
   (`pnpm exec tsx e2e/agent/mcp/server.ts`). In Claude Code, `/mcp` shows it.
-- Direct scripts (all Node 22):
+- Direct scripts (all Node 22, not the repo default - `nvm use 22` first):
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
@@ -211,7 +219,8 @@ Gitignored; the 20 newest sessions are kept.
 
 ## Troubleshooting
 
-- `app_start` fails `UND_ERR_INVALID_ARG` -> you are on Node 23+; use Node 22.
+- `app_start` fails `UND_ERR_INVALID_ARG` -> you are not on Node 22; `nvm use 22`.
+  The repo default is Node 24, so a fresh shell lands on the wrong major.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
   `build: "auto"` should have caught that before attach (see the build stamp
   below); if you land here anyway, rerun `app_start` with `build: "force"`.

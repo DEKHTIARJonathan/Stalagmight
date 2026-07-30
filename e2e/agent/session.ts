@@ -157,15 +157,25 @@ export class AppSession {
     if (this.state !== 'idle' && this.state !== 'crashed') {
       throw new Error(`cannot start from state ${this.state}`);
     }
-    // webdriverio 9's HTTP layer creates an undici Agent from its bundled undici
-    // and hands it to Node's built-in fetch. That only works when the two undici
-    // versions match, i.e. on the repo-pinned Node 22 (.nvmrc). On Node >= 23 it
-    // fails with UND_ERR_INVALID_ARG at POST /session. Warn early.
+    // The harness has only ever been exercised on Node 22, so warn on anything
+    // else. This is deliberately NOT tied to .nvmrc: the repo moved to Node 24
+    // while this constraint stayed unverified, so the two are independent now.
+    //
+    // The older note here claimed webdriverio hands an Agent from its bundled
+    // undici to Node's built-in fetch, breaking when the undici majors differ.
+    // That does not describe webdriver 9.23.0: it imports `fetch` from undici
+    // alongside `Agent` and uses both together, so they cannot disagree. The
+    // UND_ERR_INVALID_ARG failure at POST /session is real but its cause is
+    // unconfirmed, and the harness is Linux-only so it cannot be checked from a
+    // macOS box. Verify on Linux before widening this.
+    const HARNESS_VERIFIED_NODE_MAJOR = 22;
     const nodeMajor = Number.parseInt(process.versions.node.split('.')[0] ?? '0', 10);
-    if (nodeMajor !== 22) {
+    if (nodeMajor !== HARNESS_VERIFIED_NODE_MAJOR) {
       process.stderr.write(
-        `[agent] WARNING: running on Node ${process.versions.node}; the harness is tested on Node 22 (see .nvmrc). ` +
-          'If app_start fails with UND_ERR_INVALID_ARG, switch to Node 22 (nvm use).\n',
+        `[agent] WARNING: running on Node ${process.versions.node}; the harness has only been ` +
+          `verified on Node ${HARNESS_VERIFIED_NODE_MAJOR}, which is no longer the repo default. ` +
+          `If app_start fails with UND_ERR_INVALID_ARG, switch to Node ${HARNESS_VERIFIED_NODE_MAJOR} ` +
+          `(nvm install ${HARNESS_VERIFIED_NODE_MAJOR} && nvm use ${HARNESS_VERIFIED_NODE_MAJOR}).\n`,
       );
     }
     try {
@@ -343,8 +353,9 @@ export class AppSession {
       if (msg.includes('UND_ERR_INVALID_ARG')) {
         throw new Error(
           'Failed to attach to tauri-driver (UND_ERR_INVALID_ARG). This is a webdriverio + Node ' +
-            `version mismatch: you are on Node ${process.versions.node}. Run the harness under the ` +
-            'repo-pinned Node 22 (see .nvmrc / nvm use).',
+            `version mismatch: you are on Node ${process.versions.node}. Run the harness under ` +
+            'Node 22, the only major it has been verified on (nvm install 22 && nvm use 22). ' +
+            'Note the repo default is Node 24; the harness pin is separate.',
         );
       }
       throw new Error(`Failed to attach to tauri-driver on port ${this.driverPort}: ${msg}`);
