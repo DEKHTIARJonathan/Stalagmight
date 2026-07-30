@@ -24,11 +24,13 @@
 //! refusal must not write a byte to - or migrate, or mmap - a file the user
 //! may not want touched.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
+use super::speleodb::local_dto;
 use super::AppState;
 use crate::core::loading::SpeleoManagedFile;
 use crate::persistence::Database;
+use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 /// The refusal for `path`, or `None` when opening it is fine.
 ///
@@ -79,6 +81,44 @@ impl AppState {
     /// open must be refused with the carried payload.
     pub(super) fn foreign_link(&self, path: &Path) -> Option<SpeleoManagedFile> {
         foreign_link_in(super::speleodb_local_state::cache_root().as_deref(), path)
+    }
+
+    /// Turn the foreign managed copy at `path` into a plain unmanaged project by
+    /// deleting its `speleo_link` row. The counterpart for the OPEN project is
+    /// `speleodb_unlink`, which also releases the held write lock and moves the
+    /// edit gates; `path` here is a file this session does not have open, so
+    /// there is no lock and no gate to move.
+    ///
+    /// `open_existing` rather than the metadata probe: this DOES mutate the
+    /// file, so it should refuse one that is not a Stalagmight project and run
+    /// the same integrity check + migration a real open would - a corrupt file
+    /// is reported instead of half-edited. The handle drops before returning,
+    /// which matters on Windows: the frontend reopens this very file right
+    /// afterwards, and SQLite holds it without FILE_SHARE_DELETE.
+    ///
+    /// The row delete itself is idempotent (`DELETE FROM speleo_link`), so a
+    /// second invocation - or one against a file whose link is already gone -
+    /// succeeds harmlessly.
+    pub(crate) fn speleodb_remove_link_at(&self, path: PathBuf) -> Result<(), SpeleoErrorDto> {
+        if self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        {
+            return Err(local_dto(SpeleoDbError::Io(
+                "that file is the project currently open; detach it from SpeleoDB instead"
+                    .to_owned(),
+            )));
+        }
+        let db = Database::open_existing(&path)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        db.save_speleo_link(None)
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        tracing::info!(
+            path = %path.display(),
+            purpose = "keep one local copy per SpeleoDB project",
+            "Removed the SpeleoDB link from a foreign copy"
+        );
+        Ok(())
     }
 }
 
@@ -241,6 +281,71 @@ mod tests {
             foreign_link_in(None, &foreign).is_none(),
             "with no cache directory there is no canonical slot to conflict with"
         );
+    }
+
+    #[test]
+    fn remove_link_at_clears_the_row_and_leaves_the_project_readable() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let foreign = temp.path().join("copy.stalx");
+        seed_linked(&foreign, ID);
+        let state = AppState::new().expect("state");
+
+        state
+            .speleodb_remove_link_at(foreign.clone())
+            .expect("removing the link from a closed foreign copy succeeds");
+
+        let db = Database::open_for_metadata(&foreign).expect("reopen");
+        assert_eq!(
+            db.load_speleo_link().expect("read link"),
+            None,
+            "the link row is gone"
+        );
+        drop(db);
+        let db = Database::open_existing(&foreign).expect("full open still works");
+        assert_eq!(
+            db.load_project().expect("project still loads").name,
+            "Linked",
+            "the project data is untouched"
+        );
+
+        // Idempotent: a second removal (nothing left to delete) still succeeds.
+        state
+            .speleodb_remove_link_at(foreign)
+            .expect("a second removal is a harmless no-op");
+    }
+
+    #[test]
+    fn remove_link_at_refuses_the_open_project() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let open_path = temp.path().join("open.stalx");
+        seed_linked(&open_path, ID);
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(open_path.clone()).success,
+            "fixture opens"
+        );
+
+        state
+            .speleodb_remove_link_at(open_path.clone())
+            .expect_err("the open project must detach via speleodb_unlink instead");
+
+        let db = Database::open_for_metadata(&open_path).expect("reopen");
+        assert!(
+            db.load_speleo_link().expect("read link").is_some(),
+            "the refusal must not have touched the row"
+        );
+    }
+
+    #[test]
+    fn remove_link_at_reports_a_file_that_is_not_a_project() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let junk = temp.path().join("junk.stalx");
+        std::fs::write(&junk, b"not a database at all").expect("write junk");
+        let state = AppState::new().expect("state");
+
+        state
+            .speleodb_remove_link_at(junk)
+            .expect_err("a file that is not a Stalagmight project is reported, not half-edited");
     }
 
     #[test]

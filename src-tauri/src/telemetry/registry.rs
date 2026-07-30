@@ -165,6 +165,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
+    "command.speleodb_remove_link_at",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -970,7 +971,10 @@ mod tests {
         //       collab_sibling_when_disabled},
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .collab-review removed = 687.
-        assert_eq!(EVENT_NAMES.len(), 687);
+        //   + 1 SpeleoDB foreign-copy de-link command (canonical local storage:
+        //       the strip half of the managed-file prompt):
+        //       command.speleodb_remove_link_at = 688.
+        assert_eq!(EVENT_NAMES.len(), 688);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

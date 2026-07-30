@@ -1306,6 +1306,7 @@ pub fn run() {
             // SpeleoDB linked-project status for the action shell (#204)
             commands::speleodb::speleodb_link_status,
             commands::speleodb::speleodb_unlink,
+            commands::speleodb::speleodb_remove_link_at,
             // SpeleoDB single-writer hand-off (#194/#197)
             commands::speleodb::speleodb_start_editing,
             commands::speleodb::speleodb_force_edit,

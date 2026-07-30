@@ -4670,6 +4670,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             return '/mock/project.stalx';
           case 'speleodb_logout':
           case 'speleodb_unlink':
+          // Strip half of the managed-file prompt: deletes a foreign copy's
+          // speleo_link row. No payload; specs assert the invocation itself.
+          case 'speleodb_remove_link_at':
           case 'speleodb_release_all_locks':
           case 'speleodb_release_lock':
           // [#258 review] The provenance-scoped unwind. No payload, and no argument:
