@@ -83,12 +83,18 @@ version_of() {
 
 # Cargo.lock has a `version = "..."` line per dependency, so read only the one
 # belonging to this crate: the line right after its `name` line.
+# Mirrors release.sh's own helper, including CRLF tolerance - without that this
+# reads empty on a CRLF checkout and every assertion built on it fails for the
+# wrong reason, or worse, passes vacuously.
 lock_version_of() {
   awk '
-    /^name = "stalagmight"$/ {
-      if ((getline nxt) > 0 && nxt ~ /^version = "/) {
-        gsub(/^version = "|"$/, "", nxt)
-        print nxt
+    /^name = "stalagmight"[[:space:]]*$/ {
+      if ((getline nxt) > 0) {
+        sub(/\r$/, "", nxt)
+        if (nxt ~ /^version = "/) {
+          gsub(/^version = "|"$/, "", nxt)
+          print nxt
+        }
       }
     }
   ' "$1/src-tauri/Cargo.lock"
@@ -195,6 +201,83 @@ if "$D/scripts/release.sh" 5.5.5 --no-edit --no-tag >/dev/null 2>&1; then
   refute "no tag created"           has_tag "$D" v5.5.5
 else
   fail "release.sh --no-tag exited non-zero"
+fi
+
+echo "== case 7: a failing \$EDITOR reverts the version files =="
+# Without this, `set -e` aborted between the last rewrite and `git add`, leaving
+# four bumped manifests, no commit, no tag and no message - and the clean-tree
+# check then refuses the obvious re-run. `:cq` and a misconfigured $EDITOR both
+# exit non-zero, so this is a normal-use path, not a contrived one.
+D=$(fresh_clone case7)
+if EDITOR=false "$D/scripts/release.sh" 4.4.4 >/dev/null 2>&1; then
+  fail "release.sh ignored a failing \$EDITOR"
+else
+  pass "refused after \$EDITOR failed"
+  refute "package.json reverted"  grep -q '"version": "4\.4\.4"' "$D/package.json"
+  assert "Cargo.lock reverted"    test "$(lock_version_of "$D")" != "4.4.4"
+  refute "no commit was made"     grep -q '4\.4\.4' <(git -C "$D" log -1 --format=%s)
+  refute "no tag created"         has_tag "$D" v4.4.4
+  # CHANGELOG.md is deliberately left rewritten (the operator's notes are in it),
+  # and the clean-tree check tolerates exactly that one file, so a re-run is
+  # possible without hand-reverting anything.
+  assert "only CHANGELOG.md left dirty" \
+    bash -c '[ "$(git -C "$1" status --porcelain | grep -cv "^ M CHANGELOG.md$")" -eq 0 ]' _ "$D"
+fi
+
+echo "== case 8: --dry-run refuses a drifted Cargo.lock instead of promising a bump =="
+# The pre-flights are read-only, so they must run before the dry-run exit. A dry
+# run that printed a confident "would update" for the one condition the real run
+# rejects is worse than no dry run.
+D=$(fresh_clone case8)
+set_lock_version "$D" 0.0.1
+git -C "$D" commit --quiet -am "desync Cargo.lock"
+if out=$("$D/scripts/release.sh" 3.3.3 --no-edit --dry-run 2>&1); then
+  fail "--dry-run accepted a drifted Cargo.lock"
+else
+  pass "--dry-run refused a drifted Cargo.lock"
+  refute "did not claim it would bump the lock" \
+    bash -c 'printf "%s" "$1" | grep -q "Cargo.lock: 0.0.1 ->"' _ "$out"
+  assert "tree untouched by the dry run" tree_clean "$D"
+fi
+
+echo "== case 9: a CRLF Cargo.lock still releases =="
+# The stanza pattern is the script's only end-anchored version check, so a
+# core.autocrlf=true checkout used to abort every release - and blame the version
+# value rather than the line endings.
+D=$(fresh_clone case9)
+python3 - "$D/src-tauri/Cargo.lock" <<'PY'
+import sys
+p = sys.argv[1]
+with open(p, 'rb') as f:
+    data = f.read()
+with open(p, 'wb') as f:
+    f.write(data.replace(b'\n', b'\r\n'))
+PY
+git -C "$D" -c core.autocrlf=false commit --quiet -am "CRLF the lock"
+if "$D/scripts/release.sh" 2.2.2 --no-edit --no-tag >/dev/null 2>&1; then
+  assert "lock bumped despite CRLF" test "$(lock_version_of "$D")" = "2.2.2"
+  assert "line endings preserved" \
+    bash -c 'python3 -c "
+import sys
+d = open(sys.argv[1], \"rb\").read()
+sys.exit(0 if d.count(b\"\\n\") == d.count(b\"\\r\\n\") else 1)
+" "$1/src-tauri/Cargo.lock"' _ "$D"
+else
+  fail "release.sh aborted on a CRLF Cargo.lock"
+fi
+
+echo "== case 10: a missing stanza reports a SHAPE error, not a value mismatch =="
+D=$(fresh_clone case10)
+grep -v '^name = "stalagmight"$' "$D/src-tauri/Cargo.lock" > "$D/.lock.tmp"
+mv "$D/.lock.tmp" "$D/src-tauri/Cargo.lock"
+git -C "$D" commit --quiet -am "drop the stalagmight stanza"
+if out=$("$D/scripts/release.sh" 1.1.1 --no-edit 2>&1); then
+  fail "accepted a Cargo.lock with no stalagmight stanza"
+else
+  pass "refused a Cargo.lock with no stalagmight stanza"
+  assert "message names the shape problem" \
+    bash -c 'printf "%s" "$1" | grep -q "shape is not what the rewrite assumes"' _ "$out"
+  assert "tree untouched" tree_clean "$D"
 fi
 
 echo "== release-notes.sh =="

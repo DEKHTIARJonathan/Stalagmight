@@ -21,7 +21,12 @@ This used to say the harness required Node 22 and would fail on 23+ with
 from its bundled undici and handed it to Node's built-in `fetch`, so the two
 undici majors had to agree. That mechanism is not what the code does. `webdriver`
 9.23.0 imports `fetch` from undici alongside `Agent` (`build/node.js:1614`) and
-calls that fetch (`:1986`); they come from one undici and cannot disagree. The
+calls that fetch (`:1986`), so on today's code they cannot disagree: the one place
+a dispatcher it did not create could reach its own `fetch` is `getGlobalDispatcher()`
+(`:2000-2005`, assigned at `:2031`), and `getDispatcher` declines any foreign
+dispatcher by testing `constructor.name` against `Agent`/`MockAgent` (`:2002-2003`).
+That guard is a string comparison, so treat this as true-of-this-version rather than
+structurally impossible. The
 global-`fetch` variant is `request/web.ts`, the browser path, which this harness
 does not use.
 
@@ -44,15 +49,26 @@ passed all 13 checks - including the crash oracle (a thread panic wrote its mark
 and `PANIC` ring line while the app stayed responsive) and process-group teardown
 with both ports released. Whole job: 7 minutes, of which 4m34s was the build.
 
-So nothing about the harness is Node-22-specific, at any layer. Reproduce with the
-`Agent Harness (node 24 probe)` workflow (`workflow_dispatch`; it is self-hosted,
-so it costs no Actions minutes). The runner image carries webkit's `-dev` packages
-for `cargo test` but not the WebDriver daemon, so that job installs
-`webkit2gtk-driver`, `xvfb` and `tauri-driver` itself - about 40s combined.
+That is one green run, on one Node patch, on one Linux box - enough to retire the
+claim that Node 22 was required, not enough to call every layer Node-agnostic
+forever. `session.ts` still warns (advisorily) when the running major differs from
+`.nvmrc`, because the verified envelope is only {22, 24} and `node@26` already
+exists.
+
+Reproduce with the `Agent Harness (on-demand)` workflow (`workflow_dispatch`). It
+runs on the self-hosted runner, so it consumes no *included* Actions minutes - but
+that runner also serves the merge gate, and `ci.yml`'s picker spills `check` to
+paid hosted runners whenever it is busy, so dispatching this during a merge window
+is not free in practice. The runner image carries webkit's `-dev` packages for
+`cargo test` but not the WebDriver daemon, so the job installs `webkit2gtk-driver`
+and `tauri-driver` (xvfb is usually already there) - about 40s combined.
 
 If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect `HTTP_PROXY` /
 `NO_PROXY` in the environment before the Node version, and record what actually
-fixed it here.
+fixed it here. `agent:http-probe` drops those variables for its own loopback stub
+(webdriver snapshots them at module init and would otherwise route a 127.0.0.1
+request through the proxy, then blame the driver), so a proxy-caused failure shows
+up in `app_start` rather than in the probe.
 
 ## Architecture
 

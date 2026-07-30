@@ -21,12 +21,32 @@
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
 
-import { remote } from 'webdriverio';
-
 const STUB_SESSION_ID = 'http-probe-session';
 
+// webdriver snapshots the proxy env into a plain object at MODULE INIT
+// (webdriver/build/node.js:2190-2196, `variables: { PROXY_URL: process.env.HTTP_PROXY ... }`),
+// and then routes requests through it unless NO_PROXY covers the host (:2008-2009).
+// For a loopback stub that means an unrelated proxy setting makes this probe fail
+// with "make sure browser driver is running" - blaming the driver for the
+// environment, in the one tool whose job is to tell those apart.
+//
+// Because the snapshot happens at init, clearing the env after a static import is
+// too late; webdriverio has to be imported AFTER this runs, hence the dynamic
+// import in main(). Nothing about a 127.0.0.1 stub should traverse a proxy.
+function dropProxyEnv(): string[] {
+  const vars = ['HTTP_PROXY', 'http_proxy', 'HTTPS_PROXY', 'https_proxy'] as const;
+  const present = vars.filter((v) => process.env[v]);
+  for (const v of vars) delete process.env[v];
+  return [...present];
+}
+
 async function main(): Promise<void> {
+  const dropped = dropProxyEnv();
+  const { remote } = await import('webdriverio');
   const seen: string[] = [];
+  if (dropped.length > 0) {
+    console.log(`  (ignored ${dropped.join(', ')} - a loopback stub needs no proxy)`);
+  }
 
   const server = http.createServer((req, res) => {
     req.resume();

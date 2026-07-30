@@ -9,7 +9,7 @@
  *   pnpm agent:mcp:smoke
  *
  * It spawns the server with the SAME node that runs this client (process.execPath)
- * plus tsx, so a Node-22 client yields a Node-22 server.
+ * plus tsx, so the server always matches whichever node ran the client.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';

@@ -263,10 +263,12 @@ before it can be handed to anyone.
 ```
 
 Covers both scripts. For `release.sh` it clones the repo to a temp directory and
-drives the real script through a normal bump plus four refusal cases
-(re-releasing the current version, an existing tag, a drifted version-string
-format, an empty `[Unreleased]`), asserting each time that the tree is left clean
-and nothing was tagged. For `release-notes.sh` it runs the real script against a
+drives the real script through a normal bump, a `--no-tag` bump, and seven refusal
+or recovery cases (re-releasing the current version, an existing tag, a drifted
+version-string format, an empty `[Unreleased]`, a `Cargo.lock` already out of step,
+a `Cargo.lock` whose stanza is missing entirely, and a failing `$EDITOR`), plus a
+CRLF checkout, asserting each time that the tree is left clean and nothing was
+tagged. For `release-notes.sh` it runs the real script against a
 fixture changelog and checks the section each tag shape resolves to, the
 candidate banner, and that an empty changelog still yields a usable body.
 
@@ -274,8 +276,7 @@ Run it after touching either script; it takes a few seconds and needs no network
 
 ## Version locations
 
-The version string lives in 4 tracked files. The release script updates the first
-three, **not** the fourth:
+The version string lives in 4 tracked files. `release.sh` updates all of them:
 
 | File | Field | Bumped by `release.sh`? |
 |------|-------|-------------------------|
@@ -304,6 +305,23 @@ Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but 
 
 ### "[Unreleased] section is empty" error
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.
+
+### "Cargo.lock records stalagmight at X, but package.json says Y"
+The lock drifted out of step before the release started, so the script stops rather
+than bumping past a discrepancy worth looking at. Sync it and re-run: the simplest
+fix is any `cargo` command in `src-tauri` (`cargo metadata >/dev/null` is enough),
+which rewrites the version in place, then commit the lock. `--dry-run` reports this
+too, so it is safe to check before you start.
+
+### "Cargo.lock has N lines matching name = "stalagmight"" / "no version = line"
+A shape problem rather than a value one - the rewrite anchors on the single
+`name = "stalagmight"` stanza with its `version` on the following line. Look at
+`src-tauri/Cargo.lock` before doing anything else; nothing was modified.
+
+### `$EDITOR` exited non-zero
+The version files are reverted automatically, but `CHANGELOG.md` keeps the moved
+`[Unreleased]` content so your notes survive. Review it and re-run, or
+`git checkout -- CHANGELOG.md` to start over.
 
 ### Multi-platform builds
 Linux, macOS and Windows are all built from the tag by the `build` matrix. Each

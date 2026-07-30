@@ -9,6 +9,7 @@ import { spawn, execSync, type ChildProcess } from 'child_process';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
+import { fileURLToPath } from 'url';
 import { remote, type Browser } from 'webdriverio';
 import { binaryPath, isolatedEnv } from '../lib/env';
 import { checkDisplayAvailable, startXvfb, type XvfbHandle } from '../lib/display';
@@ -22,6 +23,36 @@ import {
 } from './lib/procs';
 import { Recorder, ARTIFACTS_ROOT } from './lib/recorder';
 import { waitForAppReady, waitForE2EHooks, disableOnboardingGuides } from './lib/waiters';
+
+/**
+ * Warn when the running Node major differs from the repo pin in `.nvmrc`.
+ *
+ * Advisory only: the harness is known to work on more than one major, so this must
+ * not block. It exists because the harness is the one tier a human runs by hand,
+ * where nothing selects the runtime for you - CI gets it from `setup-node`.
+ * Deliberately derived, never a literal, so the next toolchain bump cannot leave a
+ * stale number here.
+ */
+function warnIfOffPinnedNode(): void {
+  try {
+    // fileURLToPath, not __dirname: this tree is ESM ("type": "module"), where
+    // __dirname is undefined at runtime even though @types/node declares it - so
+    // the __dirname form typechecks clean and then silently never warns.
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    const nvmrc = path.resolve(here, '..', '..', '.nvmrc');
+    const want = Number.parseInt(fs.readFileSync(nvmrc, 'utf8').trim().replace(/^v/, ''), 10);
+    const running = Number.parseInt(process.versions.node.split('.')[0] ?? '', 10);
+    if (Number.isInteger(want) && Number.isInteger(running) && want !== running) {
+      process.stderr.write(
+        `[agent] WARNING: running Node ${process.versions.node}, but .nvmrc pins ${want}. ` +
+          `The harness is not routinely exercised off-pin; if app_start fails oddly, ` +
+          `try \`nvm use\` first.\n`,
+      );
+    }
+  } catch {
+    // Never let a diagnostic break a session start.
+  }
+}
 
 export type SessionState =
   | 'idle'
@@ -157,14 +188,18 @@ export class AppSession {
     if (this.state !== 'idle' && this.state !== 'crashed') {
       throw new Error(`cannot start from state ${this.state}`);
     }
-    // No Node-version gate here on purpose. This used to warn on anything but
-    // Node 22, citing webdriverio handing an `Agent` from its bundled undici to
-    // Node's built-in fetch so the undici majors had to agree. That is not what
-    // webdriver 9.23.0 does: it imports `fetch` from undici alongside `Agent`
-    // (build/node.js:1614) and calls that fetch (:1986), so the two cannot
-    // disagree. Driving a session against a stub WebDriver server succeeds
-    // identically on Node 22 (built-in undici 6) and Node 24 (undici 7), so the
-    // harness tracks .nvmrc like everything else. See docs/agent-harness.md.
+    // Warn when the running Node is not the pinned one. This used to hardcode 22,
+    // justified by webdriverio handing an `Agent` from its bundled undici to
+    // Node's built-in fetch so the undici majors had to agree - which is not what
+    // webdriver 9.23.0 does (it imports `fetch` from undici alongside `Agent`,
+    // build/node.js:1614, and calls that fetch at :1986). A stub-driver session
+    // succeeds identically on Node 22 and 24, so the constant was wrong.
+    //
+    // The CHECK is still worth having: "you are off-pin" is useful whichever layer
+    // breaks, and the verified envelope is only {22, 24} while node@26 already
+    // exists. So it reads .nvmrc rather than asserting a major, which also means it
+    // cannot go stale at the next bump. See docs/agent-harness.md.
+    warnIfOffPinnedNode();
     try {
       return await this.startInner(opts);
     } catch (err) {

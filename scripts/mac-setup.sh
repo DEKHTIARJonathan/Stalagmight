@@ -72,8 +72,11 @@ fi
 # node with `node-version-file: .nvmrc`. Keep them reading the same file.
 NVMRC="$(dirname "$(dirname "$(realpath "$0")")")/.nvmrc"
 [[ -f "$NVMRC" ]] || die "Could not find .nvmrc next to the repo root ($NVMRC)"
-NODE_MAJOR="$(tr -dc '0-9' < "$NVMRC")"
-[[ -n "$NODE_MAJOR" ]] || die "Could not read a node major from $NVMRC"
+# Take the leading version component, tolerating a `v` prefix and a full semver -
+# both of which are valid .nvmrc and both of which `setup-node` accepts. Stripping
+# every non-digit instead would turn "24.1.0" into "24100".
+NODE_MAJOR="$(tr -d 'v \t\r\n' < "$NVMRC" | cut -d. -f1)"
+[[ "$NODE_MAJOR" =~ ^[0-9]+$ ]] || die "Could not read a node major from $NVMRC (got '$NODE_MAJOR')"
 
 # Homebrew installs node@<major> as keg-only; ensure its bin is on PATH
 NODE_PREFIX="$(brew --prefix "node@$NODE_MAJOR" 2>/dev/null || true)"

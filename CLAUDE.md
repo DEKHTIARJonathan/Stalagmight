@@ -40,8 +40,17 @@ pnpm install         # build scripts are pre-approved (pnpm.onlyBuiltDependencie
 
 Without `corepack enable`, a globally-installed **pnpm 11** hard-fails
 `pnpm tauri dev` on a fresh clone (its stricter deps check rejects unapproved
-build scripts - issue #109). Don't commit a lockfile-only drift. Coordinated
-pnpm/node upgrades are a deliberate, separate change (Phase 2).
+build scripts - issue #109). Don't commit a lockfile-only drift.
+
+The node half of that upgrade has landed (22 -> 24). **pnpm is still pinned at
+`9.15.9`, and bumping it is not just a version edit:** `pnpm.onlyBuiltDependencies`
+in `package.json` is a **silent no-op on pnpm 10 and 11**, which read the approval
+list from `pnpm-workspace.yaml` instead - as `allowBuilds:` **keyed by package**
+(`esbuild: true`), not a list. Get that wrong and fresh clones break again exactly
+as in #109, with no error pointing at the cause. Verified against the 10.34.5 and
+11.18.0 release tarballs: the list form of `allowBuilds` and `onlyBuiltDependencies`
+in either shape both fail on 11.18.0; the keyed `allowBuilds` map is the only form
+that works on both majors.
 
 ### Never Use `cd` in Bash Commands
 
