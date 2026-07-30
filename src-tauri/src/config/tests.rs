@@ -2797,6 +2797,37 @@ fn test_panels_config_normalize_clamps_column_widths() {
 }
 
 #[test]
+fn test_panels_config_normalize_bounds_the_shape_of_the_width_maps() {
+    // Clamping each VALUE bounds one entry; nothing bounded the map itself. That
+    // matters because no path prunes a key that never named a real column and the
+    // frontend re-sends the whole map on every later resize, so one oversized write
+    // is re-persisted forever. Both grids declare well under 100 columns.
+    let mut p = PanelsConfig {
+        data_table_shot_column_widths: (0..300).map(|i| (format!("col_{i:04}"), 120)).collect(),
+        data_table_station_column_widths: std::collections::BTreeMap::from([
+            ("x".repeat(129), 120),      // one byte over the key cap
+            ("x".repeat(128), 130),      // exactly at it, kept
+            (String::new(), 140),        // no column has an empty key
+            ("length".to_string(), 150), // ordinary, kept
+        ]),
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+
+    assert_eq!(p.data_table_shot_column_widths.len(), 256);
+    // Truncation is by key order, so it is at least deterministic across runs.
+    assert!(p.data_table_shot_column_widths.contains_key("col_0000"));
+    assert!(!p.data_table_shot_column_widths.contains_key("col_0299"));
+
+    let station = &p.data_table_station_column_widths;
+    assert_eq!(station.len(), 2, "over-long and empty keys are dropped");
+    assert_eq!(station["length"], 150);
+    assert_eq!(station[&"x".repeat(128)], 130);
+    assert!(!station.contains_key(&"x".repeat(129)));
+    assert!(!station.contains_key(""));
+}
+
+#[test]
 fn test_panels_config_normalize_repairs_invalid_mode() {
     let mut p = PanelsConfig {
         sections_panel_mode: "Hover".to_string(), // wrong case

@@ -400,12 +400,26 @@ impl PanelsConfig {
 }
 
 /// Smallest column width the grid can render legibly, and the widest it will
-/// persist. Mirrors `MIN_COL_WIDTH` in
-/// src/components/common/SpreadsheetGrid/SpreadsheetGrid.tsx and `MAX_COL_WIDTH`
-/// in src/components/common/SpreadsheetGrid/useColumnWidths.ts. Nothing enforces
-/// that mirror, so change all four together.
+/// persist. Mirrors `MIN_COL_WIDTH` and `MAX_COL_WIDTH`, BOTH of which live in
+/// src/components/common/SpreadsheetGrid/useColumnWidths.ts (SpreadsheetGrid.tsx
+/// only imports them). Nothing enforces that mirror, so change all four together
+/// - this comment is the entire enforcement mechanism, so keep the pointer exact.
 const MIN_COLUMN_WIDTH: u32 = 40;
 const MAX_COLUMN_WIDTH: u32 = 2000;
+
+/// Ceilings on the SHAPE of a column-width map, as opposed to the values in it.
+/// Clamping each width bounds one entry; without these, the map itself is
+/// unbounded in both entry count and key length. That matters because nothing
+/// prunes a key that no longer names a real column: the frontend re-sends the
+/// whole map on every later resize, so one bad write is re-persisted forever.
+/// Both grids together declare well under a hundred columns, so 256 is generous
+/// for any real layout. Same reasoning as `MAX_BINDINGS_PER_ACTION` below.
+///
+/// Note what this does and does not bound: it caps what we RETAIN and write back,
+/// not what a single hostile IPC payload or config file transiently allocates -
+/// serde has already materialised the input by the time these apply.
+const MAX_COLUMN_WIDTH_ENTRIES: usize = 256;
+const MAX_COLUMN_KEY_LEN: usize = 128;
 
 /// Tolerant deserializer for the data-table column-width maps. Captures the raw
 /// value as a `serde_json::Value` first - this works through any self-describing
@@ -447,6 +461,30 @@ where
 /// un-resizable because there is no border left to grab) or a 100000-pixel one
 /// that pushes every later column off-screen.
 pub(crate) fn normalize_column_widths(widths: &mut BTreeMap<String, u32>) {
+    // Shape first, then values. Both the load path (`Config::normalize`) and the
+    // IPC write path (`update_data_table_view_impl`) come through here, so this is
+    // the one place that has to hold for a hand-edited file and for a caller that
+    // reached `invoke()` alike.
+    widths.retain(|key, _| !key.is_empty() && key.len() <= MAX_COLUMN_KEY_LEN);
+
+    if widths.len() > MAX_COLUMN_WIDTH_ENTRIES {
+        tracing::warn!(
+            "Column-width map has {} entries, truncating to {}",
+            widths.len(),
+            MAX_COLUMN_WIDTH_ENTRIES
+        );
+        // BTreeMap has no truncate; drop everything past the cap in key order so
+        // the survivors are at least deterministic rather than hash-dependent.
+        let excess: Vec<String> = widths
+            .keys()
+            .skip(MAX_COLUMN_WIDTH_ENTRIES)
+            .cloned()
+            .collect();
+        for key in excess {
+            widths.remove(&key);
+        }
+    }
+
     for width in widths.values_mut() {
         *width = (*width).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
     }

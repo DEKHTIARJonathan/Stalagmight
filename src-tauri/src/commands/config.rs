@@ -124,10 +124,16 @@ pub(crate) fn update_data_table_view_impl(
     // Clamp on the way in as well as on load, so a width that arrived here
     // degenerate is repaired before it reaches disk rather than only on the next
     // read. NB this is not the only door into these fields: `update_config` takes
-    // a whole `Config` and `Config::save` deliberately skips normalize, so a
-    // caller that goes that way can still store an unclamped value until the next
-    // load repairs it. That gap is pre-existing and applies to every config
-    // field, not just these.
+    // a whole `Config` and `Config::save` deliberately skips normalize.
+    //
+    // Do NOT read that as "harmless until the next load". Settings > Advanced >
+    // Reset posts a whole Config carrying `defaultConfig.panels`, i.e. EMPTY width
+    // maps, and `update_config` preserves only webkit_memory and four speleodb
+    // fields - so the reset genuinely wipes these off disk. The running DataTable
+    // does not notice (its seed effect is one-shot) and the next unrelated view
+    // change posts the whole in-memory map straight back, so the reset reads as a
+    // no-op until restart. Pre-existing for column_order/hidden_columns; these two
+    // fields join it. Tracked in #357.
     if let Some(mut widths) = column_widths {
         normalize_column_widths(&mut widths);
         config.panels.data_table_shot_column_widths = widths;

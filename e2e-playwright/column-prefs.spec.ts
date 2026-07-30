@@ -136,10 +136,12 @@ test.describe('Data table column preferences', () => {
   });
 
   test('eye-menu toggles coalesce into one debounced update_data_table_view call', async ({ page }) => {
-    // NB no "zero calls yet" assertion mid-gesture. That is a wall-clock race against
-    // the 500ms debounce and it lost under parallel load; the single-call assertion
-    // after settling proves the coalescing claim without racing anything. The sibling
-    // reorder test records the same lesson.
+    // What proves the coalescing claim is waitForSingleViewCall() below - exactly one
+    // call once everything settles. The `toHaveLength(0)` a few lines down is NOT part
+    // of that proof: it samples the call count mid-debounce, so under parallel load the
+    // 500ms timer can fire before it runs. It predates this change and is left alone
+    // here rather than widening the diff, but do not copy the pattern - assert the
+    // settled end state, which proves the same property without racing.
     await page.getByTestId('data-table-columns-menu').click();
     const dropdown = page.getByTestId('data-table-columns-dropdown');
     await expect(dropdown).toBeVisible();
@@ -279,7 +281,7 @@ test.describe('Data table column preferences', () => {
     // in-progress width is already in the live map, and every commit spreads that
     // WHOLE map - so the abandoned value used to be persisted by the next resize of
     // an unrelated column, and rendered in the meantime as a width that was never
-    // saved. Seven review lenses found this independently.
+    // saved.
     const lengthHeader = page.getByTestId('grid-header-length');
     const before = await beginColumnDrag(page, 'length', 80);
     await expect.poll(async () => (await lengthHeader.boundingBox())!.width).toBeGreaterThan(before + 40);

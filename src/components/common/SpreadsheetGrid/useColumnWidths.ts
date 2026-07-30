@@ -8,11 +8,13 @@ import { DEFAULT_COL_WIDTH, type GridColumn } from './types';
  * that mutates them.
  *
  * This is its own module to keep the width rules next to the constants the Rust side
- * mirrors. It did NOT shrink SpreadsheetGrid.tsx: that file went from 1971 to 1990
- * prod LOC across this work, so the extraction bought headroom for future width
- * changes rather than recovering any. With the ratchet's hard 2000-LOC cap - which no
- * baseline bump can raise - only 12 lines remain there, so further width logic
- * belongs in this file, not back in the component.
+ * mirrors. It did NOT shrink SpreadsheetGrid.tsx - see ts-file-size-baseline.json for
+ * that file's current figure; the extraction bought headroom for future width changes
+ * rather than recovering any. Deliberately no LOC numbers quoted here: an earlier
+ * revision of this comment claimed a figure the baseline in the same commit
+ * contradicted. The ratchet's hard 2000-LOC cap cannot be raised by a baseline bump,
+ * and SpreadsheetGrid.tsx is close to it, so further width logic belongs in this file
+ * rather than back in the component.
  *
  * The state deliberately lives here rather than being fully controlled by the
  * host: a resize drag fires on every mousemove, so lifting it would re-render the
@@ -56,11 +58,18 @@ function sameWidths(a: ColumnWidths, b: ColumnWidths): boolean {
  * straight back to the same column as leftover, so the handle looked dead at every
  * drag distance while a width the user never saw was still written to config.toml.
  *
- * A pinned width is then capped at the room this panel actually has for the
- * column. `startResize` seeds the drag from the RENDERED width, so nudging the
- * trailing column on a 2560px window persists ~2360px; uncapped, that value would
- * force a permanent horizontal scrollbar on a laptop screen, surviving restart with
- * no UI to clear it. Capping heals it per-window without discarding the preference.
+ * An override pins, full stop - the rendered width is NOT then capped at the room
+ * the panel has. A per-window cap was tried and reverted: because `startResize`
+ * seeds the drag from the RENDERED width, capping made a widening drag on a `grow`
+ * column freeze at the panel edge while `commitWidths` still persisted the raw
+ * dragged value, so the handle went dead and a width the user never saw reached
+ * config.toml - the exact pair of symptoms this rule was written to remove, brought
+ * back in the widening direction. Overflowing instead is what every other manually
+ * sized column already does, and it keeps rendered == persisted.
+ *
+ * The cost is that a wide drag on a big monitor can leave a horizontal scrollbar
+ * on a smaller one. That is bounded by MAX_COL_WIDTH and is recoverable by
+ * dragging back, which the frozen-handle behaviour was not.
  */
 export function computeColumnWidths<Row>(
   columns: GridColumn<Row>[],
@@ -69,15 +78,9 @@ export function computeColumnWidths<Row>(
   gutterWidth: number,
 ): number[] {
   const declared = columns.map((c) => c.width ?? DEFAULT_COL_WIDTH);
-  const base = columns.map((c, i) => overrides[c.key] ?? declared[i] ?? DEFAULT_COL_WIDTH);
-  const baseTotal = base.reduce((sum, w) => sum + w, 0);
-  const pinned = base.map((w, i) => {
-    const c = columns[i];
-    if (!c?.grow || overrides[c.key] === undefined || availWidth <= 0) return w;
-    const room = availWidth - gutterWidth - (baseTotal - w);
-    if (room <= 0) return w;
-    return Math.min(w, Math.max(declared[i] ?? DEFAULT_COL_WIDTH, room));
-  });
+  // An override is the final width for that column, grow or not. Only columns
+  // WITHOUT an override take a share of the leftover below.
+  const pinned = columns.map((c, i) => overrides[c.key] ?? declared[i] ?? DEFAULT_COL_WIDTH);
   const growIdx = columns
     .map((c, i) => (c.grow && overrides[c.key] === undefined ? i : -1))
     .filter((i) => i >= 0);

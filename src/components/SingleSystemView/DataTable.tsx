@@ -716,15 +716,20 @@ export default function DataTable({ sections }: DataTableProps) {
     // data table scheduled a save of state the user never touched. Pre-existing (the
     // widths entries below always sorted via stableWidths); it stayed invisible until
     // a test asserted "no save yet" and lost the race to the 500ms debounce.
+    // `?? []` / `?? {}` because panelsConfig comes straight from get_config with no
+    // defaultConfig merge: the only guarantee is the Rust #[serde(default)]. A frontend
+    // running against a backend that predates these fields would otherwise take the
+    // whole data table down on open (spread and Object.entries both throw on
+    // undefined) instead of starting with no overrides.
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
-      [...panelsConfig.data_table_shot_hidden_columns].sort(),
+      [...(panelsConfig.data_table_shot_hidden_columns ?? [])].sort(),
       azimuth,
       inclination,
       panelsConfig.data_table_station_column_order,
-      [...stationHidden].sort(),
-      stableWidths(shotWidths),
-      stableWidths(stationWidths),
+      [...(stationHidden ?? [])].sort(),
+      stableWidths(shotWidths ?? {}),
+      stableWidths(stationWidths ?? {}),
     ]);
   }, [panelsConfig]);
   useEffect(() => {

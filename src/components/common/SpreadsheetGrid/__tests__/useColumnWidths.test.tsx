@@ -65,21 +65,32 @@ describe('computeColumnWidths', () => {
     }
   });
 
-  it('caps a pinned grow width at the room the container actually has', () => {
-    // A nudge on a wide window persists that window's grown width. Uncapped it
-    // becomes a permanent minimum and forces a horizontal scrollbar on a smaller
-    // screen, surviving restart with nothing to clear it.
+  it('does not shrink a pinned grow width to fit the container', () => {
+    // This asserted the OPPOSITE until the review caught it. Capping the RENDERED
+    // width while commitWidths persists the RAW dragged value is how a widening
+    // drag went dead at the panel edge and still wrote a width the user never saw.
+    // Rendered must equal what gets persisted, even when that overflows.
     const cols = [col('a', { width: 100 }), col('b', { width: 100, grow: true })];
     const wide = computeColumnWidths(cols, {}, 2020, gutter)[1]!;
     expect(wide).toBe(1900);
     const narrow = computeColumnWidths(cols, { b: wide }, 520, gutter);
-    expect(narrow).toEqual([100, 400]);
-    expect(narrow[0]! + narrow[1]! + gutter).toBe(520); // fits, no overflow
+    expect(narrow).toEqual([100, 1900]);
+    // Overflow is the point: the grid scrolls rather than lying about the width.
+    expect(narrow[0]! + narrow[1]! + gutter).toBeGreaterThan(520);
+  });
+
+  it('tracks the pointer for every widening distance on a grow column', () => {
+    // The regression the cap introduced: each of these used to collapse to the
+    // same rendered width, so the handle stopped following the pointer.
+    const cols = [col('a', { width: 100 }), col('b', { width: 100, grow: true })];
+    const seen = new Set<number>();
+    for (const w of [500, 900, 1400, 1900]) {
+      seen.add(computeColumnWidths(cols, { b: w }, 520, gutter)[1]!);
+    }
+    expect(seen).toEqual(new Set([500, 900, 1400, 1900]));
   });
 
   it('does not re-grow a deliberately narrow pin when the container is wide', () => {
-    // The cap must only ever reduce a pinned width; otherwise it would silently
-    // undo the user's resize on a big monitor.
     const cols = [col('a', { width: 100 }), col('b', { width: 100, grow: true })];
     expect(computeColumnWidths(cols, { b: 150 }, 2020, gutter)).toEqual([100, 150]);
   });
