@@ -141,6 +141,7 @@ describe('defaultConfig structure', () => {
       expect(defaultConfig.general.locale).toBe('system');
       expect(defaultConfig.general.onboarding_enabled).toBe(true);
       expect(defaultConfig.general.onboarding_completed_flows).toEqual([]);
+      expect(defaultConfig.general.onboarding_first_launch_done).toBe(false);
     });
   });
 
