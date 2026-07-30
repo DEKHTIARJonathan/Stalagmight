@@ -32,7 +32,27 @@ use crate::core::loading::SpeleoManagedFile;
 use crate::persistence::Database;
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
-/// The refusal for `path`, or `None` when opening it is fine.
+/// What the probe established about the spelling the load was handed.
+///
+/// Three answers rather than two, because "this IS the canonical copy" and "this
+/// is the canonical copy under a name that a save would destroy" are different
+/// facts - see [`LinkedSpelling::Canonical`].
+#[derive(Debug)]
+pub(super) enum LinkedSpelling {
+    /// Open the path exactly as it was spelled: an unmanaged project, or the
+    /// cache copy reached by a spelling that keeps resolving to it on every
+    /// access (a `..` segment, a symlinked parent directory, a Windows case
+    /// variant).
+    AsSpelled,
+    /// The cache copy reached through a symlink AS THE FINAL COMPONENT: open the
+    /// carried canonical cache path instead of the spelling that was asked for.
+    Canonical(PathBuf),
+    /// A second local copy of a managed project: refuse the open, and hand the
+    /// frontend this payload for its prompt.
+    Foreign(SpeleoManagedFile),
+}
+
+/// Whether `path` may be opened, and under which spelling.
 ///
 /// `root` is the pull-cache root (`speleodb_local_state::cache_root()`), passed
 /// explicitly so this is unit-testable against a temp tree without latching the
@@ -57,17 +77,45 @@ use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 /// - **`root == None`**: not refused. With no cache directory there is no
 ///   canonical slot to conflict with and no pull can run; in production the
 ///   app dirs resolve during `setup`, so this branch is tests / pre-setup only.
-pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> Option<SpeleoManagedFile> {
-    let link = Database::open_for_metadata(path)
+/// - **A symlink whose target IS the cache copy**: not refused, but the load is
+///   redirected to the real cache path ([`LinkedSpelling::Canonical`]). It is
+///   the same file to READ - `is_the_cached_copy` follows the link and rightly
+///   says yes - and not the same file to WRITE: every save writes a temp sibling
+///   and renames it over the destination, and that rename replaces the SYMLINK
+///   ENTRY with a regular file. Opening the link by name would therefore leave
+///   the cached copy stale at the first implicit save while a brand new linked
+///   `.stalx` appeared wherever the link lived, which is two local copies of one
+///   remote project - the exact shape this module exists to prevent. Redirecting
+///   is better than refusing here: the file behind the link genuinely is the
+///   canonical copy, and refusing it would offer "open the managed copy from
+///   SpeleoDB" for a copy the user already has.
+///
+///   Only the FINAL component is treated this way. A symlinked parent DIRECTORY
+///   is harmless and stays as spelled, because the rename resolves through it
+///   into the real directory and lands on the real entry.
+pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpelling {
+    let Some(link) = Database::open_for_metadata(path)
         .and_then(|db| db.load_speleo_link())
         .ok()
-        .flatten()?;
+        .flatten()
+    else {
+        return LinkedSpelling::AsSpelled;
+    };
     let valid_id = super::speleodb::validate_project_id(&link.project_id).is_ok();
-    let root = root?;
+    let Some(root) = root else {
+        return LinkedSpelling::AsSpelled;
+    };
     if valid_id && super::speleodb_local_state::is_the_cached_copy(root, &link.project_id, path) {
-        return None;
+        return if final_component_is_a_symlink(path) {
+            LinkedSpelling::Canonical(super::speleodb_local_state::cache_path_in(
+                root,
+                &link.project_id,
+            ))
+        } else {
+            LinkedSpelling::AsSpelled
+        };
     }
-    Some(SpeleoManagedFile {
+    LinkedSpelling::Foreign(SpeleoManagedFile {
         path: path.display().to_string(),
         project_id: link.project_id,
         project_name: link.project_name,
@@ -76,10 +124,26 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> Option<Speleo
     })
 }
 
+/// Whether the LAST component of `path` is itself a symlink.
+///
+/// `symlink_metadata` follows every parent component but NOT the final one,
+/// which is exactly the distinction that matters to the save pipeline: a rename
+/// resolves parent directory links and lands on the real entry, so a symlinked
+/// parent is safe; the final component is the entry the rename REPLACES.
+///
+/// A path that cannot be stat'ed answers false: the probe already read a link
+/// row out of it, so an error here is a race or a permission quirk, and the open
+/// a few lines later reports it far better than a canonical-storage refusal
+/// would.
+fn final_component_is_a_symlink(path: &Path) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|meta| meta.is_symlink())
+}
+
 impl AppState {
-    /// [`foreign_link_in`] against the production cache root. `Some` means the
-    /// open must be refused with the carried payload.
-    pub(super) fn foreign_link(&self, path: &Path) -> Option<SpeleoManagedFile> {
+    /// [`foreign_link_in`] against the production cache root. See
+    /// [`LinkedSpelling`]: the open is refused, redirected to the canonical
+    /// cache path, or left alone.
+    pub(super) fn foreign_link(&self, path: &Path) -> LinkedSpelling {
         foreign_link_in(super::speleodb_local_state::cache_root().as_deref(), path)
     }
 
@@ -152,6 +216,20 @@ mod tests {
         .expect("save link");
     }
 
+    /// The refusal payload, or `None` when the probe accepted the file (under
+    /// either spelling).
+    fn refusal(spelling: LinkedSpelling) -> Option<SpeleoManagedFile> {
+        match spelling {
+            LinkedSpelling::Foreign(managed) => Some(managed),
+            LinkedSpelling::AsSpelled | LinkedSpelling::Canonical(_) => None,
+        }
+    }
+
+    /// Whether the probe accepted the file under the spelling it was given.
+    fn accepted_as_spelled(spelling: &LinkedSpelling) -> bool {
+        matches!(spelling, LinkedSpelling::AsSpelled)
+    }
+
     #[test]
     fn a_linked_stalx_outside_the_cache_is_refused() {
         let temp = tempfile::TempDir::new().expect("temp");
@@ -159,8 +237,8 @@ mod tests {
         let foreign = temp.path().join("elsewhere").join("copy.stalx");
         seed_linked(&foreign, ID);
 
-        let managed =
-            foreign_link_in(Some(&root), &foreign).expect("a foreign linked file is refused");
+        let managed = refusal(foreign_link_in(Some(&root), &foreign))
+            .expect("a foreign linked file is refused");
         assert_eq!(managed.path, foreign.display().to_string());
         assert_eq!(managed.project_id, ID);
         assert_eq!(managed.project_name, "Linked");
@@ -176,7 +254,7 @@ mod tests {
         seed_linked(&cached, ID);
 
         assert!(
-            foreign_link_in(Some(root), &cached).is_none(),
+            accepted_as_spelled(&foreign_link_in(Some(root), &cached)),
             "the cache copy is the canonical home and opens normally"
         );
     }
@@ -193,21 +271,96 @@ mod tests {
         let dir = cached.parent().expect("parent");
         let aliased = dir.join("..").join(ID).join("project.stalx");
         assert!(
-            foreign_link_in(Some(root), &aliased).is_none(),
+            accepted_as_spelled(&foreign_link_in(Some(root), &aliased)),
             "an alias spelling of the cache path is still the cache copy"
         );
 
         #[cfg(unix)]
         {
-            // The cache root reached through a symlink is still the same file.
+            // The cache root reached through a symlink is still the same file -
+            // and is left AS SPELLED, unlike a symlinked final component: a
+            // rename resolves the directory link and still lands on the real
+            // entry in the real directory, so nothing here needs rewriting.
             let sym_root = temp.path().join("sym-root");
             std::os::unix::fs::symlink(root, &sym_root).expect("symlink");
             let through_symlink = super::super::speleodb_local_state::cache_path_in(&sym_root, ID);
             assert!(
-                foreign_link_in(Some(root), &through_symlink).is_none(),
+                accepted_as_spelled(&foreign_link_in(Some(root), &through_symlink)),
                 "the cache copy through a symlinked root is still the cache copy"
             );
         }
+    }
+
+    /// A symlink to the cache copy is the cache copy to READ, and the probe used
+    /// to stop there and accept the link's own name. Saving through that name is
+    /// what breaks: the save writes a temp sibling and renames it over the
+    /// destination, so the rename replaces the SYMLINK ENTRY with a regular file.
+    /// The real cached copy is then stale forever and a second linked `.stalx`
+    /// exists wherever the link lived - two local copies of one remote project,
+    /// which is precisely what this module exists to prevent.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_the_cache_copy_opens_the_real_cache_path_instead() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let cached = super::super::speleodb_local_state::cache_path_in(&root, ID);
+        seed_linked(&cached, ID);
+
+        let alias = temp.path().join("my-project.stalx");
+        std::os::unix::fs::symlink(&cached, &alias).expect("symlink");
+
+        let spelling = foreign_link_in(Some(&root), &alias);
+        assert!(
+            matches!(&spelling, LinkedSpelling::Canonical(real) if real == &cached),
+            "the load must be redirected to the real cache path, not the link: {spelling:?}"
+        );
+    }
+
+    /// The same rewrite when the CACHE SLOT ITSELF is the symlink (the user
+    /// pointed it at a file of their own). The canonical path is the slot, so the
+    /// answer is the path we were given - and the first save materialises the real
+    /// file in the slot, exactly as a pull's atomic replace would. The old target
+    /// is then an ordinary foreign copy, refused by this same probe.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_cache_slot_still_resolves_to_the_canonical_path() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let cached = super::super::speleodb_local_state::cache_path_in(&root, ID);
+        let elsewhere = temp.path().join("elsewhere").join("real.stalx");
+        seed_linked(&elsewhere, ID);
+        std::fs::create_dir_all(cached.parent().expect("parent")).expect("mkdir");
+        std::os::unix::fs::symlink(&elsewhere, &cached).expect("symlink");
+
+        let spelling = foreign_link_in(Some(&root), &cached);
+        assert!(
+            matches!(&spelling, LinkedSpelling::Canonical(real) if real == &cached),
+            "the canonical slot is the canonical path even when it is a link: {spelling:?}"
+        );
+    }
+
+    /// The redirect is for the CACHE COPY only: a link that points at some other
+    /// linked `.stalx` is still a second local copy, and is still refused - under
+    /// the name the user asked for, so the prompt names the file they picked.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_to_a_foreign_linked_file_is_still_refused() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let root = temp.path().join("cache");
+        let foreign = temp.path().join("elsewhere").join("copy.stalx");
+        seed_linked(&foreign, ID);
+
+        let alias = temp.path().join("my-project.stalx");
+        std::os::unix::fs::symlink(&foreign, &alias).expect("symlink");
+
+        let managed = refusal(foreign_link_in(Some(&root), &alias))
+            .expect("a symlink to a foreign copy is still a second local copy");
+        assert_eq!(
+            managed.path,
+            alias.display().to_string(),
+            "the refusal names the file the user asked for"
+        );
+        assert_eq!(managed.project_id, ID);
     }
 
     #[test]
@@ -219,7 +372,7 @@ mod tests {
         let misfiled = super::super::speleodb_local_state::cache_path_in(root, OTHER_ID);
         seed_linked(&misfiled, ID);
 
-        let managed = foreign_link_in(Some(root), &misfiled)
+        let managed = refusal(foreign_link_in(Some(root), &misfiled))
             .expect("a copy in another project's cache slot is refused");
         assert_eq!(managed.project_id, ID);
     }
@@ -234,7 +387,7 @@ mod tests {
         drop(db);
 
         assert!(
-            foreign_link_in(Some(temp.path()), &plain).is_none(),
+            accepted_as_spelled(&foreign_link_in(Some(temp.path()), &plain)),
             "an unmanaged project opens normally from anywhere"
         );
     }
@@ -251,7 +404,7 @@ mod tests {
         // the full open right after it reports CORRUPT through the existing
         // recovery UI, which is the better surface for this file.
         assert!(
-            foreign_link_in(Some(temp.path()), &junk).is_none(),
+            accepted_as_spelled(&foreign_link_in(Some(temp.path()), &junk)),
             "an unreadable file is the corruption path's problem, not this probe's"
         );
     }
@@ -262,7 +415,7 @@ mod tests {
         let foreign = temp.path().join("bad-id.stalx");
         seed_linked(&foreign, "../../../etc/passwd");
 
-        let managed = foreign_link_in(Some(temp.path()), &foreign)
+        let managed = refusal(foreign_link_in(Some(temp.path()), &foreign))
             .expect("a linked file with an unusable id is still refused");
         assert!(
             !managed.can_open_remote,
@@ -278,7 +431,7 @@ mod tests {
         seed_linked(&foreign, ID);
 
         assert!(
-            foreign_link_in(None, &foreign).is_none(),
+            accepted_as_spelled(&foreign_link_in(None, &foreign)),
             "with no cache directory there is no canonical slot to conflict with"
         );
     }

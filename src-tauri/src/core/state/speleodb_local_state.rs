@@ -55,6 +55,12 @@ pub(super) fn cache_path_in(root: &Path, project_id: &str) -> PathBuf {
 ///
 /// This is THE definition of canonical identity - every "is this file the managed
 /// copy" decision must go through it so they cannot drift.
+///
+/// Identity, note, not writability: a symlink to the cache copy IS the cache copy
+/// to read, yet writing through that name would rename a fresh file over the link
+/// entry rather than over the cache copy. The one caller that goes on to write -
+/// the load, via `speleodb_foreign::foreign_link_in` - swaps such a spelling for
+/// [`cache_path_in`] before it opens anything.
 pub(super) fn is_the_cached_copy(root: &Path, project_id: &str, path: &Path) -> bool {
     super::project_io::same_file(path, &cache_path_in(root, project_id))
 }

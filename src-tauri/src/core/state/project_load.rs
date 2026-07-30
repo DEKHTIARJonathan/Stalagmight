@@ -343,15 +343,35 @@ impl AppState {
         // the link) instead of a generic load error. It sits after the
         // already-open guard above, so a project already on screen is never
         // refused. See `speleodb_foreign` for the probe's degradation rules.
-        if let Some(managed) = self.foreign_link(&path) {
-            tracing::info!(
-                path = ?path,
-                project_id = %managed.project_id,
-                purpose = "keep one local copy per SpeleoDB project",
-                "Refused to open a non-canonical copy of a SpeleoDB project"
-            );
-            early_return_err!(LoadError::speleodb_managed(managed));
-        }
+        //
+        // The probe can also ACCEPT the file under a different spelling: the
+        // cache copy reached through a symlink is the canonical copy to read,
+        // but saving through that name would rename a fresh file over the link
+        // entry and strand the real cached copy. The load continues with the
+        // canonical cache path in that case, so `project.file_path` - and every
+        // save that follows from it - names the real file.
+        use super::speleodb_foreign::LinkedSpelling;
+        let path = match self.foreign_link(&path) {
+            LinkedSpelling::AsSpelled => path,
+            LinkedSpelling::Canonical(canonical) => {
+                tracing::info!(
+                    spelled = ?path,
+                    canonical = ?canonical,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Opening the canonical cache copy behind a symlink to it"
+                );
+                canonical
+            }
+            LinkedSpelling::Foreign(managed) => {
+                tracing::info!(
+                    path = ?path,
+                    project_id = %managed.project_id,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Refused to open a non-canonical copy of a SpeleoDB project"
+                );
+                early_return_err!(LoadError::speleodb_managed(managed));
+            }
+        };
         // Local variable only - NO state mutation until Finalizing
         let db = match Database::open_existing(&path) {
             Ok(db) => db,
