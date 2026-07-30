@@ -619,7 +619,7 @@ impl Command {
 }
 
 #[cfg(test)]
-#[expect(clippy::unwrap_used)]
+#[expect(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
     use crate::models::{
@@ -627,6 +627,63 @@ mod tests {
         StationRef,
     };
     use chrono::NaiveDate;
+
+    /// Pins the `Command` variant SET, so removing one cannot pass silently.
+    ///
+    /// `Command` is `#[serde(tag = "type")]` with no catch-all, so a persisted
+    /// undo entry naming a deleted variant stops deserializing - and
+    /// `UndoStack::load_from_persisted_with_timestamps` SKIPS a bad entry rather
+    /// than truncating, keeping the entries on BOTH sides. The stack then loads
+    /// with a HOLE, and undoing past it replays older entries against a tree they
+    /// no longer describe. `ApplyCollabChanges` is the worked example: schema v15
+    /// has to call `drop_legacy_undo_history` for exactly that reason, as v11->v12
+    /// and v12->v13 did before it.
+    ///
+    /// Its sibling `legacy_set_shot_reference_undo_entries_still_deserialize`
+    /// covers the other half of this hazard - a RENAMED tag, which can be kept
+    /// loadable with `#[serde(alias = ...)]`. A removal cannot.
+    ///
+    /// If this fires because you removed a variant: either keep its tag
+    /// deserializable, or bump `SCHEMA_VERSION` and drop the persisted history in
+    /// the new migration step. If you added one, just update the count.
+    #[test]
+    fn command_variant_set_is_pinned_so_a_removal_cannot_pass_silently() {
+        let manifest_dir = env!("CARGO_MANIFEST_DIR");
+        let path = format!("{manifest_dir}/src/core/command.rs");
+        let src =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("Failed to read {path}: {e}"));
+
+        let start = src
+            .find("pub enum Command {")
+            .expect("pub enum Command not found");
+        let end = src[start..]
+            .find("\n}\n")
+            .expect("end of `enum Command` not found");
+
+        // Variants sit at exactly four-space indent. Fields and attributes are
+        // deeper, and doc comments start with `/`, so an uppercase first char at
+        // that indent identifies a variant.
+        let variants: Vec<&str> = src[start..start + end]
+            .lines()
+            .filter_map(|line| {
+                let rest = line.strip_prefix("    ")?;
+                if rest.starts_with(' ') || !rest.starts_with(char::is_uppercase) {
+                    return None;
+                }
+                rest.split(|c: char| !c.is_alphanumeric()).next()
+            })
+            .filter(|v| !v.is_empty())
+            .collect();
+
+        assert_eq!(
+            variants.len(),
+            28,
+            "Command's variant set changed. A removal leaves persisted undo \
+             history unloadable at that entry and holed either side of it - keep \
+             the tag deserializable, or bump SCHEMA_VERSION and call \
+             drop_legacy_undo_history in the new migration step. Saw: {variants:?}"
+        );
+    }
 
     #[test]
     fn legacy_set_shot_reference_undo_entries_still_deserialize() {
