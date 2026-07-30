@@ -47,6 +47,18 @@ pub(super) fn cache_path_in(root: &Path, project_id: &str) -> PathBuf {
     root.join(project_id).join(CACHE_STALX)
 }
 
+/// Whether `path` IS the cache copy for `project_id` under `root` - the canonical
+/// home of a managed project. `same_file` so an alias spelling (a symlink, a `..`
+/// segment, a Windows case variant) of the cache path still answers yes; when
+/// either side does not exist it falls back to a literal compare, which is correct
+/// because a file that is not there cannot be the file `path` names.
+///
+/// This is THE definition of canonical identity - every "is this file the managed
+/// copy" decision must go through it so they cannot drift.
+pub(super) fn is_the_cached_copy(root: &Path, project_id: &str, path: &Path) -> bool {
+    super::project_io::same_file(path, &cache_path_in(root, project_id))
+}
+
 /// What a read of one cached `.stalx` established.
 ///
 /// The two consumers need OPPOSITE defaults when the read fails, which is why the
@@ -330,9 +342,8 @@ impl AppState {
         let Some(root) = cache_root else {
             return false;
         };
-        let cached_path = cache_path_in(root, id);
         self.open_project_path()
-            .is_some_and(|open| super::project_io::same_file(&open, &cached_path))
+            .is_some_and(|open| is_the_cached_copy(root, id, &open))
     }
 }
 
