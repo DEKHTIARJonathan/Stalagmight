@@ -448,14 +448,24 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
 /// settles these before every save and before the SpeleoDB render, so the mint is a
 /// fallback for an export of a project that was never saved - without it the same
 /// project would render to different bytes on each export.
-fn shot_export_uuid(shot: &Shot) -> Option<String> {
-    Some(
-        shot.uuid
-            .as_deref()
-            .filter(|u| !u.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| uuid::Uuid::new_v4().to_string()),
-    )
+///
+/// What this value guarantees is STABILITY across re-exports, not uniqueness within
+/// the file. Shot-UUID uniqueness in this model is PER-SECTION only, deliberately:
+/// `Project::ensure_unique_shot_uuids` resets its dedup set inside the section loop,
+/// and the companion `duplicate_shot_uuid` integrity check is section-scoped for the
+/// same reason - `resolve_key` is section-local, so a cross-section repeat cannot
+/// mis-resolve an anchor and is not a violation. Nothing therefore makes `<UUID>`
+/// unique across the exported document, and a consumer that keys features by it
+/// alone (a GeoJSON feature `id`, say) would alias the two shots if a repeat ever
+/// appeared - the export would not flag it, and neither would our integrity pass.
+/// Never returns an empty string: an empty stored UUID is treated as "no identity
+/// yet" and gets the same fresh mint as `None`, because an empty `<UUID>` element
+/// is worse than an ephemeral one (it reads as a real, shared key).
+fn shot_export_uuid(shot: &Shot) -> String {
+    match shot.uuid.as_deref() {
+        Some(u) if !u.is_empty() => u.to_string(),
+        _ => uuid::Uuid::new_v4().to_string(),
+    }
 }
 
 fn build_export_shots(project: &Project) -> Vec<ExportShot> {
@@ -576,7 +586,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                 root_shots.push(ExportShot {
                     id: shot_ariane_id,
-                    uuid: shot_export_uuid(shot),
+                    uuid: Some(shot_export_uuid(shot)),
                     from_id: prev_id,
                     shot_type: if shot.kind.is_virtual() {
                         "VIRTUAL"
@@ -714,7 +724,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
                         fwd_shots.push(ExportShot {
                             id: shot_ariane_id,
-                            uuid: shot_export_uuid(shot),
+                            uuid: Some(shot_export_uuid(shot)),
                             from_id: prev_id,
                             shot_type: if shot.kind.is_virtual() {
                                 "VIRTUAL"
@@ -957,7 +967,7 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
 
             shots.push(ExportShot {
                 id: shot_ariane_id,
-                uuid: shot_export_uuid(shot),
+                uuid: Some(shot_export_uuid(shot)),
                 from_id: prev_id,
                 shot_type: if shot.kind.is_virtual() {
                     "VIRTUAL"
@@ -1077,12 +1087,23 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
         // Apply to each block's REAL/VIRTUAL shots (skip START so its
         // hardcoded "START" content stays untouched; skip CLOSURE as it has
         // no `to` station in the create-station sense).
+        //
+        // `remove`, not `get`: an Ariane id belongs to exactly one emitted shot, so
+        // taking the entry can never steal it from another shot - and what is LEFT
+        // in the map once every block has been walked is precisely the set of
+        // station comments this export dropped, which the loop below reports. That
+        // is the only way the START-aliased drops become visible at all: the START
+        // shot's id IS the id `station_to_ariane` holds for root station 0, and for
+        // the primary zero datum's station when the root is split there, so the
+        // lookup that reports "no Ariane shot represents this station" above
+        // succeeds and the comment is then discarded HERE, by a shot-type skip that
+        // used to run before the lookup and say nothing.
         for block in &mut blocks {
             for shot in &mut block.shots {
                 if shot.shot_type != "REAL" && shot.shot_type != "VIRTUAL" {
                     continue;
                 }
-                let Some(attachments) = comments_by_ariane.get(&shot.id) else {
+                let Some(attachments) = comments_by_ariane.remove(&shot.id) else {
                     continue;
                 };
                 let joined_station: String = attachments
@@ -1092,6 +1113,28 @@ fn build_export_shots(project: &Project) -> Vec<ExportShot> {
                     .join("\n");
                 shot.comment = comment_split::merge(shot.comment.as_deref(), Some(&joined_station));
             }
+        }
+
+        // Anything still in the map named an Ariane node that no fold-eligible shot
+        // carries - a START, or (defensively) an id `station_to_ariane` holds with
+        // no shot of its own. Those comments are simply absent from the file, and
+        // WHICH ones is not derivable from the output, so the drop has to be said
+        // out loud here or it is unobservable. Sorted so the log reads the same on
+        // every export, like the fold itself.
+        let mut dropped: Vec<(StationRef, i64)> = comments_by_ariane
+            .into_iter()
+            .flat_map(|(ariane_id, attachments)| {
+                attachments.into_iter().map(move |(sr, _)| (sr, ariane_id))
+            })
+            .collect();
+        dropped.sort_by_key(|(sr, _)| (sr.section_id, sr.station_index));
+        for (sr, ariane_id) in dropped {
+            tracing::debug!(
+                section_id = sr.section_id,
+                station_index = sr.station_index,
+                ariane_id,
+                "Station comment dropped from .tml export: the Ariane shot representing this station takes no station comment (START, or no shot of its own)"
+            );
         }
     }
 
@@ -1851,6 +1894,52 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// The fold now TAKES each entry out of `comments_by_ariane` as it applies it
+    /// and reports whatever is left as dropped, so the two halves have to stay in
+    /// step. Both directions matter: a comment on a station some REAL shot creates
+    /// must still be folded onto that shot, and a comment on a station whose Ariane
+    /// id is the START shot's - root station 0 here - must still be dropped rather
+    /// than overwriting START's hardcoded content. If the take ever moved above the
+    /// shot-type skip, the START-aliased comment would leave the map without being
+    /// applied OR reported, which is exactly the silent loss the report exists to
+    /// end.
+    #[test]
+    fn station_comments_fold_onto_their_shot_and_a_start_aliased_one_is_still_dropped() {
+        let mut project = simple_project();
+        let section_id = project.sections[0].id;
+        let station_0 = project.key_for_ref(StationRef::new(section_id, 0)).unwrap();
+        let station_1 = project.key_for_ref(StationRef::new(section_id, 1)).unwrap();
+        project
+            .station_comments
+            .insert(station_0, "on the START station".to_string());
+        project
+            .station_comments
+            .insert(station_1, "at the bend".to_string());
+
+        let shots = build_export_shots(&project);
+
+        // Station 1 is created by the section's first shot, so its comment rides
+        // along there - beside that shot's own comment, split by the ZWSP marker.
+        let first_real = shots.iter().find(|s| s.shot_type == "REAL").unwrap();
+        let folded = first_real.comment.as_deref().unwrap_or_default();
+        assert!(
+            folded.contains("at the bend") && folded.contains("first shot"),
+            "the station comment must be folded beside the shot comment: {folded:?}"
+        );
+
+        // Station 0 IS the START shot, which the fold skips, so its comment is
+        // absent from the file and START keeps what it was given.
+        let start = shots.iter().find(|s| s.shot_type == "START").unwrap();
+        assert_eq!(start.comment.as_deref(), Some("START"));
+        assert!(
+            !shots.iter().any(|s| s
+                .comment
+                .as_deref()
+                .is_some_and(|c| c.contains("on the START station"))),
+            "a START-aliased station comment must not reach the file"
+        );
     }
 
     #[test]

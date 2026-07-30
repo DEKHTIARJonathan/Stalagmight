@@ -65,11 +65,29 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 Every real forward shot carries its persistent `shot.uuid` into the export as
 `<UUID>` (`<UU>` in `.tmlu`). This is what makes a re-export of an unchanged
 project **byte-identical**, which the SpeleoDB push depends on: the `.tml` is
-rendered as a sidecar so the server can regenerate GeoJSON, and the UUID gives
-each feature a stable top-level `id`. `Project::ensure_shot_uuids` settles the
-UUIDs before every save and before that render, so nothing is minted per-export
-(a project loaded but never saved is the one case where a UUID is minted on the
-fly, and it is persisted by the next save).
+rendered as a sidecar so the server can regenerate GeoJSON.
+`Project::ensure_shot_uuids` settles the UUIDs before every save and before that
+render, so nothing is minted per-export (a project loaded but never saved is the
+one case where a UUID is minted on the fly, and it is persisted by the next
+save).
+
+What the value guarantees is **stability across re-exports, not uniqueness
+within the file**. Shot-UUID uniqueness in the model is **per-section only**, and
+deliberately so: `Project::ensure_unique_shot_uuids` resets its dedup set inside
+the section loop, and the companion `duplicate_shot_uuid` integrity check is
+section-scoped for the same reason - `resolve_key` is section-local, so a
+cross-section repeat cannot mis-resolve a station anchor and is not treated as a
+violation. Nothing in the model, the integrity pass or the exporter therefore
+makes `<UUID>` unique across the exported document.
+
+The consequence for the SpeleoDB render is that a consumer keying features by
+`<UUID>` alone - as a GeoJSON feature `id`, say - would alias the colliding shots
+if such a repeat ever appeared, and neither the export nor our integrity pass
+would flag it. No current edit path is known to mint a cross-section duplicate
+(there is no section split/duplicate command, and the importer mints fresh
+identities), so this is a documented property of the guarantee rather than a live
+bug. What it means in practice: do not build a consumer that assumes
+project-wide uniqueness, and do not describe `<UUID>` as one.
 
 The importer does **not** read the element back: a fresh import mints its own
 shot identities, so `<UUID>` is write-only as far as Stalagmight is concerned.
@@ -123,17 +141,44 @@ through Ariane, the exporter packs both into the shot's `<Comment>`:
 
 Caveats:
 
-- Station 0 of the root section (the START shot's station) has no shot whose
-  `to` station matches, so its comment is dropped from the `.tml` export. Add
-  the note one shot downstream if you need it to survive.
-- When a child section's station 0 is merged into a parent's station, both
-  StationRefs alias the same Ariane shot id, so both station comments are
-  concatenated into the exported Comment (sorted by `(section_id,
-  station_index)` for reproducibility).
+The fold walks the emitted REAL/VIRTUAL shots and skips START (its `"START"`
+content is hardcoded) and CLOSURE (no `to` station in the create-station sense).
+Every station whose Ariane id **is** the START shot's therefore loses its comment
+on export. Three ways a station ends up there:
 
-START shots keep their hardcoded `"START"` content untouched (no
-station-comment fold), and CLOSURE shots have no `to` station in the
-create-station sense.
+- **Root station 0.** In an unsplit root section, station 0 *is* the START shot,
+  so a comment on it is dropped. Add the note one shot downstream if you need it
+  to survive.
+- **The primary zero datum's station.** When the root section is split at a
+  non-zero zero datum, the datum's own station is aliased onto the synthesized
+  START shot, so a comment on that station is dropped too - even though a real
+  shot of the project sits at that index.
+- **A station merged onto either of the above.** The parent-link pass maps a
+  merged child station to the *parent's* Ariane id, so a child station merged
+  into root station 0 (or into the aliased datum station) inherits the START id
+  and is dropped with it.
+
+Comments that survive but move:
+
+- **Stations before the zero-datum split index.** Those stations are emitted on
+  the reverse `"<Section> (pre-zero-datum)"` leg, so their comments are folded
+  onto that synthetic leg's shots. The text survives, but it re-imports onto a
+  *fabricated* section that never existed in the project - not onto the section
+  the surveyor wrote it in.
+- **Two StationRefs on one Ariane shot.** When a child section's station 0 is
+  merged into a parent station that *is* a real shot, both refs alias that shot
+  id, so both station comments are concatenated into its exported Comment
+  (sorted by `(section_id, station_index)` for reproducibility).
+
+A fourth, rarer drop: a station the Ariane topology does not represent at all
+(nothing in the exporter's station-to-node map), which is what happens when the
+shape of a merge leaves a station with no node of its own.
+
+Every one of these drops emits a `tracing::debug!` naming the section id and
+station index (plus the Ariane node id where there is one), so a lost comment is
+diagnosable from a debug-level log rather than silent. Which comments get dropped
+is deliberately unchanged - the logging exists so the loss is observable, not to
+change the behaviour.
 
 The same split logic is applied in reverse on `.tml` import
 (`core::comment_split::split`) when the import dialog's "comments on
