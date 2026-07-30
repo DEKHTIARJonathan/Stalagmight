@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
 import type { OnboardingIllustration, OnboardingPlacement } from '../../onboarding/flows';
 import {
-  CenterMapIcon,
   FitToViewIcon,
   MinusIcon,
   PlusIcon,
@@ -486,91 +485,6 @@ function renderStepIllustration(
     );
   }
 
-  if (illustration === 'sections-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-sections-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <PlusIcon size={14} />
-            <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.addTitle')}</span>
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-            {t('onboarding.illustrations.sections.addDescription')}
-          </p>
-        </div>
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text-primary">
-                <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.focusTitle')}</span>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-                {t('onboarding.illustrations.sections.focusDescription')}
-              </p>
-            </div>
-            <div className="flex flex-shrink-0 flex-col items-end">
-              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
-              <div className="flex items-end gap-2">
-                {renderMouseIcon('h-8 w-7', 'left')}
-                {renderMouseIcon('h-8 w-7', 'left')}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (illustration === 'detail-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-detail-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <CenterMapIcon size={14} />
-            <span className="whitespace-nowrap">{t('onboarding.illustrations.detail.centerTitle')}</span>
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-            {t('onboarding.illustrations.detail.centerDescription')}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (illustration === 'data-table-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-data-table-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text-primary">
-                <span className="whitespace-nowrap">{t('onboarding.illustrations.dataTable.focusTitle')}</span>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-                {t('onboarding.illustrations.dataTable.focusDescription')}
-              </p>
-            </div>
-            <div className="flex flex-shrink-0 flex-col items-end">
-              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
-              <div className="flex items-end gap-2">
-                {renderMouseIcon('h-8 w-7', 'left')}
-                {renderMouseIcon('h-8 w-7', 'left')}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (illustration !== 'mouse-pan-zoom') {
     return null;

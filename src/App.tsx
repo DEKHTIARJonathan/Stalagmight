@@ -336,6 +336,30 @@ function App() {
     });
   }, []);
 
+  // Guides are armed for the first launch only (#331). The flag is persisted the
+  // moment they arm, not when they finish, so a crash mid-tour cannot re-arm
+  // them on the next launch. `onboardingArmed` holds the decision for the rest
+  // of this session, so writing the flag does not immediately disarm the tour
+  // the user is currently being shown.
+  const [onboardingArmed, setOnboardingArmed] = useState(false);
+  useEffect(() => {
+    const currentConfig = config;
+    if (!currentConfig || !currentConfig.general.onboarding_enabled) {
+      return;
+    }
+    if (currentConfig.general.onboarding_first_launch_done) {
+      return;
+    }
+    setOnboardingArmed(true);
+    const nextConfig = {
+      ...currentConfig,
+      general: { ...currentConfig.general, onboarding_first_launch_done: true },
+    };
+    const store = useProjectStore.getState();
+    store.setConfig(nextConfig);
+    void store.updateConfig(nextConfig);
+  }, [config]);
+
   const onboarding = useOnboarding({
     view,
     hasProject: project !== null,
@@ -349,7 +373,7 @@ function App() {
     splashVisible: splashMounted,
     configLoaded: config !== null,
   }, {
-    enabled: config?.general?.onboarding_enabled ?? true,
+    enabled: (config?.general?.onboarding_enabled ?? true) && onboardingArmed,
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });

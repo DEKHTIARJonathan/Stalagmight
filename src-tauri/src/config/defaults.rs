@@ -55,6 +55,7 @@ impl Default for GeneralConfig {
             splash_screen: false,
             onboarding_enabled: true,
             onboarding_completed_flows: Vec::new(),
+            onboarding_first_launch_done: false,
             telemetry_enabled: false,
             telemetry_opt_in_shown: false,
         }
