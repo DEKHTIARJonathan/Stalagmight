@@ -154,6 +154,39 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// [`Self::open_for_metadata`] with WRITE access, for the one question a
+    /// read-only connection cannot answer: what is in a file whose last write
+    /// was interrupted.
+    ///
+    /// A hot rollback journal (a kill, a power loss) fails a read-only open with
+    /// `SQLITE_READONLY_ROLLBACK` because rolling it back is a write. This opens
+    /// read-write so SQLite performs that recovery on the first read - and does
+    /// nothing else: no integrity check, no project-data check, no foreign-key
+    /// validation and, above all, NO `ensure_schema_version`. That last one is
+    /// the point. The caller
+    /// ([`crate::core::state::speleodb_foreign`](../../core/state/speleodb_foreign/index.html))
+    /// uses this to decide whether a file may be opened AT ALL, and may well
+    /// refuse it; running the load path's migrations there would rewrite - and
+    /// in the v15 case discard undo/redo history from - a file the user is
+    /// about to be told they cannot open, before they have answered the prompt.
+    ///
+    /// Rolling the journal back is itself a write, and an unavoidable one: it is
+    /// the only way to see the committed contents, and it is exactly what the
+    /// next ordinary open would do anyway. Everything beyond it is avoidable,
+    /// so this does none of it.
+    ///
+    /// Do NOT reach for this to load project data. It is `open_for_metadata`'s
+    /// sibling, with `open_for_metadata`'s caveats: the schema is whatever the
+    /// file has, and a missing table surfaces as a failed SELECT.
+    pub fn open_for_metadata_recovering(path: &Path) -> Result<Self> {
+        if !path.exists() {
+            anyhow::bail!("File does not exist: {}", path.display());
+        }
+        let conn = Connection::open_with_flags(path, rusqlite::OpenFlags::SQLITE_OPEN_READ_WRITE)
+            .context("Failed to open database read-write for metadata")?;
+        Ok(Self { conn })
+    }
+
     /// Open an existing database in read-only mode.
     /// Does not create if missing, does not run migrations.
     /// Used for lazy loading survey geometry without modifying files.

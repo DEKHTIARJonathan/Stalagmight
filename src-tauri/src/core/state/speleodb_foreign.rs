@@ -136,16 +136,21 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpellin
 /// Read-only FIRST, because that is the answer for every ordinary file and it
 /// neither migrates nor mmaps a file this probe may be about to refuse. But a
 /// read-only connection cannot recover a hot rollback journal - it fails with
-/// `SQLITE_READONLY_ROLLBACK` where the read-write open a few lines later rolls
-/// the journal back and succeeds - so a read-only miss is NOT evidence that the
-/// file is unopenable. Escalating is what keeps this probe's verdict aligned
-/// with the open it guards; without it the guard fell open in exactly the state
-/// where the file was about to become a fully usable second managed copy.
+/// `SQLITE_READONLY_ROLLBACK` where a read-write open rolls the journal back and
+/// succeeds - so a read-only miss is NOT evidence that the file is unopenable.
+/// Escalating is what keeps this probe's verdict aligned with the open it
+/// guards; without it the guard fell open in exactly the state where the file
+/// was about to become a fully usable second managed copy.
 ///
-/// The escalation costs a second open in that rare case, and it does write to
-/// the file (rolling the journal back). That is not a new intrusion: it is the
-/// open that was going to happen a few lines later regardless, moved earlier so
-/// its result can be judged before the session commits to it.
+/// The escalation goes through [`Database::open_for_metadata_recovering`], NOT
+/// `open_existing`, and that distinction is load-bearing. The only write this
+/// probe may make is the journal rollback itself: unavoidable (it is the only
+/// way to see what the file committed) and identical to what the next ordinary
+/// open would do anyway. `open_existing` would go on to run
+/// `ensure_schema_version`, whose v15 migration drops `collab_state` and the
+/// persisted undo/redo history - so a file this probe is about to REFUSE would
+/// have been migrated and stripped of its history before the user ever saw the
+/// prompt, with "Cancel" unable to put it back.
 ///
 /// `None` covers both "no link row" (an unmanaged project) and "neither open
 /// could read one" - the caller treats them the same, and the full open
@@ -156,7 +161,7 @@ pub(super) fn foreign_link_in(root: Option<&Path>, path: &Path) -> LinkedSpellin
 fn link_row_of(path: &Path) -> Option<crate::models::SpeleoLink> {
     match Database::open_for_metadata(path).and_then(|db| db.load_speleo_link()) {
         Ok(link) => link,
-        Err(read_only_error) => Database::open_existing(path)
+        Err(read_only_error) => Database::open_for_metadata_recovering(path)
             .and_then(|db| db.load_speleo_link())
             .inspect_err(|e| {
                 tracing::warn!(
@@ -212,10 +217,30 @@ impl AppState {
     /// The row delete itself is idempotent (`DELETE FROM speleo_link`), so a
     /// second invocation - or one against a file whose link is already gone -
     /// succeeds harmlessly.
+    ///
+    /// The refusal and the delete share ONE `project` acquisition, for the same
+    /// reason `delete_project`'s check and teardown do. Asking
+    /// `open_project_path` (which releases the lock) and only then deleting is a
+    /// TOCTOU against load finalization: a load of THIS path finishing in the
+    /// gap makes it the open project - gates already derived as remote - and the
+    /// row then vanishes from underneath a live remote session, leaving a gate
+    /// and possibly an acquired server mutex with no link left to release or
+    /// push through. Every installer of a file-backed project finalizes under
+    /// this same lock, so holding it here orders this command strictly before
+    /// such a load (we refuse nothing, and the load then owns a file with its
+    /// link already gone - an ordinary local project) or strictly after it (we
+    /// see it open and refuse).
     pub(crate) fn speleodb_remove_link_at(&self, path: PathBuf) -> Result<(), SpeleoErrorDto> {
-        if self
-            .open_project_path()
-            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        let open = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Read through the guard rather than `open_project_path`, which takes
+        // the same lock and would deadlock here.
+        if open
+            .as_ref()
+            .and_then(|project| project.file_path.as_deref())
+            .is_some_and(|open| super::project_io::same_file(open, &path))
         {
             return Err(local_dto(SpeleoDbError::Io(
                 "that file is the project currently open; detach it from SpeleoDB instead"
@@ -226,6 +251,7 @@ impl AppState {
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         db.save_speleo_link(None)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        drop(open);
         tracing::info!(
             path = %path.display(),
             purpose = "keep one local copy per SpeleoDB project",
@@ -277,6 +303,21 @@ mod tests {
     /// Whether the probe accepted the file under the spelling it was given.
     fn accepted_as_spelled(spelling: &LinkedSpelling) -> bool {
         matches!(spelling, LinkedSpelling::AsSpelled)
+    }
+
+    /// Backdate the schema version recorded in `path`, so that a migration run
+    /// against it would be observable.
+    fn set_user_version(path: &Path, version: u32) {
+        let conn = rusqlite::Connection::open(path).expect("open to backdate the schema");
+        conn.pragma_update(None, "user_version", version)
+            .expect("set user_version");
+    }
+
+    /// The schema version recorded in `path`.
+    fn user_version(path: &Path) -> u32 {
+        let conn = rusqlite::Connection::open(path).expect("open to read the schema version");
+        conn.query_row("PRAGMA user_version", [], |row| row.get(0))
+            .expect("read user_version")
     }
 
     /// The rollback journal SQLite keeps beside `path` mid-transaction.
@@ -348,6 +389,10 @@ mod tests {
         let foreign = temp.path().join("elsewhere").join("copy.stalx");
         seed_linked(&foreign, ID);
 
+        // An OLD file, so a migration would be visible: `ensure_schema_version`
+        // would raise this to the current version (and, at v15, drop the
+        // persisted undo/redo history with it).
+        set_user_version(&foreign, 1);
         let hot = temp.path().join("elsewhere").join("hot.stalx");
         copy_with_a_hot_journal(&foreign, &hot);
 
@@ -357,17 +402,31 @@ mod tests {
                 .is_err(),
             "precondition: a read-only connection cannot roll back a hot journal"
         );
-        assert!(
-            Database::open_existing(&hot).is_ok(),
-            "precondition: a read-write open recovers it, which is the whole problem"
-        );
-        // Re-create it: the read-write open above just rolled the journal back.
-        let hot = temp.path().join("elsewhere").join("hot2.stalx");
-        copy_with_a_hot_journal(&foreign, &hot);
 
         let managed = refusal(foreign_link_in(Some(&root), &hot))
             .expect("an unreadable-to-read-only foreign copy is still a foreign copy");
         assert_eq!(managed.project_id, ID);
+        assert_eq!(
+            user_version(&hot),
+            1,
+            "and the refused file was NOT migrated: the probe may recover the \
+             journal, because that is the only way to read what the file \
+             committed and the next open would do it anyway, but it must not \
+             rewrite a schema - the user has not even answered the prompt yet, \
+             and Cancel cannot put a v15 migration's dropped history back"
+        );
+
+        // What the full open WOULD have done to it, which is why the escalation
+        // does not use one. Both recover the journal; only this one migrates.
+        let migrated = temp.path().join("elsewhere").join("hot2.stalx");
+        copy_with_a_hot_journal(&foreign, &migrated);
+        drop(Database::open_existing(&migrated).expect("recovers the journal as well"));
+        assert_ne!(
+            user_version(&migrated),
+            1,
+            "precondition for the assertion above: `open_existing` migrates, so \
+             the probe reaching for it would have rewritten a refused file"
+        );
     }
 
     /// ...but a file NOTHING can read is still left to the open that follows,
