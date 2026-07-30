@@ -59,6 +59,17 @@ pub(super) struct LockReleaseParams {
     pub(super) insecure_http: bool,
     /// The project whose write lock is being released.
     pub(super) project_id: String,
+    /// The open-project session this snapshot was taken from - the session that was
+    /// editing under the lock, and whose acquisition claim this release ends.
+    ///
+    /// Every caller but one snapshots and releases in one breath, so for them this is
+    /// simply the live session. It exists for [`AppState::speleodb_release_captured_lock`],
+    /// which runs after `AppState::delete_project` has torn that session down and
+    /// dropped the `project` mutex: a REPLACEMENT session on the same remote project
+    /// can be open and editing by then, and `project_id` cannot tell the two apart
+    /// (two local `.stalx` files can be linked to one remote project). See
+    /// [`super::project_session`].
+    pub(super) session: super::project_session::ProjectSession,
 }
 
 /// Whether a release may proceed over un-pushed local edits.
@@ -166,6 +177,10 @@ impl AppState {
             token,
             insecure_http: self.speleodb_insecure_http(),
             project_id: link.project_id,
+            // Read LAST, but still before the caller's teardown: `delete_project`
+            // calls this under the `project` guard it then tears the session down
+            // with, so the value captured here IS the session being ended.
+            session: self.project_session(),
         })
     }
 
@@ -208,8 +223,20 @@ impl AppState {
         }
     }
 
-    /// Forget the acquisition record IF it still names `project_id`: one
-    /// compare-and-clear under a SINGLE session-lock acquisition.
+    /// Forget the acquisition record IF it is still the claim `taken_by` took on
+    /// `project_id`: one compare-and-clear under a SINGLE session-lock acquisition.
+    ///
+    /// `taken_by: Some(session)` ends exactly ONE session's claim - for a release that
+    /// decided against a session which may no longer be installed by the time it runs.
+    /// `None` ends whichever claim names the project, for a release aimed at an
+    /// arbitrary project id whose editing session (if any) it cannot name:
+    /// [`AppState::speleodb_release_lock`], the held-lock prompt's per-project release.
+    ///
+    /// The session half is what an id comparison alone cannot do. Two local `.stalx`
+    /// files can carry the same `speleo_link` row, so "the claim names this project"
+    /// is true for a REPLACEMENT session's claim as well as for the dead session's -
+    /// and blanking the replacement's costs it the authorship shortcut described
+    /// below just as surely.
     ///
     /// For the releases that clear the record at a different moment than they decided
     /// to release it. [`AppState::speleodb_release_captured_lock`] is the reason this
@@ -263,11 +290,19 @@ impl AppState {
     /// `speleodb_note_lock_acquired`: it costs the shortcut rather than granting one,
     /// since the same poisoned mutex fails the token read the poll needs to identify a
     /// lock holder at all.
-    pub(super) fn speleodb_forget_lock_acquired_for(&self, project_id: &str) {
+    pub(super) fn speleodb_forget_lock_acquired_for(
+        &self,
+        project_id: &str,
+        taken_by: Option<super::project_session::ProjectSession>,
+    ) {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
-        if session.lock_acquired_here.as_deref() == Some(project_id) {
+        if session
+            .lock_acquired_here
+            .as_ref()
+            .is_some_and(|c| c.taken_by(taken_by, project_id))
+        {
             session.lock_acquired_here = None;
         }
     }
@@ -298,7 +333,8 @@ impl AppState {
     ///
     /// The same deferral is why the acquisition-record clear below is CONDITIONAL,
     /// unlike the one every other release verb makes - see
-    /// [`AppState::speleodb_forget_lock_acquired_for`].
+    /// [`AppState::speleodb_forget_lock_acquired_for`] - and why the RELEASE ITSELF is
+    /// conditional too, which no other verb's is: see the skip below.
     pub(super) fn speleodb_release_captured_lock(
         &self,
         params: &LockReleaseParams,
@@ -308,13 +344,55 @@ impl AppState {
         // or not the POST lands, and one that failed leaves behind a lock this process
         // can no longer account for.
         //
-        // But KEYED on the project, which that one does not have to be. Every caller of
-        // `speleodb_release_best_effort` decides and clears in one breath, so no other
-        // acquisition can have happened in between; this one runs after
-        // `delete_project` has dropped the `project` mutex, and a Start editing on
-        // ANOTHER project inside that gap records ITSELF in the very slot an
-        // unconditional clear would then blank. See the helper for what that costs.
-        self.speleodb_forget_lock_acquired_for(&params.project_id);
+        // But KEYED on the project AND on the session that took it, which that one
+        // does not have to be. Every caller of `speleodb_release_best_effort` decides
+        // and clears in one breath, so no other acquisition can have happened in
+        // between; this one runs after `delete_project` has dropped the `project`
+        // mutex, and a Start editing inside that gap records ITSELF in the very slot
+        // an unconditional clear would then blank. See the helper for what that costs
+        // - and for why the project id alone cannot tell the two claims apart.
+        self.speleodb_forget_lock_acquired_for(&params.project_id, Some(params.session));
+        // Has another edit session taken over this same remote project's lock while we
+        // were getting here? Then the mutex is no longer ours to hand back.
+        //
+        // The delete drops the `project` guard before this runs - an HTTP round trip
+        // may not happen under it - and inside that gap another local `.stalx` linked
+        // to the SAME remote project can be opened and Started editing. Two files can
+        // carry one `speleo_link` row (Save-As copies it forward, and a re-pull
+        // rebuilds the cache copy at the very path this delete just trashed), and the
+        // server answers a re-acquire by an account that already holds the mutex with
+        // a successful no-op - so the replacement session becomes editable UNDER THE
+        // LOCK THIS RELEASE IS ABOUT TO FREE, without taking a lock of its own and
+        // without recording anything. Releasing anyway leaves it `edit_enabled` and
+        // not force-editing with no server lock behind it: the unflagged lockless
+        // edit session the rest of this crate treats as unreachable, with nothing
+        // behind it but the 20-minute #202 re-verify.
+        //
+        // So leave the mutex held and let the session that is actually editing under
+        // it release it on close / Done / quit. That is the recoverable direction this
+        // module argues for everywhere else: a lock kept back times out on the server
+        // and is re-offered by the next login's held-lock prompt, while work stranded
+        // behind a freed lock is not recoverable at all.
+        //
+        // BOTH terms are load-bearing. The session comparison alone would skip the
+        // release whenever ANYTHING had been opened since - an unrelated local project
+        // would strand the deleted project's mutex forever, which is the bug this
+        // deferred release exists to fix. The live-edit-session test alone is sound
+        // only because the delete happens to tear down first: it says nothing about a
+        // caller that defers a release WITHOUT ending its session, and it is the
+        // session id that makes "a DIFFERENT session" a fact rather than an inference
+        // from the call order.
+        if self.project_session() != params.session
+            && self.speleodb_editing_under(&params.project_id)
+        {
+            tracing::info!(
+                project_id = %params.project_id,
+                purpose = "avoid freeing the lock a replacement edit session is using",
+                "speleodb: skipping the deleted project's lock release; another session \
+                 is editing the same remote project under that lock"
+            );
+            return Ok(());
+        }
         client::release_lock(
             &params.endpoint,
             &params.token,
@@ -322,6 +400,27 @@ impl AppState {
             &params.project_id,
         )
         .map(|_| ())
+    }
+
+    /// Whether the OPEN project is `project_id` and is being edited under a genuinely
+    /// held server lock right now.
+    ///
+    /// The three conjuncts are the ones every lock-aware path in this crate uses, in
+    /// the same order: the edit gate is the permission, `!force_editing` is what
+    /// separates a lock-holding session from a #213 force-editor (edit-enabled while
+    /// holding NO lock, so its presence is no reason to keep a mutex alive), and the
+    /// link is what says the lock in question is this one.
+    ///
+    /// Reads the link through the database handle, so it must not be called while the
+    /// `project` guard is held: the order is `project` -> `database` and this takes
+    /// the second without the first. Its only caller runs after `delete_project` has
+    /// released that guard, which is the same constraint the network release has.
+    fn speleodb_editing_under(&self, project_id: &str) -> bool {
+        self.edit_enabled()
+            && !self.force_editing()
+            && self
+                .speleodb_open_link()
+                .is_ok_and(|l| l.project_id == project_id)
     }
 
     /// Snapshot the release params, then run the network release on a detached

@@ -152,6 +152,12 @@ impl AppState {
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
+            // A new open-project session, and started under the same guard that
+            // installs it: this path does NOT close first, so without the bump a
+            // Start editing that began on the PREVIOUS project would commit its edit
+            // gate and its acquisition record onto this one. See
+            // `super::project_session`.
+            self.begin_project_session();
         }
 
         // Load undo/redo stacks from database before replacing database reference
@@ -664,10 +670,22 @@ impl AppState {
         self.speleodb_release_held_lock_detached();
 
         // Commit 1: Project state mutation
-        *self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+        {
+            let mut slot = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *slot = Some(project.clone());
+            // The new open-project session starts with the slot it names, under the
+            // SAME guard: a bump after the guard dropped would leave a window in
+            // which the new project is installed under the old session's id, and a
+            // commit that captured that id would land on the wrong project. Same
+            // reason as `open_project` - this path installs WITHOUT closing first,
+            // so the bump is the only thing that tells in-flight work decided
+            // against the old project that it is looking at a different session
+            // now. See `super::project_session`.
+            self.begin_project_session();
+        }
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.

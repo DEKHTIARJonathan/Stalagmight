@@ -658,6 +658,13 @@ impl AppState {
     pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
         tracing::debug!("close_project: dropping project");
         *project = None;
+        // The open-project session ends HERE, under the same guard that empties the
+        // slot, so nothing can observe an emptied slot still carrying the old id.
+        // Anything that captured that id and is still in flight - a Start editing
+        // between its acquire and its commit, a delete's deferred lock release -
+        // finds it stale and declines to act on a session that no longer exists.
+        // See `super::project_session`.
+        self.begin_project_session();
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");

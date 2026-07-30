@@ -54,11 +54,18 @@ pub(crate) struct SpeleoDbSession {
     /// `load()` doesn't re-hit the keychain on every authed call.
     rehydrate_attempted: bool,
     /// The project whose write lock THIS process took and is still editing under,
-    /// if any: the acquisition provenance the authorship shortcut in
-    /// [`AppState::speleodb_remote_state`] hangs on. Deliberately process-local and
-    /// never persisted - a lock left over from an earlier run, or one held by a
-    /// sibling session on the same account, is no evidence that THIS process pushed
-    /// anything.
+    /// if any, AND the open-project session that took it: the acquisition provenance
+    /// the authorship shortcut in [`AppState::speleodb_remote_state`] hangs on.
+    /// Deliberately process-local and never persisted - a lock left over from an
+    /// earlier run, or one held by a sibling session on the same account, is no
+    /// evidence that THIS process pushed anything.
+    ///
+    /// The session half is not decoration. Two local `.stalx` files can be linked to
+    /// ONE remote project (Save-As carries the `speleo_link` row forward, and a
+    /// re-pull rebuilds the cache copy at the same path), so a project id alone
+    /// cannot say WHOSE claim this is - and a deferred release that guessed wrong
+    /// took the lock out from under a live replacement session. See
+    /// [`super::project_session::LockClaim`].
     ///
     /// Read-modify-written through exactly three helpers, never by a field assignment
     /// anywhere else, because each such pair has to happen under ONE session-lock
@@ -66,14 +73,15 @@ pub(crate) struct SpeleoDbSession {
     /// be erased from (each helper's doc says which gap it is closing):
     /// [`AppState::speleodb_note_lock_acquired`] (record, or unconditional clear),
     /// `AppState::speleodb_forget_lock_acquired_if_gate_shut` (clear if the edit gate
-    /// is shut) and [`AppState::speleodb_forget_lock_acquired_for`] (clear if it still
-    /// names one given project).
+    /// is shut) and [`AppState::speleodb_forget_lock_acquired_for`] (clear if it is
+    /// still the claim one given session took on one given project).
     ///
     /// `pub(super)` rather than private only because the last of those lives with the
-    /// rest of the split delete release in [`super::speleodb_lock_release`], and a
-    /// sibling module cannot see a private field. Nothing else in `core::state` may
-    /// touch it.
-    pub(super) lock_acquired_here: Option<String>,
+    /// rest of the split delete release in [`super::speleodb_lock_release`] - and the
+    /// Start-editing commit, which has to write it under the `project` guard, lives
+    /// in [`super::project_session`] - and a sibling module cannot see a private
+    /// field. Nothing else in `core::state` may touch it.
+    pub(super) lock_acquired_here: Option<super::project_session::LockClaim>,
 }
 
 /// Pure endpoint-precedence resolver (extracted so it is unit-testable without
@@ -960,9 +968,23 @@ impl AppState {
     /// whatever another project's acquisition wrote in the gap. Any caller that clears
     /// on behalf of one named project wants that helper, not this one; every caller of
     /// this one is in this file.
+    ///
+    /// The claim is stamped with the open-project session installed as it is written,
+    /// which is what makes it a claim by ONE session rather than a fact about a
+    /// project id (see [`super::project_session::LockClaim`]). Every caller here is
+    /// an IN-PLACE reload restoring a record it captured before its own reload, so
+    /// the session it stamps is the reloaded one - the session that now holds the
+    /// lock. `speleodb_start_editing`'s two arms record through
+    /// [`AppState::speleodb_commit_project_session`] instead, which stamps the same
+    /// claim under the `project` guard because it also has to REFUSE when that
+    /// session is gone.
     fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session.lock_acquired_here = project_id.map(str::to_owned);
+            // The session id is a plain atomic load, so reading it while this guard is
+            // held takes no second lock and cannot deadlock - and it means the stamp
+            // and the write happen under one acquisition, like every other
+            // read-modify-write of this field.
+            session.lock_acquired_here = project_id.map(|id| self.speleodb_new_lock_claim(id));
         }
     }
 
@@ -999,13 +1021,6 @@ impl AppState {
         if !self.edit_enabled() {
             session.lock_acquired_here = None;
         }
-    }
-
-    /// Whether THIS process took `project_id`'s write lock and is still editing
-    /// under it (see [`Self::speleodb_note_lock_acquired`]).
-    fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
-        self.speleodb_session_lock()
-            .is_ok_and(|session| session.lock_acquired_here.as_deref() == Some(project_id))
     }
 
     /// [Track C] (#188, C5): centralized session-level 401 auto-drop handler.
@@ -1842,6 +1857,12 @@ impl AppState {
     /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
     pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        // Which open-project session this call is about, captured with the link it
+        // reads and re-checked before anything is committed. Three HTTP round trips
+        // separate the two, and this verb holds no `project` guard and no
+        // `command_lock`, so a close / delete / project switch can land anywhere in
+        // between. See `super::project_session` for what committing anyway costs.
+        let session = self.project_session();
         let link = self.speleodb_validated_link()?;
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
@@ -2027,6 +2048,11 @@ impl AppState {
                 return Err(dto_for_error(Endpoint::GetProject, &e));
             }
         };
+        // What the two editing arms below record: the project id where the pre-acquire
+        // probe proved the mutex was free (so this call made the unheld -> ours
+        // transition), and nothing where the lock was merely INHERITED - keeping one of
+        // those is an edit session, not an acquisition.
+        let record = acquired_here.then_some(link.project_id.as_str());
         match sync::reconcile_verdict(
             link.base_commit_sha.as_deref(),
             tip.as_deref(),
@@ -2034,20 +2060,25 @@ impl AppState {
             &commits,
         ) {
             ReconcileVerdict::UpToDate => {
-                self.set_edit_enabled(true);
-                // This process took the lock and is keeping it: record the
-                // acquisition, which is what licenses the authorship shortcut in
-                // `speleodb_remote_state`. AFTER the gate opens, never before - a poll
-                // landing in between would see a shut gate and clear it again. Only
-                // where the pre-acquire probe proved the mutex was free: keeping a
-                // lock we INHERITED is an edit session, not an acquisition.
-                if acquired_here {
-                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                // Open the gate, record the acquisition (which is what licenses the
+                // authorship shortcut in `speleodb_remote_state`) and clear force-edit
+                // (#213: the "reconnect" transition; a no-op for a normal read-only
+                // Start editing) - as ONE step under the `project` guard, and only
+                // onto the session this call validated its link against.
+                //
+                // If the session is gone the commit is refused and this unwinds like
+                // the `Diverged` arm below: `release_unless_kept` hands the lock back
+                // IF this call took it and there is no local work behind it, and keeps
+                // it otherwise. Abandoning silently would leak the mutex we just took;
+                // releasing unconditionally would surrender an INHERITED one over
+                // un-pushed work, which is the direction this file refuses everywhere
+                // else. Reported as an error, never as `Editing`: no edit session was
+                // started, and saying otherwise leaves the shell editable over a
+                // backend that is not.
+                if !self.speleodb_commit_project_session(Some(session), record) {
+                    release_unless_kept(None);
+                    return Err(local_dto(SpeleoDbError::NoRemoteProject));
                 }
-                // #213: we now genuinely hold the lock, so clear force-edit. This is
-                // the "reconnect" transition for a force-editor (no-op for a normal
-                // read-only Start editing, where force_editing was already false).
-                self.set_force_editing(false);
                 // Acquiring the lock on a clean reconcile confirms BASE == the tip
                 // as of now, so start the #202 re-verify window here (best-effort;
                 // a failed stamp just makes the first edit re-verify sooner).
@@ -2075,6 +2106,18 @@ impl AppState {
                 // pre-acquire flag keeps the lock for an inherited one and nothing
                 // else. Handing the refusal to `release_unless_kept` is what lets the
                 // cache copy speak for itself; every other failure releases as before.
+                //
+                // Checked BEFORE the fast-forward, not only at the commit below,
+                // because the fast-forward is destructive: it re-downloads the dump
+                // over the cache path and reloads from it, so a project deleted or
+                // closed while we were on the network would be silently RESURRECTED
+                // (and the delete's own recents prune already gone) before anything
+                // noticed. Bailing here unwinds on the same terms as every other
+                // no-edit-session exit.
+                if self.project_session() != session {
+                    release_unless_kept(None);
+                    return Err(local_dto(SpeleoDbError::NoRemoteProject));
+                }
                 let local_path = match self.speleodb_fast_forward(
                     &endpoint,
                     &token,
@@ -2089,17 +2132,21 @@ impl AppState {
                         return Err(local_dto(e));
                     }
                 };
-                self.set_edit_enabled(true);
-                // As in the UpToDate arm, and likewise after the gate reopens (the
-                // reload shut it, which is exactly the window in which a concurrent
-                // poll drops the record) and likewise only where the probe proved the
-                // mutex was free before we asked for it.
-                if acquired_here {
-                    self.speleodb_note_lock_acquired(Some(&link.project_id));
+                // Same one-step commit as the UpToDate arm - gate, then record (only
+                // where the probe proved the mutex was free), then the #213 force-edit
+                // clear - and likewise AFTER the gate reopens, which is exactly the
+                // window a concurrent poll drops the record in.
+                //
+                // `None` rather than `Some(session)`: the fast-forward above ENDED the
+                // session captured at entry on purpose (it closes and reopens the
+                // project in place), so an equality check against it would refuse
+                // every successful fast-forward. What is still checked is the failure
+                // this arm can actually produce - a teardown landing between that
+                // reload and here, leaving the gate open over no project at all.
+                if !self.speleodb_commit_project_session(None, record) {
+                    release_unless_kept(None);
+                    return Err(local_dto(SpeleoDbError::NoRemoteProject));
                 }
-                // #213: reconnect transition - the FF reload already cleared it, but
-                // clear force-edit explicitly now that we hold the lock.
-                self.set_force_editing(false);
                 Ok(StartEditingResult::FastForwarded { local_path })
             }
             // A fork, a moved tip our BASE isn't an ancestor of, OR a server
@@ -2369,7 +2416,12 @@ impl AppState {
         // `speleodb_note_lock_acquired(None)` write, i.e. two session-lock
         // acquisitions, which only NARROWED the window an acquisition landing between
         // them could be erased in rather than closing it.
-        self.speleodb_forget_lock_acquired_for(&project_id);
+        //
+        // NOT keyed on a session, unlike the deferred delete release: this verb aims
+        // at an arbitrary project id from the held-lock prompt and cannot name the
+        // session (if any) editing under it, and the lock is gone for every session
+        // once the POST above lands - so any claim on it is over, whoever took it.
+        self.speleodb_forget_lock_acquired_for(&project_id, None);
         Ok(())
     }
 
@@ -6473,15 +6525,71 @@ mod tests {
             "and must hand the failure over - the refusal is the only evidence that \
              the copy being overwritten holds work the open project's link never did"
         );
+        // Scoped to the fast-forward's own FAILURE arm, not to the whole
+        // `ReconcileVerdict::FastForward` arm. The arm also unwinds for a reason that
+        // is NOT a failure - the open-project session being gone before or after the
+        // reload - and there `release_unless_kept(None)` is the correct call, exactly
+        // as in the `Diverged` arm: nothing has read a local copy, so there is no
+        // refusal to consult and the pre-acquire probe is the whole answer. What must
+        // never regress is this one: the re-pull's error consulted.
+        let repull_failure = fast_forward
+            .split_once("Err(e) => {")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("return Err(local_dto(e));").next())
+            .expect("the fast-forward call's failure arm precedes its return");
         assert!(
-            !fast_forward.contains("release_unless_kept();")
-                && !fast_forward.contains("release_unless_kept(None)"),
+            !repull_failure.contains("release_unless_kept();")
+                && !repull_failure.contains("release_unless_kept(None)"),
             "releasing without consulting the failure is the defect itself"
         );
         assert!(
             start_editing.contains("failure.is_some_and(is_local_edits_refusal)"),
             "and the unwind must act on it: passing the failure in and ignoring it \
              releases just the same"
+        );
+    }
+
+    /// The fast-forward arm checks the open-project session BEFORE its re-pull.
+    ///
+    /// The sibling of the F7 behavioural test below, on the arm a unit test cannot
+    /// reach (the reload resolves an app cache dir only the env-gated live tests
+    /// initialise, and initialising it here would latch a process-wide `OnceLock` for
+    /// the whole binary).
+    ///
+    /// Checking only at the commit would be too late, because this arm is
+    /// DESTRUCTIVE: `speleodb_fast_forward` downloads the dump over the cache path and
+    /// reloads from it, so a project deleted while we were on the network would be
+    /// silently RESURRECTED - reopened, editable, holding a lock - after its `.stalx`
+    /// was trashed and its recents row pruned. The check has to precede the re-pull,
+    /// which is why the assertion is on the ORDER and not merely on its presence.
+    #[test]
+    fn the_fast_forward_arm_bails_before_it_re_pulls_over_a_vanished_session() {
+        let start_editing = prod_source()
+            .split_once("fn speleodb_start_editing")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    fn ").next())
+            .expect("speleodb_start_editing body precedes the next method");
+        let fast_forward = start_editing
+            .split_once("ReconcileVerdict::FastForward => {")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("ReconcileVerdict::Diverged").next())
+            .expect("the fast-forward arm precedes the divergence arm");
+        let before_the_repull = fast_forward
+            .split_once("self.speleodb_fast_forward(")
+            .map(|(before, _)| before)
+            .expect("the arm calls the fast-forward");
+
+        assert!(
+            before_the_repull.contains("if self.project_session() != session {"),
+            "the session captured at entry must be re-checked BEFORE the re-pull; \
+             checking only at the commit lets a deleted project be re-downloaded and \
+             reopened first"
+        );
+        assert!(
+            before_the_repull.contains("release_unless_kept(None);"),
+            "and that bail must unwind on the same terms as every other no-edit-session \
+             exit - a lock this call took and then abandoned is the leak the check \
+             exists to prevent"
         );
     }
 
@@ -6845,6 +6953,248 @@ mod tests {
             "and the deleted project's lock is STILL released - the record is what is \
              conditional here, never the release"
         );
+    }
+
+    /// The ORDINARY deferred release, after the delete's own teardown: still POSTs.
+    ///
+    /// The baseline the two F8 tests below are measured against. The teardown ends the
+    /// session the snapshot was taken from - that is what `close_open_project_locked`
+    /// is for - so "the session moved" is true of EVERY delete, and a release that
+    /// keyed on that alone would strand the mutex of every project it was asked to
+    /// hand back. It is the second term (a live edit session on this same remote
+    /// project) that has to do the discriminating.
+    #[test]
+    fn a_deferred_release_still_posts_after_its_own_teardown() {
+        let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        let params = state
+            .speleodb_abandon_lock_release_params()
+            .expect("precondition: the fixture holds a lock, so there is a snapshot");
+
+        // `delete_project`'s teardown, under the same guard the snapshot was taken
+        // under. Nothing replaces it - the user deleted the project and stopped there.
+        state.close_open_project_locked(&mut state.project.lock().expect("project lock"));
+
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("the stub answers 200");
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "the mutex is nobody else's, so it is handed back exactly as before"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "and the claim it licensed is over"
+        );
+    }
+
+    /// Nor when an UNRELATED project has been opened since - the other half of the
+    /// same rule, and the regression the session comparison would cause on its own.
+    #[test]
+    fn a_deferred_release_still_posts_when_an_unrelated_project_took_over() {
+        let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        let params = state
+            .speleodb_abandon_lock_release_params()
+            .expect("precondition: the fixture holds a lock, so there is a snapshot");
+        state.close_open_project_locked(&mut state.project.lock().expect("project lock"));
+
+        // A plain local project opened in the gap: a brand-new session, editable by
+        // default (a local project has no lock and no link), and no business of the
+        // deleted project's server mutex. The database slot stays empty, which is
+        // what makes the link read below answer `NoRemoteProject` - the same answer a
+        // local project's live handle gives.
+        *state.project.lock().expect("project lock") = Some(Project::new("Local".to_owned(), None));
+        state.begin_project_session();
+        state.set_edit_enabled(true);
+
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("the stub answers 200");
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "opening something else is not a reason to strand the deleted project's \
+             lock: nothing here is editing under it, so it is still ours to hand back"
+        );
+    }
+
+    /// F8: a REPLACEMENT session on the SAME remote project keeps the lock it is
+    /// editing under.
+    ///
+    /// `delete_project` drops the `project` mutex before this release - an HTTP round
+    /// trip may not happen under it - and inside that gap another local `.stalx`
+    /// carrying the same `speleo_link` row can be opened and Started editing. Two
+    /// files can carry one row (Save-As copies it forward; a re-pull rebuilds the
+    /// cache copy at the very path this delete just trashed), and the server answers a
+    /// re-acquire from an account that already holds the mutex with a successful
+    /// no-op - so that session becomes editable under the very lock this release was
+    /// about to free, WITHOUT taking a lock of its own and without recording anything.
+    ///
+    /// The POST then left it `edit_enabled` and not force-editing with no server lock
+    /// behind it: the unflagged lockless edit session the rest of this file treats as
+    /// unreachable, discovered only by the 20-minute #202 re-verify - by which point
+    /// someone else can have locked and pushed over it. A project-id comparison cannot
+    /// see any of this, because the two sessions' ids are equal by construction.
+    #[test]
+    fn a_deferred_release_leaves_a_replacement_session_on_the_same_project_editing() {
+        let (base, _listener, hits) = answering_counting_stub(REMOTE_ID);
+        let (_temp, state) = editing_fixture(&base);
+        let params = state
+            .speleodb_abandon_lock_release_params()
+            .expect("precondition: the fixture holds a lock, so there is a snapshot");
+        assert_eq!(
+            params.project_id, REMOTE_ID,
+            "precondition: the snapshot names the project being deleted"
+        );
+        state.close_open_project_locked(&mut state.project.lock().expect("project lock"));
+
+        // The replacement: a SECOND local file linked to the same remote project,
+        // installed as its own session and editing under the inherited mutex. Its
+        // Start editing recorded nothing - the pre-acquire probe saw our own account
+        // holding the lock, so it took the "inherited" arm - which is exactly why the
+        // record cannot be used to tell the two sessions apart either.
+        let (_temp2, replacement) = remote_readonly_fixture();
+        *state.project.lock().expect("project lock") =
+            replacement.project.lock().expect("project lock").clone();
+        *state.database.lock().expect("db lock") =
+            replacement.database.lock().expect("db lock").take();
+        state.begin_project_session();
+        state.set_edit_enabled(true);
+
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("skipping is not a failure - the lock is accounted for");
+
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "the mutex the replacement session is editing under must NOT be freed: \
+             doing so leaves it edit-enabled and not force-editing with no server lock, \
+             free for the next writer to lock and push over"
+        );
+        assert!(
+            state.edit_enabled() && !state.force_editing(),
+            "and the replacement is left editing exactly as it was"
+        );
+
+        // The other side of that line: a #213 FORCE-editor is edit-enabled while
+        // holding no lock at all, so it is no reason to keep the mutex alive. Skipping
+        // for one would strand the deleted project's lock behind a session that never
+        // had it and can never release it.
+        state.set_force_editing(true);
+        state
+            .speleodb_release_captured_lock(&params)
+            .expect("the stub answers 200");
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            1,
+            "a force-editing replacement holds no lock, so the deleted project's mutex \
+             is still ours to hand back"
+        );
+    }
+
+    /// F7: Start editing must not commit onto a session that vanished mid-call.
+    ///
+    /// Driven end-to-end and DETERMINISTICALLY: the loopback stub tears the open
+    /// project down when it sees the acquire POST, which is precisely the window the
+    /// finding names - after `speleodb_start_editing` read and validated the link,
+    /// before it commits. No sleeps and no thread race; the interleaving is pinned by
+    /// the request the stub is answering.
+    ///
+    /// What committing anyway cost: `set_edit_enabled(true)` plus an acquisition
+    /// record over no project at all, with the server mutex still held. The delete's
+    /// own release snapshot answers `None` in this window (a remote project opened
+    /// read-only has a shut gate), so nothing releases it; and nothing later can,
+    /// because every release re-reads the link through the database handle the
+    /// teardown dropped and the poll's catch-all clear sits behind
+    /// `speleodb_link_status`'s `NoRemoteProject` early return.
+    ///
+    /// The lock is handed back instead of abandoned, and that is the point of routing
+    /// the refusal through `release_unless_kept` rather than returning early: a lock
+    /// this call demonstrably TOOK and then walked away from would be the very leak
+    /// the fix exists to prevent.
+    #[test]
+    fn start_editing_refuses_to_commit_onto_a_session_torn_down_mid_call() {
+        use std::io::{Read as _, Write as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let (_temp, state) = remote_readonly_fixture();
+        let base = format!("http://127.0.0.1:{port}");
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        let state = std::sync::Arc::new(state);
+
+        // A history whose tip IS our BASE, so the reconcile is UpToDate and the
+        // UpToDate arm - the one the finding names - is the arm reached.
+        let body = r#"{"id":"11111111-1111-1111-1111-111111111111","name":"Remote",
+                "commits":[{"id":"abc123","parent_ids":[],"author_email":"u@x"}]}"#;
+        let releases = std::sync::Arc::new(AtomicUsize::new(0));
+        let server_state = std::sync::Arc::clone(&state);
+        let server_releases = std::sync::Arc::clone(&releases);
+        let server = std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = listener.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut request = Vec::new();
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(chunk.get(..n).unwrap_or_default());
+                }
+                let request = String::from_utf8_lossy(&request).into_owned();
+                if request.contains("/acquire/") {
+                    // THE INTERLEAVING: the delete's teardown, landing after the link
+                    // was read and before anything is committed. Under the `project`
+                    // guard, exactly as `delete_project` takes it.
+                    server_state.close_open_project_locked(
+                        &mut server_state.project.lock().expect("project lock"),
+                    );
+                }
+                if request.contains("/release/") {
+                    server_releases.fetch_add(1, Ordering::SeqCst);
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\n\
+                     Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+
+        let outcome = state.speleodb_start_editing();
+
+        assert!(
+            outcome.is_err(),
+            "no edit session was started, so reporting Editing would leave the shell \
+             editable over a backend that is not, got {outcome:?}"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(REMOTE_ID),
+            "and nothing is recorded: an acquisition claim by a session that no longer \
+             exists licenses the authorship shortcut over a project nobody is editing"
+        );
+        assert!(
+            state.project.lock().expect("project lock").is_none(),
+            "precondition held: the teardown really did land inside the call"
+        );
+        assert_eq!(
+            releases.load(Ordering::SeqCst),
+            1,
+            "and the lock this call took is handed back rather than abandoned - a \
+             mutex acquired and walked away from is the leak this fix exists to \
+             prevent, recoverable only by the server timeout or the next login's \
+             held-lock prompt"
+        );
+        drop(state);
+        drop(server);
     }
 
     #[test]

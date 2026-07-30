@@ -146,6 +146,19 @@ pub struct AppState {
     /// solve so a result computed against a since-invalidated project is not
     /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
     pub(super) adjusted_cache_generation: AtomicU64,
+    /// Which open-project session is installed - bumped by every path that installs
+    /// or tears one down, so a value captured earlier and still equal is proof that
+    /// the very session it was taken from is the one open now. See
+    /// [`super::project_session`] for the two defects it exists to close; read and
+    /// written only through `project_session()` / `begin_project_session()` there.
+    ///
+    /// Distinct from `speleodb`, which models the signed-in ACCOUNT and outlives
+    /// every project, and not derivable from anything else in this struct: the
+    /// project id cannot separate two local files on one remote project, the file
+    /// path cannot separate a project from its own re-pulled replacement, and
+    /// `edit_enabled` is reset to `true` by the teardown so after a close it reads
+    /// exactly like a live edit session.
+    pub(super) project_session: AtomicU64,
 }
 
 impl AppState {
@@ -201,6 +214,10 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
+            // Starts at 0 (no project installed) and is bumped by the first open;
+            // the value itself is meaningless, only whether it still matches a
+            // captured one.
+            project_session: AtomicU64::new(0),
         })
     }
 

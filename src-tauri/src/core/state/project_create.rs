@@ -145,6 +145,12 @@ impl AppState {
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
+            // A new open-project session, started under the guard that installs it.
+            // This path never closes first (and never installs a database handle at
+            // all), so the bump is what stops in-flight work decided against the
+            // PREVIOUS project from committing onto this one. See
+            // `super::project_session`.
+            self.begin_project_session();
         }
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
@@ -419,10 +425,17 @@ impl AppState {
         // data is written even if a previous panic poisoned a mutex.
 
         // Commit 1: Project state mutation
-        *self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+        {
+            let mut slot = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *slot = Some(project.clone());
+            // The new open-project session starts with the slot it names, under the
+            // SAME guard - see `do_load_project_full` for why the bump may not trail
+            // the install, and `super::project_session` for what it discriminates.
+            self.begin_project_session();
+        }
 
         // Commit 2: Database handle mutation
         *self
