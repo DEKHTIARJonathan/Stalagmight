@@ -683,7 +683,8 @@
           "notAttempted": "not checked yet",
           "available": "available",
           "unavailable": "not working on this computer",
-          "declined": "not in use - you chose otherwise when signing in"
+          "declined": "not in use - you chose to keep the key elsewhere",
+        "disabled": "switched off in these settings"
         },
         "retry": "Try again",
         "retrying": "Trying…",
@@ -2974,6 +2975,17 @@
       "doneToast": "Project adopted. Start editing, then Done, to push it to SpeleoDB.",
       "doneToastNoWrite": "Project adopted locally, but its SpeleoDB type could not be changed (you may not have write access)."
     },
+    "dumpPicker": {
+      "titleStalx": "Choose which file to open",
+      "titleAriane": "Choose which file to adopt",
+      "body": "This SpeleoDB project holds more than one openable file, so Stalagmight cannot tell which one is the survey. Pick the one you want.",
+      "consequence": "The file you choose becomes the project. The next time you push, it replaces the project file on SpeleoDB - so if you are not sure which one is current, check the sizes and dates below, or ask whoever uploaded them. To stop being asked, remove the extra file(s) on SpeleoDB, leaving a single one.",
+      "columnFile": "File",
+      "columnSize": "Size",
+      "columnModified": "Modified",
+      "confirmStalx": "Open",
+      "confirmAriane": "Adopt"
+    },
     "forceEdit": {
       "reconnect": "Reconnect to sync",
       "confirm": {
@@ -3024,6 +3036,7 @@
       "failed": "Could not restore the revision"
     },
     "revert": {
+      "awaitingChoice": "Revision {{sha}} holds more than one openable file, so the write lock was handed back while you choose. Nothing was changed. Pick a file and the revert runs again from the start.",
       "action": "Revert",
       "title": "Revert to revision {{sha}}",
       "body": "This takes the write lock on \"{{name}}\", replaces the working copy with revision {{sha}}, uploads it as a new revision, and releases the write lock again.",

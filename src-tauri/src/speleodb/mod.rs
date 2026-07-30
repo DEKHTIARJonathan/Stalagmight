@@ -36,12 +36,13 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
-    DoneResult, KeychainReport, Permission, PushResult, RemoteState, SpeleoAdoptResult,
-    SpeleoCollaborator, SpeleoCollaborators, SpeleoErrorDto, SpeleoLinkStatus,
-    SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata,
-    SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult,
-    SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption, SpeleoUserSuggestion,
-    StartEditingResult, TokenStorage, UnpushedLocalEdits, UpdateResult, Visibility,
+    DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
+    SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate,
+    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
+    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
+    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
+    SpeleoUserSuggestion, StartEditingResult, TokenStorage, UnpushedLocalEdits, UpdateResult,
+    Visibility,
 };
 
 /// Errors from the SpeleoDB client and dump handling.
@@ -90,9 +91,30 @@ pub(crate) enum SpeleoDbError {
     /// hard error.
     #[error("this is an Ariane (.tml) project; adopt it to edit it in Stalagmight")]
     AdoptAriane,
-    /// The dump held more than one `.stalx` - ambiguous; fail closed.
-    #[error("SpeleoDB contained multiple ambiguous .stalx files: {}", .0.join(", "))]
-    AmbiguousDump(Vec<String>),
+    /// The dump held more than one `.stalx` - ambiguous. [#258] Surfaced to the FE
+    /// as `SpeleoDbAction::Ambiguous` with the candidates attached, so the user can
+    /// pick one.
+    ///
+    /// A COUNT, not the names. Two reasons, and neither is brevity. The verbs this
+    /// used to be the fallback for - the fast-forward family, which carries no
+    /// `entryPath` - no longer reach it at all: they are refused earlier with
+    /// `AMBIGUOUS_NEEDS_REOPEN`, which names the way out. And the names are
+    /// server-supplied and unbounded in aggregate, so joining them built a second full
+    /// copy of every candidate path inside the error, alongside the structured list the
+    /// DTO already carries. A count says the same useful thing to anyone who does see
+    /// it, for a fixed size.
+    #[error(
+        "SpeleoDB contains more than one Stalagmight file ({} found). Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.len()
+    )]
+    AmbiguousDump(Vec<SpeleoDumpCandidate>),
+    /// The dump held no `.stalx` but more than one `ariane.tml` - ambiguous on the
+    /// adoption path. [#258] A count rather than the names, for the reasons above.
+    #[error(
+        "SpeleoDB contains more than one Ariane file ({} found). Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.len()
+    )]
+    AmbiguousAriane(Vec<SpeleoDumpCandidate>),
     /// A local filesystem error while extracting/writing.
     #[error("filesystem error: {0}")]
     Io(String),
@@ -139,7 +161,7 @@ pub(crate) enum SpeleoDbError {
 
 #[cfg(test)]
 mod tests {
-    use super::{SpeleoDbError, TransportCause};
+    use super::{SpeleoDbError, SpeleoDumpCandidate, TransportCause};
 
     #[test]
     fn error_display_strings_are_stable() {
@@ -181,10 +203,34 @@ mod tests {
             SpeleoDbError::MissingCredentials.to_string(),
             "email and password are required to log in"
         );
+        // [#258] The ambiguity Display still has to name the remedy - every path that
+        // can offer the picker routes on `action == Ambiguous` and never shows this
+        // string, so whoever DOES see it has no dialog to act in.
+        //
+        // A COUNT rather than the names, and the names being server-supplied is why:
+        // joining them built a second unbounded copy of every candidate path inside the
+        // error, beside the structured list the DTO already carries. The count says the
+        // same useful thing for a fixed size, and this assertion is what stops the join
+        // creeping back.
+        let candidate = |path: &str| SpeleoDumpCandidate {
+            entry_path: path.to_owned(),
+            size_bytes: 0,
+            modified: None,
+        };
         assert_eq!(
-            SpeleoDbError::AmbiguousDump(vec!["a.stalx".to_owned(), "b.stalx".to_owned()])
+            SpeleoDbError::AmbiguousDump(vec![candidate("a.stalx"), candidate("b.stalx")])
                 .to_string(),
-            "SpeleoDB contained multiple ambiguous .stalx files: a.stalx, b.stalx"
+            "SpeleoDB contains more than one Stalagmight file (2 found). \
+             Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one."
+        );
+        assert_eq!(
+            SpeleoDbError::AmbiguousAriane(vec![
+                candidate("ariane.tml"),
+                candidate("misc/ariane.tml")
+            ])
+            .to_string(),
+            "SpeleoDB contains more than one Ariane file (2 found). \
+             Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one."
         );
         // [#270] Transport gained a typed `cause`, but its Display is unchanged:
         // it stays the RAW diagnostic line (logs / bug reports). What changed is

@@ -29,10 +29,10 @@ use crate::core::AppState;
 // the call site where the endpoint is known.
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
-    SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
-    SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
-    SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamOption,
-    SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
+    SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
+    SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
+    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -50,6 +50,8 @@ async fn run_blocking<T: Send + 'static>(
             status: None,
             transport: None,
             unpushed_local: None,
+            dump_candidates: None,
+            dump_candidate_kind: None,
         })?
 }
 
@@ -92,9 +94,10 @@ pub async fn speleodb_open_project(
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_open_project(project_id, project_name, latest_commit_sha)
+        s.speleodb_open_project(project_id, project_name, latest_commit_sha, entry_path)
     })
     .await
 }
@@ -118,11 +121,41 @@ pub async fn speleodb_open_project_discarding_local(
     project_id: String,
     project_name: String,
     latest_commit_sha: Option<String>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     run_blocking(app, move |s| {
-        s.speleodb_open_project_discarding_local(project_id, project_name, latest_commit_sha)
+        s.speleodb_open_project_discarding_local(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            entry_path,
+        )
     })
     .await
+}
+
+/// [#258] What a project dump holds, WITHOUT taking the write lock or touching the
+/// cache. `hexsha` targets a specific revision; omit it for the current tip.
+///
+/// Lets a flow that needs the lock (the revert composite) put its "which file is the
+/// survey?" question BEFORE acquiring, instead of taking the lock, failing, handing
+/// it back to ask, and re-taking it.
+///
+/// Returns the candidates when there is a real choice to make, and `null` otherwise.
+/// It ALWAYS downloads: it used to skip that when the session held an answer, but the
+/// answer it held was about a different tree than the one being asked about, so the
+/// short-circuit was answering the wrong question. The recall is consulted inside the
+/// resolver instead, which honours it only for the revision it belongs to.
+///
+/// Advisory: it never reports its own failures, so the call that follows stays the one
+/// authoritative place a problem is surfaced.
+#[tauri::command]
+pub async fn speleodb_dump_candidates(
+    app: AppHandle,
+    project_id: String,
+    hexsha: Option<String>,
+) -> Result<Option<Vec<SpeleoDumpCandidate>>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_dump_candidates(project_id, hexsha)).await
 }
 
 /// [#214] Adopt an Ariane (`.tml`-only) project: import its `ariane.tml`, save a
@@ -147,10 +180,17 @@ pub async fn speleodb_adopt_ariane(
     project_name: String,
     latest_commit_sha: Option<String>,
     discard_local: Option<bool>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoAdoptResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_adopt_ariane(project_id, project_name, latest_commit_sha, discard_local)
+        s.speleodb_adopt_ariane(
+            project_id,
+            project_name,
+            latest_commit_sha,
+            discard_local,
+            entry_path,
+        )
     })
     .await
 }
@@ -230,6 +270,17 @@ pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErro
     run_blocking(app, AppState::speleodb_release_all_locks).await
 }
 
+/// Hand back a write lock only if THIS process took it, and only the one it took.
+///
+/// For an unwind whose context went stale mid-flight. Deliberately takes no project
+/// id: the caller's captured id is not necessarily what got locked, and an inherited
+/// same-account lock must never be handed back. See
+/// [`AppState::speleodb_release_lock_acquired_here`].
+#[tauri::command]
+pub async fn speleodb_release_lock_acquired_here(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_release_lock_acquired_here).await
+}
+
 /// Release the write lock on ONE project by id (#201 per-project "Release" in the
 /// held-lock resume prompt). Targets an arbitrary held project, not necessarily
 /// the open one; on success the caller re-scans to refresh the recents badges.
@@ -293,10 +344,18 @@ pub async fn speleodb_restore_revision(
     hexsha: String,
     restore: bool,
     discard_local: Option<bool>,
+    entry_path: Option<String>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     run_blocking(app, move |s| {
-        s.speleodb_restore_revision(project_id, project_name, hexsha, restore, discard_local)
+        s.speleodb_restore_revision(
+            project_id,
+            project_name,
+            hexsha,
+            restore,
+            discard_local,
+            entry_path,
+        )
     })
     .await
 }

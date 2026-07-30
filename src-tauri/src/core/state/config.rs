@@ -1053,7 +1053,10 @@ mod tests {
             let mut session = state.speleodb.lock().expect("session");
             assert_eq!(
                 session.token_store.keychain_state(),
-                KeychainState::Declined,
+                // `Disabled`, not `Declined`: the switch is a standing policy the
+                // retry verb cannot revoke, and reporting it as a decline is what
+                // made Settings offer a "Try again" that could not do anything.
+                KeychainState::Disabled,
                 "the live store has to know before the next restart"
             );
             assert_eq!(

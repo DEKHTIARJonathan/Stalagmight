@@ -47,11 +47,53 @@ function setAppInert(inert: boolean): void {
 }
 
 /**
+ * The z-index the FIRST stacked dialog gets; each one above it gets one more.
+ *
+ * 51 because app chrome inside `#root` tops out at `z-50` and `#dialog-root`
+ * creates no stacking context of its own, so dialogs compete with that chrome
+ * directly in the root stacking context. Staying just above it leaves the whole
+ * 60..9999 band free for the layers that must out-rank every dialog - toasts at
+ * `z-[99999]`, tooltips, onboarding.
+ */
+const BASE_Z = 51;
+
+/**
+ * Give every stacked container a z-index matching its position in the stack.
+ *
+ * Paint order has to be OWNED here, because nothing else can own it correctly.
+ * Dialog containers are `position: fixed` with a z-index, and they portal into a
+ * `#dialog-root` that is a bare div - no position, no transform, no isolation - so
+ * they do not form a local stacking context and are sorted against each other in
+ * the ROOT one. Painting compares z-index first and only falls back to DOM order
+ * on a tie, so a later-mounted dialog with a lower class-declared z-index can
+ * never come out on top however it is inserted.
+ *
+ * That is not hypothetical: `DialogWrapper` declares `z-50` and `AlertDialog`
+ * declares `z-[60]`, so ANY overlay built on the former was painted underneath any
+ * dialog built on the latter - visible as the #258 file picker being buried by the
+ * revert dialog that raised it. Worse, it was buried while still being the
+ * interactive one, because this module's `inert` bookkeeping was right: the user
+ * could click controls they could not see.
+ *
+ * An inline style rather than a class, deliberately - it beats the Tailwind
+ * declaration by specificity, so the classes stay as documentation of each
+ * dialog's default layer, and it is a real computed value that a test can assert
+ * without a stylesheet loaded.
+ */
+function restack(): void {
+  stack.forEach((element, index) => {
+    element.style.zIndex = String(BASE_Z + index);
+  });
+}
+
+/**
  * Push a dialog container onto the stack.
  *
  * - Sets `inert` on all siblings of `#dialog-root` (app root)
  * - Sets `inert` on all previously-stacked dialog containers
  *   so only the topmost dialog is interactive
+ * - Re-ranks every container's z-index so the topmost is also the one PAINTED on
+ *   top (see [`restack`])
  */
 export function pushDialog(element: HTMLElement): void {
   // De-duplicate: if already in stack, move to top
@@ -73,6 +115,8 @@ export function pushDialog(element: HTMLElement): void {
   // Always set app siblings inert when any dialog is open
   setAppInert(true);
 
+  restack();
+
   emitChange();
 }
 
@@ -81,6 +125,7 @@ export function pushDialog(element: HTMLElement): void {
  *
  * - Removes `inert` from the new topmost dialog (if any)
  * - Removes `inert` from app siblings only if stack is now empty
+ * - Clears the popped container's stamped z-index and re-ranks the rest
  */
 export function popDialog(element: HTMLElement): void {
   const index = stack.indexOf(element);
@@ -88,8 +133,11 @@ export function popDialog(element: HTMLElement): void {
 
   stack.splice(index, 1);
 
-  // Clear inert from the popped element to avoid stale attributes
+  // Clear inert AND the stamped layer from the popped element, so a container
+  // that is re-used later starts from its declared class again rather than from
+  // wherever it happened to sit last time.
   element.removeAttribute('inert');
+  element.style.zIndex = '';
 
   if (stack.length === 0) {
     // No dialogs left - restore app interactivity
@@ -99,6 +147,8 @@ export function popDialog(element: HTMLElement): void {
     const topmost = stack[stack.length - 1]!;
     topmost.removeAttribute('inert');
   }
+
+  restack();
 
   emitChange();
 }

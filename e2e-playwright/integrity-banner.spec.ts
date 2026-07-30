@@ -55,7 +55,13 @@ test.describe('Structural-integrity banner', () => {
     // Dialog and banner clear; a confirmation toast appears.
     await expect(page.getByTestId('integrity-dialog')).toHaveCount(0);
     await expect(page.getByTestId('integrity-banner')).toHaveCount(0);
-    await expect(page.getByText(/Repaired 2 issues/)).toBeVisible();
+    // Scoped to the toast: ToastStack renders every message TWICE on purpose - once
+    // in an `sr-only` live region that announces it, and once as the visible,
+    // `aria-hidden` copy - so an unscoped text match is ambiguous by design. The
+    // visible one is what this test is about.
+    await expect(
+      page.getByTestId('toast').filter({ hasText: /Repaired 2 issues/ }),
+    ).toBeVisible();
   });
 
   test('repair reports issues that still need manual attention', async ({ page }) => {
@@ -72,8 +78,11 @@ test.describe('Structural-integrity banner', () => {
     await page.getByTestId('integrity-review-button').click();
     await page.getByTestId('integrity-dialog-repair').click();
 
-    // Honest message: fixed one, one needs manual attention.
-    await expect(page.getByText(/Fixed 1 issue; 1 need.* manual attention/)).toBeVisible();
+    // Honest message: fixed one, one needs manual attention. Scoped to the toast
+    // for the same reason as above - the live region carries the same text.
+    await expect(
+      page.getByTestId('toast').filter({ hasText: /Fixed 1 issue; 1 need.* manual attention/ }),
+    ).toBeVisible();
     // The banner stays (the residual issue is still present).
     await expect(page.getByTestId('integrity-banner')).toContainText('1 integrity issue');
   });

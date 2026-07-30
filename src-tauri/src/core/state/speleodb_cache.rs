@@ -251,6 +251,7 @@ impl AppState {
 )]
 mod tests {
     use super::*;
+    use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::models::{Project, SpeleoLink};
     use crate::persistence::Database;
     use crate::speleodb::dump::Dump;
@@ -281,14 +282,12 @@ mod tests {
     /// this test kept), and the behaviour of both is pinned by the test below.
     #[test]
     fn the_orchestration_never_calls_the_abandoning_replace_directly() {
-        let source = include_str!("speleodb.rs");
-        // Production code only: the orchestration's own test module drives both
-        // verbs on purpose.
-        let orchestration = source.split("#[cfg(test)]").next().unwrap_or(source);
+        // Production code only, across EVERY speleodb module except this one - the
+        // definition site legitimately names the verb, and the orchestration's own
+        // test module drives both verbs on purpose. Scanning a single sibling would
+        // pass vacuously as soon as the call sites move out of it (#275).
         assert_eq!(
-            orchestration
-                .matches("replace_cache_stalx_abandoning")
-                .count(),
+            speleodb_prod_matches("replace_cache_stalx_abandoning", &["speleodb_cache.rs"]),
             0,
             "the orchestration reaches the abandoning replace only through the \
              named LocalEditsPolicy, so every waiver is spelled out at its call site"

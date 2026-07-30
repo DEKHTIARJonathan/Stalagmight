@@ -233,11 +233,23 @@ test.describe('#162 a downward-flipping picker is bounded above the status bar',
     await waitForMapReady(page);
     await page.setViewportSize({ width: 900, height: 560 });
     // A tall data-table panel pushes the sub-header HIGH, so the picker flips
-    // DOWN (toward the status bar) rather than up.
+    // DOWN (toward the status bar) rather than up. 440 is past what the layout
+    // will grant, deliberately: it asks for the tallest panel available.
     await setDataTableHeight(page, 440);
     await openDataTable(page);
     const pill = page.getByTestId('data-table-section-pill');
-    await expect.poll(async () => (await pill.boundingBox())?.y ?? 999).toBeLessThan(160);
+    // #260 clamps the panel so the map row keeps MAP_MIN_HEIGHT, capping it at
+    // `main - 200` however much was asked for. That pins the sub-header near
+    // `toolbar + 200` no matter how short the viewport is, so the original fixed
+    // `< 160` became unreachable rather than merely tight. What the flip-down case
+    // needs is only that the trigger sits in the upper half, leaving more room
+    // below it than above - so assert that, derived from the viewport instead of
+    // hard-coded against a layout constant this spec does not own.
+    const viewport = page.viewportSize();
+    expect(viewport).not.toBeNull();
+    await expect
+      .poll(async () => (await pill.boundingBox())?.y ?? 999)
+      .toBeLessThan(viewport!.height / 2);
   });
 
   test('flips down and stops above the status bar (not clipped behind it)', async ({ page }) => {

@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore, asDoneKind } from '../store/speleoStore';
+import { invokeIpc } from '../utils/ipc';
 import { useSpeleoActions } from './useSpeleoActions';
 import { useRestoreRevision } from './useRestoreRevision';
-import { humanizeSpeleoError, unpushedLocalEdits } from '../utils/speleoError';
+import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../utils/speleoError';
+import type { SpeleoDumpCandidate } from '../types/ipc.generated';
 
 export interface RevertRevisionArgs {
   projectId: string;
@@ -21,6 +23,12 @@ export interface RevertRevisionArgs {
    * armed second press, after the user has been told which local work it replaces.
    */
   discardLocal?: boolean;
+  /**
+   * [#258] The dump entry the user picked, when this whole composite is a retry from
+   * the ambiguity picker. Only the restore step reads it; `resumeAtPush` returns
+   * before that step, so it is inert there by construction.
+   */
+  entryPath?: string;
   /**
    * Resume a revert whose restore already landed: re-issue ONLY the upload +
    * release, against the working copy this flow already swapped in and the write
@@ -76,6 +84,19 @@ export type RevertOutcome =
   | { kind: 'locked_by'; email: string | null }
   | { kind: 'lock_failed' }
   | { kind: 'restore_failed'; message: string; lockHeld: boolean }
+  /** [#258] The revision's tree holds more than one openable file, so the composite
+      is SUSPENDED on a question rather than failed. The write lock has already been
+      handed back (that is why there is no `lockHeld` here), nothing was written, and
+      answering re-runs the whole composite from the top - which is what re-acquires
+      the lock. Never produced while the copy is dirty: there the lock is kept on
+      purpose and a composite retry would be refused by the un-pushed pre-flight. */
+  | { kind: 'awaiting_dump_choice'; candidates: SpeleoDumpCandidate[] }
+  /** [#258] The open project changed while the composite was waiting on the dump
+      probe, so everything after that point would be about a different project than
+      the one this revert was asked for. Nothing was taken and nothing was written -
+      the probe is deliberately the one step that needs no lock, which is why this
+      can only be produced from before the acquire. */
+  | { kind: 'project_changed' }
   | { kind: 'push_failed' }
   /** The edit gate dropped mid-flight (usually a 401 auto-drop): nothing uploaded,
       nothing released, and - unlike `push_failed` - no lock held to retry with. */
@@ -143,13 +164,34 @@ export function useRevertRevision() {
       shortSha,
       message,
       discardLocal = false,
+      entryPath,
       resumeAtPush = false,
       onStep,
     }: RevertRevisionArgs): Promise<RevertOutcome> => {
+      // Which project this composite is FOR, against what is open right now. The
+      // dialog captured `projectId` from its open data, so it is a snapshot; nothing
+      // downstream re-checks it, and the two steps that would act on a mismatch act on
+      // different projects - `startEditing()` takes no argument and locks whatever is
+      // open, while the restore targets the captured id.
+      //
+      // Checked at ENTRY as well as before the acquire below, because this callback is
+      // re-entered from the picker with `entryPath` set, which skips the probe branch
+      // and every check inside it. The picker is the longest wait in the whole flow.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        return { kind: 'project_changed' };
+      }
+
       // The restore already landed and the lock is still ours, so the upload is the
       // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of both
       // pre-flights below: the restore is what set the bit the un-pushed guard
       // tests, so running it here would refuse the retry over the revert's own tree.
+      //
+      // But BEHIND the identity check, which it used to precede. `publish` calls
+      // `done(message)` - argument-free, acting on whatever is open, and `message` is a
+      // real commit message, so it PUSHES. A retry after a project switch therefore
+      // uploaded the replacement project and released its lock, under a comment two
+      // hunks above claiming this check ran "at ENTRY". The pre-flights are what must
+      // stay behind the resume; the identity is not.
       if (resumeAtPush) return publish({ message, shortSha, onStep });
 
       // Un-SAVED is a different loss from un-PUSHED, and this flow resolves neither:
@@ -182,6 +224,47 @@ export function useRevertRevision() {
         return { kind: 'needs_discard', lockHeld: false };
       }
 
+      // [#258] Ask which file BEFORE acquiring, for the same reason the un-pushed
+      // check above runs before any IPC: a question that needs no lock should not
+      // cost one. Discovering the ambiguity inside the restore meant taking the
+      // lock, failing, handing it back to ask, and re-taking it - all visible.
+      //
+      // Skipped once `entryPath` is set, because that IS the answer. The probe takes no
+      // lock, touches no cache and never reports its own failures - but it DOES always
+      // download. It used to skip that when the session held an answer; that answer was
+      // about the tip while this asks about `hexsha`, so the short-circuit was answering
+      // a different question than the one put to it.
+      if (!entryPath) {
+        const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
+          'speleodb_dump_candidates',
+          { projectId, hexsha },
+        ).catch(() => null);
+        // The probe can involve a dump download, so it is the longest step before the
+        // acquire. Candidates painted after a swap would describe a server tree nobody
+        // is looking at any more.
+        if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+          return { kind: 'project_changed' };
+        }
+        if (candidates && candidates.length > 0) {
+          return { kind: 'awaiting_dump_choice', candidates };
+        }
+      }
+
+      // Last call before anything becomes irreversible: the acquire below takes a
+      // server mutex and the restore after it replaces the whole working tree. Both
+      // pre-flights are re-run here rather than trusted from the top, because every
+      // route into this point has a wait behind it - the probe's download, or the
+      // picker, whose answer re-enters this callback from the very beginning with
+      // `entryPath` set. The identity check answers "still the same project?"; the
+      // dirty check answers "did they edit while we waited?", which the entry check
+      // cannot, since it ran before the wait. Skipping the second let a restore
+      // destroy in-memory work that arrived during the probe, under a confirmation
+      // whose copy only ever mentions SpeleoDB.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        return { kind: 'project_changed' };
+      }
+      if (useProjectStore.getState().isDirty) return { kind: 'unsaved_local' };
+
       onStep?.('locking');
       if (!(await startEditing())) {
         // `startEditing` resolves false for three different reasons, and only one of
@@ -198,6 +281,47 @@ export function useRevertRevision() {
         return { kind: 'lock_failed' };
       }
 
+      // The acquire is itself a round trip, and the restore on the other side of it is
+      // the destructive step - it replaces the whole working tree. So the identity is
+      // checked once more here, where a mismatch still costs nothing but the lock we
+      // just took.
+      //
+      // Handing that lock back is the point: every other failure arm below unwinds
+      // what it acquired, and walking away from a server mutex because the project
+      // changed would strand it for the holder's whole session.
+      //
+      // The unwind names NEITHER a project nor `done`, and both exclusions are load
+      // bearing.
+      //
+      // Not `done`: it is argument-free and acts on whatever is open - the very thing
+      // this branch has just proved changed - and `message: null` picks the commit
+      // message rather than suppressing the upload, so a replacement that is dirty and
+      // editable would have been PUSHED by an error path.
+      //
+      // Not `speleodb_release_lock(projectId)` either, which was the first correction
+      // and only fixed half of it. That verb targets an ARBITRARY project by design
+      // (#201's held-lock prompt), so it unwinds whatever holds the id it is handed -
+      // and `startEditing()` locks whatever is OPEN, so the id captured here is not
+      // necessarily the id that got locked. Two ways to be wrong, and one destructive:
+      // an acquire that met a lock this ACCOUNT already held inherited it from a
+      // sibling session guarding its own un-pushed work, and `speleodb_start_editing`
+      // is explicit that no unwind may hand that back.
+      //
+      // Only the backend knows which of those happened, so it decides:
+      // `speleodb_release_lock_acquired_here` releases exactly what this process took
+      // and no-ops on an inherited lock or none at all.
+      //
+      // Best-effort: a failed release warns and nothing more. The outcome is already
+      // decided, and reporting a release failure instead of the project change would
+      // name the smaller problem; a stranded lock stays visible in the held-lock
+      // resume prompt.
+      if (useSpeleoStore.getState().remoteProjectId !== projectId) {
+        await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
+          console.warn('revert: could not release the lock taken before the project changed', e);
+        });
+        return { kind: 'project_changed' };
+      }
+
       onStep?.('restoring');
       try {
         // Quiet: this restore is a middle step, and its toast tells the user to push -
@@ -210,6 +334,7 @@ export function useRevertRevision() {
           restore: true,
           discardLocal,
           quiet: true,
+          ...(entryPath ? { entryPath } : {}),
         });
       } catch (e) {
         const refusedForLocalEdits = unpushedLocalEdits(e);
@@ -251,6 +376,13 @@ export function useRevertRevision() {
           lockHeld = !(kind === 'released' || kind === 'not_editing');
         }
         if (unpushedLocalEdits(e)) return { kind: 'needs_discard', lockHeld };
+        // [#258] After the unwind, not before it: the release must have HAPPENED, and
+        // `lockHeld` being false is the evidence that a composite retry can re-acquire.
+        // While the copy is dirty the lock is deliberately kept and the retry's own
+        // un-pushed pre-flight would refuse it, so that case falls through to the
+        // message below - which is accurate - rather than to a picker that cannot work.
+        const candidates = dumpCandidates(e);
+        if (candidates && !lockHeld) return { kind: 'awaiting_dump_choice', candidates };
         return {
           kind: 'restore_failed',
           message: humanizeSpeleoError(e, t('speleodb.revert.errors.restorePrefix', { sha: shortSha })),

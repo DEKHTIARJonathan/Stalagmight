@@ -4,8 +4,16 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../store/speleoStore';
 import { useRevertRevision } from '../../hooks/useRevertRevision';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
+
+/**
+ * Names this flow to `openDumpPicker`, so its own re-raise is read as a continuation
+ * of the question it is still suspended on, and anyone else's raise is read as the
+ * displacement it is.
+ */
+const DUMP_PICKER_OWNER = 'speleodb-revert';
 
 /**
  * What a press asks `useRevertRevision` for.
@@ -36,6 +44,7 @@ export default function SpeleoRevertDialog() {
   const dialogData = useUIStore((s) => s.dialogData);
   const isDirty = useProjectStore((s) => s.isDirty);
   const revertRevision = useRevertRevision();
+  const openDumpPicker = useSpeleoStore((s) => s.openDumpPicker);
 
   const projectId = typeof dialogData.projectId === 'string' ? dialogData.projectId : '';
   const projectName = typeof dialogData.projectName === 'string' ? dialogData.projectName : '';
@@ -56,6 +65,8 @@ export default function SpeleoRevertDialog() {
   const [busy, setBusy] = useState(false);
   const [step, setStep] = useState<'locking' | 'restoring' | 'pushing' | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** [#258] The composite is parked on the file picker - suspended, not failed. */
+  const [awaitingChoice, setAwaitingChoice] = useState(false);
   // Set when the revert cannot proceed without replacing un-pushed local work -
   // either refused up front (before any lock was taken) or by the backend mid-flight.
   const [needsDiscard, setNeedsDiscard] = useState(false);
@@ -90,14 +101,17 @@ export default function SpeleoRevertDialog() {
     else closeDialog();
   };
 
-  const run = async (mode: RunMode) => {
+  const run = async (mode: RunMode, entryPath?: string) => {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
+    setAwaitingChoice(false);
     // Cleared for the duration of the attempt: this run either fails at the upload
     // again (and re-arms it below) or gets past that step, in which case the retry
     // control must not linger over an outcome it no longer describes.
     setRetryUpload(false);
+    // Captured BEFORE the composite runs; the ambiguity arm checks it.
+    const issuedAt = speleoSessionIssuedAt();
     const outcome = await revertRevision({
       projectId,
       projectName,
@@ -107,6 +121,9 @@ export default function SpeleoRevertDialog() {
       discardLocal: mode === 'discard',
       resumeAtPush: mode === 'resume-upload',
       onStep: setStep,
+      // Conditional spread: `exactOptionalPropertyTypes` rejects an explicit
+      // `undefined` here, the same reason `PublishArgs` spells `onStep` out.
+      ...(entryPath ? { entryPath } : {}),
     });
     setStep(null);
     // The restore LANDED, so the destructive question has been asked AND answered:
@@ -129,9 +146,48 @@ export default function SpeleoRevertDialog() {
       case 'reverted':
         dismiss();
         return;
+      case 'awaiting_dump_choice':
+        // NOT a failure: the write lock is already back, nothing was written, and the
+        // composite is suspended on a question. So no `error` is set - the red line
+        // below would be a lie - and `busy` deliberately STAYS true, which keeps the
+        // plain Revert control inert so a second composite cannot be armed behind the
+        // picker. Answering re-runs the whole thing, which is what re-acquires the
+        // lock; cancelling hands the dialog back exactly as it was.
+        // [#258 review] Only for a session that can still answer it - the probe behind
+        // this outcome is an unbounded download, and a concurrent 401 can tear the
+        // surface down while it is out. Without the picker there is nothing to suspend
+        // on, so `busy` is released rather than deliberately held.
+        if (!speleoSessionStillCurrent(issuedAt)) {
+          setBusy(false);
+          return;
+        }
+        setAwaitingChoice(true);
+        openDumpPicker(
+          outcome.candidates,
+          'stalx',
+          (chosen) => run(mode, chosen),
+          () => {
+            setAwaitingChoice(false);
+            setBusy(false);
+          },
+          // This flow suspends on the answer - `busy` stays true across it and the
+          // cancel above is the only thing that releases it - so it names itself. A
+          // re-raise from its own retry is a continuation and must NOT fire that
+          // cancel; a picker raised by anything else displaces it and must.
+          DUMP_PICKER_OWNER,
+        );
+        return;
       case 'diverged':
         // The remote moved on: the divergence dialog has already taken the dialog
         // slot from us. Touching it here would tear down the prompt that replaced us.
+        return;
+      case 'project_changed':
+        // A different project is open than the one this dialog is about, so every
+        // control on it now points somewhere it should not - including the armed
+        // discard, which would be spent against the wrong survey. Nothing was taken
+        // and nothing was written, so there is nothing to unwind and nothing to
+        // report; just leave, and by the same route Cancel would take.
+        dismiss();
         return;
       case 'needs_discard':
         setNeedsDiscard(true);
@@ -331,6 +387,15 @@ export default function SpeleoRevertDialog() {
         {step && (
           <p className="text-text-secondary" data-testid="speleodb-revert-step">
             {t(`speleodb.revert.steps.${step}`, { sha: shortSha })}
+          </p>
+        )}
+        {/* Neutral, not `text-error`: the lock is back, nothing was written, and the
+            revert is waiting on the user rather than on the server. Rendering this as
+            a failure is what the first cut of #258 did, and it told the user the
+            revert had died when it had merely asked them something. */}
+        {awaitingChoice && (
+          <p className="text-text-secondary" data-testid="speleodb-revert-awaiting-choice">
+            {t('speleodb.revert.awaitingChoice', { sha: shortSha })}
           </p>
         )}
         {error && (

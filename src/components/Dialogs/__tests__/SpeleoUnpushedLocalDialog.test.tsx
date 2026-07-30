@@ -116,9 +116,43 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
         projectId: 'p1',
         projectName: 'Cenote Azul',
         latestCommitSha: 'abc123',
+        // [#258] No chosen entry on a first attempt.
+        entryPath: null,
       });
     });
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'));
+  });
+
+  it('DO NOT REGRESS: releases the prompt when the picker takes over (#258)', async () => {
+    // `busy` gates `onClose` AND every button here, so holding it across the picker
+    // left this dialog with no way out at all once the user cancelled - on the one
+    // route that reaches an ambiguous dump with un-pushed edits, where backing out
+    // matters most.
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_open_project_discarding_local'
+        ? Promise.reject({
+            message: 'more than one',
+            action: 'Ambiguous',
+            status: null,
+            dump_candidates: [
+              { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+              { entry_path: 'b.stalx', size_bytes: 2, modified: null },
+            ],
+          })
+        : Promise.resolve(undefined),
+    );
+    render(<SpeleoUnpushedLocalDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+
+    await waitFor(() =>
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true),
+    );
+    // Cancelling the picker must leave a usable dialog behind it.
+    useSpeleoStore.getState().closeDumpPicker();
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-unpushed-local-keep')).not.toBeDisabled(),
+    );
   });
 
   it('keeps the prompt open and shows why when the discarding open fails', async () => {
@@ -217,5 +251,42 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
     render(<SpeleoUnpushedLocalDialog />);
     await userEvent.click(screen.getByTestId('speleodb-unpushed-local-cancel'));
     expect(closeDialogMock).toHaveBeenCalled();
+  });
+
+  it('[#258] releases busy when the ADOPT turns ambiguous, so the picker can be cancelled', async () => {
+    // Adoption raises the picker on its own account - the Ariane tree can change while
+    // the confirm sits open, and the backend answers with a fresh candidate set. This
+    // branch had also just cleared `pendingAdopt`, so holding `busy` left a prompt with
+    // no confirm on it AND every dismissal route disabled: cancelling the picker handed
+    // back to a dialog that could not be closed.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_open_project_discarding_local')
+        return Promise.reject({ message: 'ariane', action: 'Adopt', status: null });
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.reject({
+          message: 'more than one',
+          action: 'Ambiguous',
+          status: null,
+          dump_candidates: [
+            { entry_path: 'a/ariane.tml', size_bytes: 1, modified: null },
+            { entry_path: 'b/ariane.tml', size_bytes: 2, modified: null },
+          ],
+          dump_candidate_kind: 'ariane',
+        });
+      return undefined;
+    });
+
+    render(<SpeleoUnpushedLocalDialog />);
+    // Arm, then confirm the destructive take-remote, which routes to the adopt confirm.
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await userEvent.click(screen.getByTestId('speleodb-unpushed-local-take-remote'));
+    await waitFor(() => expect(screen.getByTestId('speleodb-adopt-confirm')).toBeInTheDocument());
+    await userEvent.click(screen.getByTestId('speleodb-adopt-confirm-btn'));
+
+    // The picker is up, and this prompt is usable again underneath it.
+    await waitFor(() => expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true));
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-unpushed-local-cancel')).not.toBeDisabled(),
+    );
   });
 });

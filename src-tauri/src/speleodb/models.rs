@@ -356,6 +356,10 @@ pub enum KeychainReport {
     /// The user declined it; we are deliberately leaving it alone until they sign
     /// in again.
     Declined,
+    /// Switched off in Settings. Reported apart from [`Self::Declined`] because the
+    /// retry verb revokes a decline but cannot bypass this, so a frontend that
+    /// cannot tell them apart offers a control that does nothing.
+    Disabled,
 }
 
 // The storage layer and the IPC surface keep separate enums on purpose, so the
@@ -379,6 +383,7 @@ impl From<super::auth::KeychainState> for KeychainReport {
             super::auth::KeychainState::Available => Self::Available,
             super::auth::KeychainState::Unavailable => Self::Unavailable,
             super::auth::KeychainState::Declined => Self::Declined,
+            super::auth::KeychainState::Disabled => Self::Disabled,
         }
     }
 }
@@ -765,6 +770,63 @@ pub struct SpeleoErrorDto {
     /// what the frontend needs to offer the binary choice; `None` on every other
     /// error, which is what makes it a sound discriminant.
     pub unpushed_local: Option<UnpushedLocalEdits>,
+    /// [#258] Set ONLY when the dump held more than one openable file
+    /// (`action == Ambiguous`), listing them so the frontend can offer a picker
+    /// instead of dead-ending. `None` on every other error.
+    pub dump_candidates: Option<Vec<SpeleoDumpCandidate>>,
+    /// [#258] Which ambiguity [`Self::dump_candidates`] describes, set on exactly
+    /// the same errors and `None` on the rest.
+    ///
+    /// Carried rather than inferred from the candidates' extensions: which kind a
+    /// set is, is the classifier's decision, and re-deriving it on the frontend
+    /// would put a second copy of that rule where nothing keeps the two agreeing.
+    /// It changes the verb the picker offers - extracting a `.stalx` and adopting
+    /// an `ariane.tml` are different operations - so guessing it wrong shows the
+    /// wrong dialog rather than merely the wrong wording.
+    pub dump_candidate_kind: Option<DumpCandidateKind>,
+}
+
+/// [#258] Which flavour of ambiguity a picker is being offered for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+#[serde(rename_all = "snake_case")]
+pub enum DumpCandidateKind {
+    /// Several `.stalx` - the chosen one is extracted.
+    Stalx,
+    /// No `.stalx` and several `ariane.tml` - the chosen one is adopted (imported).
+    Ariane,
+}
+
+/// [#258] One openable file inside an ambiguous project dump, carried on
+/// [`SpeleoErrorDto::dump_candidates`].
+///
+/// `size_bytes` and `modified` are free: the classifier already walks the central
+/// directory, which carries both. `modified` is `None` when the entry declares no
+/// timestamp - and note that a dump produced by `git archive` stamps every entry
+/// with the same commit time, so the frontend suppresses a metadata column whose
+/// values all agree rather than showing a uselessly uniform one.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoDumpCandidate {
+    /// The entry's path inside the dump ZIP, and the value the frontend sends back
+    /// as `entryPath` to resolve. It must be byte-identical to the archive's own
+    /// name: it is looked up as an exact key and is never normalised, so a
+    /// helpfully-cleaned path resolves to "not found" rather than the wrong file.
+    pub entry_path: String,
+    /// Uncompressed size, from the central directory.
+    ///
+    /// Typed as a TS `number`, not ts-rs's default `bigint` for `u64`: serde emits
+    /// a JSON number and the webview parses it as one, so `bigint` would describe a
+    /// value that never arrives. Bounded by the 512 MiB per-entry cap and so well
+    /// inside the exact-integer range - but only because `Dump::entry_details` drops
+    /// any entry above it. That is load-bearing, not incidental: the raw value is the
+    /// central directory's unvalidated ZIP64 `u64`, and the cap used to be applied at
+    /// extraction alone, which left this claim justifying the `number` type by a bound
+    /// nothing on this path enforced.
+    #[ts(type = "number")]
+    pub size_bytes: u64,
+    /// Last-modified (RFC-3339) when the entry carries one.
+    pub modified: Option<String>,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on
@@ -849,6 +911,8 @@ mod tests {
             status: Some(401),
             transport: None,
             unpushed_local: None,
+            dump_candidates: None,
+            dump_candidate_kind: None,
         })
         .expect("serialize error dto");
         // The single-writer hand-off DTOs (#194/#197) must also never carry a token

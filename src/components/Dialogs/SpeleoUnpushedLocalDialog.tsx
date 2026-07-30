@@ -42,6 +42,13 @@ export default function SpeleoUnpushedLocalDialog() {
   // hand-off the browser dialog makes).
   const { keepLocalCopy, takeRemoteDiscardingLocal, adoptRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
+    // [#258] The discarding open can hit an ambiguous dump too - it is in fact the
+    // only route that reaches one with un-pushed edits - and an Ariane pick there
+    // still needs its confirmation.
+    onAdoptAfterPick: () => {
+      setPendingAdopt(true);
+      setBusy(false);
+    },
   });
 
   const [busy, setBusy] = useState(false);
@@ -108,6 +115,12 @@ export default function SpeleoUnpushedLocalDialog() {
       // asked once, not twice.
       setPendingAdopt(true);
       setBusy(false);
+    } else if (outcome.status === 'ambiguous') {
+      // [#258] The hook raised the file picker over this prompt, which stays mounted
+      // underneath. Releasing `busy` is not cosmetic here: it gates `onClose` and
+      // every button, so holding it while the user cancels the picker left this
+      // dialog with no way out at all.
+      setBusy(false);
     } else if (outcome.status === 'error') {
       setError(outcome.message);
       // A `ReLogin` outcome means the token is gone; keeping the session would have
@@ -125,7 +138,15 @@ export default function SpeleoUnpushedLocalDialog() {
     setBusy(true);
     setError(null);
     const outcome = await adoptRemote(summary, { discardLocal: true });
-    if (outcome.status === 'error') {
+    if (outcome.status === 'ambiguous') {
+      // [#258] Adoption raises the picker on its own account, not only by inheriting
+      // one: the Ariane tree can change while the confirm above sits open, and the
+      // backend then answers with a fresh candidate set. Same release as
+      // `handleTakeRemote`, and it matters more here - this branch has ALSO just
+      // cleared `pendingAdopt`, so a held `busy` left a prompt with no confirm on it
+      // and no way out, and the picker's cancel had nothing to hand back to.
+      setBusy(false);
+    } else if (outcome.status === 'error') {
       setError(outcome.message);
       if (outcome.reLogin) clearSession();
       setBusy(false);

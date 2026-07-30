@@ -324,6 +324,12 @@ pub(crate) enum KeychainState {
     /// The user declined it; we are deliberately not touching it until they sign
     /// in again.
     Declined,
+    /// The keychain is switched OFF in Settings. Distinct from [`Self::Declined`]
+    /// in the one way a caller cares about: a decline answers a single login and
+    /// the retry verb revokes it, whereas this is a standing policy the retry
+    /// cannot bypass. Collapsing the two is what made Settings offer a "Try again"
+    /// that could not do anything.
+    Disabled,
 }
 
 /// Holds the SpeleoDB token backend-side across an ordered tier list. The active
@@ -571,7 +577,14 @@ impl TokenStore {
     /// of it - whether anything of ours could still be in there - and the user's
     /// preference does not answer that one.
     pub(crate) fn keychain_state(&self) -> KeychainState {
-        if self.keychain_off() {
+        // The two flags behind `keychain_off` are reported SEPARATELY, for the same
+        // reason `clear` refuses to treat them alike (see its doc above): they differ
+        // in whether anything can act on them. A decline is revoked by the retry verb;
+        // the disable is a standing policy that outranks it, so it is checked first.
+        if self.keychain_disabled {
+            return KeychainState::Disabled;
+        }
+        if self.keychain_declined {
             return KeychainState::Declined;
         }
         self.keychain_state
@@ -1036,14 +1049,18 @@ impl TokenStore {
     /// warned about a credential it cannot have.
     ///
     /// Reads the recorded verdict, not [`Self::keychain_state`]: the reported answer
-    /// is `Declined` for as long as the user has the keychain off, and the sweep
-    /// runs with it off by construction.
+    /// is `Declined` or `Disabled` for as long as the user has the keychain off, and
+    /// the sweep runs with it off by construction.
+    ///
+    /// `Disabled` is listed for exhaustiveness only - it is derived by the reporter
+    /// and never stored in this field.
     fn unreadable_keychain_may_hold(&self) -> bool {
         match self.keychain_state {
             KeychainState::Available => true,
-            KeychainState::NotAttempted | KeychainState::Unavailable | KeychainState::Declined => {
-                self.keychain_has_token
-            }
+            KeychainState::NotAttempted
+            | KeychainState::Unavailable
+            | KeychainState::Declined
+            | KeychainState::Disabled => self.keychain_has_token,
         }
     }
 
@@ -1935,6 +1952,27 @@ mod tests {
         assert_eq!(failing.keychain_state(), KeychainState::NotAttempted);
         assert_eq!(failing.store(EP, EMAIL, "tok", false), TokenTier::Memory);
         assert_eq!(failing.keychain_state(), KeychainState::Unavailable);
+    }
+
+    #[test]
+    fn a_disabled_keychain_reports_apart_from_a_declined_one() {
+        // They used to collapse into `Declined`, and the consequence was a Settings
+        // control that could not work: the retry verb revokes a decline, but nothing
+        // it does can bypass the disable. A caller that cannot tell them apart cannot
+        // decide whether pressing the button achieves anything.
+        let mut store = TokenStore::from_stores(Box::new(InMemoryStore::new()), None);
+
+        store.set_keychain_declined(true);
+        assert_eq!(store.keychain_state(), KeychainState::Declined);
+
+        store.set_keychain_declined(false);
+        store.set_keychain_disabled(true);
+        assert_eq!(store.keychain_state(), KeychainState::Disabled);
+
+        // Both set: the standing policy outranks the single-login answer, because it
+        // is the one the retry cannot revoke.
+        store.set_keychain_declined(true);
+        assert_eq!(store.keychain_state(), KeychainState::Disabled);
     }
 
     // ---- moving the key the session already holds (the login-time choice) ----

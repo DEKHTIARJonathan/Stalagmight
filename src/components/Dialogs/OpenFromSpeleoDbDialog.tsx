@@ -35,6 +35,13 @@ export default function OpenFromSpeleoDbDialog() {
   const { openRemote, adoptRemote } = useOpenRemoteProject({
     onBeforeLoad: closeDialog,
     cancelReturnsTo: 'open-from-speleodb',
+    // [#258] The picker's retry resolved to an Ariane project, so show the same
+    // confirm a first-attempt `adopt` would have. The retry runs from the picker,
+    // so its outcome never comes back through `handleOpen`.
+    onAdoptAfterPick: (project) => {
+      setPendingAdopt(project);
+      setBusy(false);
+    },
   });
 
   // Start in 'checking' so the session probe settles before the first paint
@@ -149,6 +156,11 @@ export default function OpenFromSpeleoDbDialog() {
     if (outcome.status === 'adopt') {
       setPendingAdopt(project);
       setBusy(false);
+    } else if (outcome.status === 'ambiguous') {
+      // #258: the hook raised the file picker, which is an independent overlay - so
+      // unlike the prompt below, THIS dialog stays mounted underneath it and has to
+      // release its busy flag or the list stays frozen behind the choice.
+      setBusy(false);
     } else if (outcome.status === 'unpushed_local') {
       // #270: the hook raised the keep-local / take-remote prompt, which has already
       // replaced this browser as the active dialog - so this component is unmounting
@@ -166,7 +178,15 @@ export default function OpenFromSpeleoDbDialog() {
     setBusy(true);
     setError(null);
     const outcome = await adoptRemote(project);
-    if (outcome.status === 'error') surfaceOpenError(outcome.message, outcome.reLogin);
+    if (outcome.status === 'ambiguous') {
+      // #258: same release the open handler makes, and for the same reason - adoption
+      // raises the picker on its own account when the Ariane tree moves under the
+      // confirm, and this dialog stays mounted underneath the overlay. Without it the
+      // list stays frozen behind a choice the user can still cancel.
+      setBusy(false);
+    } else if (outcome.status === 'error') {
+      surfaceOpenError(outcome.message, outcome.reLogin);
+    }
   };
 
   const goToLogin = () => openDialog('settings', { initialCategory: 'speleodb' });

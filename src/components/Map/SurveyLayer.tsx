@@ -190,6 +190,31 @@ export default class SurveyLayer {
   // Active tool state (for disabling interactions when non-interactive tools are active)
   private activeTool: ToolType = 'select';
 
+  /**
+   * The RESTING cursor for the active tool (zoom-in, grab, crosshair …), pushed in
+   * by MapCanvas, which owns that decision - including the Ctrl-held grab, which
+   * this class has no way to know about.
+   *
+   * Exists because this class also writes `canvas.style.cursor`, and used to write
+   * a bare `''` whenever nothing was hovered. Both writers are legitimate (only
+   * MapCanvas knows the tool, only this knows what is under the pointer and whether
+   * it is anchored/immovable), but `''` is not "no opinion" - it is "default arrow",
+   * so it silently erased the tool cursor MapCanvas had just set. The clobber won
+   * because it lands a render LATER: MapCanvas's cursor effect is passive, and the
+   * dim-set update that follows a tool switch re-runs this from a layout effect,
+   * by which time the passive effect has already run and will not run again (#24).
+   */
+  private baseCursor = '';
+
+  /**
+   * Whether {@link baseCursor} is a MODE cursor (the Ctrl-held pan grab) rather
+   * than the tool's own resting one. A mode outranks the Move Station/Shot arrow
+   * below: that arrow exists only to stop MapLibre's *default* grab showing
+   * through off-feature, so letting it beat a grab the user is deliberately
+   * holding Ctrl for inverts what it is there to do.
+   */
+  private baseCursorForced = false;
+
   // Anchored section IDs (for fading when Move Segment tool is active)
   private anchoredSectionIds: Set<number> = new Set();
 
@@ -479,7 +504,6 @@ export default class SurveyLayer {
       this.hoveredSectionId = null;
       this.customRender?.setSectionHover([]);
       this.updateVisualState();
-      this.map.getCanvas().style.cursor = '';
 
       // CRITICAL: Also notify callbacks to clear MapCanvas state
       this.callbacks.onFeatureHover?.(false);
@@ -487,14 +511,13 @@ export default class SurveyLayer {
       this.callbacks.onShotHover?.(null);
     }
 
-    // Move Station/Shot tools: set arrow cursor immediately on activation
-    // (prevents MapLibre's grab cursor from showing before any hover event fires)
-    if (tool === 'move_station' || tool === 'move_shot') {
-      this.map.getCanvas().style.cursor = 'default';
-    } else if (!isNonInteractive) {
-      // Reset cursor when switching away from move tools to other interactive tools
-      this.map.getCanvas().style.cursor = '';
-    }
+    // One derivation for every tool, from the state just updated above: the arrow
+    // Move Station/Shot need before any hover event fires, the pointer if something
+    // is already under the cursor, and otherwise the tool's own resting cursor.
+    // These three cases used to be written out here as literals - including two
+    // bare `''`, which wiped the tool cursor MapCanvas had set for exactly the
+    // tools (pan, zoom) whose cursor IS the affordance (#24).
+    this.refreshHoverCursor();
 
     // Comment tool override: force comment layers visible + overlap priority
     const isCommentTool = tool === 'comment' || tool === 'move_comment';
@@ -1370,6 +1393,18 @@ export default class SurveyLayer {
    *  when a dim set changes, not only when the hovered id changes - the anchored
    *  and immovable sets arrive asynchronously, and without a recompute the cursor
    *  disagrees with the highlight until the pointer leaves the feature (#301). */
+  /**
+   * Tell this layer the active tool's resting cursor, and re-derive from it.
+   *
+   * `forced` marks a mode cursor (the Ctrl-held pan grab) that must also outrank
+   * the Move Station/Shot arrow - see {@link baseCursorForced}.
+   */
+  public setBaseCursor(cursor: string, forced = false): void {
+    this.baseCursor = cursor;
+    this.baseCursorForced = forced;
+    this.refreshHoverCursor();
+  }
+
   private refreshHoverCursor(): void {
     let showPointer = Boolean(this.hoveredStationId || this.hoveredShotId);
     let suppressReason: string | null = null;
@@ -1394,9 +1429,17 @@ export default class SurveyLayer {
         suppressReason = this.hoveredStationId ? 'immovable_station' : 'immovable_shot';
       }
     }
-    // Move Station/Shot tools: use arrow cursor when not over a movable feature
-    // (prevents MapLibre's default grab cursor from showing through)
-    this.map.getCanvas().style.cursor = showPointer ? 'pointer' : (useArrowFallback ? 'default' : '');
+    // Nothing hovered falls back to the TOOL's resting cursor, not to `''`: this
+    // runs again on every dim-set change, so writing `''` here reset the zoom
+    // magnifier / pan hand / measure crosshair to a plain arrow moments after the
+    // tool was chosen. Move Station/Shot keep their explicit arrow, which is not
+    // the tool's own `move` cursor - it exists to stop MapLibre's grab showing
+    // through when the pointer is not over a movable feature.
+    this.map.getCanvas().style.cursor = showPointer
+      ? 'pointer'
+      : useArrowFallback && !this.baseCursorForced
+        ? 'default'
+        : this.baseCursor;
     if (this.shouldLogInteraction() && suppressReason) {
       console.debug('[HitDetection] Hover suppressed', {
         activeTool: this.activeTool,

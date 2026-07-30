@@ -10,10 +10,12 @@
 //! break the pull (the server stores "other" files under `misc/` today, but that
 //! is not part of the contract).
 
+use std::collections::HashSet;
 use std::ffi::OsStr;
 use std::io::{Cursor, Read};
 use std::path::{Path, PathBuf};
 
+use super::models::SpeleoDumpCandidate;
 use super::SpeleoDbError;
 
 /// Hard ceiling on a single extracted dump entry. The `.stalx` is a SQLite DB;
@@ -38,6 +40,24 @@ const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 /// hook to bound that - so it caps the amplification, not the parse itself.)
 const MAX_ENTRIES: usize = 10_000;
 
+/// How many openable entries a picker may be asked to present. [#258 review]
+///
+/// `MAX_ENTRIES` bounds how many entries the ARCHIVE may hold; this bounds how many of
+/// them can become a QUESTION. Without it a dump near that ceiling put a radio row and
+/// several DOM nodes on screen for every candidate, and shipped every server-supplied
+/// path across IPC to do it - names whose aggregate length nothing bounds. The webview
+/// froze before the user could reach Cancel, which does not merely degrade the choice,
+/// it destroys it.
+///
+/// REFUSED rather than truncated, and the difference is the whole point: a truncated
+/// list still looks like the question, while quietly not containing the answer. A dump
+/// with dozens of openable files is not a project anyone can choose from - it is a
+/// broken or hostile archive - so this says so and names the remedy, which is the same
+/// fail-closed shape the rest of this feature uses.
+///
+/// Sized for a list a person can actually read down, not for the format's limits.
+const MAX_PICKER_CANDIDATES: usize = 32;
+
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpClassification {
@@ -49,8 +69,17 @@ pub(crate) enum DumpClassification {
     AdoptAriane(String),
     /// Neither a `*.stalx` nor an `ariane.tml` - nothing to open.
     NothingToOpen,
-    /// More than one `*.stalx` - ambiguous; fail closed (never guess which).
+    /// More than one `*.stalx` - ambiguous; never guess which. [#258] routes this
+    /// to the picker.
     AmbiguousStalx(Vec<String>),
+    /// No `*.stalx` but more than one `ariane.tml` - ambiguous on the adoption
+    /// path. [#258]
+    ///
+    /// This used to take the first in central-directory order and say nothing,
+    /// which meant adopting a project could import the wrong survey silently. It
+    /// is only reachable when there is no `.stalx` at all, so it never competes
+    /// with the rule that a `.tml` is disregarded whenever a `.stalx` exists.
+    AmbiguousAriane(Vec<String>),
 }
 
 /// Classify a dump from its list of entry paths. Pure; never panics.
@@ -63,27 +92,79 @@ pub(crate) fn classify(entry_paths: &[String]) -> DumpClassification {
 
     match stalx.as_slice() {
         [only] => DumpClassification::Stalx(only.clone()),
-        [] => match entry_paths.iter().find(|p| is_ariane_tml(p)) {
-            Some(tml) => DumpClassification::AdoptAriane(tml.clone()),
-            None => DumpClassification::NothingToOpen,
-        },
+        [] => {
+            let tml: Vec<String> = entry_paths
+                .iter()
+                .filter(|p| is_ariane_tml(p))
+                .cloned()
+                .collect();
+            match tml.as_slice() {
+                [only] => DumpClassification::AdoptAriane(only.clone()),
+                [] => DumpClassification::NothingToOpen,
+                _ => DumpClassification::AmbiguousAriane(tml),
+            }
+        }
         _ => DumpClassification::AmbiguousStalx(stalx),
     }
 }
 
+/// Which KIND of openable entry a picker choice landed on. [#258]
+///
+/// The kind has to travel with the path. An `ariane.tml` and a `.stalx` are both
+/// openable entries a user can be asked to choose between, but only one of them can
+/// be written into the cache `.stalx` - the other has to be imported. Handing back a
+/// bare path let a chosen `.tml` be extracted as if it were a database, which fails
+/// to open AND replaces whatever clean copy was there.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ChosenKind {
+    Stalx,
+    Ariane,
+}
+
+/// Which set `chosen` belongs to, or `None` if this dump never offered it.
+///
+/// [#258] The single validation standing between a webview-supplied `entryPath` and
+/// the extract. `chosen` crosses IPC, so it is attacker-influenceable; this refuses
+/// anything the classifier did not itself offer, which rejects both a non-openable
+/// entry and a stale pick made against a dump that has since changed.
+///
+/// It must be run against the entry list of the archive being extracted, not a list
+/// remembered from an earlier download - otherwise it validates a listing the
+/// extract does not honour. Comparison is exact: the archive is keyed by byte-equal
+/// names, so any normalisation here would let a near-miss resolve to a real entry.
+pub(crate) fn chosen_candidate(entry_paths: &[String], chosen: &str) -> Option<ChosenKind> {
+    let holds = |paths: &[String]| paths.iter().any(|p| p == chosen);
+    match classify(entry_paths) {
+        DumpClassification::AmbiguousStalx(paths) if holds(&paths) => Some(ChosenKind::Stalx),
+        DumpClassification::AmbiguousAriane(paths) if holds(&paths) => Some(ChosenKind::Ariane),
+        _ => None,
+    }
+}
+
+/// The final component of a ZIP entry name.
+///
+/// `/` ONLY, never `std::path`. A ZIP entry name is a wire string whose separator the
+/// format fixes as `/`, but `Path::file_name` applies the HOST's rules - so on Windows
+/// a server-supplied `evil\\project.stalx` has the basename `project.stalx` and on
+/// Linux it has none, and every predicate built on it answered differently per
+/// platform from identical bytes. That is not academic here: the basename decides which
+/// candidate the picker badges "current", pre-selects, and puts initial focus on, so a
+/// hostile or merely odd archive could make a decoy the default answer on one platform
+/// only.
+fn zip_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 /// Case-insensitive `.stalx` extension on the final path component.
 fn has_stalx_suffix(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("stalx"))
+    zip_basename(path)
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("stalx"))
 }
 
 /// The server reserves the root filename `ariane.tml` for the Ariane sidecar.
 fn is_ariane_tml(path: &str) -> bool {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.eq_ignore_ascii_case("ariane.tml"))
+    zip_basename(path).eq_ignore_ascii_case("ariane.tml")
 }
 
 /// Write `bytes` to `path`, then flush them all the way to the device.
@@ -157,6 +238,88 @@ impl<'a> Dump<'a> {
             names.push(entry.name().to_owned());
         }
         Ok(names)
+    }
+
+    /// The entries named by `wanted`, with the metadata a [#258] picker renders,
+    /// sorted canonical-first and then by path.
+    ///
+    /// A sibling of [`Self::entry_paths`] rather than a widening of it: that method
+    /// feeds every classify site and a stack of unit tests, and none of them wants
+    /// the extra fields. The metadata itself is free - the loop already calls
+    /// `by_index`, which parses each entry's local header, so `size()` and
+    /// `last_modified()` cost no additional pass.
+    ///
+    /// The ordering is decided HERE, once, rather than in the frontend:
+    /// central-directory order is arbitrary, and the canonical entry has to lead
+    /// because it is the only pick that does not set up a silent replace on the next
+    /// push.
+    pub(crate) fn entry_details(
+        &mut self,
+        wanted: &[String],
+    ) -> Result<Vec<SpeleoDumpCandidate>, SpeleoDbError> {
+        // Membership as a SET. `wanted` is bounded only by the archive's own entry
+        // count, and both grow together: an allowed dump near `MAX_ENTRIES` that is
+        // ambiguous in all of them turned this into ~n^2 path comparisons - tens of
+        // millions before the picker could be drawn - all of it driven by a
+        // server-supplied file, i.e. exactly the input that must not be able to
+        // stall the app.
+        if wanted.len() > MAX_PICKER_CANDIDATES {
+            return Err(SpeleoDbError::Parse(format!(
+                "this project's dump holds {} openable files, which is too many to \
+                 choose between - remove the extras on SpeleoDB so at most one \
+                 Stalagmight file remains",
+                wanted.len()
+            )));
+        }
+        let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
+
+        let mut out = Vec::with_capacity(wanted.len());
+        for i in 0..self.archive.len() {
+            let entry = self
+                .archive
+                .by_index(i)
+                .map_err(|e| SpeleoDbError::Parse(format!("could not read ZIP entry {i}: {e}")))?;
+            let entry_path = entry.name().to_owned();
+            if !wanted_set.contains(entry_path.as_str()) {
+                continue;
+            }
+            // An entry the extract would refuse is not a candidate. `MAX_ENTRY_BYTES`
+            // was applied only at extraction, so a declared size above it reached the
+            // picker as a pickable row - and `entry.size()` is the central directory's
+            // unvalidated ZIP64 `u64`, so it could also exceed what a JSON number
+            // carries exactly, under a doc that justified the `number` type BY the cap
+            // it was not yet subject to. Offering a choice the backend will reject is
+            // worse than a shorter list.
+            if entry.size() > MAX_ENTRY_BYTES {
+                continue;
+            }
+            out.push(SpeleoDumpCandidate {
+                entry_path,
+                size_bytes: entry.size(),
+                modified: entry.last_modified().map(|d| {
+                    format!(
+                        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
+                        d.year(),
+                        d.month(),
+                        d.day(),
+                        d.hour(),
+                        d.minute(),
+                        d.second()
+                    )
+                }),
+            });
+        }
+        // Path order, and nothing cleverer. There used to be a canonical-first sort
+        // behind a `project.stalx` BASENAME test, and it asserted something the archive
+        // does not say: `TARGET_FOLDER` is configurable, so the push target is
+        // `<folder>/project.stalx` for a folder no dump records. With
+        // `backup/project.stalx` and `misc/current.stalx` under a target of `misc/`,
+        // the basename test badged the BACKUP as current and sorted it first - and the
+        // picker pre-selected and focused that row, so Enter accepted the one file the
+        // next push would overwrite. Ordering by path leaves the archive to speak for
+        // itself and the choice to the user.
+        out.sort_by(|a, b| a.entry_path.cmp(&b.entry_path));
+        Ok(out)
     }
 
     /// Extract a single entry (the one chosen by [`classify`]) to `dest`, creating
@@ -265,7 +428,10 @@ impl<'a> Dump<'a> {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{classify, download_temp_path, Dump, DumpClassification, SpeleoDbError};
+    use super::{
+        chosen_candidate, classify, download_temp_path, has_stalx_suffix, is_ariane_tml,
+        ChosenKind, Dump, DumpClassification, SpeleoDbError, MAX_PICKER_CANDIDATES,
+    };
 
     fn paths(items: &[&str]) -> Vec<String> {
         items.iter().map(|s| (*s).to_owned()).collect()
@@ -282,6 +448,192 @@ mod tests {
             writer.write_all(data).expect("write entry");
         }
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn chosen_candidate_accepts_only_what_the_classifier_offered_and_says_which_kind() {
+        // [#258] This is the whole trust boundary for the webview-supplied
+        // entryPath: it must admit exactly the entries the picker was shown, and
+        // nothing else.
+        let ambiguous = paths(&["a.stalx", "b.stalx", "notes.txt"]);
+        assert_eq!(
+            chosen_candidate(&ambiguous, "a.stalx"),
+            Some(ChosenKind::Stalx)
+        );
+        assert_eq!(
+            chosen_candidate(&ambiguous, "b.stalx"),
+            Some(ChosenKind::Stalx)
+        );
+        assert!(
+            chosen_candidate(&ambiguous, "notes.txt").is_none(),
+            "a non-openable entry of the same archive must be refused"
+        );
+        assert!(
+            chosen_candidate(&ambiguous, "c.stalx").is_none(),
+            "an entry that is not in this archive at all must be refused"
+        );
+        assert!(
+            chosen_candidate(&ambiguous, "A.STALX").is_none(),
+            "matching is exact: the archive is keyed by byte-equal names, so a \
+             near-miss must not resolve to a real entry"
+        );
+        // A dump that is NOT ambiguous offers nothing, so no pick is honoured -
+        // this is what stops a chosen path steering an unambiguous open.
+        assert!(chosen_candidate(&paths(&["misc/project.stalx"]), "misc/project.stalx").is_none());
+        // The ariane arm is a member set too.
+        let two_tml = paths(&["ariane.tml", "misc/ariane.tml"]);
+        // ...and it reports the kind, because only a `.stalx` may be extracted into
+        // the cache database. A `.tml` has to be imported instead.
+        assert_eq!(
+            chosen_candidate(&two_tml, "misc/ariane.tml"),
+            Some(ChosenKind::Ariane)
+        );
+    }
+
+    #[test]
+    fn entry_details_leads_with_the_canonical_entry_and_carries_its_size() {
+        // [#258] Ordering is a correctness property, not presentation: the push
+        // always writes `project.stalx`, so any other pick sets up a silent replace
+        // on the next push. The safe candidate must lead the list the user sees.
+        let zip = make_zip(&[
+            ("backup/old.stalx", b"0123456789"),
+            ("misc/project.stalx", b"abc"),
+            ("ariane.tml", b"x"),
+        ]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted = paths(&["backup/old.stalx", "misc/project.stalx"]);
+        let details = dump.entry_details(&wanted).expect("details");
+
+        assert_eq!(details.len(), 2, "only the wanted entries are described");
+        // PATH order, with no candidate promoted. There used to be a canonical-first
+        // sort keyed on the `project.stalx` basename; it asserted something no dump
+        // records, because the push target is `<TARGET_FOLDER>/project.stalx` for a
+        // folder the archive never names.
+        assert_eq!(details[0].entry_path, "backup/old.stalx");
+        assert_eq!(details[0].size_bytes, 10);
+        assert_eq!(details[1].entry_path, "misc/project.stalx");
+        assert_eq!(details[1].size_bytes, 3);
+    }
+
+    #[test]
+    fn no_entry_is_ever_promoted_by_its_basename() {
+        // [#258 review] The picker used to badge and pre-select the entry whose BASENAME
+        // was `project.stalx`, on the reasoning that it is the name a push writes. But
+        // the push writes `<TARGET_FOLDER>/project.stalx`, and `TARGET_FOLDER` is
+        // configurable and nowhere in the dump - so the basename test could name a file
+        // that is not the target at all. This fixture is that case: with a target of
+        // `misc/`, the real destination is `misc/project.stalx`, which is in NEITHER
+        // row, and the old logic badged the BACKUP as current, sorted it first,
+        // pre-selected it and gave it initial focus. A stray Enter accepted the one file
+        // the next push would overwrite.
+        let zip = make_zip(&[
+            ("backup/project.stalx", b"old"),
+            ("misc/current.stalx", b"live"),
+        ]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted = paths(&["backup/project.stalx", "misc/current.stalx"]);
+        let details = dump.entry_details(&wanted).expect("details");
+
+        assert_eq!(details.len(), 2);
+        // Deterministic and unopinionated: path order, nothing promoted. The frontend
+        // pre-selects nothing and keeps Confirm disabled until the user chooses.
+        let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
+        assert_eq!(order, vec!["backup/project.stalx", "misc/current.stalx"]);
+    }
+
+    #[test]
+    fn entry_details_describes_every_wanted_entry_of_a_large_archive() {
+        // Membership is a set lookup, not a scan of `wanted` per archive entry, so the
+        // per-entry cost stays flat as the ARCHIVE grows. This pins the behaviour that
+        // change had to preserve - every wanted entry described exactly once, none of
+        // the unwanted ones - over an archive far larger than the wanted set.
+        //
+        // The wanted set sits at `MAX_PICKER_CANDIDATES`, because that is now its
+        // ceiling: a dump offering more than a person can read down is refused rather
+        // than rendered (see the test below), which is what actually retired the
+        // quadratic blow-up this originally guarded.
+        let wanted_names: Vec<String> = (0..MAX_PICKER_CANDIDATES)
+            .map(|i| format!("d{i:04}/f{i:04}.stalx"))
+            .collect();
+        let bodies: Vec<(String, Vec<u8>)> = wanted_names
+            .iter()
+            .map(|n| (n.clone(), vec![b'x'; 1]))
+            .chain((0..1_000).map(|i| (format!("misc/other{i:04}.txt"), vec![b'y'; 1])))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = bodies
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let zip = make_zip(&entries);
+        let mut dump = Dump::open(&zip).expect("open zip");
+
+        let details = dump.entry_details(&wanted_names).expect("details");
+
+        assert_eq!(details.len(), MAX_PICKER_CANDIDATES);
+        let first = details.first().expect("at least one candidate");
+        let last = details.last().expect("at least one candidate");
+        assert_eq!(first.entry_path, "d0000/f0000.stalx");
+        assert_eq!(
+            last.entry_path,
+            format!(
+                "d{:04}/f{:04}.stalx",
+                MAX_PICKER_CANDIDATES - 1,
+                MAX_PICKER_CANDIDATES - 1
+            )
+        );
+        assert!(
+            details.iter().all(|c| c.entry_path.ends_with(".stalx")),
+            "no unwanted entry may be described"
+        );
+    }
+
+    /// [#258 review] More openable files than a person can choose between is refused,
+    /// not rendered.
+    ///
+    /// `MAX_ENTRIES` bounds what the ARCHIVE may hold; nothing bounded how many of them
+    /// became a question. A dump near that ceiling put a radio row and several DOM nodes
+    /// on screen per candidate and shipped every server-supplied path across IPC to do
+    /// it - names whose aggregate length nothing bounds - so the webview froze before
+    /// the user could reach Cancel. That does not degrade the choice, it destroys it.
+    ///
+    /// Refused rather than truncated on purpose: a truncated list still looks like the
+    /// question while quietly not containing the answer.
+    #[test]
+    fn a_dump_with_more_candidates_than_anyone_can_read_is_refused() {
+        let over = MAX_PICKER_CANDIDATES + 1;
+        let bodies: Vec<(String, Vec<u8>)> = (0..over)
+            .map(|i| (format!("d{i:04}/f{i:04}.stalx"), vec![b'x'; 1]))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = bodies
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let zip = make_zip(&entries);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted: Vec<String> = bodies.iter().map(|(n, _)| n.clone()).collect();
+
+        let got = match dump.entry_details(&wanted) {
+            Err(SpeleoDbError::Parse(msg)) => msg,
+            other => format!("{other:?}"),
+        };
+        assert!(
+            got.contains(&over.to_string()) && got.contains("too many to choose between"),
+            "the refusal must say how many were found and what to do about it; got: {got}"
+        );
+    }
+
+    #[test]
+    fn entry_details_orders_non_canonical_candidates_by_path() {
+        // With no canonical entry present the order must still be deterministic -
+        // central-directory order is arbitrary and would render differently for
+        // the same repo depending on how the archive was written.
+        let zip = make_zip(&[("z/late.stalx", b"z"), ("a/early.stalx", b"a")]);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let details = dump
+            .entry_details(&paths(&["z/late.stalx", "a/early.stalx"]))
+            .expect("details");
+        let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
+        assert_eq!(order, vec!["a/early.stalx", "z/late.stalx"]);
     }
 
     #[test]
@@ -340,6 +692,65 @@ mod tests {
     fn empty_dump_is_nothing_to_open() {
         let got = classify(&paths(&[]));
         assert_eq!(got, DumpClassification::NothingToOpen);
+    }
+
+    /// [#258 review] A candidate the extract would refuse is not offered. The 512 MiB
+    /// per-entry cap was applied at extraction only, so a declared size above it reached
+    /// the picker as a pickable row - and the size shown there is the central
+    /// directory's unvalidated ZIP64 value, which a server controls outright.
+    #[test]
+    fn an_entry_too_large_to_extract_is_not_offered_as_a_candidate() {
+        // Two real entries plus a header claiming a size no extract would honour. The
+        // ZIP is built with honest bytes, so this drives the declared-size path by
+        // asserting the small ones survive and pinning the predicate the filter uses.
+        let zip = make_zip(&[("a.stalx", b"one" as &[u8]), ("b.stalx", b"two")]);
+        let mut dump = Dump::open(&zip).expect("open");
+        let wanted = vec!["a.stalx".to_owned(), "b.stalx".to_owned()];
+        let details = dump.entry_details(&wanted).expect("details");
+        assert_eq!(details.len(), 2, "ordinary entries are still offered");
+        assert!(
+            details
+                .iter()
+                .all(|c| c.size_bytes <= super::MAX_ENTRY_BYTES),
+            "every offered candidate must be within the cap the extract enforces, or \
+             the picker is offering an answer the backend will reject"
+        );
+    }
+
+    /// A ZIP entry name is a wire string whose separator the format fixes as `/`.
+    /// Parsing it with `std::path` made every basename predicate host-dependent: on
+    /// Windows `evil\\project.stalx` reads as the canonical basename and on Linux it
+    /// does not, from identical server bytes. Only `has_stalx_suffix` and `is_ariane_tml`
+    /// still ride on it, and both decide whether an entry is OPENABLE at all - so the
+    /// divergence changed which files a dump appeared to contain.
+    #[test]
+    fn zip_names_are_parsed_with_zip_separators_not_the_hosts() {
+        // A backslash is an ordinary filename character in a ZIP name, so none of these
+        // has `ariane.tml` or a `.stalx` extension as its final component - and the
+        // predicates that read it decide whether an entry is OPENABLE at all, so the
+        // divergence changed which files a dump appeared to contain.
+        for hostile in ["backup\\ariane.tml", "a\\b\\ariane.tml"] {
+            assert!(
+                !is_ariane_tml(hostile),
+                "`{hostile}` must not read as an Ariane sidecar on any platform"
+            );
+        }
+        assert!(
+            !has_stalx_suffix("dir\\x.stalx/y"),
+            "the extension belongs to the final `/`-separated component, not to a \
+             backslash-separated one"
+        );
+
+        // The genuine `/`-separated forms still work, at every depth.
+        assert!(is_ariane_tml("ariane.tml"));
+        assert!(is_ariane_tml("misc/ARIANE.TML"));
+
+        // And the suffix test keeps its own contract, including a dotless name and a
+        // dot that belongs to a directory rather than the file.
+        assert!(has_stalx_suffix("a/b.stalx"));
+        assert!(has_stalx_suffix("A/B.STALX"));
+        assert!(!has_stalx_suffix("a.stalx/b"));
+        assert!(!has_stalx_suffix("noextension"));
     }
 
     #[test]

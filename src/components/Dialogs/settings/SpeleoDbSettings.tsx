@@ -27,6 +27,7 @@ const KEYCHAIN_STATE_KEYS: Record<KeychainReport, string> = {
   available: 'available',
   unavailable: 'unavailable',
   declined: 'declined',
+  disabled: 'disabled',
 };
 
 /**
@@ -142,13 +143,23 @@ export function SpeleoDbSettings({
     ? t(`settings.speleodb.credentials.where.${session.storage ?? 'memory'}`)
     : null;
   const keychainState = KEYCHAIN_STATE_KEYS[session?.keychain ?? 'not_attempted'];
-  // Offered only where it can change something: the keychain is being skipped
-  // (declined) or is broken (unavailable), AND there is a token in hand to move
-  // into it. Pressing it when the keychain already works would be a no-op that
-  // costs an unlock prompt.
+  // Offered only where it can change something. That is a statement about WHERE THE
+  // TOKEN IS, not about which state was reported: anything held outside the keychain
+  // can be moved into it, and anything already in it cannot - pressing there would be
+  // a no-op costing an unlock prompt.
+  //
+  // Keying on the state list instead got both directions wrong. `disabled` used to
+  // report as `declined`, so the button appeared for a policy the retry cannot
+  // bypass; and re-enabling the keychain leaves `not_attempted` with the token still
+  // in a plaintext file, which the list hid - so there was no honest way to migrate
+  // it short of signing out.
+  //
+  // Read from the SESSION, never from `speleo.keychain_disabled`: that is the staged
+  // config and the toggle only takes effect on Save, so an unsaved flip would render
+  // a control that disagrees with the backend.
+  const storageTier = session?.storage ?? 'memory';
   const canRetryKeychain =
-    (session?.loggedIn ?? false) &&
-    (session?.keychain === 'declined' || session?.keychain === 'unavailable');
+    (session?.loggedIn ?? false) && storageTier !== 'keychain' && session?.keychain !== 'disabled';
   const [retryingKeychain, setRetryingKeychain] = useState(false);
   // Credential-storage failures get their OWN slot rather than the store's shared
   // `authError`. That field belongs to the login form: writing a storage message
@@ -175,7 +186,6 @@ export function SpeleoDbSettings({
   // cleartext file. Offered only while a token is actually held in a non-keychain
   // tier, which is the only state either direction can change.
   const [movingToken, setMovingToken] = useState(false);
-  const storageTier = session?.storage ?? 'memory';
   const canChooseStorage = (session?.loggedIn ?? false) && storageTier !== 'keychain';
   const handleSetStorage = async (mode: Exclude<TokenFallback, 'unknown'>) => {
     setMovingToken(true);

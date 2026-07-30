@@ -2561,18 +2561,28 @@ function MapCanvas() {
       move_comment: 'crosshair',
     };
 
+    // In supported tools with Ctrl held, show grab cursor for panning
+    const ctrlPan = CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld;
+    const base = ctrlPan ? 'grab' : cursors[activeTool] ?? 'default';
+
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
     // Force zoom-in cursor for zoom tool even when hovering over features
     if (!isHoveringFeature || activeTool === 'zoom') {
-      // In supported tools with Ctrl held, show grab cursor for panning
-      if (CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld) {
-        map.current.getCanvas().style.cursor = 'grab';
-      } else {
-        map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
-      }
+      map.current.getCanvas().style.cursor = base;
     }
-  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode]);
+    // Hand the same value to SurveyLayer, which writes this property too and needs
+    // something to fall back to when nothing is hovered. It cannot derive `base`
+    // itself - the tool map and the Ctrl-held grab both live here - and without it
+    // its own recomputes (which continue after this passive effect has run for the
+    // last time) reset the cursor to a bare arrow (#24). Unconditional: it is the
+    // RESTING cursor, true whether or not something is hovered right now.
+    surveyLayerRef.current?.setBaseCursor(base, ctrlPan);
+    // `mapLoaded` is a dependency for the hand-off above, not for the write: on the
+    // first run the layer does not exist yet, and none of the other deps change on
+    // map load, so without it the starting tool's resting cursor would never reach
+    // SurveyLayer at all.
+  }, [activeTool, ctrlHeld, isHoveringFeature, placementMode, mapLoaded]);
 
   // Disable map drag pan for tools that need custom interaction
   // (Ctrl+drag panning is handled by custom implementation, not dragPan)
@@ -2643,6 +2653,15 @@ function MapCanvas() {
   // Track Ctrl key for cursor updates and box/zoom select cancellation
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Recover from a genuine Ctrl release that the keyup workaround below
+      // swallowed. That suppression cannot tell a spurious keyup from a real one at
+      // the moment it fires - but the two diverge immediately afterwards: with the
+      // key still physically down every later event reports `ctrlKey: true`, so an
+      // event reporting `false` is proof the key is up. Without this, one release
+      // timed inside the 50ms window latched `ctrlHeld` on until the user pressed
+      // and released Ctrl again - leaving the pan grab over every tool they
+      // switched to, since no further keyup was ever coming.
+      if (!e.ctrlKey) setCtrlHeld(false);
       if (e.key === 'Control' && !e.repeat) {
         setCtrlHeld(true);
 
@@ -2652,6 +2671,9 @@ function MapCanvas() {
       }
     };
     const handleKeyUp = (e: KeyboardEvent) => {
+      // Same recovery as on keydown: releasing any OTHER key also proves whether
+      // Ctrl is still down.
+      if (e.key !== 'Control' && !e.ctrlKey) setCtrlHeld(false);
       if (e.key === 'Control') {
         // WORKAROUND: Tauri/WebKit fires spurious Ctrl keyup events at the moment of
         // mousedown/mouseup while holding Ctrl. Only suppress keyups that occur within
@@ -2673,14 +2695,42 @@ function MapCanvas() {
       setZoomBox({ start: null, end: null });
     };
 
+    /**
+     * The same correction from the POINTER, which is the half the keyboard cannot
+     * cover: after a Ctrl+drag whose release landed inside the suppression window,
+     * the next thing a user does is usually click a toolbar tool or just move the
+     * mouse - neither of which is a key event, so `ctrlHeld` stayed latched and the
+     * pan grab followed them onto the tool they had just chosen.
+     *
+     * Deliberately NOT skipped while a Ctrl+pan is running. Exempting that window
+     * looked safer and was not: the release is swallowed precisely at the end of a
+     * drag, so a click landing inside the same 50ms - reaching straight for the
+     * toolbar, which is the whole scenario - was exempted too, and the flag stayed
+     * latched until some later stray mouse move happened to clear it. The quirk
+     * being worked around is spurious KEYUPS, not mis-reported mouse modifiers; the
+     * Ctrl+pan mouseup handler already trusts `e.ctrlKey` the same way. And the flag
+     * only drives the cursor - the pan itself runs off `ctrlPanActiveRef` - so even
+     * on a platform that did lie here the cost is a cursor, not a broken gesture.
+     *
+     * Re-setting `false` when it is already `false` is free: React bails out of the
+     * render when the state is unchanged, which is the common case on every move.
+     */
+    const clearIfReleased = (e: MouseEvent | PointerEvent) => {
+      if (!e.ctrlKey) setCtrlHeld(false);
+    };
+
     window.addEventListener('keydown', handleKeyDown);
     window.addEventListener('keyup', handleKeyUp);
     window.addEventListener('blur', handleBlur);
+    window.addEventListener('pointerdown', clearIfReleased);
+    window.addEventListener('mousemove', clearIfReleased);
 
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
       window.removeEventListener('blur', handleBlur);
+      window.removeEventListener('pointerdown', clearIfReleased);
+      window.removeEventListener('mousemove', clearIfReleased);
     };
   }, []);
 
@@ -3765,6 +3815,9 @@ function MapCanvas() {
       data-map-loaded={mapLoaded ? 'true' : 'false'}
       data-active-tool={activeTool}
       data-placement-mode={placementMode ? 'true' : 'false'}
+      /* (#24) Ctrl BELIEVED down, which the swallowed-release guard can get wrong.
+         The cursor cannot stand in for it - the drag drives that too. */
+      data-ctrl-held={ctrlHeld ? 'true' : 'false'}
       onPointerDown={handlePointerDown}
       onPointerMove={handlePointerMove}
       onPointerUp={handlePointerUp}

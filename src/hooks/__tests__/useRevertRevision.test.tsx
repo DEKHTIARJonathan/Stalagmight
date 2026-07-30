@@ -108,6 +108,9 @@ describe('useRevertRevision - the happy path', () => {
 
     expect(outcome).toEqual({ kind: 'reverted' });
     expect(issued()).toEqual([
+      // [#258] The lock-free probe leads: the "which file?" question is settled
+      // before anything is acquired.
+      'speleodb_dump_candidates',
       'speleodb_start_editing',
       'speleodb_restore_revision',
       'speleodb_done',
@@ -119,6 +122,9 @@ describe('useRevertRevision - the happy path', () => {
       restore: true,
       // The first attempt never waives the un-pushed-edits guard.
       discardLocal: false,
+      // [#258] A first attempt sends no chosen entry, which is what makes the
+      // backend classify the dump normally rather than honour a stale pick.
+      entryPath: null,
     });
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
   });
@@ -134,6 +140,62 @@ describe('useRevertRevision - the happy path', () => {
     await run({ onStep: (s) => steps.push(s) });
 
     expect(steps).toEqual(['locking', 'restoring', 'pushing']);
+  });
+});
+
+describe('useRevertRevision - the resume is identity-checked too (#258)', () => {
+  it('does not publish a replacement project when the resume finds the context stale', async () => {
+    // `resumeAtPush` used to return BEFORE the identity check, two hunks under a
+    // comment claiming that check ran "at ENTRY". `publish` calls `done(message)` -
+    // argument-free, acting on whatever is open, with a real commit message - so it
+    // PUSHES. A retry after a project switch therefore uploaded the replacement and
+    // released its lock.
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    expect(await run({ resumeAtPush: true })).toEqual({ kind: 'project_changed' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('still resumes normally when the project is the one it was asked about', async () => {
+    // The other half: the pre-flights must STAY behind the resume, because the restore
+    // is what set the bit the un-pushed guard tests. Only the identity moved ahead.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, hasUnpushedEdits: true },
+    });
+    useProjectStore.setState({ isDirty: true });
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    expect(await run({ resumeAtPush: true })).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+});
+
+describe('useRevertRevision - the swapped tree owns no stale entity refs (#258)', () => {
+  it('resets every per-project tool ref, not just the selection', async () => {
+    // The swap replaces the working tree without going through `loadProject`, which is
+    // the only thing that resets these - so `clearSelection` was the whole reset and
+    // merge/comment/measure refs survived. #258 is what makes that dangerous: two
+    // `.stalx` under one project are independent databases with independently assigned
+    // section ids, so a picker answer can swap in a DIFFERENT survey whose ids collide,
+    // and a half-armed merge would resolve its endpoint against the wrong station.
+    useUIStore.setState({
+      mergeStationA: { section_id: 1, station_index: 0 },
+      mergeStationB: null,
+      commentTarget: { sectionId: 1, shotId: 7 } as never,
+    });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    expect(await run()).toEqual({ kind: 'reverted' });
+
+    const ui = useUIStore.getState();
+    expect(ui.mergeStationA).toBeNull();
+    expect(ui.commentTarget).toBeNull();
   });
 });
 
@@ -198,7 +260,7 @@ describe('useRevertRevision - refusing before it takes anything', () => {
     const outcome = await run();
 
     expect(outcome).toEqual({ kind: 'locked_by', email: 'other@x' });
-    expect(issued()).toEqual(['speleodb_start_editing']);
+    expect(issued()).toEqual(['speleodb_dump_candidates', 'speleodb_start_editing']);
   });
 
   it('reports a divergence and unwinds nothing (the backend released its own lock)', async () => {
@@ -207,7 +269,7 @@ describe('useRevertRevision - refusing before it takes anything', () => {
     const outcome = await run();
 
     expect(outcome).toEqual({ kind: 'diverged' });
-    expect(issued()).toEqual(['speleodb_start_editing']);
+    expect(issued()).toEqual(['speleodb_dump_candidates', 'speleodb_start_editing']);
   });
 
   it('reports a plain lock failure when nothing else explains it', async () => {
@@ -438,5 +500,281 @@ describe('useRevertRevision - resuming at the push', () => {
 
     expect(outcome).toEqual({ kind: 'push_unconfirmed' });
     expect(issued()).toEqual(['speleodb_done']);
+  });
+});
+
+describe('useRevertRevision - an ambiguous dump is a question, not a failure (#258)', () => {
+  const AMBIGUOUS = {
+    message: 'more than one Stalagmight file',
+    action: 'Ambiguous',
+    dump_candidates: [
+      { entry_path: 'misc/a.stalx', size_bytes: 10, modified: null },
+      { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null },
+    ],
+  };
+
+  it('asks BEFORE taking the lock when the probe finds a choice', async () => {
+    // The point of the probe: no lock is taken at all, so there is nothing to hand
+    // back. Contrast the case below, which is the fallback for when the probe could
+    // not know - the composite gets as far as the restore and unwinds.
+    ipc({
+      speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'awaiting_dump_choice', candidates: AMBIGUOUS.dump_candidates });
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
+  it('abandons the composite when the open project changes under the probe', async () => {
+    // The probe is the only step here that can involve a dump download, so it is the
+    // longest, and it is the last point at which the project is still named: after it
+    // `startEditing()` takes no argument and locks whatever is open NOW, while the
+    // restore still targets the captured id. A swap in between would take a write
+    // lock on one project and check a revision out of another - and the candidates
+    // would raise a picker describing a server tree nobody is looking at.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') {
+        // The user closes this dialog and opens something else while the probe is
+        // still in flight.
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return AMBIGUOUS.dump_candidates;
+      }
+      if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    // Nothing acquired, nothing written - so there is nothing to unwind either.
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
+  it('abandons a picker retry whose project changed while the dialog was open', async () => {
+    // The retry re-enters the composite from the top with `entryPath` set, which
+    // SKIPS the probe branch and every check inside it - so the guard that only lived
+    // there covered the shorter wait and missed the longer one. The picker is an
+    // interaction of unbounded length; the probe is a download.
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('refuses to restore over edits that arrived while the probe was out', async () => {
+    // The unsaved-work guard runs at entry, before a download that can take as long as
+    // it likes. An edit landing during it was still in memory when the restore closed
+    // and reopened the project at the checked-out tree - and `useRestoreRevision`
+    // force-clears `isDirty` behind it, so nothing would have said it ever existed.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') {
+        useProjectStore.setState({ isDirty: true });
+        return null;
+      }
+      if (cmd === 'speleodb_start_editing') return { kind: 'editing' };
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'unsaved_local' });
+    // Nothing acquired: the re-check sits in front of the lock, not behind it.
+    expect(issued()).toEqual(['speleodb_dump_candidates']);
+  });
+
+  it('hands back the lock it just took when the project changed during the acquire', async () => {
+    // The acquire is a round trip of its own, and the restore on the other side of it
+    // replaces the whole working tree. Walking away without releasing would strand a
+    // server mutex for the rest of the holder's session, so the mismatch unwinds like
+    // every other failure arm - and `done(null)` is correct here by construction,
+    // because the restore that sets the dirty bit has not run.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_restore_revision') return RESTORED;
+      if (cmd === 'speleodb_done') return { kind: 'released' };
+      if (cmd === 'speleodb_release_lock_acquired_here') return null;
+      return null;
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'project_changed' });
+    // Acquired, unwound, and never restored.
+    expect(issued()).toEqual([
+      'speleodb_dump_candidates',
+      'speleodb_start_editing',
+      'speleodb_release_lock_acquired_here',
+    ]);
+    // Through the PROVENANCE-SCOPED verb, and through neither of the two things that
+    // look like they would do. `done` is argument-free and acts on whatever is OPEN -
+    // which this branch has just proved is a different project - and `message: null`
+    // picks the commit message rather than suppressing the upload, so unwinding through
+    // it would push the replacement whenever it was dirty and editable.
+    // `speleodb_release_lock(projectId)` targets an ARBITRARY project by design, so it
+    // would surrender a lock this account inherited from a sibling session, and would
+    // name an id that is not necessarily the one `startEditing` locked.
+    expect(issued()).not.toContain('speleodb_done');
+    expect(issued()).not.toContain('speleodb_release_lock');
+    // No argument: only the backend knows what it took.
+    expect(argsOf('speleodb_release_lock_acquired_here')).toBeUndefined();
+  });
+
+  it('leaves an INHERITED same-account lock alone when the project changes', async () => {
+    // The destructive half. An acquire that met a lock this account already held
+    // inherited it from a sibling session guarding its own un-pushed work, and
+    // `speleodb_start_editing` is explicit that no unwind may hand that back. The
+    // frontend cannot tell the two apart - `startEditing` reduces every success to
+    // `true` - so the decision has to sit in the backend, and this test's job is to
+    // prove the frontend does not make it. It asks unconditionally; the no-op is the
+    // backend's answer, which its own unit tests cover.
+    let released = 0;
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_release_lock_acquired_here') {
+        released += 1;
+        return null;
+      }
+      return null;
+    });
+
+    expect(await run()).toEqual({ kind: 'project_changed' });
+    // Exactly one ask, carrying no id for the backend to misapply.
+    expect(released).toBe(1);
+    expect(issued()).not.toContain('speleodb_release_lock');
+    expect(issued()).not.toContain('speleodb_done');
+  });
+
+  it('still reports the project change when the release of that lock fails', async () => {
+    // The outcome is already decided by then. Reporting a release failure instead
+    // would name the smaller problem, and the stranded lock stays visible in the
+    // held-lock resume prompt either way.
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_release_lock_acquired_here')
+        throw { message: 'offline', action: 'Retry' };
+      return null;
+    });
+
+    expect(await run()).toEqual({ kind: 'project_changed' });
+  });
+
+  it('does not probe on the retry - the answer is already in hand', async () => {
+    ipc({
+      speleodb_dump_candidates: ok(AMBIGUOUS.dump_candidates),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).not.toContain('speleodb_dump_candidates');
+  });
+
+  it('a probe that fails is advisory only and never blocks the revert', async () => {
+    // It reports nothing of its own: the flow proceeds and the real call stays the
+    // one authoritative place a problem is surfaced.
+    ipc({
+      speleodb_dump_candidates: rejects({ message: 'offline', action: 'Retry' }),
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    expect(await run()).toEqual({ kind: 'reverted' });
+  });
+
+  it('hands the lock back and reports the choice, NOT a restore failure', async () => {
+    // The reported bug: this used to come back as `restore_failed`, so the dialog
+    // painted "The write lock was released and nothing was changed" in red while a
+    // picker sat behind it offering a retry the backend would refuse. Both halves
+    // are pinned here - the release DID happen (so a retry can re-acquire), and the
+    // outcome says what is actually going on.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(AMBIGUOUS),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome).toEqual({ kind: 'awaiting_dump_choice', candidates: AMBIGUOUS.dump_candidates });
+    expect(issued()).toContain('speleodb_done');
+  });
+
+  it('re-runs the WHOLE composite on the retry, re-acquiring the lock', async () => {
+    // The heart of the fix. A retry that re-ran only the restore step would be
+    // refused: `restore: true` needs a held lock, and the attempt above gave it back.
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run({ entryPath: 'misc/b.stalx' });
+
+    expect(outcome).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual([
+      'speleodb_start_editing',
+      'speleodb_restore_revision',
+      'speleodb_done',
+    ]);
+    expect(argsOf('speleodb_restore_revision')?.entryPath).toBe('misc/b.stalx');
+  });
+
+  it('does NOT offer the choice while the copy is dirty, because the retry could not work', async () => {
+    // A dump can be ambiguous AND the copy un-pushed: the backend resolves the entry
+    // before it consults the local-edits policy. There the lock is deliberately KEPT,
+    // so a composite retry would be refused by the revert's own un-pushed pre-flight.
+    // Offering a picker there would reproduce the reported bug in a rarer form.
+    // Clean at the pre-flight (or the revert would refuse before it ever restored),
+    // then dirty by the time the catch re-reads it - an autosave landing in between
+    // is exactly the race the unwind's refresh exists to catch.
+    useSpeleoStore.setState({
+      link: { ...LINK },
+      refreshLinkStatus: vi.fn(async () => {
+        useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true } });
+      }),
+    });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: rejects(AMBIGUOUS),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    const outcome = await run();
+
+    expect(outcome.kind).toBe('restore_failed');
+    expect(outcome).toMatchObject({ lockHeld: true });
+    expect(issued()).not.toContain('speleodb_done');
   });
 });

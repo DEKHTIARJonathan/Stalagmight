@@ -5,6 +5,7 @@ import type {
   Permission,
   PushResult,
   RemoteState,
+  SpeleoDumpCandidate,
   SpeleoErrorDto,
   SpeleoLinkStatus,
   SpeleoLoginResult,
@@ -14,9 +15,35 @@ import type {
   TokenStorage,
   UpdateResult,
 } from '../types/ipc.generated';
-import { invokeIpc } from '../utils/ipc';
+import { invokeIpc, getErrorMessage } from '../utils/ipc';
+import {
+  trackAction,
+  setDwellState,
+  checkDialogCancel,
+  trackDialogComplete,
+} from '../utils/telemetry';
 import { emailsMatch } from '../utils/email';
 import { useProjectStore } from './projectStore';
+import { useUIStore } from './uiStore';
+
+/** [#258] Which ambiguity the picker is resolving. Both share the mechanics and
+    differ only in the verb the user is offered. */
+export type DumpPickerKind = 'stalx' | 'ariane';
+
+/** Telemetry key for the picker overlay. Must match the registry entry. */
+const DUMP_PICKER_DIALOG = 'speleodb-dump-picker';
+
+/**
+ * Hand dwell back after the picker closes.
+ *
+ * Not `tool.<activeTool>` the way `uiStore.closeDialog` does it: this overlay
+ * layers OVER other dialogs, so when one is still open underneath, dwell belongs to
+ * it and not to the map tool nobody has returned to yet.
+ */
+function restoreDwellUnderOverlay(): void {
+  const ui = useUIStore.getState();
+  setDwellState(ui.activeDialog ? `dialog.${ui.activeDialog}` : `tool.${ui.activeTool}`);
+}
 
 /**
  * Shared SpeleoDB frontend state (#204/#203/#205). Holds the backend **session**
@@ -190,6 +217,59 @@ export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
  * by {@link SpeleoStore.snapshotLink} and put back by
  * {@link SpeleoStore.restoreLink}.
  */
+/**
+ * The session a request is being issued under, to be checked again when its reply
+ * lands. [#258]
+ *
+ * Ambiguity is a ROUTING signal, so the catch that receives it opens a dialog rather
+ * than reporting anything - and every verb that can raise the picker makes a call of
+ * unbounded length (a dump download) first. A 401 auto-drop on any concurrent call ends
+ * the session underneath it, so the reply can arrive after `clearSession` has already
+ * torn the surface down; raising the picker then puts a dialog on screen for an account
+ * nobody is signed in to, where Confirm can only fail and a flow suspended on the
+ * question waits for a manual cancel.
+ *
+ * Shared rather than repeated because it was repeated, and the copies did not agree:
+ * the three open verbs had it and the three revision-family verbs did not.
+ */
+export function speleoSessionIssuedAt(): number {
+  return useSpeleoStore.getState().sessionGeneration;
+}
+
+/**
+ * Whether the session that issued a request is still the one signed in.
+ *
+ * `sessionGeneration` rather than `session` identity, for the reason the store
+ * documents: it moves on a login or an ending and NOT on the benign refreshes a project
+ * load and Settings both trigger, so an identity check would fire on those and suppress
+ * a picker that should have opened.
+ *
+ * `!== false`, not `=== true`: a session that is merely ABSENT is not evidence of a
+ * logout, it is a store that has not been seeded yet, and demanding one would make
+ * raising the picker conditional on a status poll having landed first. Only a positive
+ * `loggedIn: false` says the session ended under us.
+ */
+export function speleoSessionStillCurrent(issuedAt: number): boolean {
+  const { sessionGeneration, session } = useSpeleoStore.getState();
+  return sessionGeneration === issuedAt && session?.loggedIn !== false;
+}
+
+/**
+ * Whether the project a request was issued FOR is still the one open. [#258]
+ *
+ * The companion to {@link speleoSessionStillCurrent}, for the verbs that act on the
+ * OPEN project - restore, View, revert. Their session can be perfectly current while
+ * the project underneath has changed: start a View, dismiss the SpeleoDB dialog, open
+ * something else, and the download returns to raise project A's picker over project B,
+ * whose retry the backend then refuses because a revision swap binds to what is open.
+ *
+ * Deliberately NOT applied to the open verbs - they exist to change which project is
+ * open, so for them a mismatch is the goal rather than the hazard.
+ */
+export function speleoOpenProjectStillIs(projectId: string | null): boolean {
+  return useSpeleoStore.getState().remoteProjectId === projectId;
+}
+
 export interface SpeleoLinkSnapshot {
   link: SpeleoLinkState | null;
   projectLinkKind: ProjectLinkKind;
@@ -351,6 +431,72 @@ interface SpeleoStore {
       the next login, which is the safe direction for a prompt someone escaped out
       of rather than answered. */
   closeStorageChoice: () => void;
+
+  /** [#258] The ambiguous-dump picker: the candidates a rejected pull offered, and
+   *  the pending call to replay once the user has chosen.
+   *
+   *  An INDEPENDENT overlay for the same reason as the storage prompt above, plus
+   *  one of its own: this question is raised from FOUR unrelated surfaces (the
+   *  Open-from-SpeleoDB browser, GlobalView, the refused-open prompt, and the
+   *  revision history inside the project dialog), and three of those already
+   *  occupy the single `activeDialog` slot themselves. */
+  dumpPickerOpen: boolean;
+  /** The entries the backend offered, already ordered canonical-first. */
+  dumpPickerCandidates: SpeleoDumpCandidate[];
+  /** Which question is being asked - it changes the verb, not the mechanics. */
+  dumpPickerKind: DumpPickerKind;
+  /** A resolve is in flight, so the dialog must not be dismissed out from under it. */
+  dumpPickerBusy: boolean;
+  /** Why the last confirmation failed, rendered inside the picker. The retry runs
+      from the DIALOG, not from a host, so a rejection has nowhere else to surface -
+      it used to escape as an unhandled rejection and leave the picker open saying
+      nothing. */
+  dumpPickerError: string | null;
+  /** Raise the picker for `candidates`, replaying `retry` with the chosen entry. */
+  openDumpPicker: (
+    candidates: SpeleoDumpCandidate[],
+    kind: DumpPickerKind,
+    retry: (entryPath: string) => Promise<void>,
+    onCancel?: () => void,
+    /**
+     * WHICH flow is asking, for the hosts that suspend on the answer.
+     *
+     * A raise either CONTINUES the flow already suspended - a retry meeting a fresh
+     * ambiguity re-asks the same question of a moved tree - or DISPLACES a different
+     * flow, whose cancel is then the only thing that would ever have released it. The
+     * two need opposite treatment and only the caller knows which it is.
+     *
+     * Timing cannot answer it, which is what the first attempt got wrong: a flag held
+     * for the duration of an awaited retry marks every picker raised anywhere in that
+     * window as a continuation, so a View retry re-offering while a Revert picker was
+     * up suppressed the Revert's cancel and stranded it. Identity does answer it.
+     *
+     * Omitted by the flows that suspend on nothing - the open verbs pass no `onCancel`
+     * either, so there is nothing to strand and nothing to preserve.
+     */
+    owner?: string,
+  ) => void;
+  /** Dismiss WITHOUT choosing. Nothing was downloaded over and nothing was
+      replaced - the classify step runs before the cache is touched - so cancelling
+      is genuinely free and the question can simply be asked again. */
+  closeDumpPicker: () => void;
+  /** Re-run the pending call with the chosen entry, then close. Left OPEN on
+      failure so the choice is not silently lost; the caller surfaces the error. */
+  resolveDumpPicker: (entryPath: string) => Promise<void>;
+  /** The pending call, held so the dialog itself stays presentational. Not part of
+      the picker's public surface - callers go through `openDumpPicker`. */
+  dumpPickerRetry: ((entryPath: string) => Promise<void>) | null;
+  /** Run when the picker goes away WITHOUT an answer - dismissed, or dropped by a
+      lost session. It lives here rather than as an effect in each dialog because
+      the session-loss reset below also has to fire it: a caller that suspended a
+      flow on this question is left with a modal it cannot dismiss otherwise. */
+  dumpPickerCancel: (() => void) | null;
+  /**
+   * Which flow the open picker belongs to, or `null` for one that suspends nothing.
+   * Compared against an incoming raise's owner to tell a continuation from a
+   * displacement - see {@link SpeleoStore.openDumpPicker}.
+   */
+  dumpPickerOwner: string | null;
   /** Answer the storage question: persist the tier + the settled refusal, and move
       the held token there (no re-login - the backend still has it).
       Resolves the tier the key ACTUALLY LANDED ON, which is not always the one that
@@ -445,6 +591,17 @@ interface SpeleoStore {
     permission: Permission | null;
     forPath?: string | null;
     hasUnpushedEdits?: boolean;
+    /**
+     * WHICH SpeleoDB project this seed is for.
+     *
+     * The seed used to omit it, leaving `remoteProjectId` to the status poll - which
+     * meant that after opening remote B from remote A the store still named A for as
+     * long as a poll took (30 s to a user-configurable 24 h). Every consumer keyed on
+     * it read the wrong project in that window, and the guards that compare against it
+     * could not notice, because the id they were handed came from the same stale value.
+     * The pull knows the answer at the call site; there is no reason to wait to be told.
+     */
+    projectId?: string | null;
   }) => void;
   clearLink: () => void;
   /**
@@ -777,7 +934,30 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     }
   },
 
-  setSession: (s) =>
+  setSession: (s) => {
+    // [#258] A refresh that comes back logged-OUT is an ending, whatever raised it.
+    // This action is the benign one - every project load and every Settings open calls
+    // it, and it deliberately does not bump `sessionGeneration` - so it cannot simply
+    // tear down. But the ONE transition it can carry is a real session loss, and an
+    // overlay left standing across it is a picker offering to retry against an account
+    // nobody is signed in to. Suppressing NEW pickers is not enough; one already open
+    // has to go too.
+    //
+    // Routed through `clearSession` rather than a second teardown beside it: that is
+    // where the pending cancel is fired, the dismissal telemetry recorded, and every
+    // stale link field reset - all of which are just as due here.
+    // Two ways in, because a known true->false transition is not the only one that
+    // matters. `sessionStillCurrent` deliberately lets a picker be raised while
+    // `session` is still null - an authenticated backend call can beat the first
+    // `speleodb_session` reply - and for that picker the prior value is never `true`,
+    // so a transition test alone skipped the teardown and left it open over a session
+    // the very same refresh had just reported dead. Confirm could then only fail, and a
+    // revert suspended on the question stayed busy until the user cancelled by hand.
+    // An open picker is therefore its own reason to tear down.
+    const wasLoggedIn = get().session?.loggedIn === true;
+    if (!s.logged_in && (wasLoggedIn || get().dumpPickerOpen)) {
+      get().clearSession();
+    }
     set({
       session: {
         loggedIn: s.logged_in,
@@ -787,7 +967,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         storage: s.storage ?? null,
         keychain: s.keychain,
       },
-    }),
+    });
+  },
 
   refreshSession: async () => {
     try {
@@ -801,6 +982,140 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   storageChoiceOpen: false,
 
   closeStorageChoice: () => set({ storageChoiceOpen: false }),
+
+  dumpPickerOpen: false,
+  dumpPickerCandidates: [],
+  dumpPickerKind: 'stalx',
+  dumpPickerBusy: false,
+  dumpPickerError: null,
+  dumpPickerRetry: null,
+  dumpPickerCancel: null,
+  dumpPickerOwner: null,
+
+  openDumpPicker: (candidates, kind, retry, onCancel, owner) => {
+    // Whoever was suspended on the PREVIOUS question has to be released, because this
+    // raise takes their picker away and their cancel with it.
+    //
+    // Two flows really can be in flight at once: the revision history disables View
+    // while its own download runs but leaves Revert live, so a revert probe can raise a
+    // picker and the older View download can then raise another over it. The displaced
+    // revert kept `busy` deliberately - its cancel is what releases it - so dropping
+    // that callback left a dialog with every control and every dismissal route
+    // disabled.
+    //
+    // NOT on a continuation, though. When a retry re-raises with a fresh candidate set,
+    // the same flow is still suspended on the same question, and firing its cancel would
+    // release it out from under the picker that just replaced it.
+    //
+    // Told apart by OWNER, not by timing. The first attempt used a flag held for the
+    // duration of an awaited retry, which marks every picker raised anywhere in that
+    // window as a continuation - so a View retry re-offering while a Revert picker was
+    // up suppressed the Revert's cancel and stranded exactly the dialog this is here to
+    // release. An unowned raise (the open verbs, which suspend on nothing) never
+    // matches an owned one, so it always displaces.
+    const previousOwner = get().dumpPickerOwner;
+    const continuing = owner !== undefined && owner === previousOwner;
+    const displaced = continuing ? null : get().dumpPickerCancel;
+    // The lifecycle `uiStore.openDialog` runs, done by hand because this overlay
+    // deliberately does not take the `activeDialog` slot - and skipping it left the
+    // four registered picker events dead, so incidence and cancel counts stayed zero
+    // while dwell went on being attributed to whatever surface is underneath.
+    trackAction(`dialog.${DUMP_PICKER_DIALOG}`);
+    setDwellState(`dialog.${DUMP_PICKER_DIALOG}`);
+    set({
+      dumpPickerOpen: true,
+      dumpPickerCandidates: candidates,
+      dumpPickerKind: kind,
+      dumpPickerBusy: false,
+      dumpPickerError: null,
+      dumpPickerRetry: retry,
+      dumpPickerCancel: onCancel ?? null,
+      dumpPickerOwner: owner ?? null,
+    });
+    // Clear FIRST, then notify - the same order `closeDumpPicker` documents, so a
+    // handler that re-raises is not wiped by the call that released it.
+    displaced?.();
+  },
+
+  closeDumpPicker: () => {
+    // Dismissed without answering - the cancel half of the same lifecycle.
+    checkDialogCancel(DUMP_PICKER_DIALOG);
+    restoreDwellUnderOverlay();
+    const onCancel = get().dumpPickerCancel;
+    // Clear FIRST, then notify: a handler that re-raises the picker must not have
+    // its new state wiped by this same call.
+    set({
+      dumpPickerOpen: false,
+      dumpPickerCandidates: [],
+      dumpPickerBusy: false,
+      dumpPickerError: null,
+      dumpPickerRetry: null,
+      dumpPickerCancel: null,
+      dumpPickerOwner: null,
+    });
+    onCancel?.();
+  },
+
+  resolveDumpPicker: async (entryPath) => {
+    const retry = get().dumpPickerRetry;
+    if (!retry) return;
+    set({ dumpPickerBusy: true, dumpPickerError: null });
+    try {
+      await retry(entryPath);
+      // Only act on a picker that is still THIS one. `retry` is the ownership token:
+      // every route that ends a picker replaces it - `closeDumpPicker` and
+      // `clearSession` null it, `openDumpPicker` installs a fresh closure - so an
+      // identity check catches all three, where the `dumpPickerBusy` proxy this
+      // replaces caught only the re-raise. A confirm is a network round trip of
+      // unbounded length, and the session can die and be replaced under it (the
+      // reLogin route does exactly that), after which closing, erroring or
+      // un-busying would be acting on a DIFFERENT dialog's state.
+      //
+      // A fresh ambiguity is the ordinary case: the tree moved while the dialog was
+      // open, so the retry re-raised the picker with a new candidate list, and
+      // closing here would throw that away.
+      if (get().dumpPickerRetry !== retry) return;
+      // Both halves, in this order, exactly as `uiStore.openDialog` does for a
+      // chained dialog. `trackDialogComplete` only SETS a module-global marker and
+      // `checkDialogCancel` is what consumes it - so completing without consuming
+      // left the marker standing, and the next picker's cancel was read as this
+      // one's completion and emitted no cancel event.
+      trackDialogComplete(DUMP_PICKER_DIALOG);
+      checkDialogCancel(DUMP_PICKER_DIALOG);
+      restoreDwellUnderOverlay();
+      set({
+        dumpPickerOpen: false,
+        dumpPickerCandidates: [],
+        dumpPickerRetry: null,
+        dumpPickerCancel: null,
+        dumpPickerOwner: null,
+        // Cleared HERE rather than left to the `finally`, which no longer fires
+        // unconditionally: this very `set` hands ownership away, so the guard below
+        // correctly declines to touch a picker that is no longer ours.
+        dumpPickerBusy: false,
+      });
+    } catch (e) {
+      // The retry runs from the DIALOG, so its rejection has nowhere else to go: the
+      // caller invokes this with `void` and no host receives an outcome. Left
+      // unhandled it became an unhandled rejection and the picker sat there open,
+      // saying nothing about why confirming did not work.
+      // `getErrorMessage`, not `humanizeSpeleoError`: `utils/speleoError` imports
+      // this module, so reaching for it here would close an import cycle. The
+      // picker's message is the raw reason, which is what a user staring at a
+      // failed confirmation needs.
+      //
+      // Same ownership check as the success path, and it is what keeps the reLogin
+      // route quiet: that replay drops the session (which closes this picker) and
+      // then rethrows, and painting its message onto whatever dialog came next -
+      // or onto a closed one, to surface on the next open - helps nobody.
+      if (get().dumpPickerRetry !== retry) return;
+      set({ dumpPickerError: getErrorMessage(e) });
+    } finally {
+      // Never un-busy a picker we no longer own: a late loser settling under a
+      // NEWER picker would otherwise re-enable its buttons mid-confirm.
+      if (get().dumpPickerRetry === retry) set({ dumpPickerBusy: false });
+    }
+  },
 
   // Both credential verbs write `config.speleodb.{token_fallback,keychain_declined}`
   // on the backend, so the frontend's config copy is stale the moment they return.
@@ -944,7 +1259,19 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
   // a self-contradictory button (e.g. yellow "click to edit" while still claiming we
   // hold the lock and have un-pushed edits). The shell offers Start editing again on
   // re-login, and the next poll re-seeds. (fix 4)
-  clearSession: () =>
+  clearSession: () => {
+    // [#258] Fire the picker's cancel BEFORE dropping it. A caller that suspended a
+    // flow on this question (the revert holds `busy` across it) is otherwise left
+    // with a modal whose every dismissal route is disabled, by the very reset that
+    // was meant to tidy up after the session.
+    const abandonedPicker = get().dumpPickerCancel;
+    // A session-loss teardown is still a dismissal without an answer, so it owes the
+    // same telemetry any other dismissal does - otherwise the cancel goes unrecorded
+    // and dwell stays attributed to a picker that is no longer on screen.
+    if (get().dumpPickerOpen) {
+      checkDialogCancel(DUMP_PICKER_DIALOG);
+      restoreDwellUnderOverlay();
+    }
     set((state) => ({
       session: null,
       // The session ended, so nothing still in flight for it may act on whatever
@@ -988,7 +1315,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       // Same reasoning: the storage prompt asks where to put a key that no longer
       // exists once the session has ended.
       storageChoiceOpen: false,
-    })),
+      // The candidates describe a server tree this session can no longer reach.
+      dumpPickerOpen: false,
+      dumpPickerCandidates: [],
+      dumpPickerBusy: false,
+      dumpPickerRetry: null,
+      dumpPickerCancel: null,
+      dumpPickerOwner: null,
+    }));
+    abandonedPicker?.();
+  },
 
   seedFromStatus: (s) =>
     set((state) => {
@@ -1056,8 +1392,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, projectId = null }) =>
     set({
+      // Committed in the SAME synchronous `set()` as the rest of the seed, so nothing
+      // can observe the new project's link beside the old project's id. `syncProjectLink`
+      // recognises this seed by `linkPath` and keeps it; the unmatched branch clears the
+      // id, so a File > Open of some other remote `.stalx` still resets it.
+      remoteProjectId: projectId,
       // We just pulled it from SpeleoDB, so it is remote by construction - and
       // saying so keeps the gate closed even if the load never completes.
       projectLinkKind: 'remote',

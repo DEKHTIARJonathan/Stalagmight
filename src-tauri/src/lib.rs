@@ -1317,12 +1317,14 @@ pub fn run() {
             // SpeleoDB held-lock resume/release prompt - release all + per-project (#201)
             commands::speleodb::speleodb_release_all_locks,
             commands::speleodb::speleodb_release_lock,
+            commands::speleodb::speleodb_release_lock_acquired_here,
             // SpeleoDB per-project LOCAL state (cached copy + un-pushed edits), the
             // local half of the held-lock / GlobalView project joins
             commands::speleodb::speleodb_local_project_states,
             // SpeleoDB revision-history read + restore (#218)
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
+            commands::speleodb::speleodb_dump_candidates,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)

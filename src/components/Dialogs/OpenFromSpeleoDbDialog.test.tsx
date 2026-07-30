@@ -107,6 +107,8 @@ describe('OpenFromSpeleoDbDialog adopt flow (#214)', () => {
         // un-pushed-edits guard stays armed. Only the refused-open prompt's
         // "take the server copy" branch waives it, having asked first.
         discardLocal: false,
+        // [#258] No pick on a first attempt; the picker's replay supplies one.
+        entryPath: null,
       });
     });
     await waitFor(() =>
