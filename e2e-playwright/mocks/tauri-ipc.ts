@@ -1241,6 +1241,19 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'save_project': {
+            // Mirror the backend's Save-a-Copy contract: an EXPLICIT destination
+            // on a SpeleoDB-managed project writes a detached unlinked copy - the
+            // session does NOT move (projectPath/file_path untouched) and the
+            // result carries unlinked_copy_path instead of saved_path.
+            if (projectIsRemote && args?.path) {
+              return {
+                success: true,
+                unlinked_copy_path: args.path as string,
+                error: null,
+                warnings: [],
+                section_ids: [],
+              };
+            }
             projectPath = (args?.path as string) ?? projectPath;
             if (currentProject && projectPath) {
               currentProject.file_path = projectPath;
