@@ -57,14 +57,17 @@ pub(crate) struct SpeleoDbSession {
     /// sibling session on the same account, is no evidence that THIS process pushed
     /// anything.
     ///
-    /// Read-modify-written through exactly three helpers, never by a field assignment
+    /// Read-modify-written through exactly four sites, never by a field assignment
     /// anywhere else, because each such pair has to happen under ONE session-lock
     /// acquisition - two acquisitions leave a gap a fresh acquisition can land in and
-    /// be erased from (each helper's doc says which gap it is closing):
+    /// be erased from (each site's doc says which gap it is closing):
     /// [`AppState::speleodb_note_lock_acquired`] (record, or unconditional clear),
     /// `AppState::speleodb_forget_lock_acquired_if_gate_shut` (clear if the edit gate
-    /// is shut) and [`AppState::speleodb_forget_lock_acquired_for`] (clear if it still
-    /// names one given project).
+    /// is shut), [`AppState::speleodb_forget_lock_acquired_for`] (clear if it still
+    /// names one given project), and the stranded-claim janitor
+    /// (`AppState::speleodb_janitor_stranded_claim`, which additionally holds the
+    /// `project` mutex over its decision and the lock-ops mutex over its
+    /// restore-on-failure, so its writes cannot cross a live session's).
     ///
     /// `pub(super)` rather than private only because the last of those lives with the
     /// rest of the split delete release in [`super::speleodb_lock_release`], and a
@@ -1560,10 +1563,13 @@ impl AppState {
         // never wrongly granted.
         //
         // Residual, and irreducible without a server-side compare-and-set: between
-        // this probe and the acquire another session on our account could take the
-        // lock, and we would record an acquisition that was really theirs. That is the
-        // same fail direction as today, over a window of milliseconds rather than a
-        // whole process lifetime.
+        // this probe and the acquire another session on our account IN ANOTHER
+        // PROCESS (a second window, the website) could take the lock, and we would
+        // record an acquisition that was really theirs. That is the same fail
+        // direction as today, over a window of milliseconds rather than a whole
+        // process lifetime. In-process flows are no longer part of this residual:
+        // the lock-ops span below starts before the probe precisely so a captured
+        // or janitor release cannot land between the probe and the acquire.
         //
         // FOUR outcomes over three probe states, because a HELD mutex says nothing on
         // its own - only its holder does - and the two questions the probe answers
@@ -1601,6 +1607,21 @@ impl AppState {
         // Comparison is `lock_held_by_me`, the same case-insensitive predicate the #202
         // re-verify and the gate re-derivation use - SpeleoDB may normalise case, and
         // three hand-rolled spellings of "is this holder us?" is how they drift apart.
+        //
+        // The lock-ops span starts HERE, before the probe, not at the acquire:
+        // serialize probe -> commit against captured/janitor releases (F8), held
+        // across the network span on purpose - see `speleodb_session`. A probe
+        // outside the span reads provenance a captured release can invalidate
+        // before the acquire runs: the probe sees the account still holding (the
+        // delete's deferred release has not POSTed yet), answers "inherited, keep
+        // on unwind", the release then frees the mutex, and the acquire takes a
+        // FRESH lock this call believes it merely resumed - so an abort arm skips
+        // the unwind and strands a mutex we in fact took. Inside the span the
+        // release either finished first (the probe reads the freed world and the
+        // acquire is ours to record and to hand back) or waits until our commit
+        // (the probe's "inherited" answer stays true for the whole span, and the
+        // release's reclaim check then stands down for the live session).
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let me = self.speleodb_my_email();
         let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
             &endpoint,
@@ -1694,10 +1715,6 @@ impl AppState {
                 entry_gen,
             );
         };
-
-        // Serialize acquire -> commit against captured/janitor releases (F8):
-        // held across the network span on purpose - see `speleodb_session`.
-        let _lock_ops = self.speleodb_lock_ops_guard();
 
         // Acquire the lock. A 400 is the server's "someone else holds it" signal;
         // it has no first-class map_status row, so it is handled here (per #194).
@@ -5661,7 +5678,16 @@ mod tests {
             state.speleodb_lock_acquired_here(REMOTE_ID),
             "precondition: the fixture recorded the acquisition it edits under"
         );
-        state.speleodb_forget_lock_acquired_for(&params.project_id);
+        // Clear + teardown under ONE `project` guard, exactly as `delete_project`
+        // does. The teardown matters to the release below since round 5: a still
+        // OPEN, still EDITING session on the same project is itself grounds to
+        // stand down (`speleodb_live_session_accounts_for`), so a fixture that
+        // skipped the close would model a world the real sequence never produces.
+        {
+            let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
+            state.speleodb_forget_lock_acquired_for(&params.project_id);
+            state.close_open_project_locked(&mut open);
+        }
 
         state
             .speleodb_release_captured_lock(&params)
@@ -5670,8 +5696,8 @@ mod tests {
         assert_eq!(
             hits.load(std::sync::atomic::Ordering::SeqCst),
             1,
-            "with no claim left in the slot there is no successor to stand down \
-             for, so the release request went out"
+            "with no claim in the slot and no live session on the project there \
+             is no successor to stand down for, so the release request went out"
         );
         assert!(
             !state.speleodb_lock_acquired_here(REMOTE_ID),
@@ -5743,6 +5769,14 @@ mod tests {
             params.project_id, REMOTE_ID,
             "precondition: the snapshot names the project being deleted"
         );
+        // The delete's own clear + teardown, as in the positive test above: the
+        // deleted project's session must be GONE before the deferred POST, or
+        // the round-5 live-session eye would (correctly) stand down for it.
+        {
+            let mut open = state.project.lock().unwrap_or_else(|e| e.into_inner());
+            state.speleodb_forget_lock_acquired_for(&params.project_id);
+            state.close_open_project_locked(&mut open);
+        }
         // Exactly what a successful Start editing on the NEXT project does, in the
         // window `delete_project` opens by releasing the `project` mutex first.
         state.speleodb_note_lock_acquired(Some(GAP_ID));

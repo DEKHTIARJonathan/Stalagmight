@@ -5,8 +5,18 @@ mechanism is the session generation + commit guard + reclaim-checked releases
 in `core/state/speleodb_session.rs` (F7: Start Editing commits through a
 generation/identity check under the `project` mutex; F8: the delete clears its
 own claim at snapshot time and its captured release stands down for a
-successor's claim, serialized under the new outermost `speleodb_lock_ops`
-mutex; the 5.4 janitor gap is closed in `speleodb_link_status`). Two
+successor, serialized under the new outermost `speleodb_lock_ops` mutex; the
+5.4 janitor gap is closed in `speleodb_link_status`). Codex round 5 then
+hardened three edges of that mechanism: the reclaim check grew a second eye
+(`speleodb_live_session_accounts_for` - a successor that INHERITED the
+account's still-held lock deliberately mints no acquisition record, so a
+record-only check freed the mutex under exactly the sessions the stand-down
+exists for); Start Editing's lock-ops span now starts BEFORE the pre-acquire
+holder probe (a captured release landing between probe and acquire made
+"inherited, keep on unwind" true of a mutex the release then freed, so the
+abort arms stranded a lock the call had in fact taken); and the janitor keeps
+its claim record through a signed-out poll and restores it after a failed
+release POST (a take-first shape erased the only pointer the retry had). Two
 pre-existing residuals are deliberately out of scope and noted in that
 commit: the detached project-switch/quit releases and `speleodb_update`'s
 fast-forward re-record. The canonical-storage change

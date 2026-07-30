@@ -19,12 +19,21 @@
 //!   captured release, the janitor below) must stand down when a SUCCESSOR
 //!   session has meanwhile claimed the same project's mutex - the server
 //!   treats a same-account re-acquire as a no-op, so the successor inherited
-//!   the very lock the stale release would free (F8).
+//!   the very lock the stale release would free (F8). The check has TWO eyes,
+//!   because a successor accounts for the lock in two shapes: a claim record
+//!   (its probe proved the mutex unheld, so it recorded an acquisition) and a
+//!   live edit session WITHOUT one (its probe saw the account still holding -
+//!   the pending release had not POSTed - so it inherited, and an inheritance
+//!   deliberately mints no record). Reading only the record frees the mutex
+//!   out from under exactly the inherited successors the stand-down exists
+//!   for - see [`AppState::speleodb_live_session_accounts_for`].
 //!
 //! What makes the reclaim check sound is the `speleodb_lock_ops` mutex: Start
-//! Editing holds it across acquire -> commit, and every reclaim-checked
-//! release holds it across check -> POST, so a claim can never be minted
-//! between a release's decision and its network call. Deliberately held across
+//! Editing holds it across probe -> commit (from BEFORE the pre-acquire
+//! holder probe, so a captured release cannot invalidate the provenance the
+//! probe read before the acquire runs), and every reclaim-checked release
+//! holds it across check -> POST, so a claim can never be minted between a
+//! release's decision and its network call. Deliberately held across
 //! network I/O - which is exactly why it is OUTERMOST: nothing that holds
 //! `project` / `database` / `undo_stack` may block on it (decide under
 //! `project`, drop, then take it), and code already inside a lock-ops span
@@ -254,16 +263,50 @@ impl AppState {
         self.speleodb_release_unless_reclaimed_locked(params)
     }
 
+    /// Whether a LIVE edit session currently accounts for `project_id`'s server
+    /// mutex: the open project is linked to it and the edit gate is open without
+    /// force-edit (a force-editor holds no lock by definition). Link and gate
+    /// are read under the `project` mutex so they describe one world.
+    ///
+    /// This is the reclaim check's second eye. A successor session that
+    /// INHERITED the account's lock never minted an acquisition record - its
+    /// probe saw the mutex already held (the capturing session's release had
+    /// not POSTed yet), and recording an inheritance as an acquisition is the
+    /// footgun the probe exists to prevent - so a reclaim check that reads only
+    /// `lock_acquired_here` frees the mutex out from under exactly the
+    /// successors the stand-down is for. The gate + link ARE that successor's
+    /// footprint: its commit opened the gate on a project linked to this id,
+    /// under the same lock-ops span that keeps this answer stable.
+    pub(super) fn speleodb_live_session_accounts_for(&self, project_id: &str) -> bool {
+        let _proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !self.edit_enabled() || self.force_editing() {
+            return false;
+        }
+        self.speleodb_open_link()
+            .is_ok_and(|link| link.project_id == project_id)
+    }
+
     /// The body of [`Self::speleodb_release_unless_reclaimed`], for callers that
     /// already hold the lock-ops mutex. Never touches `lock_acquired_here`: a
     /// record present here is by definition a successor's (the capturing
     /// session's own record was cleared when the release was captured), and a
     /// record absent needs no clearing.
+    ///
+    /// Two stand-down tests, one per successor shape: the claim record (a
+    /// successor whose acquire was real - the lock was freed out-of-band, or a
+    /// re-record path outside the lock-ops span minted it) and the live edit
+    /// session (a successor that inherited and so, deliberately, has no
+    /// record). Either one means the lock is accounted for.
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        if self.speleodb_lock_acquired_here(&params.project_id) {
+        if self.speleodb_lock_acquired_here(&params.project_id)
+            || self.speleodb_live_session_accounts_for(&params.project_id)
+        {
             tracing::info!(
                 project_id = %params.project_id,
                 purpose = "avoid freeing a successor session's mutex",
@@ -304,10 +347,14 @@ impl AppState {
     /// under lock-ops so a Start Editing that slipped in between keeps the
     /// mutex it just claimed.
     ///
-    /// Best-effort by design: signed out means there is no token to release
-    /// with (the record is still cleared - it describes a dead session either
-    /// way), and a failed POST leaves retry to the next poll of this same
-    /// branch, the server-side timeout, or the held-lock prompt.
+    /// The record is the ONLY pointer to the stranded lock, so it is cleared
+    /// exactly when the cleanup can no longer need it: an unusable project id
+    /// clears it permanently (it can never be joined into a URL), and a usable
+    /// one is cleared only once a release POST is in hand - signed out, the
+    /// record stays so the first poll after a sign-in retries, and a failed
+    /// POST puts it back (below) so the next poll of this branch retries too.
+    /// A take-first shape lost the record to a transient network blip and
+    /// turned "retry on the next poll" into a promise nothing could keep.
     pub(super) fn speleodb_janitor_stranded_claim(&self) {
         let params = {
             let proj_guard = self
@@ -317,26 +364,42 @@ impl AppState {
             if proj_guard.is_some() {
                 return;
             }
-            let Ok(mut session) = self.speleodb_session_lock() else {
+            let project_id = {
+                let Ok(mut session) = self.speleodb_session_lock() else {
+                    return;
+                };
+                let Some(project_id) = session.lock_acquired_here.clone() else {
+                    return;
+                };
+                if super::speleodb::validate_project_id(&project_id).is_err() {
+                    // Never joined into a URL, and never releasable: clearing
+                    // is the only safe end for an unusable id.
+                    session.lock_acquired_here = None;
+                    return;
+                }
+                project_id
+            };
+            // Session guard dropped for the token read - `active_token` takes it
+            // itself. `proj_guard` is still held, so no session can begin.
+            let Ok((endpoint, token)) = self.speleodb_active_token() else {
+                // No token, no POST. Keep the record: it describes a dead
+                // session either way, but with no project open it drives
+                // nothing except this janitor, and the poll after a sign-in
+                // walks this branch again WITH a token.
                 return;
             };
-            let Some(project_id) = session.lock_acquired_here.take() else {
-                return;
-            };
-            drop(session);
+            if let Ok(mut session) = self.speleodb_session_lock() {
+                // This exact record, not whatever is there - the only writer
+                // that could slip into the unguarded gap above is a clear.
+                if session.lock_acquired_here.as_deref() == Some(project_id.as_str()) {
+                    session.lock_acquired_here = None;
+                }
+            }
             tracing::info!(
                 project_id = %project_id,
                 purpose = "clean up after a torn-down edit session",
                 "speleodb: clearing a lock claim with no project open"
             );
-            if super::speleodb::validate_project_id(&project_id).is_err() {
-                // Never joined into a URL. The record is already cleared, which
-                // is the only safe thing to do with an unusable id.
-                return;
-            }
-            let Ok((endpoint, token)) = self.speleodb_active_token() else {
-                return;
-            };
             LockReleaseParams {
                 endpoint,
                 token,
@@ -344,13 +407,32 @@ impl AppState {
                 project_id,
             }
         };
-        if let Err(e) = self.speleodb_release_unless_reclaimed(&params) {
+        // One lock-ops span over release AND restore: a Start Editing cannot
+        // mint or inherit between a failed POST and the record going back, so
+        // the restore can never overwrite a successor's claim.
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        if let Err(e) = self.speleodb_release_unless_reclaimed_locked(&params) {
             tracing::warn!(
                 error = %e,
                 project_id = %params.project_id,
                 purpose = "clean up after a torn-down edit session",
-                "speleodb: stranded-claim release failed; the server lock times out on its own"
+                "speleodb: stranded-claim release failed; the next poll retries"
             );
+            // Restore for the retry - but only into the same no-project-open
+            // world the decision read. With a project open the field belongs
+            // to the live world (its own verbs and catch-alls own it), and
+            // this janitor never runs there anyway.
+            let proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if proj_guard.is_none() {
+                if let Ok(mut session) = self.speleodb_session_lock() {
+                    if session.lock_acquired_here.is_none() {
+                        session.lock_acquired_here = Some(params.project_id.clone());
+                    }
+                }
+            }
         }
     }
 }
@@ -609,8 +691,19 @@ mod tests {
         );
     }
 
+    /// A signed-in session pointing at a dead endpoint: token resolution
+    /// succeeds locally, every POST fails fast (nothing listens on port 1).
+    /// The in-memory token store keeps this hermetic - no OS keychain probe
+    /// (and `endpoint.is_some()` short-circuits the rehydration).
+    fn sign_in_unreachable(state: &AppState) {
+        let mut session = state.speleodb_session_lock().expect("session lock");
+        session.endpoint = Some("http://127.0.0.1:1/".to_owned());
+        session.email = Some("diver@example.com".to_owned());
+        session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
+    }
+
     #[test]
-    fn the_janitor_clears_a_stranded_claim_only_when_no_project_is_open() {
+    fn the_janitor_leaves_a_live_claim_and_a_signed_out_stranded_claim_alone() {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
 
@@ -623,24 +716,56 @@ mod tests {
             "a claim with a project open is not the janitor's to judge"
         );
 
-        // No project open: the claim describes a dead session - clear it. (No
-        // token in this fixture, so the network half is skipped; the clear is
-        // the part every path shares.)
+        // No project open but signed out: no token means no release POST, and
+        // the record is the ONLY pointer to the stranded lock - keep it so the
+        // first poll after a sign-in can retry (round 5).
         state.close_project();
         state.speleodb_note_lock_acquired(Some(ID));
         state.speleodb_janitor_stranded_claim();
         assert!(
-            !state.speleodb_lock_acquired_here(ID),
-            "a claim with no project open describes a dead session"
+            state.speleodb_lock_acquired_here(ID),
+            "signed out, the record must survive: it is the retry"
+        );
+    }
+
+    #[test]
+    fn the_janitor_restores_the_claim_when_the_release_post_fails() {
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        state.speleodb_note_lock_acquired(Some(ID));
+
+        state.speleodb_janitor_stranded_claim();
+
+        assert!(
+            state.speleodb_lock_acquired_here(ID),
+            "a transient POST failure must put the record back, or the next \
+             poll has nothing to retry from (round 5)"
+        );
+    }
+
+    #[test]
+    fn the_janitor_permanently_clears_an_unusable_id() {
+        // Signed out on purpose: an id that can never be joined into a URL is
+        // cleared regardless of whether a release could even be attempted.
+        let state = AppState::new().expect("state");
+        state.speleodb_note_lock_acquired(Some("not-a-uuid"));
+
+        state.speleodb_janitor_stranded_claim();
+
+        assert!(
+            !state.speleodb_lock_acquired_here("not-a-uuid"),
+            "an unusable id has no release to retry; clearing is its only end"
         );
     }
 
     #[test]
     fn link_status_with_no_project_open_runs_the_janitor() {
         // Footgun 5.4 closed: the NoRemoteProject early-return used to be
-        // unreachable territory for every cleanup.
+        // unreachable territory for every cleanup. The unusable-id record is
+        // the janitor outcome observable without a live server: it is cleared
+        // on the spot, signed in or not.
         let state = AppState::new().expect("state");
-        state.speleodb_note_lock_acquired(Some(ID));
+        state.speleodb_note_lock_acquired(Some("not-a-uuid"));
 
         let status = state
             .speleodb_link_status()
@@ -648,9 +773,69 @@ mod tests {
 
         assert!(!status.is_remote);
         assert!(
-            !state.speleodb_lock_acquired_here(ID),
-            "the poll's visit to the no-project branch cleared the stranded claim"
+            !state.speleodb_lock_acquired_here("not-a-uuid"),
+            "the poll's visit to the no-project branch ran the janitor"
         );
+    }
+
+    #[test]
+    fn a_captured_release_stands_down_for_an_inherited_successor_session() {
+        // The round-4 P1: a successor that started editing while the account
+        // still held the lock (the capturing session's release had not POSTed)
+        // INHERITED it - `acquired_here` false, so no record was minted. The
+        // reclaim check must still see that session, or the deferred release
+        // frees the mutex out from under it.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        open_linked(&state, temp.path(), "a.stalx", ID);
+        state
+            .speleodb_commit_editing(None, ID, false)
+            .expect("the inherited successor's commit");
+        assert!(
+            !state.speleodb_lock_acquired_here(ID),
+            "fixture: an inherited session has no acquisition record"
+        );
+
+        let params = super::LockReleaseParams {
+            endpoint: "http://127.0.0.1:1/".to_owned(),
+            token: "tok".to_owned(),
+            insecure_http: true,
+            project_id: ID.to_owned(),
+        };
+        state
+            .speleodb_release_unless_reclaimed(&params)
+            .expect("stood down without a POST - a POST to a dead endpoint errs");
+    }
+
+    #[test]
+    fn a_captured_release_posts_when_no_session_accounts_for_the_lock() {
+        // The other half of the check: a world with no live claim and no live
+        // edit session must NOT stand down - the POST is attempted (and errs
+        // against the dead endpoint, which is how the attempt is observable).
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        let params = super::LockReleaseParams {
+            endpoint: "http://127.0.0.1:1/".to_owned(),
+            token: "tok".to_owned(),
+            insecure_http: true,
+            project_id: ID.to_owned(),
+        };
+
+        // No project open at all.
+        assert!(state.speleodb_release_unless_reclaimed(&params).is_err());
+
+        // The project open READ-ONLY: a shut gate is not an edit session and
+        // accounts for nothing.
+        open_linked(&state, temp.path(), "a.stalx", ID);
+        assert!(state.speleodb_release_unless_reclaimed(&params).is_err());
+
+        // A DIFFERENT project's live session says nothing about this lock.
+        state.close_project();
+        open_linked(&state, temp.path(), "b.stalx", OTHER_ID);
+        state
+            .speleodb_commit_editing(None, OTHER_ID, false)
+            .expect("the other project's session");
+        assert!(state.speleodb_release_unless_reclaimed(&params).is_err());
     }
 
     // ---- tripwires -------------------------------------------------------
@@ -738,12 +923,19 @@ mod tests {
         let lock_ops = body
             .find("self.speleodb_lock_ops_guard()")
             .expect("the acquire span must be serialized against captured releases");
+        let probe = body
+            .find("self.speleodb_lock_holder_checked(")
+            .expect("the pre-acquire holder probe is present");
         let acquire = body
             .find("client::acquire_lock(")
             .expect("the acquire is present");
         assert!(
-            snapshot < lock_ops && lock_ops < acquire,
-            "order must be: session snapshot, then lock-ops guard, then acquire"
+            snapshot < lock_ops && lock_ops < probe && probe < acquire,
+            "order must be: session snapshot, then lock-ops guard, then the \
+             holder probe, then acquire - a probe OUTSIDE the span reads \
+             provenance a captured release can invalidate before the acquire \
+             (round 5: 'inherited, keep on unwind' over a mutex the release \
+             then freed, so the abort arms strand a lock this call took)"
         );
         assert_eq!(
             body.matches("self.speleodb_commit_editing(").count(),

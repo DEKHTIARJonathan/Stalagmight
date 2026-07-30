@@ -102,8 +102,9 @@ concurrent load install a different project between the check and the teardown.
 
 One lock sits OUTSIDE even that: `speleodb_lock_ops`
 (`core/state/speleodb_session.rs`), which serializes SpeleoDB lock
-acquire-and-commit spans against captured lock releases and is deliberately held
-across network calls. Nothing holding `project` / `database` / `undo_stack` may
+probe-to-commit spans (Start Editing takes it BEFORE its pre-acquire holder
+probe, so a captured release cannot invalidate the provenance the probe read)
+against captured lock releases and is deliberately held across network calls. Nothing holding `project` / `database` / `undo_stack` may
 block on it - its users decide under `project`, drop that guard, and only then
 take it. The SpeleoDB session generation (`speleodb_session_generation`) is
 likewise only ever bumped while holding `project`; see the module doc in
