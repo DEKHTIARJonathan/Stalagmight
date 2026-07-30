@@ -209,7 +209,18 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // `forPath` is the exact string handed to `loadProject` below, so the
       // `syncProjectLink` inside that load recognises this seed as belonging to
       // the project being opened rather than to whatever was open before.
-      if (!alreadyOpen) {
+      if (alreadyOpen) {
+        // The seed is skipped here on purpose - the link on screen is this project's
+        // own RESOLVED state and replacing it with an optimistic one is the downgrade
+        // this branch exists to avoid. But the project ID is not part of that state,
+        // it is just which project this is, and skipping the whole seed took it with
+        // the rest: reopening from SpeleoDB a project already on screen from recents
+        // left `remoteProjectId` stale until a status request happened to land. The
+        // revision history is keyed on it, and the identity guards compare against it,
+        // so the window showed no history and could refuse actions as
+        // `project_changed`. One field, without touching the link.
+        useSpeleoStore.setState({ remoteProjectId: projectId });
+      } else {
         setLinkOnOpen({
           permission,
           forPath: result.local_path,

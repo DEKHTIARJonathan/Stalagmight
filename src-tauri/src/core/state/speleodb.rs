@@ -84,7 +84,7 @@ pub(crate) struct SpeleoDbSession {
     /// Recorded here rather than round-tripped through the DTO because it need not
     /// leave the process: the offer and the reply are the same session, so the client
     /// never has to be trusted to hand it back, and no IPC surface widens.
-    offered_dump_at: std::collections::HashMap<String, String>,
+    offered_dump_at: std::collections::HashMap<String, Option<String>>,
 }
 
 /// [#258] Why the remembered dump choices are keyed by REVISION as well as project.
@@ -1011,11 +1011,17 @@ impl AppState {
     /// records nothing, which is what keeps [`Self::speleodb_dump_offer_answers`]
     /// permissive in that case rather than looping.
     pub(super) fn speleodb_note_dump_offer(&self, project_id: &str, at: DumpAt<'_>) {
-        let DumpAt::Revision(sha) = at else { return };
+        // Recorded even when the dump could not be DATED. "Nothing was asked" and "a
+        // question was asked about a tree we could not name" are different states, and
+        // collapsing them let a reply to the second be accepted against any revision -
+        // so a collaborator pushing while the picker was open could have the user's
+        // pick pass membership against a tree whose size and timestamp they never saw.
+        let dated = match at {
+            DumpAt::Revision(sha) => Some(sha.to_owned()),
+            DumpAt::Unknown => None,
+        };
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session
-                .offered_dump_at
-                .insert(project_id.to_owned(), sha.to_owned());
+            session.offered_dump_at.insert(project_id.to_owned(), dated);
         }
     }
 
@@ -1036,16 +1042,30 @@ impl AppState {
     /// holds NOW. That re-offer records the new revision, so the next reply matches and
     /// the loop terminates.
     pub(super) fn speleodb_dump_offer_answers(&self, project_id: &str, at: DumpAt<'_>) -> bool {
-        let DumpAt::Revision(sha) = at else {
-            return true;
-        };
         let Ok(session) = self.speleodb_session_lock() else {
             return true;
         };
-        session
-            .offered_dump_at
-            .get(project_id)
-            .is_none_or(|offered| offered == sha)
+        match (session.offered_dump_at.get(project_id), at) {
+            // Nothing was asked, so nothing can be contradicted. The pick is still
+            // membership-checked, which is what has always carried a hand-authored
+            // `entryPath`.
+            (None, _) => true,
+            // Both dated: the ordinary case, and the one the whole mechanism is for.
+            (Some(Some(offered)), DumpAt::Revision(sha)) => offered == sha,
+            // The offer was dated and this dump is not. We cannot show the reply
+            // answers that question, and undatable is the failing side here - refuse
+            // and let the flow re-offer.
+            (Some(Some(_)), DumpAt::Unknown) => false,
+            // The OFFER was undatable and the reply is dated. Positive evidence they
+            // are not about the same thing: the candidates described a tree we could
+            // not name, and this one we can. Refuse; the re-offer will be datable too,
+            // so this converges instead of looping.
+            (Some(None), DumpAt::Revision(_)) => false,
+            // Neither is datable. Nothing distinguishes them, and refusing would
+            // re-offer an equally undatable question forever - the one case where
+            // membership has to carry it alone.
+            (Some(None), DumpAt::Unknown) => true,
+        }
     }
 
     /// [#258] Forget this project's remembered dump entry.

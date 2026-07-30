@@ -1761,37 +1761,81 @@ mod tests {
         );
     }
 
-    /// The permissive halves of the same gate, both deliberate. An undatable dump has
-    /// no revision to disagree with, and refusing there would re-offer an equally
-    /// undatable question - the picker would ask forever. A pick with no offer behind
-    /// it contradicts nothing, and is still membership-checked.
+    /// A pick is refused only where the offer positively disagrees - and the four
+    /// combinations are not symmetric.
+    ///
+    /// "Nothing was asked" and "a question was asked about a tree we could not name"
+    /// are different states, and collapsing them (as `is_none_or` did) let a reply to
+    /// the second be accepted against ANY revision: a collaborator pushing while the
+    /// picker was open could have the pick pass membership against a tree whose size
+    /// and timestamp the user never saw. Only the both-undatable corner stays
+    /// permissive, because refusing there would re-offer an equally undatable question
+    /// forever.
     #[test]
     fn a_pick_is_only_refused_when_the_offer_positively_disagrees() {
         let state = AppState::new().expect("state");
         let zip = make_zip(&["a.stalx", "b.stalx"]);
-
-        for (project, at) in [
-            ("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", DumpAt::Unknown),
-            (
-                "cccccccc-cccc-cccc-cccc-cccccccccccc",
-                DumpAt::Revision(TIP),
-            ),
-        ] {
+        let pick = |project: &str, at: DumpAt<'_>| {
             let mut dump = Dump::open(&zip).expect("open");
-            assert_eq!(
-                state
-                    .speleodb_resolve_entry_remembering(
-                        project,
-                        &mut dump,
-                        Some("b.stalx"),
-                        ArianeRoute::Adopt,
-                        at,
-                        StalxAmbiguity::Ask,
-                    )
-                    .expect("nothing here contradicts the pick"),
-                "b.stalx"
-            );
-        }
+            state.speleodb_resolve_entry_remembering(
+                project,
+                &mut dump,
+                Some("b.stalx"),
+                ArianeRoute::Adopt,
+                at,
+                StalxAmbiguity::Ask,
+            )
+        };
+
+        // No offer at all: nothing to contradict, membership carries it.
+        let never_asked = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+        assert_eq!(
+            pick(never_asked, DumpAt::Revision(TIP)).expect("no offer contradicts nothing"),
+            "b.stalx"
+        );
+
+        // An UNDATED offer answered by a DATED dump: positive evidence they are not
+        // about the same thing, so refuse - and the re-offer is datable, so it ends.
+        let undated = "cccccccc-cccc-cccc-cccc-cccccccccccc";
+        state.speleodb_note_dump_offer(undated, DumpAt::Unknown);
+        assert!(
+            matches!(
+                pick(undated, DumpAt::Revision(TIP)),
+                Err(SpeleoDbError::AmbiguousDump(_))
+            ),
+            "a reply to a question about an unnameable tree must not be honoured \
+             against a nameable one"
+        );
+        // ...and neither datable: the one corner that has to stay permissive. On a
+        // FRESH project, because the refusal above re-offered - with a revision this
+        // time - which is exactly the convergence that stops it looping, and therefore
+        // also changes what the next reply is measured against.
+        let both_undated = "cccccccc-2222-cccc-2222-cccccccccccc";
+        state.speleodb_note_dump_offer(both_undated, DumpAt::Unknown);
+        assert_eq!(
+            pick(both_undated, DumpAt::Unknown).expect("nothing distinguishes them"),
+            "b.stalx"
+        );
+
+        // A DATED offer answered by an undatable dump fails the same way round.
+        let dated = "dddddddd-1111-dddd-1111-dddddddddddd";
+        state.speleodb_note_dump_offer(dated, DumpAt::Revision(TIP));
+        assert!(
+            matches!(
+                pick(dated, DumpAt::Unknown),
+                Err(SpeleoDbError::AmbiguousDump(_))
+            ),
+            "an undatable dump cannot be shown to be the tree the offer described"
+        );
+        // The matching case, again on a fresh project: every refusal above re-offers,
+        // so the recorded state after one is not the state it was measured against.
+        // That is the mechanism, not an artefact - it is what makes the loop converge.
+        let matching = "dddddddd-3333-dddd-3333-dddddddddddd";
+        state.speleodb_note_dump_offer(matching, DumpAt::Revision(TIP));
+        assert_eq!(
+            pick(matching, DumpAt::Revision(TIP)).expect("the offer's own revision"),
+            "b.stalx"
+        );
     }
 
     /// [#258] A dump nobody can date cannot be shown to match any choice, so it
