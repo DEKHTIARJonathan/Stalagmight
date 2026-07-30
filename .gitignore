@@ -81,5 +81,5 @@ CLAUDE.local.md
 # Per-contributor /pre-pr instrumentation - local by policy.
 # Unanchored so a nested worktree's own .claude/ log is covered too.
 **/.claude/review-log.jsonl
-# Python bytecode (repo-wide; scripts/review and scripts/ralph both emit it)
+# Python bytecode (repo-wide; scripts/ralph emits it)
 __pycache__/

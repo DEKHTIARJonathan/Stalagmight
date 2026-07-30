@@ -1,5 +1,5 @@
 ---
-description: Adversarial pre-PR gate - two time-budgeted reviewers run concurrently with the deterministic pre-flight, merged into one verdict, and the run is logged
+description: Adversarial pre-PR gate - two-to-three time-budgeted reviewers run concurrently with the deterministic pre-flight, merged into one verdict, and the run is logged
 ---
 Run the project's pre-PR review on the current change to Stalagmight (Tauri: Rust
 backend + React/TS frontend, underwater cave-survey data). This is an ADVERSARIAL
@@ -291,6 +291,11 @@ What the log answers: which reviewers produce must-fixes, which run clean, and -
 ids are frozen for comparability with records already on disk: **6** = this pre-flight,
 **8** = reviewer C, **9** = reviewer B, **10** = reviewer A. Ids 1-5 and 7 belong to
 retired lenses: they remain valid in old records and are simply not logged anymore.
+
+⚠ Only this definition logs at all, and the sibling definitions
+(`.agents/skills/pre-pr/SKILL.md` for Codex, `.opencode/command/pre-pr.md`) still run
+the old ten-lens shape - the log is a 1-of-3 sample and the three paths are not
+measuring the same thing (#358). Treat cross-path comparisons accordingly.
 
 Record shape:
 
