@@ -35,6 +35,17 @@ describe('MapTopLeftOverlay', () => {
     expect(screen.getByRole('status')).toHaveTextContent('Computing Closures - Read Only');
     expect(screen.getByTestId('geometry-computing-spinner')).toHaveClass('animate-spin');
     expect(screen.queryByText('Closure-adjusted · read-only')).not.toBeInTheDocument();
+    // The role must NOT ride on the chip: the chip is mounted by the very state
+    // change it would have to announce, which is the unreliable case.
+    expect(screen.getByTestId('geometry-readonly-banner')).not.toHaveAttribute('role');
+  });
+
+  it('keeps the status region mounted and empty before a solve starts', () => {
+    render(<MapTopLeftOverlay {...baseProps} />);
+
+    // An announcement channel that appears together with its text is unreliably
+    // announced, so it has to pre-exist the solve - empty, but present.
+    expect(screen.getByRole('status')).toBeEmptyDOMElement();
   });
 
   it('keeps the static read-only badge when no solve is running', () => {
