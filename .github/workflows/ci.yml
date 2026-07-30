@@ -135,6 +135,13 @@ jobs:
       # the real release.sh in throwaway clones.
       - name: Release tooling
         run: ./scripts/test-release.sh
+      # Review-log writer. Same lesson as the step above: the suite existed and
+      # ran nowhere, so a schema change could silently start producing records
+      # that the (out-of-repo) reader mis-summarises. 4s, stdlib only, no
+      # network. python3 is already a merge-gate dependency via the Release
+      # tooling step, so this adds no new runtime requirement on either runner.
+      - name: Review-log writer
+        run: python3 scripts/review/test_log_run.py
       # File-size ratchet (#157): keep non-test src-tauri/src/*.rs files from
       # re-bloating past their committed baseline. Pure-Node, no deps; sub-second.
       # The fixture test pins the prod-LOC strip heuristic (the under-count class).

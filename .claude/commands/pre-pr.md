@@ -75,6 +75,12 @@ and which the diff made irrelevant. Neither file-size ratchet covers anything ou
 `src-tauri/src` and `src/`, so a large new file elsewhere is ungated; say so rather than
 implying coverage. Put the gate output in every finder's brief so none of them re-runs it.
 
+⚠ **`.github/workflows/**` has no row above and no gate anywhere** - there is no YAML linter
+in this repo and no parser in either runtime here, so a workflow edit can only be checked
+structurally (indentation against a sibling step) until CI actually runs it. Say that plainly
+when the diff touches one. Note also that `.claude/commands/*.md` matches `ci.yml`'s
+`paths-ignore` (`**/*.md`), so a change to THIS file alone runs no CI at all.
+
 **Landmines that are knowledge, not gates** - these were the other half of Subagent 6.
 Include this list verbatim in every finder's brief; whichever lens owns the touched area
 checks the relevant one:
@@ -371,17 +377,15 @@ python3 scripts/review/log_run.py < <path-to-record>.json
 
 Self-test: `python3 scripts/review/test_log_run.py` (37 tests, stdlib only, no network).
 
-⚠ **Not a CI step, and the reason is a runner constraint, not an oversight.** Every sibling
-gate pairs `lint:X:test` with `lint:X` inside one `check`-job step, so the obvious move is a
-fourth such pairing - but **no workflow in this repo invokes `python3` today**, and the
-`check` job is routed by the picker onto the self-hosted runner, whose image
-(`myoung34/github-runner:ubuntu-noble`) is not known to ship it. Adding a Python step would
-make the merge gate depend on an interpreter nobody has confirmed is present, on a box that
-only its owner can change. `scripts/` is *not* in `ci.yml`'s `paths-ignore`, so a
-`scripts/review/` edit already pays for a full `check` run - the run is free, the
-**dependency** is not.
+It **is** a CI step: `Review-log writer` in the `check` job, beside `Release tooling`. Also in
+the Pre-flight table above, so a `scripts/review/` diff gates on it during review too.
 
-Until that is settled, the coverage lives in the **Pre-flight table above**: a diff touching
-`scripts/review/` runs the self-test as a gate, and a failure there is a 🔴 like any other.
-Wiring it into `check` needs either a verified `python3` on the self-hosted image or a port
-to Node (which is what every other gate in `scripts/` is written in).
+⚠ Worth knowing why, because this was deferred for one rebase: the objection was that no
+workflow invoked `python3`, and `check` is picker-routed onto the self-hosted runner whose
+image (`myoung34/github-runner:ubuntu-noble`) was not confirmed to ship it - so the step would
+have made the merge gate depend on an unverified interpreter on a box only its owner can
+change. **#352 settled that**: `check` now runs `./scripts/test-release.sh`, which needs
+`python3` (`ci.yml` says so in its own comment), so the interpreter is already load-bearing for
+the gate and this adds no new requirement. The general form is worth keeping: `scripts/` is not
+in `ci.yml`'s `paths-ignore`, so such a diff already pays for a full `check` run - **the run
+was always free; the dependency was the cost**, and it is now already paid.
