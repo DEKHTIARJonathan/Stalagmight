@@ -736,6 +736,11 @@ export default function DataTable({ sections }: DataTableProps) {
     ]);
     if (snapshot === lastSavedViewRef.current) return undefined;
     const timer = setTimeout(() => {
+      // Mark it saved up front so a re-render mid-flight does not queue a duplicate
+      // write, but remember what to fall back to: if the IPC rejects, the state never
+      // reached disk, and leaving the snapshot marked would mean no later change ever
+      // retries it - the column silently returns to its old width on next launch.
+      const previouslySaved = lastSavedViewRef.current;
       lastSavedViewRef.current = snapshot;
       void invokeIpc(
         'update_data_table_view',
@@ -754,7 +759,12 @@ export default function DataTable({ sections }: DataTableProps) {
         // Re-sync the in-memory config: a remount re-seeds from it, so a stale
         // copy would silently revert what was just saved to disk.
         .then(() => useProjectStore.getState().loadConfig())
-        .catch((e) => console.error('Failed to save data-table view state:', e));
+        .catch((e) => {
+          if (lastSavedViewRef.current === snapshot) {
+            lastSavedViewRef.current = previouslySaved;
+          }
+          console.error('Failed to save data-table view state:', e);
+        });
     }, 500);
     return () => clearTimeout(timer);
   }, [

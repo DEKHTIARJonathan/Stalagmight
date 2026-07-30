@@ -1681,7 +1681,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       colDrag.current !== null ||
       rowDrag.current !== null;
     if (e.buttons === 0 && anyDrag) {
-      cancelDragRef.current();
+      // A resize reaches here only because the mouseup landed outside the window: the
+      // user DID finish it, so route to the release path, which commits. Reverting
+      // (what the abandon path must do) would throw away completed work. Only one
+      // gesture is ever active, so onUp cannot commit a reorder or cell move here.
+      // Those kinds keep aborting - a buttonless move is too weak a signal to commit.
+      if (resizing.current) onUpRef.current();
+      else cancelDragRef.current();
       return;
     }
     if (cellMove.current) {
@@ -1792,8 +1798,9 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
-    // Persist the width only once the drag lands. The abandon paths route to
-    // cancelDragRef, which reverts rather than committing.
+    // Persist the width only once the drag lands. The abandon path routes to
+    // cancelDragRef, which reverts instead; commitWidths itself drops a commit that
+    // matches the map the host already has, so a bare click is not a save.
     if (resizing.current) commitWidths(widthsRef.current);
     resetDrag();
   };

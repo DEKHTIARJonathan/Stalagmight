@@ -432,7 +432,10 @@ where
     Ok(entries
         .iter()
         .filter_map(|(key, raw)| {
-            let width = u32::try_from(raw.as_u64()?).ok()?;
+            // Saturate rather than drop: a value past u32::MAX is still an integral
+            // width, and the doc above promises those reach `normalize_column_widths`
+            // to be clamped. `ok()?` here would silently discard the entry instead.
+            let width = u32::try_from(raw.as_u64()?).unwrap_or(u32::MAX);
             Some((key.clone(), width))
         })
         .collect())

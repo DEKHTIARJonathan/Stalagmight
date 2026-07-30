@@ -7,10 +7,12 @@ import { DEFAULT_COL_WIDTH, type GridColumn } from './types';
  * leftover-width distribution that reads them, and the commit/revert lifecycle
  * that mutates them.
  *
- * Two reasons this is its own module rather than more of SpreadsheetGrid.tsx: it
- * keeps the width rules next to the constants the Rust side mirrors, and
- * SpreadsheetGrid.tsx sits close to the ratchet's hard 2000-prod-LOC cap, which no
- * baseline bump can raise.
+ * This is its own module to keep the width rules next to the constants the Rust side
+ * mirrors. It did NOT shrink SpreadsheetGrid.tsx: that file went from 1971 to 1990
+ * prod LOC across this work, so the extraction bought headroom for future width
+ * changes rather than recovering any. With the ratchet's hard 2000-LOC cap - which no
+ * baseline bump can raise - only 12 lines remain there, so further width logic
+ * belongs in this file, not back in the component.
  *
  * The state deliberately lives here rather than being fully controlled by the
  * host: a resize drag fires on every mousemove, so lifting it would re-render the
@@ -47,12 +49,18 @@ function sameWidths(a: ColumnWidths, b: ColumnWidths): boolean {
  * Rendered width per visible column: each column's own width, then any leftover
  * container space split across the `grow` columns so the grid fills its panel.
  *
- * A manual override raises a column's starting width but does NOT opt it out of
- * growing. Overrides used to be session-only, so a de-grown column healed on the
- * next remount; now that they persist, pinning would mean one resize of the
- * trailing grow column left a permanent empty right gutter, in every session, with
- * no UI to clear it. Treating the override as the grow FLOOR keeps the resize
- * meaningful without ever stranding the layout.
+ * Resizing a `grow` column PINS it: it stops absorbing leftover, so the edge moves
+ * in both directions and the grid can end up narrower than its panel, which is
+ * ordinary spreadsheet behaviour. The earlier "an override is only the grow FLOOR"
+ * rule made a narrowing drag a silent no-op - the width the drag took off came
+ * straight back to the same column as leftover, so the handle looked dead at every
+ * drag distance while a width the user never saw was still written to config.toml.
+ *
+ * A pinned width is then capped at the room this panel actually has for the
+ * column. `startResize` seeds the drag from the RENDERED width, so nudging the
+ * trailing column on a 2560px window persists ~2360px; uncapped, that value would
+ * force a permanent horizontal scrollbar on a laptop screen, surviving restart with
+ * no UI to clear it. Capping heals it per-window without discarding the preference.
  */
 export function computeColumnWidths<Row>(
   columns: GridColumn<Row>[],
@@ -60,14 +68,25 @@ export function computeColumnWidths<Row>(
   availWidth: number,
   gutterWidth: number,
 ): number[] {
-  const base = columns.map((c) => overrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH);
-  const growIdx = columns.map((c, i) => (c.grow ? i : -1)).filter((i) => i >= 0);
-  if (growIdx.length === 0 || availWidth <= 0) return base;
-  const leftover = availWidth - gutterWidth - base.reduce((sum, w) => sum + w, 0);
-  if (leftover <= 0) return base;
+  const declared = columns.map((c) => c.width ?? DEFAULT_COL_WIDTH);
+  const base = columns.map((c, i) => overrides[c.key] ?? declared[i] ?? DEFAULT_COL_WIDTH);
+  const baseTotal = base.reduce((sum, w) => sum + w, 0);
+  const pinned = base.map((w, i) => {
+    const c = columns[i];
+    if (!c?.grow || overrides[c.key] === undefined || availWidth <= 0) return w;
+    const room = availWidth - gutterWidth - (baseTotal - w);
+    if (room <= 0) return w;
+    return Math.min(w, Math.max(declared[i] ?? DEFAULT_COL_WIDTH, room));
+  });
+  const growIdx = columns
+    .map((c, i) => (c.grow && overrides[c.key] === undefined ? i : -1))
+    .filter((i) => i >= 0);
+  if (growIdx.length === 0 || availWidth <= 0) return pinned;
+  const leftover = availWidth - gutterWidth - pinned.reduce((sum, w) => sum + w, 0);
+  if (leftover <= 0) return pinned;
   const add = Math.floor(leftover / growIdx.length);
   const rem = leftover - add * growIdx.length;
-  const out = base.slice();
+  const out = pinned.slice();
   growIdx.forEach((i, n) => {
     out[i] = (out[i] ?? 0) + add + (n < rem ? 1 : 0);
   });
@@ -113,6 +132,11 @@ export function useColumnWidths(
         Object.entries(next).map(([k, w]) => [k, clampRound(w, MIN_COL_WIDTH, MAX_COL_WIDTH)]),
       );
       applyWidths(settled);
+      // Nothing to tell the host if this is already the map it agreed to. A bare
+      // mousedown/mouseup on a resize handle sets the drag flag without moving
+      // anything, and a drag returned to where it started ends up here too; both
+      // used to spread the whole width map outward for no change.
+      if (sameWidths(settled, settledRef.current)) return;
       settledRef.current = settled;
       onColumnWidthsChange?.(settled);
     },

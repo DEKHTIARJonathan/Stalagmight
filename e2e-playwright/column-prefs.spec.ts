@@ -290,6 +290,38 @@ test.describe('Data table column preferences', () => {
     expect(await latestPersistedWidth(page, 'length')).toBeUndefined();
   });
 
+  test('a resize whose mouseup landed outside the window is kept, not reverted', async ({
+    page,
+  }) => {
+    // The abandon guard above and this one share a single code path: cancelDragRef used
+    // to serve both `blur` (a genuine abandon) and the buttonless-mousemove recovery
+    // for a mouseup released outside the window. Making that path revert fixed the
+    // first case and broke the second - the user DID finish this resize, so throwing
+    // it away is data loss, not safety.
+    const lengthHeader = page.getByTestId('grid-header-length');
+    const before = await beginColumnDrag(page, 'length', 70);
+    await expect
+      .poll(async () => (await lengthHeader.boundingBox())!.width)
+      .toBeGreaterThan(before + 30);
+
+    // No mouseup reaches the window; the next pointer move arrives with no buttons
+    // held, which is exactly how the grid learns the release already happened.
+    await page.evaluate(() =>
+      window.dispatchEvent(new MouseEvent('mousemove', { buttons: 0, bubbles: true }))
+    );
+    await page.mouse.up(); // keep the browser's own button state clean for later tests
+
+    await expect
+      .poll(async () => latestPersistedWidth(page, 'length'), { timeout: 5000 })
+      .toBeGreaterThan(before + 30);
+  });
+
+  // A bare click on a resize handle must not commit. That is NOT asserted here: the
+  // commit is deduped downstream by DataTable's snapshot compare, so no IPC fires
+  // either way and this layer cannot tell the two apart - an e2e test here passes with
+  // the guard deleted. It is pinned where the callback is observable, in
+  // src/components/common/SpreadsheetGrid/__tests__/useColumnWidths.test.tsx.
+
   test('header right-click hide entry hides the column and persists', async ({ page }) => {
     expect(await getViewCalls(page)).toHaveLength(0);
 

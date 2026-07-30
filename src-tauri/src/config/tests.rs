@@ -2742,12 +2742,25 @@ textual = "wide"
 absurd = 99999999999
 good = 180
 "#;
-    let panels: PanelsConfig =
+    let mut panels: PanelsConfig =
         toml::from_str(toml_str).expect("an unusable width must not fail the whole parse");
     assert_eq!(
         panels.data_table_shot_column_widths,
-        std::collections::BTreeMap::from([("good".to_string(), 180)]),
-        "only the representable width survives; the rest drop rather than erroring"
+        std::collections::BTreeMap::from([
+            ("absurd".to_string(), u32::MAX),
+            ("good".to_string(), 180),
+        ]),
+        "negative, fractional and textual values are not widths at all and drop; an \
+         integral one past u32::MAX saturates so normalize can clamp it"
+    );
+    // Saturate-then-clamp rather than drop, so there is no arbitrary cliff at
+    // u32::MAX: 5000 and 99999999999 both mean "absurdly wide" and both land on
+    // MAX_COLUMN_WIDTH. Dropping would instead revert the column to its declared
+    // default, which is a different width than the user asked for.
+    panels.normalize();
+    assert_eq!(
+        panels.data_table_shot_column_widths["absurd"], 2000,
+        "the saturated width must reach the clamp, not be discarded before it"
     );
     assert_eq!(
         panels.sections_panel_width, 320,
