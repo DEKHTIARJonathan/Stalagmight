@@ -418,7 +418,9 @@ impl AppState {
         &self,
         link: &crate::models::SpeleoLink,
     ) -> bool {
-        let Ok((endpoint, token)) = self.speleodb_active_token() else {
+        // One read, so the holder comparison below cannot pair one account's
+        // endpoint with another's email (`speleodb_active_account`).
+        let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
             return false;
         };
         let insecure_http = self.speleodb_insecure_http();
@@ -440,8 +442,7 @@ impl AppState {
                 return false;
             }
         };
-        if !super::speleodb::lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref())
-        {
+        if !super::speleodb::lock_held_by_me(holder.as_deref(), Some(me.as_str())) {
             return false;
         }
         self.speleodb_commit_editing(None, &link.project_id, false)
@@ -628,14 +629,18 @@ impl AppState {
             // Both reads take the session lock themselves, so neither may run under
             // it (the mutex is not reentrant). `proj_guard` is still held, so no
             // session can begin underneath them.
-            let Ok((endpoint, token)) = self.speleodb_active_token() else {
+            // Endpoint, token and email as ONE read: separately, a login landing
+            // between them pairs account A's token with account B's email, and
+            // the search below then takes B's claim out of the retry list and
+            // posts it with A's token. See `speleodb_active_account`.
+            let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
                 // No token, no POST. Keep the records: they describe dead sessions
                 // either way, but with no project open they drive nothing except
                 // this janitor, and the poll after a sign-in walks this branch
                 // again WITH a token.
                 return;
             };
-            let me = self.speleodb_my_email();
+            let me = Some(me);
             let Ok(mut session) = self.speleodb_session_lock() else {
                 return;
             };
@@ -1177,6 +1182,45 @@ mod tests {
     }
 
     #[test]
+    fn an_inherited_acquire_leaves_the_unwind_with_nothing_to_hand_back() {
+        // Round 10 (P1): the unwind slot answers "what did the acquire that just
+        // ran take?", and for an acquire that INHERITED a lock the account
+        // already held the answer is nothing - it mints no claim by design. The
+        // slot was only ever WRITTEN, never reset, so the previous operation's
+        // acquisition stood in for that nothing and the revert flow's unwind
+        // released it: a different project's mutex, possibly one a logout kept
+        // back precisely because it guards un-pushed work.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        open_linked(&state, temp.path(), "a.stalx", ID);
+
+        // An earlier flow that DID acquire.
+        state
+            .speleodb_commit_editing(None, ID, true)
+            .expect("the first flow's commit");
+
+        // A later flow that inherits: it opens its span, commits without an
+        // acquisition, and must leave the unwind empty.
+        state.speleodb_begin_acquisition_flow();
+        state
+            .speleodb_commit_editing(None, ID, false)
+            .expect("the inheriting flow's commit");
+
+        assert_eq!(
+            state.speleodb_take_acquisition_by_this_flow(),
+            None,
+            "an inherited acquire took nothing, so the unwind must release \
+             nothing - not the previous operation's lock"
+        );
+        assert!(
+            state.speleodb_lock_acquired_here(ID),
+            "and the earlier acquisition's claim is untouched: it is still a \
+             lock this process holds"
+        );
+    }
+
+    #[test]
     fn a_claim_survives_a_re_login_that_spells_the_endpoint_differently() {
         // Round 9 (P2): the credential layer keys tokens by
         // `auth::account_key`, which collapses a trailing slash, host case and
@@ -1572,6 +1616,15 @@ mod tests {
              (round 5), and a token read outside it lets a logout leave this flow \
              committing on behalf of a signed-out session (round 6)"
         );
+        let flow_begins = body
+            .find("self.speleodb_begin_acquisition_flow()")
+            .expect("the operation must clear the previous one's unwind slot");
+        assert!(
+            lock_ops < flow_begins && flow_begins < acquire,
+            "the unwind slot is reset inside the span and before the acquire, so \
+             an inheriting or aborting flow leaves nothing behind for the \
+             stale-context unwind to release (round 10)"
+        );
         assert_eq!(
             body.matches("self.speleodb_commit_editing(").count(),
             2,
@@ -1653,6 +1706,37 @@ mod tests {
                 "{func}: one release, at the end of the finalization"
             );
         }
+    }
+
+    #[test]
+    fn every_deferred_release_is_reclaim_checked() {
+        // Round 10 (P1): the project-switch and app-exit releases run on a
+        // detached thread, which is exactly the delay a successor needs - the
+        // switch is what lets the user reopen that project, and a Start Editing
+        // on it INHERITS the still-held mutex and mints no claim. An unguarded
+        // POST landing afterwards frees the lock under a live edit session. Every
+        // release that can outlive the moment it was decided goes through the
+        // reclaim check; this pins the one that had been left out.
+        let src = state_source("speleodb_lock_release.rs");
+        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let start = src
+            .find("fn speleodb_spawn_lock_release")
+            .expect("the detached release is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert!(
+            body.contains("speleodb_release_unless_reclaimed(&p)"),
+            "the detached release must be reclaim-checked, like the delete's \
+             captured release and the janitor's"
+        );
+        // The raw POST survives only as the no-managed-state fallback.
+        assert_eq!(
+            body.matches("client::release_lock(").count(),
+            1,
+            "the only bare POST left is the fallback for when there is no app \
+             handle to reach managed state through (tests, pre-setup)"
+        );
     }
 
     #[test]

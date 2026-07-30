@@ -350,16 +350,39 @@ impl AppState {
     /// so nothing was spawned). Because the params are captured synchronously first,
     /// the release targets the CURRENT project even if the caller swaps the database
     /// immediately after. Shared by the two non-blocking callers below.
+    ///
+    /// The POST is RECLAIM-CHECKED, like the delete's captured release and the
+    /// janitor's, and for the same reason: this thread can be delayed
+    /// arbitrarily, and the project switch that spawned it is exactly the event
+    /// that lets the user reopen that same remote project. A Start Editing on it
+    /// INHERITS the still-held same-account mutex (a re-acquire is a server-side
+    /// no-op) and mints no claim, so an unguarded POST landing afterwards frees
+    /// the mutex out from under a live edit session - editable, with no server
+    /// lock behind it and nothing recording one. Going through
+    /// [`AppState::speleodb_release_unless_reclaimed`] puts this thread in the
+    /// same `speleodb_lock_ops` queue as every other lock operation, so it
+    /// either completes before that acquire or sees the session it would have
+    /// stranded and stands down.
+    ///
+    /// A detached thread cannot borrow `self`, so it goes back in through the
+    /// Tauri handle the state already holds - the one `'static` route to managed
+    /// state. Without a handle (unit tests, pre-`setup`) there is no managed
+    /// state to consult and the raw POST is what this always did.
     fn speleodb_spawn_lock_release(
         &self,
     ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
         let p = self.speleodb_held_lock_release_params()?;
         let (tx, rx) = std::sync::mpsc::channel();
+        let handle = self.get_app_handle();
         std::thread::spawn(move || {
-            let _ = tx.send(
+            let reclaim_checked = handle
+                .as_ref()
+                .and_then(tauri::Manager::try_state::<AppState>)
+                .map(|state| state.speleodb_release_unless_reclaimed(&p));
+            let _ = tx.send(reclaim_checked.unwrap_or_else(|| {
                 client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                    .map(|_| ()),
-            );
+                    .map(|_| ())
+            }));
         });
         Some(rx)
     }

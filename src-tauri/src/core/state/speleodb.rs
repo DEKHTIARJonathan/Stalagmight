@@ -642,6 +642,34 @@ impl AppState {
         self.speleodb_session_lock()?.active_token()
     }
 
+    /// [`Self::speleodb_active_token`] plus the EMAIL, resolved under ONE
+    /// session acquisition - `(endpoint, token, email)` that provably describe
+    /// the same account.
+    ///
+    /// For every caller that has to decide "is this lock MINE to release?", the
+    /// two halves must come from one read. A login lands as a single write to
+    /// this session, but it does not take the `project` or `speleodb_lock_ops`
+    /// guards, so it can land BETWEEN two separate reads and hand a caller one
+    /// account's endpoint and token with another account's email. The
+    /// stranded-claim janitor is the one that pays for it: it would then find
+    /// account B's claim with B's email, take it out of the retry list, and send
+    /// the release with A's token - an idempotent success for a lock A never
+    /// held, and B's only pointer to its still-held mutex gone.
+    pub(super) fn speleodb_active_account(
+        &self,
+    ) -> Result<(String, String, String), SpeleoDbError> {
+        self.speleodb_ensure_rehydrated();
+        let mut session = self.speleodb_session_lock()?;
+        let (endpoint, token) = session.active_token()?;
+        // `active_token` already refuses without an email, so this cannot fail
+        // after it succeeded - it is spelled out rather than unwrapped.
+        let email = session
+            .email
+            .clone()
+            .ok_or(SpeleoDbError::NotAuthenticated)?;
+        Ok((endpoint, token, email))
+    }
+
     /// Report whether a usable token is held (and for whom), so the dialog can
     /// restore the project list on reopen instead of forcing a re-login. The
     /// token itself never leaves the backend.
@@ -970,6 +998,25 @@ impl AppState {
     /// the mutex it had just taken held.
     pub(super) fn speleodb_note_acquisition_by_this_flow(&self, project_id: &str) {
         self.speleodb_record_claim(Some(project_id), true);
+    }
+
+    /// Open a Start Editing operation: forget whatever the PREVIOUS one left in
+    /// the unwind slot.
+    ///
+    /// The slot answers "what did the acquire that just ran take?", and the
+    /// honest answer for an acquire that INHERITED a lock the account already
+    /// held - or one that aborted before committing - is nothing. Neither of
+    /// those writes the slot, so without this the stale entry from an earlier
+    /// operation stood in for them, and the revert flow's unwind released THAT
+    /// lock: possibly one a logout kept back precisely because it guards
+    /// un-pushed work, and certainly not the mutex this operation was about.
+    ///
+    /// Called inside the lock-ops span, so no other flow can be between its own
+    /// clear and its own commit while this runs.
+    pub(super) fn speleodb_begin_acquisition_flow(&self) {
+        if let Ok(mut session) = self.speleodb_session_lock() {
+            session.acquired_by_this_flow = None;
+        }
     }
 
     /// The body of both, so the two cannot record differently.
@@ -1690,6 +1737,11 @@ impl AppState {
         // arm's identity-only commit cannot see (the slot never moves). Held across
         // the network span on purpose - see `speleodb_session`.
         let _lock_ops = self.speleodb_lock_ops_guard();
+        // This operation's unwind slot starts empty. An acquire that inherits an
+        // already-held lock, or one that aborts, records nothing - and must
+        // leave the stale-context unwind with nothing to hand back, rather than
+        // the previous operation's acquisition.
+        self.speleodb_begin_acquisition_flow();
 
         // Generation + link read as ONE world under the `project` mutex (D6): the
         // commit far below re-checks the generation before opening the gate, so a
