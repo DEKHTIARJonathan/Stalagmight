@@ -42,6 +42,23 @@ export function MapTopLeftOverlay({
 
   return (
     <div className="absolute top-2 left-2 flex items-center gap-2">
+      {/* The solve's announcement channel, and the ONLY thing that speaks it.
+          Mounted unconditionally and empty until the solve starts, because a live
+          region injected at the same moment as its text is unreliably announced -
+          the chip below appears and disappears with the solve, so it can never be
+          the region itself. Same reason `ToastStack` and the selection announcer
+          in `App` are permanent. `sr-only` is absolutely positioned, so this is
+          not a flex item in any layout sense. */}
+      <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        {showClosureComputing
+          ? t(
+              showClosureReadOnly
+                ? 'map.geometry.computingReadOnly'
+                : 'map.geometry.computing'
+            )
+          : ''}
+      </div>
+
       <button
         onClick={onFitOrExitFocus}
         className="flex items-center gap-1.5 bg-panel border border-border rounded px-2 py-1 text-sm hover:bg-background"
@@ -66,18 +83,33 @@ export function MapTopLeftOverlay({
 
       {/* One chip, two reasons to exist. The read-only testid rides ONLY on the
           notice itself: a spec asserting "no closure read-only banner in Plan
-          mode" must not be satisfied by a progress indicator. */}
+          mode" must not be satisfied by a progress indicator.
+
+          Purely visual - it carries no live-region role, because it is mounted and
+          unmounted BY the thing it would have to announce. The region above speaks
+          for it. */}
       {(showClosureReadOnly || showClosureComputing) && (
         <div
           className="bg-panel border border-accent rounded px-3 py-1.5 text-xs flex items-center gap-2"
           data-testid={showClosureReadOnly ? 'geometry-readonly-banner' : 'geometry-computing-banner'}
         >
-          {showClosureReadOnly && (
+          {showClosureComputing && (
+            <span
+              className="w-3.5 h-3.5 border-2 border-accent border-t-transparent rounded-full animate-spin"
+              aria-hidden="true"
+              data-testid="geometry-computing-spinner"
+            />
+          )}
+          {showClosureReadOnly && !showClosureComputing && (
             <span className="text-accent font-medium">{t('map.geometry.adjustedBadge')}</span>
           )}
           {showClosureComputing && (
-            <span className="text-text-secondary" data-testid="geometry-computing">
-              {t('map.geometry.computing')}
+            <span className="text-accent font-medium" data-testid="geometry-computing">
+              {t(
+                showClosureReadOnly
+                  ? 'map.geometry.computingReadOnly'
+                  : 'map.geometry.computing'
+              )}
             </span>
           )}
         </div>
