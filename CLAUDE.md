@@ -27,8 +27,10 @@ The toolchain is pinned so every machine + CI runs the same versions:
 
 - **pnpm `9.15.9`** via `"packageManager"` in `package.json` (corepack and
   `pnpm/action-setup@v4` both read it - no per-workflow `version:`).
-- **node `22.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
-  on newer node).
+- **node `24.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
+  on newer node). The agent harness is the one exception - it has only been
+  verified on node 22, so run it under `nvm use 22` (see
+  [docs/agent-harness.md](docs/agent-harness.md)).
 
 First-time setup on a clean clone:
 
@@ -179,7 +181,7 @@ Update `CHANGELOG.md` every time a new version is tagged.
 | [Performance](docs/performance.md) | Algorithm choices, renderer cost model, profiling guide |
 | [Debug Gates](docs/debug-gates.md) | Where dev-only logs / asserts / profile harnesses live, and how to turn them on |
 | [macOS Build](docs/macos-build.md) | macOS build scripts and known issues |
-| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22. |
+| [Agent Harness](docs/agent-harness.md) | LLM-agent harness (MCP + WebdriverIO) to drive the real app: tools, oracles, stress scenarios, replay + repro reports. Runs under Node 22, not the repo default. |
 | [App modes](docs/app-modes.md) | Survey/Plan/Export modes and the read-only contract every mutation path must check |
 | [Loop closures](docs/closures.md) | Measured vs closure-adjusted display, the least-squares solve, co-location with the move tools |
 | [Undo/Redo](docs/undo-redo.md) | Command-pattern undo: two-phase capture, `UndoData` variants, batch commands, persistence, lock ordering |

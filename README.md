@@ -59,12 +59,12 @@ generated from the Rust types via `ts-rs`.
 
 ## Getting started
 
-**Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 22.x, and the
+**Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 24.x, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your
 platform.
 
 The toolchain is pinned so every machine builds the same versions - pnpm
-`9.15.9` (via `packageManager` in `package.json`) and Node `22.x` (via
+`9.15.9` (via `packageManager` in `package.json`) and Node `24.x` (via
 `.nvmrc`). On a fresh clone:
 
 ```bash

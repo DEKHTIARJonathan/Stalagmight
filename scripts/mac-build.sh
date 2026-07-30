@@ -80,11 +80,16 @@ elif [[ -x "$HOME/.homebrew/bin/brew" ]]; then
   eval "$("$HOME/.homebrew/bin/brew" shellenv)"
 fi
 
-# If node@22 was installed via Homebrew, ensure its bin is on PATH
+# If the pinned node@<major> was installed via Homebrew, ensure its bin is on
+# PATH. The major comes from .nvmrc, the same file CI selects node from, so this
+# cannot drift behind a toolchain bump.
 if command -v brew &>/dev/null; then
-  NODE22_PREFIX="$(brew --prefix node@22 2>/dev/null || true)"
-  if [[ -n "$NODE22_PREFIX" && -d "$NODE22_PREFIX/bin" ]]; then
-    export PATH="$NODE22_PREFIX/bin:$PATH"
+  NODE_MAJOR="$(tr -dc '0-9' < "$PROJECT_DIR/.nvmrc" 2>/dev/null || true)"
+  if [[ -n "$NODE_MAJOR" ]]; then
+    NODE_PREFIX="$(brew --prefix "node@$NODE_MAJOR" 2>/dev/null || true)"
+    if [[ -n "$NODE_PREFIX" && -d "$NODE_PREFIX/bin" ]]; then
+      export PATH="$NODE_PREFIX/bin:$PATH"
+    fi
   fi
 fi
 

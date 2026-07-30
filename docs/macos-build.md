@@ -24,7 +24,7 @@ Build artifacts land under `src-tauri/target/release/bundle/`.
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node 22, pnpm 9, Rust, tauri-wd) |
+| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node from `.nvmrc`, pnpm 9, Rust, tauri-wd) |
 | `scripts/mac-build.sh` | Run the full build pipeline (deps, tsc, cargo test, tauri build) |
 
 ## `mac-setup.sh` - Dev Tool Installer
@@ -35,7 +35,7 @@ Installs all required development tools, skipping anything already present. Safe
 
 1. **Xcode Command Line Tools** - headless install via `softwareupdate`
 2. **Homebrew** - standard installer if sudo is available, otherwise git-clones to `~/.homebrew`
-3. **Node.js 22** - via `brew install node@22`, with PATH fix for keg-only installs
+3. **Node.js** - major read from `.nvmrc` (currently 24), via `brew install node@<major>`, with PATH fix for keg-only installs
 4. **pnpm 9** - via `npm install -g pnpm@9`, with CA cert fix for Homebrew's OpenSSL
 5. **Rust stable** - via rustup
 6. **tauri-wd** - via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
@@ -127,7 +127,7 @@ The `e2e` feature is gated behind a Cargo feature flag (`[features] e2e = [...]`
 | Issue | Cause | Workaround |
 |-------|-------|------------|
 | No-sudo Homebrew | Some build hosts lack passwordless sudo | `mac-setup.sh` git-clones Homebrew to `~/.homebrew` |
-| Node.js not on PATH | `node@22` is keg-only in Homebrew | Scripts detect and prepend `$(brew --prefix node@22)/bin` to PATH |
+| Node.js not on PATH | `node@<major>` is keg-only in Homebrew | Scripts read the major from `.nvmrc`, then detect and prepend `$(brew --prefix node@<major>)/bin` to PATH |
 | npm SSL certificate errors | Homebrew's source-built OpenSSL lacks CA bundle | `mac-setup.sh` sets `npm config set cafile` to Homebrew's `ca-certificates` bundle |
 | DMG bundling hangs over SSH | Tauri's DMG bundler uses AppleScript (needs Finder GUI) | `mac-build.sh` sets `CI=true` which skips the AppleScript step |
 | macOS `ulimit -n 256` | Default is too low for the Rust test suite | `mac-build.sh` raises to 4096 (falls back to 1024) |

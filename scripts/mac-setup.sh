@@ -67,24 +67,31 @@ else
   ok "Installed"
 fi
 
-# ── Node.js 22 ───────────────────────────────────────────────────────────────
-# Homebrew installs node@22 as keg-only; ensure its bin is on PATH
-NODE22_PREFIX="$(brew --prefix node@22 2>/dev/null || true)"
-if [[ -n "$NODE22_PREFIX" && -d "$NODE22_PREFIX/bin" ]]; then
-  export PATH="$NODE22_PREFIX/bin:$PATH"
+# ── Node.js ──────────────────────────────────────────────────────────────────
+# The major comes from .nvmrc so this script cannot drift from CI, which selects
+# node with `node-version-file: .nvmrc`. Keep them reading the same file.
+NVMRC="$(dirname "$(dirname "$(realpath "$0")")")/.nvmrc"
+[[ -f "$NVMRC" ]] || die "Could not find .nvmrc next to the repo root ($NVMRC)"
+NODE_MAJOR="$(tr -dc '0-9' < "$NVMRC")"
+[[ -n "$NODE_MAJOR" ]] || die "Could not read a node major from $NVMRC"
+
+# Homebrew installs node@<major> as keg-only; ensure its bin is on PATH
+NODE_PREFIX="$(brew --prefix "node@$NODE_MAJOR" 2>/dev/null || true)"
+if [[ -n "$NODE_PREFIX" && -d "$NODE_PREFIX/bin" ]]; then
+  export PATH="$NODE_PREFIX/bin:$PATH"
 fi
 
-info "Checking Node.js 22"
-if command -v node &>/dev/null && [[ "$(node --version)" == v22.* ]]; then
+info "Checking Node.js $NODE_MAJOR"
+if command -v node &>/dev/null && [[ "$(node --version)" == v"$NODE_MAJOR".* ]]; then
   ok "Already installed: $(node --version)"
 else
-  info "Installing Node.js 22 via Homebrew…"
-  brew install node@22
-  brew link --overwrite node@22 2>/dev/null || true
+  info "Installing Node.js $NODE_MAJOR via Homebrew…"
+  brew install "node@$NODE_MAJOR"
+  brew link --overwrite "node@$NODE_MAJOR" 2>/dev/null || true
   # Refresh PATH for keg-only install
-  NODE22_PREFIX="$(brew --prefix node@22)"
-  export PATH="$NODE22_PREFIX/bin:$PATH"
-  node --version | grep -q '^v22\.' || die "Node.js 22 installation failed"
+  NODE_PREFIX="$(brew --prefix "node@$NODE_MAJOR")"
+  export PATH="$NODE_PREFIX/bin:$PATH"
+  node --version | grep -q "^v$NODE_MAJOR\." || die "Node.js $NODE_MAJOR installation failed"
   ok "Installed: $(node --version)"
 fi
 

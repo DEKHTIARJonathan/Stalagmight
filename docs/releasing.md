@@ -113,7 +113,7 @@ git push origin master && git push origin --tags
 
 - **Trigger**: push to master, pull requests to master
 - **Steps**: TypeScript check, Rust tests
-- Installs: system libs, Rust toolchain, Node 22, pnpm 9
+- Installs: system libs, Rust toolchain, Node 24 (from `.nvmrc`), pnpm 9
 
 ### Release (`.github/workflows/release.yml`)
 

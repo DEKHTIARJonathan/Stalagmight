@@ -10,6 +10,7 @@ Update this file every time a new version is tagged.
 ### Changed
 
 - CI: GitHub Actions bumped to versions that run on Node.js 24, ahead of the Node.js 20 runtime deprecation ([#351](https://github.com/Stalagmight/Stalagmight/issues/351))
+- The pinned toolchain moved to **Node.js 24** (`.nvmrc` plus advisory `engines`), so builds and tests now run on the current LTS line. `scripts/mac-setup.sh` and `scripts/mac-build.sh` read the major from `.nvmrc` instead of hardcoding it, so they can no longer drift behind a bump. pnpm stays pinned at `9.15.9`. The agent harness is deliberately left on Node 22, the only major it has been exercised on - run it under `nvm use 22` ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
 
 ## [0.5.0] - 2026-07-29
 
