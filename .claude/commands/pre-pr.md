@@ -1,5 +1,5 @@
 ---
-description: Adversarial pre-PR gate - two-to-three time-budgeted reviewers run concurrently with the deterministic pre-flight, merged into one verdict, and the run is logged
+description: Adversarial pre-PR gate - two-to-three time-budgeted reviewers run concurrently with the deterministic pre-flight, merged into one verdict; the run is logged when a writer is configured
 ---
 Run the project's pre-PR review on the current change to Stalagmight (Tauri: Rust
 backend + React/TS frontend, underwater cave-survey data). This is an ADVERSARIAL
@@ -81,6 +81,10 @@ time, and higher effort spends it in thinking. The **budget is the cost control;
 tier is not** - do not down-tier A or B. Record every reviewer you don't launch (C on
 a non-matching diff) for the log's `lenses_skipped`.
 
+⚠ C's trigger is the ONE judgment call in this file - every other gate is a pathspec.
+When you skip C, the logged `why` must name the surfaces you judged absent for THIS
+diff, not restate the rule; when in doubt, launch it.
+
 **Brief reviewers blind to author intent - this is load-bearing.** Give each reviewer
 ONLY the diff/scope above + the files to read. Do NOT tell them what the change "is
 trying to do," why it's correct, or that any part is safe - author framing biases
@@ -93,7 +97,9 @@ protects this").
 
 ### Shared contract (give it to every reviewer verbatim)
 
-> **You have 9 minutes, hard.** Triage by risk, read the riskiest thing first, and stop
+> **You have 9 minutes, hard.** Make your FIRST tool call `date +%s` and re-check
+> elapsed time before starting each new file or thread - you cannot otherwise observe
+> the clock. Triage by risk, read the riskiest thing first, and stop
 > and report at ~8 even if mid-thread. An honest partial review that names what it did
 > not reach is worth more than a complete one that arrives late.
 > Do not run build/test/lint gates - the main thread runs them; review the code.
@@ -175,6 +181,9 @@ whichever reviewer's thread touches the area owns it.
   before they're real - they orphan on next open.
 - Saves are atomic (temp `.stalx.tmp` → rename); flag direct overwrites. Test read-only /
   legacy / missing-table load paths and `INSERT OR REPLACE` collisions.
+- Any NEW on-disk artifact the change introduces (a log, a cache, a sibling file) is
+  persistence surface regardless of language - atomic write, cleanup, and gitignore
+  status all apply.
 - Persistence references use `StationKey` / `AfterShot(uuid)` anchors, never positional
   refs - a positional ref goes stale on the first insert/delete.
 
@@ -282,7 +291,9 @@ Wait for the reviewers, fold in the gate results, and merge. Do not re-read the 
 After printing the verdict, log the run with the review-log writer named in your
 personal/local notes (it lives outside this repo, deliberately - the tree carries no
 review-process tooling). **If no writer is configured in your context, skip this
-section**; the review stands without it. The writer validates the record and appends
+section and say so in Coverage ("not logged: no writer configured")** - a silent skip
+reads as a logged run; the review stands without it. The writer validates the record
+and appends
 exactly one JSON line to `<repo-root>/.claude/review-log.jsonl` (gitignored,
 per-contributor).
 
@@ -291,6 +302,10 @@ What the log answers: which reviewers produce must-fixes, which run clean, and -
 ids are frozen for comparability with records already on disk: **6** = this pre-flight,
 **8** = reviewer C, **9** = reviewer B, **10** = reviewer A. Ids 1-5 and 7 belong to
 retired lenses: they remain valid in old records and are simply not logged anymore.
+The active id set is coupled state with the out-of-repo writer (its ACTIVE set) and
+its summarizer (its MANDATORY set): promoting C to always-on, or adding or retiring a
+reviewer, means updating both alongside this file - otherwise the log will confidently
+recommend deleting its own gates.
 
 ⚠ Only this definition logs at all, and the sibling definitions
 (`.agents/skills/pre-pr/SKILL.md` for Codex, `.opencode/command/pre-pr.md`) still run
