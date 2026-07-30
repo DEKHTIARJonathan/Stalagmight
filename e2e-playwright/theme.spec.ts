@@ -166,6 +166,12 @@ const CATPPUCCIN_LATTE_BG = { r: 239, g: 241, b: 245 };
 const NORD_BG = { r: 46, g: 52, b: 64 };
 // Catppuccin Mocha theme --cc-background is #1e1e2e -> rgb(30, 30, 46)
 const CATPPUCCIN_MOCHA_BG = { r: 30, g: 30, b: 46 };
+// Light theme --cc-map-background is #faf7f2 -> rgb(250, 247, 242).
+// This is the token themeColors.ts feeds to MapLibre's background layer, so it
+// is what the user perceives as "the app background" (#332).
+const LIGHT_MAP_BG = { r: 250, g: 247, b: 242 };
+// Light theme --cc-stroke-color is #1a120b -> rgb(26, 18, 11)
+const LIGHT_STROKE = { r: 26, g: 18, b: 11 };
 
 test.describe('Theme Switching - Default Dark Theme', () => {
   test.beforeEach(async ({ page }) => {
@@ -277,6 +283,91 @@ test.describe('Theme Switching - Via Settings UI', () => {
     });
 
     assertColorsApproximatelyEqual(bgColor, LIGHT_BG);
+  });
+
+  test('map canvas tokens resolve to light values in light mode', async ({
+    page,
+  }) => {
+    // Regression guard for #332: light mode used to theme only the UI chrome,
+    // leaving the MapLibre background layer on the dark :root value, so the app
+    // still looked dark. Chrome-only assertions above cannot catch that.
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+
+    await selectThemeMode(page, 'Light');
+
+    const saveButton = page.locator(
+      '[data-testid="settings-save-button"]'
+    );
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+
+    await expect(
+      page.locator('[data-testid="settings-dialog"]')
+    ).not.toBeVisible({ timeout: 5000 });
+
+    const { mapBg, strokeColor } = await page.evaluate(() => {
+      const styles = getComputedStyle(document.documentElement);
+      return {
+        mapBg: styles.getPropertyValue('--cc-map-background').trim(),
+        strokeColor: styles.getPropertyValue('--cc-stroke-color').trim(),
+      };
+    });
+
+    assertColorsApproximatelyEqual(mapBg, LIGHT_MAP_BG);
+    // The outline colour has to invert too, or survey lines would be white on a
+    // near-white canvas.
+    assertColorsApproximatelyEqual(strokeColor, LIGHT_STROKE);
+  });
+
+  test('MapLibre paints the light canvas, not just the CSS token', async ({
+    page,
+  }) => {
+    // #332 was a token that resolved correctly but never reached MapLibre, so
+    // the test above cannot fail for the actual bug: it reads the same CSS
+    // custom property the stylesheet declares. This one reads the paint
+    // property off the live map. That needs a project open, which is why the
+    // project is created AFTER saving - openSettingsDialog closes the one the
+    // beforeEach made, and MapCanvas deletes __stalagmight_map__ on unmount.
+    //
+    // What this pins: the map's INITIAL paint, MapCanvas.tsx:1691. Not the
+    // [resolvedTheme, mapLoaded] re-apply at :2317 - the theme is already light
+    // by the time createProject() builds the map, so init alone turns this
+    // assertion green and deleting the re-apply effect would not fail it.
+    // The re-apply path is unreachable from Playwright as the app is shaped
+    // today: openSettingsDialog() starts with goBackToGlobalView(), and the
+    // hamburger that holds Settings only exists in global view, so a project
+    // can never be open across a theme change. If Settings ever becomes
+    // reachable in-project, add a second case that opens a project FIRST and
+    // then switches - that one would pin :2317.
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+    await selectThemeMode(page, 'Light');
+
+    const saveButton = page.locator('[data-testid="settings-save-button"]');
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(
+      page.locator('[data-testid="settings-dialog"]')
+    ).not.toBeVisible({ timeout: 5000 });
+
+    await createProject(page, 'Theme Map Paint Test');
+
+    const painted = await page.evaluate(() => {
+      const map = (
+        window as unknown as {
+          __stalagmight_map__?: {
+            getPaintProperty: (layer: string, prop: string) => unknown;
+          };
+        }
+      ).__stalagmight_map__;
+      return map
+        ? String(map.getPaintProperty('background', 'background-color'))
+        : null;
+    });
+
+    expect(painted).not.toBeNull();
+    assertColorsApproximatelyEqual(painted as string, LIGHT_MAP_BG);
   });
 
   test('theme applies immediately on selection before saving', async ({

@@ -18,12 +18,11 @@ import { SEVERITY_GREEN, SEVERITY_YELLOW, SEVERITY_RED } from './colors';
  * Keep in sync with src/theme/tokens.ts (tests enforce parity with CSS).
  */
 const FALLBACK_MAP: Record<string, string> = { ...themeTokens.dark };
-const DARK_DEPTH_SHALLOW = themeTokens.dark['--cc-depth-shallow'];
-const DARK_DEPTH_DEEP = themeTokens.dark['--cc-depth-deep'];
 
 // Issue-severity ("traffic light") colors for the map's Issue-severity Display
-// mode. Fixed (not theme-derived), like the depth-gradient endpoints, so
-// severity reads identically across UI themes. Single-sourced from
+// mode. Fixed (not theme-derived) so severity reads identically across UI themes.
+// NB do not read this as a shared convention with the depth-gradient endpoints:
+// those became theme-derived below, in this same file. Single-sourced from
 // src/utils/colors.ts (same palette as getErrorColor).
 const SEVERITY_CLEAR = SEVERITY_GREEN;
 const SEVERITY_WARNING = SEVERITY_YELLOW;
@@ -81,10 +80,17 @@ export function getMapThemeColors(): MapThemeColors {
     textHaloAlt: getThemeColor('--cc-text-halo-alt'),
     stationDefault: getThemeColor('--cc-station-default'),
     zeroDatum: getThemeColor('--cc-zero-datum'),
-    // Keep depth gradient endpoints consistent with the canonical dark theme
-    // across all UI themes so survey depth colors remain stable and comparable.
-    depthShallow: DARK_DEPTH_SHALLOW,
-    depthDeep: DARK_DEPTH_DEEP,
+    // Read per theme, like every other map colour. These used to be pinned to the
+    // dark values so depth reads identically across themes, but that only holds
+    // while every canvas is dark: on the light theme's #faf7f2 paper the dark
+    // endpoints draw shallow passages at 1.81:1 and their dark-theme labels at
+    // 1.02:1, i.e. the survey is unreadable in depth mode. (Measured, not averaged:
+    // an earlier revision of this comment said "roughly 1.5:1", which was neither
+    // figure.) A theme that wants the canonical
+    // gradient declares the canonical values; kaleido_eink already declared its
+    // own and was silently ignored here.
+    depthShallow: getThemeColor('--cc-depth-shallow'),
+    depthDeep: getThemeColor('--cc-depth-deep'),
     labelColor: getThemeColor('--cc-depth-text'),
     grayLine: getThemeColor('--cc-gray-line'),
     grayText: getThemeColor('--cc-gray-text'),

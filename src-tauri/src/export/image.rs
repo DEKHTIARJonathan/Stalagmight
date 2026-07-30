@@ -118,8 +118,18 @@ fn escape_xml_text(s: &str) -> String {
 // distanceGradient.ts). To match on screen, port those exact endpoints + math
 // here (the HSL lerp lives in depth_colors.rs).
 
-/// Live-map depth-gradient endpoints (dark-theme tokens, pinned theme-independent):
-/// shallow teal → deep coral. From `--cc-depth-shallow` / `--cc-depth-deep`.
+/// DARK-theme depth-gradient endpoints: shallow teal → deep coral, the values of
+/// `--cc-depth-shallow` / `--cc-depth-deep` under `[data-theme="dark"]`.
+///
+/// ⚠ These are NOT theme-independent any more, and the "mirror the live survey map"
+/// promise above does not hold for them. `getMapThemeColors()` in
+/// src/utils/themeColors.ts used to force the dark constants for every theme, which
+/// is what made a single hardcoded pair correct here; #332 made it resolve the live
+/// token instead. So depth-mode export now matches `dark` only - on the light theme
+/// the screen draws navy → brick while the export draws teal → coral onto a white
+/// page, which is the pairing src/theme/__tests__/tokens.test.ts measures at 1.13:1.
+/// Fixing it means threading the resolved endpoints through `ExportImageOptions`
+/// rather than duplicating the per-theme table in Rust. Tracked in #360.
 const DEPTH_SHALLOW: &str = "#4ecdc4";
 const DEPTH_DEEP: &str = "#ff6b6b";
 

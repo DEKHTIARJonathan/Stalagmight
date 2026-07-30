@@ -5,7 +5,9 @@
 /* ============================================================
    Theme CSS Variables (--cc-* tokens)
    Source of truth: src/theme/tokens.ts
-   Dark = default, Light = UI chrome + MapLibre controls only
+   Dark = default. "light" and "kaleido_eink" are full light themes (map
+   visualization included); "solarized_light" and "catppuccin_latte" still
+   override UI chrome + MapLibre controls only.
    ============================================================ */
 
 :root,
@@ -145,9 +147,39 @@
   --cc-map-scale-border: #d4c5a9;
   --cc-map-scale-text: #1a120b;
 
-  /* --- Map Visualization ---
-     Map canvas always uses dark-mode colors (inherited from :root).
-     Only MapLibre UI controls above are themed for light mode. */
+  /* --- Map Visualization --- warm paper canvas, dark ink outlines.
+     Outlines, halos and labels invert against the light canvas so station
+     labels stay legible.
+     The depth endpoints are navy -> brick rather than the dark theme's teal ->
+     coral because getDepthColor interpolates in HSL along the SHORTEST hue path:
+     teal (175deg) to coral (0deg) runs through green and yellow, which bottoms out
+     at 1.13:1 against this canvas (#eef15d, t=0.65 of the 41-sample sweep the test
+     runs) - the ramp, not just the endpoints, has to stay legible. Navy (211deg) to
+     brick (8deg) takes the short way round through magenta and never drops below
+     6.67:1. Same reasoning as
+     kaleido_eink's blue -> red; the hues here are warmer to sit with the cream
+     chrome. Pinned by a contrast test, not by these hex values. */
+  --cc-map-background: #faf7f2;
+  --cc-snap-color: #c0392b;
+  --cc-hover-highlight: #b8860b;
+  --cc-select-highlight: #3a8a82;
+  --cc-stroke-color: #1a120b;
+  --cc-stroke-light: rgba(26, 18, 11, 0.25);
+  --cc-text-halo: #faf7f2;
+  --cc-text-halo-alt: rgba(250, 247, 242, 0.85);
+  --cc-station-default: #6b5b4a;
+  --cc-gray-line: #9c8b78;
+  --cc-gray-text: #6b5b4a;
+  --cc-grid-default: #ddd0bb;
+  --cc-zero-datum: #b8860b;
+  --cc-compass-color: #1a120b;
+  --cc-depth-shallow: #14487f;
+  --cc-depth-deep: #a52a1a;
+  --cc-depth-text: #1a120b;
+
+  /* --- Canvas Preview --- */
+  --cc-preview-bg: #faf7f2;
+  --cc-preview-text: #1a120b;
 
   /* --- Opacity Variants: accent --- */
   --cc-accent-5: rgba(58, 138, 130, 0.05);
