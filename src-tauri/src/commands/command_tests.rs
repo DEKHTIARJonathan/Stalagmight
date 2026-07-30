@@ -1434,6 +1434,279 @@ fn test_delete_project_leaves_a_same_stem_tml_alone() {
     });
 }
 
+/// Once the `.stalx` has been trashed the delete HAS happened, so a later problem
+/// must not be reported as a failure.
+///
+/// The frontend refreshes its recents list only on `success`, so a failure returned
+/// after the file is already gone leaves the deleted project rendered as a permanent
+/// "File not found" zombie row that no amount of clicking can remove. The contract
+/// is therefore all three of: `success: true`, a `delete_project_persist_failed`
+/// warning naming what went wrong, and the recents entry dropped anyway.
+///
+/// The surviving post-trash failure is the recents persist (the `.tml` sibling this
+/// used to fail on belonged to the removed collab mode, and is now an unrelated file
+/// the delete never touches - see the same-stem test above).
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn test_delete_project_partial_failure_still_prunes_recents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Skip when running as root - file permission restrictions don't apply to UID 0
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
+
+    // Same technique as test_open_project_updates_recent_projects_when_config_save_fails:
+    // take the config lock WITHOUT redirecting `config_path()` to a temp dir, and point
+    // the platform's config root at a read-only directory so every `config.save()` fails
+    // deterministically (`save_to_path` cannot create its parent there). Linux resolves
+    // the root from XDG_CONFIG_HOME; the `directories` crate ignores that on macOS and
+    // derives from HOME instead.
+    let _config_guard = crate::test_helpers::config_lock_guard();
+    let readonly_dir = TempDir::new().unwrap();
+    let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    #[cfg(target_os = "linux")]
+    let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
+    #[cfg(target_os = "macos")]
+    let _env_guard = EnvVarGuard::set("HOME", readonly_dir.path().to_str().unwrap());
+
+    let app = app_with_state();
+    create_project(&app);
+    let project_dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &project_dir);
+    // The save could not persist the config either - that is the point - but it DID
+    // update the in-memory recents, so there is a real entry for the delete to prune.
+    assert!(
+        config::get_config(state(&app))
+            .general
+            .recent_projects
+            .contains(&saved_path),
+        "precondition: the saved project is in recents"
+    );
+    assert!(
+        !crate::config::Config::config_path().unwrap().exists(),
+        "precondition: the config root is genuinely unwritable"
+    );
+
+    let result = project::delete_project(state(&app), saved_path.clone());
+
+    // Restore permissions BEFORE the assertions: a panicking assert would otherwise
+    // unwind past this and leave TempDir unable to clean up.
+    let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(readonly_dir.path(), perms).unwrap();
+
+    assert!(
+        result.success,
+        "the .stalx was trashed, so the delete succeeded overall: {:?}",
+        result.error
+    );
+    assert!(!saved_path.exists(), "project .stalx should be trashed");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code == "delete_project_persist_failed"),
+        "the un-persisted recents list must be surfaced as a warning, got {:?}",
+        result.warnings
+    );
+    assert!(
+        !config::get_config(state(&app))
+            .general
+            .recent_projects
+            .contains(&saved_path),
+        "recents must be pruned even though the persist failed - otherwise the \
+         deleted project stays on screen as an unremovable zombie row"
+    );
+}
+
+/// Deleting the `.stalx` backing the OPEN project tears the whole SESSION down, not
+/// just the project slot.
+///
+/// It used to only do `*self.project.lock() = None`, which left behind a live SQLite
+/// handle on a file that no longer exists, plus the entire undo/redo stack - so an
+/// undo could replay against a deleted project. `delete_project` now routes through
+/// the same `close_project` teardown a real close uses.
+///
+/// Observed through the surface the frontend itself has: `get_project_state` for the
+/// project slot, the raw-data reader for the database handle (the only command that
+/// reports `self.database == None` distinctly - see
+/// `test_raw_data_commands_fail_without_db`), and `can_undo`/`can_redo` +
+/// `get_undo_stack`/`get_redo_stack` for the two stacks.
+#[test]
+fn test_delete_project_of_open_project_tears_down_the_session() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+
+            // Two undoable commands and then one undo, so BOTH stacks are genuinely
+            // non-empty going in - asserting "empty afterwards" on a stack that was
+            // already empty would prove nothing.
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_section_with_shots(&app, vec![shot_data(2.0)]);
+            assert_success(&history::undo(state(&app)));
+
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("precondition: a project is open")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(saved_path.as_path()),
+                "precondition: the path being deleted IS the open project"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                "precondition: the project database handle is live"
+            );
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: the undo stack is non-empty"
+            );
+            assert!(
+                history::can_redo(state(&app)),
+                "precondition: the redo stack is non-empty"
+            );
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project .stalx should be trashed");
+
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the open project must be dropped when its file is deleted"
+            );
+            let db_err = raw_data::get_raw_table_names_impl(state(&app).inner()).expect_err(
+                "the database handle LEAKED: still open on a file that was just deleted",
+            );
+            assert!(
+                db_err.contains("No project database"),
+                "expected the no-database error, got: {db_err}"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries): an undo must never be able to \
+                 replay against a deleted project",
+                history::get_undo_stack(state(&app)).len()
+            );
+            assert!(
+                history::get_undo_stack(state(&app)).is_empty(),
+                "the undo stack LEAKED: {:?}",
+                history::get_undo_stack(state(&app))
+            );
+            assert!(
+                !history::can_redo(state(&app)),
+                "the redo stack LEAKED ({} entries): a redo must never be able to \
+                 replay against a deleted project",
+                history::get_redo_stack(state(&app)).len()
+            );
+            assert!(
+                history::get_redo_stack(state(&app)).is_empty(),
+                "the redo stack LEAKED: {:?}",
+                history::get_redo_stack(state(&app))
+            );
+        });
+    });
+}
+
+/// The teardown runs BEFORE the file is handed to the OS delete, not after.
+///
+/// On Windows the ordering is what makes the delete possible at all (SQLite holds the
+/// file without `FILE_SHARE_DELETE`, so both the Recycle-Bin move and the
+/// `remove_file` fallback fail with "Access is denied" while the handle is alive), but
+/// "the delete would have failed" is not observable on Unix. The other side of the
+/// same coin is: force the removal to FAIL and the session must be torn down anyway -
+/// which can only happen if the teardown ran FIRST, because the trash step returns
+/// early on failure, so a teardown placed after it would never be reached. That is
+/// exactly the trade-off `delete_project`'s own comment documents ("the project is now
+/// closed and its undo history dropped even though the file survives").
+///
+/// Unix-only for the same reason as the partial-failure test above: making the removal
+/// fail deterministically means taking write permission off the parent directory
+/// (`fs::remove_file` needs it), and that is a POSIX mode bit.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn test_delete_project_tears_down_before_removing_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Skip when running as root - file permission restrictions don't apply to UID 0
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
+
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history to tear down"
+            );
+
+            // Drop write permission on the project's parent directory so the
+            // `fs::remove_file` behind `send_to_trash` fails with EACCES.
+            let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+            perms.set_mode(0o555);
+            fs::set_permissions(dir.path(), perms).unwrap();
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+
+            // Restore permissions BEFORE the assertions: a panicking assert would
+            // otherwise unwind past this and leave TempDir unable to clean up.
+            let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(dir.path(), perms).unwrap();
+
+            assert_failure_contains(&result, "Failed to delete");
+            assert!(
+                saved_path.exists(),
+                "precondition: the removal really did fail, so the file survived"
+            );
+
+            // The removal never happened, yet the session is gone - so the teardown
+            // must have run before it.
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the teardown must precede the file removal: the project is still open, \
+                 so the close can only have been sequenced AFTER the (failed) delete"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the teardown must precede the file removal: the database handle is \
+                 still live, so the close can only have been sequenced AFTER the \
+                 (failed) delete"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the teardown must precede the file removal: the undo stack still has \
+                 {} entries",
+                history::get_undo_stack(state(&app)).len()
+            );
+
+            // The documented cost of closing first: recents is left untouched on this
+            // branch, so the user can reopen the project that survived.
+            assert!(
+                project::list_recent_projects(state(&app))
+                    .iter()
+                    .any(|p| p.file_path == saved_path),
+                "a failed delete must leave the recents entry so the surviving project \
+                 stays re-openable"
+            );
+        });
+    });
+}
+
 #[test]
 fn test_save_project_fails_when_directory_missing() {
     with_config_lock(|| {

@@ -252,11 +252,20 @@ interface ProjectStore {
   createProject: (name: string, projectLocation?: string, options?: CreateProjectOptions) => Promise<CommandResult>;
   /**
    * Save the project. `isAutosave` is FRONTEND-ONLY - it is not sent over IPC and
-   * the backend save is identical either way. It suppresses two bits of UI churn
-   * on the debounced background save: the save-permission dialog (which would
-   * otherwise reopen on every retry while folder access is denied) and the
-   * post-save integrity re-check (skipped unless the project entered the save
-   * already flagged, since the save path auto-heals some issues).
+   * the backend save is identical either way. Since it never reaches the backend,
+   * this comment is its whole specification: it marks a QUIET, BACKGROUND save -
+   * one the user did not ask for and is not waiting on - and suppresses two bits
+   * of UI churn for it: the save-permission dialog (which would otherwise reopen
+   * on every retry while folder access is denied) and the post-save integrity
+   * re-check (skipped unless the project entered the save already flagged, since
+   * the save path auto-heals some issues).
+   *
+   * Read it as "background save", NOT literally "the auto-save timer fired":
+   * `useAutoSave`'s debounced write is one caller, and `flushToDiskAfterPush` in
+   * `useSpeleoActions` is the other - a single, undebounced flush after a
+   * confirmed SpeleoDB push. Both are quiet writes the user never requested, so
+   * both pass `true`; anything the user explicitly asked for (Ctrl+S, Save As,
+   * save-after-import) must not.
    */
   saveProject: (path?: string, isAutosave?: boolean) => Promise<CommandResult>;
   /**
@@ -481,6 +490,43 @@ function runSerialized<T>(work: () => Promise<T>): Promise<T> {
     () => undefined
   );
   return result;
+}
+
+/**
+ * The frontend half of "no project is open" - every piece of project-derived state
+ * that must not outlive the project it describes, plus the two sibling stores that
+ * hold project-scoped state of their own.
+ *
+ * Shared by `closeProject` (the ordinary teardown, once the backend confirms the
+ * close) and `deleteProject` (when the `.stalx` just handed to the OS delete was
+ * the open one). The delete path can't reuse `closeProject` itself: that issues the
+ * `close_project` IPC, and by then the backend has ALREADY torn its own session
+ * down as part of the delete, so the round trip is pointless - and its `isClosing`
+ * guard can answer `success: false`, which would leave the frontend still rendering
+ * a project whose file is gone. Sharing the state reset instead keeps the two paths
+ * from drifting.
+ */
+function clearOpenProjectState(set: (partial: Partial<ProjectStore>) => void): void {
+  set({
+    project: null,
+    databaseOpen: false,
+    stations: [],
+    surveyData: null,
+    stationsAdjusted: null,
+    surveyDataAdjusted: null,
+    stats: null,
+    frozenShots: [],
+    isDirty: false,
+    integrityIssues: [],
+    integrityDismissed: false,
+    integritySaveBlocked: false,
+    integrityDialogOpen: false,
+  });
+  // Losing a project bypasses the setView() cleanup funnel, so drop the gas
+  // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
+  useUIStore.getState().exitGasPlan();
+  // #204: drop the SpeleoDB action-shell edit-state - no project is open.
+  useSpeleoStore.getState().clearLink();
 }
 
 export const useProjectStore = create<ProjectStore>((set, get) => {
@@ -1383,12 +1429,7 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'close project and release resources' },
       );
       if (result.success) {
-        set({ project: null, databaseOpen: false, stations: [], surveyData: null, stationsAdjusted: null, surveyDataAdjusted: null, stats: null, frozenShots: [], isDirty: false, integrityIssues: [], integrityDismissed: false, integritySaveBlocked: false, integrityDialogOpen: false });
-        // Closing a project bypasses the setView() cleanup funnel, so drop the gas
-        // sub-mode (#38) here too - a stale overlay/panel must not outlive the project.
-        useUIStore.getState().exitGasPlan();
-        // #204: drop the SpeleoDB action-shell edit-state - no project is open.
-        useSpeleoStore.getState().clearLink();
+        clearOpenProjectState(set);
       }
       return result;
     } finally {
@@ -1652,6 +1693,20 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { purpose: 'permanently delete project', fields: { path } }
       );
       if (result.success) {
+        // Deleting the file backing the OPEN project closes it: the backend tore
+        // its own session down (project, SQLite handle, undo stack) before handing
+        // the `.stalx` to the OS, so the frontend has to follow. Without this the
+        // UI kept rendering the deleted project as open - and the next autosave
+        // tick, which does not care that the file is gone, failed the save with
+        // "No project open" and surfaced that as a save error.
+        //
+        // Compared AFTER the await, against whatever is open NOW: that is the safe
+        // direction. The comparison decides whether to throw away the CURRENT
+        // project's state, so it must describe the current project, not the one
+        // that happened to be open when the request went out.
+        if (get().project?.file_path === path) {
+          clearOpenProjectState(set);
+        }
         await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
       return result;
