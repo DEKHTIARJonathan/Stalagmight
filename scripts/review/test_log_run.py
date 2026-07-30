@@ -239,6 +239,37 @@ class LogRunScriptTests(unittest.TestCase):
             self.assertIn("lenses_skipped", logged)
             self.assertEqual(logged["lenses_skipped"], [])
 
+    def test_omitted_lenses_run_still_appears_in_output(self) -> None:
+        # `validate` reads it with .get("lenses_run", []), so omitting the key is
+        # NOT rejected on its own - it is only rejected when the completeness
+        # check has nothing to satisfy it. Skip all ten and the record is legal
+        # with no `lenses_run` at all, which is the one input that distinguishes
+        # an explicit write-back from `{**record}`.
+        #
+        # A version of this test built on VALID_RECORD was VACUOUS: that fixture
+        # supplies `lenses_run`, so `{**record}` carried it and deleting the
+        # write-back changed nothing. Caught by injection, 2026-07-30.
+        with TempRepo() as repo:
+            record = {
+                "date": "2026-07-30",
+                "branch": "feat/x",
+                "verdict": "nits",
+                "findings": [],
+                "lenses_skipped": [
+                    {"lens": i, "why": "trivial diff"} for i in sorted(log_run.LENS_IDS)
+                ],
+            }
+            self.assertNotIn("lenses_run", record)
+            proc = run_script(repo, json.dumps(record))
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+
+            logged = json.loads(
+                (repo / ".claude" / "review-log.jsonl").read_text("utf-8").splitlines()[0]
+            )
+            for key in ("lenses_run", "lenses_skipped"):
+                self.assertIn(key, logged, f"`{key}` missing from the logged line")
+            self.assertEqual(logged["lenses_run"], [])
+
     # --- cross-field accounting: the invariant the log's purpose rests on ---
 
     def test_lens_both_run_and_skipped_rejected(self) -> None:

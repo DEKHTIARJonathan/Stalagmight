@@ -32,21 +32,43 @@ separate finders each independently ran `lint:no-em-dash` and `lint:private-leak
 identical, deterministic, whole-tree commands, paid for three times. A gate that returns
 the same answer regardless of which model runs it does not need a model.
 
+⚠ **Pick the diff expression ONCE - the one Scope selected - and use that SAME expression
+for every probe below.** They are written `master...HEAD`; on the staged fallback
+substitute `--staged`, on the unstaged fallback drop the range entirely. Get this wrong and
+all five probes return empty on a real change, every gated lens is skipped, and each one is
+logged with a `why` that is false - in the single field the log exists to make trustworthy.
+An empty surface list on a fallback path means **recompute with the right expression**, not
+*skip*.
+
 ```
 git diff --name-only master...HEAD                                  # the surface
 git diff --name-only master...HEAD -- '*.ts' '*.tsx'                # TS?
 git diff --name-only master...HEAD -- 'src-tauri/'                  # Rust crate?
 git diff --name-only master...HEAD -- 'src/'                        # frontend?
+git diff --name-only master...HEAD -- 'e2e-playwright/'             # Playwright specs?
 ```
 
 Then, only for the surfaces present:
 
 | Surface in diff | Run |
 |---|---|
-| always | `pnpm lint:no-em-dash` · `pnpm lint:private-leaks` |
-| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` · `pnpm lint:rust-file-size` · deny-level clippy |
-| `src/` | `pnpm tsc --noEmit` · `pnpm lint:ts-file-size` · `pnpm lint:readonly-gates` |
-| `e2e-playwright/` | `pnpm typecheck:playwright` · `pnpm test:mock-contract` · `pnpm lint:e2e-parallel` |
+| always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash` · `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
+| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` · `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size` · deny-level clippy |
+| `src/` | `pnpm tsc --noEmit` · `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size` · `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
+| `e2e-playwright/` | `pnpm typecheck:playwright` · `pnpm test:mock-contract` · `pnpm lint:e2e-parallel` · `pnpm lint:pw-timing:test` |
+| `scripts/review/` | `python3 scripts/review/test_log_run.py` |
+
+Each ratchet is paired with its own `:test` because CI pairs them (`ci.yml`, three
+instances) - the self-test pins the LOC/strip heuristic the gate depends on, and both are
+sub-second.
+
+⚠ **This table is deliberately NOT the whole merge gate, and "gates green" must not be
+reported as if it were.** The `check` job also runs `cargo test --features telemetry`,
+`pnpm test` (vitest), and `pnpm typecheck:agent`; those take minutes, they are the
+**Pre-Push Checklist's** job (`CLAUDE.md`), and running them here would cost more than the
+whole fan-out this pre-flight exists to shrink. So say *which* gates you ran, and say that
+the test suites were deferred to CI - a reviewer reading "gates green" must not conclude the
+merge gate is green.
 
 ⚠ A **failing gate is a 🔴 in its own right** - report it, and say which gates you ran
 and which the diff made irrelevant. Neither file-size ratchet covers anything outside
@@ -212,6 +234,12 @@ three separate finders.
 - **Keep logging it as lens 6 in `lenses_run` when the pre-flight ran**, so the log stays
   comparable with earlier records. Do not renumber lenses 7-10 to close the gap: the ids
   are the join key for every record already on disk.
+- ⚠ Because it now runs on *every* review and passes on any branch worth opening a PR for,
+  lens 6 accrues `ran` with zero findings and is never skipped - which is byte-identical to
+  the **retire** signature the log exists to detect. `~/tools/review_log_summary.py` holds it
+  in `MANDATORY_LENSES` so it is reported as a clean gate rather than a deletion candidate.
+  If lens 6 ever stops being logged, or another gate joins the pre-flight, that set is the
+  thing to update - otherwise the log will confidently recommend deleting its own gates.
 
 **Subagent 7 - Tests**
 - Is the **adversarial** case tested (boundary, duplicate-UUID, legacy load), not just
@@ -292,10 +320,14 @@ keys.
 
 ⚠ **Read this before retiring a lens on the log's evidence.** Nothing in the repo reads
 the log; the only reader is `~/tools/review_log_summary.py`, which is personal and
-unversioned here. And only the Claude path logs today - the sibling definitions
-(`.agents/skills/pre-pr/SKILL.md` for Codex `$pre-pr`, `.opencode/command/pre-pr.md`) have
-no log step, so **the log is a partial sample of runs.** A skipped lens is evidence of
-nothing, not evidence against the lens.
+unversioned here. And only the Claude path logs today, which understates the problem: the sibling definitions
+(`.agents/skills/pre-pr/SKILL.md` for Codex `$pre-pr`, 97 lines; `.opencode/command/pre-pr.md`,
+173 lines) contain **no `Pre-flight`, no path gating, and no log step** - zero hits for any of
+those markers, against this file's ~370 lines. So `$pre-pr` and the OpenCode command now run a
+structurally *different* review under the same nominal name, not merely an unlogged one: they
+still fan out every lens, still pay for lens 6 as a subagent, and contribute nothing to the
+log. **The log is therefore a 1-of-3 sample AND the three are not measuring the same thing**
+(#358). A skipped lens is evidence of nothing, not evidence against the lens.
 
 Record shape:
 
@@ -337,6 +369,19 @@ python3 scripts/review/log_run.py < <path-to-record>.json
   because the file is gitignored a stray write is invisible to `git status`. When probing
   or testing the script by hand, set `STALAGMIGHT_REVIEW_LOG` to an absolute scratch path.
 
-Self-test: `python3 scripts/review/test_log_run.py` (36 tests, stdlib only, no network).
-Not wired into CI, unlike every sibling gate's `lint:*:test` - run it by hand after
-editing the logger.
+Self-test: `python3 scripts/review/test_log_run.py` (37 tests, stdlib only, no network).
+
+⚠ **Not a CI step, and the reason is a runner constraint, not an oversight.** Every sibling
+gate pairs `lint:X:test` with `lint:X` inside one `check`-job step, so the obvious move is a
+fourth such pairing - but **no workflow in this repo invokes `python3` today**, and the
+`check` job is routed by the picker onto the self-hosted runner, whose image
+(`myoung34/github-runner:ubuntu-noble`) is not known to ship it. Adding a Python step would
+make the merge gate depend on an interpreter nobody has confirmed is present, on a box that
+only its owner can change. `scripts/` is *not* in `ci.yml`'s `paths-ignore`, so a
+`scripts/review/` edit already pays for a full `check` run - the run is free, the
+**dependency** is not.
+
+Until that is settled, the coverage lives in the **Pre-flight table above**: a diff touching
+`scripts/review/` runs the self-test as a gate, and a failure there is a 🔴 like any other.
+Wiring it into `check` needs either a verified `python3` on the self-hosted image or a port
+to Node (which is what every other gate in `scripts/` is written in).

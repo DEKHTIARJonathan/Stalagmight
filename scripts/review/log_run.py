@@ -238,7 +238,18 @@ def validate(record: dict[str, Any], *, repo: Path) -> dict[str, Any]:
     else:
         _require(isinstance(branch, str) and branch, "`branch` must be a non-empty string")
 
-    return {**record, "date": date, "branch": branch, "lenses_skipped": lenses_skipped}
+    # Both lens lists are written back explicitly, not just the one that has a
+    # default. `lenses_run` is required, so it is always in `record` today - but
+    # relying on that would mean every line on disk carries the full schema only
+    # by accident, and a reader that indexes `rec["lenses_run"]` instead of
+    # `rec.get(...)` would KeyError on the first record that ever omits it.
+    return {
+        **record,
+        "date": date,
+        "branch": branch,
+        "lenses_run": lenses_run,
+        "lenses_skipped": lenses_skipped,
+    }
 
 
 def log_path_for(repo: Path) -> Path:
