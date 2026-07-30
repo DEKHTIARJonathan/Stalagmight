@@ -29,7 +29,7 @@ describe('projectStore.saveProject detached-copy result', () => {
   });
 
   afterEach(() => {
-    useProjectStore.setState({ project: null, isDirty: false } as never);
+    useProjectStore.setState({ project: null, isDirty: false, integrityIssues: [] } as never);
   });
 
   it('does not re-point the project, does not clear isDirty, and toasts the copy path', async () => {
@@ -53,5 +53,33 @@ describe('projectStore.saveProject detached-copy result', () => {
       expect.stringContaining('/home/diver/copy.stalx'),
       'speleodb-unlinked-copy'
     );
+    // Nothing was flagged, so nothing could have been healed - no extra fetch.
+    expect(useProjectStore.getState().refreshProjectState).not.toHaveBeenCalled();
+  });
+
+  it('refreshes the mirror and marks the session dirty when the save healed the live project', async () => {
+    useUIStore.setState({ showToast: vi.fn() } as never);
+    const project = { file_path: '/cache/p1/project.stalx' } as never;
+    // Clean session, flagged project: the save pipeline heals the LIVE project
+    // (duplicate shot UUIDs, non-finite geometry) before it decides to write only
+    // a copy, so the healed state never reaches the managed file on disk.
+    useProjectStore.setState({
+      project,
+      isDirty: false,
+      integrityIssues: ['duplicate_shot_uuid'],
+    } as never);
+    invokeIpcMock.mockResolvedValue({
+      success: true,
+      unlinked_copy_path: '/home/diver/copy.stalx',
+    } as CommandResult);
+
+    await useProjectStore.getState().saveProject('/home/diver/copy.stalx');
+
+    // The mirror is re-pulled from the mutated backend project...
+    expect(useProjectStore.getState().refreshProjectState).toHaveBeenCalled();
+    // ...and the managed session is dirty: its healed state is unsaved.
+    expect(useProjectStore.getState().isDirty).toBe(true);
+    // Still no re-point - the open project remains the managed file.
+    expect(useProjectStore.getState().project).toBe(project);
   });
 });

@@ -1315,6 +1315,14 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
             i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
             'speleodb-unlinked-copy'
           );
+        // The heals above ran on the LIVE project before the pipeline decided to
+        // write a copy, so the frontend's mirror is stale here too - and the
+        // healed state reached only the copy, never the managed file, which
+        // leaves the session dirty even if it entered the save clean.
+        if (hadIntegrityIssues) {
+          await get().refreshProjectState();
+          set({ isDirty: true });
+        }
         return result;
       }
       // Update file_path if the backend returned it (first save / save-as)
