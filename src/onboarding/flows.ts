@@ -54,10 +54,13 @@ const canShowOnboarding = (context: OnboardingContext): boolean =>
   !context.placementModeActive &&
   context.activeDialog === null;
 
-// Placement mode hides the wizard to free the map, but leaves `activeDialog` and
-// the wizard phase set. Without the placement guard a dialog flow starts anyway
-// and anchors to a control that is no longer in the DOM, which locks the screen
-// behind a spotlight-less dim (#331).
+// The placement clause is DEFENSIVE, not load-bearing: every current path into
+// placement mode nulls `activeDialog` and the wizard phase first (uiStore
+// `closeDialog`), so no reachable state satisfies both today. It is kept so that
+// a future path which starts placement with the wizard still registered cannot
+// anchor a dialog flow to a control that is no longer on screen. What actually
+// prevents that dead-end is the unresolvable-target fallback in
+// OnboardingOverlay - not this clause (#331).
 const canShowDialogOnboarding = (context: OnboardingContext): boolean =>
   context.configLoaded &&
   !context.splashVisible &&
@@ -97,20 +100,6 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
-      id: 'geometry',
-      titleKey: 'onboarding.flows.workspace.steps.geometry.title',
-      descriptionKey: 'onboarding.flows.workspace.steps.geometry.description',
-      targetSelectors: [
-        '[data-testid="geometry-mode-measured"]',
-        '[data-testid="geometry-mode-closureAdjusted"]',
-      ],
-      mergeTargetSpotlights: true,
-      placement: 'left',
-      tooltipTargetSelector: '[data-testid="geometry-mode-measured"]',
-      tooltipOffsetX: -150,
-      interaction: 'locked',
-    },
-    {
       id: 'tools',
       titleKey: 'onboarding.flows.workspace.steps.tools.title',
       descriptionKey: 'onboarding.flows.workspace.steps.tools.description',
@@ -120,6 +109,9 @@ const workspaceFlow: OnboardingFlowDefinition = {
       illustration: 'tools-overview',
       tooltipMaxWidth: 980,
     },
+    // `display-options` and `geometry` are adjacent on purpose: both are anchored
+    // inside the Display menu, which DisplayMenu auto-opens for exactly these two
+    // step ids. A step between them would close and re-open the menu mid-tour.
     {
       id: 'display-options',
       titleKey: 'onboarding.flows.workspace.steps.displayOptions.title',
@@ -135,6 +127,23 @@ const workspaceFlow: OnboardingFlowDefinition = {
       interaction: 'locked',
     },
     {
+      // Survey-only controls (DisplayMenu gates the Geometry group on
+      // `appMode === 'survey'`). Outside Survey this step has no anchor and
+      // falls back to a centered card rather than blocking.
+      id: 'geometry',
+      titleKey: 'onboarding.flows.workspace.steps.geometry.title',
+      descriptionKey: 'onboarding.flows.workspace.steps.geometry.description',
+      targetSelectors: [
+        '[data-testid="geometry-mode-measured"]',
+        '[data-testid="geometry-mode-closureAdjusted"]',
+      ],
+      mergeTargetSpotlights: true,
+      placement: 'left',
+      tooltipTargetSelector: '[data-testid="geometry-mode-measured"]',
+      tooltipOffsetX: -150,
+      interaction: 'locked',
+    },
+    {
       id: 'docks',
       titleKey: 'onboarding.flows.workspace.steps.docks.title',
       descriptionKey: 'onboarding.flows.workspace.steps.docks.description',
@@ -146,7 +155,6 @@ const workspaceFlow: OnboardingFlowDefinition = {
       ],
       placement: 'center',
       interaction: 'locked',
-      illustration: 'map-with-pan-zoom',
     },
     {
       id: 'done',
@@ -261,7 +269,9 @@ const placementModeFlow: OnboardingFlowDefinition = {
       targetSelector: '[data-testid="map-canvas"]',
       placement: 'top',
       interaction: 'locked',
-      illustration: 'mouse-pan-zoom',
+      // Renders pan/zoom plus fit-to-view, zoom and scale-bar guidance - all of
+      // which are what you actually need while positioning a section.
+      illustration: 'map-with-pan-zoom',
     },
   ],
 };

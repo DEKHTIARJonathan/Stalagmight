@@ -363,7 +363,7 @@ export function GeneralSettings({
         <SettingRow
           label={t('settings.general.onboarding.restart.label')}
           helpText={t('settings.general.onboarding.restart.help')}
-          isChanged={isFieldChanged(changedFields, 'general.onboarding_completed_flows', 'general.onboarding_enabled')}
+          isChanged={isFieldChanged(changedFields, 'general.onboarding_completed_flows', 'general.onboarding_enabled', 'general.onboarding_first_launch_done')}
           onReset={handleRestartOnboarding}
           isDefault={!canRestartOnboarding}
           data-testid="setting-onboarding-restart"

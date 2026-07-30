@@ -720,8 +720,10 @@ export default function OnboardingOverlay({
   }, []);
 
   // Publish the active step to the onboarding-step store for consumers outside
-  // this overlay's tree (DisplayMenu, SingleSystemView). The DOM attributes on
-  // the overlay element below are kept for DmpNewImportDialog's own observer.
+  // this overlay's tree (DisplayMenu, SingleSystemView). The matching DOM
+  // attributes on the overlay element below now have no in-app consumer - the
+  // observer that read them is gone (#331) - and are kept only as a test/debug
+  // handle.
   useEffect(() => {
     publishOnboardingStep(step.flowId, step.id);
   }, [step.flowId, step.id]);

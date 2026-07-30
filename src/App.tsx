@@ -336,12 +336,19 @@ function App() {
     });
   }, []);
 
-  // Guides are armed for the first launch only (#331). The flag is persisted the
-  // moment they arm, not when they finish, so a crash mid-tour cannot re-arm
-  // them on the next launch. `onboardingArmed` holds the decision for the rest
-  // of this session, so writing the flag does not immediately disarm the tour
-  // the user is currently being shown.
+  // Guides are armed for the first launch only (#331). `onboardingArmed` holds
+  // that decision for the rest of the session, so persisting the flag does not
+  // disarm a tour already on screen.
+  //
+  // The flag is burned when a flow actually STARTS, not when config loads: the
+  // orientation flow needs an open project (flows.ts `workspace-basics`), and a
+  // first launch has none, so arming on config load spent the one chance on a
+  // session that could not show anything. Persisting on first start still means
+  // a crash mid-tour does not re-arm - the write has already gone out by then -
+  // but it is the in-memory flag that is certain; a failed IPC write leaves
+  // `false` on disk and the next launch re-arms.
   const [onboardingArmed, setOnboardingArmed] = useState(false);
+  const firstLaunchBurnedRef = useRef(false);
   useEffect(() => {
     const currentConfig = config;
     if (!currentConfig || !currentConfig.general.onboarding_enabled) {
@@ -351,13 +358,9 @@ function App() {
       return;
     }
     setOnboardingArmed(true);
-    const nextConfig = {
-      ...currentConfig,
-      general: { ...currentConfig.general, onboarding_first_launch_done: true },
-    };
-    const store = useProjectStore.getState();
-    store.setConfig(nextConfig);
-    void store.updateConfig(nextConfig);
+    // "Restart guides" clears the flag mid-session; clear the latch with it so
+    // the next flow re-burns rather than running unpersisted.
+    firstLaunchBurnedRef.current = false;
   }, [config]);
 
   const onboarding = useOnboarding({
@@ -377,6 +380,27 @@ function App() {
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });
+
+  // Burn the first-launch flag once a guide is actually on screen. The config is
+  // re-read from the store here rather than closed over, so this merges against
+  // the live value instead of the snapshot the effect was scheduled with.
+  useEffect(() => {
+    if (!onboarding.activeFlowId || firstLaunchBurnedRef.current) {
+      return;
+    }
+    const store = useProjectStore.getState();
+    const currentConfig = store.config;
+    if (!currentConfig || currentConfig.general.onboarding_first_launch_done) {
+      return;
+    }
+    firstLaunchBurnedRef.current = true;
+    const nextConfig = {
+      ...currentConfig,
+      general: { ...currentConfig.general, onboarding_first_launch_done: true },
+    };
+    store.setConfig(nextConfig);
+    void store.updateConfig(nextConfig);
+  }, [onboarding.activeFlowId]);
 
   const disableOnboardingGuides = useCallback(() => {
     const store = useProjectStore.getState();

@@ -640,14 +640,14 @@
         "warning": "Allowing plain HTTP to a public address sends your token unencrypted. Only enable this for a trusted local server."
       },
       "disableKeychain": {
-        "label": "Never use the OS keychain",
-        "help": "Stops Stalagmight touching the system keyring entirely. Turn this on if your keyring is locked or unavailable and you do not want to be asked about it again.",
-        "aria": "Never use the OS keychain",
-        "warning": "Your API key will not be stored in the OS keychain. It will be kept wherever the credential-storage setting above says - which may mean signing in again each time Stalagmight starts.",
-        "evictionFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer's keychain ({{reason}}), so it may sign you back in the next time you open the app.",
-        "sweepFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer ({{reason}}), so it may sign you back in the next time you open the app."
-      },
-      "allowForceEdit": {
+      "label": "Never use the OS keychain",
+      "help": "Stops Stalagmight touching the system keyring entirely. Turn this on if your keyring is locked or unavailable and you do not want to be asked about it again.",
+      "aria": "Never use the OS keychain",
+      "warning": "Your API key will not be stored in the OS keychain. It will be kept wherever the credential-storage setting above says - which may mean signing in again each time Stalagmight starts.",
+      "evictionFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer's keychain ({{reason}}), so it may sign you back in the next time you open the app.",
+      "sweepFailed": "Your settings were saved, but an older copy of your API key could not be removed from this computer ({{reason}}), so it may sign you back in the next time you open the app."
+    },
+    "allowForceEdit": {
         "label": "Allow editing without the write lock",
         "help": "Adds an \"Edit without the write lock\" option for remote projects, so you can survey offline or while someone else holds it.",
         "aria": "Allow editing SpeleoDB projects without the write lock",
@@ -684,15 +684,15 @@
           "available": "available",
           "unavailable": "not working on this computer",
           "declined": "not in use - you chose to keep the key elsewhere",
-          "disabled": "switched off in these settings"
+        "disabled": "switched off in these settings"
         },
         "retry": "Try again",
         "retrying": "Trying…",
         "retryFailed": "Could not move your API key into the OS keychain.",
-        "plaintextWarning": "Your API key is in a plaintext file on this computer. Anyone who can read your files can read it.",
-        "moveFailed": "Could not change where your API key is kept.",
-        "useSessionOnly": "Keep it in this session only",
-        "usePlaintext": "Keep it in a file on this computer"
+      "plaintextWarning": "Your API key is in a plaintext file on this computer. Anyone who can read your files can read it.",
+      "moveFailed": "Could not change where your API key is kept.",
+      "useSessionOnly": "Keep it in this session only",
+      "usePlaintext": "Keep it in a file on this computer"
       },
       "pollInterval": {
         "label": "Remote refresh interval",
@@ -2567,7 +2567,7 @@
             "description": "Click the map to drop the section; position can be refined later. Hovering near an existing station snaps and merges the two at placement time.",
             "descriptionItems": [
               "Drag to pan, scroll to zoom.",
-              "Esc reopens the placement options and metadata."
+              "Once this guide closes, Esc reopens the placement options and metadata."
             ]
           }
         }
