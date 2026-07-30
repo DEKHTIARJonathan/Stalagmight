@@ -263,9 +263,15 @@ impl AppState {
     /// `speleodb_note_lock_acquired`: it costs the shortcut rather than granting one,
     /// since the same poisoned mutex fails the token read the poll needs to identify a
     /// lock holder at all.
-    pub(super) fn speleodb_forget_lock_acquired_for(&self, project_id: &str) {
+    /// Returns the claim it removed, for the one caller that may have to put it
+    /// back: `AppState::delete_project` clears at snapshot time and can still
+    /// fail before anything is destroyed.
+    pub(super) fn speleodb_forget_lock_acquired_for(
+        &self,
+        project_id: &str,
+    ) -> Option<super::speleodb_session::LockClaim> {
         let Ok(mut session) = self.speleodb_session_lock() else {
-            return;
+            return None;
         };
         // The live account's claim on that project, and only that one. The id is
         // what closes this function's race (see above); the account is what keeps
@@ -273,9 +279,27 @@ impl AppState {
         // release for - every caller here released with the credentials signed in
         // now, so those are the only claims it can have ended.
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
-        session.locks_acquired_here.retain(|claim| {
-            claim.project_id != project_id || !claim.taken_by(endpoint.as_deref(), email.as_deref())
-        });
+        let removed = session
+            .locks_acquired_here
+            .iter()
+            .position(|claim| {
+                claim.project_id == project_id
+                    && claim.taken_by(endpoint.as_deref(), email.as_deref())
+            })
+            .map(|at| session.locks_acquired_here.remove(at));
+        // The unwind slot names a claim too, and a released lock is no longer an
+        // acquisition anything may hand back - leaving it would let the
+        // stale-context unwind release this mutex a second time, which on a
+        // project since re-locked by a sibling session is a release of THEIR
+        // lock.
+        if session
+            .acquired_by_this_flow
+            .as_ref()
+            .is_some_and(|flow| removed.as_ref().is_some_and(|gone| flow.is_same_lock(gone)))
+        {
+            session.acquired_by_this_flow = None;
+        }
+        removed
     }
 
     /// Run the network half of a release for params captured EARLIER, and REPORT the

@@ -89,6 +89,17 @@ pub(crate) struct SpeleoDbSession {
     /// sibling module cannot see a private field. Nothing else in `core::state` may
     /// touch it.
     pub(super) locks_acquired_here: Vec<super::speleodb_session::LockClaim>,
+    /// The claim the most recent Start Editing MINTED, kept apart from the set
+    /// above so the stale-context unwind can hand back the lock that operation
+    /// took rather than an arbitrary one of this account's.
+    ///
+    /// Written only by `AppState::speleodb_note_acquisition_by_this_flow`, in
+    /// the same session acquisition that records the claim itself, and TAKEN by
+    /// `AppState::speleodb_take_acquisition_by_this_flow` - so it answers once,
+    /// for the flow that set it. An acquire that inherited a lock the account
+    /// already held mints nothing and leaves this alone, which is what makes the
+    /// unwind's promised no-op on an inherited lock real.
+    pub(super) acquired_by_this_flow: Option<super::speleodb_session::LockClaim>,
     /// [#258] Which dump entry the user picked, per project, for THIS session.
     ///
     /// Deliberately process-local and never persisted. The chosen entry is a
@@ -942,6 +953,27 @@ impl AppState {
     /// this session's to drop, and each is the only local pointer to a mutex
     /// still held elsewhere.
     pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
+        self.speleodb_record_claim(project_id, false);
+    }
+
+    /// [`Self::speleodb_note_lock_acquired`] for the acquisition a Start Editing
+    /// just made, which additionally REMEMBERS that claim as this flow's own.
+    ///
+    /// The stale-context unwind (`speleodb_release_lock_acquired_here`) has to
+    /// hand back the lock THIS operation took and nothing else, and it cannot be
+    /// told which that is - the caller's whole reason for calling is that the
+    /// open project changed under it. Scanning the claims for "one of this
+    /// account's" was near enough while a claim was one slot, and stopped being
+    /// so the moment claims started surviving per project: an older stranded
+    /// claim - one logout kept back precisely because it guards un-pushed work -
+    /// is indistinguishable that way, and the unwind released THAT while leaving
+    /// the mutex it had just taken held.
+    pub(super) fn speleodb_note_acquisition_by_this_flow(&self, project_id: &str) {
+        self.speleodb_record_claim(Some(project_id), true);
+    }
+
+    /// The body of both, so the two cannot record differently.
+    fn speleodb_record_claim(&self, project_id: Option<&str>, by_this_flow: bool) {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
@@ -960,11 +992,13 @@ impl AppState {
         // direction as the poisoned-lock case above - it costs the shortcut rather
         // than granting one.
         if let Some(((project_id, endpoint), email)) = project_id.zip(endpoint).zip(email) {
-            session
-                .locks_acquired_here
-                .push(super::speleodb_session::LockClaim::taken(
-                    project_id, endpoint, email,
-                ));
+            let claim = super::speleodb_session::LockClaim::taken(project_id, endpoint, email);
+            if by_this_flow {
+                // Recorded in the SAME session acquisition as the claim itself,
+                // so the two can never disagree about what was just acquired.
+                session.acquired_by_this_flow = Some(claim.clone());
+            }
+            session.locks_acquired_here.push(claim);
         }
     }
 
@@ -984,25 +1018,50 @@ impl AppState {
         })
     }
 
-    /// WHICH project this process took a lock on, if it took one AS THE ACCOUNT
-    /// CURRENTLY SIGNED IN and is still editing under it.
+    /// Whether a claim exists for `project_id` ON `endpoint`'s deployment,
+    /// whoever holds it.
     ///
-    /// The id half of [`Self::speleodb_lock_acquired_here`], for the one caller that
-    /// needs to unwind an acquisition WITHOUT already knowing what got acquired -
-    /// and it carries that helper's account test for the same reason the janitor
-    /// does. `speleodb_release_lock_acquired_here` releases with whatever
-    /// credentials are signed in NOW, so handing it a previous account's project id
-    /// posts that id to the wrong server or under the wrong user: an idempotent
-    /// success then clears a claim whose mutex was never freed, and on the same
-    /// deployment the same UUID can have a live lock released out from under
-    /// whoever is actually editing it.
-    pub(super) fn speleodb_acquired_here_project(&self) -> Option<String> {
-        let session = self.speleodb_session_lock().ok()?;
-        session
-            .locks_acquired_here
-            .iter()
-            .find(|claim| claim.taken_by(session.endpoint.as_deref(), session.email.as_deref()))
-            .map(|claim| claim.project_id.clone())
+    /// The reclaim check's question, and deliberately NOT
+    /// [`Self::speleodb_lock_acquired_here`]'s. A captured release names the
+    /// server it is for and may outlive the session - and even the sign-in -
+    /// that captured it, so "is this OUR account's?" is the wrong test: what
+    /// matters is whether some session in this process has claimed the very
+    /// mutex the release would free. Keyed on the deployment because a project
+    /// UUID is unique only on one server; a clone holding the same id must not
+    /// answer for it.
+    pub(super) fn speleodb_claim_on_deployment(&self, endpoint: &str, project_id: &str) -> bool {
+        self.speleodb_session_lock().is_ok_and(|session| {
+            session
+                .locks_acquired_here
+                .iter()
+                .any(|claim| claim.project_id == project_id && claim.on_deployment(endpoint))
+        })
+    }
+
+    /// WHICH project the most recent Start Editing ACQUIRED a lock on in this
+    /// process, if it acquired one at all - consumed, so it answers once.
+    ///
+    /// For the one caller that needs to unwind an acquisition WITHOUT knowing
+    /// what got acquired ([`Self::speleodb_release_lock_acquired_here`]): the
+    /// stale-context unwind, whose whole premise is that the open project moved
+    /// under it. That caller cannot name the project, so this names it - and it
+    /// has to name the acquisition THIS operation made, not merely one of this
+    /// account's claims. Those are no longer the same thing: claims now survive
+    /// per project, and an older one may be a lock a logout deliberately kept
+    /// back because it guards un-pushed work. Releasing that instead was both a
+    /// wrong release and a stranded mutex.
+    ///
+    /// Empty when the acquire INHERITED a lock the account already held (no
+    /// acquisition, nothing of ours to hand back) or when the last one has
+    /// already been unwound, which is exactly the no-op the caller documents.
+    /// The account is re-checked at consumption: a sign-in as somebody else in
+    /// between makes this session's credentials the wrong ones to release with.
+    pub(super) fn speleodb_take_acquisition_by_this_flow(&self) -> Option<String> {
+        let mut session = self.speleodb_session_lock().ok()?;
+        let claim = session.acquired_by_this_flow.take()?;
+        claim
+            .taken_by(session.endpoint.as_deref(), session.email.as_deref())
+            .then(|| claim.project_id.clone())
     }
 
     /// Hand back a write lock ONLY if this process is the one that took it, and only
@@ -1029,7 +1088,7 @@ impl AppState {
     /// Silent when there is nothing of ours to release: the caller is already reporting
     /// the staleness it found, and "no lock was ours" is not a second problem.
     pub(crate) fn speleodb_release_lock_acquired_here(&self) -> Result<(), SpeleoErrorDto> {
-        let Some(project_id) = self.speleodb_acquired_here_project() else {
+        let Some(project_id) = self.speleodb_take_acquisition_by_this_flow() else {
             return Ok(());
         };
         self.speleodb_release_lock(project_id)
@@ -4087,6 +4146,7 @@ mod tests {
             token_store,
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -4398,8 +4458,8 @@ mod tests {
         *state.speleodb.lock().expect("session lock") = authed_session_at("http://x/");
 
         assert!(
-            state.speleodb_acquired_here_project().is_none(),
-            "precondition: a fresh session has taken nothing"
+            state.speleodb_take_acquisition_by_this_flow().is_none(),
+            "precondition: a fresh session has acquired nothing"
         );
         assert!(
             state.speleodb_release_lock_acquired_here().is_ok(),
@@ -4410,10 +4470,18 @@ mod tests {
         // And the gate reads exactly what a fresh acquire records, so the release it
         // delegates to can only ever name the project this process locked - never the
         // id a caller captured before the context moved under it.
-        state.speleodb_note_lock_acquired(Some(REMOTE_ID));
+        // What a successful Start Editing commit records - the acquisition the
+        // stale-context unwind exists to hand back, and the ONLY thing it will:
+        // a bare claim (an inherited lock, or one an earlier flow left behind)
+        // is deliberately not offered.
+        state.speleodb_note_acquisition_by_this_flow(REMOTE_ID);
         assert_eq!(
-            state.speleodb_acquired_here_project().as_deref(),
+            state.speleodb_take_acquisition_by_this_flow().as_deref(),
             Some(REMOTE_ID)
+        );
+        assert!(
+            state.speleodb_take_acquisition_by_this_flow().is_none(),
+            "and it answers once - a second unwind must not release it again"
         );
     }
 
@@ -5906,6 +5974,60 @@ mod tests {
         );
     }
 
+    /// A delete that cannot destroy the file must not have destroyed the only
+    /// pointer to the lock either.
+    ///
+    /// The claim is cleared at SNAPSHOT time, under the guard that decided the
+    /// file's identity (F8), and only afterwards is the file handed to the OS.
+    /// When that fails nothing has been destroyed: the lock is still ours, still
+    /// guarding a project still on disk. But the session HAS been closed by
+    /// then, so no status poll will ever look at that mutex again, and this
+    /// return does not reach the deferred release either - a claim dropped here
+    /// leaves the mutex with nothing at all pointing at it.
+    #[cfg(unix)]
+    #[test]
+    fn a_delete_that_cannot_trash_the_file_keeps_its_lock_claim() {
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let (base, _listener, hits) = counting_stub();
+        let (_temp, state) = editing_fixture(&base);
+        let path = state.open_project_path().expect("fixture is open");
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "precondition: the fixture holds a lock it recorded taking"
+        );
+
+        // Deny writes on the PARENT so the unlink is refused while the file
+        // itself still stats perfectly well.
+        let dir = path.parent().expect("parent").to_path_buf();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555))
+            .expect("make the directory read-only");
+        let probe = dir.join(".writable");
+        let running_as_root = std::fs::write(&probe, b"x").is_ok();
+        let _ = std::fs::remove_file(&probe);
+        let result = (!running_as_root).then(|| state.delete_project(path.clone()));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755))
+            .expect("restore the directory");
+
+        let Some(result) = result else {
+            // Root ignores the permission bits, so there is no denied unlink to
+            // test with.
+            return;
+        };
+        assert!(!result.success, "the delete failed");
+        assert!(path.exists(), "and the file is still there");
+        assert!(
+            state.speleodb_lock_acquired_here(REMOTE_ID),
+            "so its lock claim must be back - it is the only local record of a \
+             mutex this process still holds, over a project that still exists"
+        );
+        assert_eq!(
+            hits.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "and nothing was released: the project was never destroyed"
+        );
+    }
+
     /// A claim naming the SAME project at release time is a SUCCESSOR's - the
     /// deleting session's own claim was cleared at snapshot time - and the
     /// captured release must stand down for it: the successor inherited the very
@@ -6062,6 +6184,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6148,6 +6271,7 @@ mod tests {
             token_store,
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6944,6 +7068,7 @@ mod tests {
             token_store: TokenStore::from_stores(keychain, plaintext),
             rehydrate_attempted: false,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -7319,6 +7444,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7335,6 +7461,7 @@ mod tests {
             token_store: TokenStore::from_stores(Box::new(InMemoryStore::new()), None),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7349,6 +7476,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7363,6 +7491,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7478,6 +7607,7 @@ mod tests {
             token_store: TokenStore::from_in_memory_token(token),
             rehydrate_attempted: true,
             locks_acquired_here: Vec::new(),
+            acquired_by_this_flow: None,
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };

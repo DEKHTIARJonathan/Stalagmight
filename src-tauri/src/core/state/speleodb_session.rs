@@ -71,6 +71,7 @@ use std::sync::atomic::Ordering;
 use super::speleodb::local_dto;
 use super::speleodb_lock_release::LockReleaseParams;
 use super::AppState;
+use crate::speleodb::auth::normalize_endpoint;
 use crate::speleodb::{client, SpeleoDbError, SpeleoErrorDto};
 
 /// WHICH project this process took a write lock on, and under WHOSE account.
@@ -116,17 +117,40 @@ impl LockClaim {
     /// Whether this claim belongs to the account `(endpoint, email)` names -
     /// i.e. whether that account's token is the one that can release it.
     ///
-    /// Email comparison is case-insensitive, matching every other "is this us?"
-    /// test in this tree (`lock_held_by_me`, the #202 re-verify): SpeleoDB may
-    /// normalise case, and a claim we refuse to recognise is a lock nothing
-    /// hands back. The endpoint is compared exactly - it is the same resolved
-    /// string the acquire used, and a user who has since pointed the app at a
-    /// different deployment must NOT have this claim released against it.
+    /// Both halves are compared the way the CREDENTIAL layer compares them, and
+    /// that is not a detail: the token this claim needs is stored under
+    /// `auth::account_key`, so any pair that key treats as one account has one
+    /// token, and a claim that refuses to recognise its own token is a lock
+    /// nothing ever hands back. Email case-insensitively (SpeleoDB may normalise
+    /// it), endpoint through [`normalize_endpoint`], which collapses a trailing
+    /// slash, host case and a default port - all three of which a user can
+    /// change simply by retyping the server on the next sign-in.
     pub(super) fn taken_by(&self, endpoint: Option<&str>, email: Option<&str>) -> bool {
         matches!(
             (endpoint, email),
-            (Some(e), Some(m)) if e == self.endpoint && m.eq_ignore_ascii_case(&self.email)
+            (Some(e), Some(m))
+                if self.on_deployment(e) && m.eq_ignore_ascii_case(&self.email)
         )
+    }
+
+    /// Whether this claim's lock lives on `endpoint`'s deployment.
+    ///
+    /// Separate from the account test because a captured release knows which
+    /// SERVER it is for without necessarily being the account signed in now -
+    /// and a project UUID means nothing across deployments. A cloned or restored
+    /// deployment can hold the very same id, which is exactly how a successor
+    /// check that compared ids alone stood down for an unrelated session.
+    pub(super) fn on_deployment(&self, endpoint: &str) -> bool {
+        normalize_endpoint(endpoint) == normalize_endpoint(&self.endpoint)
+    }
+
+    /// Whether both claims name the SAME lock: one project, on one deployment,
+    /// taken by one account. The full identity, for deciding whether a claim
+    /// that was removed has been re-made by somebody else in the meantime.
+    pub(super) fn is_same_lock(&self, other: &Self) -> bool {
+        self.project_id == other.project_id
+            && self.on_deployment(&other.endpoint)
+            && self.email.eq_ignore_ascii_case(&other.email)
     }
 }
 
@@ -232,7 +256,10 @@ impl AppState {
         // pre-acquire probe proved the mutex was free: keeping a lock we
         // INHERITED is an edit session, not an acquisition.
         if acquired_here {
-            self.speleodb_note_lock_acquired(Some(project_id));
+            // Recorded as THIS flow's acquisition, so the stale-context unwind
+            // hands back the lock this operation took rather than whichever of
+            // the account's claims it happened to find first.
+            self.speleodb_note_acquisition_by_this_flow(project_id);
         }
         // #213: we now genuinely hold the lock, so clear force-edit - the
         // "reconnect" transition for a force-editor, a no-op otherwise.
@@ -274,17 +301,30 @@ impl AppState {
     /// decline - or it has not recorded yet, and its write lands after our clear
     /// and stands.
     pub(super) fn speleodb_forget_lock_acquired_if_gate_shut(&self) {
+        // The OPEN project's id, resolved BEFORE the session lock is taken:
+        // `speleodb_open_link` takes the database mutex, and the order in this
+        // tree is database-then-session (`speleodb_held_lock_release_params`).
+        // No open link, no claim of ours this gate can be about - the janitor
+        // owns that world.
+        let Ok(link) = self.speleodb_open_link() else {
+            return;
+        };
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
         if !self.edit_enabled() {
-            // This account's claims only. The gate is a fact about the session
-            // signed in NOW; another account's retained claim is a pointer to a
-            // mutex still held elsewhere, and dropping it strands that mutex.
+            // The OPEN project's claim, held by the account signed in now, and
+            // nothing else. The gate is one fact about one project: this
+            // account's claims on OTHER projects can be live pointers to mutexes
+            // still held (a janitor release that failed transiently leaves
+            // exactly one), and another account's are never this session's to
+            // drop. Clearing by account alone discarded both, so opening any
+            // second project read-only was enough to strand an earlier lock.
             let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
-            session
-                .locks_acquired_here
-                .retain(|claim| !claim.taken_by(endpoint.as_deref(), email.as_deref()));
+            session.locks_acquired_here.retain(|claim| {
+                claim.project_id != link.project_id
+                    || !claim.taken_by(endpoint.as_deref(), email.as_deref())
+            });
         }
     }
 
@@ -422,7 +462,18 @@ impl AppState {
     /// successors the stand-down is for. The gate + link ARE that successor's
     /// footprint: its commit opened the gate on a project linked to this id,
     /// under the same lock-ops span that keeps this answer stable.
-    pub(super) fn speleodb_live_session_accounts_for(&self, project_id: &str) -> bool {
+    ///
+    /// `endpoint` is the DEPLOYMENT the captured release is for, and it is half
+    /// the question. A project id identifies a project on one server; a cloned
+    /// or restored deployment can hold the same UUID, and a session editing THAT
+    /// project accounts for nothing on the server whose mutex is about to be
+    /// left held. The link carries its own endpoint, so the comparison is
+    /// available and the id alone was never enough.
+    pub(super) fn speleodb_live_session_accounts_for(
+        &self,
+        project_id: &str,
+        endpoint: &str,
+    ) -> bool {
         let _proj_guard = self
             .project
             .lock()
@@ -430,8 +481,10 @@ impl AppState {
         if !self.edit_enabled() || self.force_editing() {
             return false;
         }
-        self.speleodb_open_link()
-            .is_ok_and(|link| link.project_id == project_id)
+        self.speleodb_open_link().is_ok_and(|link| {
+            link.project_id == project_id
+                && normalize_endpoint(&link.endpoint) == normalize_endpoint(endpoint)
+        })
     }
 
     /// The body of [`Self::speleodb_release_unless_reclaimed`], for callers that
@@ -445,12 +498,19 @@ impl AppState {
     /// re-record path outside the lock-ops span minted it) and the live edit
     /// session (a successor that inherited and so, deliberately, has no
     /// record). Either one means the lock is accounted for.
+    ///
+    /// Both are asked about the DEPLOYMENT this release is for, not just the
+    /// project id. `params` names one server, and a project UUID is only unique
+    /// on one: a cloned or restored deployment holding the same id had a session
+    /// there answering for a mutex on a server it has never touched, so the
+    /// release was never sent and that server's lock stayed held - over a file
+    /// the delete may already have destroyed.
     pub(super) fn speleodb_release_unless_reclaimed_locked(
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        if self.speleodb_lock_acquired_here(&params.project_id)
-            || self.speleodb_live_session_accounts_for(&params.project_id)
+        if self.speleodb_claim_on_deployment(&params.endpoint, &params.project_id)
+            || self.speleodb_live_session_accounts_for(&params.project_id, &params.endpoint)
         {
             tracing::info!(
                 project_id = %params.project_id,
@@ -467,6 +527,33 @@ impl AppState {
             &params.project_id,
         )
         .map(|_| ())
+    }
+
+    /// Put a claim back after a clear whose reason turned out not to happen.
+    ///
+    /// `AppState::delete_project` clears at snapshot time, under the same
+    /// `project` guard that decided the file's identity, and only afterwards
+    /// tries to destroy the file. When THAT fails nothing has been destroyed:
+    /// the lock is still ours, still guarding a project still on disk, and the
+    /// claim is the only local pointer to it - the session is closed by then, so
+    /// no poll catch-all will ever see the mutex again.
+    ///
+    /// Declines if the same lock has been claimed meanwhile: a successor's entry
+    /// is newer and describes the same mutex, so two would say one thing twice.
+    pub(super) fn speleodb_restore_lock_claim(&self, claim: Option<LockClaim>) {
+        let Some(claim) = claim else {
+            return;
+        };
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        if !session
+            .locks_acquired_here
+            .iter()
+            .any(|live| live.is_same_lock(&claim))
+        {
+            session.locks_acquired_here.push(claim);
+        }
     }
 
     /// The guard Start Editing holds across acquire -> commit (see the module
@@ -612,12 +699,17 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if proj_guard.is_none() {
                 if let Ok(mut session) = self.speleodb_session_lock() {
-                    // Only if nothing has re-claimed this project meanwhile: a
+                    // Only if nothing has re-claimed THIS lock meanwhile: a
                     // successor's entry is newer than ours and must stand.
+                    // Compared on the full identity - project, deployment AND
+                    // account - because a same-UUID claim on a cloned
+                    // deployment is a different lock entirely, and reading it
+                    // as a successor would suppress this restore and lose the
+                    // retry pointer for a mutex still held over here.
                     if !session
                         .locks_acquired_here
                         .iter()
-                        .any(|live| live.project_id == claim.project_id)
+                        .any(|live| live.is_same_lock(&claim))
                     {
                         session.locks_acquired_here.push(claim);
                     }
@@ -643,6 +735,9 @@ mod tests {
     use crate::speleodb::SpeleoDbError;
 
     const ID: &str = "11111111-1111-1111-1111-111111111111";
+    /// A loopback address nothing listens on: token resolution succeeds and
+    /// every POST fails fast with "connection refused".
+    const UNREACHABLE: &str = "http://127.0.0.1:1/";
     const OTHER_ID: &str = "22222222-2222-2222-2222-222222222222";
 
     /// A `.stalx` at `path` linked to `project_id` (same idiom as
@@ -652,7 +747,11 @@ mod tests {
         db.save_project(&Project::new("Linked".to_owned(), None))
             .expect("save project");
         db.save_speleo_link(Some(&SpeleoLink {
-            endpoint: "http://x/".to_owned(),
+            // The same dead loopback the fixtures sign in against, so a link,
+            // a claim and a captured release all name ONE deployment - which
+            // the reclaim check now compares, and a POST to port 1 still fails
+            // fast rather than waiting on a DNS lookup.
+            endpoint: UNREACHABLE.to_owned(),
             project_id: project_id.to_owned(),
             project_name: "Linked".to_owned(),
             base_commit_sha: Some("abc123".to_owned()),
@@ -677,7 +776,7 @@ mod tests {
     /// The in-memory token store keeps it hermetic - no OS keychain probe, and
     /// `endpoint.is_some()` short-circuits the rehydration.
     fn sign_in_unreachable(state: &AppState) {
-        sign_in_as(state, "http://127.0.0.1:1/", "diver@example.com");
+        sign_in_as(state, UNREACHABLE, "diver@example.com");
     }
 
     /// [`sign_in_unreachable`] for a named account on a named deployment, for
@@ -992,12 +1091,13 @@ mod tests {
             !state.speleodb_lock_acquired_here(ID),
             "another account's does not - it is no evidence about this session"
         );
+        // The unwind is offered nothing here: these claims were recorded
+        // directly, not minted by a Start Editing commit, and the unwind hands
+        // back only the acquisition its own flow made (round 9 P1).
         assert_eq!(
-            state.speleodb_acquired_here_project().as_deref(),
-            Some(OTHER_ID),
-            "and the unwind is only ever offered the live account's project: \
-             releasing the other one would use these credentials against a lock \
-             they have nothing to do with (round 7 P1)"
+            state.speleodb_take_acquisition_by_this_flow(),
+            None,
+            "a claim is not by itself an acquisition this flow may unwind"
         );
 
         // Re-acquiring the SAME project replaces that entry rather than piling
@@ -1039,10 +1139,9 @@ mod tests {
         );
 
         sign_out(&state);
-        assert_eq!(
-            state.speleodb_acquired_here_project(),
-            None,
-            "signed out there is no live account, so no claim is ours to unwind"
+        assert!(
+            !state.speleodb_lock_acquired_here(ID),
+            "signed out there is no live account, so no claim answers for one"
         );
     }
 
@@ -1075,6 +1174,112 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}"), listener)
+    }
+
+    #[test]
+    fn a_claim_survives_a_re_login_that_spells_the_endpoint_differently() {
+        // Round 9 (P2): the credential layer keys tokens by
+        // `auth::account_key`, which collapses a trailing slash, host case and
+        // a default port - so all of these spellings share ONE token. Comparing
+        // the claim's endpoint exactly meant the janitor could not recognise the
+        // very account whose token it was about to release with, and the mutex
+        // stayed held for good.
+        let state = AppState::new().expect("state");
+        sign_in_as(&state, "https://sdb.example.com/", "diver@example.com");
+        state.speleodb_note_lock_acquired(Some(ID));
+
+        for spelling in [
+            "https://sdb.example.com",
+            "https://sdb.example.com:443",
+            "https://SDB.Example.com/",
+        ] {
+            sign_in_as(&state, spelling, "diver@example.com");
+            assert!(
+                state.speleodb_lock_acquired_here(ID),
+                "{spelling} is the same deployment, so the claim is still ours"
+            );
+        }
+
+        // ...and a genuinely different one is still refused.
+        sign_in_as(&state, "https://other.example.com/", "diver@example.com");
+        assert!(
+            !state.speleodb_lock_acquired_here(ID),
+            "a different host is a different deployment"
+        );
+    }
+
+    #[test]
+    fn a_captured_release_ignores_a_same_id_session_on_another_deployment() {
+        // Round 9 (P1): a project UUID is unique on ONE server. A cloned or
+        // restored deployment can hold the same id, and a session editing THAT
+        // project accounts for nothing on the server whose mutex is about to be
+        // left held - which the delete may have already destroyed the file for.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        // A live edit session on the SAME project id, on the fixture's
+        // deployment.
+        open_linked(&state, temp.path(), "a.stalx", ID);
+        state
+            .speleodb_commit_editing(None, ID, false)
+            .expect("the successor's commit");
+
+        // The captured release is for the same id on ANOTHER deployment.
+        let elsewhere = super::LockReleaseParams {
+            endpoint: "http://127.0.0.1:2/".to_owned(),
+            token: "tok".to_owned(),
+            insecure_http: true,
+            project_id: ID.to_owned(),
+        };
+        assert!(
+            state.speleodb_release_unless_reclaimed(&elsewhere).is_err(),
+            "the local session answers for its own server's lock, not for a \
+             same-UUID project somewhere else - so the release must go out \
+             (and error against the dead endpoint) rather than stand down"
+        );
+
+        // The same release for THIS deployment still stands down.
+        let here = super::LockReleaseParams {
+            endpoint: UNREACHABLE.to_owned(),
+            token: "tok".to_owned(),
+            insecure_http: true,
+            project_id: ID.to_owned(),
+        };
+        state
+            .speleodb_release_unless_reclaimed(&here)
+            .expect("stood down for the live session on this deployment");
+    }
+
+    #[test]
+    fn opening_a_second_project_read_only_keeps_the_first_ones_stranded_claim() {
+        // Round 9 (P2): the poll's catch-all clear ran on every claim the
+        // account held, so the first status poll after opening ANY project
+        // read-only discarded a claim retained for a different project - the
+        // only pointer to a mutex a failed janitor release had left held.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        state.speleodb_note_lock_acquired(Some(OTHER_ID));
+
+        // A second project, opened read-only: its gate is shut, which is what
+        // the catch-all keys on.
+        open_linked(&state, temp.path(), "a.stalx", ID);
+        state.speleodb_forget_lock_acquired_if_gate_shut();
+
+        assert_eq!(
+            retained_projects(&state),
+            vec![OTHER_ID.to_owned()],
+            "the shut gate says nothing about a lock on another project"
+        );
+
+        // And it still clears the OPEN project's claim, which is its job.
+        state.speleodb_note_lock_acquired(Some(ID));
+        state.speleodb_forget_lock_acquired_if_gate_shut();
+        assert_eq!(
+            retained_projects(&state),
+            vec![OTHER_ID.to_owned()],
+            "the open project's claim is over when its gate is shut"
+        );
     }
 
     #[test]
@@ -1223,7 +1428,7 @@ mod tests {
         );
 
         let params = super::LockReleaseParams {
-            endpoint: "http://127.0.0.1:1/".to_owned(),
+            endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),
@@ -1241,7 +1446,7 @@ mod tests {
         let temp = tempfile::TempDir::new().expect("temp");
         let state = AppState::new().expect("state");
         let params = super::LockReleaseParams {
-            endpoint: "http://127.0.0.1:1/".to_owned(),
+            endpoint: UNREACHABLE.to_owned(),
             token: "tok".to_owned(),
             insecure_http: true,
             project_id: ID.to_owned(),

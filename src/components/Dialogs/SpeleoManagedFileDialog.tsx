@@ -6,6 +6,7 @@ import { useProjectStore } from '../../store/projectStore';
 import { useOpenRemoteProject } from '../../hooks/useOpenRemoteProject';
 import { invokeIpc } from '../../utils/ipc';
 import { humanizeSpeleoError } from '../../utils/speleoError';
+import { endpointsMatch } from '../../utils/speleoEndpoint';
 import { extractFilename } from '../../utils/path';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
@@ -92,7 +93,7 @@ export default function SpeleoManagedFileDialog() {
     // deployment or a restored database can hold the very same UUID, and
     // matching on the id alone would open THAT project - a different cave
     // system, under a file that says plainly which server it came from.
-    if (session?.endpoint && managed.endpoint !== session.endpoint) {
+    if (session?.endpoint && !endpointsMatch(managed.endpoint, session.endpoint)) {
       setError(
         t('speleodb.managedFile.notOnAccount', { name: managed.projectName }) +
           ` ${t('speleodb.managedFile.endpointMismatch', { endpoint: managed.endpoint })}`

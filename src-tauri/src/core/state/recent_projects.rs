@@ -287,6 +287,7 @@ impl AppState {
         // ITSELF is the one case that does not get referent identity - the removal
         // leaves the referent alive, so tearing down a session opened through it
         // would be a teardown for nothing. See `names_the_deleted_file` above.)
+        let mut cleared_claim = None;
         let (session_closed, held_lock) = {
             let mut open = self.project.lock().unwrap_or_else(|e| e.into_inner());
             // A never-saved project has no `file_path` and so can never be the file
@@ -335,9 +336,15 @@ impl AppState {
                 // `speleodb_release_unless_reclaimed`. Clearing here is also what
                 // the old post-release clear did, just moved to where it cannot be
                 // confused with someone else's record (F8).
-                if let Some(p) = &held_lock {
-                    self.speleodb_forget_lock_acquired_for(&p.project_id);
-                }
+                // Kept, not dropped: nothing has been destroyed yet, and the
+                // trash below can still fail. A claim cleared over a file that
+                // survived is a mutex left held with no local pointer to it -
+                // the session is closed, so the poll's catch-alls never see it,
+                // and the no-project janitor has nothing to retry. See the
+                // trash-failure return, which puts it back.
+                cleared_claim = held_lock
+                    .as_ref()
+                    .and_then(|p| self.speleodb_forget_lock_acquired_for(&p.project_id));
                 tracing::info!(
                     path = ?path,
                     purpose = "release the live handle before deleting the file",
@@ -401,6 +408,13 @@ impl AppState {
         // exactly "there is an entry" versus "there is provably nothing".
         if entry.is_ok() {
             if let Err(e) = send_to_trash(&path) {
+                // Nothing was destroyed, so the lock is still ours and still
+                // guarding a project that is still there. Put the claim back -
+                // without it the mutex has no local pointer at all: this call
+                // closed the session, so the poll's catch-alls will never run
+                // over it, and the deferred release below is not reached from
+                // here either.
+                self.speleodb_restore_lock_claim(cleared_claim);
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()))
                     .with_session_closed(session_closed);
             }
