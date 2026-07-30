@@ -24,16 +24,25 @@ Stalagmight uses an atomic save strategy with a SQLite `.stalx` database file. S
 
 Steps 1-6 are the critical path for data safety. Step 7 persists undo/redo stacks synchronously to avoid race conditions with concurrent readers.
 
+For a SpeleoDB-managed project given an explicit destination (Save a Copy, see
+below), the pipeline diverges after step 5: the copy is written and renamed into
+place, recorded in Recent Projects, and the function returns with
+`CommandResult.unlinked_copy_path` set - steps 6, 8 and 9 are skipped on
+purpose, because the session stays on the managed file.
+
 ### Frontend (`saveProject` in `projectStore.ts`)
 
 ```
 1. invoke('save_project', { path })
-2. If saved_path in result, update project.file_path in store
-3. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
-4. Set isDirty: false
+2. If unlinked_copy_path in result: toast the copy's location and stop - the
+   open project was NOT saved (a detached copy was written elsewhere), so
+   file_path and isDirty are left untouched
+3. If saved_path in result, update project.file_path in store
+4. refreshUndoState() - lightweight, just fetches can_undo/can_redo booleans
+5. Set isDirty: false
 ```
 
-The frontend does **not** call `refreshProjectState()` after save. Save doesn't change any computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`.
+The frontend does **not** call `refreshProjectState()` after save. Save doesn't change any computed data (stations, stats, warnings), so recomputing everything would be wasted work. The only state that changes is `file_path` (on first save or save-as), which the backend returns via `CommandResult.saved_path`. When the save produced a detached copy instead (see Save a Copy below), the path comes back in `unlinked_copy_path` and `saved_path` is absent.
 
 ## Atomic Save (Temp File + Rename)
 
@@ -44,6 +53,31 @@ All saves use a temp file with atomic rename to prevent data loss on crash or po
 3. On failure: delete `file.stalx.tmp`, original file untouched
 
 If a leftover `.stalx.tmp` file exists from a previous failed save, it is removed before starting.
+
+## Save a Copy (SpeleoDB-managed projects)
+
+A project carrying a `speleo_link` row lives at exactly one usable path: the
+pull cache (`<cache>/speleodb/<project_id>/project.stalx` - see
+`core/state/speleodb_foreign.rs` for the invariant). Save As on such a project
+therefore does not relocate the session; it writes a detached copy:
+
+- The copy carries display settings, resolved warnings and the undo/redo
+  stacks, but NOT the `speleo_link` row - it is a plain unmanaged project.
+- The session stays on the managed file: `project.file_path`, the database
+  handle and the dirty state are untouched. The backend reports the copy via
+  `CommandResult.unlinked_copy_path` and deliberately leaves `saved_path`
+  unset so the frontend cannot re-point itself at the copy.
+- The copy is added to Recent Projects.
+- Saving a copy onto the managed file itself (its own path, or an alias of the
+  cache path) is refused - that would strip the managed project's link in
+  place.
+- Implicit saves (Ctrl+S, auto-save, the pre-push flush) are unaffected: they
+  carry the link forward as always.
+
+Opening a linked `.stalx` from any non-canonical path is refused by
+`do_load_project_full` with a structured `SPELEODB_MANAGED` error; the frontend
+raises `SpeleoManagedFileDialog`, offering to open the managed copy from
+SpeleoDB or to remove the file's link and open it as a local project.
 
 ## Auto-Save
 
@@ -102,7 +136,7 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 
 ## CommandResult.saved_path
 
-The `save_project` backend command returns the save path as a string in `CommandResult.saved_path`. This allows the frontend to update `project.file_path` without a full state refresh.
+The `save_project` backend command returns the save path as a string in `CommandResult.saved_path`. This allows the frontend to update `project.file_path` without a full state refresh. A Save a Copy on a managed project returns `unlinked_copy_path` instead and leaves `saved_path` absent, precisely so this update cannot fire.
 
 - Present on successful saves (regular save and save-as)
 - Absent (`None`/`undefined`) on all other command results

@@ -41,10 +41,16 @@ family (`command_shot.rs`, `command_station.rs`, `command_move.rs`, ...) under
 - **Station**: Computed from shots, can be merged or set as zero datum
 
 Two things a project owns are deliberately *not* fields on `Project`. The SpeleoDB link is
-a single `speleo_link` row inside the `.stalx` (`src-tauri/src/models/speleo_link.rs`),
-snapshotted and re-applied verbatim by every save - the save writes a fresh file, so
-without that carry-forward a local save would silently un-remote the project and clear its
-un-pushed-edits bit. Named dive plans live in a sibling `<stem>.plnx` file.
+a single `speleo_link` row inside the `.stalx` (`src-tauri/src/models/speleo_link.rs`). A
+linked project is usable at exactly one path - the pull cache,
+`<cache>/speleodb/<project_id>/project.stalx` - and two seams enforce that:
+`do_load_project_full` refuses to open a linked file anywhere else
+(`core/state/speleodb_foreign.rs`), and `save_project` carries the row forward only on an
+implicit save (the save writes a fresh file, so without the carry-forward a local save
+would silently un-remote the project and clear its un-pushed-edits bit); an explicit
+destination on a linked project instead writes a detached copy WITHOUT the row and keeps
+the session on the managed file (docs/saving.md, "Save a Copy"). Named dive plans live in
+a sibling `<stem>.plnx` file.
 
 ## Subsystems
 

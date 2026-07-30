@@ -98,6 +98,17 @@ For multi-user scenarios, have the superuser provision the extra accounts (see
 above), grant them the project permission under test, and tear everything down in a
 `Drop` guard the same way.
 
+### Poking at the cache: linked files open only from their cache path
+
+A `.stalx` that carries a `speleo_link` row can only be opened from
+`<cache>/speleodb/<project_id>/project.stalx` (canonical storage - see
+`core/state/speleodb_foreign.rs`). Copy one elsewhere and the open is refused
+with the managed-file dialog, which offers exactly two ways forward: open the
+managed copy from SpeleoDB, or strip the file's link
+(`speleodb_remove_link_at`) and open it as a plain local project. To hand-craft
+a foreign-file repro, copy `<cache>/speleodb/<id>/project.stalx` to any other
+path and open it.
+
 ## Running the live tests
 
 ```bash
