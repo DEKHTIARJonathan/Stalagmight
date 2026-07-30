@@ -278,7 +278,13 @@ impl AppState {
             return;
         };
         if !self.edit_enabled() {
-            session.lock_acquired_here = None;
+            // This account's claims only. The gate is a fact about the session
+            // signed in NOW; another account's retained claim is a pointer to a
+            // mutex still held elsewhere, and dropping it strands that mutex.
+            let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+            session
+                .locks_acquired_here
+                .retain(|claim| !claim.taken_by(endpoint.as_deref(), email.as_deref()));
         }
     }
 
@@ -515,15 +521,18 @@ impl AppState {
                 let Ok(mut session) = self.speleodb_session_lock() else {
                     return;
                 };
-                let Some(claim) = session.lock_acquired_here.clone() else {
+                // Unusable ids first, whoever they belong to: one that can never
+                // be joined into a URL can never be released either, so clearing
+                // is its only safe end and nobody's later sign-in helps.
+                session.locks_acquired_here.retain(|claim| {
+                    super::speleodb::validate_project_id(&claim.project_id).is_ok()
+                });
+                // One claim per visit - the poll comes back. Any of them will do;
+                // whether it is THIS session's to release is decided below, once
+                // the account is resolved.
+                let Some(claim) = session.locks_acquired_here.first().cloned() else {
                     return;
                 };
-                if super::speleodb::validate_project_id(&claim.project_id).is_err() {
-                    // Never joined into a URL, and never releasable: clearing
-                    // is the only safe end for an unusable id.
-                    session.lock_acquired_here = None;
-                    return;
-                }
                 claim
             };
             // Session guard dropped for the token read - `active_token` takes it
@@ -535,7 +544,10 @@ impl AppState {
                 // walks this branch again WITH a token.
                 return;
             };
-            if !claim.taken_by(Some(&endpoint), self.speleodb_my_email().as_deref()) {
+            // Resolved BEFORE the session guard below is taken: the session
+            // mutex is not reentrant, and `speleodb_my_email` takes it.
+            let me = self.speleodb_my_email();
+            if !claim.taken_by(Some(&endpoint), me.as_deref()) {
                 // Signed in as somebody else, or against another deployment.
                 // This token cannot release that lock, and using it anyway
                 // would either succeed against the wrong project on the wrong
@@ -550,15 +562,14 @@ impl AppState {
                 return;
             }
             if let Ok(mut session) = self.speleodb_session_lock() {
-                // This exact record, not whatever is there - the only writer
-                // that could slip into the unguarded gap above is a clear.
-                if session
-                    .lock_acquired_here
-                    .as_ref()
-                    .is_some_and(|live| live.project_id == claim.project_id)
-                {
-                    session.lock_acquired_here = None;
-                }
+                // This exact claim - same project AND same account - not
+                // whatever is there. The only writer that could slip into the
+                // unguarded gap above is a clear, and no other account's entry
+                // is this cleanup's to touch.
+                session.locks_acquired_here.retain(|live| {
+                    live.project_id != claim.project_id
+                        || !live.taken_by(Some(&endpoint), me.as_deref())
+                });
             }
             tracing::info!(
                 project_id = %claim.project_id,
@@ -599,8 +610,14 @@ impl AppState {
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             if proj_guard.is_none() {
                 if let Ok(mut session) = self.speleodb_session_lock() {
-                    if session.lock_acquired_here.is_none() {
-                        session.lock_acquired_here = Some(claim);
+                    // Only if nothing has re-claimed this project meanwhile: a
+                    // successor's entry is newer than ours and must stand.
+                    if !session
+                        .locks_acquired_here
+                        .iter()
+                        .any(|live| live.project_id == claim.project_id)
+                    {
+                        session.locks_acquired_here.push(claim);
                     }
                 }
             }
@@ -668,6 +685,23 @@ mod tests {
         session.endpoint = Some(endpoint.to_owned());
         session.email = Some(email.to_owned());
         session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
+    }
+
+    /// Every claim still retained, whatever account it belongs to.
+    ///
+    /// The accessors deliberately answer only for the account signed in NOW
+    /// (`speleodb_lock_acquired_here`, `speleodb_acquired_here_project`), so a
+    /// claim held FOR a signed-out or different account is invisible through
+    /// them - which is the whole point, and exactly what these tests have to
+    /// look past to see that it survived.
+    fn retained_projects(state: &AppState) -> Vec<String> {
+        state
+            .speleodb_session_lock()
+            .expect("session lock")
+            .locks_acquired_here
+            .iter()
+            .map(|claim| claim.project_id.clone())
+            .collect()
     }
 
     /// Sign out, WITHOUT touching the claim - what a logout that could not run
@@ -921,11 +955,70 @@ mod tests {
         state.speleodb_note_lock_acquired(Some(ID));
         sign_out(&state);
         state.speleodb_janitor_stranded_claim();
-        assert!(
-            state
-                .speleodb_acquired_here_project()
-                .is_some_and(|held| held == ID),
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
             "signed out, the record must survive: it is the retry"
+        );
+    }
+
+    #[test]
+    fn a_new_acquisition_leaves_another_accounts_retained_claim_alone() {
+        // Round 7 (P2): a claim can outlive the session that made it - logout
+        // declines to release over un-pushed edits, and a torn-down session
+        // leaves one for the janitor - and only its own account can ever hand
+        // that mutex back. With ONE slot, signing in as somebody else and
+        // starting to edit anything overwrote the only pointer to it, and the
+        // lock was stranded until the server's own timeout.
+        let state = AppState::new().expect("state");
+        sign_in_as(&state, "http://127.0.0.1:1/", "first@example.com");
+        state.speleodb_note_lock_acquired(Some(ID));
+
+        sign_in_as(&state, "http://127.0.0.1:1/", "second@example.com");
+        state.speleodb_note_lock_acquired(Some(OTHER_ID));
+
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned(), OTHER_ID.to_owned()],
+            "the new acquisition must not evict the claim held for another account"
+        );
+        assert!(
+            state.speleodb_lock_acquired_here(OTHER_ID),
+            "the live account's own claim answers for it"
+        );
+        assert!(
+            !state.speleodb_lock_acquired_here(ID),
+            "another account's does not - it is no evidence about this session"
+        );
+        assert_eq!(
+            state.speleodb_acquired_here_project().as_deref(),
+            Some(OTHER_ID),
+            "and the unwind is only ever offered the live account's project: \
+             releasing the other one would use these credentials against a lock \
+             they have nothing to do with (round 7 P1)"
+        );
+
+        // Re-acquiring replaces this account's OWN entry rather than piling up.
+        state.speleodb_note_lock_acquired(Some(ID));
+        assert_eq!(
+            retained_projects(&state).len(),
+            2,
+            "one claim per account, not one per acquisition"
+        );
+
+        // And a release ends this account's claims without touching the other's.
+        state.speleodb_note_lock_acquired(None);
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
+            "the first account's claim survives a second account's release"
+        );
+
+        sign_out(&state);
+        assert_eq!(
+            state.speleodb_acquired_here_project(),
+            None,
+            "signed out there is no live account, so no claim is ours to unwind"
         );
     }
 
@@ -944,20 +1037,18 @@ mod tests {
         // Same person, different deployment.
         sign_in_as(&state, "http://127.0.0.1:2/", "diver@example.com");
         state.speleodb_janitor_stranded_claim();
-        assert!(
-            state
-                .speleodb_acquired_here_project()
-                .is_some_and(|held| held == ID),
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
             "a claim taken on another server is not this one's to clean up"
         );
 
         // Same deployment, different person.
         sign_in_as(&state, "http://127.0.0.1:1/", "someone.else@example.com");
         state.speleodb_janitor_stranded_claim();
-        assert!(
-            state
-                .speleodb_acquired_here_project()
-                .is_some_and(|held| held == ID),
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
             "nor is a claim taken by another account"
         );
 
@@ -966,10 +1057,9 @@ mod tests {
         // poll rather than being lost.
         sign_in_as(&state, "http://127.0.0.1:1/", "DIVER@example.com");
         state.speleodb_janitor_stranded_claim();
-        assert!(
-            state
-                .speleodb_acquired_here_project()
-                .is_some_and(|held| held == ID),
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
             "the same account under a different case is still the same account, \
              so this one tried the release and restored the claim when it failed"
         );
@@ -1285,67 +1375,95 @@ mod tests {
         // with the same words.
         let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
         let start = src
-            .find("fn speleodb_logout_drop_gates")
-            .expect("the gate-drop half of logout is present");
+            .find("fn speleodb_logout(")
+            .expect("the logout verb is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
 
         let guard = body
             .find("self.speleodb_lock_ops_guard()")
             .expect("logout must serialize with every other SpeleoDB lock operation");
-        let bump = body
-            .find("self.bump_speleodb_session()")
-            .expect("logout is a session boundary");
+        let gates = body
+            .find("self.speleodb_logout_drop_gates()")
+            .expect("logout drops the gates and releases the lock");
+        let forget = body
+            .find(".forget_reporting()")
+            .expect("logout forgets the credential");
         assert!(
-            guard < bump,
-            "the guard has to be held BEFORE the boundary is published, or a \
-             Start Editing can already be past its own checks when it lands"
+            guard < gates && gates < forget,
+            "the guard has to be taken BEFORE the gates drop and still be held \
+             when the credential goes. Round 6 scoped it to the gate half alone, \
+             which left a Start Editing free to take it the instant that half \
+             returned, read the not-yet-forgotten token, and commit an edit \
+             session for an account this call was in the middle of deleting"
+        );
+        // The gate half must NOT re-take it: the span belongs to the whole verb.
+        let gate_half = src
+            .find("fn speleodb_logout_drop_gates")
+            .expect("the gate-drop half is present");
+        let gate_body = &src[gate_half..];
+        let gate_body = &gate_body[..gate_body.find("\n    }\n").expect("fn body terminates")];
+        assert!(
+            !gate_body.contains("self.speleodb_lock_ops_guard()"),
+            "the gate half must inherit its caller's span, not open a narrower \
+             one of its own (the mutex is not reentrant either)"
+        );
+        assert!(
+            gate_body.contains("self.bump_speleodb_session()"),
+            "logout is still a session boundary"
         );
     }
 
     #[test]
     fn logout_waits_for_an_in_flight_lock_operation() {
         // The tripwire above reads the source; this one proves the exclusion is
-        // real. With the lock-ops guard held, a logout on another thread must not
-        // reach its session boundary - if it does, it is landing in the middle of
-        // exactly the span the guard exists to protect.
-        let state = AppState::new().expect("state");
-        let before = state.speleodb_session_generation();
-        let (started, has_started) = std::sync::mpsc::channel();
-        let (finished, has_finished) = std::sync::mpsc::channel();
+        // real, over the WHOLE verb rather than its gate half. With the lock-ops
+        // guard held, a logout on another thread must not reach its session
+        // boundary - if it does, it is landing in the middle of exactly the span
+        // the guard exists to protect.
+        //
+        // `with_isolated_config` because logout writes the config (it clears the
+        // rehydrate seed); the override is process-global, so the spawned thread
+        // sees it too.
+        crate::test_helpers::with_isolated_config(|| {
+            let state = AppState::new().expect("state");
+            let before = state.speleodb_session_generation();
+            let (started, has_started) = std::sync::mpsc::channel();
+            let (finished, has_finished) = std::sync::mpsc::channel();
 
-        let lock_ops = state.speleodb_lock_ops_guard();
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                started.send(()).expect("announce the thread is running");
-                state.speleodb_drop_gates_for_tests();
-                finished.send(()).expect("announce the logout got through");
-            });
+            let lock_ops = state.speleodb_lock_ops_guard();
+            std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    started.send(()).expect("announce the thread is running");
+                    let _ = state.speleodb_logout();
+                    finished.send(()).expect("announce the logout got through");
+                });
 
-            has_started.recv().expect("the thread runs");
-            assert!(
+                has_started.recv().expect("the thread runs");
+                assert!(
+                    has_finished
+                        .recv_timeout(std::time::Duration::from_millis(250))
+                        .is_err(),
+                    "a logout must not end the session while a lock operation \
+                     holds the guard"
+                );
+                assert_eq!(
+                    state.speleodb_session_generation(),
+                    before,
+                    "and it must not have published its boundary either"
+                );
+
+                drop(lock_ops);
                 has_finished
-                    .recv_timeout(std::time::Duration::from_millis(250))
-                    .is_err(),
-                "a logout must not end the session while a lock operation holds \
-                 the guard"
-            );
-            assert_eq!(
+                    .recv_timeout(std::time::Duration::from_secs(5))
+                    .expect("the logout completes once the span ends");
+            });
+            assert_ne!(
                 state.speleodb_session_generation(),
                 before,
-                "and it must not have published its boundary either"
+                "the logout still happens - it is deferred, never dropped"
             );
-
-            drop(lock_ops);
-            has_finished
-                .recv_timeout(std::time::Duration::from_secs(5))
-                .expect("the logout completes once the span ends");
         });
-        assert_ne!(
-            state.speleodb_session_generation(),
-            before,
-            "the logout still happens - it is deferred, never dropped"
-        );
     }
 
     #[test]

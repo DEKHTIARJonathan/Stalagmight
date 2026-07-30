@@ -306,6 +306,26 @@ impl AppState {
     /// machine, which the FE surfaces so the user can retry. Unlike the 401
     /// auto-drop (`AppState::speleodb_forget`), which stays best-effort by design.
     pub(crate) fn speleodb_logout(&self) -> Result<(), SpeleoErrorDto> {
+        // ONE lock-ops span over the WHOLE logout - gates, lock release, AND the
+        // credential sweep below - because logout is a SpeleoDB lock operation
+        // (it ends an edit session and hands its mutex back) and the thing that
+        // makes it one is not finished until the token is gone
+        // (`core::state::speleodb_session`).
+        //
+        // Scoping the guard to the gate half alone left the gap this closes: a
+        // Start Editing could take the guard the instant `..._drop_gates`
+        // returned, read the token that had NOT been forgotten yet, and go on to
+        // acquire and commit - reopening the edit gate for a session whose
+        // credential this call then deleted. That flow's own commit cannot see
+        // it either: the fast-forward arm commits on identity, and a logout
+        // leaves the project slot exactly where it was. The user ends up signed
+        // out with remote editing enabled over a server mutex that, with no
+        // account left to stamp a claim with, nothing is even recording.
+        //
+        // Nothing inside takes this guard again: the gate half no longer does,
+        // and the release path (`speleodb_release_held_lock_best_effort`) posts
+        // directly and touches only the session record.
+        let _lock_ops = self.speleodb_lock_ops_guard();
         self.speleodb_logout_drop_gates();
 
         // Drop the session AND the persisted rehydrate seed FIRST, then report. The
@@ -342,31 +362,15 @@ impl AppState {
     /// remote link); a read-only open or a local project holds none. The gates are
     /// dropped independently of whether the token still resolves - a logged-out
     /// session must not keep editing a project it can never push.
+    ///
+    /// **The caller must hold `speleodb_lock_ops`**, and hold it until the
+    /// credential is gone. Logout is a SpeleoDB lock operation - it ends an edit
+    /// session and hands its mutex back - and being unsynchronized is what let it
+    /// land INSIDE a Start Editing, between that flow's token read and its
+    /// commit. The guard lives in [`Self::speleodb_logout`] rather than here
+    /// because the span has to outlast this function: see there for what a
+    /// gate-half-only span left open.
     fn speleodb_logout_drop_gates(&self) {
-        // Serialized against every other SpeleoDB lock operation, because that is
-        // what this is: logout ends an edit session and hands its server mutex
-        // back, alongside the acquire span and the captured releases that already
-        // hold this guard (`core::state::speleodb_session`). It was the last lock
-        // op running unsynchronized, and being unsynchronized is what let it land
-        // INSIDE a Start Editing - between that flow's token read and its commit.
-        //
-        // Which mattered most to the fast-forward arm, the one arm that commits on
-        // identity alone: its own reload is a session boundary, so it cannot
-        // compare generations, and identity sees every OTHER boundary (they all
-        // change the open project) but not this one - a logout leaves the slot
-        // exactly where it was. So a logout landing after the reload passed the
-        // identity check, and the commit reopened the edit gate, possibly
-        // recording an acquisition, for a user who was now signed out - editing a
-        // remote project whose mutex this process still held and could no longer
-        // push to. Holding this guard is what makes that interleaving impossible:
-        // a logout now runs strictly before such a flow (whose token read then
-        // fails) or strictly after its commit (and shuts the gate it just opened,
-        // releasing the lock on the way).
-        //
-        // Nothing below takes this guard again: the release path
-        // (`speleodb_release_held_lock_best_effort`) posts directly and touches
-        // only the session record.
-        let _lock_ops = self.speleodb_lock_ops_guard();
         // A session boundary even though the project slot never moves (footgun
         // 5.8): the token an in-flight Start Editing would commit a claim over is
         // being forgotten, so the commit guard must see this. Bumped under a brief
@@ -454,21 +458,10 @@ fn logout_residue_error(
     ))))
 }
 
-/// Nothing below this line is production code. The `speleodb*` source scans
-/// (`tests_support::speleodb_prod_sources`) take everything before the FIRST
-/// `#[cfg(test)]` as the production region, so a test-only item above this point
-/// silently empties this file's half of every scan built on it.
-#[cfg(test)]
-impl AppState {
-    /// [`AppState::speleodb_logout_drop_gates`] for the sibling test module that
-    /// proves it waits on the lock-ops guard (`speleodb_session`). The function
-    /// itself stays private: logout's gate half has exactly one production
-    /// caller, and this hands out no more reach than that caller has.
-    pub(super) fn speleodb_drop_gates_for_tests(&self) {
-        self.speleodb_logout_drop_gates();
-    }
-}
-
+// Nothing below this line is production code. The `speleodb*` source scans
+// (`tests_support::speleodb_prod_sources`) take everything before the FIRST
+// `#[cfg(test)]` as the production region, so a test-only item above this point
+// silently empties this file's half of every scan built on it.
 #[cfg(test)]
 #[expect(
     clippy::expect_used,

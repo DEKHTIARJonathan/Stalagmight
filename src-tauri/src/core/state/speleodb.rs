@@ -50,30 +50,45 @@ pub(crate) struct SpeleoDbSession {
     /// rehydration runs (whether it found a token or not), so an empty/failed
     /// `load()` doesn't re-hit the keychain on every authed call.
     rehydrate_attempted: bool,
-    /// The project whose write lock THIS process took and is still editing under,
-    /// if any: the acquisition provenance the authorship shortcut in
-    /// [`AppState::speleodb_remote_state`] hangs on. Deliberately process-local and
-    /// never persisted - a lock left over from an earlier run, or one held by a
-    /// sibling session on the same account, is no evidence that THIS process pushed
-    /// anything.
+    /// Every write lock THIS process took and has not handed back: the acquisition
+    /// provenance the authorship shortcut in [`AppState::speleodb_remote_state`]
+    /// hangs on. Deliberately process-local and never persisted - a lock left over
+    /// from an earlier run, or one held by a sibling session on the same account,
+    /// is no evidence that THIS process pushed anything.
+    ///
+    /// A LIST, not a slot, and the difference is a stranded lock. A claim can
+    /// outlive the session that made it (logout declines to release over un-pushed
+    /// edits; a teardown leaves one behind for the janitor) and can only be
+    /// released by the account that took it, so it has to survive until that
+    /// account signs in again. With one slot, the next acquisition - possibly by a
+    /// different user, on a different project - overwrote the only pointer to that
+    /// still-held mutex, and nothing could ever hand it back. Claims are therefore
+    /// keyed by (account, project): each entry knows whose it is
+    /// ([`super::speleodb_session::LockClaim`]), and a write for one account never
+    /// disturbs another's.
     ///
     /// Read-modify-written through exactly four sites, never by a field assignment
     /// anywhere else, because each such pair has to happen under ONE session-lock
     /// acquisition - two acquisitions leave a gap a fresh acquisition can land in and
     /// be erased from (each site's doc says which gap it is closing):
-    /// [`AppState::speleodb_note_lock_acquired`] (record, or unconditional clear),
+    /// [`AppState::speleodb_note_lock_acquired`] (record, or clear this account's),
     /// `AppState::speleodb_forget_lock_acquired_if_gate_shut` (clear if the edit gate
-    /// is shut), [`AppState::speleodb_forget_lock_acquired_for`] (clear if it still
-    /// names one given project), and the stranded-claim janitor
+    /// is shut), [`AppState::speleodb_forget_lock_acquired_for`] (clear the one that
+    /// names a given project), and the stranded-claim janitor
     /// (`AppState::speleodb_janitor_stranded_claim`, which additionally holds the
     /// `project` mutex over its decision and the lock-ops mutex over its
     /// restore-on-failure, so its writes cannot cross a live session's).
+    ///
+    /// Every one of those writes is scoped to the LIVE account. Dropping another
+    /// account's claim is the one irreversible mistake available here: a claim kept
+    /// too long costs at most a redundant release the server answers idempotently,
+    /// while a claim dropped early strands a server mutex until its own timeout.
     ///
     /// `pub(super)` rather than private only because the last of those lives with the
     /// rest of the split delete release in [`super::speleodb_lock_release`], and a
     /// sibling module cannot see a private field. Nothing else in `core::state` may
     /// touch it.
-    pub(super) lock_acquired_here: Option<super::speleodb_session::LockClaim>,
+    pub(super) locks_acquired_here: Vec<super::speleodb_session::LockClaim>,
     /// [#258] Which dump entry the user picked, per project, for THIS session.
     ///
     /// Deliberately process-local and never persisted. The chosen entry is a
@@ -910,21 +925,33 @@ impl AppState {
     /// written into, so a claim can never name an account other than the one whose
     /// token the acquire used - see [`super::speleodb_session::LockClaim`] for why
     /// a bare project id was not enough.
+    ///
+    /// Writes only THIS account's entry, in both directions. `Some` replaces it;
+    /// `None` clears it, which is what the releases below want - they hand back
+    /// "the lock of the project this process could be editing under", so ending
+    /// every claim of the signed-in account matches what they did. Another
+    /// account's retained claim is untouched either way: it is not theirs to drop,
+    /// and it is the only pointer to a mutex still held elsewhere.
     pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
-        let claim = project_id
-            .zip(session.endpoint.clone())
-            .zip(session.email.clone());
+        let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        session
+            .locks_acquired_here
+            .retain(|claim| !claim.taken_by(endpoint.as_deref(), email.as_deref()));
         // No account to stamp it with (a logout raced us, or a caller reached here
         // without a token) means no claim: one that cannot say whose it is can
         // never be released and must never license the authorship shortcut. Same
         // direction as the poisoned-lock case above - it costs the shortcut rather
         // than granting one.
-        session.lock_acquired_here = claim.map(|((project_id, endpoint), email)| {
-            super::speleodb_session::LockClaim::taken(project_id, endpoint, email)
-        });
+        if let Some(((project_id, endpoint), email)) = project_id.zip(endpoint).zip(email) {
+            session
+                .locks_acquired_here
+                .push(super::speleodb_session::LockClaim::taken(
+                    project_id, endpoint, email,
+                ));
+        }
     }
 
     /// Whether THIS process took `project_id`'s write lock, is still editing under
@@ -936,23 +963,31 @@ impl AppState {
     /// lock ours, and it must not license the authorship shortcut over their push.
     pub(super) fn speleodb_lock_acquired_here(&self, project_id: &str) -> bool {
         self.speleodb_session_lock().is_ok_and(|session| {
-            session.lock_acquired_here.as_ref().is_some_and(|claim| {
+            session.locks_acquired_here.iter().any(|claim| {
                 claim.project_id == project_id
                     && claim.taken_by(session.endpoint.as_deref(), session.email.as_deref())
             })
         })
     }
 
-    /// WHICH project this process took a lock on, if it took one and is still editing
-    /// under it.
+    /// WHICH project this process took a lock on, if it took one AS THE ACCOUNT
+    /// CURRENTLY SIGNED IN and is still editing under it.
     ///
     /// The id half of [`Self::speleodb_lock_acquired_here`], for the one caller that
-    /// needs to unwind an acquisition WITHOUT already knowing what got acquired.
+    /// needs to unwind an acquisition WITHOUT already knowing what got acquired -
+    /// and it carries that helper's account test for the same reason the janitor
+    /// does. `speleodb_release_lock_acquired_here` releases with whatever
+    /// credentials are signed in NOW, so handing it a previous account's project id
+    /// posts that id to the wrong server or under the wrong user: an idempotent
+    /// success then clears a claim whose mutex was never freed, and on the same
+    /// deployment the same UUID can have a live lock released out from under
+    /// whoever is actually editing it.
     pub(super) fn speleodb_acquired_here_project(&self) -> Option<String> {
         let session = self.speleodb_session_lock().ok()?;
         session
-            .lock_acquired_here
-            .as_ref()
+            .locks_acquired_here
+            .iter()
+            .find(|claim| claim.taken_by(session.endpoint.as_deref(), session.email.as_deref()))
             .map(|claim| claim.project_id.clone())
     }
 
@@ -4032,7 +4067,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store,
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6007,7 +6042,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6093,7 +6128,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store,
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -6889,7 +6924,7 @@ mod tests {
             email: None,
             token_store: TokenStore::from_stores(keychain, plaintext),
             rehydrate_attempted: false,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         }
@@ -7264,7 +7299,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7280,7 +7315,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_stores(Box::new(InMemoryStore::new()), None),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7294,7 +7329,7 @@ mod tests {
             email: None,
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7308,7 +7343,7 @@ mod tests {
             email: Some("u@x".to_owned()),
             token_store: TokenStore::from_in_memory_token("tok-1"),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };
@@ -7423,7 +7458,7 @@ mod tests {
             email: Some(email.to_owned()),
             token_store: TokenStore::from_in_memory_token(token),
             rehydrate_attempted: true,
-            lock_acquired_here: None,
+            locks_acquired_here: Vec::new(),
             chosen_dump_entries: std::collections::HashMap::new(),
             offered_dump_at: std::collections::HashMap::new(),
         };

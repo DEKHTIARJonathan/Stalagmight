@@ -267,16 +267,15 @@ impl AppState {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
-        // On the project id alone, deliberately: a CLEAR is safe under any
-        // account (it costs the shortcut, never grants one), and the claim being
-        // dropped here is one this very flow decided to release.
-        if session
-            .lock_acquired_here
-            .as_ref()
-            .is_some_and(|claim| claim.project_id == project_id)
-        {
-            session.lock_acquired_here = None;
-        }
+        // The live account's claim on that project, and only that one. The id is
+        // what closes this function's race (see above); the account is what keeps
+        // the clear from reaching a claim some OTHER account is still owed a
+        // release for - every caller here released with the credentials signed in
+        // now, so those are the only claims it can have ended.
+        let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        session.locks_acquired_here.retain(|claim| {
+            claim.project_id != project_id || !claim.taken_by(endpoint.as_deref(), email.as_deref())
+        });
     }
 
     /// Run the network half of a release for params captured EARLIER, and REPORT the
