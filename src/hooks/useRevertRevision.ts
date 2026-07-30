@@ -229,10 +229,11 @@ export function useRevertRevision() {
       // cost one. Discovering the ambiguity inside the restore meant taking the
       // lock, failing, handing it back to ask, and re-taking it - all visible.
       //
-      // Skipped once `entryPath` is set, because that IS the answer. The probe takes
-      // nothing, touches no cache, never reports its own failures, and does not even
-      // download when this session already settled the question - which it usually
-      // has, since opening the project settles it and opening takes no lock.
+      // Skipped once `entryPath` is set, because that IS the answer. The probe takes no
+      // lock, touches no cache and never reports its own failures - but it DOES always
+      // download. It used to skip that when the session held an answer; that answer was
+      // about the tip while this asks about `hexsha`, so the short-circuit was answering
+      // a different question than the one put to it.
       if (!entryPath) {
         const candidates = await invokeIpc<SpeleoDumpCandidate[] | null>(
           'speleodb_dump_candidates',

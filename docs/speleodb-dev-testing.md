@@ -327,9 +327,13 @@ suffix, never the hard-coded `misc/project.stalx` path, per the verified contrac
 
 ## Adopting a `.tml`-only project (C2, #214)
 
-When a SpeleoDB project's dump holds an `ariane.tml` but **no `.stalx`**, opening
-it routes to the one-time adoption bootstrap (the single sanctioned server-`.tml`
-read; never an ongoing reconcile). `speleodb_open_project` surfaces the typed
+When a SpeleoDB project's dump holds **exactly one** `ariane.tml` and **no
+`.stalx`**, opening it routes to the one-time adoption bootstrap (the single
+sanctioned server-`.tml` read; never an ongoing reconcile). Two or more
+`ariane.tml` is an *ambiguity* rather than an adoption (#258): nothing in the
+archive says which file is the project, so it routes to the dump picker, as more
+than one `.stalx` does. The verbs that can neither ask nor replay an answer -
+Start editing, Update, Take remote - refuse with directions instead. `speleodb_open_project` surfaces the typed
 `SpeleoDbAction::Adopt` (not a hard error); the browser then offers a confirm
 dialog, and on confirm `speleodb_adopt_ariane` downloads the dump, imports the
 `ariane.tml` through the normal TML importer (`include_excluded=false`,

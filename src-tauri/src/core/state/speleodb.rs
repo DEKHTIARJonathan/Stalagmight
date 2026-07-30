@@ -69,7 +69,7 @@ pub(crate) struct SpeleoDbSession {
     /// without this a user who resolved the picker at open time would meet a dead
     /// end the moment they tried to edit - the very thing the picker exists to
     /// remove. A miss falls back to failing closed, which is safe: it never guesses.
-    chosen_dump_entries: std::collections::HashMap<String, DumpChoice>,
+    chosen_dump_entries: std::collections::HashMap<(String, String), String>,
     /// [#258] Which revision this project's candidate list was last OFFERED for.
     ///
     /// The sibling of `chosen_dump_entries`, and it closes that field's blind spot.
@@ -87,29 +87,26 @@ pub(crate) struct SpeleoDbSession {
     offered_dump_at: std::collections::HashMap<String, String>,
 }
 
-/// [#258] A dump-entry choice, and the revision it was an answer about.
+/// [#258] Why the remembered dump choices are keyed by REVISION as well as project.
 ///
-/// The revision is half the answer, not decoration. A push uploads under the
-/// server's canonical wire name and leaves every other `.stalx` in the tree alone,
-/// so a choice that named any OTHER entry describes pre-push bytes the moment a
-/// revision lands - and it does not matter whose push landed it. Ours is already
-/// handled ([`AppState::speleodb_revision_landed`]); a collaborator's was not, and
-/// that is the dangerous half, because their work is what the stale entry would
-/// replace. The extract would hand back the old file while BASE was stamped at the
-/// new tip, which leaves the copy looking current, so the next push overwrites their
-/// revision with no divergence to stop it.
+/// The revision is half the answer, not decoration. A push uploads under the server's
+/// canonical wire name and leaves every other `.stalx` in the tree alone, so a choice
+/// that named any OTHER entry describes pre-push bytes the moment a revision lands -
+/// and it does not matter whose push landed it. Ours is handled by
+/// [`AppState::speleodb_revision_landed`]; a collaborator's was not, and that is the
+/// dangerous half, because their work is what the stale entry would replace.
 ///
-/// Keyed by revision rather than rebound to the target, because rebinding is not
-/// available: the upload response carries the commit sha and the project, never the
-/// stored path. Re-asking costs one more question, and only for someone whose
+/// It lived in the VALUE first, one slot per project, and that quietly broke the
+/// documented "a View is a non-destructive peek" contract: answering a viewed
+/// revision's picker evicted the tip's answer, so the next Update fast-forwarded,
+/// found the recall dated elsewhere, and - having no picker of its own - dead-ended on
+/// "re-open the project". In the key the two answers coexist, and a choice can no
+/// longer be dated wrongly because there is nowhere to put an undated one.
+///
+/// Keyed by revision rather than rebound to the upload target, because rebinding is
+/// not available: the upload response carries the commit sha and the project, never
+/// the stored path. Re-asking costs one more question, and only for someone whose
 /// project is ambiguous at all.
-#[derive(Debug, Clone)]
-struct DumpChoice {
-    /// The entry path within the dump the user picked.
-    entry: String,
-    /// The revision the dump was fetched at when they picked it.
-    at: String,
-}
 
 /// [#258] Which revision a dump being classified came from, as far as the caller can
 /// establish - the yardstick a [`DumpChoice`] is measured against.
@@ -970,13 +967,9 @@ impl AppState {
     ) {
         let DumpAt::Revision(sha) = at else { return };
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session.chosen_dump_entries.insert(
-                project_id.to_owned(),
-                DumpChoice {
-                    entry: entry.to_owned(),
-                    at: sha.to_owned(),
-                },
-            );
+            session
+                .chosen_dump_entries
+                .insert((project_id.to_owned(), sha.to_owned()), entry.to_owned());
         }
     }
 
@@ -1007,9 +1000,8 @@ impl AppState {
         let session = self.speleodb_session_lock().ok()?;
         session
             .chosen_dump_entries
-            .get(project_id)
-            .filter(|choice| choice.at == sha)
-            .map(|choice| choice.entry.clone())
+            .get(&(project_id.to_owned(), sha.to_owned()))
+            .cloned()
     }
 
     /// [#258] Record that this project's candidate list was offered for `at`.
@@ -1090,7 +1082,11 @@ impl AppState {
     /// the point the staleness is caused rather than deferred to whoever reads next.
     pub(super) fn speleodb_forget_dump_entry(&self, project_id: &str) {
         if let Ok(mut session) = self.speleodb_session_lock() {
-            session.chosen_dump_entries.remove(project_id);
+            // EVERY revision's answer for this project, not one slot: a landing makes
+            // any non-canonical pick stale whichever tree it was about.
+            session
+                .chosen_dump_entries
+                .retain(|(project, _), _| project != project_id);
         }
     }
 

@@ -141,10 +141,14 @@ pub async fn speleodb_open_project_discarding_local(
 /// survey?" question BEFORE acquiring, instead of taking the lock, failing, handing
 /// it back to ask, and re-taking it.
 ///
-/// Returns the candidates when there is a real choice to make, and `null` otherwise -
-/// including when the session already knows the answer, in which case it does not
-/// download at all. Advisory: it never reports its own failures, so the call that
-/// follows stays the one authoritative place a problem is surfaced.
+/// Returns the candidates when there is a real choice to make, and `null` otherwise.
+/// It ALWAYS downloads: it used to skip that when the session held an answer, but the
+/// answer it held was about a different tree than the one being asked about, so the
+/// short-circuit was answering the wrong question. The recall is consulted inside the
+/// resolver instead, which honours it only for the revision it belongs to.
+///
+/// Advisory: it never reports its own failures, so the call that follows stays the one
+/// authoritative place a problem is surfaced.
 #[tauri::command]
 pub async fn speleodb_dump_candidates(
     app: AppHandle,

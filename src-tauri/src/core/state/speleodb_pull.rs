@@ -433,10 +433,15 @@ impl AppState {
         };
         // Through the shared resolver, not the bare one, so the probe classifies and
         // maps errors exactly as the flow it is predicting - including whether the
-        // session's answer applies to the revision being asked about, which is the
-        // whole reason the short-circuit above is gone. The resolver's recording side
-        // effect stays inert: a probe passes no `chosen`, so there is nothing to
-        // record - it is answering "would this ask?", which is not itself an answer.
+        // session's answer applies to the revision being asked about, which is the whole
+        // reason the short-circuit above is gone.
+        //
+        // ONE of the resolver's two session side effects is inert here and the other is
+        // load-bearing. Nothing is remembered, because a probe passes no `chosen` and
+        // "would this ask?" is not itself an answer. But an ambiguity it reports DOES
+        // record the offer, and must: the reply arrives at the restore through a
+        // separate call that resolves the revision again, and the offer is the only
+        // thing that tells an answer to this question from an answer to another.
         //
         // The Ariane route has to match the flow being predicted, or the probe would
         // advertise a picker the real call then refuses: at a `hexsha` this predicts
@@ -1709,6 +1714,50 @@ mod tests {
             "both ambiguities adoption reports - the Ariane set, and the `.stalx` set \
              the frontend routes by kind to the OPEN verb - must record the revision \
              they describe, or the reply has nothing to be measured against"
+        );
+    }
+
+    /// [#258 review] A View's answer must not evict the tip's. `speleodb_revisions`
+    /// promises a View is "a non-destructive peek... a later Update fast-forwards
+    /// straight back to the latest", and with one slot per project that was false the
+    /// moment the viewed revision was ambiguous too: answering its picker overwrote the
+    /// tip's answer, the next Update fast-forwarded, found the recall dated elsewhere,
+    /// and - having no picker of its own - dead-ended on "re-open the project".
+    #[test]
+    fn answering_a_viewed_revisions_picker_leaves_the_tip_answer_standing() {
+        let state = AppState::new().expect("state");
+        let project = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+
+        state.speleodb_remember_dump_entry(project, "project.stalx", DumpAt::Revision(TIP));
+        // The View is a different tree, so it is a different question and gets its own
+        // answer - which used to land in the same slot.
+        state.speleodb_remember_dump_entry(project, "backup/old.stalx", DumpAt::Revision(NEXT));
+
+        assert_eq!(
+            state
+                .speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP))
+                .as_deref(),
+            Some("project.stalx"),
+            "the tip's answer must survive a View, or Update cannot fast-forward back"
+        );
+        assert_eq!(
+            state
+                .speleodb_recalled_dump_entry(project, DumpAt::Revision(NEXT))
+                .as_deref(),
+            Some("backup/old.stalx"),
+            "and the View keeps its own"
+        );
+
+        // A landing retires every revision's answer for the project, not one slot: a
+        // non-canonical pick is stale whichever tree it was about.
+        state.speleodb_forget_dump_entry(project);
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(TIP)),
+            None
+        );
+        assert_eq!(
+            state.speleodb_recalled_dump_entry(project, DumpAt::Revision(NEXT)),
+            None
         );
     }
 
