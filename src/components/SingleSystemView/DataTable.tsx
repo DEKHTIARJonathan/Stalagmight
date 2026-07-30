@@ -709,13 +709,20 @@ export default function DataTable({ sections }: DataTableProps) {
     const stationWidths = panelsConfig.data_table_station_column_widths;
     setShotColumnWidths(shotWidths);
     setStationColumnWidths(stationWidths);
+    // Both hidden lists are sorted here because the save snapshot below sorts them,
+    // and this string is compared against that one verbatim. Storing the config's own
+    // order made the two differ whenever the persisted list was not already sorted -
+    // the station default `['_x','_y','_lat','_long']` is not - so merely OPENING the
+    // data table scheduled a save of state the user never touched. Pre-existing (the
+    // widths entries below always sorted via stableWidths); it stayed invisible until
+    // a test asserted "no save yet" and lost the race to the 500ms debounce.
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
-      panelsConfig.data_table_shot_hidden_columns,
+      [...panelsConfig.data_table_shot_hidden_columns].sort(),
       azimuth,
       inclination,
       panelsConfig.data_table_station_column_order,
-      stationHidden,
+      [...stationHidden].sort(),
       stableWidths(shotWidths),
       stableWidths(stationWidths),
     ]);

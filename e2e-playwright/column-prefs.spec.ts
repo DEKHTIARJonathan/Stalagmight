@@ -123,10 +123,23 @@ test.describe('Data table column preferences', () => {
     await openDataTable(page);
   });
 
-  test('eye-menu toggles coalesce into one debounced update_data_table_view call', async ({ page }) => {
-    // The init from config must not re-save itself.
+  test('opening the data table saves nothing', async ({ page }) => {
+    // Seeding state from config must not look like a change and schedule a write.
+    // Deliberately waits out the 500ms debounce instead of sampling immediately: the
+    // bug this guards was a snapshot mismatch that fired ~500ms after mount, so an
+    // instantaneous check passes whether or not it is present. The mismatch came from
+    // comparing a sorted snapshot against the config's own unsorted order, and the
+    // station default `['_x','_y','_lat','_long']` is unsorted, so this fired on every
+    // open until DataTable's init sorted both hidden lists.
+    await page.waitForTimeout(900);
     expect(await getViewCalls(page)).toHaveLength(0);
+  });
 
+  test('eye-menu toggles coalesce into one debounced update_data_table_view call', async ({ page }) => {
+    // NB no "zero calls yet" assertion mid-gesture. That is a wall-clock race against
+    // the 500ms debounce and it lost under parallel load; the single-call assertion
+    // after settling proves the coalescing claim without racing anything. The sibling
+    // reorder test records the same lesson.
     await page.getByTestId('data-table-columns-menu').click();
     const dropdown = page.getByTestId('data-table-columns-dropdown');
     await expect(dropdown).toBeVisible();
