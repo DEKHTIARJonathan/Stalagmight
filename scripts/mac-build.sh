@@ -80,11 +80,35 @@ elif [[ -x "$HOME/.homebrew/bin/brew" ]]; then
   eval "$("$HOME/.homebrew/bin/brew" shellenv)"
 fi
 
-# If node@22 was installed via Homebrew, ensure its bin is on PATH
+# If the pinned node@<major> was installed via Homebrew, ensure its bin is on
+# PATH. The major comes from .nvmrc, the same file CI selects node from, so this
+# cannot drift behind a toolchain bump.
 if command -v brew &>/dev/null; then
-  NODE22_PREFIX="$(brew --prefix node@22 2>/dev/null || true)"
-  if [[ -n "$NODE22_PREFIX" && -d "$NODE22_PREFIX/bin" ]]; then
-    export PATH="$NODE22_PREFIX/bin:$PATH"
+  # Leading component only, tolerating a `v` prefix and a full semver; stripping
+  # every non-digit would turn "24.1.0" into "24100" and silently skip the PATH
+  # override. Guarded on the file existing so a stray shell diagnostic cannot leak.
+  NODE_MAJOR=""
+  if [[ -f "$PROJECT_DIR/.nvmrc" ]]; then
+    NODE_MAJOR="$(tr -d 'v \t\r\n' < "$PROJECT_DIR/.nvmrc" | cut -d. -f1)"
+  fi
+  if [[ "$NODE_MAJOR" =~ ^[0-9]+$ ]]; then
+    NODE_PREFIX="$(brew --prefix "node@$NODE_MAJOR" 2>/dev/null || true)"
+    if [[ -n "$NODE_PREFIX" && -d "$NODE_PREFIX/bin" ]]; then
+      export PATH="$NODE_PREFIX/bin:$PATH"
+    fi
+  fi
+fi
+
+# Say something when the node that will actually build is not the pinned one.
+# Every branch above can legitimately no-op (no brew, no node@<major> formula -
+# note Homebrew only ships even majors, so an odd pin has no keg at all), and
+# silently building a release artifact on the wrong runtime is worth a warning even
+# though it is usually fine. Advisory: this script must still work for anyone
+# managing node with nvm/asdf instead.
+if [[ "${NODE_MAJOR:-}" =~ ^[0-9]+$ ]] && command -v node &>/dev/null; then
+  ACTUAL_MAJOR="$(node --version | tr -d 'v' | cut -d. -f1)"
+  if [[ "$ACTUAL_MAJOR" != "$NODE_MAJOR" ]]; then
+    warn "node on PATH is v$ACTUAL_MAJOR but .nvmrc pins $NODE_MAJOR - building with v$ACTUAL_MAJOR"
   fi
 fi
 

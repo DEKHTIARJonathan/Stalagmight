@@ -91,10 +91,11 @@ git push origin master && git push origin --tags
 2. Computes new version (major/minor/patch or explicit X.Y.Z)
 3. Verifies no uncommitted changes (except CHANGELOG.md)
 4. Verifies `## [Unreleased]` section is non-empty
-5. Updates version in 3 of the 4 files that carry it (see [Version locations](#version-locations) - `src-tauri/Cargo.lock` is not one of them):
+5. Updates version in all 4 files that carry it (see [Version locations](#version-locations)):
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - `src-tauri/Cargo.lock` (this crate's stanza only)
 6. Moves `[Unreleased]` content under a new `## [X.Y.Z] - YYYY-MM-DD` header
 7. Commits: `chore: release vX.Y.Z`
 8. Tags: `vX.Y.Z`
@@ -113,7 +114,7 @@ git push origin master && git push origin --tags
 
 - **Trigger**: push to master, pull requests to master
 - **Steps**: TypeScript check, Rust tests
-- Installs: system libs, Rust toolchain, Node 22, pnpm 9
+- Installs: system libs, Rust toolchain, Node 24 (from `.nvmrc`), pnpm 9
 
 ### Release (`.github/workflows/release.yml`)
 
@@ -262,10 +263,12 @@ before it can be handed to anyone.
 ```
 
 Covers both scripts. For `release.sh` it clones the repo to a temp directory and
-drives the real script through a normal bump plus four refusal cases
-(re-releasing the current version, an existing tag, a drifted version-string
-format, an empty `[Unreleased]`), asserting each time that the tree is left clean
-and nothing was tagged. For `release-notes.sh` it runs the real script against a
+drives the real script through a normal bump, a `--no-tag` bump, and seven refusal
+or recovery cases (re-releasing the current version, an existing tag, a drifted
+version-string format, an empty `[Unreleased]`, a `Cargo.lock` already out of step,
+a `Cargo.lock` whose stanza is missing entirely, and a failing `$EDITOR`), plus a
+CRLF checkout, asserting each time that the tree is left clean and nothing was
+tagged. For `release-notes.sh` it runs the real script against a
 fixture changelog and checks the section each tag shape resolves to, the
 candidate banner, and that an empty changelog still yields a usable body.
 
@@ -273,23 +276,25 @@ Run it after touching either script; it takes a few seconds and needs no network
 
 ## Version locations
 
-The version string lives in 4 tracked files. The release script updates the first
-three, **not** the fourth:
+The version string lives in 4 tracked files. `release.sh` updates all of them:
 
 | File | Field | Bumped by `release.sh`? |
 |------|-------|-------------------------|
 | `package.json` | `"version"` | yes |
 | `src-tauri/tauri.conf.json` | `"version"` | yes |
 | `src-tauri/Cargo.toml` | `version` | yes |
-| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | **no** |
+| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | yes |
 
 `Cargo.lock` records the crate's own version, and because nothing here builds with
 `cargo --locked`, a mismatch never fails a build - the next `cargo` invocation just
-rewrites the lock in place, leaving an unexplained dirty file. That is how the lock
-sat at `0.2.0` while everything else said `0.5.0`. It is synced now; teaching
-`release.sh` to keep it in step is
-[#352](https://github.com/Stalagmight/Stalagmight/issues/352). Until that lands,
-check `git status` after a bump and commit the lock with it.
+rewrites the lock in place, leaving an unexplained dirty file in a tree the release
+reported as clean. That is how the lock sat at `0.2.0` while everything else said
+`0.5.0`. `release.sh` bumps it now
+([#352](https://github.com/Stalagmight/Stalagmight/issues/352)), rewriting only the
+line after `name = "stalagmight"` - every dependency has a `version` line too, so a
+blanket substitution would rewrite the whole file. The pre-flight refuses to start
+if the lock is already out of step with `package.json`, rather than quietly bumping
+past a discrepancy worth looking at.
 
 The About dialog reads the version dynamically via `__APP_VERSION__` (injected by Vite from `package.json` at build time).
 
@@ -300,6 +305,23 @@ Stash or commit changes first. The script allows uncommitted `CHANGELOG.md` but 
 
 ### "[Unreleased] section is empty" error
 Write release notes into the `## [Unreleased]` section of `CHANGELOG.md` before running with `--no-edit`.
+
+### "Cargo.lock records stalagmight at X, but package.json says Y"
+The lock drifted out of step before the release started, so the script stops rather
+than bumping past a discrepancy worth looking at. Sync it and re-run: the simplest
+fix is any `cargo` command in `src-tauri` (`cargo metadata >/dev/null` is enough),
+which rewrites the version in place, then commit the lock. `--dry-run` reports this
+too, so it is safe to check before you start.
+
+### "Cargo.lock has N lines matching name = "stalagmight"" / "no version = line"
+A shape problem rather than a value one - the rewrite anchors on the single
+`name = "stalagmight"` stanza with its `version` on the following line. Look at
+`src-tauri/Cargo.lock` before doing anything else; nothing was modified.
+
+### `$EDITOR` exited non-zero
+The version files are reverted automatically, but `CHANGELOG.md` keeps the moved
+`[Unreleased]` content so your notes survive. Review it and re-run, or
+`git checkout -- CHANGELOG.md` to start over.
 
 ### Multi-platform builds
 Linux, macOS and Windows are all built from the tag by the `build` matrix. Each

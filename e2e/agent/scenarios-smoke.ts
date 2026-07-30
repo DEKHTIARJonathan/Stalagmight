@@ -2,7 +2,7 @@
  * Runs every stress scenario once at small iteration counts against a live app
  * session, printing pass/fail + metrics. This is the Phase 5 scenario gate:
  * proves each scenario drives the real app without throwing or tripping a fatal
- * oracle finding. Run under Node 22 (see .nvmrc):
+ * oracle finding. Run on the repo-pinned Node (`nvm use`):
  *
  *   pnpm agent:scenarios
  */

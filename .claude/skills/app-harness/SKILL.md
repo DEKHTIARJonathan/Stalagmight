@@ -11,8 +11,8 @@ a debug build, launched headless under Xvfb on this box. Every tool call is
 recorded to a JSONL action log you can later turn into a runnable replay and a
 repro report.
 
-Runtime requirement: the server must run under **Node 22** (the repo `.nvmrc`).
-On Node 23+ `app_start` fails with `UND_ERR_INVALID_ARG`; run `nvm use` first.
+Runtime: the server runs on the repo-pinned Node (`.nvmrc`, currently 24) - `nvm
+use` is enough, there is no separate harness toolchain.
 
 If the `stalagmight-app` MCP tools are not available in your session (server
 disconnected), use the file bridge instead: `pnpm agent:bridge <dir>` in the
@@ -79,7 +79,7 @@ stress loop then a full sweep:
 3. **Generate the replay**:
    `node scripts/generate-replay.mjs <sessionDir> --assert-final`
 4. **Verify it reproduces**:
-   `REPLAY_SPEC=<sessionDir>/replay.spec.ts pnpm test:e2e:replay` (Node 22).
+   `REPLAY_SPEC=<sessionDir>/replay.spec.ts pnpm test:e2e:replay`
    If it does not reproduce, the repro depends on state you did not capture -
    note that in the report.
 5. **Write the report**:

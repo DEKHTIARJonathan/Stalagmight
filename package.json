@@ -6,7 +6,7 @@
   "type": "module",
   "packageManager": "pnpm@9.15.9",
   "engines": {
-    "node": ">=22 <23"
+    "node": ">=24 <25"
   },
   "scripts": {
     "dev": "vite",
@@ -47,6 +47,7 @@
     "agent:mcp": "tsx e2e/agent/mcp/server.ts",
     "agent:bridge": "tsx e2e/agent/mcp/bridge.ts",
     "agent:mcp:smoke": "tsx e2e/agent/mcp/smoke-client.ts",
+    "agent:http-probe": "tsx e2e/agent/session-http-probe.ts",
     "agent:replay:gen": "node scripts/generate-replay.mjs",
     "agent:report": "node scripts/generate-repro-report.mjs",
     "test:e2e:replay": "wdio run wdio.replay.conf.ts"

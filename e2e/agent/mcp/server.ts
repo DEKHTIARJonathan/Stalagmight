@@ -189,7 +189,7 @@ function define<S extends z.ZodRawShape>(
 
 define(
   'app_start',
-  'Build (if stale) and launch the real Tauri app under WebDriver, returning session info. Requires Node 22.',
+  'Build (if stale) and launch the real Tauri app under WebDriver, returning session info.',
   {
     build: z.enum(['auto', 'skip', 'force']).optional(),
     headed: z.boolean().optional(),

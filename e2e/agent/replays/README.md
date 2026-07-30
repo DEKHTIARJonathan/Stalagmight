@@ -10,7 +10,7 @@ selectors/coordinates the harness captured) to reproduce a bug deterministically
 # from a session under .agent-artifacts/sessions/<id>/
 node scripts/generate-replay.mjs <sessionDir> --assert-final --out e2e/agent/replays/<name>.spec.ts
 
-# run it (Node 22)
+# run it
 REPLAY_SPEC=e2e/agent/replays/<name>.spec.ts pnpm test:e2e:replay
 ```
 

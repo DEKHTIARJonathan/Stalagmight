@@ -70,10 +70,10 @@ needs, so point your agent at it. A few expectations:
 
 ## Development setup
 
-**Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 22.x, and the
+**Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 24.x, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
 
-The toolchain is pinned - pnpm `9.15.9` (via `packageManager`) and Node `22.x`
+The toolchain is pinned - pnpm `9.15.9` (via `packageManager`) and Node `24.x`
 (via `.nvmrc`). On a fresh clone:
 
 ```bash

@@ -34,6 +34,80 @@ replace_in_file() {
   cat "$tmp" > "$file"
 }
 
+# How many stanzas in Cargo.lock name this crate. Anything but 1 means the file's
+# shape is not what the rewrite assumes, which is a different failure from the
+# recorded version being wrong - and worth a different message, since the two send
+# the operator to different places.
+#
+# The `[[:space:]]*$` tolerates a trailing `\r`: the other pre-flight patterns are
+# not end-anchored so they survive a CRLF checkout, and this one has to as well or
+# a `core.autocrlf=true` clone cannot release at all.
+lock_stanza_count() {
+  grep -c '^name = "stalagmight"[[:space:]]*$' "$PROJECT_ROOT/src-tauri/Cargo.lock" || true
+}
+
+# Print the version of the local `stalagmight` package recorded in Cargo.lock,
+# one line per matching stanza (so a caller can notice if there is more than one).
+#
+# Cargo.lock carries a `version = "..."` line for EVERY dependency, so the plain
+# pattern the other files use would match dozens of unrelated entries. The only
+# line that belongs to this crate is the one directly after its `name` line.
+lock_version() {
+  awk '
+    /^name = "stalagmight"[[:space:]]*$/ {
+      if ((getline nxt) > 0) {
+        sub(/\r$/, "", nxt)
+        if (nxt ~ /^version = "/) {
+          gsub(/^version = "|"$/, "", nxt)
+          print nxt
+        }
+      }
+    }
+  ' "$PROJECT_ROOT/src-tauri/Cargo.lock"
+}
+
+# Rewrite that same line, and fail rather than write if it is not found exactly
+# once. Cargo would fix the version itself on the next build, but only by leaving
+# an unexplained dirty Cargo.lock in a tree the release just reported as clean -
+# and a hard error for anyone who does build with `--locked`.
+#
+# Why hand-rolled awk rather than `cargo update -p stalagmight --offline`, which
+# would let Cargo own its own format: this script deliberately has no toolchain
+# dependency (no cargo, no node, no network), so it works on a machine set up only
+# to cut a release, and it stays a pure text transform that `test-release.sh` can
+# exercise in a throwaway clone in milliseconds. The cost is a second model of one
+# line of the lock format, bounded by `END { if (hits != 1) exit 3 }` writing to a
+# temp file - a shape it does not recognise aborts with the manifest untouched
+# rather than guessing. Revisit if the lock ever carries this crate's version in
+# more than one place.
+rewrite_lock_version() {
+  local new="$1" file="$PROJECT_ROOT/src-tauri/Cargo.lock" tmp="$SCRATCH/lockrewrite"
+  awk -v new="$new" '
+    /^name = "stalagmight"[[:space:]]*$/ {
+      print
+      if ((getline nxt) > 0) {
+        if (nxt ~ /^version = "/) {
+          # Keep whatever line ending the file already uses, so rewriting one line
+          # of a CRLF checkout does not leave a single stray LF behind.
+          print "version = \"" new "\"" (nxt ~ /\r$/ ? "\r" : "")
+          hits++
+        } else { print nxt }
+      }
+      next
+    }
+    { print }
+    END { if (hits != 1) exit 3 }
+  ' "$file" > "$tmp" || {
+    echo "Error: src-tauri/Cargo.lock has no single stalagmight version line. Aborting." >&2
+    return 1
+  }
+  if [ ! -s "$tmp" ]; then
+    echo "Error: rewriting Cargo.lock produced an empty file. Aborting." >&2
+    return 1
+  fi
+  cat "$tmp" > "$file"
+}
+
 # Assert a file matches a pattern on exactly one line.
 #
 # "The string is present somewhere" is too weak a check: it passes just as
@@ -120,12 +194,47 @@ CURRENT_TOML="^version = \"$CURRENT_RE\""
 NEW_JSON="\"version\": \"$NEW_RE\""
 NEW_TOML="^version = \"$NEW_RE\""
 
+# --- Pre-flight: prove all four files have the shape the rewrites assume ---
+# Checking before writing rather than after is what keeps a format drift in the
+# fourth file from leaving the first three already bumped on disk. These checks are
+# read-only, so they run BEFORE the --dry-run exit too: a drifted Cargo.lock is the
+# one condition this script most needs to report, and a dry run that printed a
+# confident "would update" for it while the real run refuses would be worse than
+# useless.
+if ! require_one_match "package.json"              "$CURRENT_JSON" "before the rewrite" \
+  || ! require_one_match "src-tauri/tauri.conf.json" "$CURRENT_JSON" "before the rewrite" \
+  || ! require_one_match "src-tauri/Cargo.toml"      "$CURRENT_TOML" "before the rewrite"; then
+  echo "The version string is not in the expected format. Nothing was modified." >&2
+  exit 1
+fi
+
+LOCK_STANZAS="$(lock_stanza_count)"
+LOCK_VERSION="$(lock_version)"
+if [ "$LOCK_STANZAS" -ne 1 ]; then
+  echo "Error: src-tauri/Cargo.lock has $LOCK_STANZAS lines matching 'name = \"stalagmight\"'," >&2
+  echo "expected exactly 1. The lock's shape is not what the rewrite assumes." >&2
+  echo "Nothing was modified." >&2
+  exit 1
+fi
+if [ -z "$LOCK_VERSION" ]; then
+  echo "Error: src-tauri/Cargo.lock has the stalagmight stanza but no 'version =' line" >&2
+  echo "directly after its 'name =' line. Nothing was modified." >&2
+  exit 1
+fi
+if [ "$LOCK_VERSION" != "$CURRENT_VERSION" ]; then
+  echo "Error: src-tauri/Cargo.lock records stalagmight at '$LOCK_VERSION'," >&2
+  echo "but package.json says '$CURRENT_VERSION'. Sync them, then re-run." >&2
+  echo "Nothing was modified." >&2
+  exit 1
+fi
+
 if [ "$DRY_RUN" = true ]; then
   echo ""
   echo "[dry-run] Would update:"
   echo "  package.json:         $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/tauri.conf.json: $CURRENT_VERSION -> $NEW_VERSION"
   echo "  src-tauri/Cargo.toml: $CURRENT_VERSION -> $NEW_VERSION"
+  echo "  src-tauri/Cargo.lock: $CURRENT_VERSION -> $NEW_VERSION"
   echo "  CHANGELOG.md:         move [Unreleased] content under v$NEW_VERSION"
   echo "[dry-run] Would commit: chore: release v$NEW_VERSION"
   echo "[dry-run] Would tag:    v$NEW_VERSION"
@@ -169,16 +278,6 @@ if [ -z "$UNRELEASED" ] && [ "$NO_EDIT" = false ]; then
   fi
 fi
 
-# --- Pre-flight: prove all three files have the shape the rewrites assume ---
-# Checking before writing rather than after is what keeps a format drift in the
-# third file from leaving the first two already bumped on disk.
-if ! require_one_match "package.json"              "$CURRENT_JSON" "before the rewrite" \
-  || ! require_one_match "src-tauri/tauri.conf.json" "$CURRENT_JSON" "before the rewrite" \
-  || ! require_one_match "src-tauri/Cargo.toml"      "$CURRENT_TOML" "before the rewrite"; then
-  echo "The version string is not in the expected format. Nothing was modified." >&2
-  exit 1
-fi
-
 # --- Update package.json ---
 replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" \
   "$PROJECT_ROOT/package.json"
@@ -191,12 +290,21 @@ replace_in_file "s/\"version\": \"$CURRENT_RE\"/\"version\": \"$NEW_VERSION\"/" 
 replace_in_file "s/^version = \"$CURRENT_RE\"/version = \"$NEW_VERSION\"/" \
   "$PROJECT_ROOT/src-tauri/Cargo.toml"
 
+# --- Update Cargo.lock (only this crate's stanza) ---
+if ! rewrite_lock_version "$NEW_VERSION"; then
+  git -C "$PROJECT_ROOT" checkout -- \
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+  echo "Reverted the version files. No commit or tag was made." >&2
+  exit 1
+fi
+
 # --- Confirm every bump landed, on exactly one line ---
 if ! require_one_match "package.json"              "$NEW_JSON" "after the rewrite" \
   || ! require_one_match "src-tauri/tauri.conf.json" "$NEW_JSON" "after the rewrite" \
-  || ! require_one_match "src-tauri/Cargo.toml"      "$NEW_TOML" "after the rewrite"; then
+  || ! require_one_match "src-tauri/Cargo.toml"      "$NEW_TOML" "after the rewrite" \
+  || [ "$(lock_version)" != "$NEW_VERSION" ]; then
   git -C "$PROJECT_ROOT" checkout -- \
-    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
   echo "Reverted the version files. No commit or tag was made." >&2
   exit 1
 fi
@@ -224,15 +332,31 @@ if ! grep -q "^## \[$NEW_RE\]" "$CHANGELOG"; then
   echo "Error: CHANGELOG.md has no '## [$NEW_VERSION]' section after the rewrite." >&2
   echo "The '## [Unreleased]' header was probably not found." >&2
   git -C "$PROJECT_ROOT" checkout -- \
-    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml
+    package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
   echo "Reverted the version files, left CHANGELOG.md alone. No commit or tag was made." >&2
   exit 1
 fi
 
 # --- Open editor for final review ---
+#
+# Under `set -e` a bare invocation here would abort the script between the last
+# rewrite and `git add`, stranding four bumped manifests with no commit, no tag and
+# no message - and the clean-tree check above then refuses the obvious re-run, so
+# the operator has to hand-revert. Vim's `:cq` and a misconfigured $EDITOR both
+# exit non-zero, so this is reachable in normal use. Revert the version files the
+# same way every other failure path does, and say what happened.
 if [ "$NO_EDIT" = false ]; then
   EDITOR="${EDITOR:-${VISUAL:-vi}}"
-  "$EDITOR" "$CHANGELOG"
+  if ! "$EDITOR" "$CHANGELOG"; then
+    git -C "$PROJECT_ROOT" checkout -- \
+      package.json src-tauri/tauri.conf.json src-tauri/Cargo.toml src-tauri/Cargo.lock
+    echo "" >&2
+    echo "Error: \$EDITOR ($EDITOR) exited non-zero. No commit or tag was made." >&2
+    echo "Reverted the version files. CHANGELOG.md is left as-is, with the" >&2
+    echo "[Unreleased] content already moved under v$NEW_VERSION - review it before" >&2
+    echo "re-running, or 'git checkout -- CHANGELOG.md' to start over." >&2
+    exit 1
+  fi
 fi
 
 # --- Commit and tag ---
@@ -240,6 +364,7 @@ git -C "$PROJECT_ROOT" add \
   package.json \
   src-tauri/tauri.conf.json \
   src-tauri/Cargo.toml \
+  src-tauri/Cargo.lock \
   CHANGELOG.md
 
 git -C "$PROJECT_ROOT" commit -m "chore: release v$NEW_VERSION"

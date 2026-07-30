@@ -11,13 +11,64 @@ replay spec and a repro report.
 For the agent-facing workflow, see the `app-harness` skill
 (`.claude/skills/app-harness/SKILL.md`). This document is the reference.
 
-## Runtime requirement: Node 22
+## Runtime: the repo-pinned Node
 
-The harness must run under the repo-pinned **Node 22** (`.nvmrc`). WebdriverIO
-9's HTTP layer fails on Node 23+ with `UND_ERR_INVALID_ARG` at `POST /session`
-(a bundled-undici vs built-in-fetch mismatch). `app_start` warns early and
-rethrows that error with guidance. Use `nvm use` (or corepack's pinned Node)
-before starting the server.
+The harness runs on whatever `.nvmrc` pins (Node 24), like the rest of the repo.
+`nvm use` is enough; there is no separate harness toolchain.
+
+This used to say the harness required Node 22 and would fail on 23+ with
+`UND_ERR_INVALID_ARG` at `POST /session`, because webdriverio built an `Agent`
+from its bundled undici and handed it to Node's built-in `fetch`, so the two
+undici majors had to agree. That mechanism is not what the code does. `webdriver`
+9.23.0 imports `fetch` from undici alongside `Agent` (`build/node.js:1614`) and
+calls that fetch (`:1986`), so on today's code they cannot disagree: the one place
+a dispatcher it did not create could reach its own `fetch` is `getGlobalDispatcher()`
+(`:2000-2005`, assigned at `:2031`), and `getDispatcher` declines any foreign
+dispatcher by testing `constructor.name` against `Agent`/`MockAgent` (`:2002-2003`).
+That guard is a string comparison, so treat this as true-of-this-version rather than
+structurally impossible. The
+global-`fetch` variant is `request/web.ts`, the browser path, which this harness
+does not use.
+
+Checked rather than assumed: driving `remote()` through a full session lifecycle
+(`POST /session` -> `GET .../window` -> `DELETE`) against a stub WebDriver server
+succeeds identically on Node 22 (built-in undici 6.21.2) and Node 24 (undici
+7.29.0). The claim also predates nothing - `webdriverio` has been `^9.23.0` since
+the harness was written, so this was never a description of a version we no
+longer ship.
+
+That probe is committed as `pnpm agent:http-probe`, so this is one command to
+re-check after a webdriverio or Node bump rather than something to re-derive. It
+runs anywhere, macOS included, because the stub replaces the driver.
+
+That probe covers only the HTTP layer, so the full stack was checked separately on
+Linux, where it actually runs. On the self-hosted runner under Node 24.18.1
+(built-in undici 7.29.0), `pnpm agent:smoke` built the debug binary, brought up
+tauri-driver plus WebKitWebDriver on an Xvfb display, drove the real app and
+passed all 13 checks - including the crash oracle (a thread panic wrote its marker
+and `PANIC` ring line while the app stayed responsive) and process-group teardown
+with both ports released. Whole job: 7 minutes, of which 4m34s was the build.
+
+That is one green run, on one Node patch, on one Linux box - enough to retire the
+claim that Node 22 was required, not enough to call every layer Node-agnostic
+forever. `session.ts` still warns (advisorily) when the running major differs from
+`.nvmrc`, because the verified envelope is only {22, 24} and `node@26` already
+exists.
+
+Reproduce with the `Agent Harness (on-demand)` workflow (`workflow_dispatch`). It
+runs on the self-hosted runner, so it consumes no *included* Actions minutes - but
+that runner also serves the merge gate, and `ci.yml`'s picker spills `check` to
+paid hosted runners whenever it is busy, so dispatching this during a merge window
+is not free in practice. The runner image carries webkit's `-dev` packages for
+`cargo test` but not the WebDriver daemon, so the job installs `webkit2gtk-driver`
+and `tauri-driver` (xvfb is usually already there) - about 40s combined.
+
+If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect `HTTP_PROXY` /
+`NO_PROXY` in the environment before the Node version, and record what actually
+fixed it here. `agent:http-probe` drops those variables for its own loopback stub
+(webdriver snapshots them at module init and would otherwise route a 127.0.0.1
+request through the proxy, then blame the driver), so a proxy-caused failure shows
+up in `app_start` rather than in the probe.
 
 ## Architecture
 
@@ -43,7 +94,7 @@ hazards over long runs.
 
 - MCP config: `.mcp.json` registers server `stalagmight-app`
   (`pnpm exec tsx e2e/agent/mcp/server.ts`). In Claude Code, `/mcp` shows it.
-- Direct scripts (all Node 22):
+- Direct scripts (all on the repo-pinned Node, `nvm use`):
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
@@ -211,7 +262,9 @@ Gitignored; the 20 newest sessions are kept.
 
 ## Troubleshooting
 
-- `app_start` fails `UND_ERR_INVALID_ARG` -> you are on Node 23+; use Node 22.
+- `app_start` fails `UND_ERR_INVALID_ARG` -> an error from webdriverio's undici
+  HTTP layer. Session creation works on Node 22 and 24, so check `HTTP_PROXY` /
+  `NO_PROXY` in the environment before blaming the Node version.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
   `build: "auto"` should have caught that before attach (see the build stamp
   below); if you land here anyway, rerun `app_start` with `build: "force"`.

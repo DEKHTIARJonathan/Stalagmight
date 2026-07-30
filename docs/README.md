@@ -69,7 +69,7 @@ in determines how you write it, and picking wrong is the most common rework.
 | [testing-recipes.md](testing-recipes.md) | Lookup reference: exact commands per tier, per-framework patterns, mock and fixture conventions, troubleshooting. |
 | [collab-stress-testing.md](collab-stress-testing.md) | Invariants, scenario matrix, adversarial inputs and the fuzz/soak harness for the collab round-trip. |
 | [speleodb-dev-testing.md](speleodb-dev-testing.md) | Testing the SpeleoDB client against a real server: env setup, env-gated live tests, the verified v2 API contract. |
-| [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Node 22. |
+| [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Runs on the repo-pinned Node. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |
 | [linting.md](linting.md) | The `cargo fmt` + clippy CI gates, the anti-AI-slop lint policy, the per-test-module `#[expect]` idiom, deferred lints. |
 | [performance.md](performance.md) | Where the time goes and how to measure it: the closure solver, frozen-shot detection, geometry reconcile, and the WebGL renderer's per-frame vs per-data-change cost. |

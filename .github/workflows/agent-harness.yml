@@ -1,0 +1,135 @@
+name: Agent Harness (on-demand)
+
+# On-demand only. The agent harness runs nowhere automatically, and it is the one
+# tier that drives the REAL app (tauri-driver + WebKitWebDriver + Xvfb), so there
+# is no other way to find out whether a toolchain change broke it.
+#
+# Deliberately version-agnostic: every step reads .nvmrc, so this stays useful at
+# the next toolchain bump. It was added for the node 22 -> 24 one (#109); that
+# story, and the result, live in docs/agent-harness.md rather than here.
+#
+# NOTE it is free only in included-minutes terms. This runner also serves the merge
+# gate, and ci.yml's picker spills `check` to paid hosted runners while it is busy,
+# so avoid dispatching during a merge window.
+
+on:
+  workflow_dispatch: {}
+
+# No cancel-in-progress: this is a manual diagnostic run to collect evidence, and
+# having a second dispatch silently kill the first is the opposite of useful.
+concurrency:
+  group: agent-harness-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  harness:
+    runs-on: [self-hosted, ubuntu-latest-local]
+    # The debug build dominates; tauri-driver and the smoke run are minutes. Well
+    # under the 6h default, which is the actual risk on a self-hosted runner.
+    timeout-minutes: 90
+    env:
+      # Same reason as ci.yml's check job: sccache cannot cache incremental
+      # compilation, so without this the runner's sccache volume buys nothing.
+      CARGO_INCREMENTAL: "0"
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      # The whole point of the run: state on the record which node executed it,
+      # so a green result cannot later be read as "probably tested on 24".
+      #
+      # Parse the major the way setup-node does, which tolerates `v24` and a full
+      # `24.1.0`. A naive `Number()` on those yields NaN, and `major !== NaN` is
+      # true for every major, so the guard would refuse every run.
+      - name: Record the runtime under test
+        run: |
+          node -e 'console.log("node", process.versions.node, "| built-in undici", process.versions.undici)'
+          node -e '
+            const fs = require("fs");
+            const raw = fs.readFileSync(".nvmrc", "utf8").trim();
+            const want = Number.parseInt(raw.replace(/^v/, "").split(".")[0], 10);
+            const running = Number.parseInt(process.versions.node.split(".")[0], 10);
+            if (!Number.isInteger(want)) {
+              console.error(`refusing: cannot read a node major from .nvmrc (${JSON.stringify(raw)})`);
+              process.exit(1);
+            }
+            console.log(`expected major from .nvmrc: ${want}`);
+            if (running !== want) {
+              console.error(`refusing: running node ${running}, .nvmrc says ${want}`);
+              process.exit(1);
+            }
+          '
+
+      # SHA-pinned to match ci.yml and release.yml. `@stable` is a mutable branch
+      # on that action, and this job runs on a persistent self-hosted machine.
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
+
+      - run: pnpm install --frozen-lockfile
+
+      # The runner image carries webkit's *-dev* packages for cargo test but not
+      # the WebDriver daemon, so webkit2gtk-driver is a real install here. xvfb is
+      # usually already present (Playwright's install-deps pulls it in); it is
+      # listed anyway so this job does not silently depend on that.
+      # The container is root; keep a sudo path in case that ever changes.
+      - name: Install harness runtime deps (WebKitWebDriver, Xvfb)
+        run: |
+          SUDO=""
+          command -v sudo >/dev/null 2>&1 && SUDO=sudo
+          $SUDO apt-get update
+          $SUDO apt-get install -y --no-install-recommends webkit2gtk-driver xvfb
+          command -v WebKitWebDriver || { echo "WebKitWebDriver missing after install"; exit 1; }
+          command -v Xvfb || { echo "Xvfb missing after install"; exit 1; }
+
+      # Version-pinned: `--locked` only honours tauri-driver's own Cargo.lock for
+      # ITS dependencies, it does not pin tauri-driver itself, so an unpinned
+      # install compiles whatever is newest on crates.io on a persistent machine.
+      # 2.0.6 is the version the first green run used.
+      - name: Install tauri-driver
+        run: |
+          cargo install tauri-driver --version 2.0.6 --locked
+          command -v tauri-driver
+
+      # Zero the counters so the post-build stats report THIS run, not lifetime
+      # totals. `|| true`: observability must never fail the job.
+      - name: sccache zero-stats
+        run: sccache --zero-stats || true
+
+      # Fast and cheap, and it isolates the layer the old rule named. If this
+      # fails the full run below cannot possibly pass, so failing here first makes
+      # the log easier to read.
+      - name: HTTP layer (stub driver)
+        run: pnpm agent:http-probe
+
+      # The real answer: build the debug app, spawn tauri-driver +
+      # WebKitWebDriver under Xvfb, attach, drive it, assert clean teardown.
+      - name: Full harness smoke (real app under WebDriver)
+        run: pnpm agent:smoke
+
+      # Whether the build was actually cached is worth knowing rather than
+      # assuming: the first green run reported no stats at all, so its 4m34s build
+      # could not be attributed either way. !cancelled() so a failed build still
+      # reports.
+      - name: sccache stats
+        if: ${{ !cancelled() }}
+        run: |
+          stats=$(sccache --show-stats 2>&1) || true
+          echo "$stats"
+          rate=$(printf '%s\n' "$stats" | grep -m1 -E 'Cache hits rate +[0-9]' | grep -oE '[0-9.]+ %' | head -1)
+          echo "🦀 **sccache:** hit rate ${rate:-n/a}" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload harness artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-artifacts-${{ github.run_id }}
+          path: .agent-artifacts/
+          if-no-files-found: warn
+          retention-days: 7

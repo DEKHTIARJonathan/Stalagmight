@@ -4,12 +4,12 @@
  * full app lifecycle through the protocol: app_start -> screenshot -> store_state
  * -> ipc -> logs -> eval -> app_stop. This proves the transport framing is clean
  * (any stray stdout from the server would break JSON-RPC and fail here) and that
- * every tool round-trips. Run under the repo-pinned Node 22 (see .nvmrc):
+ * every tool round-trips. Run on the repo-pinned Node (`nvm use`):
  *
  *   pnpm agent:mcp:smoke
  *
  * It spawns the server with the SAME node that runs this client (process.execPath)
- * plus tsx, so a Node-22 client yields a Node-22 server.
+ * plus tsx, so the server always matches whichever node ran the client.
  */
 import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
