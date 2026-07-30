@@ -27,7 +27,7 @@ place validates the fix.
 
 | Stratum | What | Speed/iter | Schedule control | Fidelity | Drift risk |
 |---|---|---|---|---|---|
-| **L0** frontend | vitest + fake timers + unit IPC mock | ms | total (fake clock) | frontend only | mock drift (#277 class) |
+| **L0** frontend | vitest + manual deferreds + unit IPC mock (fake timers only where a real timer is in the path - a fake clock cannot force promise-resolution order) | ms | total (controlled resolution order) | frontend only | mock drift (#277 class) |
 | **L1** core | in-process Rust: drive `AppState::execute` / command fns with scripted or generated command sequences | us-ms | total (seeded RNG, injected clock, exact op order) | core only - no IPC serialization, no command-lock path, no frontend | none (real code) |
 | **L2** IPC boundary | `tauri::test` mock runtime: real handlers, real state, real serialization + command lock, no webview | ms | high (ordered invokes, forced overlap) | everything but the DOM | low |
 | **L3** whole app | existing agent harness (`driver_script`, `run_scenario`) | ~0.5-2s | low (natural timing + injection hooks) | full | n/a |
@@ -38,8 +38,8 @@ At 10k iterations: L1 = seconds, L0/L2 = minutes, L3 = hours (last resort, not d
 
 | Hypothesis class | Stratum | Forcing mechanism |
 |---|---|---|
-| Stale async IPC reply / version-guard (`projectIdentityKey`) | L0 | fake timers + controllable promise resolution |
-| Geometry-readiness vs identity guard (measured->adjusted swap without `modified_at` bump) | L0 | same |
+| Stale async IPC reply / version-guard (`projectIdentityKey`) | L0 | controllable promise resolution (manual deferreds) |
+| Geometry-readiness vs identity guard (measured->adjusted swap without `modified_at` bump) | L0 (blocked) | guard lives in a MapCanvas effect (`MapCanvas.tsx` ~:1921), not a hook - needs extraction to a mountable seam first, or route via L3 |
 | Command-lock ordering, hung-IPC deadlock, reply overlap | L2 | ordered/overlapping invokes |
 | Core invariants: undo round-trip, reconcile idempotence, persistence atomicity, section-scoped keying, collab reconcile | L1 | scripted/generated command sequences |
 | Emergent whole-system (render + IPC + persistence together) | L3 | injection hooks below |
@@ -61,6 +61,18 @@ points inside the system under test. All gated on `STALAGMIGHT_TEST_HOOKS=1`
 3. Injectable clock for `modified_at` (L1): lets scenarios force the
    identical-timestamp and stale-identity edges deterministically.
 
+Two obligations and one constraint any new hook command inherits, so they don't
+surprise the implementer at CI:
+- Every new `#[tauri::command]` must join `EVENT_NAMES` in
+  `src-tauri/src/telemetry/registry.rs` AND the lists in `src/utils/telemetry.ts`
+  (`registry_covers_all_*`, telemetry-feature-gated), plus a handler in the e2e IPC
+  mock (`test:mock-contract` enforces `generate_handler!` <-> mock both ways) - the
+  `debug_trigger_panic` precedent stays registered in all builds for exactly this
+  contract-invariance reason.
+- The delay hook must hold its delay OUTSIDE the command lock. Held inside, it stalls
+  every subsequent command and manufactures the exact hung-IPC deadlock class the L2
+  stratum exists to test - an app-wide freeze, not a targeted stale reply.
+
 Not proposed: a general scripting language inside the app. Scripts live in the test
 layers; the app only exposes narrow, named control points.
 
@@ -74,8 +86,11 @@ reportable. Invoked ad hoc (agent or human); no new server - L0/L1/L2 are just t
 code, L3 is the existing MCP harness.
 
 **Discovery loop** (broad, unattended, high n): generated command sequences + oracles.
-Runs as `cargo test` at small n inside the normal gate, and a nightly job at ~10k with
-a printed seed so any failure replays exactly. No interactive agent in the loop - the
+Runs as `cargo test` at small n inside the normal gate (budget: single-digit seconds
+added to `check`, or it gets cut), and a nightly job at ~10k targeting the self-hosted
+runner off-hours - it shares that box with the merge gate, and the picker spills
+`check` to paid hosted runners while it is busy, so scheduling matters. A printed seed
+makes any failure replay exactly. No interactive agent in the loop - the
 agent's job is writing generators/oracles beforehand and triaging findings afterwards.
 At L1 this is property-based testing; the first oracle is the strongest one we know:
 *execute a random command sequence, undo all of it, assert the project is
@@ -92,10 +107,13 @@ value-identical to the start* (plus `check_project_integrity` and the existing
 ## Decisions taken (2026-07-30)
 
 - L0 starts immediately (no new surface needed) - first target is the stale-reply
-  guard class, injection-proved (guard disabled -> test goes red).
-- Among the lower strata, **L1 first**: fastest iterations, zero mock drift, and the
-  discovery loop falls out of it nearly for free. L2 follows if/when the
-  lock/ordering class needs it.
+  guard class. Every prong is injection-proved: individually where a prong is
+  independently reachable, jointly where it is redundant defense-in-depth (the
+  monotonic-id prong cannot be isolated from any UI-reachable path - itself an
+  L0 finding).
+- Among the lower strata, **L1 first** (default ordering, revisitable in this
+  review): fastest iterations, zero mock drift, and the discovery loop falls out
+  of it nearly for free. L2 follows if/when the lock/ordering class needs it.
 - Discovery runs under cargo + nightly, not under the MCP harness.
 - Two-tier triage as above.
 
