@@ -538,6 +538,54 @@ impl AppState {
         .map(|_| ())
     }
 
+    /// A deferred release, from the moment it can finally be decided: stand the
+    /// releasing session down from the lock, then hand it back - all inside ONE
+    /// lock-ops span.
+    ///
+    /// The stand-down is the gate, and it belongs here rather than at the point
+    /// the release was spawned. The status poll reopens a shut gate whenever the
+    /// server says this account still holds the mutex
+    /// ([`Self::speleodb_reopen_gate_for_inherited_lock`]), and between spawning
+    /// a release and running it that is exactly the state a caller-side shut
+    /// would leave behind - the poll takes the guard first, resurrects the gate,
+    /// and the reclaim check below then stands down for a session the switch or
+    /// the exit is about to destroy. Inside this span there is no such window:
+    /// the gate closes and the decision is made without anything in between.
+    ///
+    /// `entry_gen` is the session generation read when the release was decided.
+    /// Unchanged, the gate still belongs to the session that decided to hand the
+    /// lock back and closing it states a fact. Changed, that session is gone and
+    /// the gate now belongs to whatever replaced it - not this release's to
+    /// touch, and the reclaim check judges the new world on its own terms.
+    ///
+    /// `claim` is what the caller took out of the claim list, returned on a
+    /// failed POST so the mutex still has a local pointer for the janitor.
+    pub(super) fn speleodb_stand_down_and_release(
+        &self,
+        params: &LockReleaseParams,
+        entry_gen: u64,
+        claim: Option<LockClaim>,
+    ) -> Result<(), SpeleoDbError> {
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        {
+            let _proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if self.speleodb_session_generation() == entry_gen {
+                self.set_edit_enabled(false);
+            }
+        }
+        let outcome = self.speleodb_release_unless_reclaimed_locked(params);
+        if outcome.is_err() {
+            // The mutex is still held and now has no local pointer: put the
+            // claim back so the no-project janitor can retry it, exactly as the
+            // janitor restores its own.
+            self.speleodb_restore_lock_claim(claim);
+        }
+        outcome
+    }
+
     /// Put a claim back after a clear whose reason turned out not to happen.
     ///
     /// `AppState::delete_project` clears at snapshot time, under the same
@@ -1734,9 +1782,10 @@ mod tests {
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
 
         assert!(
-            body.contains("speleodb_release_unless_reclaimed(&p)"),
-            "the detached release must be reclaim-checked, like the delete's \
-             captured release and the janitor's"
+            body.contains("speleodb_stand_down_and_release(&p, entry_gen, claim)"),
+            "the detached release must go through the stand-down-and-release \
+             span, which is reclaim-checked like the delete's captured release \
+             and the janitor's"
         );
         // The raw POST survives only as the no-managed-state fallback.
         assert_eq!(
@@ -1744,6 +1793,36 @@ mod tests {
             1,
             "the only bare POST left is the fallback for when there is no app \
              handle to reach managed state through (tests, pre-setup)"
+        );
+        assert!(
+            !body.contains("self.set_edit_enabled("),
+            "the gate transition belongs INSIDE the release's own lock-ops span \
+             (round 12): shutting it here leaves a shut gate over a mutex the \
+             server still says we hold, which is exactly what the status poll's \
+             inherited-lock reopen resurrects"
+        );
+
+        // ...and the span it routes to does all three under one guard.
+        let own = state_source("speleodb_session.rs");
+        let own = &own[..own.find("#[cfg(test)]").unwrap_or(own.len())];
+        let start = own
+            .find("fn speleodb_stand_down_and_release")
+            .expect("the deferred-release span is present");
+        let span = &own[start..];
+        let span = &span[..span.find("\n    }\n").expect("fn body terminates")];
+        let guard = span
+            .find("self.speleodb_lock_ops_guard()")
+            .expect("the span is serialized");
+        let gate = span
+            .find("self.set_edit_enabled(false)")
+            .expect("the span shuts the gate");
+        let decide = span
+            .find("self.speleodb_release_unless_reclaimed_locked(params)")
+            .expect("the span runs the reclaim-checked release");
+        assert!(
+            guard < gate && gate < decide,
+            "order must be: guard, then the gate, then the decision - the poll \
+             must have no moment between the shut gate and the verdict"
         );
     }
 

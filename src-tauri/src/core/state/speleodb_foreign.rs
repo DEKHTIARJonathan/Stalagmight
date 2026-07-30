@@ -291,6 +291,31 @@ impl AppState {
                         .to_owned(),
                 )));
             }
+            // Right project, and STILL the wrong file if the path now resolves
+            // to the canonical copy. `same_file` follows symlinks, so a final
+            // component replaced by a link to the cache copy passes the identity
+            // check above on every field - same project, same deployment - while
+            // the handle underneath is the one file this module exists to keep
+            // managed. `foreign_link_in` already recognises that spelling
+            // (`LinkedSpelling::Canonical`); this is the same question asked at
+            // the moment of the write. No cache root means no canonical slot to
+            // protect, which is the module's standing degradation rule.
+            if super::speleodb_local_state::cache_root().is_some_and(|root| {
+                super::speleodb_local_state::is_the_cached_copy(&root, &link.project_id, &path)
+            }) {
+                tracing::warn!(
+                    path = %path.display(),
+                    project_id = %link.project_id,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Refusing to strip a link: this path now resolves to the \
+                     project's canonical cache copy"
+                );
+                return Err(local_dto(SpeleoDbError::Io(
+                    "that path now leads to this project's managed copy, which \
+                     cannot be unlinked here; reopen it to see what it is now"
+                        .to_owned(),
+                )));
+            }
         }
         db.save_speleo_link(None)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
@@ -761,6 +786,47 @@ mod tests {
                 .is_none(),
             "its link row is gone"
         );
+    }
+
+    /// Round 12: the identity re-check passes on every field when the path is
+    /// replaced by a symlink to the SAME project's canonical cache copy - same
+    /// project, same deployment - while the handle underneath is the one file
+    /// this module exists to keep managed. `same_file` follows symlinks, so
+    /// stripping there would unmanage the canonical copy itself.
+    ///
+    /// Needs the production cache root to be resolvable, which is what
+    /// `init_for_test` latches; the module's other tests deliberately avoid it
+    /// (it is a process-global `OnceLock`), so this one asks the predicate the
+    /// production code asks and skips when no root is available.
+    #[cfg(unix)]
+    #[test]
+    fn remove_link_at_refuses_a_path_that_now_resolves_to_the_canonical_copy() {
+        let Some(root) = super::super::speleodb_local_state::cache_root() else {
+            // No app dirs in this process: there is no canonical slot to
+            // protect, which is the same degradation the production path takes.
+            return;
+        };
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        let cached = super::super::speleodb_local_state::cache_path_in(&root, ID);
+        seed_linked(&cached, ID);
+
+        // The prompt was raised for a foreign copy; the path is then replaced by
+        // a link to the canonical one.
+        let foreign = temp.path().join("copy.stalx");
+        std::os::unix::fs::symlink(&cached, &foreign).expect("symlink");
+
+        state
+            .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
+            .expect_err("the canonical copy must not be unlinked through an alias");
+        assert!(
+            Database::open_for_metadata(&cached)
+                .and_then(|db| db.load_speleo_link())
+                .expect("readable")
+                .is_some(),
+            "the canonical copy keeps its link"
+        );
+        let _ = std::fs::remove_file(&cached);
     }
 
     #[test]

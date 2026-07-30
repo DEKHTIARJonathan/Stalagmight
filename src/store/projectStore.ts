@@ -1178,6 +1178,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // SpeleoDB project. Backend-enforced (recents clicks bypass the
         // routeOpenedFile guards); the prompt offers the two real ways forward.
         if (error.code === 'SPELEODB_MANAGED' && error.speleodbManaged) {
+          // A SUPERSEDED load must not speak. Phase 0 refuses before the loader
+          // reaches its first cancellation checkpoint, so a load the user has
+          // already navigated away from really can arrive here - and resetting
+          // the loading state would discard the CURRENT load's progress, while
+          // the prompt would be about a file nobody is opening any more. The
+          // newer load owns both the loading state and the action source.
+          if (get().loading.clientOpId !== clientOpId) return { success: false };
           get().resetLoading();
           useUIStore.getState().openDialog('speleodb-managed-file', {
             managed: error.speleodbManaged,

@@ -372,23 +372,35 @@ impl AppState {
         &self,
     ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
         let p = self.speleodb_held_lock_release_params()?;
-        // THIS session's account of the lock ends here, before the POST is
-        // handed to a thread - and that ordering is what makes the reclaim check
-        // above meaningful rather than self-defeating. The check asks "does a
-        // live session hold this mutex?", and until these two lines run the
-        // answer is yes: OUR gate is still open on OUR project, and OUR claim is
-        // still in the list. The thread would read its own caller as the
-        // successor it is supposed to protect and stand down, stranding exactly
-        // the mutex this call exists to hand back - at app exit, and on every
-        // project switch away from a clean remote project.
+        // THIS session's account of the lock has to be gone before the reclaim
+        // check runs, or the check reads its own caller as the successor it
+        // exists to protect and stands down - stranding the very mutex this call
+        // hands back. That account has two halves, and they come off at
+        // different moments on purpose:
         //
-        // `delete_project` does the same thing for the same reason (there, under
-        // the guard that also tears the session down). Both are true statements
-        // about the world: a session that has decided to release is no longer
-        // editing under that lock. The gate is re-derived by whatever opens
-        // next, and at exit there is no next.
-        self.set_edit_enabled(false);
+        // - The CLAIM comes off here, synchronously. This session provably owns
+        //   it at this point (it is the one that just passed the release gate),
+        //   so there is no other claim this could be taking.
+        // - The GATE comes off inside the release's own lock-ops span, NOT here.
+        //   Shutting it here opens a window the status poll walks straight into:
+        //   a shut gate over a mutex the server still says this account holds is
+        //   exactly what its inherited-lock reopen exists for, so the poll takes
+        //   the guard first, reopens the gate, and the release then stands down
+        //   for a session that is about to be torn down anyway - lock stranded.
+        //   Left open, there is nothing for the poll to resurrect, and the
+        //   release shuts it under the same guard that then decides.
+        //
+        // The generation pairs that later gate transition with THIS session (see
+        // `speleodb_stand_down_and_release`); read under the `project` mutex,
+        // which is where every bump happens.
         let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
+        let entry_gen = {
+            let _proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.speleodb_session_generation()
+        };
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = self.get_app_handle();
         std::thread::spawn(move || {
@@ -396,16 +408,7 @@ impl AppState {
                 .as_ref()
                 .and_then(tauri::Manager::try_state::<AppState>)
             {
-                Some(state) => {
-                    let outcome = state.speleodb_release_unless_reclaimed(&p);
-                    if outcome.is_err() {
-                        // The mutex is still held and now has no local pointer:
-                        // put the claim back so the no-project janitor can retry
-                        // it, exactly as the janitor restores its own.
-                        state.speleodb_restore_lock_claim(claim);
-                    }
-                    outcome
-                }
+                Some(state) => state.speleodb_stand_down_and_release(&p, entry_gen, claim),
                 // No managed state to consult (unit tests, pre-`setup`): the raw
                 // POST this always did.
                 None => client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
