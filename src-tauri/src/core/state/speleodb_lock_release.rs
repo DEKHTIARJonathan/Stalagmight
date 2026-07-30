@@ -208,6 +208,70 @@ impl AppState {
         }
     }
 
+    /// Forget the acquisition record IF it still names `project_id`: one
+    /// compare-and-clear under a SINGLE session-lock acquisition.
+    ///
+    /// For the releases that clear the record at a different moment than they decided
+    /// to release it. [`AppState::speleodb_release_captured_lock`] is the reason this
+    /// exists: `AppState::delete_project` snapshots the release params under the
+    /// `project` mutex, tears the session down, drops that mutex, and only THEN runs
+    /// the network release - so there is a real gap between "we decided to hand this
+    /// project's lock back" and "we say so in the session". Another SpeleoDB project
+    /// can be opened and Started editing inside that gap, and a successful Start
+    /// editing records ITSELF in `lock_acquired_here`.
+    ///
+    /// An unconditional `speleodb_note_lock_acquired(None)` after the gap then erases
+    /// the NEW project's record while releasing the OLD project's lock. Nothing looks
+    /// broken - the new lock is still held and still editable - but the acquisition
+    /// PROVENANCE for it is gone, and that provenance is the entire licence for the
+    /// authorship shortcut in `AppState::speleodb_remote_state`: it is what feeds
+    /// `we_hold_the_lock` into `crate::speleodb::sync::poll_verdict`, which without it
+    /// refuses to explain a commit in the `BASE..tip` gap as our own landed push. The
+    /// concrete outcome is that OUR OWN next push comes back as
+    /// `RemoteState::Conflict` - a self-conflict against our own commit on a project
+    /// nobody else touched - with the status mark routing the user's next click into the
+    /// divergence dialog, which is exactly the misreport the record was introduced to
+    /// stop.
+    ///
+    /// Comparing project ids is what closes THIS window, and that is not in tension
+    /// with `AppState::speleodb_forget_lock_acquired_if_gate_shut`, whose doc says at
+    /// length that an id comparison does NOT close ITS race. The races are different
+    /// and neither test substitutes for the other:
+    ///
+    /// - There, the poll and the fast-forward that can be trampled are on the SAME
+    ///   project, so the ids always match and the clear fires regardless; only
+    ///   re-reading the edit GATE separates them.
+    /// - Here the interloper is by definition a DIFFERENT project - there is one
+    ///   `project` mutex and one open project, and the old one was torn down before
+    ///   this runs - so the id IS the signal. The gate is no use at all: after the
+    ///   delete it is shut for the project being released and OPEN for whatever
+    ///   session took its place, so a gate test would either never fire or fire on the
+    ///   wrong session's record.
+    ///
+    /// So: do not unify the two behind one condition. Doing so reintroduces one of the
+    /// two bugs, whichever condition loses.
+    ///
+    /// The compare and the clear MUST share one guard. A
+    /// `speleodb_lock_acquired_here` read followed by a separate
+    /// `speleodb_note_lock_acquired(None)` write is two acquisitions with a gap of
+    /// their own, and an acquisition landing in THAT gap is erased just the same: a
+    /// narrower window is still the same bug. (Which is why
+    /// `AppState::speleodb_release_lock`, the per-project release that had the id
+    /// comparison right from the start, clears through here too.)
+    ///
+    /// A poisoned session lock silently declines to clear, matching
+    /// `speleodb_note_lock_acquired`: it costs the shortcut rather than granting one,
+    /// since the same poisoned mutex fails the token read the poll needs to identify a
+    /// lock holder at all.
+    pub(super) fn speleodb_forget_lock_acquired_for(&self, project_id: &str) {
+        let Ok(mut session) = self.speleodb_session_lock() else {
+            return;
+        };
+        if session.lock_acquired_here.as_deref() == Some(project_id) {
+            session.lock_acquired_here = None;
+        }
+    }
+
     /// Run the network half of a release for params captured EARLIER, and REPORT the
     /// outcome instead of only logging it.
     ///
@@ -231,15 +295,26 @@ impl AppState {
     /// un-pushed edits by definition, so the veto that protects them on
     /// close / quit / switch has nothing left to protect and would only strand the
     /// server lock.
+    ///
+    /// The same deferral is why the acquisition-record clear below is CONDITIONAL,
+    /// unlike the one every other release verb makes - see
+    /// [`AppState::speleodb_forget_lock_acquired_for`].
     pub(super) fn speleodb_release_captured_lock(
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        // The same bookkeeping `speleodb_release_best_effort` does, for the same
-        // reason: a release we asked for ends this process's claim on the lock
-        // whether or not the POST lands, and one that failed leaves behind a lock
-        // this process can no longer account for.
-        self.speleodb_note_lock_acquired(None);
+        // The same bookkeeping `speleodb_release_best_effort` does, and for the same
+        // reason: a release we asked for ends this process's claim on the lock whether
+        // or not the POST lands, and one that failed leaves behind a lock this process
+        // can no longer account for.
+        //
+        // But KEYED on the project, which that one does not have to be. Every caller of
+        // `speleodb_release_best_effort` decides and clears in one breath, so no other
+        // acquisition can have happened in between; this one runs after
+        // `delete_project` has dropped the `project` mutex, and a Start editing on
+        // ANOTHER project inside that gap records ITSELF in the very slot an
+        // unconditional clear would then blank. See the helper for what that costs.
+        self.speleodb_forget_lock_acquired_for(&params.project_id);
         client::release_lock(
             &params.endpoint,
             &params.token,
