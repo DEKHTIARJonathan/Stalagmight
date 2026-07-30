@@ -28,16 +28,26 @@
 //!   out from under exactly the inherited successors the stand-down exists
 //!   for - see [`AppState::speleodb_live_session_accounts_for`].
 //!
-//! What makes the reclaim check sound is the `speleodb_lock_ops` mutex: Start
-//! Editing holds it across probe -> commit (from BEFORE the pre-acquire
-//! holder probe, so a captured release cannot invalidate the provenance the
-//! probe read before the acquire runs), and every reclaim-checked release
-//! holds it across check -> POST, so a claim can never be minted between a
-//! release's decision and its network call. Deliberately held across
-//! network I/O - which is exactly why it is OUTERMOST: nothing that holds
-//! `project` / `database` / `undo_stack` may block on it (decide under
-//! `project`, drop, then take it), and code already inside a lock-ops span
-//! uses the `_locked` variants instead of re-taking it.
+//! What makes both guards sound is the `speleodb_lock_ops` mutex, which every
+//! SpeleoDB LOCK OPERATION holds for its whole span:
+//!
+//! - Start Editing, from before its FIRST read (generation, link, token,
+//!   mutex holder) through the commit. Each of those facts is one another
+//!   lock operation can invalidate mid-flight, so the span has to start
+//!   before the earliest of them, not at the acquire.
+//! - Every reclaim-checked release, across check -> POST, so a claim cannot
+//!   be minted between a release's decision and its network call.
+//! - The status poll's inherited-lock gate reopen, across its holder re-read
+//!   and the gate ([`AppState::speleodb_reopen_gate_for_inherited_lock`]).
+//! - LOGOUT, which ends an edit session and hands its mutex back. It is the
+//!   one boundary the identity check cannot see (the project slot never
+//!   moves), so excluding it from the spans above is what lets the
+//!   fast-forward arm commit on identity alone.
+//!
+//! Deliberately held across network I/O - which is exactly why it is
+//! OUTERMOST: nothing that holds `project` / `database` / `undo_stack` may
+//! block on it (decide under `project`, drop, then take it), and code already
+//! inside a lock-ops span uses the `_locked` variants instead of re-taking it.
 //!
 //! ## Generation rules
 //!
@@ -114,6 +124,19 @@ impl AppState {
     ///   world where that project is open at its canonical path and this
     ///   process genuinely holds its mutex (the acquire happened and nothing
     ///   released it), so gate + record + lock still agree.
+    ///
+    ///   What makes identity ENOUGH is not identity: it is that the one boundary
+    ///   identity cannot see is excluded from the caller's span. Every other
+    ///   boundary moves the project slot (close, delete, switch), so the link
+    ///   comparison below catches it. LOGOUT does not - it ends the session and
+    ///   leaves the slot exactly where it was - and a logout landing after the
+    ///   reload therefore passed this check and reopened the edit gate for a
+    ///   signed-out user, on a remote project whose mutex this process still held
+    ///   (round 6). It cannot land there any more: logout takes
+    ///   `speleodb_lock_ops`, which Start Editing holds from before its first
+    ///   read through this commit, so it runs strictly before the flow (whose
+    ///   token read then fails) or strictly after it. Anything that gives a
+    ///   session boundary a way past that guard puts this arm back where it was.
     ///
     /// On refusal nothing has been committed: the gate stays as the successor
     /// world set it, and no record is minted. The caller decides what to do
@@ -261,6 +284,65 @@ impl AppState {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         self.speleodb_release_unless_reclaimed_locked(params)
+    }
+
+    /// The status poll's inherited-lock gate reopen: enable editing on the open
+    /// remote project because the SERVER says this account already holds its
+    /// mutex - re-asked and committed inside the lock-ops span, so the answer
+    /// cannot go stale between the asking and the gate.
+    ///
+    /// The poll's own `get_project` cannot license this. It is one read in a
+    /// sequence of several, and a captured or janitor release for this very
+    /// project can complete between that read and the gate: the release's
+    /// reclaim check looks for a claim record (none - the poll never minted one)
+    /// and a live edit session (none - the gate is still SHUT, which is exactly
+    /// why the poll is here), so it rightly POSTs and frees the mutex. Opening
+    /// the gate from the earlier read then leaves a session editing a remote
+    /// project with no server lock behind it and no record saying so - the one
+    /// state the whole lock protocol is built to prevent.
+    ///
+    /// So the holder is read AGAIN under `speleodb_lock_ops`, and the gate opens
+    /// in the same span. A release either finished first (the re-read finds the
+    /// mutex free or someone else's, and the gate stays shut - the user can
+    /// Start Editing to take it properly) or has not started (it will find the
+    /// open gate and stand down, per
+    /// [`Self::speleodb_live_session_accounts_for`]).
+    ///
+    /// Commits through [`Self::speleodb_commit_editing`] with `acquired_here`
+    /// false: an inherited lock is an edit session, never an acquisition. A
+    /// failed re-read declines to reopen - "cannot say" must not enable editing.
+    pub(super) fn speleodb_reopen_gate_for_inherited_lock(
+        &self,
+        link: &crate::models::SpeleoLink,
+    ) -> bool {
+        let Ok((endpoint, token)) = self.speleodb_active_token() else {
+            return false;
+        };
+        let insecure_http = self.speleodb_insecure_http();
+        let _lock_ops = self.speleodb_lock_ops_guard();
+        let holder = match self.speleodb_lock_holder_checked(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link.project_id,
+        ) {
+            Ok(holder) => holder,
+            Err(e) => {
+                tracing::debug!(
+                    error = %e,
+                    project_id = %link.project_id,
+                    purpose = "confirm we still hold the lock before reopening the gate",
+                    "speleodb: could not re-read the lock holder; leaving the project read-only"
+                );
+                return false;
+            }
+        };
+        if !super::speleodb::lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref())
+        {
+            return false;
+        }
+        self.speleodb_commit_editing(None, &link.project_id, false)
+            .is_ok()
     }
 
     /// Whether a LIVE edit session currently accounts for `project_id`'s server
@@ -917,12 +999,15 @@ mod tests {
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
 
-        let snapshot = body
-            .find("self.speleodb_session_snapshot()")
-            .expect("entry must snapshot generation + link as one world (D6)");
         let lock_ops = body
             .find("self.speleodb_lock_ops_guard()")
             .expect("the acquire span must be serialized against captured releases");
+        let snapshot = body
+            .find("self.speleodb_session_snapshot()")
+            .expect("entry must snapshot generation + link as one world (D6)");
+        let token = body
+            .find("self.speleodb_active_token()")
+            .expect("the flow resolves a token");
         let probe = body
             .find("self.speleodb_lock_holder_checked(")
             .expect("the pre-acquire holder probe is present");
@@ -930,12 +1015,13 @@ mod tests {
             .find("client::acquire_lock(")
             .expect("the acquire is present");
         assert!(
-            snapshot < lock_ops && lock_ops < probe && probe < acquire,
-            "order must be: session snapshot, then lock-ops guard, then the \
-             holder probe, then acquire - a probe OUTSIDE the span reads \
-             provenance a captured release can invalidate before the acquire \
-             (round 5: 'inherited, keep on unwind' over a mutex the release \
-             then freed, so the abort arms strand a lock this call took)"
+            lock_ops < snapshot && snapshot < token && token < probe && probe < acquire,
+            "order must be: lock-ops guard FIRST, then the session snapshot, the \
+             token, the holder probe, and the acquire. Every fact after the guard \
+             is one another lock operation could invalidate: a probe outside the \
+             span reads provenance a captured release can undo before the acquire \
+             (round 5), and a token read outside it lets a logout leave this flow \
+             committing on behalf of a signed-out session (round 6)"
         );
         assert_eq!(
             body.matches("self.speleodb_commit_editing(").count(),
@@ -1018,6 +1104,83 @@ mod tests {
                 "{func}: one release, at the end of the finalization"
             );
         }
+    }
+
+    #[test]
+    fn logout_takes_the_lock_ops_guard_before_it_ends_the_session() {
+        // The fast-forward arm commits on identity alone, and identity cannot see
+        // a logout (the project slot never moves). What keeps that sound is this
+        // guard: logout is a lock operation like the acquire and the captured
+        // releases, so it cannot run inside a Start Editing span. Drop it here and
+        // the identity-only commit silently goes back to reopening the edit gate
+        // for a signed-out session (round 6).
+        let src = state_source("speleodb_logout.rs");
+        // Production region only, like every other scan in this family - and here
+        // it also keeps the search off the test-only wrapper whose name starts
+        // with the same words.
+        let src = &src[..src.find("#[cfg(test)]").unwrap_or(src.len())];
+        let start = src
+            .find("fn speleodb_logout_drop_gates")
+            .expect("the gate-drop half of logout is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        let guard = body
+            .find("self.speleodb_lock_ops_guard()")
+            .expect("logout must serialize with every other SpeleoDB lock operation");
+        let bump = body
+            .find("self.bump_speleodb_session()")
+            .expect("logout is a session boundary");
+        assert!(
+            guard < bump,
+            "the guard has to be held BEFORE the boundary is published, or a \
+             Start Editing can already be past its own checks when it lands"
+        );
+    }
+
+    #[test]
+    fn logout_waits_for_an_in_flight_lock_operation() {
+        // The tripwire above reads the source; this one proves the exclusion is
+        // real. With the lock-ops guard held, a logout on another thread must not
+        // reach its session boundary - if it does, it is landing in the middle of
+        // exactly the span the guard exists to protect.
+        let state = AppState::new().expect("state");
+        let before = state.speleodb_session_generation();
+        let (started, has_started) = std::sync::mpsc::channel();
+        let (finished, has_finished) = std::sync::mpsc::channel();
+
+        let lock_ops = state.speleodb_lock_ops_guard();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                started.send(()).expect("announce the thread is running");
+                state.speleodb_drop_gates_for_tests();
+                finished.send(()).expect("announce the logout got through");
+            });
+
+            has_started.recv().expect("the thread runs");
+            assert!(
+                has_finished
+                    .recv_timeout(std::time::Duration::from_millis(250))
+                    .is_err(),
+                "a logout must not end the session while a lock operation holds \
+                 the guard"
+            );
+            assert_eq!(
+                state.speleodb_session_generation(),
+                before,
+                "and it must not have published its boundary either"
+            );
+
+            drop(lock_ops);
+            has_finished
+                .recv_timeout(std::time::Duration::from_secs(5))
+                .expect("the logout completes once the span ends");
+        });
+        assert_ne!(
+            state.speleodb_session_generation(),
+            before,
+            "the logout still happens - it is deferred, never dropped"
+        );
     }
 
     #[test]

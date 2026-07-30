@@ -204,7 +204,7 @@ fn reverify_due(last_verify_at: Option<&str>, now: chrono::DateTime<chrono::Utc>
 /// authenticated email? Case-insensitive, mirroring the ancestry-recovery email
 /// comparison in `sync.rs` (SpeleoDB may normalise case). A missing holder (lock
 /// cleared) or a missing self-email never matches - i.e. the lock is not ours.
-fn lock_held_by_me(holder: Option<&str>, me: Option<&str>) -> bool {
+pub(super) fn lock_held_by_me(holder: Option<&str>, me: Option<&str>) -> bool {
     matches!((holder, me), (Some(h), Some(m)) if h.eq_ignore_ascii_case(m))
 }
 
@@ -772,11 +772,17 @@ impl AppState {
         // the load re-derived the gate as read-only from is_remote - resume editing
         // now, so the project isn't stuck read-only under our own lock. (A same-
         // account concurrent session is warned about separately at open time.)
+        //
+        // The holder read above only decides whether to ASK: the gate itself opens
+        // in `speleodb_reopen_gate_for_inherited_lock`, which re-reads the holder
+        // and commits inside the lock-ops span. Opening it straight from the read
+        // above let a captured release for this same project land in between and
+        // free the mutex - leaving a session editing a remote project with no
+        // server lock and no record of one.
         let edit_enabled = if !edit_enabled
             && lock_held_by_me(lock_holder.as_deref(), self.speleodb_my_email().as_deref())
         {
-            self.set_edit_enabled(true);
-            true
+            self.speleodb_reopen_gate_for_inherited_lock(&link)
         } else {
             edit_enabled
         };
@@ -1539,6 +1545,17 @@ impl AppState {
     /// `Diverged` arms leave both gates untouched - so a force-editor stays
     /// force-editing (keeps their edits) rather than reverting to read-only.
     pub(crate) fn speleodb_start_editing(&self) -> Result<StartEditingResult, SpeleoErrorDto> {
+        // The lock-ops span opens FIRST, before a single fact is read: everything
+        // below is decided from facts (the session generation, the link, the
+        // token, the mutex holder) that another lock operation could invalidate,
+        // and this guard is what stops one running while they are in flight. It
+        // covers the token read specifically because logout takes the same guard -
+        // a logout that slipped in after the token was read left this flow acquiring
+        // and committing on behalf of a signed-out session, which the fast-forward
+        // arm's identity-only commit cannot see (the slot never moves). Held across
+        // the network span on purpose - see `speleodb_session`.
+        let _lock_ops = self.speleodb_lock_ops_guard();
+
         // Generation + link read as ONE world under the `project` mutex (D6): the
         // commit far below re-checks the generation before opening the gate, so a
         // teardown landing inside the network window refuses instead of committing
@@ -1608,20 +1625,18 @@ impl AppState {
         // re-verify and the gate re-derivation use - SpeleoDB may normalise case, and
         // three hand-rolled spellings of "is this holder us?" is how they drift apart.
         //
-        // The lock-ops span starts HERE, before the probe, not at the acquire:
-        // serialize probe -> commit against captured/janitor releases (F8), held
-        // across the network span on purpose - see `speleodb_session`. A probe
-        // outside the span reads provenance a captured release can invalidate
-        // before the acquire runs: the probe sees the account still holding (the
-        // delete's deferred release has not POSTed yet), answers "inherited, keep
-        // on unwind", the release then frees the mutex, and the acquire takes a
-        // FRESH lock this call believes it merely resumed - so an abort arm skips
-        // the unwind and strands a mutex we in fact took. Inside the span the
-        // release either finished first (the probe reads the freed world and the
-        // acquire is ours to record and to hand back) or waits until our commit
-        // (the probe's "inherited" answer stays true for the whole span, and the
-        // release's reclaim check then stands down for the live session).
-        let _lock_ops = self.speleodb_lock_ops_guard();
+        // The probe reads provenance INSIDE the lock-ops span opened at the top of
+        // this function, and that placement is load-bearing: outside it, a captured
+        // release can invalidate the answer before the acquire runs. The probe sees
+        // the account still holding (the delete's deferred release has not POSTed
+        // yet), answers "inherited, keep on unwind", the release then frees the
+        // mutex, and the acquire takes a FRESH lock this call believes it merely
+        // resumed - so an abort arm skips the unwind and strands a mutex we in fact
+        // took. Inside the span the release either finished first (the probe reads
+        // the freed world and the acquire is ours to record and to hand back) or
+        // waits until our commit (the probe's "inherited" answer stays true for the
+        // whole span, and the release's reclaim check then stands down for the live
+        // session).
         let me = self.speleodb_my_email();
         let (acquired_here, keep_lock_on_unwind) = match self.speleodb_lock_holder_checked(
             &endpoint,
@@ -2120,7 +2135,7 @@ impl AppState {
     /// [`Self::speleodb_start_editing`]'s acquisition provenance, where reading a
     /// failed GET as "unheld" would MINT a record on a network blip. Both views
     /// share this one implementation so they cannot drift.
-    fn speleodb_lock_holder_checked(
+    pub(super) fn speleodb_lock_holder_checked(
         &self,
         endpoint: &str,
         token: &str,
@@ -5529,6 +5544,106 @@ mod tests {
             }
         });
         (format!("http://127.0.0.1:{port}"), listener, hits)
+    }
+
+    /// A loopback server that answers the FIRST `projects/<id>/` read with the
+    /// mutex held by us and every later one with `later_holder` - so a test can
+    /// model the world changing between the status poll's own holder read and
+    /// the re-read that actually opens the gate. Requests for the revision
+    /// topology get an empty body (the fold degrades to `Unknown`, which is not
+    /// what these tests are about).
+    fn holder_changes_after_the_first_read(
+        project_id: &str,
+        later_holder: Option<&str>,
+    ) -> (String, std::net::TcpListener) {
+        use std::io::{Read as _, Write as _};
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let accept_on = listener.try_clone().expect("clone listener");
+        let first =
+            format!(r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"u@x"}}}}"#);
+        let later = match later_holder {
+            Some(user) => format!(
+                r#"{{"id":"{project_id}","name":"Remote","active_mutex":{{"user":"{user}"}}}}"#
+            ),
+            None => format!(r#"{{"id":"{project_id}","name":"Remote"}}"#),
+        };
+        std::thread::spawn(move || {
+            let project_reads = AtomicUsize::new(0);
+            while let Ok((mut stream, _)) = accept_on.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut request = Vec::new();
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    request.extend_from_slice(&chunk[..n]);
+                    if request.windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let body = if String::from_utf8_lossy(&request).contains("/revisions/") {
+                    "{}".to_owned()
+                } else if project_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    first.clone()
+                } else {
+                    later.clone()
+                };
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener)
+    }
+
+    #[test]
+    fn the_poll_resumes_editing_when_the_lock_is_still_ours_as_it_opens_the_gate() {
+        // The invariant the reopen exists for: a project reopened while we still
+        // hold its mutex must not sit read-only under our own lock.
+        let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, Some("u@x"));
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+        assert!(!state.edit_enabled(), "fixture opens read-only");
+
+        let status = state.speleodb_link_status().expect("status");
+
+        assert!(status.edit_enabled, "our own lock resumes the edit session");
+        assert!(state.edit_enabled(), "and the gate really is open");
+    }
+
+    #[test]
+    fn the_poll_leaves_the_gate_shut_when_the_mutex_went_away_mid_poll() {
+        // Round 6 (P1): the poll's holder read is one of several requests, and a
+        // captured or janitor release for this same project can complete before
+        // the gate opens. That release's reclaim check finds no claim record (the
+        // poll never minted one) and no live edit session (the gate is still shut
+        // - which is why the poll is here at all), so it rightly frees the mutex.
+        // Opening the gate from the earlier read then left a session editing a
+        // remote project with no server lock behind it and nothing recording one.
+        //
+        // The stub is that release: the mutex is ours on the read that decides to
+        // ask, and gone by the re-read that would open the gate.
+        let (base, _listener) = holder_changes_after_the_first_read(REMOTE_ID, None);
+        let (_temp, state) = remote_readonly_fixture();
+        *state.speleodb.lock().expect("session lock") = authed_session_at(&base);
+
+        let status = state.speleodb_link_status().expect("status");
+
+        assert!(
+            !status.edit_enabled,
+            "the mutex was freed before the gate opened, so there is no lock to \
+             resume editing under"
+        );
+        assert!(
+            !state.edit_enabled(),
+            "and the report is not hiding a gate that was opened anyway"
+        );
     }
 
     /// The `.stalx` of a project we hold the SpeleoDB write lock on can be DELETED, and
