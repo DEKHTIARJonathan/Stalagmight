@@ -2,7 +2,7 @@ use super::AppState;
 use crate::core::{CommandResult, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Build a save-failure `CommandResult`, tagging filesystem permission
 /// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
@@ -15,11 +15,7 @@ use std::path::PathBuf;
 /// deleted/renamed save folder yields SQLite's same generic "unable to open
 /// database file", but that's a vanished-location error, not a denial, and
 /// should stay an ordinary failure rather than show Privacy & Security steps.
-pub(super) fn save_failure(
-    context: &str,
-    target: &std::path::Path,
-    err: &anyhow::Error,
-) -> CommandResult {
+pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) -> CommandResult {
     let detail = format!("{context}: {err}");
     let dir_present = target
         .parent()
@@ -401,6 +397,49 @@ impl AppState {
                 .and_then(|db| db.load_speleo_link().ok().flatten())
         };
 
+        // Save a Copy: an EXPLICIT destination on a SpeleoDB-managed project does
+        // not relocate the session - it writes a detached copy WITHOUT the
+        // `speleo_link` row and leaves the session on the managed file. A managed
+        // project is usable at exactly one path (its cache slot - see
+        // `speleodb_foreign`), so carrying the link to an arbitrary destination
+        // would mint the second linked copy that module exists to refuse. The
+        // predicate is safe for every in-tree caller: `speleodb_publish` and the
+        // Ariane adopt both save to the cache path while the project is STILL
+        // UNLINKED (the link is stamped after - pinned by
+        // `publish_relocates_into_the_cache_before_it_stamps_the_link`), and
+        // `speleodb_upload`'s pre-push flush is an implicit save.
+        let copy_only = speleo_link.is_some() && !is_implicit_save;
+        if copy_only {
+            // Refuse the managed file itself as the copy's destination: writing an
+            // unlinked copy over it would strip the managed project's link in
+            // place - the one outcome this whole arrangement exists to prevent.
+            // Both spellings of "itself" are checked: the open file, and the
+            // project's canonical cache slot (they are normally the same file, but
+            // `same_file` cannot bridge them when one side does not resolve).
+            let names_the_managed_file = project
+                .file_path
+                .as_ref()
+                .is_some_and(|open| same_file(open, &save_path))
+                || speleo_link.as_ref().is_some_and(|link| {
+                    super::speleodb::validate_project_id(&link.project_id).is_ok()
+                        && super::speleodb_local_state::cache_root().is_some_and(|root| {
+                            super::speleodb_local_state::is_the_cached_copy(
+                                &root,
+                                &link.project_id,
+                                &save_path,
+                            )
+                        })
+                });
+            if names_the_managed_file {
+                return CommandResult::failure(format!(
+                    "\"{}\" is the managed copy of \"{}\" - Save a Copy needs a \
+                     different destination. Use Save to save the project itself.",
+                    save_path.display(),
+                    project.name
+                ));
+            }
+        }
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -454,18 +493,60 @@ impl AppState {
         // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
         // local save never un-remotes the project or clears the dirty bit. The
         // dirty bit is set-only here - only a later server push clears it.
-        if let Some(link) = &speleo_link {
-            if let Err(e) = db.save_speleo_link(Some(link)) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve SpeleoDB hand-off link on save",
-                    "Failed to copy speleo_link onto the fresh save file"
-                );
+        // EXCEPT on a copy save, where dropping the row is the whole point: the
+        // copy is a plain unmanaged project.
+        if !copy_only {
+            if let Some(link) = &speleo_link {
+                if let Err(e) = db.save_speleo_link(Some(link)) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve SpeleoDB hand-off link on save",
+                        "Failed to copy speleo_link onto the fresh save file"
+                    );
+                }
             }
+        }
+
+        // A copy gets the undo/redo history too (into the temp handle, while it
+        // is still open - the normal path writes them into the REOPENED db after
+        // the rename, but a copy never reopens). This keeps Save a Copy a
+        // faithful Save As minus the link, and it is what lets the detach flow
+        // (convert to unmanaged) carry the edit history onto the file it then
+        // opens.
+        if copy_only {
+            self.persist_undo_stacks_into(&db);
         }
 
         // Close the temp database before renaming
         drop(db);
+
+        if copy_only {
+            // The destination is provably NOT the live file (refused above), so
+            // the live connection stays open, the session keeps its file_path and
+            // database handle, and no cache is invalidated. Rename the temp into
+            // place, list the copy, and report it via `unlinked_copy_path` -
+            // deliberately NOT `saved_path`, which the frontend treats as "the
+            // open project now lives here".
+            if let Err(e) = std::fs::rename(&temp_path, &save_path) {
+                let _ = std::fs::remove_file(&temp_path);
+                let e = anyhow::Error::from(e);
+                tracing::error!(
+                    error = %e,
+                    purpose = "write a detached unlinked copy",
+                    "Failed to rename temp file to the copy destination"
+                );
+                return save_failure("Failed to finalize save", &save_path, &e);
+            }
+            drop(proj_guard);
+            self.note_recent_project(&save_path);
+            tracing::info!(
+                path = ?save_path,
+                purpose = "write a detached unlinked copy",
+                "Saved an unlinked copy of a SpeleoDB-managed project"
+            );
+            return CommandResult::success()
+                .with_unlinked_copy_path(save_path.display().to_string());
+        }
 
         // Close our own persistent connection to the destination BEFORE the
         // rename. Windows refuses to rename a file over a destination that
@@ -545,6 +626,39 @@ impl AppState {
         };
 
         // Persist undo/redo stacks (best-effort, synchronous to avoid race with readers)
+        self.persist_undo_stacks_into(&db);
+
+        // Update file path after successful save
+        project.file_path = Some(save_path.clone());
+
+        // Update database handle
+        drop(proj_guard);
+        if let Ok(mut database) = self.database.lock() {
+            *database = Some(db);
+        }
+
+        // Clear in-memory cache since settings are now persisted to DB
+        self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
+
+        // Add to recent projects and persist to config
+        self.note_recent_project(&save_path);
+
+        let save_path_str = save_path.display().to_string();
+        tracing::info!(
+            path = ?save_path,
+            purpose = "persist edits safely",
+            "Project saved successfully"
+        );
+        CommandResult::success().with_path(save_path_str)
+    }
+
+    /// Persist the undo/redo stacks into `db`, best-effort (shared by the normal
+    /// save, which writes them into the reopened destination, and the copy save,
+    /// which writes them into the temp handle before the rename). Locks
+    /// `undo_stack` only - callers may hold `project` (the established order is
+    /// `project` before `undo_stack`).
+    fn persist_undo_stacks_into(&self, db: &Database) {
         let persist_limit = self
             .config
             .lock()
@@ -576,24 +690,15 @@ impl AppState {
                 );
             }
         }
+    }
 
-        // Update file path after successful save
-        project.file_path = Some(save_path.clone());
-
-        // Update database handle
-        drop(proj_guard);
-        if let Ok(mut database) = self.database.lock() {
-            *database = Some(db);
-        }
-
-        // Clear in-memory cache since settings are now persisted to DB
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // Add to recent projects and persist to config
+    /// Put `path` at the head of the recent-projects list and persist it to
+    /// config. Takes no state locks other than `recent_projects` + `config`;
+    /// callers must NOT hold `project` (the save paths drop it first).
+    fn note_recent_project(&self, path: &Path) {
         if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.retain(|p| p != &save_path);
-            recent.insert(0, save_path.clone());
+            recent.retain(|p| p != path);
+            recent.insert(0, path.to_path_buf());
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects.clone_from(&recent);
@@ -606,14 +711,6 @@ impl AppState {
                 }
             }
         }
-
-        let save_path_str = save_path.display().to_string();
-        tracing::info!(
-            path = ?save_path,
-            purpose = "persist edits safely",
-            "Project saved successfully"
-        );
-        CommandResult::success().with_path(save_path_str)
     }
 
     /// Drop the open project's resources.
@@ -720,7 +817,7 @@ impl AppState {
     /// USUALLY, but not always, the open project (a pull can target a cached
     /// project the user does not currently have open), and dropping an unrelated
     /// open project would throw away its undo/redo history for nothing.
-    pub(super) fn close_project_if_open_at(&self, dest: &std::path::Path) -> bool {
+    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
         let Some(open_path) = self.open_project_path() else {
             return false;
         };
@@ -749,7 +846,7 @@ impl AppState {
 /// Shared with `speleodb_local_state`, where the same question ("is the open
 /// project THIS file?") decides whether the live in-memory link may vouch for a
 /// copy that could not be read.
-pub(super) fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,

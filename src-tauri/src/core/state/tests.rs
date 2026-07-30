@@ -20725,6 +20725,171 @@ fn dirty_bit_noop_for_local_only_project() {
         .is_none());
 }
 
+// ===========================================================================
+// Save a Copy: an explicit destination on a LINKED project writes a detached
+// unlinked copy and leaves the session on the managed file (see save_project).
+// ===========================================================================
+
+#[test]
+fn save_as_on_a_linked_project_writes_an_unlinked_copy_and_stays_put() {
+    let (state, _sid, _shid, temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+    let copy_path = temp.path().join("copy.stalx");
+
+    let result = state.save_project(Some(copy_path.clone()));
+
+    assert!(result.success, "copy save succeeds: {:?}", result.error);
+    assert_eq!(
+        result.unlinked_copy_path.as_deref(),
+        Some(copy_path.display().to_string().as_str()),
+        "the copy is reported via unlinked_copy_path"
+    );
+    assert!(
+        result.saved_path.is_none(),
+        "saved_path must stay None - the frontend re-points file_path on it"
+    );
+    assert_eq!(
+        state.open_project_path().unwrap(),
+        open_path,
+        "the session stays on the managed file"
+    );
+    assert!(
+        state.speleodb_open_link().is_ok(),
+        "the managed file keeps its link"
+    );
+
+    let copy_db = Database::open_for_metadata(&copy_path).unwrap();
+    assert!(
+        copy_db.load_speleo_link().unwrap().is_none(),
+        "the copy carries NO speleo_link row"
+    );
+    drop(copy_db);
+    let copy_db = Database::open_existing(&copy_path).unwrap();
+    let copied = copy_db.load_project().unwrap();
+    assert_eq!(copied.sections.len(), 1, "the survey data is in the copy");
+    assert_eq!(copied.sections[0].shots.len(), 2);
+}
+
+#[test]
+fn save_a_copy_onto_the_managed_file_itself_is_refused() {
+    let (state, _sid, _shid, _temp) = remote_fixture();
+    let open_path = state.open_project_path().unwrap();
+
+    let result = state.save_project(Some(open_path.clone()));
+
+    assert!(
+        !result.success,
+        "writing an unlinked copy over the managed file would strip its link in place"
+    );
+    let db = Database::open_for_metadata(&open_path).unwrap();
+    assert!(
+        db.load_speleo_link().unwrap().is_some(),
+        "the refusal must not have touched the file"
+    );
+}
+
+#[test]
+fn implicit_save_on_a_linked_project_still_carries_the_link_and_the_dirty_bit() {
+    // Pins speleodb_upload's pre-push flush (`save_project(None)`): an implicit
+    // save is NOT a copy save - it must keep the link and the dirty bit.
+    let (state, sid, shid, _temp) = remote_fixture_editable();
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+    assert!(dirty_bit(&state), "the edit set the dirty bit");
+
+    let result = state.save_project(None);
+
+    assert!(result.success);
+    assert!(
+        result.saved_path.is_some(),
+        "an implicit save reports saved_path"
+    );
+    assert!(
+        result.unlinked_copy_path.is_none(),
+        "an implicit save is never a copy save"
+    );
+    assert!(
+        state.speleodb_open_link().is_ok(),
+        "the link survived the save"
+    );
+    assert!(
+        dirty_bit(&state),
+        "a local save never clears the dirty bit - only a push does"
+    );
+}
+
+#[test]
+fn save_as_on_an_unlinked_project_still_relocates_the_session() {
+    // The pre-existing Save As contract for plain local projects, pinned so the
+    // copy_only branch cannot leak into it.
+    let temp = TempDir::new().unwrap();
+    let state = AppState::new().unwrap();
+    assert!(
+        state
+            .execute(Command::CreateProject {
+                name: "Local".to_string(),
+                location: None,
+            })
+            .success
+    );
+
+    let dest = temp.path().join("relocated.stalx");
+    let result = state.save_project(Some(dest.clone()));
+
+    assert!(result.success);
+    assert_eq!(
+        result.saved_path.as_deref(),
+        Some(dest.display().to_string().as_str()),
+        "an unlinked Save As reports saved_path"
+    );
+    assert!(result.unlinked_copy_path.is_none());
+    assert_eq!(
+        state.open_project_path().unwrap(),
+        dest,
+        "an unlinked Save As relocates the session"
+    );
+}
+
+#[test]
+fn the_copy_carries_the_undo_history() {
+    let (state, sid, shid, temp) = remote_fixture_editable();
+    assert!(
+        state
+            .execute(Command::UpdateShot {
+                section_id: sid,
+                shot_id: shid,
+                updates: ShotUpdates {
+                    length: Some(9.0),
+                    ..Default::default()
+                },
+            })
+            .success
+    );
+
+    let copy_path = temp.path().join("copy.stalx");
+    assert!(state.save_project(Some(copy_path.clone())).success);
+
+    let copy_db = Database::open_existing(&copy_path).unwrap();
+    assert!(
+        !copy_db
+            .load_undo_stack_with_timestamps()
+            .unwrap()
+            .is_empty(),
+        "the copy carries the undo history (the detach flow reopens it and \
+         must not lose the edit trail)"
+    );
+}
+
 #[test]
 fn edit_disabled_code_prefix_is_distinct() {
     // The EDIT_DISABLED code is distinct from the FS permission code, so the FE

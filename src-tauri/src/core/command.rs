@@ -288,6 +288,19 @@ pub struct CommandResult {
     /// frontend (see `reversed_sections` for the same reasoning).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_closed: Option<bool>,
+    /// Set when this save wrote a DETACHED COPY instead of saving the project:
+    /// an explicit Save-As destination on a SpeleoDB-managed project writes the
+    /// `.stalx` without its `speleo_link` row and leaves the session on the
+    /// managed file (see `save_project`). The frontend must be TOLD, because
+    /// the two things it normally does on a successful save are both wrong
+    /// here: `saved_path` would re-point `project.file_path` at a file this
+    /// session does not have open, and clearing `isDirty` would claim the open
+    /// project had been persisted when it was not. `saved_path` is deliberately
+    /// left `None` for exactly that reason. Same wire contract as the optional
+    /// fields above (`skip_serializing_if`, so ts-rs emits `unlinked_copy_path?:`
+    /// and the key stays absent for every ordinary save).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub unlinked_copy_path: Option<String>,
     /// The sections whose station NUMBERING this operation reversed (station `i`
     /// became station `N - i`), each carrying the shot count `N` in force at that
     /// reverse - for `ReverseSection`, for a `Batch` of them, and for an undo/redo
@@ -397,6 +410,7 @@ impl CommandResult {
             shot_id: None,
             saved_path: None,
             session_closed: None,
+            unlinked_copy_path: None,
             reversed_sections: None,
         }
     }
@@ -411,6 +425,7 @@ impl CommandResult {
             shot_id: None,
             saved_path: None,
             session_closed: None,
+            unlinked_copy_path: None,
             reversed_sections: None,
         }
     }
@@ -457,6 +472,13 @@ impl CommandResult {
         if closed {
             self.session_closed = Some(true);
         }
+        self
+    }
+
+    /// Record that this save wrote a detached (unlinked) copy at `path` rather
+    /// than saving the open project (see the field's doc comment).
+    pub fn with_unlinked_copy_path(mut self, path: String) -> Self {
+        self.unlinked_copy_path = Some(path);
         self
     }
 
@@ -799,10 +821,23 @@ mod tests {
         assert!(success.section_ids.is_empty());
         assert!(success.shot_id.is_none());
         assert!(success.saved_path.is_none());
+        assert!(success.unlinked_copy_path.is_none());
 
         let with_path = CommandResult::success().with_path("/tmp/test.stalx".to_string());
         assert!(with_path.success);
         assert_eq!(with_path.saved_path.as_deref(), Some("/tmp/test.stalx"));
+
+        let with_copy =
+            CommandResult::success().with_unlinked_copy_path("/tmp/copy.stalx".to_string());
+        assert!(with_copy.success);
+        assert_eq!(
+            with_copy.unlinked_copy_path.as_deref(),
+            Some("/tmp/copy.stalx")
+        );
+        assert!(
+            with_copy.saved_path.is_none(),
+            "a copy save must never also claim saved_path (the frontend re-points on it)"
+        );
 
         let with_warnings = CommandResult::success().with_warnings(vec![warning.clone()]);
         assert!(with_warnings.success);
