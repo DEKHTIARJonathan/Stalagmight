@@ -8,13 +8,13 @@ and turn a discovered bug into a repro report and a replayable spec.
 See **[docs/agent-harness.md](../../docs/agent-harness.md)** for the full design,
 tool reference, and troubleshooting.
 
-## Runtime requirement: Node 22
+## Runtime: the repo-pinned Node
 
-The harness runs under **Node 22**, which is no longer the repo default (`.nvmrc`
-is 24), so switch by hand with `nvm install 22 && nvm use 22` before running.
-webdriverio 9 fails at `POST /session` with `UND_ERR_INVALID_ARG` on other
-majors. See [docs/agent-harness.md](../../docs/agent-harness.md) for why the
-cause is recorded as unconfirmed.
+The harness runs on whatever `.nvmrc` pins (Node 24), like the rest of the repo -
+`nvm use` is enough. An earlier note here required Node 22 and blamed a
+webdriverio undici-vs-built-in-fetch mismatch; that is not what the code does and
+session creation works on both 22 and 24. See
+[docs/agent-harness.md](../../docs/agent-harness.md).
 
 The agent-facing workflow is the `app-harness` skill
 (`.claude/skills/app-harness/SKILL.md`).

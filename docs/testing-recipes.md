@@ -120,8 +120,7 @@ pnpm agent:smoke
 pnpm agent:scenarios
 ```
 
-Requires Node 22, which is not the repo default (`nvm use 22`). See
-[Agent Harness](agent-harness.md).
+Runs on the repo-pinned Node (`nvm use`). See [Agent Harness](agent-harness.md).
 
 ### Typecheck
 

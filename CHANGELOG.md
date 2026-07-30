@@ -11,7 +11,8 @@ Update this file every time a new version is tagged.
 
 - CI: GitHub Actions bumped to versions that run on Node.js 24, ahead of the Node.js 20 runtime deprecation ([#351](https://github.com/Stalagmight/Stalagmight/issues/351))
 - `scripts/release.sh` now bumps `src-tauri/Cargo.lock` alongside the other three version files, so a release no longer leaves the lock a version behind. It rewrites only this crate's stanza, and refuses to start if the lock is already out of step ([#352](https://github.com/Stalagmight/Stalagmight/issues/352))
-- The pinned toolchain moved to **Node.js 24** (`.nvmrc` plus advisory `engines`), so builds and tests now run on the current LTS line. `scripts/mac-setup.sh` and `scripts/mac-build.sh` read the major from `.nvmrc` instead of hardcoding it, so they can no longer drift behind a bump. pnpm stays pinned at `9.15.9`. The agent harness is deliberately left on Node 22, the only major it has been exercised on - run it under `nvm use 22` ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
+- The pinned toolchain moved to **Node.js 24** (`.nvmrc` plus advisory `engines`), so builds and tests now run on the current LTS line. `scripts/mac-setup.sh` and `scripts/mac-build.sh` read the major from `.nvmrc` instead of hardcoding it, so they can no longer drift behind a bump. pnpm stays pinned at `9.15.9` ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
+- The agent harness moved to Node 24 with everything else, so there is no second toolchain. Its "Node 22 only" rule blamed a webdriverio undici-versus-built-in-fetch mismatch that the code does not actually do; session creation works identically on Node 22 and 24, and `pnpm agent:http-probe` now checks that in one command after a webdriverio or Node bump
 
 ## [0.5.0] - 2026-07-29
 

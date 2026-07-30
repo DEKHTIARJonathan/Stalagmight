@@ -11,21 +11,37 @@ replay spec and a repro report.
 For the agent-facing workflow, see the `app-harness` skill
 (`.claude/skills/app-harness/SKILL.md`). This document is the reference.
 
-## Runtime requirement: Node 22
+## Runtime: the repo-pinned Node
 
-The harness runs under **Node 22**, which is no longer the repo default (`.nvmrc`
-is 24). Nothing selects it for you: switch by hand with `nvm install 22 && nvm
-use 22` before starting the server. `app_start` warns on any other major and
-rethrows `UND_ERR_INVALID_ARG` with guidance.
+The harness runs on whatever `.nvmrc` pins (Node 24), like the rest of the repo.
+`nvm use` is enough; there is no separate harness toolchain.
 
-Node 22 is where the harness has been exercised, not a diagnosed floor. The
-failure at `POST /session` is real, but the cause once recorded here (webdriverio
-handing an `Agent` from its bundled undici to Node's built-in `fetch`, so the two
-undici majors must agree) does **not** match webdriver 9.23.0: it imports `fetch`
-from undici alongside `Agent` and uses the pair together, so they cannot
-disagree. Treat the pin as unverified-above-22 rather than explained. Confirming
-it needs a Linux box, since the harness is Xvfb plus WebKitWebDriver and does not
-run on macOS at all.
+This used to say the harness required Node 22 and would fail on 23+ with
+`UND_ERR_INVALID_ARG` at `POST /session`, because webdriverio built an `Agent`
+from its bundled undici and handed it to Node's built-in `fetch`, so the two
+undici majors had to agree. That mechanism is not what the code does. `webdriver`
+9.23.0 imports `fetch` from undici alongside `Agent` (`build/node.js:1614`) and
+calls that fetch (`:1986`); they come from one undici and cannot disagree. The
+global-`fetch` variant is `request/web.ts`, the browser path, which this harness
+does not use.
+
+Checked rather than assumed: driving `remote()` through a full session lifecycle
+(`POST /session` -> `GET .../window` -> `DELETE`) against a stub WebDriver server
+succeeds identically on Node 22 (built-in undici 6.21.2) and Node 24 (undici
+7.29.0). The claim also predates nothing - `webdriverio` has been `^9.23.0` since
+the harness was written, so this was never a description of a version we no
+longer ship.
+
+That probe is committed as `pnpm agent:http-probe`, so this is one command to
+re-check after a webdriverio or Node bump rather than something to re-derive. It
+runs anywhere, macOS included, because the stub replaces the driver.
+
+What it does **not** cover: tauri-driver, WebKitWebDriver and the app itself,
+which are Linux-only (Xvfb). Only the HTTP layer the old note blamed is
+confirmed; a green probe does not promise the whole harness works on a given
+Node. If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect
+`HTTP_PROXY` / `NO_PROXY` in the environment before the Node version, and record
+what actually fixed it here.
 
 ## Architecture
 
@@ -51,7 +67,7 @@ hazards over long runs.
 
 - MCP config: `.mcp.json` registers server `stalagmight-app`
   (`pnpm exec tsx e2e/agent/mcp/server.ts`). In Claude Code, `/mcp` shows it.
-- Direct scripts (all Node 22, not the repo default - `nvm use 22` first):
+- Direct scripts (all on the repo-pinned Node, `nvm use`):
   - `pnpm agent:smoke` - session-core smoke (build -> launch -> drive -> stop).
   - `pnpm agent:mcp:smoke` - MCP-layer smoke (spawns the server, round-trips
     every tool through the protocol, self-tests the crash oracle).
@@ -219,8 +235,9 @@ Gitignored; the 20 newest sessions are kept.
 
 ## Troubleshooting
 
-- `app_start` fails `UND_ERR_INVALID_ARG` -> you are not on Node 22; `nvm use 22`.
-  The repo default is Node 24, so a fresh shell lands on the wrong major.
+- `app_start` fails `UND_ERR_INVALID_ARG` -> an error from webdriverio's undici
+  HTTP layer. Session creation works on Node 22 and 24, so check `HTTP_PROXY` /
+  `NO_PROXY` in the environment before blaming the Node version.
 - `window.__E2E_TEST__ not present` -> the binary was built without `VITE_E2E=1`.
   `build: "auto"` should have caught that before attach (see the build stamp
   below); if you land here anyway, rerun `app_start` with `build: "force"`.
