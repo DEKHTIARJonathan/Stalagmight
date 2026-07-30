@@ -14,6 +14,10 @@ set -euo pipefail
 # v0.5.0-rc1 reads the `## [0.5.0]` changelog section, because an RC is that
 # release, built early. If that section does not exist yet - the usual case
 # before `release.sh` moves it - it falls back to `## [Unreleased]`.
+#
+# Once that section exists, [Unreleased] is no longer read at all, so anything
+# written there after the first candidate would ship unannounced. This warns on
+# stderr when that is about to happen; see the check further down.
 
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"
@@ -47,9 +51,31 @@ trim_blank_lines() {
 }
 
 BODY="$(extract_section "$BASE_VERSION" | trim_blank_lines)"
-if [ -z "$BODY" ]; then
-  # Before release.sh moves it, the notes still live under [Unreleased].
-  BODY="$(extract_section "Unreleased" | trim_blank_lines)"
+UNRELEASED="$(extract_section "Unreleased" | trim_blank_lines)"
+
+if [ -n "$BODY" ]; then
+  # The version's own section won, so anything still under [Unreleased] is in the
+  # build being tagged but not in the notes describing it - and silently so. That
+  # is exactly what happened between v0.5.0-rc1 and rc2: four fixes sat under
+  # [Unreleased] while the tag read ## [0.5.0], and only reading the rendered body
+  # before tagging caught it. Warn on stderr, never stdout: the workflow redirects
+  # stdout into the release body, so anything printed there would be published.
+  # Warn rather than fail - a late-breaking entry nobody wants to announce is a
+  # legitimate choice, and failing here would block publishing at the last step.
+  if [ -n "$UNRELEASED" ]; then
+    lines=$(printf '%s\n' "$UNRELEASED" | wc -l | tr -d ' ')
+    cat >&2 <<WARN
+warning: ${lines} line(s) under '## [Unreleased]' will NOT be published.
+         ${TAG} takes its notes from '## [${BASE_VERSION}]', so entries left under
+         [Unreleased] ship inside the build with no mention in the release body.
+         Fold them into '## [${BASE_VERSION}]' before tagging, or accept that they
+         go unannounced.
+WARN
+  fi
+else
+  # Before release.sh moves it, the notes still live under [Unreleased]. Nothing to
+  # warn about here - that content is what gets published.
+  BODY="$UNRELEASED"
 fi
 if [ -z "$BODY" ]; then
   BODY="Release ${TAG}"
