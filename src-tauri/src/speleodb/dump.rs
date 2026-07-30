@@ -615,7 +615,6 @@ mod tests {
         assert_eq!(got, DumpClassification::NothingToOpen);
     }
 
-    #[test]
     /// [#258 review] A candidate the extract would refuse is not offered. The 512 MiB
     /// per-entry cap was applied at extraction only, so a declared size above it reached
     /// the picker as a pickable row - and the size shown there is the central
@@ -675,6 +674,7 @@ mod tests {
         assert!(!has_stalx_suffix("noextension"));
     }
 
+    #[test]
     fn entry_paths_lists_entries_in_order() {
         let zip = make_zip(&[("misc/project.stalx", b"data"), ("README.md", b"hi")]);
         let mut dump = Dump::open(&zip).expect("valid zip opens");

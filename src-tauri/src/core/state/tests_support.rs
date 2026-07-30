@@ -72,3 +72,58 @@ pub(super) fn speleodb_prod_matches(needle: &str, skip: &[&str]) -> usize {
         .map(|(_, src)| src.matches(needle).count())
         .sum()
 }
+
+#[cfg(test)]
+#[expect(clippy::expect_used, reason = "unit test fixtures")]
+mod tests {
+    use super::speleodb_prod_sources;
+
+    /// The array above must list EVERY `speleodb*.rs` in the family, and nothing
+    /// enforced that but a doc comment.
+    ///
+    /// It matters because of what rides on it. Two of the tripwires it feeds are
+    /// ABSENCE assertions - `replace_cache_stalx_abandoning` must have no caller outside
+    /// its own file, `write_collab_sibling` likewise - and an absence assertion over a
+    /// scan that has stopped seeing a file goes on passing while the thing it forbids
+    /// walks in through that file. A forgotten line is loud for the counting tripwires
+    /// and completely silent for those two, which is the wrong way round. The #275 plan
+    /// schedules two more modules (`speleodb_push.rs`, `speleodb_session.rs`), so this
+    /// is not hypothetical.
+    ///
+    /// `include_str!` needs literal paths, so the array itself cannot be derived. What
+    /// CAN be derived is whether it is complete - read the directory and say which file
+    /// is missing.
+    #[test]
+    fn every_speleodb_module_in_the_family_is_registered_for_the_source_scans() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/core/state");
+        let registered: Vec<&str> = speleodb_prod_sources().iter().map(|(n, _)| *n).collect();
+
+        let mut on_disk: Vec<String> = std::fs::read_dir(&dir)
+            .expect("the state module directory is readable")
+            .filter_map(|entry| {
+                let name = entry.ok()?.file_name().to_string_lossy().into_owned();
+                (name.starts_with("speleodb") && name.ends_with(".rs")).then_some(name)
+            })
+            .collect();
+        on_disk.sort();
+
+        let missing: Vec<&String> = on_disk
+            .iter()
+            .filter(|name| !registered.contains(&name.as_str()))
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "these `speleodb*.rs` modules are not registered in \
+             `speleodb_prod_sources`, so every source scan built on it silently stops \
+             covering them: {missing:?}. Add them there."
+        );
+
+        // And nothing registered that no longer exists - a stale entry would not fail
+        // to compile if the file were merely renamed alongside a new one.
+        let stale: Vec<&&str> = registered
+            .iter()
+            .filter(|name| !on_disk.iter().any(|d| d == *name))
+            .collect();
+        assert!(stale.is_empty(), "registered but not on disk: {stale:?}");
+    }
+}

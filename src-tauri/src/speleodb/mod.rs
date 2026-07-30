@@ -93,18 +93,26 @@ pub(crate) enum SpeleoDbError {
     AdoptAriane,
     /// The dump held more than one `.stalx` - ambiguous. [#258] Surfaced to the FE
     /// as `SpeleoDbAction::Ambiguous` with the candidates attached, so the user can
-    /// pick one; the message below is the fallback for the paths that still fail
-    /// closed (the fast-forward verbs, which carry no `entryPath` to resolve with).
+    /// pick one.
+    ///
+    /// A COUNT, not the names. Two reasons, and neither is brevity. The verbs this
+    /// used to be the fallback for - the fast-forward family, which carries no
+    /// `entryPath` - no longer reach it at all: they are refused earlier with
+    /// `AMBIGUOUS_NEEDS_REOPEN`, which names the way out. And the names are
+    /// server-supplied and unbounded in aggregate, so joining them built a second full
+    /// copy of every candidate path inside the error, alongside the structured list the
+    /// DTO already carries. A count says the same useful thing to anyone who does see
+    /// it, for a fixed size.
     #[error(
-        "SpeleoDB contains more than one Stalagmight file ({}). Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one.",
-        .0.iter().map(|c| c.entry_path.as_str()).collect::<Vec<_>>().join(", ")
+        "SpeleoDB contains more than one Stalagmight file ({} found). Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.len()
     )]
     AmbiguousDump(Vec<SpeleoDumpCandidate>),
     /// The dump held no `.stalx` but more than one `ariane.tml` - ambiguous on the
-    /// adoption path. [#258]
+    /// adoption path. [#258] A count rather than the names, for the reasons above.
     #[error(
-        "SpeleoDB contains more than one Ariane file ({}). Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one.",
-        .0.iter().map(|c| c.entry_path.as_str()).collect::<Vec<_>>().join(", ")
+        "SpeleoDB contains more than one Ariane file ({} found). Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one.",
+        .0.len()
     )]
     AmbiguousAriane(Vec<SpeleoDumpCandidate>),
     /// A local filesystem error while extracting/writing.
@@ -195,10 +203,15 @@ mod tests {
             SpeleoDbError::MissingCredentials.to_string(),
             "email and password are required to log in"
         );
-        // [#258] The ambiguity Display is the FALLBACK: every path that can offer
-        // the picker routes on `action == Ambiguous` and never shows this string.
-        // The paths that cannot (the fast-forward verbs carry no `entryPath`) show
-        // it, so it has to name the remedy rather than merely state the problem.
+        // [#258] The ambiguity Display still has to name the remedy - every path that
+        // can offer the picker routes on `action == Ambiguous` and never shows this
+        // string, so whoever DOES see it has no dialog to act in.
+        //
+        // A COUNT rather than the names, and the names being server-supplied is why:
+        // joining them built a second unbounded copy of every candidate path inside the
+        // error, beside the structured list the DTO already carries. The count says the
+        // same useful thing for a fixed size, and this assertion is what stops the join
+        // creeping back.
         let candidate = |path: &str| SpeleoDumpCandidate {
             entry_path: path.to_owned(),
             size_bytes: 0,
@@ -207,7 +220,7 @@ mod tests {
         assert_eq!(
             SpeleoDbError::AmbiguousDump(vec![candidate("a.stalx"), candidate("b.stalx")])
                 .to_string(),
-            "SpeleoDB contains more than one Stalagmight file (a.stalx, b.stalx). \
+            "SpeleoDB contains more than one Stalagmight file (2 found). \
              Choose which to open, or remove the extra file(s) on SpeleoDB, leaving a single one."
         );
         assert_eq!(
@@ -216,7 +229,7 @@ mod tests {
                 candidate("misc/ariane.tml")
             ])
             .to_string(),
-            "SpeleoDB contains more than one Ariane file (ariane.tml, misc/ariane.tml). \
+            "SpeleoDB contains more than one Ariane file (2 found). \
              Choose which to adopt, or remove the extra file(s) on SpeleoDB, leaving a single one."
         );
         // [#270] Transport gained a typed `cause`, but its Display is unchanged:
