@@ -96,6 +96,14 @@ const AMBIGUOUS_NEEDS_REOPEN: &str =
      you chose is not the one this revision was built from; re-open the project to \
      choose which file to use";
 
+/// Refusal for an Ariane ambiguity that reaches a caller with no picker. Separate from
+/// [`AMBIGUOUS_NEEDS_REOPEN`] only in what it names the tree as holding - the remedy is
+/// the same, because re-opening is the flow that can ask either question.
+const AMBIGUOUS_ARIANE_NEEDS_REOPEN: &str =
+    "this project holds more than one Ariane file on the server and no Stalagmight \
+     file, so there is nothing here to update; re-open the project to choose which \
+     file to adopt";
+
 /// The two shas a pull derives from one head resolution. [#258]
 ///
 /// Deliberately not the same value, which is the whole reason this is a type and not
@@ -317,6 +325,18 @@ impl AppState {
             Err(SpeleoDbError::AmbiguousDump(_)) if stalx == StalxAmbiguity::Refuse => {
                 Err(SpeleoDbError::Parse(AMBIGUOUS_NEEDS_REOPEN.to_owned()))
             }
+            // [#258 review] The same refusal for the OTHER ambiguity, which slipped
+            // between the two flags. `ArianeRoute` answers "can you import a `.tml`?"
+            // and `StalxAmbiguity` answers "can you ASK the user?" - the fast-forward
+            // says yes to the first and no to the second, so an ambiguous Ariane set
+            // matched neither refusing arm and shipped a candidate list to Start
+            // editing / Update / Take remote, none of which has a picker bound to it.
+            // Deliberately narrower than the arm above it: a LONE `ariane.tml` is a
+            // routing signal the frontend does act on, so only the ambiguous set is
+            // refused here.
+            Err(SpeleoDbError::AmbiguousAriane(_)) if stalx == StalxAmbiguity::Refuse => Err(
+                SpeleoDbError::Parse(AMBIGUOUS_ARIANE_NEEDS_REOPEN.to_owned()),
+            ),
             // [#258] Ariane data, and this caller cannot import it. Refuse with a
             // reason instead of handing back an adoption signal it has no way to act
             // on: a revision swap that routed here downloaded the TIP, answering a
@@ -751,10 +771,21 @@ impl AppState {
         // be recalled against a dump it never described. Best-effort - an unresolvable
         // head just means the bytes are undatable, which is what `None` says, and
         // adoption then asks again through the picker it already hosts.
-        let adopt_at = self
-            .speleodb_server_head(&endpoint, &token, insecure_http, &project_id)
-            .map(|(tip, _)| usable_tip(tip, &project_id))
-            .unwrap_or_else(|e| {
+        //
+        // DIRECTLY, not via `speleodb_server_head`, which wraps the same call in
+        // `speleodb_handle_auth`. That handler `forget()`s the token on a 401 - keychain
+        // entry included - and because this failure is deliberately swallowed and
+        // `token` was captured above, routing it there let a spurious 401 delete the
+        // user's stored credential while the adopt went on to succeed: signed out with
+        // no signal and nothing to sign back in with. The pull states the rule for this
+        // exact shape of call, and this function restates it 150 lines down for the type
+        // flip; only the resolve was routed through the drop.
+        let adopt_at = match client::get_revisions(&endpoint, &token, insecure_http, &project_id) {
+            Ok(history) => usable_tip(
+                sync::tip_of(&history.commits).map(str::to_owned),
+                &project_id,
+            ),
+            Err(e) => {
                 tracing::warn!(
                     error = %e,
                     project_id = %project_id,
@@ -763,7 +794,8 @@ impl AppState {
                      of honouring an undatable choice"
                 );
                 None
-            });
+            }
+        };
         // Download the dump (routed through the auth handler like the pull, so a dead
         // token forces re-login).
         let zip = self
@@ -1050,9 +1082,25 @@ impl AppState {
         policy: LocalEditsPolicy,
     ) -> Result<String, SpeleoDbError> {
         let project_id = &link.project_id;
+        // [#258 review] Pinned to the sha this call is fast-forwarding TO, because that
+        // sha is what dates the remembered choice below AND what stamps BASE. It used to
+        // download plain HEAD and assert in a comment that the two agreed; they are two
+        // requests, `tip` was resolved by the caller's fence, and `speleodb_update`
+        // holds no lock while `speleodb_take_remote` releases before getting here - so a
+        // push landing in between handed back commit B's tree labelled A. This is the
+        // window the pull and adopt paths were both changed to close; the fast-forward
+        // is the one that kept the claim without the fix.
+        let pinned = usable_tip(tip.map(str::to_owned), project_id);
         let zip = self.speleodb_handle_auth(
             Endpoint::DownloadDump,
-            client::download_dump(endpoint, token, insecure_http, project_id),
+            match pinned.as_deref() {
+                Some(sha) => {
+                    client::download_dump_at_hash(endpoint, token, insecure_http, project_id, sha)
+                }
+                // No usable tip: take HEAD as before, and say so by dating it `Unknown`
+                // rather than with a sha these bytes are not known to be.
+                None => client::download_dump(endpoint, token, insecure_http, project_id),
+            },
         )?;
         let mut dump = dump::Dump::open(&zip)?;
         // [#258] No `entryPath` reaches this verb - it honours whatever the session
@@ -1075,7 +1123,7 @@ impl AppState {
             &mut dump,
             None,
             ArianeRoute::Adopt,
-            DumpAt::from_sha(tip),
+            DumpAt::from_sha(pinned.as_deref()),
             StalxAmbiguity::Refuse,
         )?;
         let dest = self.speleodb_cache_path(project_id)?;
@@ -1097,7 +1145,9 @@ impl AppState {
                     endpoint: endpoint.to_owned(),
                     project_id: project_id.clone(),
                     project_name: link.project_name.clone(),
-                    base_commit_sha: tip.map(str::to_owned),
+                    // The same sha the dump was fetched at, so BASE cannot name a
+                    // commit these bytes did not come from.
+                    base_commit_sha: pinned.clone(),
                     has_unpushed_edits: false,
                     last_edit_at: None,
                     // A fresh pull confirms BASE == the server tip as of now, so this
@@ -1766,6 +1816,119 @@ mod tests {
                 Err(SpeleoDbError::AmbiguousDump(_))
             ),
             "a caller that hosts the picker must still get the candidates"
+        );
+
+        // [#258 review] And the OTHER ambiguity, which slipped between the two flags:
+        // the fast-forward passes `ArianeRoute::Adopt` (it CAN route a lone `.tml` to
+        // adoption) with `StalxAmbiguity::Refuse` (it CANNOT ask), so an ambiguous
+        // Ariane set matched neither refusing arm and shipped candidates to a verb with
+        // no picker bound to it.
+        let ariane = make_zip(&["one/ariane.tml", "two/ariane.tml"]);
+        let mut dump = Dump::open(&ariane).expect("open");
+        let refused_ariane = state.speleodb_resolve_entry_remembering(
+            project,
+            &mut dump,
+            None,
+            ArianeRoute::Adopt,
+            DumpAt::Revision(TIP),
+            StalxAmbiguity::Refuse,
+        );
+        let got = match refused_ariane {
+            Err(SpeleoDbError::Parse(msg)) => msg,
+            other => format!("{other:?}"),
+        };
+        assert!(
+            got.contains("re-open"),
+            "an Ariane ambiguity must be refused with directions for a caller that \
+             cannot ask, not answered with a candidate list; got: {got}"
+        );
+
+        // A LONE `ariane.tml` stays a routing signal even here - the frontend does act
+        // on it - so the refusal above must be the ambiguous set only.
+        let sole = make_zip(&["ariane.tml"]);
+        let mut dump = Dump::open(&sole).expect("open");
+        assert!(
+            matches!(
+                state.speleodb_resolve_entry_remembering(
+                    project,
+                    &mut dump,
+                    None,
+                    ArianeRoute::Adopt,
+                    DumpAt::Revision(TIP),
+                    StalxAmbiguity::Refuse,
+                ),
+                Err(SpeleoDbError::AdoptAriane)
+            ),
+            "a single .tml is an adoption route, not an unanswerable question"
+        );
+    }
+
+    /// [#258 review] The fast-forward must fetch the commit it dates and stamps. It
+    /// downloaded plain HEAD while dating with a `tip` its caller resolved in an earlier
+    /// request, and asserted in a comment that the two agreed - which is the same
+    /// two-request window the pull and adopt paths were changed to close. `Update` holds
+    /// no lock and `Take remote` releases before getting here, so nothing prevents a
+    /// push landing inside it.
+    ///
+    /// Source-order, because reaching the real thing needs a server that can advance its
+    /// head between two requests; the live orchestration tests are where a behavioural
+    /// version belongs.
+    #[test]
+    fn the_fast_forward_downloads_the_commit_it_dates_and_stamps() {
+        let src = prod_source();
+        let start = src
+            .find("fn speleodb_fast_forward")
+            .expect("the fast-forward verb is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert!(
+            body.contains("usable_tip(tip.map(str::to_owned)"),
+            "the caller's tip must cross the by-hash validation boundary before it can \
+             pin a download"
+        );
+        assert_eq!(
+            body.matches("download_dump_at_hash(").count(),
+            1,
+            "the fast-forward must fetch BY HASH when it has a usable tip"
+        );
+        assert!(
+            body.contains("DumpAt::from_sha(pinned.as_deref())"),
+            "the choice must be dated with the sha the bytes were fetched at, not one \
+             resolved by a separate request"
+        );
+        assert!(
+            body.contains("base_commit_sha: pinned.clone()"),
+            "and BASE must name that same sha, so it cannot claim a commit these bytes \
+             did not come from"
+        );
+    }
+
+    /// [#258 review] Adoption's best-effort head resolve must not be able to delete the
+    /// user's credential. `speleodb_server_head` wraps the call in `speleodb_handle_auth`,
+    /// which `forget()`s the token on a 401 - keychain entry included - and this
+    /// failure is deliberately swallowed, so a spurious 401 signed the user out with no
+    /// signal while the adopt went on to succeed. The pull states the rule for exactly
+    /// this shape of call, and adoption itself restates it for the type flip.
+    #[test]
+    fn adoptions_best_effort_head_resolve_stays_off_the_auth_drop() {
+        let src = prod_source();
+        let start = src
+            .find("fn speleodb_adopt_ariane")
+            .expect("the adoption verb is present");
+        let body = &src[start..];
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+        assert_eq!(
+            body.matches("speleodb_server_head(").count(),
+            0,
+            "the head resolve must not route through the 401 auto-drop: its failure is \
+             swallowed, so the drop is invisible and takes the keychain entry with it"
+        );
+        assert_eq!(
+            body.matches("client::get_revisions(").count(),
+            1,
+            "it calls the client directly instead, as the pull path does"
         );
     }
 
