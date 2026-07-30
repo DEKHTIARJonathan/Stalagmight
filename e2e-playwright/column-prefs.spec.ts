@@ -55,6 +55,45 @@ async function visibleHeaderKeys(page: Page): Promise<string[]> {
   );
 }
 
+/**
+ * Persisted width for one grid column, from the LATEST recorded view-save call.
+ *
+ * NB the shots table has a column whose key is literally `length`, so a lookup
+ * like `widths.length` is a column key, not an array length. These helpers take
+ * the key explicitly to keep that unambiguous.
+ */
+async function latestPersistedWidth(page: Page, colKey: string): Promise<number | undefined> {
+  const calls = await getViewCalls(page);
+  const widths = calls[calls.length - 1]?.columnWidths as Record<string, number> | undefined;
+  return widths?.[colKey];
+}
+
+/** How many recorded view-save calls carry a width for `colKey`. A bare call count
+ *  races the data table's own settling snapshot, which carries an EMPTY
+ *  columnWidths and flaked this test on its first run. */
+async function widthCallCount(page: Page, colKey: string): Promise<number> {
+  const calls = await getViewCalls(page);
+  return calls.filter(
+    (c) => (c.columnWidths as Record<string, number> | undefined)?.[colKey] !== undefined,
+  ).length;
+}
+
+/** Drag a column's resize edge by `dx`, leaving the button DOWN. hover() rather
+ *  than a mouse.move to a captured boundingBox: the handle is only a few px wide
+ *  and straddles the column boundary, so a raw move landed beside it under
+ *  parallel load and the drag silently did nothing. */
+async function beginColumnDrag(page: Page, colKey: string, dx: number): Promise<number> {
+  const handle = page.getByTestId(`grid-col-resize-${colKey}`);
+  await handle.hover();
+  // Measure once the pointer has settled, so the returned width is the laid-out
+  // one rather than a mid-settle value.
+  const before = (await page.getByTestId(`grid-header-${colKey}`).boundingBox())!.width;
+  await page.mouse.down();
+  const grip = (await handle.boundingBox())!;
+  await page.mouse.move(grip.x + grip.width / 2 + dx, grip.y + grip.height / 2, { steps: 8 });
+  return before;
+}
+
 /** Open the DataTable via keyboard shortcut. */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
@@ -84,10 +123,25 @@ test.describe('Data table column preferences', () => {
     await openDataTable(page);
   });
 
-  test('eye-menu toggles coalesce into one debounced update_data_table_view call', async ({ page }) => {
-    // The init from config must not re-save itself.
+  test('opening the data table saves nothing', async ({ page }) => {
+    // Seeding state from config must not look like a change and schedule a write.
+    // Deliberately waits out the 500ms debounce instead of sampling immediately: the
+    // bug this guards was a snapshot mismatch that fired ~500ms after mount, so an
+    // instantaneous check passes whether or not it is present. The mismatch came from
+    // comparing a sorted snapshot against the config's own unsorted order, and the
+    // station default `['_x','_y','_lat','_long']` is unsorted, so this fired on every
+    // open until DataTable's init sorted both hidden lists.
+    await page.waitForTimeout(900);
     expect(await getViewCalls(page)).toHaveLength(0);
+  });
 
+  test('eye-menu toggles coalesce into one debounced update_data_table_view call', async ({ page }) => {
+    // What proves the coalescing claim is waitForSingleViewCall() below - exactly one
+    // call once everything settles. The `toHaveLength(0)` a few lines down is NOT part
+    // of that proof: it samples the call count mid-debounce, so under parallel load the
+    // 500ms timer can fire before it runs. It predates this change and is left alone
+    // here rather than widening the diff, but do not copy the pattern - assert the
+    // settled end state, which proves the same property without racing.
     await page.getByTestId('data-table-columns-menu').click();
     const dropdown = page.getByTestId('data-table-columns-dropdown');
     await expect(dropdown).toBeVisible();
@@ -184,6 +238,104 @@ test.describe('Data table column preferences', () => {
       .poll(async () => (await getPanelsConfig(page)).data_table_shot_column_order, { timeout: 5000 })
       .toEqual(order);
   });
+
+  test('dragging a column edge persists the new width, and only on release', async ({ page }) => {
+    expect(await widthCallCount(page, 'length')).toBe(0);
+
+    const header = page.getByTestId('grid-header-length');
+    const before = await beginColumnDrag(page, 'length', 60);
+
+    // The grid follows the pointer immediately...
+    await expect.poll(async () => (await header.boundingBox())!.width).toBeGreaterThan(before + 40);
+    // ...but no width has been persisted yet. Were the width lifted to the host
+    // as controlled state, this would already be writing once per pixel.
+    expect(await widthCallCount(page, 'length')).toBe(0);
+
+    await page.mouse.up();
+
+    // The debounce can emit an interim snapshot, so poll the LATEST call rather
+    // than asserting a count or reading calls[0] (#171).
+    await expect
+      .poll(async () => latestPersistedWidth(page, 'length'), { timeout: 5000 })
+      .toBeGreaterThan(before + 40);
+
+    // Integers only - the persisted config stores u32.
+    const persisted = (await latestPersistedWidth(page, 'length'))!;
+    expect(Number.isInteger(persisted)).toBe(true);
+
+    // The post-save loadConfig() re-sync settles on the same width.
+    await expect
+      .poll(
+        async () =>
+          ((await getPanelsConfig(page)).data_table_shot_column_widths as Record<string, number>)
+            ?.length,
+        { timeout: 5000 },
+      )
+      .toBe(persisted);
+  });
+
+  test('a resize abandoned mid-drag is reverted and never rides along on a later save', async ({
+    page,
+  }) => {
+    // Regression guard. Clearing the drag flag on abandon is not enough: the
+    // in-progress width is already in the live map, and every commit spreads that
+    // WHOLE map - so the abandoned value used to be persisted by the next resize of
+    // an unrelated column, and rendered in the meantime as a width that was never
+    // saved.
+    const lengthHeader = page.getByTestId('grid-header-length');
+    const before = await beginColumnDrag(page, 'length', 80);
+    await expect.poll(async () => (await lengthHeader.boundingBox())!.width).toBeGreaterThan(before + 40);
+
+    // Abandon it the way the window does when focus is stolen mid-drag.
+    await page.evaluate(() => window.dispatchEvent(new Event('blur')));
+    await page.mouse.up(); // release for real, so the browser's button state is clean
+
+    // The column snaps back rather than showing a width that was never stored.
+    await expect.poll(async () => (await lengthHeader.boundingBox())!.width).toBe(before);
+    expect(await widthCallCount(page, 'length')).toBe(0);
+
+    // Now resize a DIFFERENT column for real. This is the step that used to drag
+    // the abandoned width along with it.
+    const depthBefore = await beginColumnDrag(page, 'depth_in', 50);
+    await page.mouse.up();
+
+    await expect
+      .poll(async () => latestPersistedWidth(page, 'depth_in'), { timeout: 5000 })
+      .toBeGreaterThan(depthBefore + 20);
+    expect(await latestPersistedWidth(page, 'length')).toBeUndefined();
+  });
+
+  test('a resize whose mouseup landed outside the window is kept, not reverted', async ({
+    page,
+  }) => {
+    // The abandon guard above and this one share a single code path: cancelDragRef used
+    // to serve both `blur` (a genuine abandon) and the buttonless-mousemove recovery
+    // for a mouseup released outside the window. Making that path revert fixed the
+    // first case and broke the second - the user DID finish this resize, so throwing
+    // it away is data loss, not safety.
+    const lengthHeader = page.getByTestId('grid-header-length');
+    const before = await beginColumnDrag(page, 'length', 70);
+    await expect
+      .poll(async () => (await lengthHeader.boundingBox())!.width)
+      .toBeGreaterThan(before + 30);
+
+    // No mouseup reaches the window; the next pointer move arrives with no buttons
+    // held, which is exactly how the grid learns the release already happened.
+    await page.evaluate(() =>
+      window.dispatchEvent(new MouseEvent('mousemove', { buttons: 0, bubbles: true }))
+    );
+    await page.mouse.up(); // keep the browser's own button state clean for later tests
+
+    await expect
+      .poll(async () => latestPersistedWidth(page, 'length'), { timeout: 5000 })
+      .toBeGreaterThan(before + 30);
+  });
+
+  // A bare click on a resize handle must not commit. That is NOT asserted here: the
+  // commit is deduped downstream by DataTable's snapshot compare, so no IPC fires
+  // either way and this layer cannot tell the two apart - an e2e test here passes with
+  // the guard deleted. It is pinned where the callback is observable, in
+  // src/components/common/SpreadsheetGrid/__tests__/useColumnWidths.test.tsx.
 
   test('header right-click hide entry hides the column and persists', async ({ page }) => {
     expect(await getViewCalls(page)).toHaveLength(0);

@@ -1,6 +1,8 @@
 use tauri::State;
 
-use crate::config::{Config, ConfigSaveReport};
+use std::collections::BTreeMap;
+
+use crate::config::{normalize_column_widths, Config, ConfigSaveReport};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -53,9 +55,10 @@ pub fn update_panel_sizes(
     )
 }
 
-/// Update the data-table view state (shot/station column order and
-/// visibility, angle display modes) in configuration (efficient partial update)
+/// Update the data-table view state (shot/station column order, visibility and
+/// widths, angle display modes) in configuration (efficient partial update)
 #[tauri::command]
+#[expect(clippy::too_many_arguments)]
 pub fn update_data_table_view(
     state: State<AppState>,
     column_order: Option<Vec<String>>,
@@ -64,6 +67,8 @@ pub fn update_data_table_view(
     inclination_mode: Option<String>,
     station_column_order: Option<Vec<String>>,
     station_hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+    station_column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
     update_data_table_view_impl(
         state.inner(),
@@ -73,9 +78,12 @@ pub fn update_data_table_view(
         inclination_mode,
         station_column_order,
         station_hidden_columns,
+        column_widths,
+        station_column_widths,
     )
 }
 
+#[expect(clippy::too_many_arguments)]
 pub(crate) fn update_data_table_view_impl(
     state: &AppState,
     column_order: Option<Vec<String>>,
@@ -84,6 +92,8 @@ pub(crate) fn update_data_table_view_impl(
     inclination_mode: Option<String>,
     station_column_order: Option<Vec<String>>,
     station_hidden_columns: Option<Vec<String>>,
+    column_widths: Option<BTreeMap<String, u32>>,
+    station_column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
     const MODES: [&str; 3] = ["avg", "inout", "off"];
     let mut config = state.get_config();
@@ -110,6 +120,27 @@ pub(crate) fn update_data_table_view_impl(
     }
     if let Some(hidden) = station_hidden_columns {
         config.panels.data_table_station_hidden_columns = hidden;
+    }
+    // Clamp on the way in as well as on load, so a width that arrived here
+    // degenerate is repaired before it reaches disk rather than only on the next
+    // read. NB this is not the only door into these fields: `update_config` takes
+    // a whole `Config` and `Config::save` deliberately skips normalize.
+    //
+    // Do NOT read that as "harmless until the next load". Settings > Advanced >
+    // Reset posts a whole Config carrying `defaultConfig.panels`, i.e. EMPTY width
+    // maps, and `update_config` preserves only webkit_memory and four speleodb
+    // fields - so the reset genuinely wipes these off disk. The running DataTable
+    // does not notice (its seed effect is one-shot) and the next unrelated view
+    // change posts the whole in-memory map straight back, so the reset reads as a
+    // no-op until restart. Pre-existing for column_order/hidden_columns; these two
+    // fields join it. Tracked in #357.
+    if let Some(mut widths) = column_widths {
+        normalize_column_widths(&mut widths);
+        config.panels.data_table_shot_column_widths = widths;
+    }
+    if let Some(mut widths) = station_column_widths {
+        normalize_column_widths(&mut widths);
+        config.panels.data_table_station_column_widths = widths;
     }
     state
         .update_config(config)

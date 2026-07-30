@@ -1,3 +1,4 @@
+mod column_widths;
 pub mod defaults;
 mod gas;
 mod speleodb;
@@ -8,6 +9,7 @@ mod webkit;
 #[expect(clippy::unwrap_used, clippy::expect_used, clippy::float_cmp)]
 mod tests;
 
+pub(crate) use column_widths::normalize_column_widths;
 pub use gas::*;
 pub use speleodb::*;
 pub use types::*;

@@ -1793,6 +1793,35 @@ fn test_save_to_path_and_load_roundtrip() {
 }
 
 #[test]
+fn test_column_widths_survive_a_save_load_roundtrip() {
+    // The property #334 is actually about: a width set in one session is still
+    // there in the next. That crosses a process boundary, so it has to be proven
+    // against a real file rather than the in-memory config an IPC round trip
+    // reads back.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.panels.data_table_shot_column_widths = std::collections::BTreeMap::from([
+        ("length".to_string(), 210),
+        ("comment".to_string(), 480),
+    ]);
+    config.panels.data_table_station_column_widths =
+        std::collections::BTreeMap::from([("_zeroDatum".to_string(), 96)]);
+
+    config.save_to_path(&path).unwrap();
+    let loaded = Config::load_from_path(&path).unwrap();
+
+    assert_eq!(loaded.panels.data_table_shot_column_widths["length"], 210);
+    assert_eq!(loaded.panels.data_table_shot_column_widths["comment"], 480);
+    assert_eq!(
+        loaded.panels.data_table_station_column_widths["_zeroDatum"],
+        96
+    );
+}
+
+#[test]
 fn test_non_default_webkit_memory_survives_save_load_roundtrip() {
     // Regression: `webkit_memory` is `#[serde(skip_serializing)]`, so
     // `toml::to_string_pretty` drops it. `save_to_path` must re-append the
@@ -2693,6 +2722,112 @@ fn test_panels_config_normalize_clamps_sizes() {
 }
 
 #[test]
+fn test_unusable_column_width_degrades_per_entry_without_losing_the_rest_of_the_config() {
+    // `#[serde(default)]` covers an ABSENT widths table, not a present one holding a
+    // value that is not a width. Erroring on such a value would fail the WHOLE parse,
+    // and `Config::load().unwrap_or_default()` then silently resets EVERY setting in
+    // the file because one column width was hand-typo'd. The bad ENTRY must drop and
+    // everything else - sibling widths and unrelated panel settings alike - survive.
+    // Mirrors test_gas_config_dpv_old_shape_degrades_to_none_without_losing_the_rest_of_the_config.
+    let toml_str = r#"
+sections_panel_width = 320
+detail_panel_width = 300
+data_table_height = 200
+data_table_azimuth_mode = "inout"
+
+[data_table_shot_column_widths]
+negative = -5
+fractional = 210.5
+textual = "wide"
+absurd = 99999999999
+good = 180
+"#;
+    let mut panels: PanelsConfig =
+        toml::from_str(toml_str).expect("an unusable width must not fail the whole parse");
+    assert_eq!(
+        panels.data_table_shot_column_widths,
+        std::collections::BTreeMap::from([
+            ("absurd".to_string(), u32::MAX),
+            ("good".to_string(), 180),
+        ]),
+        "negative, fractional and textual values are not widths at all and drop; an \
+         integral one past u32::MAX saturates so normalize can clamp it"
+    );
+    // Saturate-then-clamp rather than drop, so there is no arbitrary cliff at
+    // u32::MAX: 5000 and 99999999999 both mean "absurdly wide" and both land on
+    // MAX_COLUMN_WIDTH. Dropping would instead revert the column to its declared
+    // default, which is a different width than the user asked for.
+    panels.normalize();
+    assert_eq!(
+        panels.data_table_shot_column_widths["absurd"], 2000,
+        "the saturated width must reach the clamp, not be discarded before it"
+    );
+    assert_eq!(
+        panels.sections_panel_width, 320,
+        "an unrelated customized setting in the same table must survive a bad width"
+    );
+    assert_eq!(
+        panels.data_table_azimuth_mode, "inout",
+        "a sibling data-table setting must survive a bad width"
+    );
+}
+
+#[test]
+fn test_panels_config_normalize_clamps_column_widths() {
+    // config.toml is hand-editable, so the load path has to repair widths the
+    // grid cannot render: 0 is invisible and un-resizable (no border to grab),
+    // and a huge value pushes every later column off-screen.
+    let mut p = PanelsConfig {
+        data_table_shot_column_widths: std::collections::BTreeMap::from([
+            ("collapsed".to_string(), 0),
+            ("runaway".to_string(), 100_000),
+            ("sane".to_string(), 150),
+        ]),
+        data_table_station_column_widths: std::collections::BTreeMap::from([(
+            "tiny".to_string(),
+            7,
+        )]),
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+    assert_eq!(p.data_table_shot_column_widths["collapsed"], 40); // up to min
+    assert_eq!(p.data_table_shot_column_widths["runaway"], 2000); // down to max
+    assert_eq!(p.data_table_shot_column_widths["sane"], 150); // untouched
+    assert_eq!(p.data_table_station_column_widths["tiny"], 40);
+}
+
+#[test]
+fn test_panels_config_normalize_bounds_the_shape_of_the_width_maps() {
+    // Clamping each VALUE bounds one entry; nothing bounded the map itself. That
+    // matters because no path prunes a key that never named a real column and the
+    // frontend re-sends the whole map on every later resize, so one oversized write
+    // is re-persisted forever. Both grids declare well under 100 columns.
+    let mut p = PanelsConfig {
+        data_table_shot_column_widths: (0..300).map(|i| (format!("col_{i:04}"), 120)).collect(),
+        data_table_station_column_widths: std::collections::BTreeMap::from([
+            ("x".repeat(129), 120),      // one byte over the key cap
+            ("x".repeat(128), 130),      // exactly at it, kept
+            (String::new(), 140),        // no column has an empty key
+            ("length".to_string(), 150), // ordinary, kept
+        ]),
+        ..PanelsConfig::default()
+    };
+    p.normalize();
+
+    assert_eq!(p.data_table_shot_column_widths.len(), 256);
+    // Truncation is by key order, so it is at least deterministic across runs.
+    assert!(p.data_table_shot_column_widths.contains_key("col_0000"));
+    assert!(!p.data_table_shot_column_widths.contains_key("col_0299"));
+
+    let station = &p.data_table_station_column_widths;
+    assert_eq!(station.len(), 2, "over-long and empty keys are dropped");
+    assert_eq!(station["length"], 150);
+    assert_eq!(station[&"x".repeat(128)], 130);
+    assert!(!station.contains_key(&"x".repeat(129)));
+    assert!(!station.contains_key(""));
+}
+
+#[test]
 fn test_panels_config_normalize_repairs_invalid_mode() {
     let mut p = PanelsConfig {
         sections_panel_mode: "Hover".to_string(), // wrong case
@@ -2742,6 +2877,11 @@ fn test_panels_config_deserializes_legacy_table_without_reveal_fields() {
     assert_eq!(p.sections_panel_mode, "pin");
     assert_eq!(p.detail_panel_mode, "pin");
     assert_eq!(p.data_table_mode, "pin");
+    // Every config written before #334 also lacks the column-width tables, so
+    // they must default to "no overrides" rather than failing the whole load and
+    // dropping the user back to stock settings.
+    assert!(p.data_table_shot_column_widths.is_empty());
+    assert!(p.data_table_station_column_widths.is_empty());
 }
 
 // ========================================================================

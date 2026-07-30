@@ -230,6 +230,7 @@ export const defaultConfig: Config = {
       "section_id",
       "shot_id"
     ],
+    "data_table_shot_column_widths": {},
     "data_table_azimuth_mode": "avg",
     "data_table_inclination_mode": "off",
     "data_table_station_column_order": [],
@@ -239,6 +240,7 @@ export const defaultConfig: Config = {
       "_lat",
       "_long"
     ],
+    "data_table_station_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",
     "detail_panel_open": true,

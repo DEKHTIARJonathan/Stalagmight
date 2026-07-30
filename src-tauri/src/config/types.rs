@@ -1,6 +1,8 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
-use std::collections::{HashMap, HashSet};
+
+use super::column_widths::{lenient_column_widths, normalize_column_widths};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -318,6 +320,25 @@ pub struct PanelsConfig {
     /// Shots-table hidden column keys
     #[serde(default = "default_data_table_hidden_columns")]
     pub data_table_shot_hidden_columns: Vec<String>,
+    /// Shots-table column widths in pixels, keyed by grid column key. A missing
+    /// key means "no override", so the column keeps its declared width. BTreeMap
+    /// rather than HashMap so the serialized TOML key order is stable: this is
+    /// rewritten on every column resize, and a nondeterministic order would
+    /// reshuffle the config file on each save.
+    ///
+    /// Deserialized via [`lenient_column_widths`] rather than the plain derive:
+    /// `#[serde(default)]` only covers an ABSENT table, so a table that is
+    /// present with one unusable value would fail the whole config parse, and
+    /// `Config::load().unwrap_or_default()` then silently resets every OTHER
+    /// setting because one column width was typo'd.
+    ///
+    /// Deliberately NOT `skip_serializing_if` empty, tempting though it is to keep
+    /// two empty tables out of a default config file: the generated
+    /// `defaultConfig.ts` is produced by serializing `Config::default()`, and
+    /// skipping the field there drops a key the generated `PanelsConfig` type
+    /// still requires.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
+    pub data_table_shot_column_widths: BTreeMap<String, u32>,
     /// Shots-table azimuth display: "avg" | "inout" | "off"
     #[serde(default = "default_azimuth_mode")]
     pub data_table_azimuth_mode: String,
@@ -330,6 +351,11 @@ pub struct PanelsConfig {
     /// Stations-table hidden column keys (both coordinate pairs start hidden)
     #[serde(default = "default_station_hidden_columns")]
     pub data_table_station_hidden_columns: Vec<String>,
+    /// Stations-table column widths in pixels, keyed by grid column key.
+    /// See `data_table_shot_column_widths` for the BTreeMap and the tolerant
+    /// deserializer.
+    #[serde(default, deserialize_with = "lenient_column_widths")]
+    pub data_table_station_column_widths: BTreeMap<String, u32>,
     /// Sections panel open (pinned) at startup
     #[serde(default = "default_true")]
     pub sections_panel_open: bool,
@@ -370,6 +396,8 @@ impl PanelsConfig {
         normalize_panel_mode(&mut self.sections_panel_mode);
         normalize_panel_mode(&mut self.detail_panel_mode);
         normalize_panel_mode(&mut self.data_table_mode);
+        normalize_column_widths(&mut self.data_table_shot_column_widths);
+        normalize_column_widths(&mut self.data_table_station_column_widths);
     }
 }
 
