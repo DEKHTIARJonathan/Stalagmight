@@ -77,3 +77,8 @@ CLAUDE.local.md
 
 # LLM agent-harness bridge runtime artifacts (#262) - never commit
 .agent-bridge/
+
+# Per-contributor /pre-pr instrumentation - local by policy (#257)
+.claude/review-log.jsonl
+# Python bytecode from scripts/review tooling
+__pycache__/
