@@ -953,6 +953,74 @@ mod tests {
     }
 
     #[test]
+    fn every_file_backed_installer_finalizes_under_one_project_guard() {
+        // Round 4: the delete's check-and-teardown holds the `project` mutex
+        // and reasons "strictly before the load, or strictly after it". That
+        // argument is only sound while every installer of a file-backed
+        // project commits the slot AND its companion state (database handle,
+        // undo stack, recents) inside one unbroken acquisition - a slot commit
+        // in its own span reopens the torn-middle interleaving where the
+        // delete tears down a half-built session and the loader finishes
+        // building into an empty world. `create_project` is exempt: it
+        // commits a project with no `file_path`, which the delete's identity
+        // check can never match.
+        for (file, func, database_commit, undo_commit) in [
+            (
+                "project_load.rs",
+                "fn open_project",
+                " = Some(db);",
+                "load_from_persisted_with_timestamps(",
+            ),
+            (
+                "project_load.rs",
+                "pub fn do_load_project_full",
+                " = Some(db);",
+                "load_from_persisted_with_timestamps(",
+            ),
+            (
+                "project_create.rs",
+                "fn do_create_project_full",
+                " = db;",
+                ".clear();",
+            ),
+        ] {
+            let src = state_source(file);
+            let start = src
+                .find(func)
+                .unwrap_or_else(|| panic!("{func} is present in {file}"));
+            let body = &src[start..];
+            let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+
+            let guard = body
+                .find("let mut proj_guard")
+                .unwrap_or_else(|| panic!("{func} takes the project guard by name"));
+            let slot = body
+                .find(" = Some(project")
+                .unwrap_or_else(|| panic!("{func} commits the project slot"));
+            let db_commit = body
+                .find(database_commit)
+                .unwrap_or_else(|| panic!("{func} commits the database handle"));
+            let undo = body
+                .find(undo_commit)
+                .unwrap_or_else(|| panic!("{func} commits the undo stack"));
+            let released = body
+                .find("drop(proj_guard)")
+                .unwrap_or_else(|| panic!("{func} releases the guard explicitly"));
+            assert!(
+                guard < slot && slot < db_commit && db_commit < undo && undo < released,
+                "{func} must commit slot, database and undo history inside one \
+                 project-guard span (guard at {guard}, slot {slot}, database \
+                 {db_commit}, undo {undo}, drop {released})"
+            );
+            assert_eq!(
+                body.matches("drop(proj_guard)").count(),
+                1,
+                "{func}: one release, at the end of the finalization"
+            );
+        }
+    }
+
+    #[test]
     fn the_delete_clears_its_own_claim_before_the_guard_drops() {
         let src = state_source("recent_projects.rs");
         let start = src

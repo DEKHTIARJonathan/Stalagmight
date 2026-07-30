@@ -159,13 +159,6 @@ impl AppState {
         // load path classifies and persists them. Classifying in memory here
         // without persisting would only make the two paths disagree.
 
-        if let Ok(mut proj) = self.project.lock() {
-            *proj = Some(project);
-            // A session boundary (a project committed into the slot), bumped under
-            // the guard per the `speleodb_session` rule.
-            self.bump_speleodb_session();
-        }
-
         // Load undo/redo stacks from database before replacing database reference
         let undo_entries = match db.load_undo_stack_with_timestamps() {
             Ok(loaded) => loaded
@@ -196,6 +189,21 @@ impl AppState {
             }
         };
 
+        // ALL commits under ONE `project` acquisition, exactly as
+        // `do_load_project_full`'s finalization and for the same reason (round
+        // 5): the delete's check-and-teardown serializes on this mutex, and a
+        // slot commit in its own span let a delete of this path land between
+        // the slot and the handles - tearing down a half-built session that
+        // this function then finished building into an empty world.
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *proj_guard = Some(project);
+        // A session boundary (a project committed into the slot), bumped under
+        // the guard per the `speleodb_session` rule.
+        self.bump_speleodb_session();
+
         // [Track B] (#191) Read-only edit gate: remote ⇒ edit disabled,
         // local-only ⇒ enabled (see do_load_project_full). Read before `db` moves.
         let is_remote = matches!(db.load_speleo_link(), Ok(Some(_)));
@@ -203,9 +211,10 @@ impl AppState {
         // #213: force-edit is per-session; a fresh open never starts force-editing.
         self.set_force_editing(false);
 
-        if let Ok(mut database) = self.database.lock() {
-            *database = Some(db);
-        }
+        *self
+            .database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(db);
         // Opened an existing project from disk - its initial save is not deferred.
         self.initial_save_deferred
             .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -246,6 +255,8 @@ impl AppState {
                 }
             }
         }
+
+        drop(proj_guard);
 
         tracing::info!(
             path = %path_display,
@@ -716,17 +727,30 @@ impl AppState {
         // open" guard rejects reopening the same path, so neither releases our lock.
         self.speleodb_release_held_lock_detached();
 
+        // ALL commits under ONE `project` acquisition. The delete's
+        // check-and-teardown (`delete_project`) takes this same mutex and
+        // reasons "strictly before the load, or strictly after it"; when the
+        // slot was committed in its own span and the database / gates / undo /
+        // recents in later ones, a delete of this very path landing after the
+        // slot commit was NEITHER - it matched the freshly-installed project,
+        // tore the half-built session down, and this function then went on
+        // installing its handles into an empty world and returned success over
+        // a project the backend no longer had (round 5). One guard makes the
+        // finalization the atom that argument needs. The guard is held over
+        // the recents/config write too - the delete prunes recents only after
+        // its own teardown, so the row this adds must not land between the two.
+        // Lock order is the documented one: `project` is outermost of
+        // {project, database, undo_stack}, and recents/config are leaves.
+        let mut proj_guard = self
+            .project
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+
         // Commit 1: Project state mutation
-        {
-            let mut proj_guard = self
-                .project
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            *proj_guard = Some(project.clone());
-            // A session boundary (a project committed into the slot), bumped under
-            // the guard per the `speleodb_session` rule.
-            self.bump_speleodb_session();
-        }
+        *proj_guard = Some(project.clone());
+        // A session boundary (a project committed into the slot), bumped under
+        // the guard per the `speleodb_session` rule.
+        self.bump_speleodb_session();
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.
@@ -789,6 +813,8 @@ impl AppState {
                 }
             }
         }
+
+        drop(proj_guard);
 
         progress.complete_phase(LoadingPhase::Finalizing);
 

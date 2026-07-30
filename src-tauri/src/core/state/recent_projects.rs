@@ -212,15 +212,23 @@ impl AppState {
         // then calling `close_project` (which re-acquires it) is a TOCTOU: a load
         // that finished installing project B in the gap made the close tear down
         // B's SQLite handle and undo stack while this call went on to delete A's
-        // file. Every path that installs a project - `open_project`,
-        // `do_load_project_full`, `create_project`/`create_project_full` - installs
-        // it under THIS lock and only afterwards installs the database handle and
-        // the undo stack, so holding it here orders us strictly before or after such
-        // a load: either we observe the newly-installed project and match nothing,
-        // or we complete the teardown and the load installs its own handles after
-        // we release. `close_project` would self-deadlock under the guard, so this
-        // goes through `close_open_project_locked` - the same teardown with the
-        // guard passed in. (`close_project_if_open_at` still has the older
+        // file. The other half of the atom lives in the installers (round 5):
+        // every path that installs a project WITH a file path - `open_project`,
+        // `do_load_project_full`, `create_project_full` - commits the slot, the
+        // gates, the database handle, the undo stack AND the recents row under
+        // one unbroken acquisition of this same lock, so holding it here orders
+        // this delete strictly before that whole finalization or strictly after
+        // it. Before: we see the pre-load world, match nothing of the loader's,
+        // and the load lands intact. After: the teardown finds every handle
+        // installed and drops them all. When the slot commit sat in its OWN
+        // span, a delete of the very path being loaded landed in between -
+        // matching the freshly-installed project, tearing down the half-built
+        // session, and leaving the loader to install handles into an empty
+        // world and report success. (`create_project` commits a project with no
+        // `file_path`, which this check can never match.) `close_project` would
+        // self-deadlock under the guard, so this goes through
+        // `close_open_project_locked` - the same teardown with the guard passed
+        // in. (`close_project_if_open_at` still has the older
         // check-release-close shape; the same restructuring would suit it, but its
         // callers replace rather than delete, so it is left alone here.)
         //
