@@ -517,60 +517,62 @@ impl AppState {
             if proj_guard.is_some() {
                 return;
             }
-            let claim = {
-                let Ok(mut session) = self.speleodb_session_lock() else {
-                    return;
-                };
+            {
                 // Unusable ids first, whoever they belong to: one that can never
                 // be joined into a URL can never be released either, so clearing
                 // is its only safe end and nobody's later sign-in helps.
+                let Ok(mut session) = self.speleodb_session_lock() else {
+                    return;
+                };
                 session.locks_acquired_here.retain(|claim| {
                     super::speleodb::validate_project_id(&claim.project_id).is_ok()
                 });
-                // One claim per visit - the poll comes back. Any of them will do;
-                // whether it is THIS session's to release is decided below, once
-                // the account is resolved.
-                let Some(claim) = session.locks_acquired_here.first().cloned() else {
+                if session.locks_acquired_here.is_empty() {
                     return;
-                };
-                claim
-            };
-            // Session guard dropped for the token read - `active_token` takes it
-            // itself. `proj_guard` is still held, so no session can begin.
+                }
+            }
+            // The ACCOUNT is resolved BEFORE a claim is chosen, because it is what
+            // makes a claim choosable at all: only the account that took a lock can
+            // hand it back. Picking first and testing afterwards let one account's
+            // retained claim sit at the head of the list and answer every poll -
+            // failing the test, returning, and starving a claim the live account
+            // COULD have released until the other user happened to sign in.
+            //
+            // Both reads take the session lock themselves, so neither may run under
+            // it (the mutex is not reentrant). `proj_guard` is still held, so no
+            // session can begin underneath them.
             let Ok((endpoint, token)) = self.speleodb_active_token() else {
-                // No token, no POST. Keep the record: it describes a dead
-                // session either way, but with no project open it drives
-                // nothing except this janitor, and the poll after a sign-in
-                // walks this branch again WITH a token.
+                // No token, no POST. Keep the records: they describe dead sessions
+                // either way, but with no project open they drive nothing except
+                // this janitor, and the poll after a sign-in walks this branch
+                // again WITH a token.
                 return;
             };
-            // Resolved BEFORE the session guard below is taken: the session
-            // mutex is not reentrant, and `speleodb_my_email` takes it.
             let me = self.speleodb_my_email();
-            if !claim.taken_by(Some(&endpoint), me.as_deref()) {
-                // Signed in as somebody else, or against another deployment.
-                // This token cannot release that lock, and using it anyway
-                // would either succeed against the wrong project on the wrong
-                // server or 403 forever. Keep the record: a later sign-in as
-                // the right account is the one thing that can still hand this
-                // mutex back.
+            let Ok(mut session) = self.speleodb_session_lock() else {
+                return;
+            };
+            // One claim per visit - the poll comes back for the rest.
+            let Some(position) = session
+                .locks_acquired_here
+                .iter()
+                .position(|claim| claim.taken_by(Some(&endpoint), me.as_deref()))
+            else {
+                // Everything retained belongs to another account or another
+                // deployment. Their tokens are the only ones that can release
+                // them, so hold the records until one of those signs in; using
+                // this token would either succeed against the wrong project on
+                // the wrong server or 403 forever.
                 tracing::debug!(
-                    project_id = %claim.project_id,
                     purpose = "clean up after a torn-down edit session",
-                    "speleodb: holding a stranded claim until its own account signs in again"
+                    "speleodb: holding stranded claims until their own accounts sign in again"
                 );
                 return;
-            }
-            if let Ok(mut session) = self.speleodb_session_lock() {
-                // This exact claim - same project AND same account - not
-                // whatever is there. The only writer that could slip into the
-                // unguarded gap above is a clear, and no other account's entry
-                // is this cleanup's to touch.
-                session.locks_acquired_here.retain(|live| {
-                    live.project_id != claim.project_id
-                        || !live.taken_by(Some(&endpoint), me.as_deref())
-                });
-            }
+            };
+            // Removed by position, so the entry taken is exactly the entry
+            // chosen - no second predicate to drift from the first.
+            let claim = session.locks_acquired_here.remove(position);
+            drop(session);
             tracing::info!(
                 project_id = %claim.project_id,
                 purpose = "clean up after a torn-down edit session",
@@ -998,20 +1000,42 @@ mod tests {
              they have nothing to do with (round 7 P1)"
         );
 
-        // Re-acquiring replaces this account's OWN entry rather than piling up.
-        state.speleodb_note_lock_acquired(Some(ID));
+        // Re-acquiring the SAME project replaces that entry rather than piling
+        // a duplicate on top of it.
+        state.speleodb_note_lock_acquired(Some(OTHER_ID));
         assert_eq!(
-            retained_projects(&state).len(),
-            2,
-            "one claim per account, not one per acquisition"
+            retained_projects(&state),
+            vec![ID.to_owned(), OTHER_ID.to_owned()],
+            "one claim per (account, project), not one per acquisition"
         );
 
-        // And a release ends this account's claims without touching the other's.
+        // Round 8 (P2): a DIFFERENT project ADDS an entry. One account can be
+        // owed more than one mutex - a janitor release that failed transiently
+        // leaves exactly such a claim - and locking a second project must not be
+        // what loses the first one's retry pointer.
+        const THIRD_ID: &str = "33333333-3333-3333-3333-333333333333";
+        state.speleodb_note_lock_acquired(Some(THIRD_ID));
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned(), OTHER_ID.to_owned(), THIRD_ID.to_owned()],
+            "acquiring one project must not end this account's claim on another"
+        );
+
+        // A per-project release ends exactly that project's claim...
+        state.speleodb_forget_lock_acquired_for(OTHER_ID);
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned(), THIRD_ID.to_owned()],
+            "the per-project release is the one that ends one claim"
+        );
+
+        // ...and release-all ends this account's claims without touching the
+        // other account's.
         state.speleodb_note_lock_acquired(None);
         assert_eq!(
             retained_projects(&state),
             vec![ID.to_owned()],
-            "the first account's claim survives a second account's release"
+            "the first account's claim survives a second account's release-all"
         );
 
         sign_out(&state);
@@ -1019,6 +1043,71 @@ mod tests {
             state.speleodb_acquired_here_project(),
             None,
             "signed out there is no live account, so no claim is ours to unwind"
+        );
+    }
+
+    /// A loopback server that answers every request with 200 and a minimal
+    /// project body - enough for `release_lock` to read a success.
+    fn release_stub(project_id: &str) -> (String, std::net::TcpListener) {
+        use std::io::{Read as _, Write as _};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind loopback");
+        let port = listener.local_addr().expect("addr").port();
+        let body = format!(r#"{{"id":"{project_id}","name":"Remote"}}"#);
+        let accept_on = listener.try_clone().expect("clone listener");
+        std::thread::spawn(move || {
+            while let Ok((mut stream, _)) = accept_on.accept() {
+                let _ = stream.set_read_timeout(Some(std::time::Duration::from_millis(150)));
+                let mut chunk = vec![0u8; 8 * 1024];
+                while let Ok(n) = stream.read(&mut chunk) {
+                    if n == 0 {
+                        break;
+                    }
+                    if chunk[..n].windows(4).any(|w| w == b"\r\n\r\n") {
+                        break;
+                    }
+                }
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = stream.write_all(resp.as_bytes());
+                let _ = stream.flush();
+            }
+        });
+        (format!("http://127.0.0.1:{port}"), listener)
+    }
+
+    #[test]
+    fn the_janitor_picks_the_claim_the_live_account_can_actually_release() {
+        // Round 8 (P2): another account's retained claim sitting at the head of
+        // the list used to answer every poll - the janitor took the FIRST entry,
+        // found it was not this session's to release, and returned. The live
+        // account's own stranded claim was never attempted, for as long as that
+        // other user did not happen to sign in.
+        //
+        // The stub answers the release, so the two behaviours are told apart by
+        // what is LEFT: choosing correctly releases our claim and drops it,
+        // while stopping at the head of the list leaves both standing.
+        let (base, _listener) = release_stub(OTHER_ID);
+        let state = AppState::new().expect("state");
+        sign_in_as(&state, "http://127.0.0.1:1/", "first@example.com");
+        state.speleodb_note_lock_acquired(Some(ID));
+
+        sign_in_as(&state, &base, "second@example.com");
+        state.speleodb_note_lock_acquired(Some(OTHER_ID));
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned(), OTHER_ID.to_owned()],
+            "fixture: the other account's claim is FIRST in the list"
+        );
+
+        state.speleodb_janitor_stranded_claim();
+
+        assert_eq!(
+            retained_projects(&state),
+            vec![ID.to_owned()],
+            "the live account's claim was found past the head of the list, \
+             released, and dropped - and the other account's is untouched"
         );
     }
 

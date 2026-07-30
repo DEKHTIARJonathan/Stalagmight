@@ -158,6 +158,32 @@ describe('SpeleoManagedFileDialog', () => {
     expect(closeDialogMock).not.toHaveBeenCalled();
   });
 
+  it('refuses to match the project id against a different deployment', async () => {
+    // The file says which server it belongs to, and a project id only means
+    // anything on THAT server. A cloned deployment or a restored database can
+    // hold the same UUID, so matching on the id alone would open a different
+    // cave system entirely - the list must not even be consulted.
+    useSpeleoStore.setState({
+      session: { ...SESSION, endpoint: 'http://other-sdb.example/' } as SpeleoSession,
+    });
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      // The SAME id exists over here, which is exactly the trap.
+      cmd === 'speleodb_list_projects' ? Promise.resolve([SUMMARY]) : Promise.resolve(undefined),
+    );
+    render(<SpeleoManagedFileDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-managed-file-open-remote'));
+
+    await waitFor(() =>
+      expect(screen.getByTestId('speleodb-managed-file-error')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('speleodb-managed-file-error').textContent).toContain(
+      'http://sdb.example/',
+    );
+    expect(ipcCalls()).not.toContain('speleodb_list_projects');
+    expect(ipcCalls()).not.toContain('speleodb_open_project');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+
   it('strips the link and reopens the same path', async () => {
     render(<SpeleoManagedFileDialog />);
     await userEvent.click(screen.getByTestId('speleodb-managed-file-remove-link'));

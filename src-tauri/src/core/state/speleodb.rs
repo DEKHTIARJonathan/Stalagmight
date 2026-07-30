@@ -926,20 +926,34 @@ impl AppState {
     /// token the acquire used - see [`super::speleodb_session::LockClaim`] for why
     /// a bare project id was not enough.
     ///
-    /// Writes only THIS account's entry, in both directions. `Some` replaces it;
-    /// `None` clears it, which is what the releases below want - they hand back
-    /// "the lock of the project this process could be editing under", so ending
-    /// every claim of the signed-in account matches what they did. Another
-    /// account's retained claim is untouched either way: it is not theirs to drop,
-    /// and it is the only pointer to a mutex still held elsewhere.
+    /// Scoped to THIS account, and - when recording - to THIS project. `Some(id)`
+    /// replaces the account's entry for `id` and leaves its entries for other
+    /// projects standing, because those are pointers to mutexes that may still be
+    /// held: a janitor release that failed transiently leaves exactly such an
+    /// entry, and taking a lock on a second project must not be what loses it.
+    ///
+    /// `None` means "this account holds nothing any more", which is true of
+    /// exactly one caller - [`Self::speleodb_release_all_locks`], which frees
+    /// every lock the account holds. The per-project releases use
+    /// [`Self::speleodb_forget_lock_acquired_for`] instead: they hand back one
+    /// mutex, so one claim is what they may end.
+    ///
+    /// Another account's claims are untouched in every direction: they are not
+    /// this session's to drop, and each is the only local pointer to a mutex
+    /// still held elsewhere.
     pub(super) fn speleodb_note_lock_acquired(&self, project_id: Option<&str>) {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return;
         };
         let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
-        session
-            .locks_acquired_here
-            .retain(|claim| !claim.taken_by(endpoint.as_deref(), email.as_deref()));
+        session.locks_acquired_here.retain(|claim| {
+            if !claim.taken_by(endpoint.as_deref(), email.as_deref()) {
+                return true;
+            }
+            // Ours: replaced when this call names its project, ended when the
+            // call says the account holds nothing.
+            project_id.is_some_and(|id| claim.project_id != id)
+        });
         // No account to stamp it with (a logout raced us, or a caller reached here
         // without a token) means no claim: one that cannot say whose it is can
         // never be released and must never license the authorship shortcut. Same
@@ -2241,12 +2255,16 @@ impl AppState {
         // through `speleodb_release_held_lock_*` - close / logout / unlink /
         // take-remote, so the acquisition record is dropped here whether or not the
         // POST lands: a release we asked for ends the claim, and one that failed
-        // leaves a lock this process can no longer account for. Not keyed on
-        // `project_id`, unlike `speleodb_release_lock`: every caller here is dropping
-        // the lock of the project this process could be editing under, and clearing a
-        // record that named some other project can only cost the shortcut, never
-        // grant it.
-        self.speleodb_note_lock_acquired(None);
+        // leaves a lock this process can no longer account for.
+        //
+        // Keyed on `project_id`, like `speleodb_release_lock`. It used to clear
+        // whatever was recorded, on the grounds that clearing a record naming some
+        // OTHER project could only cost the authorship shortcut - true when the
+        // record was one slot holding at most a stale id, and false now that a
+        // claim can be a live pointer to a mutex still held on another project
+        // (the janitor's retry after a transient failure). This releases one
+        // project's lock, so it may end one project's claim.
+        self.speleodb_forget_lock_acquired_for(project_id);
         if let Err(e) = client::release_lock(endpoint, token, insecure_http, project_id) {
             tracing::warn!(
                 error = %e,
@@ -2374,8 +2392,9 @@ impl AppState {
                 .map_err(|e| dto_for_error(Endpoint::Release, &e))?;
                 self.set_edit_enabled(false);
                 // The lock this process took is back with the server; the edit session
-                // it licensed is over.
-                self.speleodb_note_lock_acquired(None);
+                // it licensed is over. This project's claim, not the account's whole
+                // set - Done released one mutex.
+                self.speleodb_forget_lock_acquired_for(&link.project_id);
                 Ok(DoneResult::Released)
             }
             // Stay locked + dirty so the user can reconcile / a retry can recover.

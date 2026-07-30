@@ -86,6 +86,20 @@ export default function SpeleoManagedFileDialog() {
   const handleOpenRemote = async () => {
     setBusy(true);
     setError(null);
+    // The file names the deployment it belongs to, and a project id only means
+    // anything ON that deployment. Signed in elsewhere, the id is checked BEFORE
+    // the list is consulted rather than only when the lookup misses: a cloned
+    // deployment or a restored database can hold the very same UUID, and
+    // matching on the id alone would open THAT project - a different cave
+    // system, under a file that says plainly which server it came from.
+    if (session?.endpoint && managed.endpoint !== session.endpoint) {
+      setError(
+        t('speleodb.managedFile.notOnAccount', { name: managed.projectName }) +
+          ` ${t('speleodb.managedFile.endpointMismatch', { endpoint: managed.endpoint })}`
+      );
+      setBusy(false);
+      return;
+    }
     let summary: SpeleoProjectSummary | undefined;
     try {
       const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
@@ -97,11 +111,7 @@ export default function SpeleoManagedFileDialog() {
       return;
     }
     if (!summary) {
-      const mismatch =
-        session?.endpoint && managed.endpoint !== session.endpoint
-          ? ` ${t('speleodb.managedFile.endpointMismatch', { endpoint: managed.endpoint })}`
-          : '';
-      setError(t('speleodb.managedFile.notOnAccount', { name: managed.projectName }) + mismatch);
+      setError(t('speleodb.managedFile.notOnAccount', { name: managed.projectName }));
       setBusy(false);
       return;
     }
