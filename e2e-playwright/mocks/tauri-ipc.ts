@@ -1039,6 +1039,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 }>;
                 station_merges?: unknown[]; zero_datums?: unknown[];
                 loop_closures?: unknown[]; section_offsets?: Record<string, [number, number]>;
+                // Present once `update_project_settings` has stored per-project
+                // thresholds on the mock project (#57).
+                validation?: Record<string, number>;
               };
               stations: Array<{
                 station_ref: { section_id: number; station_index: number };
@@ -1184,6 +1187,24 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 station_comments_map: [],
                 imported_file_hashes: [],
                 imported_section_hashes: [],
+                // Per-project validation thresholds (#57), sourced like every
+                // sibling above: whatever `update_project_settings` last stored
+                // on the mock project, else `ValidationConfig::default()` - what
+                // a project that never customised its thresholds carries on
+                // disk. Rust always sends this; omitting it made every mocked
+                // load resolve `project.validation` as `undefined`, which the UI
+                // quietly papers over with the GLOBAL config instead
+                // (`ShotTableEditor` prefers the project's own thresholds), so
+                // per-project thresholds stopped applying with nothing red.
+                validation: jsonResult.project.validation ?? {
+                  warn_shot_length_min: 0.3,
+                  warn_shot_length_max: 50.0,
+                  warn_depth_change_per_shot_max: 10.0,
+                  warn_azimuth_deviation_max: 30.0,
+                  azimuth_diff_threshold: 20.0,
+                  pitch_diff_threshold: 10.0,
+                  inclination_depth_diff_threshold: 15.0,
+                },
               },
               shot_count: totalShots,
               shots_floats: shotsFloats,
