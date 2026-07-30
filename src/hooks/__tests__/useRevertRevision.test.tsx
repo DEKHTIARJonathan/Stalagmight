@@ -143,6 +143,33 @@ describe('useRevertRevision - the happy path', () => {
   });
 });
 
+describe('useRevertRevision - the swapped tree owns no stale entity refs (#258)', () => {
+  it('resets every per-project tool ref, not just the selection', async () => {
+    // The swap replaces the working tree without going through `loadProject`, which is
+    // the only thing that resets these - so `clearSelection` was the whole reset and
+    // merge/comment/measure refs survived. #258 is what makes that dangerous: two
+    // `.stalx` under one project are independent databases with independently assigned
+    // section ids, so a picker answer can swap in a DIFFERENT survey whose ids collide,
+    // and a half-armed merge would resolve its endpoint against the wrong station.
+    useUIStore.setState({
+      mergeStationA: { section_id: 1, station_index: 0 },
+      mergeStationB: null,
+      commentTarget: { sectionId: 1, shotId: 7 } as never,
+    });
+    ipc({
+      speleodb_start_editing: ok({ kind: 'editing' }),
+      speleodb_restore_revision: ok(RESTORED),
+      speleodb_done: ok({ kind: 'released' }),
+    });
+
+    expect(await run()).toEqual({ kind: 'reverted' });
+
+    const ui = useUIStore.getState();
+    expect(ui.mergeStationA).toBeNull();
+    expect(ui.commentTarget).toBeNull();
+  });
+});
+
 describe('useRevertRevision - refusing before it takes anything', () => {
   it('needs a discard for an un-pushed copy WITHOUT acquiring the lock', async () => {
     // The whole point of the pre-flight: the restore would be refused anyway, so

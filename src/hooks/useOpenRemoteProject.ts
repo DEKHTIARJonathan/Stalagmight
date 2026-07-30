@@ -144,6 +144,8 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     async (
       result: { local_path: string; concurrent_session: boolean },
       permission: SpeleoProjectSummary['permission'],
+      /** The project this open is FOR, so the seed names it rather than waiting for a poll. */
+      projectId: string,
       opts: {
         successToast?: { message: string; key: string };
         /**
@@ -212,6 +214,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
           permission,
           forPath: result.local_path,
           hasUnpushedEdits: hasUnpushedEdits === true,
+          projectId,
         });
       }
       onBeforeLoad?.();
@@ -556,7 +559,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // before the load closes the open project.
       const landed = handBackRefusalAfterPull(summary, result.local_path);
       if (landed) return { status: 'error', message: landed, reLogin: false };
-      return finishOpen(result, summary.permission);
+      return finishOpen(result, summary.permission, summary.id);
     },
     [
       finishOpen,
@@ -626,9 +629,12 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         const refusal = handBackRefusal(summary);
         if (refusal) return { status: 'error', message: refusal, reLogin: false };
       }
-      return finishOpen({ local_path: localPath, concurrent_session: false }, summary.permission, {
-        hasUnpushedEdits: true,
-      });
+      return finishOpen(
+        { local_path: localPath, concurrent_session: false },
+        summary.permission,
+        summary.id,
+        { hasUnpushedEdits: true },
+      );
     },
     [finishOpen, handBackRefusal],
   );
@@ -716,7 +722,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // the project on screen. See `handBackRefusalAfterPull`.
       const landed = handBackRefusalAfterPull(summary, result.local_path);
       if (landed) return { status: 'error', message: landed, reLogin: false };
-      return finishOpen(result, summary.permission);
+      return finishOpen(result, summary.permission, summary.id);
     },
     [
       finishOpen,
@@ -851,7 +857,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        */
       // Post-adoption notice: Stalagmight now owns edits. When the server type could
       // not be flipped (no write access), say so - the user can still edit locally.
-      return finishOpen(result, summary.permission, {
+      return finishOpen(result, summary.permission, summary.id, {
         // [#270] An adopt is NOT a plain pull: the backend stamps the adopted
         // `.stalx` `has_unpushed_edits: true` (it converted an Ariane .tml into a
         // project the server has never been given), so the shared seed's

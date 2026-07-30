@@ -93,6 +93,19 @@ export function useRestoreRevision() {
       // selection could highlight a different station (loadProject's full path clears
       // it too; this swap path bypasses that path).
       clearSelection();
+      // ...and every OTHER per-project ref with it. `clearSelection` was the whole
+      // reset here, but merge endpoints, the comment target and the measure endpoints
+      // are keyed the same `(section_id, station_index)` / `(section_id, shot_id)` way
+      // and live in the same store. A project switch resets all of them through
+      // `loadProject`; this swap replaces the tree just as thoroughly and bypasses
+      // `loadProject` entirely, so it was the one replacement path that kept them.
+      //
+      // #258 is what makes that dangerous rather than untidy. Two `.stalx` under one
+      // SpeleoDB project are independent SQLite databases with independently assigned
+      // section ids, so a picker answer can now swap in a DIFFERENT survey whose ids
+      // collide by construction - and a half-armed merge would then resolve its stored
+      // endpoint against whatever holds that id in the new tree.
+      useUIStore.getState().resetToolTransientsForProjectSwitch();
       setView('single');
       await refreshProjectState();
       useProjectStore.setState({ isDirty: false });

@@ -91,8 +91,38 @@ describe('useOpenRemoteProject (#218)', () => {
       forPath: '/cache/p1.stalx',
       // A PULL has, by construction, nothing local the server has not seen.
       hasUnpushedEdits: false,
+      // And WHICH project, so `remoteProjectId` names it from the same synchronous
+      // `set()` rather than after a status poll - which left every consumer keyed on
+      // it reading the PREVIOUS project for the length of the poll interval.
+      projectId: 'p1',
     });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
+  });
+
+  it('names the opened project immediately, so A -> B does not leave A on the store', async () => {
+    // Driven through the REAL seed, because the bug is invisible to a test that sets
+    // `remoteProjectId` by hand: it was written only by the status poll, so after
+    // opening remote B from remote A the store named A for as long as a poll took
+    // (30 s to a user-configurable 24 h). Everything keyed on it read A - the revision
+    // history that lists revisions, and the revert guards that compare against the id
+    // that history handed them, which is why both sides agreed on a stale A.
+    useSpeleoStore.setState({
+      setLinkOnOpen: realSetLinkOnOpen,
+      remoteProjectId: 'p-previous',
+      linkPath: null,
+      link: null,
+    });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_open_project')
+        return Promise.resolve({ local_path: '/cache/p1.stalx', concurrent_session: false });
+      return Promise.resolve(null);
+    });
+
+    expect(await hook().openRemote(SUMMARY)).toEqual({ status: 'opened' });
+
+    // No poll has run - `loadProject` is mocked and `refreshLinkStatus` is not driven -
+    // so this can only be the seed.
+    expect(useSpeleoStore.getState().remoteProjectId).toBe('p1');
   });
 
   it('raises the file picker when the dump holds more than one openable file (#258)', async () => {
@@ -453,6 +483,7 @@ describe('useOpenRemoteProject (#218)', () => {
       permission: 'READ_AND_WRITE',
       forPath: '/cache/p1.stalx',
       hasUnpushedEdits: true,
+      projectId: 'p1',
     });
   });
 
@@ -548,6 +579,10 @@ describe('useOpenRemoteProject (#218)', () => {
       forPath: '/cache/p1.stalx',
       // A PULL has, by construction, nothing local the server has not seen.
       hasUnpushedEdits: false,
+      // And WHICH project, so `remoteProjectId` names it from the same synchronous
+      // `set()` rather than after a status poll - which left every consumer keyed on
+      // it reading the PREVIOUS project for the length of the poll interval.
+      projectId: 'p1',
     });
     expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1.stalx');
   });
@@ -1191,6 +1226,7 @@ describe('useOpenRemoteProject (#218)', () => {
         permission: 'READ_AND_WRITE',
         forPath: '/cache/p1.stalx',
         hasUnpushedEdits: false,
+        projectId: 'p1',
       });
     });
 
@@ -1263,6 +1299,7 @@ describe('useOpenRemoteProject (#218)', () => {
       permission: 'READ_AND_WRITE',
       forPath: '/cache/p1.stalx',
       hasUnpushedEdits: true,
+      projectId: 'p1',
     });
   });
 

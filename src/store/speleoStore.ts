@@ -515,6 +515,17 @@ interface SpeleoStore {
     permission: Permission | null;
     forPath?: string | null;
     hasUnpushedEdits?: boolean;
+    /**
+     * WHICH SpeleoDB project this seed is for.
+     *
+     * The seed used to omit it, leaving `remoteProjectId` to the status poll - which
+     * meant that after opening remote B from remote A the store still named A for as
+     * long as a poll took (30 s to a user-configurable 24 h). Every consumer keyed on
+     * it read the wrong project in that window, and the guards that compare against it
+     * could not notice, because the id they were handed came from the same stale value.
+     * The pull knows the answer at the call site; there is no reason to wait to be told.
+     */
+    projectId?: string | null;
   }) => void;
   clearLink: () => void;
   /**
@@ -1265,8 +1276,13 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
       };
     }),
 
-  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false }) =>
+  setLinkOnOpen: ({ permission, forPath = null, hasUnpushedEdits = false, projectId = null }) =>
     set({
+      // Committed in the SAME synchronous `set()` as the rest of the seed, so nothing
+      // can observe the new project's link beside the old project's id. `syncProjectLink`
+      // recognises this seed by `linkPath` and keeps it; the unmatched branch clears the
+      // id, so a File > Open of some other remote `.stalx` still resets it.
+      remoteProjectId: projectId,
       // We just pulled it from SpeleoDB, so it is remote by construction - and
       // saying so keeps the gate closed even if the load never completes.
       projectLinkKind: 'remote',
