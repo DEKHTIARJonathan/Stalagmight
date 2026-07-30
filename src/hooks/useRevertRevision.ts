@@ -168,12 +168,6 @@ export function useRevertRevision() {
       resumeAtPush = false,
       onStep,
     }: RevertRevisionArgs): Promise<RevertOutcome> => {
-      // The restore already landed and the lock is still ours, so the upload is the
-      // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of both
-      // pre-flights below: the restore is what set the bit the un-pushed guard
-      // tests, so running it here would refuse the retry over the revert's own tree.
-      if (resumeAtPush) return publish({ message, shortSha, onStep });
-
       // Which project this composite is FOR, against what is open right now. The
       // dialog captured `projectId` from its open data, so it is a snapshot; nothing
       // downstream re-checks it, and the two steps that would act on a mismatch act on
@@ -186,6 +180,19 @@ export function useRevertRevision() {
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
         return { kind: 'project_changed' };
       }
+
+      // The restore already landed and the lock is still ours, so the upload is the
+      // only step outstanding - see `resumeAtPush`. Deliberately AHEAD of both
+      // pre-flights below: the restore is what set the bit the un-pushed guard
+      // tests, so running it here would refuse the retry over the revert's own tree.
+      //
+      // But BEHIND the identity check, which it used to precede. `publish` calls
+      // `done(message)` - argument-free, acting on whatever is open, and `message` is a
+      // real commit message, so it PUSHES. A retry after a project switch therefore
+      // uploaded the replacement project and released its lock, under a comment two
+      // hunks above claiming this check ran "at ENTRY". The pre-flights are what must
+      // stay behind the resume; the identity is not.
+      if (resumeAtPush) return publish({ message, shortSha, onStep });
 
       // Un-SAVED is a different loss from un-PUSHED, and this flow resolves neither:
       // the restore closes and reopens the project at the checked-out tree, so an edit

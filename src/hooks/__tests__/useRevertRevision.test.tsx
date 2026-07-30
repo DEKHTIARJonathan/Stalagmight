@@ -143,6 +143,35 @@ describe('useRevertRevision - the happy path', () => {
   });
 });
 
+describe('useRevertRevision - the resume is identity-checked too (#258)', () => {
+  it('does not publish a replacement project when the resume finds the context stale', async () => {
+    // `resumeAtPush` used to return BEFORE the identity check, two hunks under a
+    // comment claiming that check ran "at ENTRY". `publish` calls `done(message)` -
+    // argument-free, acting on whatever is open, with a real commit message - so it
+    // PUSHES. A retry after a project switch therefore uploaded the replacement and
+    // released its lock.
+    useSpeleoStore.setState({ remoteProjectId: 'p2' });
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    expect(await run({ resumeAtPush: true })).toEqual({ kind: 'project_changed' });
+    expect(issued()).toEqual([]);
+  });
+
+  it('still resumes normally when the project is the one it was asked about', async () => {
+    // The other half: the pre-flights must STAY behind the resume, because the restore
+    // is what set the bit the un-pushed guard tests. Only the identity moved ahead.
+    useSpeleoStore.setState({
+      remoteProjectId: 'p1',
+      link: { ...LINK, hasUnpushedEdits: true },
+    });
+    useProjectStore.setState({ isDirty: true });
+    ipc({ speleodb_done: ok({ kind: 'released' }) });
+
+    expect(await run({ resumeAtPush: true })).toEqual({ kind: 'reverted' });
+    expect(issued()).toEqual(['speleodb_done']);
+  });
+});
+
 describe('useRevertRevision - the swapped tree owns no stale entity refs (#258)', () => {
   it('resets every per-project tool ref, not just the selection', async () => {
     // The swap replaces the working tree without going through `loadProject`, which is
