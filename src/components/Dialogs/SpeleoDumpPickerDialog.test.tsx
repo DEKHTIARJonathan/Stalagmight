@@ -21,7 +21,7 @@
  *     were evidence.
  */
 import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { act, render, screen, fireEvent } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -116,6 +116,55 @@ describe('SpeleoDumpPickerDialog - choosing', () => {
     expect(confirm()).toBeDisabled();
     await userEvent.click(confirm());
     expect(resolveMock).not.toHaveBeenCalled();
+  });
+
+  it('[#258 review] a re-offer clears the answer, so Enter cannot carry it into a new tree', async () => {
+    // The backend refuses a reply that answers a different revision and re-asks with
+    // the new tree's metadata. This component stays mounted across that, and a path
+    // that survives the push - a backup routinely does - left the old pick selected,
+    // Confirm re-enabled and still focused. A second Enter then accepted bytes from a
+    // tree the user never looked at, which is the deliberate re-choice the refusal was
+    // demanding.
+    render(<Host />);
+    await userEvent.click(option(0));
+    expect(confirm()).toBeEnabled();
+
+    // The tree moved: same path still present, different metadata.
+    act(() => {
+      seed({
+        dumpPickerCandidates: [
+          candidate({ entry_path: 'backup/old-survey.stalx', size_bytes: 999 }),
+          candidate({ entry_path: 'main/survey.stalx', size_bytes: 111 }),
+        ],
+      });
+    });
+
+    expect(option(0)).not.toBeChecked();
+    expect(option(1)).not.toBeChecked();
+    expect(confirm()).toBeDisabled();
+  });
+
+  it('[#258 review] renders bidi and invisible controls visibly, but submits the raw path', async () => {
+    // Entry names come from the archive, which a collaborator writes. A bidi override
+    // can make a decoy row READ as the trusted path while the radio's value stays the
+    // attacker's original string - the user picks what they see and the app opens what
+    // was sent. Escaped on the way to the screen, byte-identical on the way back, since
+    // the value has to match the archive's own membership test.
+    const hostile = 'backup/\u202Excod.stalx';
+    seed({
+      dumpPickerCandidates: [
+        candidate({ entry_path: hostile }),
+        candidate({ entry_path: 'main/survey.stalx' }),
+      ],
+    });
+    render(<Host />);
+
+    expect(screen.getByText(/<U\+202E>/)).toBeInTheDocument();
+    expect(screen.queryByText(hostile)).not.toBeInTheDocument();
+
+    await userEvent.click(option(0));
+    await userEvent.click(confirm());
+    expect(resolveMock).toHaveBeenCalledWith(hostile);
   });
 
   it('picking a row confirms THAT file', async () => {

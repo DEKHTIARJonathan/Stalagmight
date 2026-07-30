@@ -870,7 +870,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // Routed through `clearSession` rather than a second teardown beside it: that is
     // where the pending cancel is fired, the dismissal telemetry recorded, and every
     // stale link field reset - all of which are just as due here.
-    if (get().session?.loggedIn === true && !s.logged_in) {
+    // Two ways in, because a known true->false transition is not the only one that
+    // matters. `sessionStillCurrent` deliberately lets a picker be raised while
+    // `session` is still null - an authenticated backend call can beat the first
+    // `speleodb_session` reply - and for that picker the prior value is never `true`,
+    // so a transition test alone skipped the teardown and left it open over a session
+    // the very same refresh had just reported dead. Confirm could then only fail, and a
+    // revert suspended on the question stayed busy until the user cancelled by hand.
+    // An open picker is therefore its own reason to tear down.
+    const wasLoggedIn = get().session?.loggedIn === true;
+    if (!s.logged_in && (wasLoggedIn || get().dumpPickerOpen)) {
       get().clearSession();
     }
     set({

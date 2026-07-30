@@ -114,6 +114,36 @@ describe('speleoStore', () => {
       expect(useSpeleoStore.getState().session?.loggedIn).toBe(false);
     });
 
+    it('[#258 review] tears the picker down on a logged-out refresh even with no prior session', () => {
+      // `sessionStillCurrent` lets a picker be raised while `session` is still null -
+      // an authenticated call can beat the first `speleodb_session` reply - so for that
+      // picker there is no true->false transition to detect. A transition test alone
+      // left it open over a session the same refresh had just reported dead: Confirm
+      // could only fail, and a flow suspended on the question stayed busy.
+      useSpeleoStore.setState({ session: null });
+      const onCancel = vi.fn();
+      useSpeleoStore
+        .getState()
+        .openDumpPicker(
+          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
+          'stalx',
+          async () => {},
+          onCancel,
+        );
+
+      useSpeleoStore.getState().setSession({
+        logged_in: false,
+        user_email: null,
+        endpoint: 'https://x/',
+        keychain_backed: false,
+        storage: null,
+        keychain: 'available',
+      });
+
+      expect(useSpeleoStore.getState().dumpPickerOpen).toBe(false);
+      expect(onCancel).toHaveBeenCalled();
+    });
+
     it('[#258] a benign logged-in refresh leaves an open picker alone', () => {
       // The other half: a project load and reopening Settings both call this, and a
       // picker raised by an open in flight must survive them.

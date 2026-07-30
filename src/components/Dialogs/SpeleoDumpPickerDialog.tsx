@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useSpeleoStore } from '../../store/speleoStore';
 import { formatFixed } from '../../i18n/format';
@@ -38,6 +38,28 @@ export function shouldShowModified(candidates: SpeleoDumpCandidate[]): boolean {
  * files a few hundred KB apart otherwise round to the same integer and look like
  * the same file.
  */
+/**
+ * A ZIP entry path, rendered so it cannot lie about which entry it is.
+ *
+ * Entry names come from the archive, which a collaborator writes. Unicode carries
+ * characters that reorder or hide the text around them - the bidi overrides and
+ * isolates (U+202A..U+202E, U+2066..U+2069), the zero-width joiners and marks, and the
+ * C0/C1 controls - so a decoy row can be made to READ as `misc/project.stalx` while the
+ * radio's value stays the attacker's original string. The user picks what they see; the
+ * app opens what was sent, and later pushes it over the project file.
+ *
+ * So the display is escaped and the value is not: `entry_path` still travels back to
+ * the backend byte-identical, because that is what has to match the archive's own
+ * membership test. Only what is drawn changes, and it changes into something visibly
+ * wrong rather than something invisibly wrong.
+ */
+export function visiblePath(path: string): string {
+  // eslint-disable-next-line no-control-regex
+  return path.replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/gu, (ch) =>
+    `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}>`,
+  );
+}
+
 function formatSize(bytes: number): string {
   const value = Number.isFinite(bytes) && bytes > 0 ? bytes : 0;
   if (value < 1024) return `${formatFixed(value, undefined, 0)} B`;
@@ -93,6 +115,19 @@ export default function SpeleoDumpPickerDialog() {
   const closeDumpPicker = useSpeleoStore((s) => s.closeDumpPicker);
 
   const [picked, setPicked] = useState<string | null>(null);
+
+  // A RE-OFFER is a new question, so it clears the old answer. The store hands over a
+  // fresh array each time the picker is raised, so its identity is the offer's.
+  //
+  // Keeping the pick across a re-offer defeated the thing the re-offer exists for. The
+  // backend refuses a reply that answers a different revision and re-asks with the new
+  // tree's metadata - but this component stays mounted, and a path that survives the
+  // push (a backup routinely does) left `selected` non-null, Confirm re-enabled and
+  // still focused. A second Enter then accepted bytes from a tree the user never
+  // looked at, which is precisely the deliberate re-choice the refusal was demanding.
+  useEffect(() => {
+    setPicked(null);
+  }, [candidates]);
 
   // The user's pick, and only ever the user's pick. Derived rather than seeded into
   // state so a re-raise carrying a different dump cannot leave the selection pointing
@@ -171,7 +206,9 @@ export default function SpeleoDumpPickerDialog() {
                   {/* The FULL path, wrapped rather than truncated: the candidates
                       routinely differ only in their directory, so an elided middle
                       would hide the one thing that tells them apart. */}
-                  <span className="font-mono break-all">{candidate.entry_path}</span>
+                  <span className="font-mono break-all">
+                    {visiblePath(candidate.entry_path)}
+                  </span>
                 </span>
                 <span className="w-20 text-right flex-shrink-0 text-text-secondary tabular-nums">
                   {formatSize(candidate.size_bytes)}

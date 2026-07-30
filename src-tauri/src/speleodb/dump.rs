@@ -40,6 +40,24 @@ const MAX_ENTRY_BYTES: u64 = 512 * 1024 * 1024;
 /// hook to bound that - so it caps the amplification, not the parse itself.)
 const MAX_ENTRIES: usize = 10_000;
 
+/// How many openable entries a picker may be asked to present. [#258 review]
+///
+/// `MAX_ENTRIES` bounds how many entries the ARCHIVE may hold; this bounds how many of
+/// them can become a QUESTION. Without it a dump near that ceiling put a radio row and
+/// several DOM nodes on screen for every candidate, and shipped every server-supplied
+/// path across IPC to do it - names whose aggregate length nothing bounds. The webview
+/// froze before the user could reach Cancel, which does not merely degrade the choice,
+/// it destroys it.
+///
+/// REFUSED rather than truncated, and the difference is the whole point: a truncated
+/// list still looks like the question, while quietly not containing the answer. A dump
+/// with dozens of openable files is not a project anyone can choose from - it is a
+/// broken or hostile archive - so this says so and names the remedy, which is the same
+/// fail-closed shape the rest of this feature uses.
+///
+/// Sized for a list a person can actually read down, not for the format's limits.
+const MAX_PICKER_CANDIDATES: usize = 32;
+
 /// What a downloaded project dump contains, from the caller's point of view.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum DumpClassification {
@@ -245,6 +263,14 @@ impl<'a> Dump<'a> {
         // millions before the picker could be drawn - all of it driven by a
         // server-supplied file, i.e. exactly the input that must not be able to
         // stall the app.
+        if wanted.len() > MAX_PICKER_CANDIDATES {
+            return Err(SpeleoDbError::Parse(format!(
+                "this project's dump holds {} openable files, which is too many to \
+                 choose between - remove the extras on SpeleoDB so at most one \
+                 Stalagmight file remains",
+                wanted.len()
+            )));
+        }
         let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
 
         let mut out = Vec::with_capacity(wanted.len());
@@ -404,7 +430,7 @@ impl<'a> Dump<'a> {
 mod tests {
     use super::{
         chosen_candidate, classify, download_temp_path, has_stalx_suffix, is_ariane_tml,
-        ChosenKind, Dump, DumpClassification, SpeleoDbError,
+        ChosenKind, Dump, DumpClassification, SpeleoDbError, MAX_PICKER_CANDIDATES,
     };
 
     fn paths(items: &[&str]) -> Vec<String> {
@@ -517,14 +543,22 @@ mod tests {
 
     #[test]
     fn entry_details_describes_every_wanted_entry_of_a_large_archive() {
-        // Membership is a set lookup, not a scan of `wanted` per archive entry: both
-        // grow with the same server-supplied archive, so the pairwise form was
-        // quadratic in it. This pins the BEHAVIOUR that change had to preserve -
-        // every wanted entry described exactly once, none of the unwanted ones - at a
-        // size where the old form was doing millions of comparisons.
-        let bodies: Vec<(String, Vec<u8>)> = (0..1_000)
-            .map(|i| (format!("d{i:04}/f{i:04}.stalx"), vec![b'x'; 1]))
-            .chain((0..200).map(|i| (format!("misc/other{i:04}.txt"), vec![b'y'; 1])))
+        // Membership is a set lookup, not a scan of `wanted` per archive entry, so the
+        // per-entry cost stays flat as the ARCHIVE grows. This pins the behaviour that
+        // change had to preserve - every wanted entry described exactly once, none of
+        // the unwanted ones - over an archive far larger than the wanted set.
+        //
+        // The wanted set sits at `MAX_PICKER_CANDIDATES`, because that is now its
+        // ceiling: a dump offering more than a person can read down is refused rather
+        // than rendered (see the test below), which is what actually retired the
+        // quadratic blow-up this originally guarded.
+        let wanted_names: Vec<String> = (0..MAX_PICKER_CANDIDATES)
+            .map(|i| format!("d{i:04}/f{i:04}.stalx"))
+            .collect();
+        let bodies: Vec<(String, Vec<u8>)> = wanted_names
+            .iter()
+            .map(|n| (n.clone(), vec![b'x'; 1]))
+            .chain((0..1_000).map(|i| (format!("misc/other{i:04}.txt"), vec![b'y'; 1])))
             .collect();
         let entries: Vec<(&str, &[u8])> = bodies
             .iter()
@@ -533,14 +567,59 @@ mod tests {
         let zip = make_zip(&entries);
         let mut dump = Dump::open(&zip).expect("open zip");
 
-        let wanted: Vec<String> = (0..1_000)
-            .map(|i| format!("d{i:04}/f{i:04}.stalx"))
-            .collect();
-        let details = dump.entry_details(&wanted).expect("details");
+        let details = dump.entry_details(&wanted_names).expect("details");
 
-        assert_eq!(details.len(), 1_000, "every wanted entry, and nothing else");
-        assert_eq!(details[0].entry_path, "d0000/f0000.stalx");
-        assert_eq!(details[999].entry_path, "d0999/f0999.stalx");
+        assert_eq!(details.len(), MAX_PICKER_CANDIDATES);
+        let first = details.first().expect("at least one candidate");
+        let last = details.last().expect("at least one candidate");
+        assert_eq!(first.entry_path, "d0000/f0000.stalx");
+        assert_eq!(
+            last.entry_path,
+            format!(
+                "d{:04}/f{:04}.stalx",
+                MAX_PICKER_CANDIDATES - 1,
+                MAX_PICKER_CANDIDATES - 1
+            )
+        );
+        assert!(
+            details.iter().all(|c| c.entry_path.ends_with(".stalx")),
+            "no unwanted entry may be described"
+        );
+    }
+
+    /// [#258 review] More openable files than a person can choose between is refused,
+    /// not rendered.
+    ///
+    /// `MAX_ENTRIES` bounds what the ARCHIVE may hold; nothing bounded how many of them
+    /// became a question. A dump near that ceiling put a radio row and several DOM nodes
+    /// on screen per candidate and shipped every server-supplied path across IPC to do
+    /// it - names whose aggregate length nothing bounds - so the webview froze before
+    /// the user could reach Cancel. That does not degrade the choice, it destroys it.
+    ///
+    /// Refused rather than truncated on purpose: a truncated list still looks like the
+    /// question while quietly not containing the answer.
+    #[test]
+    fn a_dump_with_more_candidates_than_anyone_can_read_is_refused() {
+        let over = MAX_PICKER_CANDIDATES + 1;
+        let bodies: Vec<(String, Vec<u8>)> = (0..over)
+            .map(|i| (format!("d{i:04}/f{i:04}.stalx"), vec![b'x'; 1]))
+            .collect();
+        let entries: Vec<(&str, &[u8])> = bodies
+            .iter()
+            .map(|(n, b)| (n.as_str(), b.as_slice()))
+            .collect();
+        let zip = make_zip(&entries);
+        let mut dump = Dump::open(&zip).expect("open zip");
+        let wanted: Vec<String> = bodies.iter().map(|(n, _)| n.clone()).collect();
+
+        let got = match dump.entry_details(&wanted) {
+            Err(SpeleoDbError::Parse(msg)) => msg,
+            other => format!("{other:?}"),
+        };
+        assert!(
+            got.contains(&over.to_string()) && got.contains("too many to choose between"),
+            "the refusal must say how many were found and what to do about it; got: {got}"
+        );
     }
 
     #[test]
