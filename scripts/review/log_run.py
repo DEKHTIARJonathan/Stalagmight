@@ -1,30 +1,37 @@
 #!/usr/bin/env python3
 """Review-run logger - validate and append one JSONL record to review-log.jsonl.
 
-Replaces the old "hand-append a JSON line with `>>`" instruction in
-.claude/commands/pre-pr.md §"Log the run": that mechanism was prose-only, had
-no validation, and was cwd-dependent (a plain `>>` writes relative to wherever
-the shell happened to be, not the repo root). This script fixes both: it
-resolves the log path via `git rev-parse --show-toplevel` and rejects a
-malformed record outright rather than letting bad data reach the log.
+Rejects a malformed record outright rather than letting bad data reach the log,
+and resolves the log path from the repo root so it does not depend on being run
+from any particular subdirectory.
+
+WHICH repo, however, is decided by cwd: the path comes from `git rev-parse
+--show-toplevel`, so running this from inside a checkout writes to THAT
+checkout's log - including a sibling clone or a git worktree, each of which has
+its own log. The file is gitignored, so a stray write is invisible to
+`git status`. Set STALAGMIGHT_REVIEW_LOG to an absolute path to redirect the
+write (intended for tests and ad-hoc probing; six independent review agents
+polluted a real log before this existed).
 
 Input is one run record as JSON - a single positional argument, or on stdin
-(`-` or no argument). On success, exactly one compact JSON line (keys sorted)
-is appended to `<repo-root>/.claude/review-log.jsonl` (created if absent) and
-a one-line confirmation is printed to stdout. On any failure the file is left
-untouched and the reason is printed to stderr; the run is not logged until
-this script exits 0. Exit codes distinguish the two failure classes (mirrors
-preflight.py's convention of reserving a distinct code for "this tool can't
-run here" vs. "the input is bad"):
+(`-` or no argument). Prefer stdin from a FILE over a shell-quoted argument:
+a record embeds file paths taken from the diff under review, and splicing those
+into a quoted shell word is injectable. On success, exactly one compact JSON
+line (keys sorted) is appended to `<repo-root>/.claude/review-log.jsonl`
+(created if absent) and a one-line confirmation is printed to stdout. On any
+failure the file is left untouched and the reason is printed to stderr; the run
+is not logged until this script exits 0. Exit codes distinguish the two failure
+classes:
     1 - the record itself was rejected (bad verdict, malformed JSON, etc.) -
         fix the record and re-run.
-    2 - an environment/usage problem (not inside a git repo, no stdin, git
-        itself failed) - the record may be fine; fix how the script was run.
+    2 - an environment/usage problem (not inside a git repo, empty or absent
+        stdin, git missing or failing, the log path unwritable or a symlink) -
+        the record may be fine; fix how the script was run.
 
 Usage:
-    log_run.py '<json>'
-    echo '<json>' | log_run.py
-    log_run.py -              # explicit stdin
+    log_run.py < record.json   # preferred
+    log_run.py -               # explicit stdin
+    log_run.py '<json>'        # only for a record you constructed yourself
 
 Record shape:
     {"date": "YYYY-MM-DD",              # optional; defaults to today (UTC)
@@ -35,13 +42,22 @@ Record shape:
      "lenses_run": [1, 2, 3],
      "lenses_skipped": [{"lens": 8, "why": "no security trigger"}]}
 
-Importable:  validate(record) -> dict ;  append(repo, record) -> Path
+`lenses_run` and `lenses_skipped` must together account for every lens exactly
+once: disjoint, no duplicates, union == all lens ids. Every findings[].lens
+must appear in `lenses_run`. Those cross-field rules are the whole point - a
+record that cannot say which lenses ran cannot support a retire decision.
+
+A supplied `date`/`branch` is recorded AS GIVEN and is not checked against git
+or the clock; omit both and let this script fill them.
+
+Importable:  validate(record, *, repo) -> dict ;  append(repo, record) -> Path
 """
 from __future__ import annotations
 
 import argparse
 import datetime
 import json
+import os
 import re
 import subprocess
 import sys
@@ -53,6 +69,11 @@ SEVERITIES = {"red", "yellow", "green"}
 TOP_LEVEL_KEYS = {
     "date", "branch", "verdict", "findings", "lenses_run", "lenses_skipped",
 }
+# The lens vocabulary, in one place: `_is_lens` bounds every lens field against
+# it AND `validate` requires run+skipped to cover it exactly. Changing the lens
+# count means changing this alone.
+LENS_IDS = frozenset(range(1, 11))
+_LOG_OVERRIDE_ENV = "STALAGMIGHT_REVIEW_LOG"
 _DATE_FMT = "%Y-%m-%d"
 _DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
 
@@ -67,9 +88,16 @@ class EnvironmentFailure(RuntimeError):
 
 
 def _git(repo: Path | None, *args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
-    )
+    # argv list, never shell=True: a branch name can contain shell metacharacters.
+    # OSError here means git is missing or unrunnable, which is an environment
+    # problem (exit 2), not a bad record - without this it escaped as a traceback
+    # and the interpreter's default exit 1 read as "fix your JSON".
+    try:
+        return subprocess.run(
+            ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+        )
+    except OSError as e:
+        raise EnvironmentFailure(f"could not run git: {e}") from e
 
 
 def repo_root() -> Path:
@@ -94,7 +122,7 @@ def current_branch(repo: Path) -> str:
 
 
 def _is_lens(v: Any) -> bool:
-    return isinstance(v, int) and not isinstance(v, bool) and 1 <= v <= 10
+    return isinstance(v, int) and not isinstance(v, bool) and v in LENS_IDS
 
 
 def _require(cond: bool, message: str) -> None:
@@ -122,11 +150,15 @@ def _validate_findings(findings: Any) -> None:
 
 
 def _validate_lenses_run(lenses_run: Any) -> None:
-    _require(
-        isinstance(lenses_run, list) and len(lenses_run) > 0,
-        "`lenses_run` must be a non-empty list",
-    )
+    # Deliberately NOT "must be non-empty": a review where every lens was
+    # legitimately skipped is a real outcome, and the completeness check in
+    # `validate` is what actually stops a record from under-reporting.
+    _require(isinstance(lenses_run, list), "`lenses_run` must be a list")
     _require(all(_is_lens(v) for v in lenses_run), "`lenses_run` entries must be ints 1-10")
+    _require(
+        len(set(lenses_run)) == len(lenses_run),
+        "`lenses_run` must not contain duplicates (a duplicate inflates the ran count)",
+    )
 
 
 def _validate_lenses_skipped(lenses_skipped: Any) -> None:
@@ -156,9 +188,38 @@ def validate(record: dict[str, Any], *, repo: Path) -> dict[str, Any]:
     _require("findings" in record, "`findings` is required (may be an empty list)")
     _validate_findings(record["findings"])
 
-    _validate_lenses_run(record.get("lenses_run", []))
+    lenses_run = record.get("lenses_run", [])
+    _validate_lenses_run(lenses_run)
     lenses_skipped = record.get("lenses_skipped", [])
     _validate_lenses_skipped(lenses_skipped)
+
+    # Cross-field accounting. Each list validates fine in isolation while the
+    # record as a whole says something impossible, and the consumer keys its
+    # keep/retire recommendation off exactly these counts - so a lens claimed as
+    # both run and skipped, an unaccounted lens, or a finding from a lens that
+    # never ran all corrupt the decision this log exists to inform.
+    run_set = set(lenses_run)
+    skipped_set = {s["lens"] for s in lenses_skipped}
+    both = run_set & skipped_set
+    _require(
+        not both,
+        f"lens(es) {sorted(both)} appear in both `lenses_run` and `lenses_skipped`",
+    )
+    _require(
+        len(skipped_set) == len(lenses_skipped),
+        "`lenses_skipped` must not list the same lens twice",
+    )
+    missing = LENS_IDS - run_set - skipped_set
+    _require(
+        not missing,
+        f"lens(es) {sorted(missing)} are in neither `lenses_run` nor `lenses_skipped`; "
+        "every lens must be accounted for or ran-clean and never-ran stay indistinguishable",
+    )
+    orphaned = sorted({f["lens"] for f in record["findings"]} - run_set)
+    _require(
+        not orphaned,
+        f"findings cite lens(es) {orphaned} that are not in `lenses_run`",
+    )
 
     date = record.get("date")
     if date is None:
@@ -180,13 +241,35 @@ def validate(record: dict[str, Any], *, repo: Path) -> dict[str, Any]:
     return {**record, "date": date, "branch": branch, "lenses_skipped": lenses_skipped}
 
 
+def log_path_for(repo: Path) -> Path:
+    """Where the log lives, honouring the scratch override."""
+    override = os.environ.get(_LOG_OVERRIDE_ENV)
+    if override:
+        path = Path(override)
+        if not path.is_absolute():
+            raise EnvironmentFailure(f"{_LOG_OVERRIDE_ENV} must be an absolute path, got {override!r}")
+        return path
+    return repo / ".claude" / "review-log.jsonl"
+
+
 def append(repo: Path, record: dict[str, Any]) -> Path:
     """Append exactly one compact, sorted-key JSON line to the review log."""
-    log_path = repo / ".claude" / "review-log.jsonl"
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    log_path = log_path_for(repo)
+    # A symlink here would silently redirect the append outside the repo, and
+    # gitignoring the path does not stop a *tracked* symlink from being checked
+    # out at it. Refuse rather than follow.
+    if log_path.is_symlink():
+        raise EnvironmentFailure(f"refusing to write through a symlink at {log_path}")
     line = json.dumps(record, sort_keys=True, separators=(",", ":"))
-    with log_path.open("a", encoding="utf-8") as f:
-        f.write(line + "\n")
+    # mkdir/open/write are all environment faults, not record faults: an
+    # unwritable .claude/, a directory at the log path, or a full disk must not
+    # tell the caller to go and edit its JSON.
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(line + "\n")
+    except OSError as e:
+        raise EnvironmentFailure(f"could not append to {log_path}: {e}") from e
     return log_path
 
 
@@ -194,7 +277,14 @@ def _read_input(arg: str | None) -> str:
     if arg is None or arg == "-":
         if sys.stdin.isatty():
             raise EnvironmentFailure("no JSON given and stdin is a tty")
-        return sys.stdin.read()
+        raw = sys.stdin.read()
+        # Empty stdin is a usage problem (nothing was piped), not a malformed
+        # record; without this it fell through to json.loads and reported as
+        # "invalid JSON", i.e. exit 1 telling the caller to fix a record it
+        # never sent.
+        if not raw.strip():
+            raise EnvironmentFailure("stdin was empty; pipe or redirect a JSON record")
+        return raw
     return arg
 
 

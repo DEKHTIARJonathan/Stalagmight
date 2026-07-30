@@ -68,14 +68,22 @@ Subagents 1-8 each own exactly one numbered lens:
   not `setFilter`, for per-feature visuals.
 
 **Subagent 2 - IPC / async correctness** (this guard is frontend/TS only)
-- **Do not launch this lens when the diff touches no frontend TypeScript.** The lens is
-  frontend-only by its own definition (the Rust note at the end of it says so), so on a
+- **Do not launch this lens when the diff contains no TypeScript at all.** The lens is
+  TS-only by its own definition (the Rust note at the end of it says so), so on a
   Rust-only, docs-only, or CI-only diff it can produce nothing and costs a full finder.
-  Gate on:
-  `git diff --name-only master...HEAD -- 'src/**/*.ts' 'src/**/*.tsx'`
+  Gate on the SAME diff expression Scope selected (below it is the committed-branch
+  form; on the staged/unstaged fallback substitute that, or the gate reports empty for
+  every change and skips this lens on a pure-TS diff):
+  `git diff --name-only master...HEAD -- '*.ts' '*.tsx'`
   Empty output means skip it, and record `{"lens": 2, "why": "no TS in diff"}` in
   `lenses_skipped` when you log the run - a skip that isn't recorded is
   indistinguishable from a lens that ran and found nothing.
+  ⚠ Match those two patterns exactly. `'src/**/*.ts'` looks equivalent and is **not**:
+  git pathspecs are fnmatch without `:(glob)`, so `*` already spans `/` and the literal
+  slash before `*.ts` forces at least one directory level - it silently misses
+  `src/App.tsx`, `src/main.tsx`, and `src/globals.d.ts`, which is exactly where
+  mount-time IPC wiring lives. The bare `'*.ts' '*.tsx'` form also correctly catches TS
+  outside `src/`, such as `e2e-playwright/mocks/tauri-ipc.ts`.
 - Every async IPC response that paints/mutates must be **version-guarded**: capture
   identity at request time (`created_at` + `modified_at` + file path - see
   `projectIdentityKey` in `src/hooks/useMapTools.ts`) and drop the reply if state moved
@@ -172,11 +180,13 @@ Subagents 1-8 each own exactly one numbered lens:
   alongside the code, dead code, a formula duplicated in a second language, a comment
   that asserts something the code does not do. Anything the eight fixed lenses have no
   column for.
-- It exists because the fixed lenses share their blind spots, and it earns its slot: the
-  two rounds that ran an unconstrained reviewer in this position produced the deepest
-  findings of the whole review both times - the only voice to catch net-new clippy
-  warnings and a triple `Project` deep-clone per export, and the one that caught release
-  notes still telling users the build was unsigned in the very release that fixed signing.
+- It exists because the eight fixed lenses share their blind spots. Its recurring value
+  is a **class** of finding none of them has a column for: build/lint output, provenance,
+  duplicated rules, and prose that ships with the code. On this command's own review it
+  was the only voice to find that two sibling copies of this very file existed and had
+  not been updated. (Earlier rounds credited it with catching net-new clippy warnings and
+  a triple `Project` deep-clone; treat single-round anecdotes as weak evidence, which is
+  what `.claude/review-log.jsonl` exists to replace.)
 - Like Subagent 9 this is a judgment voice, not a checklist walk. If per-lens model
   routing is ever added, **9 and 10 are the two that must not be down-tiered.**
 - Do **not** try to invoke the bundled `/code-review` here (see the warning at the top);
@@ -195,6 +205,9 @@ Wait for all subagents, then merge:
 
 ## Output (same shape every time, so reviews are comparable)
 1. **Verdict** - Block / Approve-with-nits / Needs-work + the single most important issue.
+   ⚠ When you log the run, these map to `block` / **`nits`** / `needs-work`. The middle
+   one is not a case transform of its display label, and the logger rejects anything
+   else - so "Approve-with-nits" written verbatim costs a wasted round.
 2. **🔴 Must-fix** (correctness/security/CI/contract) - `file:line · why · fix`.
 3. **🟡 Should-fix** - same format.
 4. **🟢 Nits** - terse.
@@ -204,48 +217,63 @@ Wait for all subagents, then merge:
 
 ## Log the run (instrumentation - one line per review)
 After printing the verdict, log the run with the vendored script rather than appending a
-line by hand - it validates the record, resolves the repo root itself (so cwd doesn't
-matter), and appends exactly one JSON line to `.claude/review-log.jsonl`, creating the
-file if absent and never rewriting existing content. The log is gitignored and
-per-contributor.
+line by hand - it validates the record and appends exactly one JSON line to
+`<repo-root>/.claude/review-log.jsonl`, creating the file if absent and never rewriting
+existing content. The log is gitignored and per-contributor.
 
-This exists to answer the question the review process cannot currently answer: **which
-lenses are worth their wall-clock.** A lens that runs and finds nothing is the signal;
-without `lenses_run` and `lenses_skipped`, ran-clean and never-ran are indistinguishable
-and no lens can ever be safely retired.
+What this can answer: **which lenses produce must-fixes, and which run clean.** A lens
+that runs and finds nothing is the signal; without `lenses_run` and `lenses_skipped`,
+ran-clean and never-ran are indistinguishable. It does **not** record duration or cost, so
+it cannot rank lenses by wall-clock - the schema has no field for it and rejects unknown
+keys.
+
+⚠ **Read this before retiring a lens on the log's evidence.** Nothing in the repo reads
+the log; the only reader is `~/tools/review_log_summary.py`, which is personal and
+unversioned here. And only the Claude path logs today - the sibling definitions
+(`.agents/skills/pre-pr/SKILL.md` for Codex `$pre-pr`, `.opencode/command/pre-pr.md`) have
+no log step, so **the log is a partial sample of runs.** A skipped lens is evidence of
+nothing, not evidence against the lens.
 
 Record shape:
 
 ```json
-{"date":"<YYYY-MM-DD>","branch":"<git branch>","verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_run":[1,3,4,5,6,7,8,9,10],"lenses_skipped":[{"lens":2,"why":"no TS in diff"}]}
+{"verdict":"block|nits|needs-work","findings":[{"lens":<1-10>,"severity":"red|yellow|green","file":"<path:line>","verified":true}],"lenses_run":[1,3,4,5,6,7,8,9,10],"lenses_skipped":[{"lens":2,"why":"no TS in diff"}]}
 ```
 
-Invoke it as:
+**Write the record to a file and redirect it in. Do not splice it into a quoted shell
+word:** a record embeds `file:line` values taken from the diff under review, and a path
+containing a single quote closes the quoting and turns the rest into shell syntax. On a
+hostile branch that is arbitrary command execution, and this command exists to review
+exactly such branches. Use the Write tool, then:
 
 ```
-python3 scripts/review/log_run.py '<json>'
+python3 scripts/review/log_run.py < <path-to-record>.json
 ```
 
-For long records, pipe JSON on stdin instead (avoids shell quoting/length limits):
-
-```
-echo '<json>' | python3 scripts/review/log_run.py
-```
-
-- `date` and `branch` are optional - the script fills them (today's UTC date,
-  `git rev-parse --abbrev-ref HEAD`, or a short commit sha if HEAD is detached) if
-  omitted, but must match if you provide them.
+- **Omit `date` and `branch`** - the script fills them (today's UTC date, and
+  `git rev-parse --abbrev-ref HEAD`, or a short commit sha if HEAD is detached). If you do
+  supply them they are recorded **as given and not cross-checked**, so a wrong value
+  silently poisons the log. Note the script's date is UTC and may be a day ahead of local.
 - Include every 🔴/🟡 finding (🟢 optional); set `verified:true` only for findings actually
   traced in code, `false` for ASSUMED/unverified.
-- List every lens that actually ran in `lenses_run`, and every lens that did not in
-  `lenses_skipped` with a short `why`. `lenses_skipped` may be omitted from the input
-  (defaults to `[]`), but the script always writes it, so every line on disk carries the
-  full schema.
+- **`lenses_run` and `lenses_skipped` must account for every lens exactly once**: disjoint,
+  no duplicates, and together covering 1-10. Every `findings[].lens` must appear in
+  `lenses_run`. The script rejects a record that breaks any of those - a lens claimed as
+  both run and skipped, an unaccounted lens, or a finding from a lens that sat the run out
+  each corrupt the keep/retire decision. `lenses_run` may be empty if genuinely every lens
+  was skipped; `lenses_skipped` may be omitted and is always written as `[]`.
 - **The exit code tells you what went wrong, if anything:**
   - `0` - logged. The review is not logged until you see this.
   - `1` - the record was rejected (bad verdict, out-of-range lens, unknown key, malformed
-    JSON) and the log file was left untouched. Fix the record and re-run.
-  - `2` - an environment problem (not run from inside the repo, no stdin piped, git
-    itself failed), not a content problem - the record may be fine. Fix the invocation.
+    JSON, broken lens accounting) and the log file was left untouched. Fix the record.
+  - `2` - an environment problem (not inside a repo, empty/absent stdin, git missing, the
+    log path unwritable or a symlink), not a content problem - the record may be fine.
+    Fix the invocation, not the JSON.
+- ⚠ The log path comes from `git rev-parse --show-toplevel`, so **cwd decides which
+  checkout gets written** - a sibling clone or a worktree each keeps its own log, and
+  because the file is gitignored a stray write is invisible to `git status`. When probing
+  or testing the script by hand, set `STALAGMIGHT_REVIEW_LOG` to an absolute scratch path.
 
-Self-test: `python3 scripts/review/test_log_run.py` (16 tests, stdlib only, no network).
+Self-test: `python3 scripts/review/test_log_run.py` (36 tests, stdlib only, no network).
+Not wired into CI, unlike every sibling gate's `lint:*:test` - run it by hand after
+editing the logger.

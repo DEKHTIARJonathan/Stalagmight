@@ -78,7 +78,8 @@ CLAUDE.local.md
 # LLM agent-harness bridge runtime artifacts (#262) - never commit
 .agent-bridge/
 
-# Per-contributor /pre-pr instrumentation - local by policy (#257)
-.claude/review-log.jsonl
-# Python bytecode from scripts/review tooling
+# Per-contributor /pre-pr instrumentation - local by policy.
+# Unanchored so a nested worktree's own .claude/ log is covered too.
+**/.claude/review-log.jsonl
+# Python bytecode (repo-wide; scripts/review and scripts/ralph both emit it)
 __pycache__/
