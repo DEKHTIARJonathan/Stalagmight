@@ -1692,21 +1692,57 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         { path },
         { purpose: 'permanently delete project', fields: { path } }
       );
-      if (result.success) {
-        // Deleting the file backing the OPEN project closes it: the backend tore
-        // its own session down (project, SQLite handle, undo stack) before handing
-        // the `.stalx` to the OS, so the frontend has to follow. Without this the
-        // UI kept rendering the deleted project as open - and the next autosave
-        // tick, which does not care that the file is gone, failed the save with
-        // "No project open" and surfaced that as a save error.
-        //
-        // Compared AFTER the await, against whatever is open NOW: that is the safe
-        // direction. The comparison decides whether to throw away the CURRENT
-        // project's state, so it must describe the current project, not the one
-        // that happened to be open when the request went out.
-        if (get().project?.file_path === path) {
-          clearOpenProjectState(set);
+      // Deleting the file backing the OPEN project closes it - the backend tears
+      // its own session down (project, SQLite handle, undo stack) - so the
+      // frontend has to follow. Without that the UI kept rendering the deleted
+      // project as open, and the next autosave tick, which does not care that the
+      // file is gone, failed the save with "No project open" and surfaced that as
+      // a save error.
+      //
+      // ASK the backend whether it still has a project, rather than predicting it
+      // from `result.success` plus a string compare against the deleted path.
+      // Both halves of that prediction were wrong, in opposite directions:
+      //
+      //  - `result.success` is not a precondition for the close. The backend
+      //    closes BEFORE handing the `.stalx` to the OS trash, and it has to:
+      //    SQLite holds the file open without `FILE_SHARE_DELETE`, so on Windows
+      //    the trash fails with "Access is denied" while that handle lives, and a
+      //    close-afterwards would never be reached. A trash that is then denied
+      //    for some other reason (no write access to the parent directory)
+      //    therefore returns FAILURE with the session already gone - and the old
+      //    success-only guard left the frontend rendering a phantom project with
+      //    no backend behind it.
+      //  - the string compare is not what the backend matches with. It uses
+      //    `same_file`, which canonicalizes, so a symlink, a `..` segment or a
+      //    Windows case / short-name variant of the open project's path tears the
+      //    session down while `===` on the raw strings says it did not.
+      //
+      // The backend holds at most ONE project, so "the frontend believes a project
+      // is open and the backend reports none" always means the frontend is stale,
+      // whichever path was deleted - clearing is right. The converse matters just
+      // as much: a backend that still reports a project means the delete hit some
+      // OTHER file (deleting a recent from the global view while working in a
+      // different project), and clearing there would throw away a live project's
+      // state and undo history for nothing.
+      //
+      // Skipped entirely when the frontend has no project, so the common
+      // delete-from-the-global-view case costs no extra round trip.
+      if (get().project) {
+        try {
+          const state = await invokeIpc<ProjectState | null>('get_project_state', undefined, {
+            purpose: 'check whether deleting the file closed the open project',
+          });
+          if (!state) clearOpenProjectState(set);
+        } catch (e) {
+          // Deliberately swallowed rather than letting it fall into the outer
+          // catch: that would rewrite a SUCCESSFUL delete as `success: false`,
+          // which skips the recents refresh below and strands the "File not
+          // found" zombie row the backend goes out of its way to avoid. If we
+          // can't confirm, leave the frontend state as it stands.
+          console.error('Failed to confirm project state after deleting project:', e);
         }
+      }
+      if (result.success) {
         await Promise.all([get().loadRecentProjects(), get().loadConfig()]);
       }
       return result;
