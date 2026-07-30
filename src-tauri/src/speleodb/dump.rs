@@ -123,11 +123,25 @@ pub(crate) fn chosen_candidate(entry_paths: &[String], chosen: &str) -> Option<C
     }
 }
 
+/// The final component of a ZIP entry name.
+///
+/// `/` ONLY, never `std::path`. A ZIP entry name is a wire string whose separator the
+/// format fixes as `/`, but `Path::file_name` applies the HOST's rules - so on Windows
+/// a server-supplied `evil\\project.stalx` has the basename `project.stalx` and on
+/// Linux it has none, and every predicate built on it answered differently per
+/// platform from identical bytes. That is not academic here: the basename decides which
+/// candidate the picker badges "current", pre-selects, and puts initial focus on, so a
+/// hostile or merely odd archive could make a decoy the default answer on one platform
+/// only.
+fn zip_basename(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
 /// Case-insensitive `.stalx` extension on the final path component.
 fn has_stalx_suffix(path: &str) -> bool {
-    Path::new(path)
-        .extension()
-        .is_some_and(|e| e.eq_ignore_ascii_case("stalx"))
+    zip_basename(path)
+        .rsplit_once('.')
+        .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("stalx"))
 }
 
 /// Whether `path`'s file name is the one a push writes.
@@ -137,18 +151,12 @@ fn has_stalx_suffix(path: &str) -> bool {
 /// answers "could this be the upload target", never "is it" - see
 /// [`Dump::entry_details`] for what happens when more than one entry can be.
 pub(crate) fn has_canonical_basename(path: &str) -> bool {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n == super::client::CANONICAL_STALX_WIRE_NAME)
+    zip_basename(path) == super::client::CANONICAL_STALX_WIRE_NAME
 }
 
 /// The server reserves the root filename `ariane.tml` for the Ariane sidecar.
 fn is_ariane_tml(path: &str) -> bool {
-    Path::new(path)
-        .file_name()
-        .and_then(|n| n.to_str())
-        .is_some_and(|n| n.eq_ignore_ascii_case("ariane.tml"))
+    zip_basename(path).eq_ignore_ascii_case("ariane.tml")
 }
 
 /// Write `bytes` to `path`, then flush them all the way to the device.
@@ -272,6 +280,16 @@ impl<'a> Dump<'a> {
                 .map_err(|e| SpeleoDbError::Parse(format!("could not read ZIP entry {i}: {e}")))?;
             let entry_path = entry.name().to_owned();
             if !wanted_set.contains(entry_path.as_str()) {
+                continue;
+            }
+            // An entry the extract would refuse is not a candidate. `MAX_ENTRY_BYTES`
+            // was applied only at extraction, so a declared size above it reached the
+            // picker as a pickable row - and `entry.size()` is the central directory's
+            // unvalidated ZIP64 `u64`, so it could also exceed what a JSON number
+            // carries exactly, under a doc that justified the `number` type BY the cap
+            // it was not yet subject to. Offering a choice the backend will reject is
+            // worse than a shorter list.
+            if entry.size() > MAX_ENTRY_BYTES {
                 continue;
             }
             let is_canonical = canonical_path == Some(entry_path.as_str());
@@ -407,8 +425,8 @@ impl<'a> Dump<'a> {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        chosen_candidate, classify, download_temp_path, ChosenKind, Dump, DumpClassification,
-        SpeleoDbError,
+        chosen_candidate, classify, download_temp_path, has_canonical_basename, has_stalx_suffix,
+        is_ariane_tml, ChosenKind, Dump, DumpClassification, SpeleoDbError,
     };
 
     fn paths(items: &[&str]) -> Vec<String> {
@@ -623,6 +641,67 @@ mod tests {
     }
 
     #[test]
+    /// [#258 review] A candidate the extract would refuse is not offered. The 512 MiB
+    /// per-entry cap was applied at extraction only, so a declared size above it reached
+    /// the picker as a pickable row - and the size shown there is the central
+    /// directory's unvalidated ZIP64 value, which a server controls outright.
+    #[test]
+    fn an_entry_too_large_to_extract_is_not_offered_as_a_candidate() {
+        // Two real entries plus a header claiming a size no extract would honour. The
+        // ZIP is built with honest bytes, so this drives the declared-size path by
+        // asserting the small ones survive and pinning the predicate the filter uses.
+        let zip = make_zip(&[("a.stalx", b"one" as &[u8]), ("b.stalx", b"two")]);
+        let mut dump = Dump::open(&zip).expect("open");
+        let wanted = vec!["a.stalx".to_owned(), "b.stalx".to_owned()];
+        let details = dump.entry_details(&wanted).expect("details");
+        assert_eq!(details.len(), 2, "ordinary entries are still offered");
+        assert!(
+            details
+                .iter()
+                .all(|c| c.size_bytes <= super::MAX_ENTRY_BYTES),
+            "every offered candidate must be within the cap the extract enforces, or \
+             the picker is offering an answer the backend will reject"
+        );
+    }
+
+    /// A ZIP entry name is a wire string whose separator the format fixes as `/`.
+    /// Parsing it with `std::path` made every basename predicate host-dependent: on
+    /// Windows `evil\\project.stalx` reads as the canonical basename and on Linux it
+    /// does not, from identical server bytes. `is_canonical` decides the picker's badge,
+    /// its pre-selection and its initial focus, so that divergence let an archive make a
+    /// decoy the default answer on one platform only.
+    #[test]
+    fn zip_names_are_parsed_with_zip_separators_not_the_hosts() {
+        // A backslash is an ordinary filename character in a ZIP name, so none of these
+        // has `project.stalx` / `ariane.tml` as its final component.
+        for hostile in [
+            "evil\\project.stalx",
+            "a\\b\\project.stalx",
+            "backup\\ariane.tml",
+        ] {
+            assert!(
+                !has_canonical_basename(hostile),
+                "`{hostile}` must not be badged canonical on any platform"
+            );
+        }
+        assert!(!is_ariane_tml("backup\\ariane.tml"));
+
+        // The genuine `/`-separated forms still work, at every depth.
+        assert!(has_canonical_basename("project.stalx"));
+        assert!(has_canonical_basename("misc/project.stalx"));
+        assert!(has_canonical_basename("a/b/c/project.stalx"));
+        assert!(!has_canonical_basename("project.stalx.bak"));
+        assert!(is_ariane_tml("ariane.tml"));
+        assert!(is_ariane_tml("misc/ARIANE.TML"));
+
+        // And the suffix test keeps its own contract, including a dotless name and a
+        // dot that belongs to a directory rather than the file.
+        assert!(has_stalx_suffix("a/b.stalx"));
+        assert!(has_stalx_suffix("A/B.STALX"));
+        assert!(!has_stalx_suffix("a.stalx/b"));
+        assert!(!has_stalx_suffix("noextension"));
+    }
+
     fn entry_paths_lists_entries_in_order() {
         let zip = make_zip(&[("misc/project.stalx", b"data"), ("README.md", b"hi")]);
         let mut dump = Dump::open(&zip).expect("valid zip opens");

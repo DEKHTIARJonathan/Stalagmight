@@ -817,8 +817,12 @@ pub struct SpeleoDumpCandidate {
     ///
     /// Typed as a TS `number`, not ts-rs's default `bigint` for `u64`: serde emits
     /// a JSON number and the webview parses it as one, so `bigint` would describe a
-    /// value that never arrives. Sizes here are bounded by the 512 MiB per-entry cap
-    /// anyway, far inside the exact-integer range.
+    /// value that never arrives. Bounded by the 512 MiB per-entry cap and so well
+    /// inside the exact-integer range - but only because `Dump::entry_details` drops
+    /// any entry above it. That is load-bearing, not incidental: the raw value is the
+    /// central directory's unvalidated ZIP64 `u64`, and the cap used to be applied at
+    /// extraction alone, which left this claim justifying the `number` type by a bound
+    /// nothing on this path enforced.
     #[ts(type = "number")]
     pub size_bytes: u64,
     /// Last-modified (RFC-3339) when the entry carries one.
