@@ -249,6 +249,19 @@ impl AppState {
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         // Read through the guard rather than `open_project_path`, which takes
         // the same lock and would deadlock here.
+        // Resolved ONCE, and everything below - the checks and the write - is
+        // about the file this names. Re-asking the original path after opening
+        // it is a TOCTOU with symlinks in it: `open_existing` follows the link
+        // as it was, so replacing the link afterwards makes the checks describe
+        // a file the open handle is not writing to. Canonicalizing first leaves
+        // one resolution for both, and the checks can no longer be pointed at a
+        // different file than the delete.
+        let path = std::fs::canonicalize(&path).map_err(|e| {
+            local_dto(SpeleoDbError::Io(format!(
+                "cannot resolve {}: {e}",
+                path.display()
+            )))
+        })?;
         if open
             .as_ref()
             .and_then(|project| project.file_path.as_deref())
@@ -291,15 +304,16 @@ impl AppState {
                         .to_owned(),
                 )));
             }
-            // Right project, and STILL the wrong file if the path now resolves
-            // to the canonical copy. `same_file` follows symlinks, so a final
-            // component replaced by a link to the cache copy passes the identity
-            // check above on every field - same project, same deployment - while
-            // the handle underneath is the one file this module exists to keep
-            // managed. `foreign_link_in` already recognises that spelling
-            // (`LinkedSpelling::Canonical`); this is the same question asked at
-            // the moment of the write. No cache root means no canonical slot to
-            // protect, which is the module's standing degradation rule.
+            // Right project, and STILL the wrong file if this resolves to the
+            // canonical copy - a path whose final component was replaced by a
+            // link to the cache copy passes the identity check above on every
+            // field (same project, same deployment) while the file underneath is
+            // the one this module exists to keep managed. Asked of the RESOLVED
+            // path, which is also the path the handle above was opened at, so
+            // the answer describes the file that is about to be written.
+            // `foreign_link_in` recognises the same spelling at open time
+            // (`LinkedSpelling::Canonical`). No cache root means no canonical
+            // slot to protect, which is the module's standing degradation rule.
             if super::speleodb_local_state::cache_root().is_some_and(|root| {
                 super::speleodb_local_state::is_the_cached_copy(&root, &link.project_id, &path)
             }) {

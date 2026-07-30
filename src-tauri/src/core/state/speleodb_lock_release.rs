@@ -371,35 +371,36 @@ impl AppState {
     fn speleodb_spawn_lock_release(
         &self,
     ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
-        let p = self.speleodb_held_lock_release_params()?;
-        // THIS session's account of the lock has to be gone before the reclaim
-        // check runs, or the check reads its own caller as the successor it
-        // exists to protect and stands down - stranding the very mutex this call
-        // hands back. That account has two halves, and they come off at
-        // different moments on purpose:
+        // WHAT is being released, WHOSE session is releasing it, and the claim
+        // that said so - captured as ONE transition, under the `project` mutex.
         //
-        // - The CLAIM comes off here, synchronously. This session provably owns
-        //   it at this point (it is the one that just passed the release gate),
-        //   so there is no other claim this could be taking.
-        // - The GATE comes off inside the release's own lock-ops span, NOT here.
-        //   Shutting it here opens a window the status poll walks straight into:
-        //   a shut gate over a mutex the server still says this account holds is
-        //   exactly what its inherited-lock reopen exists for, so the poll takes
-        //   the guard first, reopens the gate, and the release then stands down
-        //   for a session that is about to be torn down anyway - lock stranded.
-        //   Left open, there is nothing for the poll to resurrect, and the
-        //   release shuts it under the same guard that then decides.
+        // Separately, they can describe different worlds. Every session boundary
+        // bumps the generation under this mutex, so a close-and-reopen slipping
+        // between the claim clear and the generation read left `entry_gen`
+        // naming the SUCCESSOR: the deferred release would then find its
+        // generation "unchanged", shut that successor's gate, see neither a
+        // claim nor a live session, and free the mutex the successor had just
+        // inherited. Holding the mutex across all three makes them one fact.
+        // (`delete_project` snapshots its release params under this same guard,
+        // for the same reason.)
         //
-        // The generation pairs that later gate transition with THIS session (see
-        // `speleodb_stand_down_and_release`); read under the `project` mutex,
-        // which is where every bump happens.
-        let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
-        let entry_gen = {
+        // What is NOT captured here is the GATE. It comes off inside the
+        // release's own lock-ops span, because shutting it here opens a window
+        // the status poll walks straight into: a shut gate over a mutex the
+        // server still says this account holds is exactly what its
+        // inherited-lock reopen exists for, so the poll takes the guard first,
+        // reopens the gate, and the release then stands down for a session that
+        // is about to be torn down anyway - lock stranded. Left open, there is
+        // nothing for the poll to resurrect, and the release shuts it under the
+        // same guard that then decides (`speleodb_stand_down_and_release`).
+        let (p, claim, entry_gen) = {
             let _proj_guard = self
                 .project
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            self.speleodb_session_generation()
+            let p = self.speleodb_held_lock_release_params()?;
+            let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
+            (p, claim, self.speleodb_session_generation())
         };
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = self.get_app_handle();

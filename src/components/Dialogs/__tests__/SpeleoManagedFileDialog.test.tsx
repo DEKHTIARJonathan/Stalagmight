@@ -10,7 +10,7 @@
  * prompt (and its error) on screen instead of leaving nothing open.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -183,6 +183,39 @@ describe('SpeleoManagedFileDialog', () => {
     expect(ipcCalls()).not.toContain('speleodb_list_projects');
     expect(ipcCalls()).not.toContain('speleodb_open_project');
     expect(loadProjectMock).not.toHaveBeenCalled();
+  });
+
+  it('ignores an in-flight action once a newer refusal has replaced the prompt', async () => {
+    // The dialog is a singleton: a newer refusal swaps `dialogData.managed` in
+    // place and React keeps this instance, with the running handler still
+    // closed over the OLD file. Acting on that result would open file A's
+    // project over B's prompt - superseding what the user is now looking at.
+    let releaseList: (projects: unknown[]) => void = () => {};
+    invokeIpcMock.mockImplementation((cmd: string) =>
+      cmd === 'speleodb_list_projects'
+        ? new Promise((resolve) => {
+            releaseList = resolve as (projects: unknown[]) => void;
+          })
+        : Promise.resolve(undefined),
+    );
+    render(<SpeleoManagedFileDialog />);
+    await userEvent.click(screen.getByTestId('speleodb-managed-file-open-remote'));
+
+    // A newer refusal takes the slot while the list request is still pending.
+    // (`openDialog` is a spy here, so the slot is set the way it would leave it.)
+    act(() => {
+      useUIStore.setState({
+        dialogData: {
+          managed: { ...MANAGED, path: '/home/diver/other/newer.stalx', projectId: 'p2' },
+        },
+      });
+    });
+    releaseList([SUMMARY]);
+
+    await waitFor(() => expect(ipcCalls()).toContain('speleodb_list_projects'));
+    expect(ipcCalls()).not.toContain('speleodb_open_project');
+    expect(loadProjectMock).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('speleodb-managed-file-error')).not.toBeInTheDocument();
   });
 
   it('strips the link and reopens the same path', async () => {

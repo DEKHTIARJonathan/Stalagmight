@@ -79,6 +79,15 @@ export default function SpeleoManagedFileDialog() {
       ? null
       : t('speleodb.managedFile.openRemoteDisabledLoggedOut');
 
+  // This dialog is a singleton component: a newer refusal replaces
+  // `dialogData.managed` in place, and React keeps the same instance with its
+  // in-flight handlers still closed over the OLD file. Anything awaited has to
+  // re-check that the prompt is still about the file it started on, or file A's
+  // result opens A's project over B's prompt - or writes A's error into it.
+  const stillPrompting = (about: SpeleoManagedFile) =>
+    (useUIStore.getState().dialogData.managed as SpeleoManagedFile | undefined)?.path ===
+    about.path;
+
   const dismiss = () => {
     if (cancelReturnsTo) openDialog(cancelReturnsTo);
     else closeDialog();
@@ -104,8 +113,10 @@ export default function SpeleoManagedFileDialog() {
     let summary: SpeleoProjectSummary | undefined;
     try {
       const projects = await invokeIpc<SpeleoProjectSummary[]>('speleodb_list_projects');
+      if (!stillPrompting(managed)) return;
       summary = projects.find((p) => p.id === managed.projectId);
     } catch (e) {
+      if (!stillPrompting(managed)) return;
       // The list fetch IS the offline path: no special-casing, just the reason.
       setError(humanizeSpeleoError(e, t('speleodb.errors.openFailed')));
       setBusy(false);
@@ -117,6 +128,7 @@ export default function SpeleoManagedFileDialog() {
       return;
     }
     const outcome = await openRemote(summary);
+    if (!stillPrompting(managed)) return;
     if (outcome.status === 'adopt') {
       setPendingAdopt(summary);
       setBusy(false);
@@ -138,12 +150,16 @@ export default function SpeleoManagedFileDialog() {
       // against the link it finds before deleting anything.
       await invokeIpc('speleodb_remove_link_at', { path: managed.path, expected: managed });
     } catch (e) {
+      if (!stillPrompting(managed)) return;
       // Keep the prompt open - closing it would leave the user with nothing
       // opened and no explanation.
       setError(humanizeSpeleoError(e, t('speleodb.managedFile.removeFailed')));
       setBusy(false);
       return;
     }
+    // The strip succeeded either way - the row is gone, which is what the user
+    // asked for - but only the prompt that asked may close and load.
+    if (!stillPrompting(managed)) return;
     closeDialog();
     // Now unmanaged: the same open that was refused goes through normally. A
     // failed load surfaces its own error through loadProject.
@@ -155,6 +171,7 @@ export default function SpeleoManagedFileDialog() {
     setBusy(true);
     setError(null);
     const outcome = await adoptRemote(summary);
+    if (!stillPrompting(managed)) return;
     if (outcome.status === 'error') {
       setError(outcome.message);
       setBusy(false);
