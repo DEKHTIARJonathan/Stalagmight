@@ -1,8 +1,21 @@
 # SpeleoDB lock/session races: two open P1s and the traps around them
 
-**Status: OPEN. Nothing here is fixed.** This is a problem statement, not a plan.
-One fix was attempted and abandoned; section 6 says what it was and why it did
-not survive review, because the way it failed is itself information.
+**Status: FIXED on `feat/speleodb-session-generation` (2026-07-31).** The
+mechanism is the session generation + commit guard + reclaim-checked releases
+in `core/state/speleodb_session.rs` (F7: Start Editing commits through a
+generation/identity check under the `project` mutex; F8: the delete clears its
+own claim at snapshot time and its captured release stands down for a
+successor's claim, serialized under the new outermost `speleodb_lock_ops`
+mutex; the 5.4 janitor gap is closed in `speleodb_link_status`). Two
+pre-existing residuals are deliberately out of scope and noted in that
+commit: the detached project-switch/quit releases and `speleodb_update`'s
+fast-forward re-record. The canonical-storage change
+(`feat/speleodb-canonical-storage`) separately removed the Save-As route to
+two linked copies (5.7's Save-As half, D5).
+
+The remainder of this page is the ORIGINAL problem statement, kept as the
+rationale record for the fix. Section 6 describes an earlier abandoned
+attempt, because the way it failed shaped the design that landed.
 
 All line numbers are as of `6e73c8b9` (branch `refactor/remove-collab-mode`,
 PR #355). Every claim below was traced in the code; where something is inferred
