@@ -4645,6 +4645,42 @@ fn sanitize_push_snapshot_clears_the_dirty_bit() {
 }
 
 #[test]
+fn sanitize_push_snapshot_tolerates_a_snapshot_without_a_redo_stack() {
+    // An older snapshot shape can legitimately lack a local-only table - the v15
+    // migration's own strip helper (`drop_legacy_undo_history`) is guarded on exactly
+    // that - and what does not exist cannot leak, so a missing table must never abort
+    // the push. `redo_stack` is the sharp end of the branch: it is on
+    // PUSH_SNAPSHOT_FATAL_TABLES, so without the absent-table `continue` the
+    // `DELETE FROM redo_stack` would error with "no such table" and take the FATAL
+    // arm - failing every push from a snapshot that simply never had one.
+    //
+    // Every other sanitize test builds its fixture through `Database::open`, whose
+    // `init_schema` creates all the local-only tables, so none of them can reach this.
+    let temp = TempDir::new().unwrap();
+    let path = dirty_push_snapshot(&temp, "x", 3);
+    Connection::open(&path)
+        .unwrap()
+        .execute("DROP TABLE redo_stack", [])
+        .unwrap();
+
+    Database::sanitize_push_snapshot(&path).expect("a missing local table must not fail the push");
+
+    let snap = Connection::open(&path).unwrap();
+    let undo: i64 = snap
+        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
+        .unwrap();
+    assert_eq!(undo, 0, "the tables that DO exist are still stripped");
+    // The skip continues the loop rather than short-circuiting the function: the
+    // dirty-bit clear that comes AFTER the strip loop must still have run.
+    let dirty: i64 = snap
+        .query_row("SELECT has_unpushed_edits FROM speleo_link", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(dirty, 0, "the rest of the sanitize still ran to completion");
+}
+
+#[test]
 fn sanitize_push_snapshot_fails_closed_when_the_undo_strip_cannot_run() {
     // The fail-closed half: if `undo_stack` exists but cannot be emptied, the
     // snapshot still carries the pusher's edit history - both a privacy leak and a
@@ -5836,6 +5872,17 @@ fn migrate_v15_drops_collab_state_and_the_undo_history() {
             ),
         ])
         .unwrap();
+        // The REDO stack too: `drop_legacy_undo_history` loops both, and a redo entry
+        // is just as unsafe to replay - a v14 user who undid past an
+        // `apply_collab_changes` reaches this migration with the apply sitting in
+        // redo. Asserting only `undo_stack` would let a helper that stopped looping
+        // both tables through unnoticed.
+        db.save_redo_stack_with_timestamps(vec![(
+            r#"{"type":"apply_collab_changes"}"#.to_string(),
+            "null".to_string(),
+            None,
+        )])
+        .unwrap();
         db.set_user_version(14).unwrap();
     }
 
@@ -5845,15 +5892,17 @@ fn migrate_v15_drops_collab_state_and_the_undo_history() {
         !db.table_exists("collab_state").unwrap(),
         "v15 must drop the collab sidecar table, not leave a dead one in every file"
     );
-    let undo_rows: i64 = db
-        .conn
-        .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(
-        undo_rows, 0,
-        "the whole undo stack must go: skipping only the undeserializable entry \
-         would leave a hole that replays stale entries over the applied changes"
-    );
+    for table in ["undo_stack", "redo_stack"] {
+        let remaining: i64 = db
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "the whole {table} must go: skipping only the undeserializable entry \
+             would leave a hole that replays stale entries over the applied changes"
+        );
+    }
 }
 
 /// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`.
