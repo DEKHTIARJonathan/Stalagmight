@@ -53,11 +53,23 @@ export function shouldShowModified(candidates: SpeleoDumpCandidate[]): boolean {
  * membership test. Only what is drawn changes, and it changes into something visibly
  * wrong rather than something invisibly wrong.
  */
+const HIDDEN_IN_PATH =
+  // By Unicode PROPERTY, not by an enumerated range. The first version of this listed
+  // the ranges it could think of and missed a soft hyphen, a combining grapheme joiner,
+  // a Mongolian vowel separator and every variation selector - each of which still lets
+  // two byte-distinct paths render identically, which is the whole attack. An
+  // allowlist of invisibles is a list you will always be one codepoint behind on.
+  //
+  // `Cc`/`Cf` are the control and format characters, `Default_Ignorable_Code_Point` is
+  // Unicode's own name for "renders as nothing", and `Zl`/`Zp` are the line and
+  // paragraph separators. U+0020 is deliberately NOT here: an ordinary space is legal
+  // in a path and visible between other characters.
+  /[\p{Cc}\p{Cf}\p{Default_Ignorable_Code_Point}\p{Zl}\p{Zp}]/gu;
 export function visiblePath(path: string): string {
-  // eslint-disable-next-line no-control-regex
-  return path.replace(/[\u0000-\u001F\u007F-\u009F\u061C\u200B-\u200F\u2028-\u202E\u2060-\u2069\uFEFF]/gu, (ch) =>
-    `<U+${ch.codePointAt(0)!.toString(16).toUpperCase().padStart(4, '0')}>`,
-  );
+  return path.replace(HIDDEN_IN_PATH, (ch) => {
+    const code = ch.codePointAt(0) ?? 0;
+    return `<U+${code.toString(16).toUpperCase().padStart(4, '0')}>`;
+  });
 }
 
 function formatSize(bytes: number): string {

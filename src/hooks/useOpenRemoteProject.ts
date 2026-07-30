@@ -2,7 +2,11 @@ import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore } from '../store/speleoStore';
+import {
+  useSpeleoStore,
+  speleoSessionIssuedAt,
+  speleoSessionStillCurrent,
+} from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import {
   speleoErrorAction,
@@ -456,40 +460,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
     throw new Error(retried.message);
   }, []);
 
-  /**
-   * [#258] Whether the session that ISSUED a request is still the one signed in.
-   *
-   * Ambiguity is a routing signal, not a failure, so the catch that receives it opens
-   * a picker rather than reporting anything - and a picker is only worth raising for
-   * a session that can still answer it. These three verbs each make a call of
-   * unbounded length (a dump download), and a 401 auto-drop on any concurrent call
-   * ends the session underneath them, so the reply can arrive after `clearSession`
-   * has already torn the surface down. Raising the picker then puts a dialog on
-   * screen for an account nobody is signed in to; every button on it fails, and the
-   * only reason it eventually resolves is that the replay's own re-login tears it
-   * down a second time.
-   *
-   * `sessionGeneration` rather than `session` identity, for the reason the store
-   * documents: it is bumped by a login or an ending and NOT by the benign refreshes a
-   * project load and Settings both trigger, so an identity check would fire on those
-   * and suppress a picker that should have opened.
-   *
-   * The generation alone is not quite enough, though, and the gap is exactly one of
-   * those benign refreshes: `setSession` writes whatever the backend reports, so a
-   * refresh that comes back `logged_in: false` leaves a session object behind at the
-   * SAME generation. That case is covered here rather than by wiring a teardown into
-   * `setSession`, which every project load and Settings open calls - it would fire far
-   * beyond this question.
-   *
-   * `!== false`, not `=== true`: a session that is merely ABSENT is not evidence of a
-   * logout, it is a store that has not been seeded yet, and demanding one would make
-   * raising the picker conditional on a status poll having landed first. Only a
-   * positive `loggedIn: false` says the session ended under us.
-   */
-  const sessionStillCurrent = useCallback((issuedAt: number): boolean => {
-    const { sessionGeneration, session } = useSpeleoStore.getState();
-    return sessionGeneration === issuedAt && session?.loggedIn !== false;
-  }, []);
 
   const openRemote = useCallback(
     async (
@@ -502,7 +472,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Captured immediately before the request, so an Ambiguous reply that lands
       // after the session ended routes nowhere (see `sessionStillCurrent`).
-      const issuedAt = useSpeleoStore.getState().sessionGeneration;
+      const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoOpenResult;
       try {
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project', {
@@ -529,7 +499,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // raised here - all three hosts of this hook get the choice rather than
         // each having to recognise the typed action for itself.
         const candidates = dumpCandidates(e);
-        if (candidates && sessionStillCurrent(issuedAt)) {
+        if (candidates && speleoSessionStillCurrent(issuedAt)) {
           // The kind comes off the DTO rather than being assumed: with no `.stalx`
           // and several `ariane.tml`, this same branch is offering a choice of file
           // to ADOPT, and hard-coding `stalx` showed the Open title and button for
@@ -581,7 +551,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       onAdoptAfterPick,
       cancelReturnsTo,
       failReplay,
-      sessionStillCurrent,
       t,
     ],
   );
@@ -684,7 +653,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Captured immediately before the request, so an Ambiguous reply that lands
       // after the session ended routes nowhere (see `sessionStillCurrent`).
-      const issuedAt = useSpeleoStore.getState().sessionGeneration;
+      const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoOpenResult;
       try {
         result = await invokeIpc<SpeleoOpenResult>('speleodb_open_project_discarding_local', {
@@ -711,7 +680,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // who had just confirmed discarding their local copy met a flat error and had
         // nowhere to go - on the one path where backing out costs the most.
         const candidates = dumpCandidates(e);
-        if (candidates && sessionStillCurrent(issuedAt)) {
+        if (candidates && speleoSessionStillCurrent(issuedAt)) {
           openDumpPicker(candidates, dumpCandidateKind(e), async (entryPath) => {
             const retried = await takeRemoteRef.current?.(summary, { entryPath });
             if (retried?.status === 'error') failReplay(retried);
@@ -742,7 +711,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       openDumpPicker,
       onAdoptAfterPick,
       failReplay,
-      sessionStillCurrent,
       t,
     ],
   );
@@ -781,7 +749,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       if (refusal) return { status: 'error', message: refusal, reLogin: false };
       // Same capture as the two pull verbs, and it matters most here: adoption can
       // raise the ambiguity itself on a tree that moved while its confirm was open.
-      const issuedAt = useSpeleoStore.getState().sessionGeneration;
+      const issuedAt = speleoSessionIssuedAt();
       let result: SpeleoAdoptResult;
       try {
         result = await invokeIpc<SpeleoAdoptResult>('speleodb_adopt_ariane', {
@@ -801,7 +769,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         // flat error stranded the user - they could not pick from the new tree
         // without restarting the whole open flow.
         const candidates = dumpCandidates(e);
-        if (candidates && sessionStillCurrent(issuedAt)) {
+        if (candidates && speleoSessionStillCurrent(issuedAt)) {
           // WHICH verb replays depends on what the new tree turned out to hold, and
           // it is not always this one. If a `.stalx` has appeared the answer is to
           // EXTRACT it, and adoption refuses anything but an Ariane entry - so
@@ -893,7 +861,6 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       openDumpPicker,
       onAdoptAfterPick,
       failReplay,
-      sessionStillCurrent,
       t,
     ],
   );

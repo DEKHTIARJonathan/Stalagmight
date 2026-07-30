@@ -4,7 +4,7 @@ import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../store/speleoStore';
 import { useRevertRevision } from '../../hooks/useRevertRevision';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
@@ -103,6 +103,8 @@ export default function SpeleoRevertDialog() {
     // again (and re-arms it below) or gets past that step, in which case the retry
     // control must not linger over an outcome it no longer describes.
     setRetryUpload(false);
+    // Captured BEFORE the composite runs; the ambiguity arm checks it.
+    const issuedAt = speleoSessionIssuedAt();
     const outcome = await revertRevision({
       projectId,
       projectName,
@@ -144,6 +146,14 @@ export default function SpeleoRevertDialog() {
         // plain Revert control inert so a second composite cannot be armed behind the
         // picker. Answering re-runs the whole thing, which is what re-acquires the
         // lock; cancelling hands the dialog back exactly as it was.
+        // [#258 review] Only for a session that can still answer it - the probe behind
+        // this outcome is an unbounded download, and a concurrent 401 can tear the
+        // surface down while it is out. Without the picker there is nothing to suspend
+        // on, so `busy` is released rather than deliberately held.
+        if (!speleoSessionStillCurrent(issuedAt)) {
+          setBusy(false);
+          return;
+        }
         setAwaitingChoice(true);
         openDumpPicker(
           outcome.candidates,

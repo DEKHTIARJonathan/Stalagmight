@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { Button } from '../common/Button';
 import { AlertDialog } from './AlertDialog';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
@@ -66,6 +66,9 @@ export default function SpeleoRestoreDialog() {
     if (!projectId || !hexsha) return;
     setBusy(true);
     setError(null);
+    // Captured BEFORE the request, so the ambiguity catch can tell whether the session
+    // that issued it is still the one signed in.
+    const issuedAt = speleoSessionIssuedAt();
     try {
       // Restore mode: the backend reopens the swapped tree with editing re-enabled
       // and the hook pulls it into the view. Close the confirm only on success so a
@@ -86,7 +89,9 @@ export default function SpeleoRestoreDialog() {
       // returns the dialog to its opening state with the lock still held - the user
       // is still in an edit session, and the edit bar still says so.
       const candidates = dumpCandidates(e);
-      if (candidates) {
+      // [#258 review] Same issuing-session guard the open verbs use: this download is
+      // unbounded, and a concurrent 401 can tear the surface down while it is out.
+      if (candidates && speleoSessionStillCurrent(issuedAt)) {
         openDumpPicker(
           candidates,
           'stalx',

@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
 import { useUIStore } from '../../../store/uiStore';
-import { useSpeleoStore } from '../../../store/speleoStore';
+import { useSpeleoStore, speleoSessionIssuedAt, speleoSessionStillCurrent } from '../../../store/speleoStore';
 import { useProjectStore } from '../../../store/projectStore';
 import { useRestoreRevision } from '../../../hooks/useRestoreRevision';
 import { useSpeleoWebLink } from '../../../hooks/useSpeleoWebLink';
@@ -110,6 +110,8 @@ export function SpeleoRevisionHistory() {
   const handleView = async (rev: SpeleoRevision, entryPath?: string) => {
     if (!projectId) return;
     setPendingId(rev.id);
+    // Captured BEFORE the request; the ambiguity catch checks it.
+    const issuedAt = speleoSessionIssuedAt();
     try {
       await restoreRevision({
         projectId,
@@ -125,7 +127,8 @@ export function SpeleoRevisionHistory() {
       // and re-entering HERE rather than the hook means the retry's own failure
       // lands in the toast below, exactly as a first attempt's would.
       const candidates = dumpCandidates(e);
-      if (candidates) {
+      // [#258 review] Same issuing-session guard the open verbs use.
+      if (candidates && speleoSessionStillCurrent(issuedAt)) {
         openDumpPicker(candidates, 'stalx', (chosen) => handleView(rev, chosen));
         return;
       }

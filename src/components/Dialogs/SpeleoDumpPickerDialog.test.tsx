@@ -32,7 +32,7 @@ vi.mock('../../utils/ipc', () => ({
 
 // Real copy, so the assertions below are about what the user actually reads.
 import '../../i18n';
-import SpeleoDumpPickerDialog, { shouldShowModified } from './SpeleoDumpPickerDialog';
+import SpeleoDumpPickerDialog, { shouldShowModified, visiblePath } from './SpeleoDumpPickerDialog';
 import { useSpeleoStore, type DumpPickerKind } from '../../store/speleoStore';
 import type { SpeleoDumpCandidate } from '../../types/ipc/SpeleoDumpCandidate';
 
@@ -165,6 +165,24 @@ describe('SpeleoDumpPickerDialog - choosing', () => {
     await userEvent.click(option(0));
     await userEvent.click(confirm());
     expect(resolveMock).toHaveBeenCalledWith(hostile);
+  });
+
+  it('[#258 review] escapes by Unicode property, not by an enumerated range', async () => {
+    // The first version of this listed the ranges it could think of and missed a soft
+    // hyphen, a combining grapheme joiner, a Mongolian vowel separator and every
+    // variation selector - each of which still lets two byte-distinct paths render
+    // identically, which is the whole attack. An allowlist of invisibles is a list you
+    // are always one codepoint behind on.
+    const sneaky = 'a\u00ADb\u034Fc\u180Ed\uFE00e.stalx';
+    seed({ dumpPickerCandidates: [candidate({ entry_path: sneaky })] });
+    render(<Host />);
+
+    for (const code of ['00AD', '034F', '180E', 'FE00']) {
+      expect(screen.getByText(new RegExp(`<U\\+${code}>`))).toBeInTheDocument();
+    }
+    // ...while an ordinary space stays an ordinary space: it is legal in a path and
+    // visible between other characters.
+    expect(visiblePath('misc/my survey.stalx')).toBe('misc/my survey.stalx');
   });
 
   it('picking a row confirms THAT file', async () => {

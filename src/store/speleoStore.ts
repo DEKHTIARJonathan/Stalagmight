@@ -217,6 +217,43 @@ export type PendingAuth = PendingLogin | { kind: 'logout' } | null;
  * by {@link SpeleoStore.snapshotLink} and put back by
  * {@link SpeleoStore.restoreLink}.
  */
+/**
+ * The session a request is being issued under, to be checked again when its reply
+ * lands. [#258]
+ *
+ * Ambiguity is a ROUTING signal, so the catch that receives it opens a dialog rather
+ * than reporting anything - and every verb that can raise the picker makes a call of
+ * unbounded length (a dump download) first. A 401 auto-drop on any concurrent call ends
+ * the session underneath it, so the reply can arrive after `clearSession` has already
+ * torn the surface down; raising the picker then puts a dialog on screen for an account
+ * nobody is signed in to, where Confirm can only fail and a flow suspended on the
+ * question waits for a manual cancel.
+ *
+ * Shared rather than repeated because it was repeated, and the copies did not agree:
+ * the three open verbs had it and the three revision-family verbs did not.
+ */
+export function speleoSessionIssuedAt(): number {
+  return useSpeleoStore.getState().sessionGeneration;
+}
+
+/**
+ * Whether the session that issued a request is still the one signed in.
+ *
+ * `sessionGeneration` rather than `session` identity, for the reason the store
+ * documents: it moves on a login or an ending and NOT on the benign refreshes a project
+ * load and Settings both trigger, so an identity check would fire on those and suppress
+ * a picker that should have opened.
+ *
+ * `!== false`, not `=== true`: a session that is merely ABSENT is not evidence of a
+ * logout, it is a store that has not been seeded yet, and demanding one would make
+ * raising the picker conditional on a status poll having landed first. Only a positive
+ * `loggedIn: false` says the session ended under us.
+ */
+export function speleoSessionStillCurrent(issuedAt: number): boolean {
+  const { sessionGeneration, session } = useSpeleoStore.getState();
+  return sessionGeneration === issuedAt && session?.loggedIn !== false;
+}
+
 export interface SpeleoLinkSnapshot {
   link: SpeleoLinkState | null;
   projectLinkKind: ProjectLinkKind;
