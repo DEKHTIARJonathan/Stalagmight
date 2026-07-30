@@ -4676,6 +4676,9 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_unlink':
           case 'speleodb_release_all_locks':
           case 'speleodb_release_lock':
+          // [#258 review] The provenance-scoped unwind. No payload, and no argument:
+          // it releases whatever THIS process recorded acquiring, or nothing.
+          case 'speleodb_release_lock_acquired_here':
           case 'speleodb_set_exclude_geojson':
           // #215 lock release + delete: no payload.
           case 'speleodb_release_current_lock':

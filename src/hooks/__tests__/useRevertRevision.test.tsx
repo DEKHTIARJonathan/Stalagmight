@@ -556,24 +556,59 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
       }
       if (cmd === 'speleodb_restore_revision') return RESTORED;
       if (cmd === 'speleodb_done') return { kind: 'released' };
-      if (cmd === 'speleodb_release_lock') return null;
+      if (cmd === 'speleodb_release_lock_acquired_here') return null;
       return null;
     });
 
     const outcome = await run();
 
     expect(outcome).toEqual({ kind: 'project_changed' });
-    // Acquired, released, and never restored.
+    // Acquired, unwound, and never restored.
     expect(issued()).toEqual([
       'speleodb_dump_candidates',
       'speleodb_start_editing',
-      'speleodb_release_lock',
+      'speleodb_release_lock_acquired_here',
     ]);
-    // BY ID. `done` is argument-free and acts on whatever is OPEN - which this branch
-    // has just proved is a different project - and `message: null` picks the commit
-    // message rather than suppressing the upload, so unwinding through it would push
-    // the replacement whenever that project happened to be dirty and editable.
-    expect(argsOf('speleodb_release_lock')).toEqual({ projectId: 'p1' });
+    // Through the PROVENANCE-SCOPED verb, and through neither of the two things that
+    // look like they would do. `done` is argument-free and acts on whatever is OPEN -
+    // which this branch has just proved is a different project - and `message: null`
+    // picks the commit message rather than suppressing the upload, so unwinding through
+    // it would push the replacement whenever it was dirty and editable.
+    // `speleodb_release_lock(projectId)` targets an ARBITRARY project by design, so it
+    // would surrender a lock this account inherited from a sibling session, and would
+    // name an id that is not necessarily the one `startEditing` locked.
+    expect(issued()).not.toContain('speleodb_done');
+    expect(issued()).not.toContain('speleodb_release_lock');
+    // No argument: only the backend knows what it took.
+    expect(argsOf('speleodb_release_lock_acquired_here')).toBeUndefined();
+  });
+
+  it('leaves an INHERITED same-account lock alone when the project changes', async () => {
+    // The destructive half. An acquire that met a lock this account already held
+    // inherited it from a sibling session guarding its own un-pushed work, and
+    // `speleodb_start_editing` is explicit that no unwind may hand that back. The
+    // frontend cannot tell the two apart - `startEditing` reduces every success to
+    // `true` - so the decision has to sit in the backend, and this test's job is to
+    // prove the frontend does not make it. It asks unconditionally; the no-op is the
+    // backend's answer, which its own unit tests cover.
+    let released = 0;
+    invokeIpcMock.mockImplementation(async (cmd: string) => {
+      if (cmd === 'speleodb_dump_candidates') return null;
+      if (cmd === 'speleodb_start_editing') {
+        useSpeleoStore.setState({ remoteProjectId: 'p2' });
+        return { kind: 'editing' };
+      }
+      if (cmd === 'speleodb_release_lock_acquired_here') {
+        released += 1;
+        return null;
+      }
+      return null;
+    });
+
+    expect(await run()).toEqual({ kind: 'project_changed' });
+    // Exactly one ask, carrying no id for the backend to misapply.
+    expect(released).toBe(1);
+    expect(issued()).not.toContain('speleodb_release_lock');
     expect(issued()).not.toContain('speleodb_done');
   });
 
@@ -587,7 +622,8 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
         useSpeleoStore.setState({ remoteProjectId: 'p2' });
         return { kind: 'editing' };
       }
-      if (cmd === 'speleodb_release_lock') throw { message: 'offline', action: 'Retry' };
+      if (cmd === 'speleodb_release_lock_acquired_here')
+        throw { message: 'offline', action: 'Retry' };
       return null;
     });
 

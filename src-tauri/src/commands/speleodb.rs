@@ -266,6 +266,17 @@ pub async fn speleodb_release_all_locks(app: AppHandle) -> Result<(), SpeleoErro
     run_blocking(app, AppState::speleodb_release_all_locks).await
 }
 
+/// Hand back a write lock only if THIS process took it, and only the one it took.
+///
+/// For an unwind whose context went stale mid-flight. Deliberately takes no project
+/// id: the caller's captured id is not necessarily what got locked, and an inherited
+/// same-account lock must never be handed back. See
+/// [`AppState::speleodb_release_lock_acquired_here`].
+#[tauri::command]
+pub async fn speleodb_release_lock_acquired_here(app: AppHandle) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_release_lock_acquired_here).await
+}
+
 /// Release the write lock on ONE project by id (#201 per-project "Release" in the
 /// held-lock resume prompt). Targets an arbitrary held project, not necessarily
 /// the open one; on success the caller re-scans to refresh the recents badges.

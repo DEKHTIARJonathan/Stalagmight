@@ -282,21 +282,33 @@ export function useRevertRevision() {
       // what it acquired, and walking away from a server mutex because the project
       // changed would strand it for the holder's whole session.
       //
-      // BY ID, and emphatically not through `done`. Every verb this composite
-      // otherwise uses is argument-free and acts on whatever is open - which is the
-      // very thing this branch has just proved is no longer the project we mean. So
-      // `done(null)` would have unwound against the REPLACEMENT, and worse than
-      // uselessly: `message: None` picks the commit message, it does not suppress the
-      // upload, so a replacement that is dirty and editable would have been PUSHED by
-      // an error path. `speleodb_release_lock` takes the id and targets an arbitrary
-      // held project, which is exactly the shape this needs.
+      // The unwind names NEITHER a project nor `done`, and both exclusions are load
+      // bearing.
       //
-      // Best-effort: a failed release is reported as a warning and nothing more. The
-      // outcome is already decided by then, and the honest alternative - reporting a
-      // release failure instead of the project change - would name the smaller
-      // problem. The stranded lock remains visible in the held-lock resume prompt.
+      // Not `done`: it is argument-free and acts on whatever is open - the very thing
+      // this branch has just proved changed - and `message: null` picks the commit
+      // message rather than suppressing the upload, so a replacement that is dirty and
+      // editable would have been PUSHED by an error path.
+      //
+      // Not `speleodb_release_lock(projectId)` either, which was the first correction
+      // and only fixed half of it. That verb targets an ARBITRARY project by design
+      // (#201's held-lock prompt), so it unwinds whatever holds the id it is handed -
+      // and `startEditing()` locks whatever is OPEN, so the id captured here is not
+      // necessarily the id that got locked. Two ways to be wrong, and one destructive:
+      // an acquire that met a lock this ACCOUNT already held inherited it from a
+      // sibling session guarding its own un-pushed work, and `speleodb_start_editing`
+      // is explicit that no unwind may hand that back.
+      //
+      // Only the backend knows which of those happened, so it decides:
+      // `speleodb_release_lock_acquired_here` releases exactly what this process took
+      // and no-ops on an inherited lock or none at all.
+      //
+      // Best-effort: a failed release warns and nothing more. The outcome is already
+      // decided, and reporting a release failure instead of the project change would
+      // name the smaller problem; a stranded lock stays visible in the held-lock
+      // resume prompt.
       if (useSpeleoStore.getState().remoteProjectId !== projectId) {
-        await invokeIpc<null>('speleodb_release_lock', { projectId }).catch((e: unknown) => {
+        await invokeIpc<null>('speleodb_release_lock_acquired_here').catch((e: unknown) => {
           console.warn('revert: could not release the lock taken before the project changed', e);
         });
         return { kind: 'project_changed' };

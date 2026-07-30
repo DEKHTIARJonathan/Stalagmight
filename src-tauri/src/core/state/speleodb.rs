@@ -914,6 +914,46 @@ impl AppState {
             .is_ok_and(|session| session.lock_acquired_here.as_deref() == Some(project_id))
     }
 
+    /// WHICH project this process took a lock on, if it took one and is still editing
+    /// under it.
+    ///
+    /// The id half of [`Self::speleodb_lock_acquired_here`], for the one caller that
+    /// needs to unwind an acquisition WITHOUT already knowing what got acquired.
+    pub(super) fn speleodb_acquired_here_project(&self) -> Option<String> {
+        let session = self.speleodb_session_lock().ok()?;
+        session.lock_acquired_here.clone()
+    }
+
+    /// Hand back a write lock ONLY if this process is the one that took it, and only
+    /// the one it took.
+    ///
+    /// For an unwind that has discovered its context went stale - the revert composite
+    /// finding a different project open after its acquire. That caller cannot express
+    /// this itself, and gets it wrong in two ways if it tries:
+    ///
+    /// - `speleodb_release_lock` targets an ARBITRARY project by design (#201's
+    ///   held-lock prompt, where releasing a lock this process never took IS the
+    ///   point). Handing it an id unwinds whatever holds that id.
+    /// - the id the caller captured is not necessarily the id that got locked, because
+    ///   `speleodb_start_editing` locks whatever is OPEN - which is the very thing the
+    ///   stale-context check has just proved changed.
+    ///
+    /// And one of those ways is destructive rather than merely wrong. An acquire that
+    /// met `Ok(Some(us))` INHERITED a lock a sibling session on this account is holding
+    /// over its own un-pushed work, and `speleodb_start_editing` is explicit that no
+    /// unwind may hand that back. `lock_acquired_here` is the durable form of the same
+    /// verdict its `release_unless_kept` closure reads, so this releases exactly what
+    /// this process took and no-ops on an inherited lock or none at all.
+    ///
+    /// Silent when there is nothing of ours to release: the caller is already reporting
+    /// the staleness it found, and "no lock was ours" is not a second problem.
+    pub(crate) fn speleodb_release_lock_acquired_here(&self) -> Result<(), SpeleoErrorDto> {
+        let Some(project_id) = self.speleodb_acquired_here_project() else {
+            return Ok(());
+        };
+        self.speleodb_release_lock(project_id)
+    }
+
     /// [#258] Record which dump entry resolved this project's ambiguity, so the
     /// verbs that carry no `entryPath` can honour the choice for the rest of the
     /// session. Best-effort: a poisoned lock costs the memory, not the pull.
@@ -4238,6 +4278,46 @@ mod tests {
             RemoteState::UpToDate,
             "a session that really does hold the lock still gets the shortcut - our \
              own landed push must not be painted as a conflict"
+        );
+    }
+
+    /// [#258 review] The provenance-scoped unwind releases what THIS process took, and
+    /// nothing else.
+    ///
+    /// An acquire that met a lock this ACCOUNT already held inherited it from a sibling
+    /// session guarding its own un-pushed work, and `speleodb_start_editing` is explicit
+    /// that no unwind may hand that back. It records that case by leaving
+    /// `lock_acquired_here` unset, so an absent record is the inherited case and MUST
+    /// no-op - not fall through to a release the way `speleodb_release_lock` would.
+    ///
+    /// The no-op half is asserted behaviourally, and it is the half that matters: with
+    /// no record the call returns `Ok` having issued nothing, which is only reachable by
+    /// returning BEFORE the token lookup and the request. The complement - that a
+    /// RECORDED acquisition does reach the release - cannot be exercised here without a
+    /// server (it gets as far as a real request and blocks), so it rests on the
+    /// delegation to `speleodb_release_lock` being the function's only other branch,
+    /// plus the id assertion below proving the gate reads what the acquire wrote.
+    #[test]
+    fn the_unwind_releases_only_a_lock_this_process_recorded_taking() {
+        let state = AppState::new().expect("state");
+
+        assert!(
+            state.speleodb_acquired_here_project().is_none(),
+            "precondition: a fresh session has taken nothing"
+        );
+        assert!(
+            state.speleodb_release_lock_acquired_here().is_ok(),
+            "an inherited lock (no record) must be left alone - and silently, since the \
+             caller is already reporting the staleness that sent it here"
+        );
+
+        // And the gate reads exactly what a fresh acquire records, so the release it
+        // delegates to can only ever name the project this process locked - never the
+        // id a caller captured before the context moved under it.
+        state.speleodb_note_lock_acquired(Some(REMOTE_ID));
+        assert_eq!(
+            state.speleodb_acquired_here_project().as_deref(),
+            Some(REMOTE_ID)
         );
     }
 

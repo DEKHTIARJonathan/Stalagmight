@@ -147,6 +147,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_release_all_locks",
     "command.speleodb_release_current_lock",
     "command.speleodb_release_lock",
+    "command.speleodb_release_lock_acquired_here",
     "command.speleodb_remove_collaborator",
     "command.speleodb_remove_team",
     "command.speleodb_restore_revision",
@@ -968,7 +969,11 @@ mod tests {
         //   + 1 lock-free dump probe (#258), so the revert composite can ask which
         //       file to use BEFORE it acquires the write lock rather than after:
         //       command.speleodb_dump_candidates = 696.
-        assert_eq!(EVENT_NAMES.len(), 696);
+        //   + 1 provenance-scoped lock unwind (#258 review), so a composite that
+        //       finds its context stale after acquiring can hand back what IT took
+        //       without surrendering a lock inherited from a sibling session on the
+        //       same account: command.speleodb_release_lock_acquired_here = 697.
+        assert_eq!(EVENT_NAMES.len(), 697);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there
