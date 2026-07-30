@@ -1,21 +1,19 @@
 name: Agent Harness (node 24 probe)
 
-# TEMPORARY, for the node 22 -> 24 bump (#109).
+# On-demand only. The agent harness runs nowhere automatically, and it is the one
+# tier that drives the REAL app (tauri-driver + WebKitWebDriver + Xvfb), so there
+# is no other way to find out whether a toolchain change broke it.
 #
-# The committed `pnpm agent:http-probe` covers webdriverio's HTTP layer, which is
-# what the old "Node 22 only" rule actually blamed. It deliberately stubs the
-# driver, so it says nothing about tauri-driver, WebKitWebDriver or the real app -
-# and those are Linux-only, so no macOS box can answer for them. This job is that
-# missing half.
+# Added for the node 22 -> 24 bump (#109), where the harness carried a "Node 22
+# only" rule whose stated cause was not what the code did. `pnpm agent:http-probe`
+# disproved it for the HTTP layer and runs anywhere; this job covered the rest,
+# which is Linux-only. Result is recorded in docs/agent-harness.md: all 13 smoke
+# checks passed on Node 24.18.1, 7 minutes end to end.
 #
-# The harness runs nowhere automatically, so there is no existing job to extend.
-# It runs on the self-hosted NUC (zero Actions minutes) and only for the bump
-# branch. Delete it, or reduce it to workflow_dispatch, once the answer is
-# recorded in docs/agent-harness.md.
+# Kept because it is free (self-hosted) and manual, and because the next toolchain
+# bump will want exactly this. Safe to delete if it ever rots.
 
 on:
-  push:
-    branches: [chore/109-352-toolchain-and-lock-versioning]
   workflow_dispatch: {}
 
 concurrency:

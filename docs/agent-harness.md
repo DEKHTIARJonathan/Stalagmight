@@ -36,12 +36,23 @@ That probe is committed as `pnpm agent:http-probe`, so this is one command to
 re-check after a webdriverio or Node bump rather than something to re-derive. It
 runs anywhere, macOS included, because the stub replaces the driver.
 
-What it does **not** cover: tauri-driver, WebKitWebDriver and the app itself,
-which are Linux-only (Xvfb). Only the HTTP layer the old note blamed is
-confirmed; a green probe does not promise the whole harness works on a given
-Node. If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect
-`HTTP_PROXY` / `NO_PROXY` in the environment before the Node version, and record
-what actually fixed it here.
+That probe covers only the HTTP layer, so the full stack was checked separately on
+Linux, where it actually runs. On the self-hosted runner under Node 24.18.1
+(built-in undici 7.29.0), `pnpm agent:smoke` built the debug binary, brought up
+tauri-driver plus WebKitWebDriver on an Xvfb display, drove the real app and
+passed all 13 checks - including the crash oracle (a thread panic wrote its marker
+and `PANIC` ring line while the app stayed responsive) and process-group teardown
+with both ports released. Whole job: 7 minutes, of which 4m34s was the build.
+
+So nothing about the harness is Node-22-specific, at any layer. Reproduce with the
+`Agent Harness (node 24 probe)` workflow (`workflow_dispatch`; it is self-hosted,
+so it costs no Actions minutes). The runner image carries webkit's `-dev` packages
+for `cargo test` but not the WebDriver daemon, so that job installs
+`webkit2gtk-driver`, `xvfb` and `tauri-driver` itself - about 40s combined.
+
+If `app_start` ever does fail with `UND_ERR_INVALID_ARG`, suspect `HTTP_PROXY` /
+`NO_PROXY` in the environment before the Node version, and record what actually
+fixed it here.
 
 ## Architecture
 
