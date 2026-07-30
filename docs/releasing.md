@@ -91,10 +91,11 @@ git push origin master && git push origin --tags
 2. Computes new version (major/minor/patch or explicit X.Y.Z)
 3. Verifies no uncommitted changes (except CHANGELOG.md)
 4. Verifies `## [Unreleased]` section is non-empty
-5. Updates version in 3 of the 4 files that carry it (see [Version locations](#version-locations) - `src-tauri/Cargo.lock` is not one of them):
+5. Updates version in all 4 files that carry it (see [Version locations](#version-locations)):
    - `package.json`
    - `src-tauri/tauri.conf.json`
    - `src-tauri/Cargo.toml`
+   - `src-tauri/Cargo.lock` (this crate's stanza only)
 6. Moves `[Unreleased]` content under a new `## [X.Y.Z] - YYYY-MM-DD` header
 7. Commits: `chore: release vX.Y.Z`
 8. Tags: `vX.Y.Z`
@@ -281,15 +282,18 @@ three, **not** the fourth:
 | `package.json` | `"version"` | yes |
 | `src-tauri/tauri.conf.json` | `"version"` | yes |
 | `src-tauri/Cargo.toml` | `version` | yes |
-| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | **no** |
+| `src-tauri/Cargo.lock` | the `name = "stalagmight"` entry | yes |
 
 `Cargo.lock` records the crate's own version, and because nothing here builds with
 `cargo --locked`, a mismatch never fails a build - the next `cargo` invocation just
-rewrites the lock in place, leaving an unexplained dirty file. That is how the lock
-sat at `0.2.0` while everything else said `0.5.0`. It is synced now; teaching
-`release.sh` to keep it in step is
-[#352](https://github.com/Stalagmight/Stalagmight/issues/352). Until that lands,
-check `git status` after a bump and commit the lock with it.
+rewrites the lock in place, leaving an unexplained dirty file in a tree the release
+reported as clean. That is how the lock sat at `0.2.0` while everything else said
+`0.5.0`. `release.sh` bumps it now
+([#352](https://github.com/Stalagmight/Stalagmight/issues/352)), rewriting only the
+line after `name = "stalagmight"` - every dependency has a `version` line too, so a
+blanket substitution would rewrite the whole file. The pre-flight refuses to start
+if the lock is already out of step with `package.json`, rather than quietly bumping
+past a discrepancy worth looking at.
 
 The About dialog reads the version dynamically via `__APP_VERSION__` (injected by Vite from `package.json` at build time).
 

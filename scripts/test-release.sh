@@ -81,12 +81,40 @@ version_of() {
   sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' "$1/package.json" | head -1
 }
 
-echo "== case 1: a normal bump rewrites all three files, commits and tags =="
+# Cargo.lock has a `version = "..."` line per dependency, so read only the one
+# belonging to this crate: the line right after its `name` line.
+lock_version_of() {
+  awk '
+    /^name = "stalagmight"$/ {
+      if ((getline nxt) > 0 && nxt ~ /^version = "/) {
+        gsub(/^version = "|"$/, "", nxt)
+        print nxt
+      }
+    }
+  ' "$1/src-tauri/Cargo.lock"
+}
+
+# Rewrite that line to an arbitrary value, to fixture a drifted lock.
+set_lock_version() {
+  awk -v v="$2" '
+    /^name = "stalagmight"$/ { print; getline; print "version = \"" v "\""; next }
+    { print }
+  ' "$1/src-tauri/Cargo.lock" > "$1/.locktmp"
+  mv "$1/.locktmp" "$1/src-tauri/Cargo.lock"
+}
+
+echo "== case 1: a normal bump rewrites all four files, commits and tags =="
 D=$(fresh_clone case1)
 if "$D/scripts/release.sh" 9.9.9 --no-edit >/dev/null 2>&1; then
   assert "package.json bumped"       test "$(version_of "$D")" = "9.9.9"
   assert "tauri.conf.json bumped"    grep -q '"version": "9.9.9"' "$D/src-tauri/tauri.conf.json"
   assert "Cargo.toml bumped"         grep -q '^version = "9.9.9"' "$D/src-tauri/Cargo.toml"
+  # Cargo.lock is the fourth version file. Before #352 it was left behind, which
+  # nothing failed on: the next cargo invocation rewrote it in place, so the only
+  # symptom was an unexplained dirty lock in a tree the release called clean.
+  assert "Cargo.lock bumped"         test "$(lock_version_of "$D")" = "9.9.9"
+  assert "Cargo.lock is in the release commit" \
+    bash -c 'git -C "$1" show --name-only --format= HEAD | grep -qx "src-tauri/Cargo.lock"' _ "$D"
   assert "changelog section created" grep -q '^## \[9\.9\.9\]' "$D/CHANGELOG.md"
   assert "tag created"               has_tag "$D" v9.9.9
   assert "tree clean after release"  tree_clean "$D"
@@ -124,6 +152,22 @@ if "$D/scripts/release.sh" 7.7.7 --no-edit >/dev/null 2>&1; then
 else
   pass "refused a drifted version format"
   refute "package.json left untouched" grep -q '"version": "7.7.7"' "$D/package.json"
+  assert "tree clean, nothing to hand-revert" tree_clean "$D"
+fi
+
+echo "== case 4b: a Cargo.lock already out of step aborts before ANY file is written =="
+# The lock drifting behind is the #352 bug. If it is ALREADY wrong when a release
+# starts, bumping it to the new version would paper over that instead of pointing
+# at it, so the pre-flight refuses rather than guessing which one is right.
+D=$(fresh_clone case4b)
+set_lock_version "$D" 0.0.1
+git -C "$D" commit --quiet -am "desync Cargo.lock from Cargo.toml"
+if "$D/scripts/release.sh" 7.7.7 --no-edit >/dev/null 2>&1; then
+  fail "accepted a Cargo.lock that disagreed with package.json"
+else
+  pass "refused a Cargo.lock that disagreed with package.json"
+  refute "package.json left untouched" grep -q '"version": "7.7.7"' "$D/package.json"
+  assert "lock left as found"          test "$(lock_version_of "$D")" = "0.0.1"
   assert "tree clean, nothing to hand-revert" tree_clean "$D"
 fi
 
