@@ -156,6 +156,15 @@ TypeScript IPC types are generated from Rust via `ts-rs`. Do **not** hand-edit o
 create files under `src/types/ipc/` or `src/types/ipc.generated.ts`; run
 `pnpm gen:ipc-types` and commit the regenerated output instead.
 
+`src-tauri/bindings/` is generated too, but by a *different* mechanism: it falls
+out of `cargo test` (ts-rs turns each `#[ts(export)]` into an `export_bindings_*`
+test), not out of `pnpm gen:ipc-types`, whose output directory is hardcoded to
+`src/types/ipc`. Nothing imports that tree - it exists only as ts-rs's default
+export target - but it *is* committed, so CI's `check` job fails if `cargo test`
+leaves it dirty. Never hand-edit it either; run the Rust tests and commit what
+they write. See [docs/ipc-typegen.md](docs/ipc-typegen.md) for the full picture,
+including the one drift shape the gate cannot see.
+
 ### Commit Early, Commit Often
 
 Make small, frequent commits as you work. Don't accumulate large uncommitted changesets.
