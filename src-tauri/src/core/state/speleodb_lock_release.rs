@@ -303,25 +303,16 @@ impl AppState {
         &self,
         params: &LockReleaseParams,
     ) -> Result<(), SpeleoDbError> {
-        // The same bookkeeping `speleodb_release_best_effort` does, and for the same
-        // reason: a release we asked for ends this process's claim on the lock whether
-        // or not the POST lands, and one that failed leaves behind a lock this process
-        // can no longer account for.
-        //
-        // But KEYED on the project, which that one does not have to be. Every caller of
-        // `speleodb_release_best_effort` decides and clears in one breath, so no other
-        // acquisition can have happened in between; this one runs after
-        // `delete_project` has dropped the `project` mutex, and a Start editing on
-        // ANOTHER project inside that gap records ITSELF in the very slot an
-        // unconditional clear would then blank. See the helper for what that costs.
-        self.speleodb_forget_lock_acquired_for(&params.project_id);
-        client::release_lock(
-            &params.endpoint,
-            &params.token,
-            params.insecure_http,
-            &params.project_id,
-        )
-        .map(|_| ())
+        // The capturing session's own claim was already cleared - by
+        // `delete_project`, under the SAME `project` guard that snapshotted these
+        // params and decided the file's identity. So a claim naming this project
+        // when the release finally runs can only be a SUCCESSOR session's (a
+        // Start Editing that slipped into the gap and inherited the mutex via the
+        // server's same-account re-acquire no-op), and the reclaim-checked
+        // release stands down for it instead of freeing the lock out from under
+        // a live edit session (F8). Serialized under the lock-ops mutex, so the
+        // check and the POST cannot interleave with an acquire -> commit span.
+        self.speleodb_release_unless_reclaimed(params)
     }
 
     /// Snapshot the release params, then run the network release on a detached

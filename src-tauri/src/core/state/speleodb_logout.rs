@@ -343,6 +343,19 @@ impl AppState {
     /// dropped independently of whether the token still resolves - a logged-out
     /// session must not keep editing a project it can never push.
     fn speleodb_logout_drop_gates(&self) {
+        // A session boundary even though the project slot never moves (footgun
+        // 5.8): the token an in-flight Start Editing would commit a claim over is
+        // being forgotten, so the commit guard must see this. Bumped under a brief
+        // `project` acquisition per the `speleodb_session` rule; taken and dropped
+        // before the gates/lock work below, none of which needs it. Bumped even on
+        // the read-only early return: the boundary is the LOGOUT, not the release.
+        {
+            let _proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            self.bump_speleodb_session();
+        }
         if !self.edit_enabled() {
             return;
         }

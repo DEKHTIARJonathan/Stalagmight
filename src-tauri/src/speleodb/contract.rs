@@ -271,6 +271,11 @@ pub(crate) fn dto_for_error(endpoint: Endpoint, err: &SpeleoDbError) -> SpeleoEr
         SpeleoDbError::AmbiguousDump(_) | SpeleoDbError::AmbiguousAriane(_) => {
             (SpeleoDbAction::Ambiguous, None, err.to_string())
         }
+        // The session-moved refusal from Start Editing's commit guard: the world it
+        // was started in is gone (delete / close / switch / logout landed inside
+        // its network window) and nothing was committed. Retryable by definition -
+        // a retry runs in the successor world and does the right thing there.
+        SpeleoDbError::SessionMoved => (SpeleoDbAction::Retry, None, err.to_string()),
         // Everything below fails closed; each Display is already user-facing.
         //
         // ENUMERATED, not a `_` catch-all. Two of the arms above (`AdoptAriane`,

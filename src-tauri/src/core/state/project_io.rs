@@ -755,6 +755,10 @@ impl AppState {
     pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
         tracing::debug!("close_project: dropping project");
         *project = None;
+        // A session boundary: the caller holds the `project` guard (it passed it
+        // in), which is the bump rule (`speleodb_session`). Covers close, delete
+        // and the project switch, which all route through here.
+        self.bump_speleodb_session();
         tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");

@@ -146,6 +146,26 @@ pub struct AppState {
     /// solve so a result computed against a since-invalidated project is not
     /// written back (covers mutations that don't bump `modified_at`, e.g. repair).
     pub(super) adjusted_cache_generation: AtomicU64,
+    /// The SpeleoDB SESSION generation: bumped on every session boundary - a
+    /// project committed into (or cleared from) the `project` slot, and logout -
+    /// and ONLY while holding the `project` mutex. Captured by Start Editing at
+    /// entry and re-checked under the same mutex before its commit opens the edit
+    /// gate, so a teardown landing inside its network window refuses the commit
+    /// instead of opening a gate onto a torn-down world (F7). The same idiom as
+    /// [`Self::adjusted_cache_generation`] / `unrecognised_shot_kinds`, applied to
+    /// the one slot that never had it. See `core::state::speleodb_session`.
+    pub(super) speleodb_session_generation: AtomicU64,
+    /// Serializes SpeleoDB lock-acquisition spans against lock releases that run
+    /// detached from the session that captured them (the delete's captured
+    /// release, the stranded-claim janitor). Start Editing holds this across
+    /// acquire -> commit, so a captured release either completes before a new
+    /// acquire begins or observes the successor's claim and stands down - the F8
+    /// "stale release frees the successor's mutex" interleaving cannot fit in
+    /// between. ORDER: this mutex is OUTERMOST - it is held across network calls,
+    /// and code holding `project`/`database`/`undo_stack` must never block on it
+    /// (decide under `project`, drop it, then take this). See
+    /// `core::state::speleodb_session`.
+    pub(super) speleodb_lock_ops: Mutex<()>,
 }
 
 impl AppState {
@@ -201,6 +221,8 @@ impl AppState {
             unrecognised_shot_kinds: Mutex::new(None),
             adjusted_cache: Mutex::new(None),
             adjusted_cache_generation: AtomicU64::new(0),
+            speleodb_session_generation: AtomicU64::new(0),
+            speleodb_lock_ops: Mutex::new(()),
         })
     }
 

@@ -161,6 +161,9 @@ impl AppState {
 
         if let Ok(mut proj) = self.project.lock() {
             *proj = Some(project);
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule.
+            self.bump_speleodb_session();
         }
 
         // Load undo/redo stacks from database before replacing database reference
@@ -694,10 +697,16 @@ impl AppState {
         self.speleodb_release_held_lock_detached();
 
         // Commit 1: Project state mutation
-        *self
-            .project
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(project.clone());
+        {
+            let mut proj_guard = self
+                .project
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            *proj_guard = Some(project.clone());
+            // A session boundary (a project committed into the slot), bumped under
+            // the guard per the `speleodb_session` rule.
+            self.bump_speleodb_session();
+        }
 
         // [Track B] (#191) Read-only edit gate: a remote SpeleoDB project (one
         // carrying a speleo_link row) opened WITHOUT a write lock is read-only.

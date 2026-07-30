@@ -287,6 +287,18 @@ impl AppState {
                 //   the local link and so could never release from this project
                 //   again.
                 held_lock = self.speleodb_abandon_lock_release_params();
+                // End OUR claim now, while the identity decision above is still
+                // atomic under this guard. After the guard drops, a successor Start
+                // Editing on the SAME remote project can mint a claim of its own in
+                // this slot (a same-account re-acquire is a server-side no-op), and
+                // the deferred release must be able to read "a claim exists" as
+                // "the successor's, stand down" - see
+                // `speleodb_release_unless_reclaimed`. Clearing here is also what
+                // the old post-release clear did, just moved to where it cannot be
+                // confused with someone else's record (F8).
+                if let Some(p) = &held_lock {
+                    self.speleodb_forget_lock_acquired_for(&p.project_id);
+                }
                 tracing::info!(
                     path = ?path,
                     purpose = "release the live handle before deleting the file",
