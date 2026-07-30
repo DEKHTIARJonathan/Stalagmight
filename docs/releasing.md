@@ -80,6 +80,16 @@ further fixes land before `rc2`.
 
 ## Step-by-step (what Claude does)
 
+⚠ **First decide which of the two flows you are in. Running the wrong one cuts the
+wrong version, and it commits before anyone sees it.**
+
+```bash
+# Is this version already bumped? Compare the version files to the release you mean.
+grep -m1 '"version"' package.json
+```
+
+**Flow A - a NEW version** (`package.json` still shows the *previous* release):
+
 ```bash
 # 1. Check what changed since last release
 git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
@@ -91,12 +101,34 @@ git log $(git describe --tags --abbrev=0)..HEAD --oneline --no-merges
 git add CHANGELOG.md
 git commit -m "docs: update changelog for vX.Y.Z"
 
-# 4. Run release script (bumps versions in 3 of the 4 version files, moves changelog, commits, tags)
-./scripts/release.sh patch --no-edit
+# 4. Bump all four version files, move the changelog, commit. `--no-tag` if any
+#    candidate will be cut before the real release (see Release candidates above).
+./scripts/release.sh <major|minor|patch|X.Y.Z> --no-edit
 
 # 5. Push
 git push origin master && git push origin --tags
 ```
+
+**Flow B - the version is ALREADY bumped** (`package.json` already shows the version
+you are releasing, because `release.sh … --no-tag` ran for an earlier candidate). This
+is the flow for every candidate after the first, and for the final release that follows
+them. **Do not run `release.sh` again** - it would bump you onto the *next* version:
+
+```bash
+# 1. Fold anything under ## [Unreleased] into that version's own section.
+#    release-notes.sh reads `## [X.Y.Z]` and never looks at [Unreleased] once it
+#    exists, so entries left behind ship in the build and appear in no notes.
+
+# 2. Render and READ the body that will actually be published.
+./scripts/release-notes.sh vX.Y.Z-rcN     # or vX.Y.Z for the real one
+
+# 3. Tag the commit you mean, and push the tag.
+git tag vX.Y.Z-rcN && git push origin vX.Y.Z-rcN
+```
+
+A tag with a suffix publishes as a pre-release; a bare `vX.Y.Z` publishes as **Latest**.
+Check the `## [X.Y.Z] - YYYY-MM-DD` date before the final tag: `release.sh` stamped it
+the day the version was bumped, which may be well before the day it ships.
 
 ## What `scripts/release.sh` does
 
