@@ -1150,32 +1150,79 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('b.stalx');
   });
 
-  it('[#258 review] does NOT release the flow when its own retry re-raises', async () => {
+  it('[#258 review] does NOT release the flow when its OWN re-raise replaces it', async () => {
     // The other half, and why this cannot just always fire. A retry that meets a fresh
     // ambiguity re-raises from inside the same suspended flow; releasing its cancel
     // there would un-suspend it out from under the picker that just replaced it.
     const cancel = vi.fn();
+    const raise = (path: string) =>
+      useSpeleoStore
+        .getState()
+        .openDumpPicker(
+          [{ entry_path: path, size_bytes: 1, modified: null }],
+          'stalx',
+          async () => {},
+          cancel,
+          'flow-a',
+        );
+
+    raise('a.stalx');
+    raise('c.stalx');
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('c.stalx');
+  });
+
+  it('[#258 review] tells continuation from displacement by OWNER, not by timing', async () => {
+    // Codex's interleaving, and the reason the first attempt at this was wrong. That
+    // one marked a picker as a continuation when a retry happened to be in flight -
+    // a process-wide window, not a relationship. So a picker raised by a DIFFERENT
+    // flow during that window, and then displaced when the retry re-offered, had its
+    // cancel suppressed as if it were the retry's own re-raise. It is the one dialog
+    // that was actually suspended, and the cancel was the only thing that released it.
+    const revertCancel = vi.fn();
+    let releaseRetry = () => {};
+    const retryRan = new Promise<void>((resolve) => {
+      releaseRetry = resolve;
+    });
+
+    // A View picker: no owner, no cancel - it suspends nothing.
     useSpeleoStore.getState().openDumpPicker(
-      [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
+      [{ entry_path: 'view.stalx', size_bytes: 1, modified: null }],
       'stalx',
       async () => {
+        // ... while its retry is out, the revert raises its own question and
+        // suspends on the answer.
         useSpeleoStore
           .getState()
           .openDumpPicker(
-            [{ entry_path: 'c.stalx', size_bytes: 3, modified: null }],
+            [{ entry_path: 'revert.stalx', size_bytes: 2, modified: null }],
             'stalx',
             async () => {},
-            cancel,
+            revertCancel,
+            'speleodb-revert',
+          );
+        await retryRan;
+        // ... and then the View's retry meets a moved tree and re-offers, taking the
+        // overlay back from a revert that is still waiting to be released.
+        useSpeleoStore
+          .getState()
+          .openDumpPicker(
+            [{ entry_path: 'view2.stalx', size_bytes: 3, modified: null }],
+            'stalx',
+            async () => {},
           );
       },
-      cancel,
+      undefined,
+      undefined,
     );
 
-    await useSpeleoStore.getState().resolveDumpPicker('a.stalx');
+    const resolving = useSpeleoStore.getState().resolveDumpPicker('view.stalx');
+    releaseRetry();
+    await resolving;
 
-    expect(cancel).not.toHaveBeenCalled();
-    expect(useSpeleoStore.getState().dumpPickerOpen).toBe(true);
-    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('c.stalx');
+    expect(revertCancel).toHaveBeenCalledTimes(1);
+    expect(useSpeleoStore.getState().dumpPickerCandidates[0]?.entry_path).toBe('view2.stalx');
   });
 
   it('lets a retry that lost its picker settle without touching the one that replaced it', async () => {

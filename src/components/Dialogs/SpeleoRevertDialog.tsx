@@ -9,6 +9,13 @@ import { useRevertRevision } from '../../hooks/useRevertRevision';
 import { SpeleoPushFailureNotice } from './SpeleoPushFailureNotice';
 
 /**
+ * Names this flow to `openDumpPicker`, so its own re-raise is read as a continuation
+ * of the question it is still suspended on, and anyone else's raise is read as the
+ * displacement it is.
+ */
+const DUMP_PICKER_OWNER = 'speleodb-revert';
+
+/**
  * What a press asks `useRevertRevision` for.
  * - `revert`: the whole composite - take the lock, check the revision out, upload it.
  * - `discard`: the same, after the armed confirm, waiving the un-pushed-edits guard.
@@ -163,6 +170,11 @@ export default function SpeleoRevertDialog() {
             setAwaitingChoice(false);
             setBusy(false);
           },
+          // This flow suspends on the answer - `busy` stays true across it and the
+          // cancel above is the only thing that releases it - so it names itself. A
+          // re-raise from its own retry is a continuation and must NOT fire that
+          // cancel; a picker raised by anything else displaces it and must.
+          DUMP_PICKER_OWNER,
         );
         return;
       case 'diverged':

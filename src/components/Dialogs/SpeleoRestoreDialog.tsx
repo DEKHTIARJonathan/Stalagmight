@@ -8,6 +8,9 @@ import { useProjectStore } from '../../store/projectStore';
 import { useRestoreRevision } from '../../hooks/useRestoreRevision';
 import { humanizeSpeleoError, unpushedLocalEdits, dumpCandidates } from '../../utils/speleoError';
 
+/** Names this flow to `openDumpPicker` - see the revert dialog for why. */
+const DUMP_PICKER_OWNER = 'speleodb-restore';
+
 /**
  * [#218] Restore-revision confirm. Opened from the Project Settings revision
  * history with `{ projectId, projectName, hexsha, shortSha }`. Carries the
@@ -105,6 +108,10 @@ export default function SpeleoRestoreDialog() {
           'stalx',
           (chosen) => run(discardLocal, chosen),
           () => setBusy(false),
+          // Suspends on the answer like the revert does, so it names itself for the
+          // same reason: its own re-raise must not fire the cancel that releases it,
+          // and anything else's raise must.
+          DUMP_PICKER_OWNER,
         );
         return;
       }
