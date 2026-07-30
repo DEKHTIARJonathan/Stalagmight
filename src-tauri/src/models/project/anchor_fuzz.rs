@@ -8,17 +8,43 @@
 //!
 //! It used to live in the collaboration reconcile fuzz harness, beside the diff
 //! engine that harness tested. It is not about collaboration at all, so it
-//! belongs here, next to the `Project` geometry it constrains. Reverse's own
-//! identity invariants are covered targeted-style in `reverse.rs`
-//! (`reverse_refreshes_the_sections_shot_uuid_index`,
-//! `reverse_keeps_external_refs_on_their_physical_station`), so there is no
-//! randomized reverse property here.
+//! belongs here, next to the `Project` geometry it constrains.
+//!
+//! There is no randomized REVERSE property here because the same invariant is
+//! pinned targeted-style, one anchor kind at a time. The tests that carry it -
+//! and that must not be deleted as redundant, because nothing else covers what
+//! they cover:
+//!
+//! - ZERO DATUM anchor, in `core/state/reverse_tests.rs`:
+//!   `reverse_works_on_a_datum_anchored_section_and_keeps_the_datum_in_place`.
+//!   Reverses through the full `Command::ReverseSection` and asserts every
+//!   station kept its absolute position and that
+//!   `resolve_key(zero_datums[0].station_ref)` follows the physical station to
+//!   its mirrored index rather than staying on index 0.
+//! - STATION MERGE anchor, same file:
+//!   `reversing_a_merge_anchored_section_moves_nothing_through_the_full_execute`.
+//!   Also through the full `execute`, the only level at which the reconcile
+//!   epilogue's `realign_merges` can run. Asserts the merge followed the
+//!   physical station, that the untouched side was not dragged, and that
+//!   `check_merge_alignment()` is empty - the same colocation this file's
+//!   interleaved-edit property demands.
+//! - LOOP CLOSURE anchor with no datum, in `reverse.rs` itself:
+//!   `reverse_preserves_adjusted_coordinates_of_a_datum_less_component`, checked
+//!   on the CLOSURE-ADJUSTED coordinates that Plan/Export mode force. It pinned
+//!   a real bug: the gauge anchor was the lex-min `(section_id, station_index)`,
+//!   which a reverse moves to the other physical end, sliding the whole adjusted
+//!   component.
+//!
+//! `reverse.rs`'s own `reverse_refreshes_the_sections_shot_uuid_index` and
+//! `reverse_keeps_external_refs_on_their_physical_station` are about the
+//! `shot_uuid_index` cache and `station_comments` respectively - neither builds
+//! a datum, merge or closure anchor, and neither calls
+//! `check_structural_integrity` - so they do NOT stand in for the three above.
 //!
 //! Dependency-free: a SplitMix64 PRNG plus one generated topology. A failing
 //! case prints its seed so it can be pinned as a fixed-seed regression test.
 //! Iteration count is scaled by `ANCHOR_FUZZ_ITERS` (default 64).
 
-#![cfg(test)]
 #![expect(clippy::unwrap_used, clippy::indexing_slicing)]
 
 use crate::models::{Project, SectionData, ShotData, StationMerge, StationRef};
