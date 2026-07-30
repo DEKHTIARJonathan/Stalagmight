@@ -38,6 +38,14 @@ export interface OnboardingContext {
   loadingProject: boolean;
   splashVisible: boolean;
   configLoaded: boolean;
+  /**
+   * The one-shot orientation tour has already had its chance. Scoped to that
+   * tour only (#331): the contextual flows below are triggered by an action the
+   * user may not take for months, so suppressing them globally would mean a
+   * surveyor who imports their first DMP in week three never sees its guide.
+   * Repeat-suppression for those is `onboarding_completed_flows`, per flow.
+   */
+  orientationConsumed: boolean;
 }
 
 export interface OnboardingFlowDefinition {
@@ -82,11 +90,15 @@ const canShowPlacementOnboarding = (context: OnboardingContext): boolean =>
  * contract, the measured/closure-adjusted split, and where the tools and layers
  * live. Panels a surveyor can identify on sight get one merged step, not three.
  */
+/** The one-shot orientation tour. See `orientationConsumed`. */
+export const ORIENTATION_FLOW_ID = 'workspace-basics';
+
 const workspaceFlow: OnboardingFlowDefinition = {
-  id: 'workspace-basics',
+  id: ORIENTATION_FLOW_ID,
   titleKey: 'onboarding.flows.workspace.title',
   shouldStart: (context) =>
     canShowOnboarding(context) &&
+    !context.orientationConsumed &&
     context.view === 'single' &&
     context.hasProject,
   steps: [

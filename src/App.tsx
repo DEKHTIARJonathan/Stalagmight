@@ -12,6 +12,7 @@ import { guardQuit } from './utils/quit';
 import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
+import { ORIENTATION_FLOW_ID } from './onboarding/flows';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
@@ -336,31 +337,33 @@ function App() {
     });
   }, []);
 
-  // Guides are armed for the first launch only (#331). `onboardingArmed` holds
-  // that decision for the rest of the session, so persisting the flag does not
-  // disarm a tour already on screen.
+  // The one-shot rule applies to the ORIENTATION tour only (#331). It used to
+  // gate the shared `enabled` switch, which also suppressed the contextual
+  // DMP/placement guides - so a surveyor who imported their first DMP in week
+  // three never saw its guide. Those repeat-suppress per flow via
+  // `onboarding_completed_flows` instead.
   //
-  // The flag is burned when a flow actually STARTS, not when config loads: the
-  // orientation flow needs an open project (flows.ts `workspace-basics`), and a
-  // first launch has none, so arming on config load spent the one chance on a
-  // session that could not show anything. Persisting on first start still means
-  // a crash mid-tour does not re-arm - the write has already gone out by then -
-  // but it is the in-memory flag that is certain; a failed IPC write leaves
-  // `false` on disk and the next launch re-arms.
-  const [onboardingArmed, setOnboardingArmed] = useState(false);
+  // The decision is held in session state so that burning the flag (below) does
+  // not tear down the tour currently on screen, and is re-taken when "Restart
+  // guides" clears the flag mid-session.
+  const [orientationConsumed, setOrientationConsumed] = useState(false);
+  const orientationDecidedRef = useRef(false);
   const firstLaunchBurnedRef = useRef(false);
   useEffect(() => {
-    const currentConfig = config;
-    if (!currentConfig || !currentConfig.general.onboarding_enabled) {
+    if (!config) {
       return;
     }
-    if (currentConfig.general.onboarding_first_launch_done) {
+    if (!config.general.onboarding_first_launch_done) {
+      // Fresh install, or re-armed from Settings.
+      orientationDecidedRef.current = true;
+      firstLaunchBurnedRef.current = false;
+      setOrientationConsumed(false);
       return;
     }
-    setOnboardingArmed(true);
-    // "Restart guides" clears the flag mid-session; clear the latch with it so
-    // the next flow re-burns rather than running unpersisted.
-    firstLaunchBurnedRef.current = false;
+    if (!orientationDecidedRef.current) {
+      orientationDecidedRef.current = true;
+      setOrientationConsumed(true);
+    }
   }, [config]);
 
   const onboarding = useOnboarding({
@@ -375,17 +378,21 @@ function App() {
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
     configLoaded: config !== null,
+    orientationConsumed,
   }, {
-    enabled: (config?.general?.onboarding_enabled ?? true) && onboardingArmed,
+    enabled: config?.general?.onboarding_enabled ?? true,
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });
 
-  // Burn the first-launch flag once a guide is actually on screen. The config is
-  // re-read from the store here rather than closed over, so this merges against
-  // the live value instead of the snapshot the effect was scheduled with.
+  // Burn the flag once the orientation tour is actually on screen - not when
+  // config loads (a first launch has no project, so the tour cannot start yet
+  // and the one chance would be spent on a session that showed nothing), and
+  // not on any other flow (they are not what the flag governs). The config is
+  // re-read from the store rather than closed over, so this merges against the
+  // live value instead of the snapshot the effect was scheduled with.
   useEffect(() => {
-    if (!onboarding.activeFlowId || firstLaunchBurnedRef.current) {
+    if (onboarding.activeFlowId !== ORIENTATION_FLOW_ID || firstLaunchBurnedRef.current) {
       return;
     }
     const store = useProjectStore.getState();
