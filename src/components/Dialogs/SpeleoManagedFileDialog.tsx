@@ -133,7 +133,10 @@ export default function SpeleoManagedFileDialog() {
     setBusy(true);
     setError(null);
     try {
-      await invokeIpc('speleodb_remove_link_at', { path: managed.path });
+      // The refusal payload goes back with the request: a prompt can sit open
+      // while the file at that path is replaced, and the backend re-checks this
+      // against the link it finds before deleting anything.
+      await invokeIpc('speleodb_remove_link_at', { path: managed.path, expected: managed });
     } catch (e) {
       // Keep the prompt open - closing it would leave the user with nothing
       // opened and no explanation.

@@ -1547,6 +1547,20 @@ impl AppState {
         let previously_declined = previously_declined || keychain_disabled;
         let allow_plaintext = previously_declined && prefers_plaintext;
 
+        // The ACCOUNT SWAP below is a lock operation in everything but name: every
+        // decision about who may release or edit under a mutex is made from the
+        // session this is about to replace. Taken here rather than at the top of
+        // the verb, so the guard covers the swap and everything after it without
+        // holding lock operations behind the two network round trips above.
+        //
+        // What it closes: the status poll's inherited-lock gate reopen reads the
+        // account, re-reads the holder and opens the gate, all inside this same
+        // guard. Without it here, a sign-in as somebody else landed mid-poll and
+        // the gate opened for the NEW account on the strength of the OLD one's
+        // lock - free to mutate a project whose mutex their credentials do not
+        // hold. Logout takes the guard for the same reason (see
+        // `speleodb_logout`); a login is the same event in the other direction.
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let (tier, keychain_state, has_token) = {
             let mut session = self.speleodb_session_lock().map_err(local_dto)?;
             // If a *different* account is already active, forget it first so its
@@ -2217,6 +2231,11 @@ impl AppState {
     /// command count, and the verb is still the only recovery for an account whose
     /// locks are scattered across projects this machine has no copy of.
     pub(crate) fn speleodb_release_all_locks(&self) -> Result<(), SpeleoErrorDto> {
+        // Guarded for the same reason as `speleodb_release_lock`, and more so:
+        // this frees EVERY lock the account holds, so an acquire slipping
+        // between the POST and the cleanup leaves a mutex this call already
+        // released re-taken and then un-recorded.
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         self.speleodb_handle_auth(
@@ -2262,6 +2281,14 @@ impl AppState {
         // plain UUID to close the path/route-traversal vector at the trust boundary,
         // exactly as `speleodb_open_project` does.
         validate_project_id(&project_id).map_err(local_dto)?;
+        // ONE lock-ops span over the POST and the local cleanup below. This is a
+        // lock operation like any other, and without the guard a Start Editing
+        // for the same project could acquire the mutex this POST just freed and
+        // record its claim BEFORE the cleanup runs - which then removes that new
+        // claim and can put its live session back to read-only, leaving a
+        // freshly acquired server mutex held and unaccounted for. Inside the
+        // span the acquire runs wholly before this command or wholly after it.
+        let _lock_ops = self.speleodb_lock_ops_guard();
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
         let insecure_http = self.speleodb_insecure_http();
         self.speleodb_handle_auth(

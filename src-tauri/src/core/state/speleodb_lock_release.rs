@@ -372,17 +372,46 @@ impl AppState {
         &self,
     ) -> Option<std::sync::mpsc::Receiver<Result<(), SpeleoDbError>>> {
         let p = self.speleodb_held_lock_release_params()?;
+        // THIS session's account of the lock ends here, before the POST is
+        // handed to a thread - and that ordering is what makes the reclaim check
+        // above meaningful rather than self-defeating. The check asks "does a
+        // live session hold this mutex?", and until these two lines run the
+        // answer is yes: OUR gate is still open on OUR project, and OUR claim is
+        // still in the list. The thread would read its own caller as the
+        // successor it is supposed to protect and stand down, stranding exactly
+        // the mutex this call exists to hand back - at app exit, and on every
+        // project switch away from a clean remote project.
+        //
+        // `delete_project` does the same thing for the same reason (there, under
+        // the guard that also tears the session down). Both are true statements
+        // about the world: a session that has decided to release is no longer
+        // editing under that lock. The gate is re-derived by whatever opens
+        // next, and at exit there is no next.
+        self.set_edit_enabled(false);
+        let claim = self.speleodb_forget_lock_acquired_for(&p.project_id);
         let (tx, rx) = std::sync::mpsc::channel();
         let handle = self.get_app_handle();
         std::thread::spawn(move || {
-            let reclaim_checked = handle
+            let outcome = match handle
                 .as_ref()
                 .and_then(tauri::Manager::try_state::<AppState>)
-                .map(|state| state.speleodb_release_unless_reclaimed(&p));
-            let _ = tx.send(reclaim_checked.unwrap_or_else(|| {
-                client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
-                    .map(|_| ())
-            }));
+            {
+                Some(state) => {
+                    let outcome = state.speleodb_release_unless_reclaimed(&p);
+                    if outcome.is_err() {
+                        // The mutex is still held and now has no local pointer:
+                        // put the claim back so the no-project janitor can retry
+                        // it, exactly as the janitor restores its own.
+                        state.speleodb_restore_lock_claim(claim);
+                    }
+                    outcome
+                }
+                // No managed state to consult (unit tests, pre-`setup`): the raw
+                // POST this always did.
+                None => client::release_lock(&p.endpoint, &p.token, p.insecure_http, &p.project_id)
+                    .map(|_| ()),
+            };
+            let _ = tx.send(outcome);
         });
         Some(rx)
     }

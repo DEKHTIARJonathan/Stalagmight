@@ -418,13 +418,21 @@ impl AppState {
         &self,
         link: &crate::models::SpeleoLink,
     ) -> bool {
+        // The guard comes FIRST, before the account is read. Everything after it
+        // - the account, the holder, the gate - describes one moment, and a
+        // LOGIN is what can move that moment: it swaps the whole session in one
+        // write, and it takes this same guard (see `speleodb_login`). Reading
+        // the account before the guard let a sign-in as somebody else land in
+        // between, so this went on to confirm the PREVIOUS account's lock with
+        // the previous account's token and opened the edit gate for the new one -
+        // free to mutate a project whose mutex their credentials do not hold.
+        let _lock_ops = self.speleodb_lock_ops_guard();
         // One read, so the holder comparison below cannot pair one account's
         // endpoint with another's email (`speleodb_active_account`).
         let Ok((endpoint, token, me)) = self.speleodb_active_account() else {
             return false;
         };
         let insecure_http = self.speleodb_insecure_http();
-        let _lock_ops = self.speleodb_lock_ops_guard();
         let holder = match self.speleodb_lock_holder_checked(
             &endpoint,
             &token,

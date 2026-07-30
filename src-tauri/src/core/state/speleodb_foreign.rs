@@ -230,7 +230,19 @@ impl AppState {
     /// such a load (we refuse nothing, and the load then owns a file with its
     /// link already gone - an ordinary local project) or strictly after it (we
     /// see it open and refuse).
-    pub(crate) fn speleodb_remove_link_at(&self, path: PathBuf) -> Result<(), SpeleoErrorDto> {
+    ///
+    /// `expected` is the link the REFUSAL reported, and it is re-checked against
+    /// the file under the handle that does the delete. The prompt can sit on
+    /// screen indefinitely, and a path is not a file: the `.stalx` there can be
+    /// replaced, renamed over or restored from a backup in between. Stripping
+    /// whatever now occupies the path would silently unmanage a project the user
+    /// never saw a prompt about - possibly the canonical cache copy of something
+    /// else, which is the one file this module exists to keep managed.
+    pub(crate) fn speleodb_remove_link_at(
+        &self,
+        path: PathBuf,
+        expected: SpeleoManagedFile,
+    ) -> Result<(), SpeleoErrorDto> {
         let open = self
             .project
             .lock()
@@ -249,6 +261,37 @@ impl AppState {
         }
         let db = Database::open_existing(&path)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        // Read and compare through the SAME handle that is about to write, so
+        // nothing can slip between the check and the delete.
+        //
+        // A link naming a DIFFERENT project is the case this exists for, and the
+        // only one that refuses. NO link row at all is still a success: the
+        // desired end state is already there, nothing is unmanaged by saying so,
+        // and the idempotency this command documents (a second confirm, a file
+        // whose link is already gone) survives.
+        let found = db
+            .load_speleo_link()
+            .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
+        if let Some(link) = &found {
+            let same_project = link.project_id == expected.project_id
+                && crate::speleodb::auth::normalize_endpoint(&link.endpoint)
+                    == crate::speleodb::auth::normalize_endpoint(&expected.endpoint);
+            if !same_project {
+                tracing::warn!(
+                    path = %path.display(),
+                    prompted_for = %expected.project_id,
+                    found = %link.project_id,
+                    purpose = "keep one local copy per SpeleoDB project",
+                    "Refusing to strip a link: the file at this path is a different \
+                     managed project than the prompt was raised for"
+                );
+                return Err(local_dto(SpeleoDbError::Io(
+                    "that file is a different SpeleoDB project than the one this \
+                     prompt was about; reopen it to see what it is now"
+                        .to_owned(),
+                )));
+            }
+        }
         db.save_speleo_link(None)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
         drop(open);
@@ -289,6 +332,18 @@ mod tests {
             last_verify_at: None,
         }))
         .expect("save link");
+    }
+
+    /// The refusal payload a prompt for `project_id` at `path` would carry -
+    /// what the strip command re-checks the file against.
+    fn prompted_for(path: &Path, project_id: &str) -> SpeleoManagedFile {
+        SpeleoManagedFile {
+            path: path.display().to_string(),
+            project_id: project_id.to_owned(),
+            project_name: "Linked".to_owned(),
+            endpoint: "http://x/".to_owned(),
+            can_open_remote: true,
+        }
     }
 
     /// The refusal payload, or `None` when the probe accepted the file (under
@@ -645,7 +700,7 @@ mod tests {
         let state = AppState::new().expect("state");
 
         state
-            .speleodb_remove_link_at(foreign.clone())
+            .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
             .expect("removing the link from a closed foreign copy succeeds");
 
         let db = Database::open_for_metadata(&foreign).expect("reopen");
@@ -664,8 +719,48 @@ mod tests {
 
         // Idempotent: a second removal (nothing left to delete) still succeeds.
         state
-            .speleodb_remove_link_at(foreign)
+            .speleodb_remove_link_at(foreign.clone(), prompted_for(&foreign, ID))
             .expect("a second removal is a harmless no-op");
+    }
+
+    #[test]
+    fn remove_link_at_refuses_a_file_that_is_no_longer_the_one_the_prompt_named() {
+        // Round 11: the prompt can sit on screen indefinitely, and a path is not
+        // a file. If the `.stalx` there is replaced meanwhile - restored from a
+        // backup, renamed over, or simply a different managed project - then
+        // confirming the prompt would strip a link the user was never asked
+        // about, up to and including another project's canonical cache copy.
+        let temp = tempfile::TempDir::new().expect("temp");
+        let state = AppState::new().expect("state");
+        let path = temp.path().join("copy.stalx");
+        seed_linked(&path, ID);
+        let prompted = prompted_for(&path, ID);
+
+        // Same path, DIFFERENT project now.
+        seed_linked(&path, OTHER_ID);
+        state
+            .speleodb_remove_link_at(path.clone(), prompted.clone())
+            .expect_err("the file at that path is not the one the prompt was about");
+        assert!(
+            Database::open_for_metadata(&path)
+                .and_then(|db| db.load_speleo_link())
+                .expect("readable")
+                .is_some(),
+            "and its link row is untouched"
+        );
+
+        // The file the prompt WAS about still strips.
+        seed_linked(&path, ID);
+        state
+            .speleodb_remove_link_at(path.clone(), prompted)
+            .expect("the expected file strips as before");
+        assert!(
+            Database::open_for_metadata(&path)
+                .and_then(|db| db.load_speleo_link())
+                .expect("readable")
+                .is_none(),
+            "its link row is gone"
+        );
     }
 
     #[test]
@@ -680,7 +775,7 @@ mod tests {
         );
 
         state
-            .speleodb_remove_link_at(open_path.clone())
+            .speleodb_remove_link_at(open_path.clone(), prompted_for(&open_path, ID))
             .expect_err("the open project must detach via speleodb_unlink instead");
 
         let db = Database::open_for_metadata(&open_path).expect("reopen");
@@ -698,7 +793,7 @@ mod tests {
         let state = AppState::new().expect("state");
 
         state
-            .speleodb_remove_link_at(junk)
+            .speleodb_remove_link_at(junk.clone(), prompted_for(&junk, ID))
             .expect_err("a file that is not a Stalagmight project is reported, not half-edited");
     }
 

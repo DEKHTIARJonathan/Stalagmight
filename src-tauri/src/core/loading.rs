@@ -19,7 +19,10 @@ use ts_rs::TS;
 /// canonical cache copy of that project (see `core::state::speleodb_foreign`).
 /// Everything the frontend's managed-file prompt needs to offer its two ways
 /// forward: open the managed copy from SpeleoDB, or strip this file's link.
-#[derive(Serialize, Debug, Clone, TS)]
+/// `Deserialize` as well as `Serialize`: this goes OUT with the refusal and
+/// comes back IN with the strip command, which re-checks it against the file
+/// before deleting a link row (the prompt can outlive the file it is about).
+#[derive(Serialize, Deserialize, Debug, Clone, TS)]
 #[serde(rename_all = "camelCase")]
 #[ts(rename_all = "camelCase")]
 pub struct SpeleoManagedFile {

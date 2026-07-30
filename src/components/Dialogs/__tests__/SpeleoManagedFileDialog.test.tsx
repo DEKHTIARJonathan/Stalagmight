@@ -104,6 +104,7 @@ describe('SpeleoManagedFileDialog', () => {
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_remove_link_at', {
         path: MANAGED.path,
+        expected: MANAGED,
       }),
     );
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith(MANAGED.path));
@@ -191,6 +192,7 @@ describe('SpeleoManagedFileDialog', () => {
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_remove_link_at', {
         path: MANAGED.path,
+        expected: MANAGED,
       }),
     );
     await waitFor(() => expect(loadProjectMock).toHaveBeenCalledWith(MANAGED.path));
