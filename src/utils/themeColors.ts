@@ -18,8 +18,6 @@ import { SEVERITY_GREEN, SEVERITY_YELLOW, SEVERITY_RED } from './colors';
  * Keep in sync with src/theme/tokens.ts (tests enforce parity with CSS).
  */
 const FALLBACK_MAP: Record<string, string> = { ...themeTokens.dark };
-const DARK_DEPTH_SHALLOW = themeTokens.dark['--cc-depth-shallow'];
-const DARK_DEPTH_DEEP = themeTokens.dark['--cc-depth-deep'];
 
 // Issue-severity ("traffic light") colors for the map's Issue-severity Display
 // mode. Fixed (not theme-derived), like the depth-gradient endpoints, so
@@ -81,10 +79,15 @@ export function getMapThemeColors(): MapThemeColors {
     textHaloAlt: getThemeColor('--cc-text-halo-alt'),
     stationDefault: getThemeColor('--cc-station-default'),
     zeroDatum: getThemeColor('--cc-zero-datum'),
-    // Keep depth gradient endpoints consistent with the canonical dark theme
-    // across all UI themes so survey depth colors remain stable and comparable.
-    depthShallow: DARK_DEPTH_SHALLOW,
-    depthDeep: DARK_DEPTH_DEEP,
+    // Read per theme, like every other map colour. These used to be pinned to the
+    // dark values so depth reads identically across themes, but that only holds
+    // while every canvas is dark: on the light theme's #faf7f2 paper the dark
+    // endpoints draw shallow passages and their labels at roughly 1.5:1, i.e. the
+    // survey is unreadable in depth mode. A theme that wants the canonical
+    // gradient declares the canonical values; kaleido_eink already declared its
+    // own and was silently ignored here.
+    depthShallow: getThemeColor('--cc-depth-shallow'),
+    depthDeep: getThemeColor('--cc-depth-deep'),
     labelColor: getThemeColor('--cc-depth-text'),
     grayLine: getThemeColor('--cc-gray-line'),
     grayText: getThemeColor('--cc-gray-text'),

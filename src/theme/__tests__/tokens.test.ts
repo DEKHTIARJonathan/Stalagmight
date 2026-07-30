@@ -3,6 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapVizTokenNames, themeTokens } from '../tokens';
+import { getDepthColor } from '../../utils/colors';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -144,6 +145,117 @@ describe('theme tokens', () => {
     for (const [key, value] of Object.entries(themeTokens[theme])) {
       expect(cssTokens[key]).toBe(value);
     }
+  });
+});
+
+/**
+ * The depth gradient is the one map colour a theme can get wrong without any token
+ * being missing: `getDepthColor` interpolates between the two endpoints along the
+ * SHORTEST HSL hue path, so a pair that looks fine at both ends can pass through a
+ * near-invisible hue in the middle. The dark theme's teal -> coral does exactly that
+ * on a light canvas, bottoming out at 1.14:1. Assert the whole ramp, against each
+ * theme's own canvas, using the production interpolation rather than a copy of it.
+ */
+describe('depth gradient legibility', () => {
+  /** WCAG relative luminance. */
+  function luminance(hex: string): number {
+    const channel = (v: number) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  }
+
+  function contrast(a: string, b: string): number {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  }
+
+  /** Worst contrast anywhere along the drawn ramp, plus where it occurs. */
+  /** Themes that declare their own map-visualization tokens. */
+  type FullTheme =
+    | (typeof FULL_LIGHT_THEMES)[number]
+    | (typeof FULL_DARK_THEMES)[number]
+    | 'dark';
+
+  function worstOnRamp(theme: FullTheme) {
+    const tokens = themeTokens[theme];
+    const canvas = tokens['--cc-map-background'];
+    const shallow = tokens['--cc-depth-shallow'];
+    const deep = tokens['--cc-depth-deep'];
+    let worst = Number.POSITIVE_INFINITY;
+    let at = '';
+    for (let i = 0; i <= 40; i++) {
+      // Depths are negative elevations, so minDepth is the DEEPER end. Passing them
+      // the other way round makes getDepthColor's own clamp degenerate (min > max)
+      // and the sweep only ever returns the two endpoints - which silently turns
+      // this into an endpoint check and misses the mid-ramp hue entirely.
+      const color = getDepthColor(-40 + i, shallow, deep, -40, 0);
+      expect(color).not.toBeNull();
+      const ratio = contrast(color!, canvas);
+      if (ratio < worst) {
+        worst = ratio;
+        at = color!;
+      }
+    }
+    return { worst, at, canvas };
+  }
+
+  // 3:1 is the WCAG floor for non-text graphical objects, which is what a survey line
+  // is. Full themes only: the chrome-only light themes inherit the dark canvas, so
+  // their ramp is judged against that one.
+  const RAMP_FLOOR = 3;
+
+  /**
+   * Themes already below the floor when this guard was added, with the value measured
+   * at the time. Pre-existing and out of scope for #332 (which is about the light
+   * canvas), but recorded so they cannot quietly get worse. `one_dark` interpolates
+   * indigo -> indigo through a mid-blue that sits close to its own dark canvas.
+   */
+  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = { one_dark: 2.59 };
+
+  it.each([...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const])(
+    '%s keeps the whole depth ramp at 3:1 or better against its own canvas',
+    (theme) => {
+      const { worst, at, canvas } = worstOnRamp(theme);
+      const known = KNOWN_BELOW_FLOOR[theme];
+      if (known === undefined) {
+        expect(
+          worst,
+          `${theme}: ${at} on ${canvas} is ${worst.toFixed(2)}:1, below the ${RAMP_FLOOR}:1 floor`
+        ).toBeGreaterThanOrEqual(RAMP_FLOOR);
+        return;
+      }
+      // Not allowed to get worse...
+      expect(
+        worst,
+        `${theme} regressed: ${at} on ${canvas} is now ${worst.toFixed(2)}:1, was ${known}:1`
+      ).toBeGreaterThanOrEqual(known);
+      // ...and once it clears the floor, this entry is stale - delete it.
+      expect(
+        worst,
+        `${theme} now clears ${RAMP_FLOOR}:1 (${worst.toFixed(2)}:1) - remove it from KNOWN_BELOW_FLOOR`
+      ).toBeLessThan(RAMP_FLOOR);
+    }
+  );
+
+  it('would reject the dark endpoints on the light canvas', () => {
+    // Proves the test above can fail: this is the exact pairing light shipped with
+    // before the endpoints were themed.
+    const light = themeTokens.light['--cc-map-background'];
+    let worst = Number.POSITIVE_INFINITY;
+    for (let i = 0; i <= 40; i++) {
+      const color = getDepthColor(
+        -40 + i,
+        themeTokens.dark['--cc-depth-shallow'],
+        themeTokens.dark['--cc-depth-deep'],
+        -40,
+        0
+      );
+      worst = Math.min(worst, contrast(color!, light));
+    }
+    expect(worst).toBeLessThan(2);
   });
 });
 

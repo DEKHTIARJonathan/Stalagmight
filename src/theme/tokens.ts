@@ -145,12 +145,11 @@ export const themeTokens = {
     '--cc-grid-default': '#ddd0bb',
     '--cc-zero-datum': '#b8860b',
     '--cc-compass-color': '#1a120b',
-    // Depth endpoints stay on the dark values on purpose - see the matching
-    // note in index.css: the canvas and DepthLegend ignore these tokens while
-    // ProfileChart reads them live, so theming them here would desynchronise
-    // the chart from the map.
-    '--cc-depth-shallow': '#4ecdc4',
-    '--cc-depth-deep': '#ff6b6b',
+    // Navy -> brick, not the dark theme's teal -> coral: getDepthColor takes the
+    // shortest HSL hue path, and teal to coral runs through yellow at 1.14:1 on
+    // this canvas. See the fuller note in index.css.
+    '--cc-depth-shallow': '#14487f',
+    '--cc-depth-deep': '#a52a1a',
     '--cc-depth-text': '#1a120b',
 
     // Canvas Preview

@@ -5,7 +5,6 @@ import { useDecimalPrecision } from '../../hooks/useDecimalPrecision';
 import { getDepthColor } from '../../utils/colors';
 import { getThemeColor } from '../../utils/themeColors';
 import { useUIStore } from '../../store/uiStore';
-import { themeTokens } from '../../theme/tokens';
 
 interface DepthLegendProps {
   minDepth: number;
@@ -38,8 +37,12 @@ export function DepthLegend({
   const precision = useDecimalPrecision();
   // Subscribe to theme for reactive color updates (value triggers re-render)
   useUIStore((s) => s.resolvedTheme);
-  const effectiveShallow = shallowColor ?? themeTokens.dark['--cc-depth-shallow'];
-  const effectiveDeep = deepColor ?? themeTokens.dark['--cc-depth-deep'];
+  // Fall back to the LIVE token, not the dark one: the legend has to show the
+  // gradient the canvas actually drew, and getMapThemeColors now reads these per
+  // theme. A hardcoded dark fallback would make the legend disagree with the map
+  // on any theme that declares its own endpoints.
+  const effectiveShallow = shallowColor ?? getThemeColor('--cc-depth-shallow');
+  const effectiveDeep = deepColor ?? getThemeColor('--cc-depth-deep');
   const depthTextColor = getThemeColor('--cc-depth-text');
   const textHaloAlt = getThemeColor('--cc-text-halo-alt');
 
