@@ -8,9 +8,17 @@ otherwise. Do not rubber-stamp it.
 
 ## Scope
 
-Review `git diff master...HEAD`. If that is empty, review the staged diff, then
-the unstaged diff. Read enough surrounding code and documentation to judge the
-change and its blast radius. If the diff is too large for complete review, tell
+Resolve the base against the REMOTE and pin it, before anything else:
+`git fetch --quiet origin master`, then `BASE=$(git merge-base origin/master HEAD)`
+and `HEAD_SHA=$(git rev-parse HEAD)`. Review `git diff "$BASE" "$HEAD_SHA"`, and give
+every reviewer those same two SHAs. **Never `git diff master...HEAD`**: it reads the
+*local* `master`, which in a clone that has not pulled is silently many commits behind,
+so the review surface fills with other people's already-merged work (seen live: 130
+files for a 14-file change). Pinned SHAs also keep the base still while reviewers run,
+which matters because several clones share this repo. Check the file count against the
+change you made before launching anything. If that diff is empty, review the staged
+diff, then the unstaged diff. Read enough surrounding code and documentation to judge
+the change and its blast radius. If the diff is too large for complete review, tell
 each reviewer to inspect the riskiest files first and report what it did not
 reach.
 

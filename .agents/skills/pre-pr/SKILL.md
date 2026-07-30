@@ -13,7 +13,15 @@ or open a PR while running this skill.
 
 1. Read `AGENTS.md` and `references/lenses.md` completely.
 2. Inspect `git status --short` and the current branch.
-3. Prefer `git diff master...HEAD` as the review diff.
+3. Resolve the base against the REMOTE and pin it: `git fetch --quiet origin master`,
+   then `BASE=$(git merge-base origin/master HEAD)` and `HEAD_SHA=$(git rev-parse HEAD)`.
+   The review diff is `git diff "$BASE" "$HEAD_SHA"`, and every reviewer gets those two
+   SHAs verbatim. **Never `git diff master...HEAD`** - it reads the *local* `master`,
+   which in a clone that has not pulled is silently many commits behind, so the surface
+   fills with other people's already-merged work (seen live: 130 files for a 14-file
+   change). Pinned SHAs also hold the base still while reviewers run, which matters
+   because several clones share this repo. Sanity-check the file count against the
+   change you made before launching anything.
 4. If that diff is empty, review `git diff --cached`. If that is also empty,
    review `git diff`.
 5. Note relevant untracked files from `git status --short`; inspect them when they

@@ -18,9 +18,40 @@ this command cannot summon it. Attempting it has twice burned a full reviewer's 
 before failing.
 
 ## Scope
-Diff vs base: `git diff master...HEAD` (fall back to staged, then unstaged, if there's
-no PR branch). Read enough surrounding code to judge correctness; keep findings
-scoped to the change + its blast radius.
+
+**Resolve the base ONCE, against the remote, and pin it to SHAs before anything else
+runs.** Two failures live in this one line and both are silent:
+
+- **A stale local ref.** `git diff master...HEAD` reads the *local* `master`, which in a
+  clone that has not pulled can be a hundred commits behind. Seen live: a 130-file
+  surface for a 14-file change, carrying the entire SpeleoDB integration, the
+  column-width work and CI changes - none of it the author's. Every reviewer would have
+  been briefed on other people's already-merged code and spent its budget there.
+- **A base that moves mid-run.** Several clones share this repo, so a merge can land
+  while the reviewers are reading. A symbolic base is not stable for the ~9 minutes they
+  run, and a reviewer that re-resolves it mid-review aborts on a tree that moved.
+
+```bash
+git fetch --quiet origin master           # read-only, no prompt; never skip it
+BASE=$(git merge-base origin/master HEAD) # immutable
+HEAD_SHA=$(git rev-parse HEAD)            # immutable
+git diff --name-only "$BASE" "$HEAD_SHA" | wc -l
+```
+
+⚠ **Check that count against the change you just made, before launching anything.** If
+the surface is much larger, the base is wrong - stop and fix it; do not review. Report
+the count and both SHAs in the run's output, so a wrong base is visible afterwards
+instead of being discovered in the findings.
+
+`merge-base` gives two-dot `git diff "$BASE" "$HEAD_SHA"` the same semantics as
+three-dot `origin/master...HEAD`, while being immutable for the whole run.
+
+Fallbacks, in order, and **never** silently to the local `master` ref: if `git fetch`
+fails (offline, no remote) say so explicitly and use `origin/master` as it stands; if
+there is no PR branch at all, fall back to staged, then unstaged.
+
+Read enough surrounding code to judge correctness; keep findings scoped to the change +
+its blast radius.
 
 ## Order of operations - this is the latency model
 
@@ -37,20 +68,23 @@ ahead of the reviewers:
 
 ## Diff surface probes
 
-⚠ **Pick the diff expression ONCE - the one Scope selected - and use that SAME expression
-for every probe below.** They are written `master...HEAD`; on the staged fallback
-substitute `--staged`, on the unstaged fallback drop the range entirely. Get this wrong
-and every probe returns empty on a real change, gated work is skipped, and the skip is
-logged with a `why` that is false - in the single field the log exists to make
-trustworthy. An empty surface list on a fallback path means **recompute with the right
-expression**, not *skip*.
+⚠ **Use the SAME pinned `$BASE`/`$HEAD_SHA` Scope resolved - for every probe below and
+for every reviewer brief.** On the staged fallback substitute `--staged`, on the
+unstaged fallback drop the range entirely. Get this wrong and every probe returns empty
+on a real change, gated work is skipped, and the skip is logged with a `why` that is
+false - in the single field the log exists to make trustworthy. An empty surface list on
+a fallback path means **recompute with the right expression**, not *skip*.
+
+⚠ **Never write `master...HEAD` here.** That reads the local ref, which is exactly the
+stale-base failure Scope exists to prevent, and it re-resolves on every probe so two
+probes can disagree if a merge lands between them.
 
 ```
-git diff --name-only master...HEAD                                  # the surface
-git diff --name-only master...HEAD -- '*.ts' '*.tsx'                # TS?
-git diff --name-only master...HEAD -- 'src-tauri/'                  # Rust crate?
-git diff --name-only master...HEAD -- 'src/'                        # frontend?
-git diff --name-only master...HEAD -- 'e2e-playwright/' 'playwright.config.ts'   # Playwright?
+git diff --name-only "$BASE" "$HEAD_SHA"                                  # the surface
+git diff --name-only "$BASE" "$HEAD_SHA" -- '*.ts' '*.tsx'                # TS?
+git diff --name-only "$BASE" "$HEAD_SHA" -- 'src-tauri/'                  # Rust crate?
+git diff --name-only "$BASE" "$HEAD_SHA" -- 'src/'                        # frontend?
+git diff --name-only "$BASE" "$HEAD_SHA" -- 'e2e-playwright/' 'playwright.config.ts'   # Playwright?
 ```
 
 ⚠ Match the TS patterns exactly. `'src/**/*.ts'` looks equivalent and is **not**: git
@@ -97,6 +131,16 @@ protects this").
 
 ### Shared contract (give it to every reviewer verbatim)
 
+⚠ **Substitute the real SHAs into the first line before sending it.** A reviewer given a
+symbolic base re-resolves it mid-review, and in a shared clone the tree can move under
+it - that has aborted reviewers outright, one of them after burning its whole budget.
+Reviewers must also never run `git status`, `git fetch` or `git checkout`: they share
+this working tree with you and with the gates you are running in parallel.
+
+> **The change under review is exactly `git diff <BASE> <HEAD_SHA>`** - both are pinned
+> SHAs, so use that expression verbatim and resolve nothing yourself. `master`,
+> `origin/master` and `HEAD` are all wrong here: they move, and they are not what this
+> review is scoped to. Read-only git only - no `status`, no `fetch`, no `checkout`.
 > **You have 9 minutes, hard.** Make your FIRST tool call `date +%s` and re-check
 > elapsed time before starting each new file or thread - you cannot otherwise observe
 > the clock. Triage by risk, read the riskiest thing first, and stop
