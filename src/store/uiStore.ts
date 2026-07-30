@@ -1878,12 +1878,31 @@ export const useUIStore = create<UIStore>((set) => ({
   dmpImportWizardPhase: null,
   openDialog: (activeDialog, dialogData = {}) => {
     const prev = useUIStore.getState().activeDialog;
-    if (prev) {
-      // Dialog chaining - previous dialog transitions, not cancelled
-      trackDialogComplete(prev);
-      checkDialogCancel(prev);
+    // Re-opening the dialog already on screen is a data refresh, not a chain and
+    // not a new open, so gate the BOOKKEEPING - never the state. `dialogData` is
+    // still replaced below, because every reachable repeat carries a different
+    // payload: a background re-verify moving `speleodb-divergence` on, a second
+    // async failure re-messaging `error`, `openExitPrompt` re-raising a quit
+    // prompt over itself. `context-menu` - the one dialog opened straight off a
+    // pointer gesture - is kept out of this branch only by the mousedown dismissal
+    // and its own full-screen backdrop, neither of which is a contract worth
+    // betting a frozen menu on.
+    //
+    // What a repeat must NOT do is bookkeeping. Chaining is A -> B
+    // (docs/telemetry.md), so completing A against itself only clobbers a pending
+    // completion; and a refresh is not a second `dialog.<name>` open, which
+    // double-counted the action AND burned the 50 ms `setSource` hint through
+    // `consumeSource`, mis-attributing whatever the user did next.
+    // `setDwellState` stays outside the gate: it already self-no-ops on an
+    // unchanged key, so the dwell clock keeps running across the refresh.
+    if (prev !== activeDialog) {
+      if (prev) {
+        // Dialog chaining - previous dialog transitions, not cancelled
+        trackDialogComplete(prev);
+        checkDialogCancel(prev);
+      }
+      trackAction(`dialog.${activeDialog}`);
     }
-    trackAction(`dialog.${activeDialog}`);
     setDwellState(`dialog.${activeDialog}`);
     // A ruler readout/tint shouldn't linger behind a dialog (#26 reset).
     set({ activeDialog, dialogData, dmpImportWizardPhase: null, ...MEASURE_CLEARED });
