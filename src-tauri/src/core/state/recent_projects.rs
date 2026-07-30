@@ -101,20 +101,71 @@ impl AppState {
     ///
     /// Tolerant of a file that is already gone (it still drops the entry from
     /// recents). If the deleted project is the one currently open in memory, the
-    /// open project is cleared so a later autosave can't recreate the file we
-    /// just removed.
+    /// whole session is torn down through [`close_project`](Self::close_project)
+    /// BEFORE the file is handed to the OS - see the call site for why the full
+    /// teardown (and not just clearing `self.project`) and why it has to happen
+    /// first.
     ///
-    /// The `.stalx` is trashed first: if *that* fails the call returns a failure
-    /// with recents untouched (nothing was destroyed). Once it succeeds the
-    /// project is gone, so a later problem - the recents persist failing - is
-    /// reported as a non-fatal [`CommandResult::warnings`] entry while the call
-    /// still returns success and drops the recents entry. Returning a failure
-    /// after the file is already trashed would strand a "File not found" zombie
-    /// row in the UI.
+    /// The `.stalx` is trashed before recents are touched: if *that* fails the
+    /// call returns a failure with recents untouched, so the entry stays
+    /// re-openable. Once it succeeds the project is gone, so a later problem -
+    /// the recents persist failing - is reported as a non-fatal
+    /// [`CommandResult::warnings`] entry while the call still returns success and
+    /// drops the recents entry. Returning a failure after the file is already
+    /// trashed would strand a "File not found" zombie row in the UI.
     pub fn delete_project(&self, path: PathBuf) -> CommandResult {
+        // Deleting the file backing the OPEN project tears the whole session down
+        // first, for the same two reasons `close_project_if_open_at` closes before
+        // a download-replace: SQLite holds a live handle with a 256 MB mmap over
+        // the file, and on Windows it opens WITHOUT `FILE_SHARE_DELETE`, so both
+        // the Recycle-Bin move and the permanent-remove fallback fail with "Access
+        // is denied" while that handle is alive. Closing after the trash would
+        // therefore be unreachable on Windows - the delete would never get that
+        // far.
+        //
+        // It has to be the FULL teardown, not just `*self.project.lock() = None`:
+        // that left the live SQLite handle open on a file that no longer exists,
+        // and left the entire undo/redo stack in place so an undo could replay
+        // against the deleted project. `close_project` additionally drops the
+        // database handle, clears the undo stack, drops the display-settings and
+        // adjusted-geometry caches, and resets the read-only edit gate plus the
+        // force-edit flag so neither leaks into the next open.
+        //
+        // Lock ordering: `open_project_path` takes and RELEASES the `project`
+        // lock, and `close_project` then acquires project -> database ->
+        // undo_stack one at a time (never nested), so nothing is held across the
+        // call and there is no ordering hazard. Holding the `project` guard here
+        // would self-deadlock on `close_project`'s first acquisition.
+        //
+        // The cost of closing first: if the trash below fails for an unrelated
+        // reason (no write access to the parent directory), the project is now
+        // closed and its undo history dropped even though the file survives.
+        // Recents is untouched in that branch, so the user reopens it from there.
+        //
+        // Matched with `same_file`, not `==`, for the same reason
+        // `close_project_if_open_at` does: canonicalization resolves `.`/`..`,
+        // symlinks and (on Windows) case/short-name differences, so a second
+        // spelling of the open project's path still tears the session down. A
+        // plain comparison was survivable while this check only kept an autosave
+        // from resurrecting the file, but the Windows delete now DEPENDS on it
+        // firing - miss it and the trash fails with "Access is denied". When
+        // neither side canonicalizes (the file is already gone, which this
+        // function tolerates) `same_file` falls back to comparing the paths.
+        if self
+            .open_project_path()
+            .is_some_and(|open| super::project_io::same_file(&open, &path))
+        {
+            tracing::info!(
+                path = ?path,
+                purpose = "release the live handle before deleting the file",
+                "Closing the open project because its .stalx is being deleted"
+            );
+            self.close_project();
+        }
+
         // Hand the primary `.stalx` to the OS trash FIRST. If this fails, nothing
-        // destructive has happened yet, so abort cleanly - recents stay untouched
-        // and the caller can retry. (Tolerant of a file that's already gone.)
+        // on disk has changed yet, so abort cleanly - recents stay untouched and
+        // the caller can retry. (Tolerant of a file that's already gone.)
         if path.exists() {
             if let Err(e) = send_to_trash(&path) {
                 return CommandResult::failure(format!("Failed to delete {}: {e}", path.display()));
@@ -149,14 +200,6 @@ impl AppState {
                         });
                     }
                 }
-            }
-        }
-
-        // If we just deleted the file backing the open project, clear it so an
-        // autosave can't resurrect the project at the now-trashed path.
-        if let Ok(mut guard) = self.project.lock() {
-            if guard.as_ref().and_then(|p| p.file_path.as_deref()) == Some(path.as_path()) {
-                *guard = None;
             }
         }
 

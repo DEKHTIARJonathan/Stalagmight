@@ -19,7 +19,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * irreversible.
  */
 export default function DeleteProjectDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData, showToast } = useUIStore();
   const { deleteProject } = useProjectStore();
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -48,6 +48,20 @@ export default function DeleteProjectDialog() {
     setError(null);
     const result = await deleteProject(path);
     if (result.success) {
+      // A SUCCESSFUL delete can still carry warnings. Once the `.stalx` is
+      // trashed the backend refuses to report the whole call as a failure (that
+      // would strand a "File not found" zombie row), so everything after that
+      // point degrades to a warning - today `delete_project_persist_failed`,
+      // where the file is gone but the recent-projects list could not be
+      // persisted, so the entry silently reappears on the next launch. This
+      // dialog is the only thing watching the result, and it is about to close,
+      // so a warning nobody surfaces here is a warning nobody ever sees. Toast
+      // the backend's own wording (this dialog is deliberately literal-copy, no
+      // i18n) rather than paraphrasing it - it carries the OS error detail.
+      const warnings = result.warnings ?? [];
+      if (warnings.length > 0) {
+        showToast(warnings.map((w) => w.message).join(' '), 'delete-project-warning', 'warning');
+      }
       // Mark the dialog completed BEFORE closing: closeDialog() runs
       // checkDialogCancel('delete-project'), which would otherwise record a
       // successful delete as a cancel (mirrors OverwriteConfirmDialog).
