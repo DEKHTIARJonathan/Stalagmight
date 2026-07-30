@@ -149,10 +149,16 @@
 
   /* --- Map Visualization --- warm paper canvas, dark ink outlines.
      Outlines, halos and labels invert against the light canvas so station
-     labels stay legible; the depth endpoints follow the theme accent/error.
-     NB the map's depth gradient is currently pinned to the dark values in
-     src/utils/themeColors.ts, so the two depth tokens below are declared for
-     parity and are not yet what the canvas draws (see #332). */
+     labels stay legible.
+     NB --cc-depth-shallow/-deep deliberately keep the dark endpoints. Three
+     surfaces draw the depth gradient and only one of them reads these tokens
+     live: the survey canvas and its DepthLegend take the dark values
+     unconditionally (src/utils/themeColors.ts:21-22,
+     DepthLegend.tsx:41-42), while ProfileChart.tsx:310-311 reads the live
+     token. Giving light its own endpoints desynchronises that chart from the
+     map it sits beside, so route all three through one source before theming
+     these. --cc-depth-text is different: every consumer reads it live, so it
+     does invert to dark ink for the overlays drawn on the light canvas. */
   --cc-map-background: #faf7f2;
   --cc-snap-color: #c0392b;
   --cc-hover-highlight: #b8860b;
@@ -167,8 +173,8 @@
   --cc-grid-default: #ddd0bb;
   --cc-zero-datum: #b8860b;
   --cc-compass-color: #1a120b;
-  --cc-depth-shallow: #3a8a82;
-  --cc-depth-deep: #c0392b;
+  --cc-depth-shallow: #4ecdc4;
+  --cc-depth-deep: #ff6b6b;
   --cc-depth-text: #1a120b;
 
   /* --- Canvas Preview --- */

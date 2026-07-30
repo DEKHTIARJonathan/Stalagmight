@@ -145,8 +145,12 @@ export const themeTokens = {
     '--cc-grid-default': '#ddd0bb',
     '--cc-zero-datum': '#b8860b',
     '--cc-compass-color': '#1a120b',
-    '--cc-depth-shallow': '#3a8a82',
-    '--cc-depth-deep': '#c0392b',
+    // Depth endpoints stay on the dark values on purpose - see the matching
+    // note in index.css: the canvas and DepthLegend ignore these tokens while
+    // ProfileChart reads them live, so theming them here would desynchronise
+    // the chart from the map.
+    '--cc-depth-shallow': '#4ecdc4',
+    '--cc-depth-deep': '#ff6b6b',
     '--cc-depth-text': '#1a120b',
 
     // Canvas Preview
@@ -918,8 +922,10 @@ export const themeTokens = {
 // Map-visualization tokens. Chrome-only light themes ("solarized_light",
 // "catppuccin_latte") deliberately leave these unset so the canvas inherits the
 // dark values from :root; full light themes ("light", "kaleido_eink") override
-// them all. Tests enforce both halves.
-export const darkOnlyTokenNames = [
+// them all. Tests enforce both halves. Named for what the tokens are, not for
+// which themes set them: "light" moved into the full set in #332, so the older
+// name darkOnlyTokenNames no longer described it.
+export const mapVizTokenNames = [
   '--cc-map-background',
   '--cc-snap-color',
   '--cc-hover-highlight',

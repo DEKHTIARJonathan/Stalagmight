@@ -2,12 +2,16 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { darkOnlyTokenNames, themeTokens } from '../tokens';
+import { mapVizTokenNames, themeTokens } from '../tokens';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 const cssPath = path.resolve(__dirname, '../../index.css');
 const cssSource = fs.readFileSync(cssPath, 'utf8');
+const htmlPath = path.resolve(__dirname, '../../../index.html');
+const htmlSource = fs.readFileSync(htmlPath, 'utf8');
+/** index.html with comments stripped, so prose cannot satisfy a rule below. */
+const htmlRules = htmlSource.replace(/\/\*[\s\S]*?\*\//g, '');
 
 function extractBlock(source: string, marker: string): string {
   const start = source.indexOf(marker);
@@ -113,10 +117,10 @@ describe('theme tokens', () => {
     const themeKeys = new Set(Object.keys(themeTokens[theme]));
     const missingKeys = Object.keys(themeTokens.dark).filter((key) => !themeKeys.has(key));
 
-    expect(missingKeys.sort()).toEqual([...darkOnlyTokenNames].sort());
+    expect(missingKeys.sort()).toEqual([...mapVizTokenNames].sort());
 
     const cssTokens = cssTokensByTheme[theme]!;
-    for (const key of darkOnlyTokenNames) {
+    for (const key of mapVizTokenNames) {
       expect(themeKeys.has(key)).toBe(false);
       expect(Object.prototype.hasOwnProperty.call(cssTokens, key)).toBe(false);
     }
@@ -140,5 +144,43 @@ describe('theme tokens', () => {
     for (const [key, value] of Object.entries(themeTokens[theme])) {
       expect(cssTokens[key]).toBe(value);
     }
+  });
+});
+
+/**
+ * index.html paints the frame before the CSS bundle loads. Nothing else in the
+ * repo reads that file, so these are the only guards on it: #332 was caused by a
+ * hard-coded background there, and the first fix for it reintroduced a different
+ * hard-coded guess (an OS colour-scheme media query, which disagrees with the
+ * shipped default of theme "dark").
+ */
+describe('index.html anti-flash cover', () => {
+  it('uses the same hex as :root --cc-background', () => {
+    const cover = /html\s*\{\s*background-color:\s*(#[0-9a-f]{3,8})\s*;/i.exec(
+      htmlRules
+    );
+    expect(cover).not.toBeNull();
+    expect(cover![1]!.toLowerCase()).toBe(
+      themeTokens.dark['--cc-background'].toLowerCase()
+    );
+  });
+
+  it('hands over to the live token once data-theme is stamped', () => {
+    expect(htmlRules).toMatch(
+      /html\[data-theme\]\s*\{\s*background-color:\s*var\(\s*--cc-background\s*\)\s*;/
+    );
+  });
+
+  it('does not pin the background with an inline style on body (#332)', () => {
+    const bodyTag = /<body[^>]*>/i.exec(htmlRules);
+    expect(bodyTag).not.toBeNull();
+    expect(bodyTag![0]).not.toMatch(/style\s*=/i);
+  });
+
+  it('does not guess the theme from the OS colour scheme', () => {
+    // The OS preference is only consulted when appearance.theme is "auto"
+    // (src/hooks/useTheme.ts), so keying the cover off it repaints the shipped
+    // default the wrong colour on a light-appearance machine.
+    expect(htmlRules).not.toMatch(/@media[^{]*prefers-color-scheme/i);
   });
 });

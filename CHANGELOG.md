@@ -16,7 +16,7 @@ Update this file every time a new version is tagged.
 
 ### Fixed
 
-- **Light mode is actually light** - the theme switched the panels and controls but left the map canvas on the dark palette, so the app still read as dark. Light mode now themes the survey canvas too, inverting outlines, labels, halos and the compass to dark ink so the survey stays legible on the light background. The two remaining light palettes, Solarized Light and Catppuccin Latte, keep the dark canvas for now ([#332](https://github.com/Stalagmight/Stalagmight/issues/332))
+- **Light mode is actually light** - the theme switched the panels and controls but left the map canvas on the dark palette, so the app still read as dark. Light mode now themes the survey canvas too: the paper background, station outlines, text halos, labels, the grid and the placement crosshair all invert to dark ink. Two things deliberately do not change with the theme - section colors are per-project data and keep the palette they were saved with, and the depth-gradient coloring stays on its existing endpoints - so a survey saved in the default palette keeps those colors on the light canvas. The two remaining light palettes, Solarized Light and Catppuccin Latte, keep the dark canvas for now ([#332](https://github.com/Stalagmight/Stalagmight/issues/332))
 
 ## [0.5.0] - 2026-07-29
 

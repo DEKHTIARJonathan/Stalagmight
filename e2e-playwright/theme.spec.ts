@@ -320,6 +320,50 @@ test.describe('Theme Switching - Via Settings UI', () => {
     assertColorsApproximatelyEqual(strokeColor, LIGHT_STROKE);
   });
 
+  test('MapLibre paints the light canvas, not just the CSS token', async ({
+    page,
+  }) => {
+    // #332 was a token that resolved correctly but never reached MapLibre, so
+    // the test above cannot fail for the actual bug: it reads the same CSS
+    // custom property the stylesheet declares. This one reads the paint
+    // property off the live map. That needs a project open, which is why the
+    // project is created AFTER saving - openSettingsDialog closes the one the
+    // beforeEach made, and MapCanvas deletes __stalagmight_map__ on unmount.
+    // What this pins, established by breaking each in turn: the
+    // [resolvedTheme, mapLoaded] effect at MapCanvas.tsx:2317. It does NOT pin
+    // the layer's initial paint at MapCanvas.tsx:1691 - that same effect
+    // re-applies the colour once mapLoaded flips, so a wrong init value is
+    // repaired before this assertion runs and the test stays green.
+    await openSettingsDialog(page);
+    await navigateToAppearance(page);
+    await selectThemeMode(page, 'Light');
+
+    const saveButton = page.locator('[data-testid="settings-save-button"]');
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+    await expect(
+      page.locator('[data-testid="settings-dialog"]')
+    ).not.toBeVisible({ timeout: 5000 });
+
+    await createProject(page, 'Theme Map Paint Test');
+
+    const painted = await page.evaluate(() => {
+      const map = (
+        window as unknown as {
+          __stalagmight_map__?: {
+            getPaintProperty: (layer: string, prop: string) => unknown;
+          };
+        }
+      ).__stalagmight_map__;
+      return map
+        ? String(map.getPaintProperty('background', 'background-color'))
+        : null;
+    });
+
+    expect(painted).not.toBeNull();
+    assertColorsApproximatelyEqual(painted as string, LIGHT_MAP_BG);
+  });
+
   test('theme applies immediately on selection before saving', async ({
     page,
   }) => {
