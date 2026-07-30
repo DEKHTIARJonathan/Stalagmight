@@ -73,6 +73,23 @@ fresh_clone() {
   # assert on a clean tree without seeing this copy as a modification.
   cp "$PROJECT_ROOT/scripts/release.sh" "$dir/scripts/release.sh"
   git -C "$dir" add scripts/release.sh
+  # Pin the changelog these cases run against instead of inheriting the live one.
+  # release.sh refuses an empty `## [Unreleased]` - case 5 asserts that refusal is
+  # correct - so cutting a release, which empties that section by moving it under
+  # the new version, turned cases 1, 6 and 9 red on master for a reason none of
+  # them is about. A fixture makes every outcome attributable to the case's own
+  # name; case 5 overwrites it with an empty section on purpose.
+  # Non-empty matters for case 7 as much as for the happy paths: with notes
+  # already present, release.sh skips the write-them-now editor at the top and
+  # reaches the post-rewrite one, which is the editor whose failure case 7 exists
+  # to test. Against an empty section it aborts at the first editor instead, with
+  # no version file ever written, and case 7 passes without testing anything.
+  printf '%s\n' \
+    '# Changelog' '' \
+    '## [Unreleased]' '' '### Fixed' '' '- a fixture entry, so the section is not empty' '' \
+    '## [0.1.0] - 2026-01-01' '' '- something old' \
+    > "$dir/CHANGELOG.md"
+  git -C "$dir" add CHANGELOG.md
   git -C "$dir" commit --quiet --allow-empty -m "test: script under test"
   echo "$dir"
 }
