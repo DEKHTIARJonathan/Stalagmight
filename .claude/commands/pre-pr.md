@@ -45,22 +45,29 @@ git diff --name-only master...HEAD                                  # the surfac
 git diff --name-only master...HEAD -- '*.ts' '*.tsx'                # TS?
 git diff --name-only master...HEAD -- 'src-tauri/'                  # Rust crate?
 git diff --name-only master...HEAD -- 'src/'                        # frontend?
-git diff --name-only master...HEAD -- 'e2e-playwright/'             # Playwright specs?
+git diff --name-only master...HEAD -- 'e2e-playwright/' 'playwright.config.ts'   # Playwright?
 ```
+
+⚠ `playwright.config.ts` is at the repo **root**, not under `e2e-playwright/`, yet
+`tsconfig.playwright.json` includes it - so a config-only change is exactly the case where
+`typecheck:playwright` matters and a naive `e2e-playwright/`-only probe reports it irrelevant.
 
 Then, only for the surfaces present:
 
 | Surface in diff | Run |
 |---|---|
 | always | `pnpm lint:no-em-dash:test && pnpm lint:no-em-dash` · `pnpm lint:private-leaks:test && pnpm lint:private-leaks` |
-| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` · `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size` · deny-level clippy |
+| `src-tauri/` | `cargo fmt --manifest-path src-tauri/Cargo.toml --check` · `pnpm lint:rust-file-size:test && pnpm lint:rust-file-size` · `TELEMETRY_ENDPOINT=http://localhost/dummy cargo clippy --manifest-path src-tauri/Cargo.toml --features telemetry --all-targets` |
 | `src/` | `pnpm tsc --noEmit` · `pnpm lint:ts-file-size:test && pnpm lint:ts-file-size` · `pnpm lint:readonly-gates:test && pnpm lint:readonly-gates` |
-| `e2e-playwright/` | `pnpm typecheck:playwright` · `pnpm test:mock-contract` · `pnpm lint:e2e-parallel` · `pnpm lint:pw-timing:test` |
+| `e2e-playwright/` **or** `playwright.config.ts` | `pnpm typecheck:playwright` · `pnpm test:mock-contract` · `pnpm lint:e2e-parallel` · `pnpm lint:pw-timing:test` |
 | `scripts/review/` | `python3 scripts/review/test_log_run.py` |
 
 Each ratchet is paired with its own `:test` because CI pairs them (`ci.yml`, three
 instances) - the self-test pins the LOC/strip heuristic the gate depends on, and both are
-sub-second.
+sub-second. **Run the clippy line verbatim.** A bare `cargo clippy` is not the gate: without
+`--features telemetry --all-targets` it misses what CI checks, and *with* the feature but
+without `TELEMETRY_ENDPOINT` set, `src-tauri/build.rs` fails the build script - so you report
+the gate red for a reason that has nothing to do with the diff.
 
 ⚠ **This table is deliberately NOT the whole merge gate, and "gates green" must not be
 reported as if it were.** The `check` job also runs `cargo test --features telemetry`,
