@@ -266,6 +266,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
     "action.dialog.speleodb-unpushed-local",
+    "action.dialog.speleodb-managed-file",
     "action.dialog.speleodb-restore",
     "action.dialog.speleodb-revert",
     "action.dialog.speleodb-project",
@@ -336,6 +337,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.speleodb-unpushed-local",
+    "dialog-cancel.speleodb-managed-file",
     "dialog-cancel.speleodb-restore",
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.speleodb-project",
@@ -433,6 +435,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.speleodb-unpushed-local",
+    "dwell.dialog.speleodb-managed-file",
     "dwell.dialog.speleodb-restore",
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.speleodb-project",
@@ -567,6 +570,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.speleodb-unpushed-local",
+    "active-dwell.dialog.speleodb-managed-file",
     "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.speleodb-project",
@@ -974,7 +978,11 @@ mod tests {
         //   + 1 SpeleoDB foreign-copy de-link command (canonical local storage:
         //       the strip half of the managed-file prompt):
         //       command.speleodb_remove_link_at = 688.
-        assert_eq!(EVENT_NAMES.len(), 688);
+        //   + 4 managed-file dialog events (canonical local storage: the prompt a
+        //       refused non-canonical open raises):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-managed-file = 692.
+        assert_eq!(EVENT_NAMES.len(), 692);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

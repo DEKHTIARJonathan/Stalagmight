@@ -2126,6 +2126,7 @@
     "menu": {
       "aria": "Project menu",
       "saveAs": "Save As",
+      "saveACopy": "Save a Copy",
       "saveAndClose": "Save and Close",
       "closeProject": "Close Project",
       "projectSettings": "Project Settings",
@@ -3071,6 +3072,19 @@
       "description": "This project is linked to SpeleoDB, but your account doesn't have permission to view or edit it - it may have been shared with you as a file. You can convert it to a regular, unmanaged .stalx file to keep and edit locally.",
       "convert": "Convert to a local file",
       "converting": "Converting…"
+    },
+    "managedFile": {
+      "title": "This file is managed by SpeleoDB",
+      "message": "\"{{fileName}}\" is a copy of the SpeleoDB project \"{{name}}\". A managed project has one working copy on this computer, so this file cannot be opened directly.",
+      "hint": "Open the project from SpeleoDB to work on the managed copy, or remove this file's SpeleoDB link to open it as an independent local project. Removing the link changes only this file - the SpeleoDB project is untouched.",
+      "openRemote": "Open from SpeleoDB",
+      "openRemoteDisabledLoggedOut": "Sign in to SpeleoDB to open the managed copy. Removing the link works offline.",
+      "openRemoteDisabledBadId": "This file's SpeleoDB project id is not readable, so it cannot be opened from the server.",
+      "removeLink": "Remove link & open as local",
+      "removeFailed": "Could not remove the SpeleoDB link",
+      "notOnAccount": "\"{{name}}\" is not available on your SpeleoDB account.",
+      "endpointMismatch": "This file is linked to {{endpoint}}, which is not the server you are signed in to.",
+      "copySaved": "Saved an unlinked copy to {{path}}. You are still working on the SpeleoDB-managed project."
     },
     "unpushedLocal": {
       "title": "Changes on this computer are not on SpeleoDB",

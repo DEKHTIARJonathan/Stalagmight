@@ -37,6 +37,7 @@ import type {
   FrozenShotRef,
 } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
+import type { SpeleoManagedFile } from '../types/ipc/SpeleoManagedFile';
 import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
@@ -112,6 +113,7 @@ interface LoadError {
   code: string;
   message: string;
   details?: string | undefined;
+  speleodbManaged?: SpeleoManagedFile | undefined;
 }
 
 interface CreateProjectOptions {
@@ -153,6 +155,7 @@ function parseLoadError(e: unknown): LoadError {
       code: (obj.code as string) || 'UNKNOWN',
       message: (obj.message as string) || String(e),
       details: obj.details as string | undefined,
+      speleodbManaged: obj.speleodbManaged as SpeleoManagedFile | undefined,
     };
   }
   return { code: 'UNKNOWN', message: String(e) };
@@ -1171,6 +1174,18 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
           return { success: false };
         }
 
+        // Canonical-storage refusal: this .stalx is a non-canonical copy of a
+        // SpeleoDB project. Backend-enforced (recents clicks bypass the
+        // routeOpenedFile guards); the prompt offers the two real ways forward.
+        if (error.code === 'SPELEODB_MANAGED' && error.speleodbManaged) {
+          get().resetLoading();
+          useUIStore.getState().openDialog('speleodb-managed-file', {
+            managed: error.speleodbManaged,
+          });
+          clearProjectActionSource();
+          return { success: false };
+        }
+
         // Only set error if this is still the current load operation
         if (get().loading.clientOpId === clientOpId) {
           get().setLoadingError(error.message, error.details);
@@ -1291,6 +1306,17 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       { purpose: 'persist project changes', fields: { path } }
     );
     if (result.success) {
+      // A detached copy was written; the OPEN project was not saved. Do not
+      // re-point file_path and do not clear isDirty (see CommandResult).
+      if (result.unlinked_copy_path) {
+        useUIStore
+          .getState()
+          .showToast(
+            i18n.t('speleodb.managedFile.copySaved', { path: result.unlinked_copy_path }),
+            'speleodb-unlinked-copy'
+          );
+        return result;
+      }
       // Update file_path if the backend returned it (first save / save-as)
       if (result.saved_path) {
         const project = get().project;

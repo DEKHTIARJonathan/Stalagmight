@@ -138,7 +138,11 @@ export function useProjectMenuItems({ onSave, saveFailed = false }: UseProjectMe
       },
       {
         id: 'project-menu-save-as',
-        label: t('singleView.menu.saveAs'),
+        // A SpeleoDB-managed project has one working copy (the cache file), so an
+        // explicit destination writes a detached UNLINKED copy and the session
+        // stays put - the label says so. The action is unchanged: the backend
+        // decides copy-vs-relocate from the link, not from which label was shown.
+        label: speleoLink ? t('singleView.menu.saveACopy') : t('singleView.menu.saveAs'),
         icon: <SaveIcon size={sz} />,
         iconColor: MENU_ICON_COLORS.save,
         action: 'save_as',
