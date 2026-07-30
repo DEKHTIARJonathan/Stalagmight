@@ -827,15 +827,6 @@ pub struct SpeleoDumpCandidate {
     pub size_bytes: u64,
     /// Last-modified (RFC-3339) when the entry carries one.
     pub modified: Option<String>,
-    /// Whether this entry is the canonical file the push writes to.
-    ///
-    /// This is the load-bearing field, not a display nicety. The push always
-    /// uploads under the canonical wire name, and the server's `upload/auto/` is
-    /// additive, so choosing any OTHER entry means the next push replaces the
-    /// canonical file with this one's contents and leaves the extra file in the
-    /// tree. The frontend pre-selects the canonical candidate for exactly that
-    /// reason.
-    pub is_canonical: bool,
 }
 
 /// The local work a refused re-pull would have destroyed, carried on

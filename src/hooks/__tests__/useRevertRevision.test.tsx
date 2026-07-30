@@ -508,8 +508,8 @@ describe('useRevertRevision - an ambiguous dump is a question, not a failure (#2
     message: 'more than one Stalagmight file',
     action: 'Ambiguous',
     dump_candidates: [
-      { entry_path: 'misc/a.stalx', size_bytes: 10, modified: null, is_canonical: false },
-      { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null, is_canonical: false },
+      { entry_path: 'misc/a.stalx', size_bytes: 10, modified: null },
+      { entry_path: 'misc/b.stalx', size_bytes: 20, modified: null },
     ],
   };
 

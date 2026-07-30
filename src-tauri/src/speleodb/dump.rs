@@ -144,16 +144,6 @@ fn has_stalx_suffix(path: &str) -> bool {
         .is_some_and(|(_, ext)| ext.eq_ignore_ascii_case("stalx"))
 }
 
-/// Whether `path`'s file name is the one a push writes.
-///
-/// A basename test, like everything else that locates the `.stalx` here: the folder
-/// it sits in is the server's `TARGET_FOLDER`, not part of the contract. So this
-/// answers "could this be the upload target", never "is it" - see
-/// [`Dump::entry_details`] for what happens when more than one entry can be.
-pub(crate) fn has_canonical_basename(path: &str) -> bool {
-    zip_basename(path) == super::client::CANONICAL_STALX_WIRE_NAME
-}
-
 /// The server reserves the root filename `ariane.tml` for the Ariane sidecar.
 fn is_ariane_tml(path: &str) -> bool {
     zip_basename(path).eq_ignore_ascii_case("ariane.tml")
@@ -257,21 +247,6 @@ impl<'a> Dump<'a> {
         // stall the app.
         let wanted_set: HashSet<&str> = wanted.iter().map(String::as_str).collect();
 
-        // The canonical entry is identified by BASENAME, never by a fixed path: the
-        // server's `TARGET_FOLDER` is configurable, so `misc/project.stalx` is where
-        // it lands today and not a contract. A basename can therefore repeat across
-        // folders, and when it does this cannot tell which one the upload actually
-        // targets - so NEITHER is canonical. Badging both as current was worse than
-        // badging none: it also sorted a backup copy first, so the preselected pick
-        // in the worst case was the one that silently gets replaced on the next
-        // push. No canonical entry means the picker asks outright, which is the
-        // honest answer when the archive genuinely does not say.
-        let mut canonical = wanted.iter().filter(|w| has_canonical_basename(w));
-        let canonical_path: Option<&str> = match (canonical.next(), canonical.next()) {
-            (Some(only), None) => Some(only.as_str()),
-            _ => None,
-        };
-
         let mut out = Vec::with_capacity(wanted.len());
         for i in 0..self.archive.len() {
             let entry = self
@@ -292,7 +267,6 @@ impl<'a> Dump<'a> {
             if entry.size() > MAX_ENTRY_BYTES {
                 continue;
             }
-            let is_canonical = canonical_path == Some(entry_path.as_str());
             out.push(SpeleoDumpCandidate {
                 entry_path,
                 size_bytes: entry.size(),
@@ -307,14 +281,18 @@ impl<'a> Dump<'a> {
                         d.second()
                     )
                 }),
-                is_canonical,
             });
         }
-        out.sort_by(|a, b| {
-            b.is_canonical
-                .cmp(&a.is_canonical)
-                .then_with(|| a.entry_path.cmp(&b.entry_path))
-        });
+        // Path order, and nothing cleverer. There used to be a canonical-first sort
+        // behind a `project.stalx` BASENAME test, and it asserted something the archive
+        // does not say: `TARGET_FOLDER` is configurable, so the push target is
+        // `<folder>/project.stalx` for a folder no dump records. With
+        // `backup/project.stalx` and `misc/current.stalx` under a target of `misc/`,
+        // the basename test badged the BACKUP as current and sorted it first - and the
+        // picker pre-selected and focused that row, so Enter accepted the one file the
+        // next push would overwrite. Ordering by path leaves the archive to speak for
+        // itself and the choice to the user.
+        out.sort_by(|a, b| a.entry_path.cmp(&b.entry_path));
         Ok(out)
     }
 
@@ -425,8 +403,8 @@ impl<'a> Dump<'a> {
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
     use super::{
-        chosen_candidate, classify, download_temp_path, has_canonical_basename, has_stalx_suffix,
-        is_ariane_tml, ChosenKind, Dump, DumpClassification, SpeleoDbError,
+        chosen_candidate, classify, download_temp_path, has_stalx_suffix, is_ariane_tml,
+        ChosenKind, Dump, DumpClassification, SpeleoDbError,
     };
 
     fn paths(items: &[&str]) -> Vec<String> {
@@ -501,41 +479,40 @@ mod tests {
         let details = dump.entry_details(&wanted).expect("details");
 
         assert_eq!(details.len(), 2, "only the wanted entries are described");
-        assert_eq!(details[0].entry_path, "misc/project.stalx");
-        assert!(details[0].is_canonical);
-        assert_eq!(details[0].size_bytes, 3);
-        assert_eq!(details[1].entry_path, "backup/old.stalx");
-        assert!(!details[1].is_canonical);
-        assert_eq!(details[1].size_bytes, 10);
+        // PATH order, with no candidate promoted. There used to be a canonical-first
+        // sort keyed on the `project.stalx` basename; it asserted something no dump
+        // records, because the push target is `<TARGET_FOLDER>/project.stalx` for a
+        // folder the archive never names.
+        assert_eq!(details[0].entry_path, "backup/old.stalx");
+        assert_eq!(details[0].size_bytes, 10);
+        assert_eq!(details[1].entry_path, "misc/project.stalx");
+        assert_eq!(details[1].size_bytes, 3);
     }
 
     #[test]
-    fn a_repeated_canonical_basename_makes_none_canonical() {
-        // [#258] The canonical entry is found by BASENAME, because the folder is the
-        // server's TARGET_FOLDER and not part of the contract. So the name can repeat
-        // across folders, and then nothing here can say which one the upload targets.
-        //
-        // Marking both was the worst of the three answers: the badge told the user
-        // two different files were the current one, and canonical-first sorting then
-        // preselected whichever sorted earlier - which can be the BACKUP, i.e. the
-        // pick that quietly gets replaced by the next push. Marking neither makes the
-        // picker ask outright, which is what the archive actually supports.
+    fn no_entry_is_ever_promoted_by_its_basename() {
+        // [#258 review] The picker used to badge and pre-select the entry whose BASENAME
+        // was `project.stalx`, on the reasoning that it is the name a push writes. But
+        // the push writes `<TARGET_FOLDER>/project.stalx`, and `TARGET_FOLDER` is
+        // configurable and nowhere in the dump - so the basename test could name a file
+        // that is not the target at all. This fixture is that case: with a target of
+        // `misc/`, the real destination is `misc/project.stalx`, which is in NEITHER
+        // row, and the old logic badged the BACKUP as current, sorted it first,
+        // pre-selected it and gave it initial focus. A stray Enter accepted the one file
+        // the next push would overwrite.
         let zip = make_zip(&[
             ("backup/project.stalx", b"old"),
-            ("misc/project.stalx", b"live"),
+            ("misc/current.stalx", b"live"),
         ]);
         let mut dump = Dump::open(&zip).expect("open zip");
-        let wanted = paths(&["backup/project.stalx", "misc/project.stalx"]);
+        let wanted = paths(&["backup/project.stalx", "misc/current.stalx"]);
         let details = dump.entry_details(&wanted).expect("details");
 
         assert_eq!(details.len(), 2);
-        assert!(
-            details.iter().all(|c| !c.is_canonical),
-            "an unresolvable canonical basename must badge NEITHER entry as current"
-        );
-        // Still deterministic: with no canonical entry to lead, path order decides.
+        // Deterministic and unopinionated: path order, nothing promoted. The frontend
+        // pre-selects nothing and keeps Confirm disabled until the user chooses.
         let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
-        assert_eq!(order, vec!["backup/project.stalx", "misc/project.stalx"]);
+        assert_eq!(order, vec!["backup/project.stalx", "misc/current.stalx"]);
     }
 
     #[test]
@@ -562,7 +539,6 @@ mod tests {
         let details = dump.entry_details(&wanted).expect("details");
 
         assert_eq!(details.len(), 1_000, "every wanted entry, and nothing else");
-        assert!(details.iter().all(|c| !c.is_canonical));
         assert_eq!(details[0].entry_path, "d0000/f0000.stalx");
         assert_eq!(details[999].entry_path, "d0999/f0999.stalx");
     }
@@ -579,7 +555,6 @@ mod tests {
             .expect("details");
         let order: Vec<&str> = details.iter().map(|c| c.entry_path.as_str()).collect();
         assert_eq!(order, vec!["a/early.stalx", "z/late.stalx"]);
-        assert!(details.iter().all(|c| !c.is_canonical));
     }
 
     #[test]
@@ -667,30 +642,28 @@ mod tests {
     /// A ZIP entry name is a wire string whose separator the format fixes as `/`.
     /// Parsing it with `std::path` made every basename predicate host-dependent: on
     /// Windows `evil\\project.stalx` reads as the canonical basename and on Linux it
-    /// does not, from identical server bytes. `is_canonical` decides the picker's badge,
-    /// its pre-selection and its initial focus, so that divergence let an archive make a
-    /// decoy the default answer on one platform only.
+    /// does not, from identical server bytes. Only `has_stalx_suffix` and `is_ariane_tml`
+    /// still ride on it, and both decide whether an entry is OPENABLE at all - so the
+    /// divergence changed which files a dump appeared to contain.
     #[test]
     fn zip_names_are_parsed_with_zip_separators_not_the_hosts() {
         // A backslash is an ordinary filename character in a ZIP name, so none of these
-        // has `project.stalx` / `ariane.tml` as its final component.
-        for hostile in [
-            "evil\\project.stalx",
-            "a\\b\\project.stalx",
-            "backup\\ariane.tml",
-        ] {
+        // has `ariane.tml` or a `.stalx` extension as its final component - and the
+        // predicates that read it decide whether an entry is OPENABLE at all, so the
+        // divergence changed which files a dump appeared to contain.
+        for hostile in ["backup\\ariane.tml", "a\\b\\ariane.tml"] {
             assert!(
-                !has_canonical_basename(hostile),
-                "`{hostile}` must not be badged canonical on any platform"
+                !is_ariane_tml(hostile),
+                "`{hostile}` must not read as an Ariane sidecar on any platform"
             );
         }
-        assert!(!is_ariane_tml("backup\\ariane.tml"));
+        assert!(
+            !has_stalx_suffix("dir\\x.stalx/y"),
+            "the extension belongs to the final `/`-separated component, not to a \
+             backslash-separated one"
+        );
 
         // The genuine `/`-separated forms still work, at every depth.
-        assert!(has_canonical_basename("project.stalx"));
-        assert!(has_canonical_basename("misc/project.stalx"));
-        assert!(has_canonical_basename("a/b/c/project.stalx"));
-        assert!(!has_canonical_basename("project.stalx.bak"));
         assert!(is_ariane_tml("ariane.tml"));
         assert!(is_ariane_tml("misc/ARIANE.TML"));
 

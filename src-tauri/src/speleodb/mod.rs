@@ -203,7 +203,6 @@ mod tests {
             entry_path: path.to_owned(),
             size_bytes: 0,
             modified: None,
-            is_canonical: false,
         };
         assert_eq!(
             SpeleoDbError::AmbiguousDump(vec![candidate("a.stalx"), candidate("b.stalx")])

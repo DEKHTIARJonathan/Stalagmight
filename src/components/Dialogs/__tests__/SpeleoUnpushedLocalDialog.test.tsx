@@ -135,8 +135,8 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
             action: 'Ambiguous',
             status: null,
             dump_candidates: [
-              { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-              { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+              { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+              { entry_path: 'b.stalx', size_bytes: 2, modified: null },
             ],
           })
         : Promise.resolve(undefined),
@@ -268,8 +268,8 @@ describe('SpeleoUnpushedLocalDialog (#270)', () => {
           action: 'Ambiguous',
           status: null,
           dump_candidates: [
-            { entry_path: 'a/ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
-            { entry_path: 'b/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+            { entry_path: 'a/ariane.tml', size_bytes: 1, modified: null },
+            { entry_path: 'b/ariane.tml', size_bytes: 2, modified: null },
           ],
           dump_candidate_kind: 'ariane',
         });

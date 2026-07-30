@@ -92,7 +92,7 @@ describe('speleoStore', () => {
       useSpeleoStore
         .getState()
         .openDumpPicker(
-          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false }],
+          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
           'stalx',
           async () => {},
           onCancel,
@@ -128,7 +128,7 @@ describe('speleoStore', () => {
       useSpeleoStore
         .getState()
         .openDumpPicker(
-          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false }],
+          [{ entry_path: 'a.stalx', size_bytes: 1, modified: null }],
           'stalx',
           async () => {},
         );
@@ -1056,8 +1056,8 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     // host receives an outcome - so a throw used to escape as an unhandled rejection
     // and leave the picker sitting there saying nothing about why confirming failed.
     const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     useSpeleoStore
       .getState()
@@ -1077,8 +1077,8 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
 
   it('clears a previous failure when the next attempt starts', async () => {
     const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
     useSpeleoStore.setState({ dumpPickerError: 'stale' });
@@ -1096,12 +1096,12 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     // DIFFERENT dialog: the loser's error overwrote the newcomer's, and its `finally`
     // re-enabled the newcomer's buttons in the middle of its own confirm.
     const first = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     const second = [
-      { entry_path: 'c.stalx', size_bytes: 3, modified: null, is_canonical: false },
-      { entry_path: 'd.stalx', size_bytes: 4, modified: null, is_canonical: false },
+      { entry_path: 'c.stalx', size_bytes: 3, modified: null },
+      { entry_path: 'd.stalx', size_bytes: 4, modified: null },
     ];
     let release = () => {};
     const gate = new Promise<void>((resolve) => {
@@ -1135,8 +1135,8 @@ describe('speleoStore - the dump picker reports its own failures (#258)', () => 
     // ordinary close has to carry it - or a successful pick would leave the next
     // picker's buttons disabled from the moment it opened.
     const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     useSpeleoStore.getState().openDumpPicker(candidates, 'stalx', async () => {});
 

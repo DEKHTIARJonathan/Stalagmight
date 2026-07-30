@@ -35,8 +35,8 @@ const DIALOG = 'dialog.speleodb-dump-picker';
 const KEY = 'speleodb-dump-picker';
 
 const CANDIDATES = [
-  { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-  { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+  { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+  { entry_path: 'b.stalx', size_bytes: 2, modified: null },
 ];
 
 beforeEach(() => {

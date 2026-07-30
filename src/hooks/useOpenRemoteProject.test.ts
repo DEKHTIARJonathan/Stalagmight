@@ -131,8 +131,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // without toasting a dead end, and the picker is raised from HERE so all three
     // hosts of this hook get the choice.
     const candidates = [
-      { entry_path: 'misc/project.stalx', size_bytes: 4096, modified: null, is_canonical: true },
-      { entry_path: 'backup/old.stalx', size_bytes: 2048, modified: null, is_canonical: false },
+      { entry_path: 'misc/project.stalx', size_bytes: 4096, modified: null },
+      { entry_path: 'backup/old.stalx', size_bytes: 2048, modified: null },
     ];
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_open_project') {
@@ -171,8 +171,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // got `ambiguous`, and stopped listening - so without an explicit hand-back the
     // picker just closed: no confirmation, and `speleodb_adopt_ariane` never called.
     const candidates = [
-      { entry_path: 'ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'misc/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'ariane.tml', size_bytes: 1, modified: null },
+      { entry_path: 'misc/ariane.tml', size_bytes: 2, modified: null },
     ];
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_open_project') {
@@ -203,8 +203,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // collapsing it into a flat error stranded the user, who could not choose from
     // the new tree without restarting the entire open flow.
     const candidates = [
-      { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'two/ariane.tml', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null },
+      { entry_path: 'two/ariane.tml', size_bytes: 2, modified: null },
     ];
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_adopt_ariane') {
@@ -247,8 +247,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // adoption there re-raised the identical picker on every confirmation, so the
     // user could never get out of it.
     const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     let adoptCalls = 0;
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
@@ -283,8 +283,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // discard my local changes". Replaying the plain open would meet the un-pushed
     // edits guard and refuse a question they had already answered.
     const candidates = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_adopt_ariane')
@@ -315,8 +315,8 @@ describe('useOpenRemoteProject (#218)', () => {
     // is classified. Without this the user met a flat error immediately after
     // confirming they wanted their local copy discarded - the worst moment to dead-end.
     const candidates = [
-      { entry_path: 'misc/a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'misc/b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'misc/a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'misc/b.stalx', size_bytes: 2, modified: null },
     ];
     invokeIpcMock.mockImplementation((cmd: string, args?: Record<string, unknown>) => {
       if (cmd === 'speleodb_open_project_discarding_local') {
@@ -1369,8 +1369,8 @@ describe('useOpenRemoteProject (#218)', () => {
 
   describe('a picker replay that needs a re-login (#258)', () => {
     const CANDIDATES = [
-      { entry_path: 'a.stalx', size_bytes: 1, modified: null, is_canonical: false },
-      { entry_path: 'b.stalx', size_bytes: 2, modified: null, is_canonical: false },
+      { entry_path: 'a.stalx', size_bytes: 1, modified: null },
+      { entry_path: 'b.stalx', size_bytes: 2, modified: null },
     ];
 
     const session = () => ({

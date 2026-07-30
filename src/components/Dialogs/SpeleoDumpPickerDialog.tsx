@@ -67,9 +67,16 @@ function formatModified(modified: string | null): string {
  * because the stakes are not in the choosing - they are in what the choice does
  * later. The chosen file becomes the project, and the next push replaces the
  * project file on SpeleoDB with it, so a user who picks the wrong one finds out
- * one push too late. The canonical entry is pre-selected for the same reason: it
- * is the file SpeleoDB already serves, so accepting the default is the move that
- * changes nothing.
+ * one push too late.
+ *
+ * NOTHING is pre-selected, and no candidate is badged. Both used to be, keyed on a
+ * `project.stalx` BASENAME - and that asserted something no dump records. The push
+ * target is `<TARGET_FOLDER>/project.stalx` for a folder the archive never names, so
+ * with `backup/project.stalx` and `misc/current.stalx` under a target of `misc/`, the
+ * badge landed on the BACKUP, sorted it first, pre-selected it and took initial focus:
+ * a stray Enter accepted the one file the next push would overwrite. A guess that
+ * confident is worse than no guess, so the list is path-ordered and the confirm stays
+ * disabled until the user says which file they mean.
  *
  * Nothing here decides anything on its own - `resolveDumpPicker` re-invokes the
  * backend with the chosen entry, and the open runs again from the top.
@@ -87,18 +94,14 @@ export default function SpeleoDumpPickerDialog() {
 
   const [picked, setPicked] = useState<string | null>(null);
 
-  // The file SpeleoDB currently serves, and so the default: choosing it is the
-  // answer that leaves the server exactly as it is.
-  const canonical = candidates.find((candidate) => candidate.is_canonical)?.entry_path ?? null;
-  // A pick wins once made, but only while it still names something on screen.
-  // Derived rather than seeded into state so a re-raise carrying a different dump
-  // cannot leave the selection pointing at an entry that is no longer listed -
-  // `entry_path` is looked up as an exact key, so a stale one resolves to "not
-  // found" rather than to the wrong file.
+  // The user's pick, and only ever the user's pick. Derived rather than seeded into
+  // state so a re-raise carrying a different dump cannot leave the selection pointing
+  // at an entry that is no longer listed - `entry_path` is looked up as an exact key,
+  // so a stale one resolves to "not found" rather than to the wrong file.
   const selected =
     picked !== null && candidates.some((candidate) => candidate.entry_path === picked)
       ? picked
-      : canonical;
+      : null;
 
   // No candidates means there was no ambiguity to resolve, so there is no question
   // to ask. Refusing to render beats an empty list with a dead confirm button.
@@ -169,11 +172,6 @@ export default function SpeleoDumpPickerDialog() {
                       routinely differ only in their directory, so an elided middle
                       would hide the one thing that tells them apart. */}
                   <span className="font-mono break-all">{candidate.entry_path}</span>
-                  {candidate.is_canonical && (
-                    <span className="px-1.5 py-0.5 rounded text-xs bg-accent text-accent-on flex-shrink-0">
-                      {t('speleodb.dumpPicker.currentBadge')}
-                    </span>
-                  )}
                 </span>
                 <span className="w-20 text-right flex-shrink-0 text-text-secondary tabular-nums">
                   {formatSize(candidate.size_bytes)}
@@ -204,11 +202,11 @@ export default function SpeleoDumpPickerDialog() {
           <Button onClick={closeDumpPicker} disabled={busy} data-testid="speleodb-dump-picker-cancel">
             {t('common.actions.cancel')}
           </Button>
-          {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
-              heuristic lands here, so a stray Enter takes the pre-selected
-              canonical file - the answer that changes nothing on the server. When
-              no candidate is canonical this button starts disabled, focus falls to
-              Cancel, and Enter cancels rather than picking a file for the user. */}
+          {/* Primary + [data-primary-action]: DialogWrapper's initial-focus heuristic
+              lands here, and it starts DISABLED because nothing is pre-selected - so
+              focus falls to Cancel and a stray Enter cancels rather than picking a file
+              on the user's behalf. That is the whole point of dropping the default:
+              there is no candidate the app can honestly nominate. */}
           <Button
             variant="primary"
             // The store owns the in-flight state (`dumpPickerBusy`) and leaves the

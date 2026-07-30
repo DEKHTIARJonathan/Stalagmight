@@ -178,7 +178,7 @@ describe('dumpCandidateKind (#258)', () => {
   const ambiguous = (kind: unknown) =>
     dto({
       action: 'Ambiguous',
-      dump_candidates: [{ entry_path: 'a', size_bytes: 1, modified: null, is_canonical: false }],
+      dump_candidates: [{ entry_path: 'a', size_bytes: 1, modified: null }],
       dump_candidate_kind: kind as SpeleoErrorDto['dump_candidate_kind'],
     });
 
@@ -203,7 +203,7 @@ describe('dumpCandidateKind (#258)', () => {
     const tmlish = dto({
       action: 'Ambiguous',
       dump_candidates: [
-        { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null, is_canonical: false },
+        { entry_path: 'one/ariane.tml', size_bytes: 1, modified: null },
       ],
     });
     expect(dumpCandidateKind(tmlish)).toBe('stalx');

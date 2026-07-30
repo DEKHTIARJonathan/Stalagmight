@@ -40,14 +40,13 @@ const candidate = (over: Partial<SpeleoDumpCandidate> = {}): SpeleoDumpCandidate
   entry_path: 'survey.stalx',
   size_bytes: 4096,
   modified: '2026-05-01T10:00:00Z',
-  is_canonical: false,
   ...over,
 });
 
 /** The ordinary dump: one entry SpeleoDB serves, plus a stray sibling. */
 const CANONICAL_SECOND: SpeleoDumpCandidate[] = [
   candidate({ entry_path: 'backup/old-survey.stalx', size_bytes: 2048 }),
-  candidate({ entry_path: 'main/survey.stalx', size_bytes: 8192, is_canonical: true }),
+  candidate({ entry_path: 'main/survey.stalx', size_bytes: 8192 }),
 ];
 
 /** The store's own signatures: the real resolve is async, so the stub must be too. */
@@ -95,33 +94,35 @@ beforeEach(() => {
 });
 
 describe('SpeleoDumpPickerDialog - choosing', () => {
-  it('pre-selects the file SpeleoDB already serves and marks it as current', () => {
+  it('[#258 review] nominates nothing: no row checked, no row badged', () => {
+    // Both used to be keyed on a `project.stalx` BASENAME, which asserts something no
+    // dump records: the push writes `<TARGET_FOLDER>/project.stalx` for a folder the
+    // archive never names. So with `backup/project.stalx` alongside `misc/current.stalx`
+    // under a target of `misc/`, the badge landed on the BACKUP, sorted it first,
+    // pre-selected it and took initial focus - a stray Enter accepted the one file the
+    // next push would overwrite.
     render(<Host />);
 
-    expect(option(1)).toBeChecked();
     expect(option(0)).not.toBeChecked();
-    // The badge is what makes the default defensible rather than arbitrary: it
-    // names WHY that row is the one already selected.
-    const canonicalRow = option(1).closest('label');
-    expect(canonicalRow?.textContent).toContain('current');
+    expect(option(1)).not.toBeChecked();
+    expect(screen.queryByText('current')).not.toBeInTheDocument();
   });
 
-  it('confirming without touching anything sends the canonical path', async () => {
+  it('[#258 review] confirming without choosing is impossible, not merely discouraged', async () => {
     render(<Host />);
-    await userEvent.click(confirm());
 
-    expect(resolveMock).toHaveBeenCalledTimes(1);
-    expect(resolveMock).toHaveBeenCalledWith('main/survey.stalx');
+    // Disabled rather than defaulted. The app has no candidate it can honestly
+    // nominate, so it asks instead of guessing on the user's behalf.
+    expect(confirm()).toBeDisabled();
+    await userEvent.click(confirm());
+    expect(resolveMock).not.toHaveBeenCalled();
   });
 
-  it('picking another row confirms THAT file, not the pre-selected one', async () => {
+  it('picking a row confirms THAT file', async () => {
     render(<Host />);
     await userEvent.click(option(0));
     await userEvent.click(confirm());
 
-    // Sending the pre-selection here would replace the server copy with a file
-    // the user explicitly declined, and the dialog would have looked like it
-    // agreed with them while doing it.
     expect(resolveMock).toHaveBeenCalledTimes(1);
     expect(resolveMock).toHaveBeenCalledWith('backup/old-survey.stalx');
   });
@@ -204,7 +205,7 @@ describe('SpeleoDumpPickerDialog - choosing', () => {
 describe('SpeleoDumpPickerDialog - the Modified column', () => {
   const withModified = (values: (string | null)[]): SpeleoDumpCandidate[] =>
     values.map((modified, index) =>
-      candidate({ entry_path: `f${index}.stalx`, modified, is_canonical: index === 0 }),
+      candidate({ entry_path: `f${index}.stalx`, modified }),
     );
 
   it('is hidden when every entry carries the same timestamp', () => {

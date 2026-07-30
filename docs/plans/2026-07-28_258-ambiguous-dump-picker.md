@@ -52,7 +52,7 @@ Every `D-*` below is the authority for resolving a conflict during implementatio
 | **q8** | Re-download on resolve | **Re-download.** Already the shipped pattern: `speleodb_adopt_ariane` re-downloads after the FE confirm (`:1557-1562`), discarding the bytes `speleodb_open_project` fetched. No `AppState` dump cache; peak RSS is already budgeted at ~1.15 GiB. |
 | **q9** | Validating `entry_path` | **Re-classify and require membership**, against the same `Dump` being extracted. The ballot premise was wrong: `entry_path` never reaches the filesystem (it is only an `IndexMap` key at `dump.rs:185`; every fs path derives from `speleodb_cache_path(uuid)`), so zip-slip and traversal are structurally inexpressible and no path sanitisation is warranted. One `==` against server-derived data. |
 | **D-1** | Scope of v1 | **Open family + restore/view, plus a session-remembered choice.** `speleodb_fast_forward` (start-editing / update / take-remote) reuses the remembered entry silently and keeps today's fail-closed error when there is none. This closes the take-a-lock-then-Fatal hole without widening three zero-arg command signatures. |
-| **D-2** | Non-canonical picks | **Pre-select and badge the candidate whose basename is `project.stalx`**, and state the consequence in the picker body. Persisting the chosen entry and guarding the push is correct but is a schema-fence change; filed as a follow-up. |
+| **D-2** | Non-canonical picks | ~~**Pre-select and badge the candidate whose basename is `project.stalx`**, and state the consequence in the picker body.~~ **REVERSED in review** - see the amendment below. Nothing is badged or pre-selected; the consequence copy stands, minus its reference to the badge. Persisting the chosen entry and guarding the push is correct but is a schema-fence change; filed as a follow-up. |
 | **D-3** | Is the choice remembered | **Session only**, on `SpeleoDbSession`, keyed by project id, cleared on logout. Never persisted: the chosen entry is a property of the server tree at a commit, not of the local project, so a stored name can vanish and the re-ask path is needed regardless. |
 | **D-4** | Cancel and lock ownership | **Let the error unwind and release the lock**; resolve re-enters from scratch. Never hold a server mutex across an unbounded user interaction - that is what `:2059-2062` exists to prevent. On the pull path cancel is already clean, since classify precedes the cache replace. |
 | **D-5** | Ariane files | **Disregarded entirely whenever a `.stalx` exists.** Users are told the `.tml` is not for editing. A newer `ariane.tml` alongside a `.stalx` being ignored is intended behaviour, not a bug - no issue is filed for it. |
@@ -358,3 +358,42 @@ revert. Worth doing if the re-open step proves annoying in practice.
 **R3 revisited.** Re-asking is now once per external revision on an ambiguous project,
 where it used to be once per session. That is the honest frequency - the tree really did
 move - but it is the number to watch if the picker starts feeling like a nag.
+
+
+---
+
+## Amendment 2 (post-review): D-2 reversed - nothing is badged or pre-selected
+
+D-2 chose to badge the candidate whose basename is `project.stalx` as "current", sort
+it first, pre-select it and let initial focus land on Confirm - on the reasoning that it
+is the name a push writes, so accepting the default changes nothing on the server.
+
+**That reasoning does not hold.** A push writes `<TARGET_FOLDER>/project.stalx`, and
+`TARGET_FOLDER` is configurable and recorded nowhere in the dump. So the basename test
+can name a file that is not the target at all. The case that makes it concrete:
+
+| dump entry | badged by D-2 | actual push target with `TARGET_FOLDER=misc/` |
+|---|---|---|
+| `backup/project.stalx` | **yes** - sorted first, pre-selected, focused | no |
+| `misc/current.stalx` | no | no |
+| `misc/project.stalx` | *not in the dump* | **yes** |
+
+The badge landed on the backup, and a stray Enter accepted the one file the next push
+would overwrite. R3's mitigation list named this pre-selection as what keeps the picker
+from being a nag; the price was a confident guess that can be wrong in exactly the
+direction that costs data.
+
+`entry_details` no longer computes it, `SpeleoDumpCandidate` no longer carries it, the
+list is path-ordered, and Confirm starts disabled so focus falls to Cancel - Enter
+cancels rather than picking a file on the user's behalf. `has_canonical_basename` is
+gone with it; `CANONICAL_STALX_WIRE_NAME` remains, used only where it belongs, naming
+the part a push actually uploads.
+
+**What this costs:** every ambiguous open now needs a deliberate choice, including the
+common case where `TARGET_FOLDER` does contain `project.stalx` and the old badge would
+have been right. That is the accepted trade - the app cannot tell the two situations
+apart, and D-2's mistake was acting as though it could.
+
+Follow-up 1 (persist the chosen entry and guard the push) is the real fix and unchanged:
+if the server ever reports the stored path, the badge can come back as a fact rather
+than an inference.
