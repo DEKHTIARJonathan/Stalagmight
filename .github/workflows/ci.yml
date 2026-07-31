@@ -24,33 +24,49 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Pick the runner: an optional self-hosted runner when it's online AND idle,
-  # else fall back to a GitHub-hosted ubuntu-latest. A single ephemeral
-  # self-hosted runner serializes jobs, so routing every check there would queue
-  # them behind each other (and behind the nightly E2E) - the picker spills to
-  # hosted whenever the self-hosted runner is busy or down. (#134 / #135)
+  # Pick the runner: hekatrine when it's online AND idle, else a GitHub-hosted
+  # ubuntu-latest. A self-hosted runner serializes jobs, so pinning every check
+  # to one would queue them behind each other (and behind anything else on that
+  # box) - the picker spills to hosted whenever hekatrine is busy or down, which
+  # is why this is a preference and not a `runs-on`. (#134 / #135)
+  #
+  # hekatrine ONLY. The NUC deliberately no longer takes CI: both boxes now carry
+  # the shared `ubuntu-latest-local` label, so asking for that label would route
+  # to whichever happened to be free and make "which machine ran this" a coin
+  # toss. Cloud is the failover instead - a known quantity, always available, and
+  # unlike the NUC it cannot also be busy with the nightly.
+  #
+  # Matched on the `hekatrine` LABEL, not on a runner name. Name and label are
+  # not the same thing here (the NUC registers as `i5-nuc-runner` while serving
+  # `ubuntu-latest-local`), and a name guessed wrong fails SILENTLY - the count
+  # is 0 forever and every run goes to cloud with nothing to say why. Counting
+  # the label we are about to request makes the probe and the dispatch agree by
+  # construction, and keeps the property the name test had: a count, not a
+  # string compare, so a stale duplicate registration stays harmless.
   #
   # The default GITHUB_TOKEN can't read org runner status, so this uses a
-  # fine-grained PAT secret (org permission "Self-hosted runners: Read").
+  # fine-grained PAT secret (org permission "Self-hosted runners: Read"). The
+  # secret name still says NUC - it is an org-wide runner-read token and reads
+  # hekatrine no differently; renaming it means rotating the secret first, so it
+  # is left alone deliberately rather than half-changed.
   # If that secret is absent/empty (or the API call fails - e.g. a fork PR with
-  # no secret access), pick defaults to HOSTED. So this is inert (always-hosted,
-  # same as before) until the secret is added, then self-hosted routing turns on.
+  # no secret access), pick defaults to HOSTED. So this stays inert (always
+  # cloud) rather than failing, whenever it cannot see the runners.
   pick:
     runs-on: ubuntu-latest
     outputs:
       runs_on: ${{ steps.pick.outputs.runs_on }}
     steps:
-      - name: Choose runner - self-hosted when online & idle, else hosted
+      - name: Choose runner - hekatrine when online & idle, else cloud
         id: pick
         env:
           GH_TOKEN: ${{ secrets.NUC_RUNNER_READ_PAT }}
         run: |
-          # Default to hosted; only route to the self-hosted runner if we can
-          # POSITIVELY confirm it is online AND idle. Any uncertainty - no token,
-          # API error, malformed response, runner missing/busy, or a DUPLICATE
-          # stale registration with the same name - sanitizes to 0 and stays on
-          # hosted. (Counting matches, not string-comparing one line, keeps a
-          # leftover offline dup harmless.)
+          # Default to hosted; only route to hekatrine if we can POSITIVELY
+          # confirm it is online AND idle. Any uncertainty - no token, API error,
+          # malformed response, runner missing/busy, or a DUPLICATE stale
+          # registration carrying the same label - sanitizes to 0 and stays on
+          # hosted.
           runs_on='["ubuntu-latest"]'
           idle=0
           if [ -n "$GH_TOKEN" ]; then
@@ -59,20 +75,20 @@ jobs:
             # `|| true` shields the assignment from the default bash -e (else
             # pick aborts and check is skipped); then sanitize to a clean int.
             idle=$(gh api 'orgs/Stalagmight/actions/runners?per_page=100' \
-              --jq '[.runners[] | select(.name=="i5-nuc-runner" and .status=="online" and .busy==false)] | length' \
+              --jq '[.runners[] | select(.status=="online" and .busy==false and ([.labels[].name] | index("hekatrine")))] | length' \
               2>/dev/null) || true
             [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
             if [ "$idle" -ge 1 ]; then
-              runs_on='["self-hosted","ubuntu-latest-local"]'
+              runs_on='["self-hosted","hekatrine"]'
             fi
           fi
           echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
-          echo "Routed to $runs_on (idle self-hosted runner count: $idle)"
+          echo "Routed to $runs_on (idle hekatrine runner count: $idle)"
           # Surface the routing on the run's summary page - no log-digging.
-          if [ "$runs_on" = '["self-hosted","ubuntu-latest-local"]' ]; then
-            echo "🖥️ \`check\` → **self-hosted runner** (idle)" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$runs_on" = '["self-hosted","hekatrine"]' ]; then
+            echo "🖥️ \`check\` → **hekatrine** (idle)" >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "☁️ \`check\` → **github-hosted** (self-hosted runner busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
+            echo "☁️ \`check\` → **github-hosted** (hekatrine busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
           fi
 
   check:
@@ -80,7 +96,9 @@ jobs:
     # Default-guard the expression: if pick somehow emits no output, fall back
     # to hosted rather than crash the run with a fromJSON("") error.
     runs-on: ${{ fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]') }}
-    # Self-hosted cold ≈ 7m, warm ≈ 4m; hosted ≈ 3m. Generous headroom either way.
+    # hekatrine ≈ 3m on the manual benchmark (a full pass, cargo test included);
+    # hosted ≈ 3m. The ≈ 7m cold / ≈ 4m warm figures this used to cite were the
+    # NUC's, which no longer takes CI. Generous headroom either way.
     timeout-minutes: 30
     env:
       # Required for sccache to cache on the self-hosted runner; harmless on
