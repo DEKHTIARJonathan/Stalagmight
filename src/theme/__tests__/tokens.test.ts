@@ -608,14 +608,55 @@ describe('index.html anti-flash cover', () => {
     // `#fff` would revert #360 with no error and no failing test anywhere.
     // This is the only place the contract can be pinned in the language that
     // owns the tokens.
+    //
+    // Absence is a FAILURE here, not a skip. This loop used to `continue` past
+    // an undefined value, which made it silently vacuous in two directions: a
+    // theme whose endpoints stopped being parsed out of the CSS (a renamed
+    // token, a reformatted block `extractTokens` no longer matches) checked
+    // nothing, and a theme missing from the hand-maintained `cssTokensByTheme`
+    // was never visited at all. Both are pinned below instead.
+    expect(
+      Object.keys(cssTokensByTheme).slice().sort(),
+      'cssTokensByTheme is hand-maintained - a theme missing from it is never checked by this test'
+    ).toEqual([...ALL_THEME_NAMES].slice().sort());
+
+    // The themes that declare depth endpoints, pinned in both directions. The
+    // other two (solarized_light, catppuccin_latte) are chrome-only and inherit
+    // :root's ramp - see the "only override UI chrome and controls" test above.
+    const DEPTH_ENDPOINT_THEMES = [
+      'catppuccin_mocha',
+      'cave',
+      'dark',
+      'dracula',
+      'kaleido_eink',
+      'light',
+      'nord',
+      'one_dark',
+    ];
+
+    const declaring: string[] = [];
     for (const [theme, tokens] of Object.entries(cssTokensByTheme)) {
-      for (const name of ['--cc-depth-shallow', '--cc-depth-deep']) {
-        const value = tokens[name];
-        // Not every theme declares them; the ones that do must be hex.
-        if (value === undefined) continue;
+      const shallow = tokens['--cc-depth-shallow'];
+      const deep = tokens['--cc-depth-deep'];
+      // All-or-nothing: the map-viz tokens ship as one block, so half a ramp is
+      // a defect regardless of which half is missing.
+      expect(
+        deep === undefined,
+        `${theme} declares one depth endpoint but not the other`
+      ).toBe(shallow === undefined);
+      if (shallow === undefined) continue;
+      declaring.push(theme);
+      for (const [name, value] of [
+        ['--cc-depth-shallow', shallow],
+        ['--cc-depth-deep', deep!],
+      ] as const) {
         expect(value, `${theme} ${name} is not #rrggbb`).toMatch(/^#[0-9a-fA-F]{6}$/);
       }
     }
+    expect(
+      declaring.slice().sort(),
+      'a theme dropped out of (or joined) the set with depth endpoints'
+    ).toEqual(DEPTH_ENDPOINT_THEMES);
   });
 
   it('does not guess the theme from the OS colour scheme', () => {

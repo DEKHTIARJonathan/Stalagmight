@@ -196,26 +196,13 @@ function endpointDiscriminability(shallowColor: string, deepColor: string): numb
  * endpoint at each sample - a ramp that loops back would show that distance
  * decrease partway through, meaning two different depths render the same (or
  * a very similar) colour. `EPS` absorbs 8-bit hex quantization noise, not real
- * regressions - see the synthetic-fixture proof below for the size of a real
- * violation.
+ * regressions - the real `getDepthColor` violation frozen in the proof block
+ * below dips by 7.31, i.e. 146x this value.
  */
 const MONOTONICITY_EPS = 0.05;
 
 function monotonicityViolations(shallowColor: string, deepColor: string): number {
   const colors = sampleRamp(shallowColor, deepColor);
-  const startLab = hexToLab(colors[0]!);
-  let prevDist = -Infinity;
-  let violations = 0;
-  for (const color of colors) {
-    const dist = deltaE2000(startLab, hexToLab(color));
-    if (dist < prevDist - MONOTONICITY_EPS) violations++;
-    prevDist = Math.max(prevDist, dist);
-  }
-  return violations;
-}
-
-/** Same check, but over a literal list of colours (for the loop-back fixture). */
-function monotonicityViolationsForColors(colors: string[]): number {
   const startLab = hexToLab(colors[0]!);
   let prevDist = -Infinity;
   let violations = 0;
@@ -238,7 +225,7 @@ function monotonicityViolationsForColors(colors: string[]): number {
  * penalised for the single sample at its own start. 180 is the real dividing
  * line - below it the path descends through green and yellow, at or above it the
  * path inverts - so 179 is as tight as this can be without rejecting the shipped
- * ramp, whose shallow anchors run 169.8-177.0. A ramp that genuinely inverts
+ * ramp, whose shallow anchors run 169.8-174.9. A ramp that genuinely inverts
  * still gets caught: starting above 180 sends the sweep up through 240-300,
  * which is deep inside the band. Returns the deepest incursion in degrees
  * (0 = the ramp never enters the band).
@@ -272,11 +259,55 @@ function cvdSafetyDeltas(shallowColor: string, deepColor: string): { protanopia:
 }
 
 // ---------------------------------------------------------------------------
+// The two perceptual floors. Declared at module scope, NOT inside the describe
+// block that asserts them, so the "proof: the harness catches real regressions"
+// tests below can compare against the live constant instead of re-typing its
+// value. A proof that hard-codes `40` stops proving anything about the guard
+// the moment the guard moves - the same defect already fixed once on this
+// branch, where a staleness check compared against a hard-coded floor instead
+// of the per-theme one (tokens.test.ts, KNOWN_BELOW_FLOOR).
+// ---------------------------------------------------------------------------
+
+/**
+ * Property 1 floor. Justification: cave's pre-retune ramp (#a89060 -> #b85048,
+ * frozen and re-checked in the "proof" describe block below) scores 29.22 -
+ * well inside the CIEDE2000 "colours read as more similar than opposite" band
+ * (roughly 11-49 on the common interpretive scale; 100 is exact opposites). A
+ * green/red pair meant to read as genuinely different (#3fa34d -> #d64545, the
+ * example in the task) scores 67.25, solidly past 50 ("more different than
+ * similar"). 40 sits between the two with margin on both sides and below every
+ * currently-shipped ramp (62.28-70.06, measured 2026-07-30 over the eight
+ * themes in EXPECTED_DEPTH_RAMP_THEMES; re-measure before quoting this range).
+ */
+const DISCRIMINABILITY_FLOOR = 40;
+
+/**
+ * Property 4 floor. Justification: pre-retune cave's deuteranopia-simulated
+ * endpoints scored 10.37 deltaE2000 - deuteranopia (~5% of men) is the single
+ * most common red-green deficiency, and 10.37 sits in "perceptible at a glance
+ * at best" territory. The iso-luminant green/red fixture in the proof block
+ * below scores 5.99. Protanopia clears comfortably for every theme today
+ * (37.91-47.41, measured 2026-07-30); deuteranopia is the tighter channel at
+ * 34.21-40.87. 15 sits below both shipped ranges while still catching the
+ * 10.37 and 5.99 failures, so it is not a floor reverse-engineered to pass
+ * everything.
+ */
+const CVD_SAFETY_FLOOR = 15;
+
+// ---------------------------------------------------------------------------
 // Theme set: derived from whatever tokens are current, not hardcoded, so a
 // theme added/removed/retuned by the parallel tokens.ts work is picked up
 // automatically. Only themes that declare their own depth-ramp tokens are in
 // scope (mirrors tokens.test.ts's FullTheme set); chrome-only light themes
 // inherit `dark`'s ramp and are covered by testing `dark` itself.
+//
+// Derived sets are silently fragile in vitest 2.1.9: `.each` is implemented as
+// `cases.forEach(...)`, so an EMPTY array registers ZERO tests and the file
+// still reports green (unlike Jest, which throws on an empty `.each` table).
+// Rename `--cc-depth-shallow` and all four properties below would vanish while
+// the CSS/tokens sync tests kept passing, because those only compare the two
+// sides to each other. EXPECTED_DEPTH_RAMP_THEMES + the non-vacuity test at the
+// top of the describe block are what make that a failure instead.
 // ---------------------------------------------------------------------------
 
 type ThemeName = keyof typeof themeTokens;
@@ -285,23 +316,44 @@ const THEMES_WITH_DEPTH_RAMP = (Object.keys(themeTokens) as ThemeName[]).filter(
   (name) => '--cc-depth-shallow' in themeTokens[name] && '--cc-depth-deep' in themeTokens[name]
 );
 
+/**
+ * The set `THEMES_WITH_DEPTH_RAMP` is expected to derive TODAY. Pinned in both
+ * directions, exactly as tokens.test.ts pins its own derived light-canvas set:
+ * a theme joining or leaving the depth-ramp set changes which themes get any
+ * perceptual checking at all, and that is a decision, not a detail.
+ */
+const EXPECTED_DEPTH_RAMP_THEMES = [
+  'cave',
+  'catppuccin_mocha',
+  'dark',
+  'dracula',
+  'kaleido_eink',
+  'light',
+  'nord',
+  'one_dark',
+] as const;
+
 function rampOf(theme: ThemeName): { shallow: string; deep: string } {
   const tokens: Record<string, string> = themeTokens[theme];
   return { shallow: tokens['--cc-depth-shallow']!, deep: tokens['--cc-depth-deep']! };
 }
 
 describe('depth ramp legibility', () => {
-  describe('property 1: discriminability (shallow and deep must be perceptually far apart)', () => {
-    // Threshold justification: cave's pre-retune ramp (#a89060 -> #b85048,
-    // frozen and re-checked in the "proof" describe block below) scores 29.22
-    // - well inside the CIEDE2000 "colours read as more similar than opposite"
-    // band (roughly 11-49 on the common interpretive scale; 100 is exact
-    // opposites). A green/red pair meant to read as genuinely different
-    // (#3fa34d -> #d64545, the example in the task) scores 67.25, solidly past
-    // 50 ("more different than similar"). 40 sits between the two with margin
-    // on both sides and below every currently-shipped ramp (44.22-76.83).
-    const DISCRIMINABILITY_FLOOR = 40;
+  it('runs all four properties over a non-empty, pinned set of themes', () => {
+    // The load-bearing assertion in this file. Every property below is an
+    // `it.each(THEMES_WITH_DEPTH_RAMP)`, and vitest 2.1.9's `.each` is a plain
+    // `forEach` over the cases: an empty table registers zero tests and the run
+    // is still green. So the four properties can go from "eight themes checked"
+    // to "nothing checked" with no failure anywhere - renaming
+    // `--cc-depth-shallow` in tokens.ts and index.css together does exactly
+    // that, and the CSS/tokens sync tests stay green because they only compare
+    // the two sides to each other. Assert non-emptiness first (the vacuity
+    // mode) and then the exact set (the coverage mode).
+    expect(THEMES_WITH_DEPTH_RAMP.length, 'no theme declares a depth ramp - all four properties below are vacuous').toBeGreaterThan(0);
+    expect(THEMES_WITH_DEPTH_RAMP.slice().sort()).toEqual([...EXPECTED_DEPTH_RAMP_THEMES].slice().sort());
+  });
 
+  describe('property 1: discriminability (shallow and deep must be perceptually far apart)', () => {
     /** Empty: every theme currently clears the floor. Keep the ratchet ready -
      * if a future retune drops a theme below 40, add it here with the
      * measured value so it can only get better, never silently worse. */
@@ -365,15 +417,6 @@ describe('depth ramp legibility', () => {
   });
 
   describe('property 4: colourblind safety (deuteranopia/protanopia simulated discriminability)', () => {
-    // Threshold justification: pre-retune cave's deuteranopia-simulated
-    // endpoints scored 10.37 deltaE2000 - deuteranopia (~5% of men) is the
-    // single most common red-green deficiency, and 10.37 sits in "perceptible
-    // at a glance at best" territory. Protanopia clears comfortably for every
-    // theme today (21.4-32.4); 15 sits below that whole range while still
-    // catching the deuteranopia-only failures below, so it is not a floor
-    // reverse-engineered to pass everything.
-    const CVD_SAFETY_FLOOR = 15;
-
     /**
      * A green->red hue swap alone is not colourblind-safe. `one_dark` (13.955),
      * `nord` (13.644) and `catppuccin_mocha` (12.406) were parked here when this
@@ -425,15 +468,34 @@ describe('depth ramp legibility', () => {
 describe('proof: the harness catches real regressions', () => {
   it('property 1 rejects the pre-retune cave ramp (the screenshot bug)', () => {
     const delta = endpointDiscriminability('#a89060', '#b85048');
-    expect(delta).toBeLessThan(40);
+    expect(delta).toBeLessThan(DISCRIMINABILITY_FLOOR);
   });
 
-  it('property 2 rejects a ramp that loops back to its starting colour', () => {
-    // Not sampled from getDepthColor (which cannot produce this shape from a
-    // 2-stop linear interpolation) - a hand-built 3-stop path: red -> green ->
-    // back to (near-)red, so two different "depths" render almost identically.
-    const loopingColors = ['#ff0000', '#80ff00', '#00ff00', '#80ff00', '#ff1010'];
-    expect(monotonicityViolationsForColors(loopingColors)).toBeGreaterThan(0);
+  it('property 2 rejects a real getDepthColor ramp that loops back', () => {
+    // Fed through `monotonicityViolations`, i.e. the SAME function the four
+    // theme properties call, sweeping the production `getDepthColor`. The
+    // previous version of this proof passed a hand-written hex list to a
+    // second, test-local copy of the monotonicity logic, so literal in ->
+    // test-local helper -> assert: no change to any shipped file could make it
+    // red, and nothing anywhere proved `monotonicityViolations` could return
+    // non-zero.
+    //
+    // Its defence was that `getDepthColor` "cannot produce this shape from a
+    // 2-stop linear interpolation". That is false and measurable: 48,814 of
+    // 200,000 random hex pairs (24.4%) swept through the real `getDepthColor`
+    // violate monotonicity.
+    //
+    // #606a7d -> #f4cb5c is one of them, and the mechanism is ordinary: the
+    // shallow end is a desaturated slate (hue 219, S 0.13, L 0.43), the deep
+    // end a vivid yellow (hue 44, S 0.87, L 0.66). `interpolateHue` takes the
+    // shortest path, 219 -> 44 descending through cyan and green, while S and L
+    // climb the whole way - so the mid-ramp greens land FURTHER from the
+    // shallow endpoint (peak 55.72 dE00) than the deep endpoint itself does
+    // (48.41). Distance from shallow rises, then falls back by 7.31 dE00 -
+    // 146x MONOTONICITY_EPS, so this is nowhere near quantization noise - and
+    // four samples repeat a distance an earlier sample already passed through,
+    // i.e. four pairs of distinct depths that render near-identically.
+    expect(monotonicityViolations('#606a7d', '#f4cb5c')).toBeGreaterThan(0);
   });
 
   it('property 3 rejects a shallow-blue to deep-red pair (the one_dark-class bug)', () => {
@@ -449,7 +511,7 @@ describe('proof: the harness catches real regressions', () => {
     // combination (differs by hue alone, so a deuteranope's collapsed L-M
     // channel leaves almost nothing to discriminate).
     const { deuteranopia } = cvdSafetyDeltas('#4caf50', '#f44336');
-    expect(deuteranopia).toBeLessThan(15);
+    expect(deuteranopia).toBeLessThan(CVD_SAFETY_FLOOR);
   });
 });
 
@@ -503,11 +565,57 @@ describe('deltaE2000 conformance: Sharma, Wu & Dalal (2005) Table I', () => {
     [34, [2.0776, 0.0795, -1.135], [0.9033, -0.0636, -0.5514], 0.9082],
   ];
 
-  it('covers the full published table', () => {
-    expect(REFERENCE_VECTORS).toHaveLength(34);
+  /**
+   * Absolute tolerance for the reference comparison, asserted directly rather
+   * than through `toBeCloseTo`'s `numDigits`, so the actual budget is visible
+   * instead of being encoded as a power of ten.
+   *
+   * It was `toBeCloseTo(expected, 4)`, i.e. |diff| < 5.0e-5. Pair 23 lands at
+   * 4.950e-5 - 99% of that budget. The residual is not an implementation error;
+   * it is the paper's own rounding, since Table I is published to 4 decimal
+   * places. At 99% of budget any floating-point drift at all (a V8 upgrade, a
+   * changed `Math.cbrt` or `Math.pow` implementation) turns pair 23 red for no
+   * reason, and the natural "fix" for a spurious red is to weaken the test.
+   *
+   * 1e-3 is 20x the worst residual today and still tight enough to catch the
+   * traps this table exists for, which move results by 1e-3 to 1e0, not by
+   * 1e-5. Measured by forcing `rt` to 0 (the Rt rotation term is the classic
+   * CIEDE2000 implementation error): 9 of the 34 pairs fail at this tolerance,
+   * residuals from 1.459e-3 (pair 27) to 4.849 (pair 19), with pair 29 at 1.129
+   * and pairs 1-3 at 0.434-0.907.
+   *
+   * Note pair 27's 1.459e-3: it is only 1.5x this tolerance, so 1e-3 is close
+   * to the loosest value that still catches a zeroed Rt on that pair. Loosen
+   * further and real defects start slipping through; tighten back toward the
+   * 4.950e-5 residual and pair 23 goes red on floating-point drift alone.
+   *
+   * Do NOT tighten this without re-measuring the worst residual first; the
+   * headroom is the point.
+   */
+  const DE2000_TOLERANCE = 1e-3;
+
+  it('covers the full published table, and the sweep over it is non-empty', () => {
+    // Not a length literal. Two things are asserted that a change can break:
+    // (1) the table is non-empty, because the `.each` below is a plain
+    //     `forEach` in vitest 2.1.9 - an empty table silently registers zero
+    //     conformance tests and every dE00 number this file reports becomes
+    //     unverified while the run stays green (same failure mode as
+    //     THEMES_WITH_DEPTH_RAMP above);
+    // (2) the pair indices are exactly 1..34 in the paper's order, which a bare
+    //     length check cannot see - a hand-transcribed table's realistic
+    //     editing accidents are a duplicated row, a row pasted over its
+    //     neighbour, or a renumbered index, and all three preserve the length.
+    expect(REFERENCE_VECTORS.length).toBeGreaterThan(0);
+    expect(REFERENCE_VECTORS.map(([i]) => i)).toEqual(
+      Array.from({ length: 34 }, (_, k) => k + 1)
+    );
   });
 
-  it.each(REFERENCE_VECTORS)('pair %i matches the published dE00 to 4 decimal places', (_i, lab1, lab2, expected) => {
-    expect(deltaE2000(lab1, lab2)).toBeCloseTo(expected, 4);
+  it.each(REFERENCE_VECTORS)('pair %i matches the published dE00 within 1e-3', (_i, lab1, lab2, expected) => {
+    const actual = deltaE2000(lab1, lab2);
+    expect(
+      Math.abs(actual - expected),
+      `dE00 ${actual} differs from the published ${expected} by more than ${DE2000_TOLERANCE}`
+    ).toBeLessThan(DE2000_TOLERANCE);
   });
 });
