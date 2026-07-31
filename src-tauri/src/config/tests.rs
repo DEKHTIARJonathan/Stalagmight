@@ -2994,3 +2994,91 @@ fn speleodb_poll_interval_defaults_to_60_and_clamps_up_to_floor() {
     let deserialized: SpeleoDbConfig = toml::from_str("").expect("empty speleodb parses");
     assert_eq!(deserialized.poll_interval_seconds, 60);
 }
+
+// ========================================================================
+// Atomic save tests (#357 item 3: `write_atomically` = sibling temp file +
+// `sync_all` + rename, replacing a bare `fs::write` that truncated the
+// destination before writing a byte).
+// ========================================================================
+
+#[test]
+fn test_save_to_path_atomic_write_round_trips_settings() {
+    // Guard C: the atomic temp-file+rename write path must still round-trip a
+    // normal save exactly like the old `fs::write` did, across several
+    // sections of the config.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.general.locale = "en-US".to_string();
+    config.general.undo_history_limit = 77;
+    config.panels.sections_panel_width = 300;
+    config.placement_suggestion.azimuth_sigma = 2.5;
+    config.display.grid_spacing = 3.25;
+
+    config.save_to_path(&path).unwrap();
+    let loaded = Config::load_from_path(&path).unwrap();
+
+    assert_eq!(loaded.general.locale, "en-US");
+    assert_eq!(loaded.general.undo_history_limit, 77);
+    assert_eq!(loaded.panels.sections_panel_width, 300);
+    assert_eq!(loaded.placement_suggestion.azimuth_sigma, 2.5);
+    assert_eq!(loaded.display.grid_spacing, 3.25);
+}
+
+#[test]
+fn test_save_to_path_leaves_no_temp_file_sibling() {
+    // Guard D: `write_atomically`'s sibling temp file (`config.toml.tmp`) must
+    // not survive a successful save.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.general.undo_history_limit = 55;
+    config.save_to_path(&path).unwrap();
+
+    let temp_path = path.with_extension("toml.tmp");
+    assert!(
+        !temp_path.exists(),
+        "a successful save must not leave config.toml.tmp behind"
+    );
+}
+
+#[test]
+fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
+    // Guard E: simulate a write that cannot complete by pre-occupying the
+    // sibling temp path with a directory, so `File::create` fails with
+    // "Is a directory" before a single byte of the destination is touched -
+    // this is EISDIR on both macOS and Linux, no root required. The
+    // destination must be left exactly as the previous successful save left
+    // it, which is the whole point of writing to a sibling and renaming
+    // rather than truncating `config.toml` directly.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut old = Config::default();
+    old.general.undo_history_limit = 11;
+    old.save_to_path(&path).unwrap();
+
+    let temp_path = path.with_extension("toml.tmp");
+    std::fs::create_dir(&temp_path).unwrap();
+
+    let mut new = Config::default();
+    new.general.undo_history_limit = 99;
+    let result = new.save_to_path(&path);
+    assert!(
+        result.is_err(),
+        "a temp file that cannot be created must fail the save"
+    );
+
+    let survivor = Config::load_from_path(&path).unwrap();
+    assert_eq!(
+        survivor.general.undo_history_limit, 11,
+        "the destination must be untouched by a save that could not complete"
+    );
+
+    std::fs::remove_dir(&temp_path).unwrap();
+}

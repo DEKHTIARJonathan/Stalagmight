@@ -417,9 +417,16 @@ fn test_update_panel_sizes_data_only() {
         let app = app_with_state();
         with_restored_config(&app, || {
             let before = config::get_config(state(&app));
-            config::update_panel_sizes(state(&app), None, None, Some(555)).unwrap();
+            // IN-RANGE on purpose (`data_table_height` is clamped to 100..500).
+            // This test is about the PARTIAL semantics - only the field passed is
+            // touched - so it must not also be straddling the clamp. It used to
+            // pass 555 and assert 555 came back, which quietly encoded the old
+            // "the write path normalizes nothing" behaviour as the spec: the value
+            // reached disk out of range and was repaired on the NEXT load instead.
+            // Clamping on the way in is covered by its own test below.
+            config::update_panel_sizes(state(&app), None, None, Some(400)).unwrap();
             let after = config::get_config(state(&app));
-            assert_eq!(after.panels.data_table_height, 555);
+            assert_eq!(after.panels.data_table_height, 400);
             assert_eq!(
                 after.panels.sections_panel_width,
                 before.panels.sections_panel_width
@@ -437,11 +444,35 @@ fn test_update_panel_sizes_all() {
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
-            config::update_panel_sizes(state(&app), Some(111), Some(222), Some(333)).unwrap();
+            // All three IN RANGE (150..400, 200..500, 100..500) - see the note in
+            // `test_update_panel_sizes_data_only`. The old 111 for a field with a
+            // 150 floor made this assert that an out-of-range value survives.
+            config::update_panel_sizes(state(&app), Some(200), Some(222), Some(333)).unwrap();
             let after = config::get_config(state(&app));
-            assert_eq!(after.panels.sections_panel_width, 111);
+            assert_eq!(after.panels.sections_panel_width, 200);
             assert_eq!(after.panels.detail_panel_width, 222);
             assert_eq!(after.panels.data_table_height, 333);
+        });
+    });
+}
+
+/// The behaviour the two tests above USED to contradict: a partial panel-size
+/// write is repaired on the way in, not left for the next load to fix.
+///
+/// Worth its own test rather than folding it into those: they are about the
+/// partial semantics (only the field you pass moves), and a fixture that
+/// straddles the clamp cannot show both things at once - which is how it went
+/// wrong the first time.
+#[test]
+fn test_update_panel_sizes_clamps_out_of_range_values() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Below the 150 floor, above the 500 ceiling.
+            config::update_panel_sizes(state(&app), Some(1), None, Some(9999)).unwrap();
+            let after = config::get_config(state(&app));
+            assert_eq!(after.panels.sections_panel_width, 150);
+            assert_eq!(after.panels.data_table_height, 500);
         });
     });
 }
@@ -3961,4 +3992,144 @@ fn test_raw_data_commands_fail_without_db() {
     let err =
         raw_data::get_raw_table_impl(state(&app).inner(), "shots".to_string(), 100, 0).unwrap_err();
     assert!(err.contains("save the project"), "got: {err}");
+}
+
+// ========================================================================
+// `AppState::config_write_lock` tests (#357 item 14: `modify_config` now
+// holds one lock across the whole read-modify-write for the partial-update
+// commands, closing the gap between a separate `get_config()` and
+// `update_config()`).
+// ========================================================================
+
+#[test]
+fn test_concurrent_partial_config_updates_do_not_lose_writes() {
+    // Guard F: the lost-update race. `update_panel_sizes_impl` and
+    // `update_data_table_view_impl` write DIFFERENT `[panels]` fields but used
+    // to run get-then-update as two separate critical sections; a write from
+    // one landing in the gap of the other's read-modify-write was silently
+    // reverted by the other's stale snapshot. With the shared
+    // `config_write_lock`, every read-modify-write is fully serialized, so
+    // the LAST write either thread makes to its OWN field is deterministically
+    // never lost - repeated over many trials so a reintroduced race is caught
+    // with overwhelming probability rather than by luck.
+    // Each iteration below is a REAL config.toml save (temp-file + rename), and
+    // this test runs alongside thousands of others in the full suite; under
+    // that load a `rename` can occasionally return a transient OS error
+    // unrelated to the lock this test exists to cover (observed in practice,
+    // sandboxed and unsandboxed alike). Retrying a few times on error keeps
+    // the test honest about what it is proving - the FINAL VALUES after every
+    // write eventually lands, not "zero I/O errors ever occur under load".
+    fn retrying(mut op: impl FnMut() -> Result<(), String>) {
+        for attempt in 0..5 {
+            match op() {
+                Ok(()) => return,
+                Err(e) if attempt < 4 => {
+                    std::thread::sleep(std::time::Duration::from_millis(20));
+                    eprintln!("retrying a transient config save failure: {e}");
+                }
+                Err(e) => {
+                    Err::<(), String>(e).expect("config save kept failing after retries");
+                }
+            }
+        }
+    }
+
+    with_config_lock(|| {
+        // Kept modest (not e.g. 500x20): each iteration is a REAL config.toml
+        // save, and this test already runs alongside thousands of others in
+        // the full suite - a large volume here risks tripping over transient
+        // OS-level file limits under that load rather than the race being
+        // tested. `TRIALS` repeats the whole race rather than growing `ITERS`,
+        // since it is the surface area at the TAIL of each thread's run (the
+        // last write racing the other thread's last write) that catches a
+        // reintroduced lost update, not raw iteration count.
+        const ITERS: u32 = 25;
+        const TRIALS: u32 = 12;
+        for _trial in 0..TRIALS {
+            let shared = std::sync::Arc::new(AppState::new().expect("app state"));
+
+            let a = std::sync::Arc::clone(&shared);
+            let handle_a = std::thread::spawn(move || {
+                for i in 0..ITERS {
+                    let width = 150 + (i % 250);
+                    retrying(|| {
+                        config::update_panel_sizes_impl(a.as_ref(), Some(width), None, None)
+                    });
+                }
+            });
+            let b = std::sync::Arc::clone(&shared);
+            let handle_b = std::thread::spawn(move || {
+                for i in 0..ITERS {
+                    let widths = BTreeMap::from([("length".to_string(), 40 + (i % 1900))]);
+                    retrying(|| {
+                        config::update_data_table_view_impl(
+                            b.as_ref(),
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                            Some(widths.clone()),
+                            None,
+                        )
+                    });
+                }
+            });
+            handle_a.join().expect("thread A panicked");
+            handle_b.join().expect("thread B panicked");
+
+            let last_width_a = 150 + ((ITERS - 1) % 250);
+            let last_width_b = 40 + ((ITERS - 1) % 1900);
+            let cfg = shared.get_config();
+            assert_eq!(
+                cfg.panels.sections_panel_width, last_width_a,
+                "thread A's last write to sections_panel_width was lost to a concurrent partial update"
+            );
+            assert_eq!(
+                cfg.panels.data_table_shot_column_widths.get("length"),
+                Some(&last_width_b),
+                "thread B's last write to data_table_shot_column_widths was lost to a concurrent partial update"
+            );
+        }
+    });
+}
+
+#[test]
+fn test_update_data_table_view_rejects_the_whole_payload_on_invalid_mode() {
+    // Guard G: `modify_config` returning `Err` from the mutate closure must
+    // write NOTHING - not just leave the invalid field unchanged. Set a valid
+    // field (column_order) in the SAME call as an invalid azimuth_mode and
+    // confirm neither one lands.
+    with_config_lock(|| {
+        let app = app_with_state();
+        let before = config::get_config(state(&app))
+            .panels
+            .data_table_shot_column_order;
+        assert!(before.is_empty(), "test assumes the default is empty");
+
+        let err = config::update_data_table_view_impl(
+            state(&app).inner(),
+            Some(vec!["length".to_string()]),
+            None,
+            Some("sideways".to_string()),
+            None,
+            None,
+            None,
+            None,
+            None,
+        );
+        assert!(err.is_err(), "an invalid azimuth mode must be rejected");
+
+        let after = config::get_config(state(&app));
+        assert!(
+            after.panels.data_table_shot_column_order.is_empty(),
+            "a valid field set in the SAME rejected call must not land either: {:?}",
+            after.panels.data_table_shot_column_order
+        );
+        assert_eq!(
+            after.panels.data_table_azimuth_mode, "avg",
+            "the rejected mode itself must be left at its previous value"
+        );
+    });
 }
