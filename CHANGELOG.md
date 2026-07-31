@@ -7,6 +7,12 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Fixed
+
+#### SpeleoDB
+
+- **Adopting a project could report the wrong outcome** - three cases where adoption described itself inaccurately. It flipped the SpeleoDB project type a second time after the upload had already done it, so a transient failure on that redundant request warned that the type could not be changed when it had been. If the upload succeeded but handing the write lock back failed, it reported the conversion as "on this machine only" - about a survey that was already safely on the server - and marked the project as having unsaved work; that case now says plainly that the upload landed and only the lock is outstanding. And taking the lock is now serialised against sign-out, so signing out at the moment an adoption acquires it can no longer leave the project locked on the server with nothing recording it.
+
 ## [0.5.0] - 2026-07-31
 
 The first release with builds for all three platforms. The headline additions are

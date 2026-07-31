@@ -1312,6 +1312,32 @@ describe('useOpenRemoteProject (#218)', () => {
    * project with nothing outstanding - a "you have unsaved work" prompt on the way
    * out of a project whose every byte is on the server.
    */
+  /**
+   * The dirty seed asks ONE question - is the survey on the server - and a landed
+   * upload whose lock release failed answers it yes. Folding that outcome in with
+   * "never uploaded" marked a project dirty whose every byte was already safe, and
+   * told the user it was "on this machine only": the most alarming way to be wrong
+   * about where someone's only copy is.
+   */
+  it('adoptRemote seeds the dirty bit FALSE when the upload landed but the lock did not', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: true,
+          concurrent_session: false,
+          upload: { kind: 'pushed_lock_held' },
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasUnpushedEdits: false }),
+    );
+  });
+
   it('adoptRemote seeds the dirty bit FALSE once the hand-over pushed', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_adopt_ariane')
@@ -1349,6 +1375,13 @@ describe('useOpenRemoteProject (#218)', () => {
    */
   it.each([
     ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
+    [
+      'pushed but the lock did not come back',
+      { kind: 'pushed_lock_held' },
+      true,
+      'warning',
+      'you still hold it',
+    ],
     [
       'pushed but still typed ariane',
       { kind: 'pushed' },

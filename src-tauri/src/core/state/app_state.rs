@@ -184,6 +184,17 @@ pub struct AppState {
     /// (decide under `project`, drop it, then take this). See
     /// `core::state::speleodb_session`.
     pub(super) speleodb_lock_ops: Mutex<()>,
+
+    /// What the last landed push left the server project `type` saying, keyed by the
+    /// project it was recorded for.
+    ///
+    /// A hand-off slot, not state: written by the push's type heal and taken by the one
+    /// caller that reports it (adoption's `type_flipped`), on the same thread, within
+    /// the same call. It exists so adoption does not have to re-establish the answer
+    /// with a second PATCH - which was a redundant request whose transient failure told
+    /// the user the type had not changed when it had. Keyed and TAKEN on read, so a
+    /// stale entry can never be mistaken for this push's verdict.
+    pub(super) speleodb_last_managed_type: Mutex<Option<(String, super::speleodb::ManagedType)>>,
 }
 
 impl AppState {
@@ -242,6 +253,7 @@ impl AppState {
             adjusted_cache_generation: AtomicU64::new(0),
             speleodb_session_generation: AtomicU64::new(0),
             speleodb_lock_ops: Mutex::new(()),
+            speleodb_last_managed_type: Mutex::new(None),
         })
     }
 
