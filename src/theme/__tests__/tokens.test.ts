@@ -345,7 +345,7 @@ describe('depth gradient legibility', () => {
    *
    * It used to be 155, which additionally encoded a product preference for a
    * green shallow end. That preference is gone: the shipped ramp is cyan -> green
-   * -> yellow -> red (the pre-#357 look), whose shallow anchors run 169.8-177.0.
+   * -> yellow -> red (the pre-#357 look), whose shallow anchors run 169.8-174.9.
    * Those descend through green and yellow exactly like a green shallow does -
    * they just start further round the wheel and cover MORE of it, which is why
    * they measure better on discriminability and on deuteranopia than the green
