@@ -3019,6 +3019,31 @@ impl AppState {
         Ok(())
     }
 
+    /// Persist `link` onto the OPEN project's database, creating the row when the
+    /// project has never had one. The insert-side twin of
+    /// [`Self::speleodb_mutate_link`], which can only edit a link that already
+    /// exists.
+    ///
+    /// For adoption, which is the one flow that mints a link for a project it just
+    /// built. It used to stamp through a SECOND `Database::open_existing` over the
+    /// same file, which worked only because nothing then read the link back through
+    /// the live handle - and the hand-over does exactly that (`speleodb_done` reads
+    /// `has_unpushed_edits` to decide whether to push at all). Writing through the
+    /// handle the rest of the flow reads from removes the question, and with it the
+    /// "could not reopen the adopted .stalx" arm that had no recovery behind it.
+    pub(super) fn speleodb_set_open_link(
+        &self,
+        link: &crate::models::SpeleoLink,
+    ) -> Result<(), SpeleoDbError> {
+        let db_guard = self
+            .database
+            .lock()
+            .map_err(|_| SpeleoDbError::Io("database lock poisoned".to_owned()))?;
+        let db = db_guard.as_ref().ok_or(SpeleoDbError::NoRemoteProject)?;
+        db.save_speleo_link(Some(link))
+            .map_err(|e| SpeleoDbError::Io(e.to_string()))
+    }
+
     /// #202 lazy lock re-verify: when EDITING a remote project with a real held
     /// lock, at most once per [`REVERIFY_INTERVAL_SECS`], re-GET the project before
     /// applying an edit and confirm we STILL HOLD the write lock. Called from the

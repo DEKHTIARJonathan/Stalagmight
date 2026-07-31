@@ -518,19 +518,61 @@ pub struct SpeleoOpenResult {
     pub concurrent_session: bool,
 }
 
+/// What adoption managed to do with the converted `.stalx` before returning.
+///
+/// Adoption hands the project straight back to SpeleoDB - take the write lock,
+/// upload the `.stalx` with its Ariane sidecar, hand the lock back - so the
+/// conversion is durable on the server rather than living only in this machine's
+/// cache. Every arm but [`Self::Pushed`] means the copy on disk is the only one
+/// that exists, so it is stamped `has_unpushed_edits` and the webview must say so
+/// instead of reporting a finished hand-over.
+///
+/// A discriminated union rather than a `bool` + reason pair, because the two can
+/// disagree: the frontend clears its dirty seed on exactly one arm, and a shape
+/// that lets "not pushed" travel without a reason is how that arm gets widened by
+/// accident.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum AdoptUpload {
+    /// The `.stalx` is on the server, the lock was handed back, and the local copy
+    /// is clean. The ONLY arm the webview may seed `hasUnpushedEdits: false` on.
+    Pushed,
+    /// Somebody holds the write lock, so the upload was not attempted: yanking a
+    /// mutex out from under another writer - or another window of our own account -
+    /// to finish an adopt is not a trade this flow makes. `email` is the holder when
+    /// the server named one.
+    LockHeld { email: Option<String> },
+    /// The lock was taken but the server had moved on from the revision this
+    /// adoption converted, so the push would have overwritten a stranger commit.
+    /// Nothing was uploaded and the user must reconcile.
+    Diverged,
+    /// The lock or the upload failed outright (no write access, offline, a server
+    /// error). `message` is the already-humanised reason, for a toast.
+    Failed { message: String },
+}
+
 /// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
 /// `.stalx` now lives at `local_path` (the webview reloads it through the normal
-/// `open_project` flow, read-only-remote). `type_flipped` reports whether the
-/// server project `type` was successfully PATCHed ariane→other; when `false` the
-/// adoption still succeeded locally (the user likely lacks write access) and the
-/// webview says so.
+/// `open_project` flow). `type_flipped` reports whether the server project `type`
+/// was successfully PATCHed ariane→other; when `false` the adoption still
+/// succeeded locally (the user likely lacks write access) and the webview says so.
+///
+/// `upload` is the hand-over half: adoption uploads the converted project before
+/// returning, so a successful adopt leaves nothing stranded in the local cache.
+/// The type flip is ordered AFTER that upload deliberately - a project typed
+/// `other` with no `.stalx` behind it is openable by nobody, since the Ariane file
+/// it still holds is the one the new type says to disregard.
 #[derive(Debug, Clone, Serialize, TS)]
 pub struct SpeleoAdoptResult {
     pub local_path: String,
     pub type_flipped: bool,
     /// Same meaning as [`SpeleoOpenResult::concurrent_session`]: a write lock held
-    /// by THIS account at adopt time (a second same-account session).
+    /// by THIS account at adopt time (a second same-account session). Read BEFORE
+    /// the hand-over takes a lock of its own, or the probe would be answering about
+    /// this very call.
     pub concurrent_session: bool,
+    pub upload: AdoptUpload,
 }
 
 /// Outcome of `speleodb_start_editing` (#194): the result of acquiring the write
