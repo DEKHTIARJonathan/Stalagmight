@@ -64,7 +64,7 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
+    AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
     SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
@@ -306,7 +306,9 @@ fn main() {
     export::<KeychainReport>(&out_dir);
     export::<SpeleoLoginResult>(&out_dir);
     export::<SpeleoOpenResult>(&out_dir);
-    // #214 adopt-Ariane result (import + link + type-flip outcome)
+    // #214 adopt-Ariane result (import + link + type-flip outcome), and what the
+    // adoption's own hand-over to the server managed to do
+    export::<AdoptUpload>(&out_dir);
     export::<SpeleoAdoptResult>(&out_dir);
     // #218 revision-history view: one projected commit
     export::<SpeleoRevision>(&out_dir);
@@ -525,6 +527,7 @@ fn main() {
         "KeychainReport",
         "SpeleoLoginResult",
         "SpeleoOpenResult",
+        "AdoptUpload",
         "SpeleoAdoptResult",
         "SpeleoRevision",
         "SpeleoSessionStatus",
