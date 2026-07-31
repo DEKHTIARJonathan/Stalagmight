@@ -40,7 +40,9 @@ pnpm install         # build scripts are pre-approved (pnpm-workspace.yaml)
 ```
 
 Any pnpm 10+ self-switches to the pin before it does anything else, so a fresh
-clone installs correctly even without `corepack enable`. Don't commit a
+clone installs correctly even without `corepack enable`. A global pnpm 9 does not
+self-switch, and installs only because it predates build approvals and runs the
+scripts anyway - `corepack enable` is what puts it on the pin. Don't commit a
 lockfile-only drift.
 
 **Build-script approvals live in `pnpm-workspace.yaml`, as `allowBuilds:` keyed by
@@ -49,8 +51,12 @@ package** (`esbuild: true`), never a list. This shape is load-bearing: the older
 list under `allowBuilds` is rejected by both pnpm 10 and 11, and the list form of
 `onlyBuiltDependencies` works on 10 but not 11 - the keyed map is the only form
 valid on both majors (verified against the 10.34.5 and 11.18.0 release tarballs,
-one isolated store per case). Getting it wrong is loud, not silent: pnpm exits 1
-with `ERR_PNPM_IGNORED_BUILDS` naming the packages, so it cannot merge green.
+one isolated store per case). On the pinned pnpm 11 getting it wrong is loud: it
+exits 1 with `ERR_PNPM_IGNORED_BUILDS` naming the packages, so it cannot merge
+green. Do not generalise that to pnpm 10, which **exits 0 and simply does not run
+the build scripts**. Nothing in CI asserts the approval shape, so on any pnpm
+other than the pin a wrong shape is silent - verify an install actually builds
+esbuild rather than reading the exit code.
 
 `pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; pnpm 11 accepts it under
 `--frozen-lockfile` and does not rewrite it.

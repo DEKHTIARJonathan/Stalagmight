@@ -17,6 +17,13 @@
 # on a stale global pnpm 9 hits an error that points nowhere near the cause.
 # Verified layout-identical on pnpm 11 with and without it (same top-level
 # node_modules, same .bin, same .pnpm dir count).
+#
+# ⚠ Any nested standalone project (telemetry-worker/) must install with
+# `pnpm install --ignore-workspace`. pnpm walks UPWARD to find this file, and a
+# nested project not listed here silently installs the root instead: exit 0, no
+# warning, and the nested node_modules is never created. That is caused by this
+# file EXISTING, not by the `packages` key, so it applies on pnpm 9/10/11 alike
+# and dropping `packages` would not avoid it. See docs/telemetry.md.
 packages:
   - .
 
