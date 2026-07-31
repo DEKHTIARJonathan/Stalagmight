@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
-import { useSpeleoStore, PUSH_FAILURE_DIALOGS } from '../speleoStore';
+import { useSpeleoStore, PUSH_FAILURE_DIALOGS, isUnwoundNotEdited } from '../speleoStore';
 import type { SpeleoLinkStatus } from '../../types/ipc.generated';
 
 const invokeIpcMock = vi.hoisted(() => vi.fn());
@@ -685,6 +685,47 @@ describe('speleoStore', () => {
 
     it('is a no-op with no link', () => {
       useSpeleoStore.getState().markDirty();
+      expect(useSpeleoStore.getState().link).toBeNull();
+    });
+
+    // [#303] The bug this pair exists to prevent: `markDirty` short-circuits on an
+    // already-dirty link, and an unwound copy is ALWAYS already dirty, so mirroring a
+    // forward edit through it left `unwound` standing until the next poll - and
+    // `isUnwoundNotEdited` kept routing the user to a discard of work they just made.
+    it('markDirty leaves unwound standing on an already-dirty link', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      useSpeleoStore.getState().markDirty();
+      expect(useSpeleoStore.getState().link?.unwound).toBe(true);
+      expect(isUnwoundNotEdited(useSpeleoStore.getState().link)).toBe(true);
+    });
+
+    it('markForwardEdit clears unwound even when already dirty', () => {
+      useSpeleoStore
+        .getState()
+        .seedFromStatus(status({ edit_enabled: true, has_unpushed_edits: true, unwound: true }));
+      useSpeleoStore.getState().markForwardEdit();
+      const link = useSpeleoStore.getState().link;
+      expect(link?.hasUnpushedEdits).toBe(true);
+      expect(link?.unwound).toBe(false);
+      expect(isUnwoundNotEdited(link)).toBe(false);
+    });
+
+    it('markForwardEdit dirties a clean link and no-ops when nothing changes', () => {
+      useSpeleoStore.getState().seedFromStatus(status({ edit_enabled: true }));
+      useSpeleoStore.getState().markForwardEdit();
+      const after = useSpeleoStore.getState().link;
+      expect(after?.hasUnpushedEdits).toBe(true);
+      expect(after?.unwound).toBe(false);
+      // Identity is preserved on a true no-op: refreshLinkStatus uses it to detect a
+      // concurrent mutation, so a gratuitous new object would discard live replies.
+      useSpeleoStore.getState().markForwardEdit();
+      expect(useSpeleoStore.getState().link).toBe(after);
+    });
+
+    it('markForwardEdit is a no-op with no link', () => {
+      useSpeleoStore.getState().markForwardEdit();
       expect(useSpeleoStore.getState().link).toBeNull();
     });
   });

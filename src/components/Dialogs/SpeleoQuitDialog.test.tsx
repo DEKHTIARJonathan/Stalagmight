@@ -380,3 +380,55 @@ describe('SpeleoQuitDialog - Cancel puts back the dialog it displaced', () => {
     expect(useUIStore.getState().activeDialog).toBeNull();
   });
 });
+
+/**
+ * [#303] The unwound branch, kept in lock-step with SpeleoCloseDialog.
+ *
+ * A copy that is dirty ONLY because a chain step walked it back holds nothing of the
+ * user's. Calling that "changes that have not been uploaded" and pre-focusing "Push,
+ * release & quit" pointed a stray Enter at the one destructive answer: pushing records
+ * the older survey over the newer one for everyone, and `done` then short-circuits into
+ * its own confirmation, which replaces this dialog in the single `activeDialog` slot -
+ * so the quit is silently abandoned as well.
+ */
+describe('SpeleoQuitDialog - unwound copy', () => {
+  const unwind = () =>
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: true } });
+
+  it('hands the pre-focused default to "keep the lock" and marks pushing destructive', () => {
+    unwind();
+    render(<SpeleoQuitDialog />);
+
+    const keep = screen.getByTestId('speleodb-quit-keep-lock');
+    const push = screen.getByTestId('speleodb-quit-push-release');
+    expect(keep).toHaveAttribute('data-primary-action');
+    expect(push).not.toHaveAttribute('data-primary-action');
+    // Still reachable - deliberately publishing an older version is a real choice.
+    expect(push).toBeInTheDocument();
+  });
+
+  it('does not call an unwound copy unpushed work', () => {
+    unwind();
+    render(<SpeleoQuitDialog />);
+
+    const body = screen.getByTestId('speleodb-quit-dialog').textContent ?? '';
+    expect(body).toContain('older version of the survey');
+    expect(body).not.toContain('changes that have not been uploaded');
+    // The "your changes are saved locally" reassurance describes work that does not
+    // exist here, so it is withheld rather than reworded.
+    expect(screen.queryByTestId('speleodb-quit-saved-locally-note')).not.toBeInTheDocument();
+  });
+
+  it('keeps the ordinary wording and default when the copy really is edited', () => {
+    useSpeleoStore.setState({ link: { ...LINK, hasUnpushedEdits: true, unwound: false } });
+    render(<SpeleoQuitDialog />);
+
+    expect(screen.getByTestId('speleodb-quit-push-release')).toHaveAttribute('data-primary-action');
+    expect(screen.getByTestId('speleodb-quit-keep-lock')).not.toHaveAttribute(
+      'data-primary-action',
+    );
+    expect(screen.getByTestId('speleodb-quit-dialog').textContent ?? '').toContain(
+      'have not been uploaded',
+    );
+  });
+});

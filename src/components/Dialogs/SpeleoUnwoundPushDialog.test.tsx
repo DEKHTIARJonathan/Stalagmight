@@ -104,8 +104,15 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     // project back. Folding them together forces the second user to discard, then go
     // hunting for Release.
     const { default: SpeleoDiscardChangesDialog } = await import('./SpeleoDiscardChangesDialog');
+    // Both outcomes are only on offer to a session that HOLDS the lock, so the fixture
+    // has to say so - `holdsWriteLock` is editState === 'editing' && !forceEditing.
     useSpeleoStore.setState({
-      link: { unwound: false, hasUnpushedEdits: true } as never,
+      link: {
+        unwound: false,
+        hasUnpushedEdits: true,
+        editState: 'editing',
+        forceEditing: false,
+      } as never,
       refreshLinkStatus: vi.fn(async () => {}),
     });
     useUIStore.setState({ activeDialog: 'speleodb-discard-changes', dialogData: {} });
@@ -120,6 +127,35 @@ describe('SpeleoUnwoundPushDialog (#303)', () => {
     await userEvent.click(screen.getByTestId('speleodb-discard-changes-release'));
     await waitFor(() =>
       expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: false }),
+    );
+  });
+
+  it('does not offer to release a lock a force-editor never held', async () => {
+    // [#303] A #213 force-editor is dirty by design and holds no lock, so Discard is
+    // exactly the escape hatch they want - but "and release the lock" would reach
+    // `speleodb_release_current_lock`, the ADMIN-capable stuck-lock recovery verb, and
+    // either fail or force-release the colleague's lock as a side effect. Discarding
+    // itself must stay available; only the lock half goes.
+    const { default: SpeleoDiscardChangesDialog } = await import('./SpeleoDiscardChangesDialog');
+    useSpeleoStore.setState({
+      link: {
+        unwound: false,
+        hasUnpushedEdits: true,
+        editState: 'editing',
+        forceEditing: true,
+      } as never,
+      refreshLinkStatus: vi.fn(async () => {}),
+    });
+    useUIStore.setState({ activeDialog: 'speleodb-discard-changes', dialogData: {} });
+    render(<SpeleoDiscardChangesDialog />);
+
+    expect(screen.queryByTestId('speleodb-discard-changes-release')).not.toBeInTheDocument();
+    const keep = screen.getByTestId('speleodb-discard-changes-keep');
+    expect(keep).toBeInTheDocument();
+
+    await userEvent.click(keep);
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_discard_changes', { keepLock: true }),
     );
   });
 

@@ -2703,14 +2703,18 @@
       "title": "Quit with changes not on SpeleoDB",
       "message": "You still hold the SpeleoDB write lock, and you have changes that have not been uploaded to SpeleoDB yet.",
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
+      "unwoundMessage": "This copy is at an older version of the survey - you stepped back through its history and have not changed anything. Uploading it would record that older survey over the newer one for everyone.",
       "quitAnyway": "Quit anyway",
       "saveLocally": "Save changes locally before quitting",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
       "keepLockHint": "Keeping the write lock is safe: your changes stay on this computer and nobody else can edit from the older version on the server. Pick it if you want to carry on later.",
+      "keepLockHintUnwound": "Keeping the write lock is safe: nothing is uploaded, the newer survey on SpeleoDB is left alone, and this older copy is still here next time you open the project.",
       "pushRelease": "Push, release & quit",
+      "pushOlderVersion": "Push this older version\u2026",
       "keepLock": "Keep the write lock & quit",
       "discardRelease": "Discard & release the write lock",
       "discardWarning": "Releasing the write lock without uploading leaves your changes on this computer only, and lets anyone else start editing from the older version on SpeleoDB. Quit anyway?",
+      "discardWarningUnwound": "Releasing the write lock lets anyone else start editing straight away. Nothing of yours is lost - this copy is an older version you stepped back to, not work you made. Quit anyway?",
       "discardConfirm": "Yes, release & quit"
     },
     "divergence": {

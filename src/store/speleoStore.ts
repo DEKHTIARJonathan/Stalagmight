@@ -665,6 +665,25 @@ interface SpeleoStore {
   applyPush: (r: PushResult) => void;
   /** First successful mutation while editing flips the dirty indicator on. */
   markDirty: () => void;
+  /**
+   * [#303] A FORWARD edit, as opposed to an undo/redo: dirty, AND no longer merely
+   * "where the Unwind walk left it". Mirrors the backend pairing - `mark_remote_dirty()`
+   * followed by `speleodb_forget_unwind_position()` at commands.rs:757-761 (and the
+   * batch/repair sites).
+   *
+   * Deliberately NOT `markDirty`, which short-circuits when the link is already dirty.
+   * An unwound copy is always already dirty (`revision_swap_base` stamps the bit on any
+   * restore off tip), so mirroring a forward edit through `markDirty` was a total no-op:
+   * `unwound` survived until the next `speleodb_link_status` poll, up to
+   * `MIN_POLL_INTERVAL_SECONDS` away. Inside that window {@link isUnwoundNotEdited} still
+   * held, so SpeleoStatusButton, the lock menu, the `done()` guard and both exit prompts
+   * offered "Discard and take the latest" over work the user had just drawn.
+   *
+   * Undo/redo keeps `markDirty`: the backend deliberately does NOT drop the chain pointer
+   * on an undo, and a structural tripwire in speleodb_revisions.rs asserts that undo.rs
+   * never calls `speleodb_forget_unwind_position`.
+   */
+  markForwardEdit: () => void;
 
   // --- seams ---
   clearDivergence: () => void;
@@ -1680,6 +1699,18 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     set((state) =>
       state.link && !state.link.hasUnpushedEdits
         ? { link: { ...state.link, hasUnpushedEdits: true } }
+        : {},
+    ),
+
+  // [#303] Both halves of the backend's post-edit bookkeeping, not just the dirty bit.
+  // The `unwound` term in the guard is what makes this fire on an already-dirty link -
+  // exactly the case `markDirty` skips, and exactly the case an unwound copy is always
+  // in. Still returns `{}` when nothing would change, so the identity check that
+  // `refreshLinkStatus` uses to spot a concurrent mutation keeps working.
+  markForwardEdit: () =>
+    set((state) =>
+      state.link && (!state.link.hasUnpushedEdits || state.link.unwound)
+        ? { link: { ...state.link, hasUnpushedEdits: true, unwound: false } }
         : {},
     ),
 

@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
@@ -51,6 +51,13 @@ export default function SpeleoQuitDialog() {
   // collapses to the one honest choice: save locally, then leave, with the work
   // still only on this computer.
   const holdsLock = holdsWriteLock(link);
+  // [#303] Dirty ONLY because a chain step walked the copy back - the user edited nothing.
+  // Kept in lock-step with SpeleoCloseDialog, which is the whole reason these two are
+  // siblings: the wording must not call that "changes that have not been uploaded", and
+  // pushing it must not be the pre-focused default, because it records the older survey
+  // over the newer one for everyone. `done` raises its own confirmation, so the button
+  // stays available - it just stops being what a stray Enter reaches.
+  const unwound = isUnwoundNotEdited(link);
 
   // Which dialog this prompt displaced in the single `activeDialog` slot, if any.
   // Cancelling means the app keeps running, so whatever was on screen has to come
@@ -165,7 +172,11 @@ export default function SpeleoQuitDialog() {
     >
       <div className="space-y-4">
         <p className="text-sm text-text-secondary">
-          {holdsLock ? t('speleodb.quit.message') : t('speleodb.quit.messageNoLock')}
+          {!holdsLock
+            ? t('speleodb.quit.messageNoLock')
+            : unwound
+              ? t('speleodb.quit.unwoundMessage')
+              : t('speleodb.quit.message')}
         </p>
 
         {isDirtyLocal ? (
@@ -179,14 +190,18 @@ export default function SpeleoQuitDialog() {
             />
             {t('speleodb.quit.saveLocally')}
           </label>
-        ) : (
+        ) : unwound ? null : (
+          // Nothing of the user's is pending on an unwound copy, so "your changes are
+          // saved locally" would be describing work that does not exist.
           <p className="text-xs text-text-secondary" data-testid="speleodb-quit-saved-locally-note">
             {t('speleodb.quit.savedLocallyNote')}
           </p>
         )}
 
         {holdsLock && (
-          <p className="text-xs text-text-secondary">{t('speleodb.quit.keepLockHint')}</p>
+          <p className="text-xs text-text-secondary">
+            {unwound ? t('speleodb.quit.keepLockHintUnwound') : t('speleodb.quit.keepLockHint')}
+          </p>
         )}
 
         {discardArmed && (
@@ -195,7 +210,9 @@ export default function SpeleoQuitDialog() {
             role="alert"
             data-testid="speleodb-quit-discard-warning"
           >
-            {t('speleodb.quit.discardWarning')}
+            {unwound
+              ? t('speleodb.quit.discardWarningUnwound')
+              : t('speleodb.quit.discardWarning')}
           </div>
         )}
 
@@ -226,25 +243,33 @@ export default function SpeleoQuitDialog() {
                   ? t('speleodb.quit.discardConfirm')
                   : t('speleodb.quit.discardRelease')}
               </Button>
+              {/* [#303] On an unwound copy the roles swap: keeping the lock and walking
+                  away changes nothing on the server, so THAT becomes the default a stray
+                  Enter reaches. Same swap as SpeleoCloseDialog. */}
               <Button
-                variant="secondary"
+                variant={unwound ? 'primary' : 'secondary'}
                 onClick={() => void keepLockAndQuit()}
                 disabled={busyAny}
+                data-primary-action={unwound ? '' : undefined}
                 data-testid="speleodb-quit-keep-lock"
               >
                 {t('speleodb.quit.keepLock')}
               </Button>
               {/* Primary + [data-primary-action]: DialogWrapper's initial-focus
                   heuristic lands here, so a stray Enter pushes - it can never
-                  discard or release. */}
+                  discard or release. Except on an unwound copy, where pushing IS the
+                  destructive answer (it records the older survey over the newer one),
+                  so it hands the default to "keep the lock" above and turns danger. */}
               <Button
-                variant="primary"
+                variant={unwound ? 'danger' : 'primary'}
                 onClick={() => void pushReleaseThenQuit()}
                 disabled={busyAny}
-                data-primary-action=""
+                data-primary-action={unwound ? undefined : ''}
                 data-testid="speleodb-quit-push-release"
               >
-                {t('speleodb.quit.pushRelease')}
+                {unwound
+                  ? t('speleodb.quit.pushOlderVersion')
+                  : t('speleodb.quit.pushRelease')}
               </Button>
             </>
           ) : (

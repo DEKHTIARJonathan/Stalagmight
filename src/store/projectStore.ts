@@ -586,7 +586,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // #204: mirror the backend's mark_remote_dirty so the SpeleoDB action shell
         // knows there are un-pushed edits (drives the button's push&release-with-
         // comment flow). No-op for a local project (no link).
-        useSpeleoStore.getState().markDirty();
+        //
+        // [#303] Both halves, not just the dirty bit: `execute` pairs mark_remote_dirty
+        // with speleodb_forget_unwind_position (commands.rs:757-761), so a forward edit
+        // also stops the copy being "merely unwound". Mirroring through `markDirty`
+        // alone was a no-op here - an unwound copy is already dirty - which left the
+        // discard prompts offering to throw away the edit that just landed.
+        useSpeleoStore.getState().markForwardEdit();
         // A command can RESOLVE (or surface) an integrity issue - e.g. removing a
         // drifted loop closure clears its banner entry - so re-check, mirroring
         // executeUndoRedo. refreshProjectState doesn't re-check, and the next save
@@ -1324,7 +1330,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       // mirror the SpeleoDB dirty bit so the status button offers push (no-op for a
       // local project). The import command usually already marks it via
       // executeCommand; this keeps the two dirty flags in lockstep on every path.
-      useSpeleoStore.getState().markDirty();
+      // [#303] Forward work, so it drops the chain pointer too - the import reached the
+      // backend through `execute`, which already forgot it there.
+      useSpeleoStore.getState().markForwardEdit();
       return true;
     }
     // New project: the initial save is deferred, so the import is invisible until
@@ -1583,7 +1591,10 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
         // executeCommand/executeUndoRedo do) so the status button offers push &
         // prompts for a commit message rather than reading "editing clean". No-op
         // for a local project (no link).
-        useSpeleoStore.getState().markDirty();
+        // [#303] `repair_integrity` pairs it with speleodb_forget_unwind_position under
+        // the same `changed` guard this branch is under (commands.rs:467-473), so mirror
+        // both halves.
+        useSpeleoStore.getState().markForwardEdit();
       }
       return result;
     } catch (e) {

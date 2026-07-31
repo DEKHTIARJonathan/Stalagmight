@@ -4,6 +4,7 @@ import { useUIStore } from '../../store/uiStore';
 import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { invokeIpc, getErrorMessage } from '../../utils/ipc';
+import { holdsWriteLock } from '../../utils/quit';
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 
@@ -30,6 +31,9 @@ export default function SpeleoDiscardChangesDialog() {
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
 
   const unwound = isUnwoundNotEdited(link);
+  // [#303] Whether the lock question below is even ours to answer. `holdsWriteLock` is
+  // false for a #213 force-editor, who reaches this dialog dirty by design.
+  const holdsLock = holdsWriteLock(link);
   const [busy, setBusy] = useState(false);
 
   const run = async (keepLock: boolean) => {
@@ -71,7 +75,10 @@ export default function SpeleoDiscardChangesDialog() {
             ? t('speleodb.discardChanges.bodyUnwound')
             : t('speleodb.discardChanges.bodyEdited')}
         </p>
-        <p className="text-xs text-text-secondary">{t('speleodb.discardChanges.lockQuestion')}</p>
+        {/* Only ask the lock question when there are two answers to pick between. */}
+        {holdsLock && (
+          <p className="text-xs text-text-secondary">{t('speleodb.discardChanges.lockQuestion')}</p>
+        )}
 
         <div className="flex justify-end gap-2 pt-2 border-t border-border">
           <Button
@@ -81,14 +88,22 @@ export default function SpeleoDiscardChangesDialog() {
           >
             {t('common.actions.cancel')}
           </Button>
-          <Button
-            variant="secondary"
-            onClick={() => void run(false)}
-            disabled={busy}
-            data-testid="speleodb-discard-changes-release"
-          >
-            {t('speleodb.discardChanges.discardAndRelease')}
-          </Button>
+          {/* [#303] Only offer to hand back a lock this session actually holds. A #213
+              force-editor is dirty by design and holds none, so "release" would reach
+              `speleodb_release_current_lock` - the ADMIN-capable stuck-lock recovery verb -
+              and either fail outright or force-release the colleague's lock as a side
+              effect of the user discarding their own work. Discarding itself stays
+              available without the lock: that is the whole point of the escape hatch. */}
+          {holdsLock && (
+            <Button
+              variant="secondary"
+              onClick={() => void run(false)}
+              disabled={busy}
+              data-testid="speleodb-discard-changes-release"
+            >
+              {t('speleodb.discardChanges.discardAndRelease')}
+            </Button>
+          )}
           {/* Primary because it is the reversible one: still holding the lock, the user can
               release at any time, whereas a released lock is a colleague's to take. */}
           <Button
