@@ -2097,6 +2097,12 @@ impl AppState {
         self.close_project();
         self.do_load_project_full(dest)
             .map_err(|e| SpeleoDbError::Io(format!("reload after fast-forward failed: {e}")))?;
+        // [#303] The working copy is now the server tip, so any Unwind chain position
+        // from before describes a copy that no longer exists - the next Unwind restarts
+        // from the new BASE. The replaced file carries no chain row either (it is
+        // stripped from every push snapshot), so this is belt-and-braces for the case
+        // where the replace left the old one behind.
+        self.speleodb_set_unwound_from(None);
         Ok(local_path)
     }
 }

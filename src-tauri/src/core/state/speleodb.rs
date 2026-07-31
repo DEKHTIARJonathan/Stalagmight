@@ -751,6 +751,11 @@ impl AppState {
                     access_denied: false,
                     server_error: None,
                     exclude_geojson: false,
+                    // [#303] A local project has no undo POLICY (the fixed window is
+                    // unconditional there), so report the global default and leave the
+                    // control - which only renders for a remote project - unbothered.
+                    undo_mode: self.undo_mode_status().0,
+                    undo_mode_overridden: false,
                     force_editing: self.force_editing(),
                     allow_force_edit: self.speleodb_allow_force_edit(),
                     project_id: None,
@@ -887,6 +892,11 @@ impl AppState {
             access_denied,
             server_error,
             exclude_geojson,
+            // [#303] Resolved from `link.undo_mode` (already in hand) and the global
+            // default, so the settings control can distinguish "Full" from "Full,
+            // following the global default" without a second round trip.
+            undo_mode: self.undo_policy_for(Some(&link)).mode,
+            undo_mode_overridden: link.undo_mode.is_some(),
             // #213: report force-edit so the FE renders the big-red banner + offers
             // Reconnect. An online force-editor whose tip moved already surfaces via
             // `remote_state` (RemoteAhead/Conflict); offline it stays Unknown (skipped).
@@ -2578,11 +2588,23 @@ impl AppState {
                 // keep the lock + editability and report PushUnconfirmed so a retry of
                 // Done re-pushes the late edit - releasing now would strand it
                 // read-only until a fresh Start editing. Only release once clean.
-                let still_dirty = self
-                    .speleodb_open_link()
-                    .map_err(local_dto)?
-                    .has_unpushed_edits;
-                if still_dirty {
+                let link_after = self.speleodb_open_link().map_err(local_dto)?;
+                if link_after.has_unpushed_edits {
+                    // Say WHY. Both routes to `PushUnconfirmed` render the same banner
+                    // ("the upload could not be confirmed"), and this one used to log
+                    // nothing at all - so a report of it was indistinguishable from an
+                    // ambiguous upload (which does warn) and could not be placed without
+                    // re-deriving the whole push from first principles.
+                    //
+                    // This arm is not a failure: the upload LANDED and an edit recorded
+                    // after push-start is deliberately being kept for the next push. The
+                    // timestamps are what make that checkable.
+                    tracing::info!(
+                        last_edit_at = ?link_after.last_edit_at,
+                        purpose = "explain a PushUnconfirmed that is not an upload failure",
+                        "speleodb done: the push landed, but an edit recorded after it \
+                         started is still un-pushed; keeping the lock so a retry uploads it"
+                    );
                     return Ok(DoneResult::PushUnconfirmed);
                 }
                 // Edits are safely on the server; release the lock and go
@@ -3170,6 +3192,10 @@ impl AppState {
     ///
     /// `reason` goes to the log so the disappearance of a visible history is explicable.
     fn speleodb_clear_inherited_undo(&self, reason: &str) {
+        // A fresh edit session starts at BASE, so any chain position from an earlier one
+        // is stale: the next Unwind restarts from BASE rather than resuming a walk that
+        // described a different working copy.
+        self.speleodb_set_unwound_from(None);
         if let Ok(mut stack) = self.undo_stack.lock() {
             if stack.is_empty() && !stack.can_redo() {
                 return;
@@ -3214,6 +3240,10 @@ impl AppState {
             return;
         };
         let cutoff = cutoff.with_timezone(&chrono::Utc);
+        // The chain pointer described a walk backwards from the PREVIOUS tip. This push
+        // made a new commit, so the next Unwind must restart from the new BASE - whose
+        // file carries the history this push just uploaded.
+        self.speleodb_set_unwound_from(None);
         if let Ok(mut stack) = self.undo_stack.lock() {
             let dropped = stack.drop_entries_up_to(cutoff);
             if dropped > 0 {

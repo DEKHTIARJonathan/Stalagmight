@@ -70,6 +70,61 @@ impl Database {
         Ok(())
     }
 
+    /// [#303] Record which SpeleoDB revision the working copy has been UNWOUND to, so
+    /// the next Unwind walks to that revision's first parent instead of back to BASE.
+    /// `None` clears it ("not mid-unwind").
+    ///
+    /// A separate single-row table rather than a `speleo_link` column because it is
+    /// per-MACHINE progress through history, not a property of the project: it is listed
+    /// in `PUSH_SNAPSHOT_LOCAL_TABLES`, so it never rides to the server. A restore stamps
+    /// BASE at the server tip (so a later push lands forward, which is what we want), and
+    /// that is precisely why BASE cannot double as this pointer.
+    pub fn save_speleo_undo_chain(&self, unwound_from_sha: Option<&str>) -> Result<()> {
+        self.conn.execute(
+            "CREATE TABLE IF NOT EXISTS speleo_undo_chain (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                unwound_from_sha TEXT NOT NULL
+            )",
+            [],
+        )?;
+        match unwound_from_sha {
+            Some(sha) => {
+                self.conn.execute(
+                    "INSERT INTO speleo_undo_chain (id, unwound_from_sha) VALUES (1, ?1)
+                     ON CONFLICT(id) DO UPDATE SET unwound_from_sha = excluded.unwound_from_sha",
+                    params![sha],
+                )?;
+            }
+            None => {
+                self.conn.execute("DELETE FROM speleo_undo_chain", [])?;
+            }
+        }
+        Ok(())
+    }
+
+    /// [#303] The revision the working copy was last unwound to, if any. `None` means
+    /// "not mid-unwind", so the next Unwind targets BASE - the commit the working copy
+    /// already equals, whose history is what a push just cleared locally.
+    pub fn load_speleo_undo_chain(&self) -> Result<Option<String>> {
+        let exists: i64 = self.conn.query_row(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='speleo_undo_chain'",
+            [],
+            |row| row.get(0),
+        )?;
+        if exists == 0 {
+            return Ok(None);
+        }
+        match self.conn.query_row(
+            "SELECT unwound_from_sha FROM speleo_undo_chain WHERE id = 1",
+            [],
+            |row| row.get::<_, String>(0),
+        ) {
+            Ok(sha) => Ok(Some(sha)),
+            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     /// Flip the SpeleoDB dirty bit and refresh `last_edit_at` in a SINGLE targeted
     /// `UPDATE`, without loading + re-serialising the whole link. Returns `true` when
     /// a remote-link row was updated (`false` = local-only project: no row → no-op).

@@ -77,12 +77,109 @@ The `shot_display_position(shot_id, section_id)` helper in `models/shot.rs` conv
 Undo and redo stacks are serialized to the SQLite database synchronously on project save and restored on project open.
 
 - Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`
-- Only the last N entries are persisted (configurable limit)
+- Only the last N entries are persisted (configurable limit), except in the hybrid mode below
 - Persistence is synchronous to avoid race conditions with concurrent readers
 - Serialization failures are logged but don't block the save
 - Deserialization failures skip invalid entries and load whatever is valid
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
+
+### Incremental writes (#303)
+
+A save writes only what CHANGED. Each entry has a stable id (`head_dropped + position`,
+stored in the existing `sequence` column, so the on-disk shape is unchanged); a save
+upserts the ids at or after the first one whose content differs and deletes whatever falls
+outside the surviving range. Ids survive both mutations a stack sees - a tail append moves
+nothing, and a front eviction bumps `head_dropped` by exactly the number removed.
+
+This is what makes a deep stack affordable. The old shape was `DELETE FROM undo_stack` +
+re-INSERT + re-gzip of every entry on every save, including the 30s autosave: fine for a
+20-entry window, seconds of compression for a byte-budgeted one, since a delete-heavy
+session's whole-project snapshots are megabytes each.
+
+A save to a different file (Save As, the first save of a deferred project, a re-open) or a
+load forces one full rewrite - the ids in memory cannot be assumed to line up with rows
+this bookkeeping has never seen, and a load also filters and trims.
+
+## Hybrid mode for SpeleoDB projects (#303)
+
+A SpeleoDB-linked project is a binary `.stalx` committed to a git repo, so what its undo
+stack holds at push time is what every commit stores forever. Two policies, resolved by
+`AppState::undo_policy` from `speleo_link.undo_mode` (per project, rides to the server) then
+`SpeleoDbConfig.undo_mode` (the application default):
+
+| | `Full` (default) | `Disabled` | Local project |
+|---|---|---|---|
+| In-memory depth | byte budget | `undo_history_limit` | `undo_history_limit` |
+| Persisted depth | byte budget | `undo_persist_limit` | `undo_persist_limit` |
+| Rides in the push | yes (undo only) | no | n/a |
+
+**The byte budget** (`UNDO_BYTE_BUDGET_BYTES`, 32 MiB of serialized JSON ~= 2.5 MB per
+commit) replaces the entry-count window rather than joining it. Count is the wrong unit
+here: `Delete shot`, `Delete section`, `Reverse section` and every `Batch` store a
+`ProjectSnapshotPair` - two whole-project JSON snapshots, about 4.2 MB on a 5,000-shot
+project - so a fixed 100 entries is anywhere from kilobytes to half a gigabyte. The budget
+buys roughly 32,000 ordinary entries, or ~8 whole-project snapshot pairs on a 5,000-shot
+project, or ~2 on a 20,000-shot one. The newest entry is always kept even if it alone
+exceeds the budget. Trims log once with a count.
+
+Because every save rewrites the persisted stack, the budget also bounds the worst-case save
+(~0.3 s of gzip at the measured throughput, which a 30 s autosave absorbs). Raising it
+deepens snapshot-heavy history and slows every save in proportion. For scale: the old fixed
+window persisted 20 entries with NO size cap, which on a 20,000-shot project is ~336 MB of
+JSON per save - so this is much cheaper in the worst case and vastly deeper in the common
+one, at the price of shallower history for repeated whole-survey operations on very large
+projects.
+
+**Redo is never uploaded**, in any mode. A redo branch replays FORWARD onto a state the
+server has now committed past, so it is the stale-replay hazard with none of the undo
+side's value.
+
+### When the stack is cleared
+
+| Event | Effect | Why |
+|---|---|---|
+| Confirmed push | entries with `timestamp <= push_start` dropped; redo cleared | they are in the commit now, so keeping them would duplicate them in the next one. Bounded by push-start because an edit recorded after the snapshot keeps its dirty bit, so its history has to survive with it |
+| Any server `.stalx` becoming the local cache file | undo/redo tables emptied in the downloaded FILE | `InheritedUndo::Drop` at the `replace_cache_stalx*` chokepoint - pull, fast-forward and revision swap all funnel there |
+| Lock acquired over a copy that equals git (`UpToDate` + clean) | in-memory stacks cleared | the history describes already-committed operations. The clean check is what lets lock, edit, unlock-without-pushing, re-lock keep the user's own history |
+| Force-edit | in-memory stacks cleared | no lock and no reconcile, so the equals-git fence cannot be evaluated; that session already carries the unmergeable warning |
+
+Clearing on adopt happens in the FILE, not in memory: the load path reads those tables into
+the live stack, so a memory-only clear would leave the history on disk for the next open.
+
+The reason it is cleared at all is #194 b3 - an adopting collaborator pressing Ctrl-Z would
+replay the pusher's command, with its prior-state payload, against a tree they have not
+looked at. Shipping the history relaxes the strip that used to prevent that, so the guard
+moves to these rules plus the one explicit route below.
+
+### Unwind: undoing past a commit
+
+`sync::unwind_target` walks BASE first, then first-parents:
+
+1. After a push the working copy IS the new commit and its history was just cleared
+   locally, so the FIRST Unwind loads that same commit. Content does not move; the undo
+   list refills with the operations the user just pushed.
+2. Undo through those and the copy sits at the parent's state, so the next Unwind loads the
+   parent, and so on back to the root.
+
+Merges take `parent_ids[0]`. The chain ends at the root and at SpeleoDB's own creation
+commit, where the affordance is hidden rather than offered as a step that cannot be taken.
+
+The position lives in `speleo_undo_chain` - a single-row, local-only table, stripped from
+every push snapshot. BASE cannot double as it: a restore stamps BASE at the server TIP so
+a later push lands forward, which is what we want and also what stops BASE describing where
+the walk is. It is on disk so an Unwind interrupted by a restart resumes, and is cleared by
+a confirmed push, a lock acquisition, a fast-forward, and a plain View / Restore.
+
+Mechanically it is `speleodb_restore_revision` with `keep_undo_history: true`, so it reuses
+the whole swap path. What the flavour adds is `speleodb_guard_unwind`, enforced in the
+backend: the in-memory undo stack must be EMPTY (that is what makes "the copy equals a
+commit" true), and any dirt must be a previous Unwind's own doing, proven by the chain
+pointer - which is what makes the `discard_local` waiver safe from the second step onwards.
+Real un-pushed work with no pointer is refused.
+
+The frontend offers it as one entry pinned below the undo history list, and clicking it
+opens a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still do nothing.
 
 ## Lock Ordering
 
@@ -149,8 +246,14 @@ For batch commands, `derive_command_details()` extracts a compact detail string 
 
 | File | Contents |
 |------|----------|
-| `src-tauri/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types |
+| `src-tauri/src/core/undo.rs` | `UndoStack`, `UndoEntry`, `UndoData` types, `DepthLimit` + the byte budget, the persist plan |
 | `src-tauri/src/core/state/undo.rs` | `undo()`, `redo()`, `undo_to()`, `redo_to()` implementation |
+| `src-tauri/src/core/state/undo_policy.rs` | `undo_policy()` (the Full/Disabled resolver), `speleodb_set_undo_mode` |
+| `src-tauri/src/models/undo_mode.rs` | `UndoMode`, `UndoPolicy` |
+| `src-tauri/src/speleodb/sync.rs` | `unwind_target` - the BASE-then-first-parents chain |
+| `src-tauri/src/core/state/speleodb_cache.rs` | `InheritedUndo` and the drop-on-adopt chokepoint |
+| `src/components/Dialogs/SpeleoUnwindDialog.tsx` | The Unwind confirmation |
+| `src/components/Dialogs/settings/SpeleoUndoModeControl.tsx` | The per-project Full/Disabled control |
 | `src-tauri/src/core/state/commands.rs` | `execute()`, `generate_undo_data()`, `finalize_undo_data()` |
 | `src-tauri/src/core/command.rs` | `Command` enum and `description()` method |
 | `src-tauri/src/commands/history.rs` | Tauri commands for stacks, `derive_preview_data()`, `entry_to_history_item()` |

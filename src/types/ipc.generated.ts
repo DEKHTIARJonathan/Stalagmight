@@ -179,6 +179,8 @@ export * from './ipc/SpeleoOpenResult';
 export * from './ipc/AdoptUpload';
 export * from './ipc/SpeleoAdoptResult';
 export * from './ipc/SpeleoRevision';
+export * from './ipc/SpeleoUnwindTarget';
+export * from './ipc/UndoMode';
 export * from './ipc/SpeleoSessionStatus';
 export * from './ipc/SpeleoDbAction';
 export * from './ipc/SpeleoErrorDto';

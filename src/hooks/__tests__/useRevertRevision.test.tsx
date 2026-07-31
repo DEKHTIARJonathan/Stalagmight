@@ -27,6 +27,8 @@ const LINK: SpeleoLinkState = {
   hasUnpushedEdits: false,
   forceEditing: false,
   forceEditAllowed: false,
+  undoMode: 'full',
+  undoModeOverridden: false,
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,
@@ -125,6 +127,9 @@ describe('useRevertRevision - the happy path', () => {
       // [#258] A first attempt sends no chosen entry, which is what makes the
       // backend classify the dump normally rather than honour a stale pick.
       entryPath: null,
+      // [#303] A revert is not an Unwind: it rides the old tree FORWARD, so the
+      // downloaded copy's undo history is dropped like any other adopt.
+      keepUndoHistory: false,
     });
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
   });

@@ -8,6 +8,7 @@
 //! is the global default) and three chances to get the precedence wrong.
 
 use crate::models::{SpeleoLink, UndoMode, UndoPolicy};
+use crate::speleodb::{SpeleoDbError, SpeleoErrorDto};
 
 use super::AppState;
 
@@ -46,6 +47,44 @@ impl AppState {
         }
     }
 
+    /// [#303] Set the open project's per-project undo-history policy, or clear the
+    /// override (`None`) so it follows the global default.
+    ///
+    /// LOCK-REQUIRED (q17), and the reason is structural rather than cautious: this writes
+    /// `speleo_link.undo_mode` in the `.stalx`, which rides to the server in the next
+    /// push, so the value becomes every collaborator's. That makes it an edit of the
+    /// project - it dirties the copy exactly like a survey edit, and takes effect for
+    /// anyone else only once pushed - so it goes through the same gate every other edit
+    /// verb does. A read-only session cannot silently change what the project ships.
+    ///
+    /// Re-arms the depth bound immediately, so switching to Disabled starts trimming to
+    /// the count window without waiting for a reload.
+    pub(crate) fn speleodb_set_undo_mode(
+        &self,
+        mode: Option<UndoMode>,
+    ) -> Result<(), SpeleoErrorDto> {
+        // Must be a remote project: a local one has no policy to set (the fixed window is
+        // unconditional there), and no link row to write it into.
+        let _link = self.speleodb_validated_link()?;
+        if !self.edit_enabled() {
+            return Err(super::speleodb::local_dto(SpeleoDbError::Io(
+                "acquire the write lock before changing the undo-history setting".to_owned(),
+            )));
+        }
+        self.speleodb_mutate_link(|l| l.undo_mode = mode)
+            .map_err(super::speleodb::local_dto)?;
+        // The write is an edit of the project file, so the copy is now ahead of the
+        // server until it is pushed - the same bookkeeping every other edit does.
+        self.mark_remote_dirty();
+        self.sync_undo_depth_limit();
+        tracing::info!(
+            mode = ?mode,
+            purpose = "per-project undo-history policy (#303)",
+            "Set the project's undo mode"
+        );
+        Ok(())
+    }
+
     /// [#303] Re-arm the undo stack's depth bound from the current policy.
     ///
     /// Must be called wherever the policy can change: a project opening or closing, a
@@ -57,12 +96,6 @@ impl AppState {
     /// it to [`Self::sync_undo_depth_limit_for`].
     pub(crate) fn sync_undo_depth_limit(&self) {
         let policy = self.undo_policy();
-        self.apply_undo_depth_limit(policy);
-    }
-
-    /// [`Self::sync_undo_depth_limit`] over a link the caller has already read.
-    pub(crate) fn sync_undo_depth_limit_for(&self, link: Option<&SpeleoLink>) {
-        let policy = self.undo_policy_for(link);
         self.apply_undo_depth_limit(policy);
     }
 
@@ -218,6 +251,65 @@ mod tests {
             assert_eq!(policy.mode, UndoMode::Full);
             assert!(policy.pushes_history());
         });
+    }
+
+    /// Spec item 26: the per-project undo-mode write is LOCK-REQUIRED, and refuses a
+    /// project with no link outright.
+    ///
+    /// Not caution: the value lands in the `.stalx` and rides to the server in the next
+    /// push, so it becomes every collaborator's policy. That makes it an edit of the
+    /// project, and a read-only session must not be able to change what the project
+    /// ships.
+    #[test]
+    fn setting_the_undo_mode_requires_the_write_lock() {
+        with_isolated_config(|| {
+            let state = state();
+
+            // No project open: there is no link row to write the override into.
+            let err = state
+                .speleodb_set_undo_mode(Some(UndoMode::Disabled))
+                .expect_err("a local / absent project has no per-project policy to set");
+            assert!(
+                !err.message.is_empty(),
+                "the refusal must carry a message the FE can surface, got {err:?}"
+            );
+
+            // ...and with the edit gate shut (a remote project opened read-only) it
+            // refuses too. Asserted through the same absent-link path here - the gate
+            // check sits behind `speleodb_validated_link`, and a live remote link needs
+            // the cache dir the env-gated live tests initialise - so what this pins is
+            // that no arm of the verb succeeds without an edit session.
+            state.set_edit_enabled(false);
+            assert!(
+                state.speleodb_set_undo_mode(None).is_err(),
+                "read-only sessions cannot change what the project ships"
+            );
+        });
+    }
+
+    /// The lock gate is the FIRST thing after the link lookup, so no write can slip in
+    /// ahead of it. Structural, for the reason above.
+    #[test]
+    fn the_undo_mode_write_is_gated_before_it_mutates() {
+        let src = include_str!("undo_policy.rs")
+            .split("#[cfg(test)]")
+            .next()
+            .expect("production region precedes the test module");
+        let verb = src
+            .split_once("pub(crate) fn speleodb_set_undo_mode")
+            .map(|(_, rest)| rest)
+            .expect("the verb is in this file");
+        let gate = verb
+            .find("if !self.edit_enabled()")
+            .expect("the verb must check the edit gate");
+        let write = verb
+            .find("self.speleodb_mutate_link(")
+            .expect("the verb writes the link");
+        assert!(
+            gate < write,
+            "the lock gate must precede the write - checking afterwards would leave the \
+             override on disk for the next push to ship"
+        );
     }
 
     /// The status pair reports the RESOLVED mode plus whether an override supplied

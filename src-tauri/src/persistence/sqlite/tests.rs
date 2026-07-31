@@ -1262,16 +1262,16 @@ fn test_display_settings_persistence() {
     );
 }
 
-/// [#303] Spec item 10, at the SQL level: a save that adds one entry to a 50-entry
-/// persisted stack touches ONE row.
+/// [#303] The sync writes every row it is given, at the ids it is given.
 ///
-/// Proven by ROWID identity rather than by counting statements: SQLite assigns a fresh
-/// rowid on insert, so a row whose `id` is unchanged is a row that was never deleted and
-/// re-inserted - and therefore never re-gzipped. That is the property the byte budget
-/// depends on, because the old shape (DELETE all + re-INSERT all) re-compressed every
-/// entry on every save, including the 30s autosave.
+/// This test used to assert the OPPOSITE - that a second call left pre-existing rows in
+/// place, proving an incremental write. It was measuring the helper against a database
+/// that persists between calls, which is NOT how saving works: `save_project` builds a
+/// fresh `.stalx.tmp` and renames it over the target, so every save writes into a file
+/// with no undo tables. The "optimization" that test blessed silently dropped the
+/// history whenever nothing had changed since the previous save.
 #[test]
-fn undo_persist_sync_leaves_untouched_rows_in_place() {
+fn undo_persist_sync_writes_the_rows_it_is_given() {
     use crate::core::{PersistPlan, PersistRow};
 
     let db = Database::in_memory().unwrap();
@@ -1283,49 +1283,30 @@ fn undo_persist_sync_leaves_untouched_rows_in_place() {
         timestamp: Some("2026-07-01T00:00:00+00:00".to_owned()),
     };
 
-    // First save: the whole stack.
-    let full = PersistPlan {
+    db.sync_undo_stack(&PersistPlan {
         rows: (0..50).map(row).collect(),
         keep_range: Some((0, 49)),
-    };
-    db.sync_undo_stack(&full).unwrap();
-    let rowids_before: Vec<(i64, i64)> = db
-        .conn
-        .prepare("SELECT sequence, id FROM undo_stack ORDER BY sequence")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    assert_eq!(rowids_before.len(), 50);
+    })
+    .unwrap();
 
-    // Second save: one new entry at the tail.
-    let incremental = PersistPlan {
-        rows: vec![row(50)],
+    let loaded = db.load_undo_stack_with_timestamps().unwrap();
+    assert_eq!(loaded.len(), 50);
+    assert_eq!(loaded[0].1, r#"{"type":"Cmd0"}"#);
+    assert_eq!(loaded[49].1, r#"{"type":"Cmd49"}"#);
+
+    // A second call with one more row rewrites the range it is handed and keeps the
+    // ordering by `sequence`.
+    db.sync_undo_stack(&PersistPlan {
+        rows: (0..51).map(row).collect(),
         keep_range: Some((0, 50)),
-    };
-    db.sync_undo_stack(&incremental).unwrap();
-
-    let rowids_after: Vec<(i64, i64)> = db
-        .conn
-        .prepare("SELECT sequence, id FROM undo_stack ORDER BY sequence")
-        .unwrap()
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))
-        .unwrap()
-        .collect::<std::result::Result<_, _>>()
-        .unwrap();
-    assert_eq!(rowids_after.len(), 51, "the new entry landed");
-    assert_eq!(
-        &rowids_after[..50],
-        &rowids_before[..],
-        "every pre-existing row kept its rowid, so none was rewritten"
-    );
-
-    // And the content is all readable in order.
+    })
+    .unwrap();
     let loaded = db.load_undo_stack_with_timestamps().unwrap();
     assert_eq!(loaded.len(), 51);
-    assert_eq!(loaded[0].1, r#"{"type":"Cmd0"}"#);
-    assert_eq!(loaded[50].1, r#"{"type":"Cmd50"}"#);
+    assert_eq!(
+        loaded.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
+        (0..51).collect::<Vec<_>>()
+    );
 }
 
 /// [#303] The delete half of the sync: rows outside the surviving id range go, whether
@@ -4402,6 +4383,79 @@ fn speleo_link_undo_mode_roundtrips_and_none_stays_null() {
     let loaded = db.load_speleo_link().unwrap().unwrap().undo_mode;
     assert_eq!(loaded, Some(UndoMode::Unknown));
     assert!(loaded.unwrap().pushes_history(), "Unknown resolves to Full");
+}
+
+/// [#303] Spec item 22, persistence half: the Unwind chain pointer survives a close and
+/// reopen (it is a row in the `.stalx`, not session state), and clearing it is a distinct
+/// state from never having set one.
+///
+/// It lives in its own table rather than in `speleo_link` because it is per-MACHINE
+/// progress through history: `PUSH_SNAPSHOT_LOCAL_TABLES` strips it, so it never rides to
+/// the server. BASE cannot double as it, because a restore stamps BASE at the server tip.
+#[test]
+fn speleo_undo_chain_round_trips_and_clears() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("chain.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("Chain".to_string(), None))
+            .unwrap();
+        assert_eq!(
+            db.load_speleo_undo_chain().unwrap(),
+            None,
+            "a fresh project is not mid-unwind"
+        );
+        db.save_speleo_undo_chain(Some("abc1234")).unwrap();
+        assert_eq!(
+            db.load_speleo_undo_chain().unwrap().as_deref(),
+            Some("abc1234")
+        );
+    }
+
+    // Survives the reopen - an Unwind interrupted by a restart resumes where it was.
+    {
+        let db = Database::open_existing(&path).unwrap();
+        assert_eq!(
+            db.load_speleo_undo_chain().unwrap().as_deref(),
+            Some("abc1234"),
+            "the pointer is on disk, so a restart mid-unwind does not restart the walk"
+        );
+        // Overwriting moves the position; clearing ends the walk.
+        db.save_speleo_undo_chain(Some("def5678")).unwrap();
+        assert_eq!(
+            db.load_speleo_undo_chain().unwrap().as_deref(),
+            Some("def5678")
+        );
+        db.save_speleo_undo_chain(None).unwrap();
+        assert_eq!(db.load_speleo_undo_chain().unwrap(), None);
+    }
+}
+
+/// [#303] The chain pointer is LOCAL: a push snapshot must not carry it, or a
+/// collaborator would inherit this machine's position in a walk they never started.
+#[test]
+fn speleo_undo_chain_is_stripped_from_a_push_snapshot() {
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("chain_push.stalx");
+    {
+        let mut db = Database::open(&path).unwrap();
+        db.save_project(&Project::new("ChainPush".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&sample_speleo_link(Some("abc"), true)))
+            .unwrap();
+        db.save_speleo_undo_chain(Some("abc1234")).unwrap();
+    }
+
+    // Full mode keeps the undo HISTORY, so this pins that the chain pointer is stripped
+    // even on the path most likely to forget it.
+    Database::sanitize_push_snapshot(&path, true).unwrap();
+
+    let db = Database::open_existing(&path).unwrap();
+    assert_eq!(
+        db.load_speleo_undo_chain().unwrap(),
+        None,
+        "the Unwind chain position is per-machine and must never ride to the server"
+    );
 }
 
 #[test]

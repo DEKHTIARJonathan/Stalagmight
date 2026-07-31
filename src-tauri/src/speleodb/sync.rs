@@ -506,6 +506,61 @@ pub(crate) fn poll_verdict(
 /// whose history has no separate creation commit. Matching is case-insensitive and
 /// ignores surrounding whitespace, because the marker is server-generated copy
 /// rather than a stable identifier.
+/// [#303] Which revision the next Unwind should check out, and whether that is the
+/// commit the working copy already equals.
+///
+/// The chain is deliberately "BASE first, then first-parents". After a push the working
+/// copy IS the new commit and its history has just been cleared locally, so the FIRST
+/// Unwind loads that same commit to get its history back - the content does not move and
+/// the undo list refills with the operations the user just pushed. Once those are undone
+/// the copy sits at the parent's state, so the NEXT Unwind loads the parent, and so on.
+/// (The alternative - always jumping straight to the parent - would make a user's own
+/// just-pushed operations un-steppable, revertable only in one lump.)
+///
+/// - `unwound_from` is the chain pointer: `None` = not mid-unwind, so target BASE.
+/// - `base` is `speleo_link.base_commit_sha`; `None` (an empty repo) has nothing to reach.
+/// - Merges take `parent_ids[0]`, the git-mainline convention.
+/// - The root commit has no parent, so the chain ENDS there and this returns `None` - the
+///   frontend hides the affordance rather than offering a step that cannot be taken.
+///
+/// Returns `(hexsha, is_current)` where `is_current` marks the BASE case, so the caller
+/// can say "reload this revision's history" rather than "go back one".
+#[must_use]
+pub(crate) fn unwind_target(
+    unwound_from: Option<&str>,
+    base: Option<&str>,
+    commits: &[RevisionCommit],
+) -> Option<(String, bool)> {
+    match unwound_from {
+        // Mid-unwind: walk to the first parent of the revision we are sitting on.
+        Some(current) => {
+            let commit = commits
+                .iter()
+                .find(|c| c.id.eq_ignore_ascii_case(current))?;
+            // A commit outside the fetched range, or a genuine root: the chain ends.
+            let parent = commit.parent_ids.first()?;
+            // Never offer SpeleoDB's own creation commit - the same reason
+            // `display_history` drops it: it predates any survey data, so "unwind to
+            // nothing" is not a step anyone means to take.
+            let parent_commit = commits.iter().find(|c| c.id.eq_ignore_ascii_case(parent))?;
+            if is_project_creation_commit(parent_commit) {
+                return None;
+            }
+            Some((parent_commit.id.clone(), false))
+        }
+        // Not mid-unwind: the working copy equals BASE, and BASE's own file carries the
+        // history that produced it.
+        None => {
+            let base = base?;
+            let commit = commits.iter().find(|c| c.id.eq_ignore_ascii_case(base))?;
+            if is_project_creation_commit(commit) {
+                return None;
+            }
+            Some((commit.id.clone(), true))
+        }
+    }
+}
+
 fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
     const CREATION_MESSAGE: &str = "[automated] project creation";
     commit.parent_ids.is_empty()
@@ -602,11 +657,16 @@ pub(crate) fn concurrent_session_notice(active_mutex_user: Option<&str>, my_emai
 }
 
 #[cfg(test)]
+// [#303] `expect` arrived with the `unwind_target` tests, which assert on an
+// `Option<(String, bool)>`: unwrapping it names the expectation at the assertion rather
+// than pushing every case through a `match` whose failure arm says nothing.
+#[expect(clippy::expect_used, reason = "unit test fixtures fail loudly")]
 mod tests {
     use super::{
         base_is_ancestor_of_tip, classify_ancestry, concurrent_session_notice, display_history,
         edits_captured_by_push, fence, plan_push, poll_verdict, reconcile_verdict, tip_of,
-        AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState, RevisionCommit,
+        unwind_target, AncestryOutcome, FenceOutcome, PushPlan, ReconcileVerdict, RemoteState,
+        RevisionCommit,
     };
 
     /// Build a revision-history commit with the given parents and author.
@@ -1324,5 +1384,103 @@ mod tests {
             !edits_captured_by_push(Some("not-a-date"), Some(T2)),
             "unparseable -> keep dirty"
         );
+    }
+    // --- [#303] unwind_target (spec items 19-22) ---
+
+    /// Spec item 19: the FIRST unwind (no chain pointer) targets BASE itself, flagged
+    /// `is_current`. The working copy already equals that commit, so nothing moves - what
+    /// comes back is the history that produced it, which clear-on-push had removed
+    /// locally. Loading the PARENT here instead would make a user's own just-pushed
+    /// operations un-steppable.
+    #[test]
+    fn unwind_first_step_targets_base_itself() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            commit("c2", &["c1"], ME),
+        ];
+        let (target, is_current) =
+            unwind_target(None, Some("c2"), &commits).expect("BASE is reachable");
+        assert_eq!(target, "c2");
+        assert!(
+            is_current,
+            "the first step reloads the commit the copy already equals"
+        );
+    }
+
+    /// Spec item 20: mid-unwind, the next step is the first parent of the revision we are
+    /// sitting on - not of BASE, which a restore has stamped at the server tip.
+    #[test]
+    fn unwind_walks_first_parents_once_mid_unwind() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("c1", &["root"], ME),
+            commit("c2", &["c1"], ME),
+            commit("c3", &["c2"], ME),
+        ];
+        // Sitting on c3 (BASE is the tip after a restore, and is deliberately ignored).
+        let (target, is_current) =
+            unwind_target(Some("c3"), Some("c3"), &commits).expect("c2 is reachable");
+        assert_eq!(target, "c2");
+        assert!(!is_current, "this one moves the working copy back");
+
+        // ...and again from c2.
+        let (target, _) = unwind_target(Some("c2"), Some("c3"), &commits).expect("c1 reachable");
+        assert_eq!(target, "c1");
+    }
+
+    /// A merge takes `parent_ids[0]` - the git-mainline convention, and the only choice
+    /// that keeps "keep pressing undo" deterministic.
+    #[test]
+    fn unwind_takes_the_first_parent_of_a_merge() {
+        let commits = vec![
+            creation_commit("root"),
+            commit("mainline", &["root"], ME),
+            commit("side", &["root"], OTHER),
+            commit("merge", &["mainline", "side"], ME),
+        ];
+        let (target, _) = unwind_target(Some("merge"), Some("merge"), &commits).expect("mainline");
+        assert_eq!(target, "mainline");
+    }
+
+    /// Spec item 21: the chain ENDS rather than offering a step that cannot be taken -
+    /// at the root, on an empty repo, and at SpeleoDB's own creation commit (which
+    /// predates any survey data, so "unwind to nothing" is not a step anyone means).
+    #[test]
+    fn unwind_has_no_target_at_the_root_or_on_an_empty_repo() {
+        let commits = vec![creation_commit("root"), commit("c1", &["root"], ME)];
+
+        assert!(
+            unwind_target(None, None, &commits).is_none(),
+            "an empty-repo BASE has nothing to reach"
+        );
+        assert!(
+            unwind_target(Some("c1"), Some("c1"), &commits).is_none(),
+            "c1's only parent is the creation commit, so the chain ends at c1"
+        );
+        assert!(
+            unwind_target(None, Some("root"), &commits).is_none(),
+            "and the creation commit is never a target itself"
+        );
+
+        // A genuine parentless survey revision (no creation commit ahead of it) is a
+        // valid target, but the chain still ends there.
+        let real_root = vec![commit("first", &[], ME), commit("second", &["first"], ME)];
+        let (target, _) =
+            unwind_target(Some("second"), Some("second"), &real_root).expect("first is real");
+        assert_eq!(target, "first");
+        assert!(
+            unwind_target(Some("first"), Some("second"), &real_root).is_none(),
+            "a real root has no parent, so the chain ends"
+        );
+    }
+
+    /// A pointer naming a commit outside the fetched history cannot be walked from, and
+    /// must fail closed (no target) rather than guessing.
+    #[test]
+    fn unwind_fails_closed_on_an_unknown_pointer() {
+        let commits = vec![creation_commit("root"), commit("c1", &["root"], ME)];
+        assert!(unwind_target(Some("deadbeef"), Some("c1"), &commits).is_none());
+        assert!(unwind_target(None, Some("deadbeef"), &commits).is_none());
     }
 }

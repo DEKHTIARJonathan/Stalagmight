@@ -1326,6 +1326,9 @@ pub fn run() {
             commands::speleodb::speleodb_get_revisions,
             commands::speleodb::speleodb_restore_revision,
             commands::speleodb::speleodb_dump_candidates,
+            // SpeleoDB hybrid undo stack: the Unwind target + the per-project policy (#303)
+            commands::speleodb::speleodb_unwind_target,
+            commands::speleodb::speleodb_set_undo_mode,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,
             // SpeleoDB Project Settings metadata (#206) + create-on-SDB publish (#207)

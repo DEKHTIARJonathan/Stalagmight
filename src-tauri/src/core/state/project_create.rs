@@ -152,10 +152,8 @@ impl AppState {
 
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
             undo_stack.clear();
-            // [#303] A brand-new project is local: the configured entry window, and no
-            // trustworthy correspondence to any file yet.
+            // [#303] A brand-new project is local: the configured entry window.
             undo_stack.use_count_limit();
-            undo_stack.require_full_rewrite();
         }
 
         // Clear display settings cache for new project

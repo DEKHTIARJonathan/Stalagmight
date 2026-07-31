@@ -365,6 +365,66 @@ fn test_open_project_drops_legacy_null_style_undo_history() {
 }
 
 #[test]
+fn a_second_save_with_no_new_edit_still_persists_the_undo_history() {
+    // [#303] THE regression guard for the bug the first cut of the hybrid stack
+    // shipped: consecutive saves with nothing changed in between.
+    //
+    // `save_project` writes a FRESH `.stalx.tmp` and renames it over the target, then
+    // writes the undo tables into the reopened file. A persist that "optimized" by
+    // skipping rows it believed were already on disk therefore wrote NOTHING into a file
+    // that had NOTHING - and the history vanished. Live, that is what a SpeleoDB push
+    // hits: its own flush is a save, and it very often follows another one (an autosave,
+    // or the save the frontend runs after a reload), so the commit it produced carried
+    // no undo history at all.
+    //
+    // Two saves, one edit. The second must leave the history on disk.
+    let temp = TempDir::new().unwrap();
+    let path = temp.path().join("twice.stalx");
+
+    let state = AppState::new().unwrap();
+    assert!(state.create_project("Twice".to_string(), None).success);
+    assert!(
+        state
+            .execute(Command::CreateSection {
+                name: Some("only-edit".to_string()),
+                surveyor: None,
+                date: None,
+                color: "#abcdef".to_string(),
+                direction: None,
+                shots: vec![ShotData {
+                    length: 5.0,
+                    ..Default::default()
+                }],
+            })
+            .success
+    );
+
+    assert!(state.save_project(Some(path.clone())).success);
+    let after_first = Database::open_existing(&path)
+        .unwrap()
+        .load_undo_stack_with_timestamps()
+        .unwrap()
+        .len();
+    assert_eq!(
+        after_first, 1,
+        "the first save persists the edit's undo entry"
+    );
+
+    // No edit in between - exactly the shape a push's flush after an autosave has.
+    assert!(state.save_project(Some(path.clone())).success);
+    let after_second = Database::open_existing(&path)
+        .unwrap()
+        .load_undo_stack_with_timestamps()
+        .unwrap()
+        .len();
+    assert_eq!(
+        after_second, 1,
+        "a save with nothing changed must still write the history - the file it writes \
+         into was just rebuilt, so anything it skips is gone for good"
+    );
+}
+
+#[test]
 fn test_undo_after_reload_restores_exactly_the_edited_field() {
     // open_project/save_project record the path in recent projects (stored in
     // the global config), so isolate the config from the real file.

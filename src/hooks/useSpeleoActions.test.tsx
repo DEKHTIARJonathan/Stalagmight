@@ -222,6 +222,8 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
         hasUnpushedEdits,
         forceEditing: false,
         forceEditAllowed: false,
+        undoMode: 'full',
+        undoModeOverridden: false,
         remoteState: 'up_to_date',
         noAccess: false,
         serverError: null,

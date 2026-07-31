@@ -40,6 +40,14 @@ export interface RestoreRevisionArgs {
    * classify normally.
    */
   entryPath?: string;
+  /**
+   * [#303] The "Unwind to previous SpeleoDB version" flavour: KEEP the downloaded
+   * copy's undo history instead of dropping it, because that history is what the
+   * action came for. Only the Unwind sets it, and the backend enforces its extra
+   * preconditions (an empty undo stack, and any dirt being a previous Unwind's own
+   * doing) rather than trusting this flag.
+   */
+  keepUndoHistory?: boolean;
 }
 
 /**
@@ -74,6 +82,7 @@ export function useRestoreRevision() {
       discardLocal = false,
       quiet = false,
       entryPath,
+      keepUndoHistory = false,
     }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
@@ -86,6 +95,9 @@ export function useRestoreRevision() {
         // Never waived for a View, whatever the caller passed.
         discardLocal: restore && discardLocal,
         entryPath: entryPath ?? null,
+        // [#303] Likewise only meaningful for a Restore: a View leaves the project
+        // read-only, so there would be nothing to undo with the history it kept.
+        keepUndoHistory: restore && keepUndoHistory,
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),

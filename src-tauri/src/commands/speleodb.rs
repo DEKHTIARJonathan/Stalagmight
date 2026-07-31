@@ -27,12 +27,14 @@ use crate::core::AppState;
 // the typed SpeleoDbAction) instead of a flattened String, so the FE branches on
 // `err.action`. The orchestration `AppState::speleodb_*` methods build the DTO at
 // the call site where the endpoint is known.
+use crate::models::UndoMode;
 use crate::speleodb::{
     DoneResult, Permission, PushResult, SpeleoAdoptResult, SpeleoCollaborators, SpeleoDbAction,
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,
-    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUserSuggestion, StartEditingResult, UpdateResult,
+    SpeleoSessionStatus, SpeleoTeamOption, SpeleoUnwindTarget, SpeleoUserSuggestion,
+    StartEditingResult, UpdateResult,
 };
 
 /// Run a blocking SpeleoDB orchestration call off the main thread. The
@@ -336,6 +338,12 @@ pub async fn speleodb_get_revisions(
 /// exists because a restore itself stamps the working copy as un-pushed, so without
 /// it Restore was single-use: restoring a second revision refused over edits the
 /// first restore had just created.
+///
+/// `keep_undo_history` (#303) is the "Unwind to previous SpeleoDB version" flavour: the
+/// downloaded copy's undo history is KEPT rather than dropped, because that history is
+/// what the action came for. Its extra preconditions (an empty undo stack, and any dirt
+/// being a previous Unwind's own doing) are enforced in the backend, never trusted from
+/// here.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -345,8 +353,10 @@ pub async fn speleodb_restore_revision(
     restore: bool,
     discard_local: Option<bool>,
     entry_path: Option<String>,
+    keep_undo_history: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
+    let keep_undo_history = keep_undo_history.unwrap_or(false);
     run_blocking(app, move |s| {
         s.speleodb_restore_revision(
             project_id,
@@ -355,9 +365,38 @@ pub async fn speleodb_restore_revision(
             restore,
             discard_local,
             entry_path,
+            keep_undo_history,
         )
     })
     .await
+}
+
+/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load, or
+/// `None` when there is nothing left to reach (an empty repo, the root of the history, or
+/// a project whose undo history is not pushed at all).
+///
+/// Read-only and permission-free, like the revision list it reads. Costs one
+/// `GET /revisions/`, so the frontend asks when the undo dropdown opens rather than on
+/// every status poll.
+#[tauri::command]
+pub async fn speleodb_unwind_target(
+    app: AppHandle,
+) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
+    run_blocking(app, AppState::speleodb_unwind_target).await
+}
+
+/// [#303] Set the open project's per-project undo-history policy
+/// (`speleo_link.undo_mode`), or clear the override so it follows the global default.
+///
+/// LOCK-REQUIRED: this writes the `.stalx`, which is project state that rides to the
+/// server in the next push, so every collaborator inherits it. That makes it an edit of
+/// the project rather than a local preference - see `AppState::speleodb_set_undo_mode`.
+#[tauri::command]
+pub async fn speleodb_set_undo_mode(
+    app: AppHandle,
+    mode: Option<UndoMode>,
+) -> Result<(), SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_set_undo_mode(mode)).await
 }
 
 /// Set the open project's server-side `exclude_geojson` flag (#200

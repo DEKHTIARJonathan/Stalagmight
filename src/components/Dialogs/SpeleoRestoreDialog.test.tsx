@@ -73,6 +73,9 @@ describe('SpeleoRestoreDialog (#218)', () => {
       discardLocal: false,
       // [#258] and it names no dump entry, so the backend classifies normally.
       entryPath: null,
+      // [#303] A plain Restore drops the downloaded copy's undo history like every
+      // other adopt path; only the Unwind keeps it.
+      keepUndoHistory: false,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

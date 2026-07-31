@@ -60,9 +60,9 @@ pub(super) fn preserved_display_settings(dest: &Path) -> HashMap<String, String>
 
 /// [#303] The `speleo_link.undo_mode` already recorded in the `.stalx` at `dest`.
 ///
-/// Every stamp site rewrites the WHOLE link row, so without this a pull / fast-forward
-/// / revision swap would reset the project's undo policy to "follow the global default"
-/// - silently discarding a `Disabled` that the project owner set precisely because the
+/// Every stamp site rewrites the WHOLE link row, so without this a pull / fast-forward /
+/// revision swap would reset the project's undo policy to "follow the global default",
+/// silently discarding a `Disabled` that the project owner set precisely because the
 /// project is too big to ship undo snapshots. The override rides in the pushed snapshot
 /// (it is project state, not machine state), so the value in the file we just extracted
 /// IS the authoritative answer and the stamp has to carry it forward.
@@ -374,6 +374,25 @@ mod tests {
             0,
             "the orchestration reaches the abandoning replace only through the \
              named LocalEditsPolicy, so every waiver is spelled out at its call site"
+        );
+    }
+
+    /// [#303] Spec item 15's structural half, and the reason `InheritedUndo` is a named
+    /// enum rather than a bool: KEEPING a downloaded copy's undo history is a waiver of
+    /// the #194 b3 guard, so there must be exactly ONE place in the whole orchestration
+    /// that asks for it - the Unwind, which exists to fetch that history back under an
+    /// explicit, confirmed, lock-held action.
+    ///
+    /// Same shape as `the_orchestration_never_calls_the_abandoning_replace_directly`
+    /// above: a diff that adds a second `Keep` site fails here and has to justify itself.
+    #[test]
+    fn undo_history_keep_is_unwind_only() {
+        let keeps = speleodb_prod_matches("InheritedUndo::Keep", &["speleodb_cache.rs"]);
+        assert_eq!(
+            keeps, 1,
+            "exactly one production site may keep a downloaded copy's undo history (the \
+             Unwind); found {keeps}. Every other adopt path inherits a stranger's \
+             history one Ctrl-Z away from the user (#194 b3)."
         );
     }
 

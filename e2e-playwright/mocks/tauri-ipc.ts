@@ -4734,6 +4734,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
               access_denied: false,
               server_error: null,
               exclude_geojson: false,
+              // [#303] The hybrid undo stack's policy fields. Full is the default, and
+              // not overridden, so the settings control renders "following the global
+              // default" - the shape a spec sees unless it overrides this.
+              undo_mode: 'full',
+              undo_mode_overridden: false,
             };
           case 'speleodb_list_projects':
             return [];
@@ -4756,9 +4761,17 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           // it releases whatever THIS process recorded acquiring, or nothing.
           case 'speleodb_release_lock_acquired_here':
           case 'speleodb_set_exclude_geojson':
+          // [#303] The per-project undo-history policy write: no payload. The FE
+          // re-reads `speleodb_link_status` afterwards for the new value.
+          case 'speleodb_set_undo_mode':
           // #215 lock release + delete: no payload.
           case 'speleodb_release_current_lock':
           case 'speleodb_delete_project':
+            return null;
+          // [#303] Which revision the next Unwind would load. `null` by default - a
+          // mocked project has no revision history to walk - so the undo dropdown shows
+          // no Unwind entry unless a spec overrides this.
+          case 'speleodb_unwind_target':
             return null;
           // #215 collaborator management: the roster (users + teams). The mutating
           // commands echo the refreshed roster; the picker lists no teams by default.

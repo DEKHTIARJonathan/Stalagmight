@@ -3,6 +3,10 @@ import { createPortal } from 'react-dom';
 import { useTranslation } from 'react-i18next';
 import { useProjectStore } from '../../store/projectStore';
 import { useUIStore } from '../../store/uiStore';
+import { SpeleoDbLogo } from '../common/SpeleoDbLogo';
+import { useUnwindTarget } from '../../hooks/useUnwindTarget';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { holdsWriteLock } from '../../utils/quit';
 import { useDismissableLayer } from '../../hooks/useDismissableLayer';
 import { getErrorMessage } from '../../utils/ipc';
 import { setSource } from '../../utils/telemetry';
@@ -54,6 +58,19 @@ interface UndoHistoryDropdownProps {
   ariaLabel?: string;
   /** Tighten the trigger's padding at the toolbar's final condensation stage. */
   compact?: boolean;
+  /**
+   * [#303] Let HOVER open the panel even while `disabled` - the case being an empty
+   * undo stack on a linked project, where the panel's only content is the Unwind entry
+   * that continues the walk past the commit boundary.
+   *
+   * The BUTTON stays disabled either way: Undo / Ctrl+Z on an empty stack must keep
+   * doing nothing, and the Unwind is deliberately reachable only through its own entry
+   * plus a confirmation. This opens the panel; it never performs anything.
+   *
+   * The toolbar passes it for the undo trigger unless something else (placement mode)
+   * is the reason for `disabled` - that reason must still suppress the panel.
+   */
+  hoverableWhenEmpty?: boolean;
 }
 
 /** Map command types to icon components (matching toolbar icon style) */
@@ -250,6 +267,7 @@ export default function UndoHistoryDropdown({
   testId,
   ariaLabel,
   compact = false,
+  hoverableWhenEmpty = false,
 }: UndoHistoryDropdownProps) {
   const { t } = useTranslation();
   const modeLabel = mode === 'undo' ? t('undo.actions.undo') : t('undo.actions.redo');
@@ -297,6 +315,24 @@ export default function UndoHistoryDropdown({
   isOpenRef.current = isOpen;
   // Unique ID for ARIA attributes
   const menuId = useId();
+
+  // [#303] The "Unwind to previous SpeleoDB version" entry, pinned below the list.
+  //
+  // Offered only on the UNDO side of a linked project whose write lock we genuinely
+  // hold (a force-editor holds none, and the backend refuses them), and only once the
+  // local stack is EMPTY - which is what makes "the working copy equals a commit" true.
+  // With entries still on the stack, walking history would discard the un-undone ones,
+  // so the backend refuses that too and there is nothing to offer.
+  const iHoldLock = useSpeleoStore((s) => holdsWriteLock(s.link));
+  // Read from the hover/queue callbacks, which must not re-create themselves every time
+  // the lock state changes (the same reason `disabledRef` exists).
+  const iHoldLockRef = useRef(iHoldLock);
+  iHoldLockRef.current = iHoldLock;
+  const hoverableWhenEmptyRef = useRef(hoverableWhenEmpty);
+  hoverableWhenEmptyRef.current = hoverableWhenEmpty;
+  const canOfferUnwind = mode === 'undo' && iHoldLock && items.length === 0;
+  const { target: unwindTarget } = useUnwindTarget(isOpen && canOfferUnwind);
+  const showUnwind = canOfferUnwind && unwindTarget !== null;
 
   const { getUndoStack, getRedoStack, undoTo, redoTo, undo, redo, canUndo, canRedo } = useProjectStore();
   const { openDialog } = useUIStore();
@@ -439,13 +475,25 @@ export default function UndoHistoryDropdown({
         scrollContainerRef.current.scrollTo({ top: 0 });
       }
 
-      // Close-on-empty: if stack is now empty, discard remaining queued actions and hard close
-      if (refreshedStack.length === 0) {
+      // Close-on-empty: if stack is now empty, discard remaining queued actions and hard
+      // close.
+      //
+      // [#303] UNLESS the Unwind is on offer. Undoing the last entry is exactly the
+      // moment a user walking backwards through history arrives at the commit boundary,
+      // and slamming the panel shut there hides the one control that continues the walk.
+      if (refreshedStack.length === 0 && !(mode === 'undo' && iHoldLockRef.current)) {
         actionQueueRef.current = [];
         isActionInProgressRef.current = false;
         setIsActionInProgress(false);
         setAnnouncement(t('undo.announcement.none'));
         hardClose();
+        return;
+      }
+      if (refreshedStack.length === 0) {
+        actionQueueRef.current = [];
+        isActionInProgressRef.current = false;
+        setIsActionInProgress(false);
+        setAnnouncement(t('undo.announcement.none'));
         return;
       }
 
@@ -472,7 +520,9 @@ export default function UndoHistoryDropdown({
 
   // Open dropdown with delay
   const openDropdown = useCallback(() => {
-    if (disabledRef.current) return;
+    // [#303] `hoverableWhenEmpty` is the one waiver: an empty undo stack disables the
+    // BUTTON but must still be able to show the Unwind entry.
+    if (disabledRef.current && !hoverableWhenEmptyRef.current) return;
 
     // Clear any pending leave timeout
     if (leaveTimeoutRef.current) {
@@ -486,7 +536,10 @@ export default function UndoHistoryDropdown({
     // Set hover timeout for 300ms delay
     hoverTimeoutRef.current = setTimeout(async () => {
       // Bail out if token changed (any close path was triggered) or disabled is now true
-      if (hoverTokenRef.current !== currentToken || disabledRef.current) {
+      if (
+        hoverTokenRef.current !== currentToken ||
+        (disabledRef.current && !hoverableWhenEmptyRef.current)
+      ) {
         return;
       }
 
@@ -495,19 +548,26 @@ export default function UndoHistoryDropdown({
         const stack = await fetchStack();
 
         // Re-check token and disabled after async operation
-        if (hoverTokenRef.current !== currentToken || disabledRef.current) {
+        if (
+          hoverTokenRef.current !== currentToken ||
+          (disabledRef.current && !hoverableWhenEmptyRef.current)
+        ) {
           return;
         }
 
-        // Only open if there are items
-        if (stack.length > 0) {
+        // Open when there is something to show. [#303] An EMPTY undo stack is now
+        // something to show on a linked project we hold the lock on: the Unwind entry
+        // lives past the bottom of the stack, and this dropdown is its only trigger.
+        // `canOfferUnwind` is not consulted here - whether a target actually exists is
+        // resolved asynchronously once open, and the panel closes itself if not.
+        if (stack.length > 0 || (mode === 'undo' && iHoldLockRef.current)) {
           setIsOpen(true);
         }
       } catch {
         // Error already logged in fetchStack
       }
     }, 300);
-  }, [fetchStack]);
+  }, [fetchStack, mode]);
 
   // Close dropdown with small delay buffer (for mouse leave)
   const closeDropdown = useCallback((event?: React.MouseEvent) => {
@@ -923,7 +983,9 @@ export default function UndoHistoryDropdown({
           >
             {items.length === 0 ? (
               <div className="px-3 py-4 text-center text-text-secondary text-sm">
-                {t('undo.history.empty', { mode: modeLabel })}
+                {showUnwind
+                  ? t('undo.history.unwind.emptyWithUnwind')
+                  : t('undo.history.empty', { mode: modeLabel })}
               </div>
             ) : (
               items.map((item, idx) => {
@@ -976,6 +1038,40 @@ export default function UndoHistoryDropdown({
               })
             )}
           </div>
+
+          {/* [#303] The Unwind entry, pinned below the list rather than inside it: it is
+              not a stack position, it is the step PAST the bottom of the stack. Clicking
+              it never acts - it opens a confirmation, because the action downloads a
+              revision and replaces the working copy. */}
+          {showUnwind && unwindTarget && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                hardClose();
+                openDialog('speleodb-unwind', {
+                  hexsha: unwindTarget.hexsha,
+                  isCurrent: unwindTarget.is_current,
+                });
+              }}
+              className="w-full px-3 py-2 flex items-center gap-2 text-left border-t border-border
+                         hover:bg-background-50 transition-colors"
+              data-testid={`${testId}-unwind`}
+              tabIndex={-1}
+            >
+              <span className="w-5 h-5 flex items-center justify-center shrink-0">
+                <SpeleoDbLogo size={14} />
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="text-sm text-text-primary truncate">
+                  {t('undo.history.unwind.label')}
+                </div>
+                <div className="text-xs text-text-secondary">
+                  {t('undo.history.unwind.hint')}
+                </div>
+              </div>
+            </button>
+          )}
         </div>
       )}
 

@@ -2128,8 +2128,9 @@ The schema is versioned (`SCHEMA_VERSION` in
 opened. Alongside the survey tables (project, sections, shots, station merges,
 zero datums, loop closures, section and station offsets) it holds per-project and
 display settings, the persisted undo and redo stacks, resolved warnings, import
-hashes, station comments, and the SpeleoDB link row. Three markers are worth
-knowing before touching migration code:
+hashes, station comments, the SpeleoDB link row, and the Unwind chain position in
+`speleo_undo_chain`. Three markers are worth knowing before touching migration
+code:
 
 - `UNDO_FORMAT_SAFE_VERSION` - files written before it get their persisted
   undo/redo stacks dropped on open, because pre-v7 `ShotUpdates` JSON cannot
@@ -2145,6 +2146,10 @@ knowing before touching migration code:
   deserializes; the loader skips a bad entry without truncating, so the stack
   would otherwise load with a hole in the middle. v13 drops the stacks the same
   way, for the legacy `is_reference` boolean.
+- v16 adds `speleo_link.undo_mode` (whether this project's undo history rides to
+  SpeleoDB) and the local-only `speleo_undo_chain` (how far back through the
+  server's revisions this machine has unwound); see
+  [undo-redo.md](undo-redo.md).
 
 The dive plan lives beside the project in its own `.plnx` SQLite sidecar
 (`src-tauri/src/persistence/plnx.rs`), not in the `.stalx`.

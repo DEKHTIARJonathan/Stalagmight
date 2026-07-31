@@ -13,6 +13,7 @@ import type {
   SpeleoSessionStatus,
   StartEditingResult,
   TokenStorage,
+  UndoMode,
   UpdateResult,
 } from '../types/ipc.generated';
 import { invokeIpc, getErrorMessage } from '../utils/ipc';
@@ -170,6 +171,14 @@ export interface SpeleoLinkState {
    * open/close/reconnect).
    */
   forceEditing: boolean;
+  /**
+   * [#303] This project's effective undo-history policy - what its next push will carry
+   * - and whether that came from a per-project override rather than the application
+   * default. Backend-resolved, so the control never re-derives the precedence.
+   */
+  undoMode: UndoMode;
+  /** See {@link undoMode}. */
+  undoModeOverridden: boolean;
   /**
    * [#213] The `SpeleoDbConfig.allow_force_edit` opt-in (a global preference,
    * mirrored per-poll onto the link). Gates whether the read-only "Edit without
@@ -662,6 +671,12 @@ interface SpeleoStore {
       rendering-disabled banner and re-seeds link status. Throws on failure so the
       banner can surface it. */
   enableRendering: () => Promise<void>;
+  /** [#303] Set the open project's per-project undo-history policy, or pass `null` to
+      clear the override so it follows the global default. LOCK-REQUIRED: the value
+      lands in the `.stalx` and rides to the server on the next push, so it becomes
+      every collaborator's. Throws on refusal (no lock, or a local project) so the
+      control can surface it, and re-seeds link status on success. */
+  setUndoMode: (mode: UndoMode | null) => Promise<void>;
   dismissBanner: () => void;
 }
 
@@ -880,6 +895,12 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           hasUnpushedEdits: false,
           forceEditing: false,
           forceEditAllowed: false,
+          // [#303] The application default until the first status reply resolves the
+          // project's own policy. Not overridden, so the settings control says
+          // "following the application default" rather than claiming a project value
+          // nothing has read yet.
+          undoMode: 'full',
+          undoModeOverridden: false,
           remoteState: 'unknown',
           noAccess: false,
           serverError: null,
@@ -1374,6 +1395,11 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // and reported every poll; a reconnect that acquires the lock clears it there.
         forceEditing: s.force_editing,
         forceEditAllowed: s.allow_force_edit,
+        // [#303] Backend-resolved (override else global default) plus whether an
+        // override supplied it - the settings control renders both, because "Full" set
+        // on the project and "Full" inherited are different states.
+        undoMode: s.undo_mode,
+        undoModeOverridden: s.undo_mode_overridden,
         remoteState: s.remote_state,
         noAccess: s.access_denied,
         serverError: s.server_error,
@@ -1420,6 +1446,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
         forceEditing: false,
         forceEditAllowed: false,
+        undoMode: 'full',
+        undoModeOverridden: false,
         // A pull just took the server tip, so up-to-date is true by construction -
         // but only for a pull. A seed that already knows the copy holds un-pushed
         // edits is by definition NOT in sync, so claim nothing until the first poll
@@ -1653,6 +1681,16 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
     // Drop the rendering-disabled banner (this resolved it) and re-seed from the
     // server so the flag reflects the change.
     set((state) => (state.banner?.kind === 'rendering_disabled' ? { banner: null } : {}));
+    await get().refreshLinkStatus();
+  },
+
+  setUndoMode: async (mode) => {
+    // [#303] Throws on failure so the caller (the settings control) renders the
+    // refusal - most usefully the lock one, since this writes the `.stalx` and so
+    // becomes every collaborator's policy on the next push.
+    await invokeIpc<null>('speleodb_set_undo_mode', { mode });
+    // Re-read rather than assuming: the backend resolves `null` against the global
+    // default, and the control renders "following the global default" from that.
     await get().refreshLinkStatus();
   },
 

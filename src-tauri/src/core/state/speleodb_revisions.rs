@@ -18,7 +18,7 @@ use super::speleodb_cache::{
 use super::speleodb_pull::{ArianeRoute, StalxAmbiguity};
 use super::AppState;
 use crate::speleodb::contract::{dto_for_error, Endpoint};
-use crate::speleodb::models::SpeleoRevision;
+use crate::speleodb::models::{SpeleoRevision, SpeleoUnwindTarget};
 use crate::speleodb::{client, dump, sync};
 use crate::speleodb::{SpeleoDbError, SpeleoErrorDto, SpeleoOpenResult};
 
@@ -41,7 +41,9 @@ pub(super) fn validate_hexsha(hexsha: &str) -> Result<(), SpeleoDbError> {
 ///
 /// - **Restore** (`restore == true`): the old tree rides as an unpushed edit ON TOP
 ///   of the current server HEAD, so BASE = `server_tip` and the dirty bit is set. A
-///   push lands it as a forward commit (SpeleoDB exposes no server-side revert).
+///   push lands it as a forward commit (SpeleoDB exposes no server-side revert). The
+///   one exception is restoring the tip itself, which changes nothing and so leaves
+///   the copy clean (#303 - see the branch).
 /// - **View** (`restore == false`): BASE = the viewed `hexsha` itself and the copy is
 ///   clean, so the working tree IS that revision (behind tip) and a later Update
 ///   fast-forwards straight back to the latest.
@@ -55,13 +57,134 @@ fn revision_swap_base(
     server_tip: Option<String>,
 ) -> (Option<String>, bool) {
     if restore {
-        (server_tip, true)
+        // [#303] ...EXCEPT when the revision restored IS the tip, where there is
+        // nothing to push: the copy was just downloaded at the commit the server
+        // already holds, so its content equals the server's by construction.
+        //
+        // This is the Unwind's first step (`unwind_target` returns the current commit
+        // so its history can be loaded back), and it is why a project could get stuck
+        // reporting "the upload could not be confirmed": the stamp made Done push a
+        // commit with no change in it, and what the server does with that is
+        // deployment-specific - one answers 304, another closes the connection
+        // mid-request, which is indistinguishable from a lost upload and so keeps the
+        // lock and asks the user to retry. Retrying re-sent the same empty commit.
+        //
+        // Nothing is at risk from not stamping it: undo/redo call `mark_remote_dirty`
+        // like any other mutation, so the moment the user actually steps back through
+        // the loaded history the copy is dirty again and Done pushes it. Done over a
+        // copy nobody has touched now just releases the lock.
+        let restored_the_tip = server_tip.as_deref() == Some(hexsha);
+        (server_tip, !restored_the_tip)
     } else {
         (Some(hexsha.to_owned()), false)
     }
 }
 
 impl AppState {
+    /// [#303] The preconditions for an Unwind - the one action allowed to keep a
+    /// downloaded copy's undo history, and therefore the one that has to earn it.
+    ///
+    /// Two of them, and the second is the interesting one:
+    ///
+    /// 1. **The in-memory undo stack must be EMPTY.** That is what makes "the working copy
+    ///    equals a commit" true: the stack is cleared at a lock or a confirmed push, and
+    ///    undoing everything since then returns the tree to exactly that commit's state.
+    ///    With entries still on the stack, the copy sits somewhere BETWEEN commits, and
+    ///    checking out a revision would silently discard the un-undone work.
+    /// 2. **Any dirt must be an Unwind's own doing.** A restore stamps the copy un-pushed
+    ///    itself, so from the second step onwards the copy IS dirty and the download needs
+    ///    the `discard_local` waiver - which is safe precisely because the only unpushed
+    ///    content is what the previous step created, and the chain pointer proves it.
+    ///    Dirty with NO pointer means real un-pushed work whose history the stack no
+    ///    longer covers (a byte-budget trim, a legacy file), and that must not be
+    ///    discarded on the strength of a waiver the user was never shown.
+    fn speleodb_guard_unwind(
+        &self,
+        link: &crate::models::SpeleoLink,
+    ) -> Result<(), SpeleoErrorDto> {
+        // A poisoned lock reads as "not empty", i.e. REFUSE: the guard exists to stop an
+        // Unwind over un-undone work, so it has to fail closed on not knowing.
+        let stack_empty = self.undo_stack.lock().is_ok_and(|s| s.is_empty());
+        if !stack_empty {
+            return Err(local_dto(SpeleoDbError::Io(
+                "undo the remaining steps before loading earlier history".to_owned(),
+            )));
+        }
+        if link.has_unpushed_edits && self.speleodb_unwound_from().is_none() {
+            return Err(local_dto(SpeleoDbError::Io(
+                "this copy holds un-pushed edits that the undo history no longer covers; \
+                 push or discard them before loading earlier history"
+                    .to_owned(),
+            )));
+        }
+        Ok(())
+    }
+
+    /// [#303] The revision the working copy has been unwound to, if any.
+    pub(super) fn speleodb_unwound_from(&self) -> Option<String> {
+        self.database
+            .lock()
+            .ok()
+            .and_then(|guard| {
+                guard
+                    .as_ref()
+                    .map(crate::persistence::Database::load_speleo_undo_chain)
+            })?
+            .ok()
+            .flatten()
+    }
+
+    /// [#303] Record (or clear) the Unwind chain pointer. Best-effort: losing it costs
+    /// the next Unwind its position - it restarts from BASE, which re-loads a history the
+    /// user already has rather than destroying anything.
+    pub(super) fn speleodb_set_unwound_from(&self, sha: Option<&str>) {
+        let Ok(guard) = self.database.lock() else {
+            return;
+        };
+        if let Some(db) = guard.as_ref() {
+            if let Err(e) = db.save_speleo_undo_chain(sha) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "record the Unwind chain position (#303)",
+                    "could not persist the undo chain pointer; the next Unwind will restart from BASE"
+                );
+            }
+        }
+    }
+
+    /// [#303] Which revision the next Unwind would load, and whether it is the commit the
+    /// working copy already equals.
+    ///
+    /// `None` when there is nothing to reach: no link, an empty repo, the root of the
+    /// history, or a chain pointer naming a commit outside the fetched range. The
+    /// frontend hides the affordance on `None` rather than offering a step that fails.
+    ///
+    /// Needs the revision topology, so it costs one `GET /revisions/`. Called when the
+    /// undo dropdown opens (and by the confirmation dialog), not on the status poll.
+    pub(crate) fn speleodb_unwind_target(
+        &self,
+    ) -> Result<Option<SpeleoUnwindTarget>, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        // Disabled mode never SHIPPED history, so there is nothing in those commits to
+        // come back for. Older commits pushed while the project was Full still have it,
+        // but offering the affordance here would mostly find empty stacks.
+        if !self.undo_policy().pushes_history() {
+            return Ok(None);
+        }
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+        let (_, commits) = self
+            .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+            .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        Ok(sync::unwind_target(
+            self.speleodb_unwound_from().as_deref(),
+            link.base_commit_sha.as_deref(),
+            &commits,
+        )
+        .map(|(hexsha, is_current)| SpeleoUnwindTarget { hexsha, is_current }))
+    }
+
     /// [#218] The project's revision history for the read-only history view:
     /// `GET /projects/{id}/revisions/`, projected to [`SpeleoRevision`] DTOs (no
     /// token, only the display fields). Takes an arbitrary project id (a GlobalView
@@ -122,6 +245,7 @@ impl AppState {
         restore: bool,
         discard_local: bool,
         entry_path: Option<String>,
+        keep_undo_history: bool,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -150,6 +274,12 @@ impl AppState {
             return Err(local_dto(SpeleoDbError::Io(
                 "acquire the write lock before restoring a revision".to_owned(),
             )));
+        }
+        // [#303] The Unwind flavour: keeping the downloaded copy's undo history is a
+        // waiver of the #194 b3 guard, so its preconditions are checked HERE and never
+        // taken on trust from the frontend.
+        if keep_undo_history {
+            self.speleodb_guard_unwind(&open_link)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -235,9 +365,13 @@ impl AppState {
                 &project_id,
                 policy,
                 // [#303] A View/Restore adopts a server tree like any other download, so
-                // its undo history is not inherited implicitly. The Unwind is the one
-                // caller that asks to KEEP it.
-                InheritedUndo::Drop,
+                // its undo history is not inherited implicitly. The Unwind is the ONE
+                // caller that asks to keep it - that history is what it came for.
+                if keep_undo_history {
+                    InheritedUndo::Keep
+                } else {
+                    InheritedUndo::Drop
+                },
             )
             .map_err(local_dto)?;
 
@@ -265,8 +399,9 @@ impl AppState {
             None
         };
         let (base_sha, has_unpushed_edits) = revision_swap_base(restore, &hexsha, server_tip);
-        // `last_edit_at = now` on Restore so the g7 push-start comparison treats it as
-        // an edit; View stays clean and carries no edit timestamp.
+        // `last_edit_at = now` on a Restore that changed something, so the g7 push-start
+        // comparison treats it as an edit. A View - and a Restore of the tip itself,
+        // which changed nothing - stays clean and carries no edit timestamp.
         let last_edit_at = has_unpushed_edits.then(|| chrono::Utc::now().to_rfc3339());
 
         match crate::persistence::Database::open_existing(&dest) {
@@ -347,6 +482,20 @@ impl AppState {
         }
         self.set_force_editing(false);
 
+        // [#303] Record where the Unwind chain now stands - AFTER the reload, because the
+        // reload replaced the file this writes into (and its `speleo_undo_chain` table
+        // came from the server copy, i.e. empty). The next Unwind reads this and walks to
+        // this revision's first parent.
+        //
+        // A plain View / Restore CLEARS it instead: the working copy is no longer where
+        // the chain thought it was, so the next Unwind must restart from BASE rather than
+        // continue a walk that no longer describes anything.
+        if keep_undo_history {
+            self.speleodb_set_unwound_from(Some(&hexsha));
+        } else {
+            self.speleodb_set_unwound_from(None);
+        }
+
         Ok(SpeleoOpenResult {
             local_path,
             concurrent_session: false,
@@ -367,6 +516,87 @@ mod tests {
             .split("#[cfg(test)]")
             .next()
             .expect("production region precedes the test module")
+    }
+
+    /// [#303] Spec item 24: the Unwind's preconditions are enforced in the BACKEND, not
+    /// taken on trust from the frontend - it is the one action allowed to keep a
+    /// downloaded copy's undo history, and (from its second step) to waive the
+    /// un-pushed-edits guard.
+    ///
+    /// Structural, like its siblings in this module: the guard runs inside a verb whose
+    /// happy path needs a live cache dir and a server, so the unit-level seam is the
+    /// source. What it pins is that the three refusals exist and are reached BEFORE the
+    /// download - a check that ran after would have already replaced the working copy.
+    #[test]
+    fn unwind_preconditions_are_checked_before_the_download() {
+        let src = prod_source();
+        assert!(
+            src.contains("fn speleodb_guard_unwind"),
+            "the Unwind guard must exist as its own named function"
+        );
+        // Reached from the swap verb, and before the download it protects.
+        let restore = src
+            .split_once("pub(crate) fn speleodb_restore_revision")
+            .map(|(_, rest)| rest)
+            .expect("the swap verb is in this file");
+        let guard = restore
+            .find("self.speleodb_guard_unwind(")
+            .expect("the swap verb must call the Unwind guard");
+        let download = restore
+            .find("client::download_dump_at_hash(")
+            .expect("the swap verb downloads the revision");
+        assert!(
+            guard < download,
+            "the guard must run BEFORE the download - a check after it would refuse a \
+             working copy that had already been replaced"
+        );
+
+        // And the two refusals themselves: a non-empty stack, and dirt that no Unwind
+        // put there.
+        let body = src
+            .split_once("fn speleodb_guard_unwind")
+            .map(|(_, rest)| rest)
+            .and_then(|rest| rest.split("\n    /// ").next())
+            .expect("guard body precedes the next item's doc");
+        assert!(
+            body.contains("if !stack_empty"),
+            "an Unwind over a non-empty undo stack would discard the un-undone steps"
+        );
+        assert!(
+            body.contains("link.has_unpushed_edits && self.speleodb_unwound_from().is_none()"),
+            "dirt with no chain pointer is real un-pushed work, not a previous Unwind's \
+             doing, and must not be discarded under the waiver"
+        );
+    }
+
+    /// [#303] The chain pointer is written AFTER the reload, and cleared by a plain
+    /// View / Restore.
+    ///
+    /// Ordering is the whole point: the reload replaces the very file the pointer is
+    /// written into (and the downloaded copy carries no chain row of its own, since it is
+    /// stripped from every push), so a write before it would be thrown away.
+    #[test]
+    fn unwind_records_its_chain_position_after_the_reload() {
+        let restore = prod_source()
+            .split_once("pub(crate) fn speleodb_restore_revision")
+            .map(|(_, rest)| rest)
+            .expect("the swap verb is in this file");
+        let reload = restore
+            .find("self.do_load_project_full(")
+            .expect("the swap reloads in place");
+        let record = restore
+            .find("self.speleodb_set_unwound_from(Some(&hexsha));")
+            .expect("an Unwind must record where the chain now stands");
+        assert!(
+            reload < record,
+            "the pointer is written after the reload - the reload replaces the file it \
+             lives in, so an earlier write would be discarded"
+        );
+        assert!(
+            restore.contains("self.speleodb_set_unwound_from(None);"),
+            "a plain View / Restore must CLEAR the pointer: the working copy is no longer \
+             where the chain thought it was"
+        );
     }
 
     #[test]
@@ -464,5 +694,38 @@ mod tests {
         let (base, dirty) = revision_swap_base(false, "abc1234", Some("deadbeefcafe".to_owned()));
         assert_eq!(base.as_deref(), Some("abc1234"));
         assert!(!dirty, "view must leave the copy clean");
+    }
+
+    #[test]
+    fn restoring_the_tip_leaves_the_copy_clean_so_done_pushes_nothing() {
+        // [#303] The Unwind's FIRST step restores the commit the copy already equals,
+        // to load its undo history back. Stamping that dirty made Done upload a commit
+        // with no change in it, and a deployment that closes the connection on one
+        // (rather than answering 304) leaves the project stuck: the push is ambiguous,
+        // so the lock is kept and the user is asked to retry, and the retry re-sends
+        // the same empty commit. `speleodb_done`'s dirty-bit gate is what makes the
+        // clean answer skip the upload entirely.
+        let (base, dirty) =
+            revision_swap_base(true, "deadbeefcafe", Some("deadbeefcafe".to_owned()));
+        assert_eq!(
+            base.as_deref(),
+            Some("deadbeefcafe"),
+            "BASE is still the tip - only the dirty bit differs"
+        );
+        assert!(
+            !dirty,
+            "restoring the revision the copy was downloaded at has nothing to push"
+        );
+
+        // The comparison is against the TIP, not just any match: restoring an ancestor
+        // really does change the tree, so it must stay dirty even though `hexsha` is a
+        // commit the server holds.
+        let (_, dirty) = revision_swap_base(true, "abc1234", Some("deadbeefcafe".to_owned()));
+        assert!(dirty, "an ancestor restore is a real change to push");
+
+        // And the degenerate case keeps the safer answer: with no resolvable tip we
+        // cannot show the copy matches it, so the work stays flagged.
+        let (_, dirty) = revision_swap_base(true, "abc1234", None);
+        assert!(dirty, "unknown tip must not silently clear the dirty bit");
     }
 }

@@ -128,11 +128,12 @@ Undo and redo stacks are persisted to the SQLite database synchronously on each 
 
 ### Details
 
-- Only the last N entries are persisted (configurable via `general.undo_persist_limit`, default 20)
+- Only the last N entries are persisted (configurable via `general.undo_persist_limit`, default 20) - EXCEPT for a Full-mode SpeleoDB project, which persists its whole history since the last commit under a byte budget instead (#303)
 - Each entry is stored as `(command_json, undo_data_json, timestamp_iso8601)`
 - Serialization uses gzip compression
+- A save rewrites the WHOLE persisted stack, every time - it has to, because the pipeline above builds a fresh temp file and renames it over the target, so anything a save skips is gone (#303). The byte budget is therefore a latency bound as much as a storage one; see [Undo/Redo](undo-redo.md)
 - On project open, persisted stacks are restored from the database
-- See [Undo/Redo](undo-redo.md) for the full undo system documentation
+- See [Undo/Redo](undo-redo.md) for the full undo system documentation, including the hybrid SpeleoDB mode and when the stack is cleared
 
 ## CommandResult.saved_path
 

@@ -92,6 +92,25 @@ pub(crate) struct RevisionHistory {
     pub(crate) commits: Vec<RevisionCommit>,
 }
 
+/// [#303] Which revision the next "Unwind to previous SpeleoDB version" would load.
+///
+/// `is_current` distinguishes the two shapes of the same action, which the confirmation
+/// dialog has to word differently:
+///
+/// - `true` - the target is the commit the working copy ALREADY equals (the first step
+///   after a push). Nothing moves; what comes back is the undo history that produced this
+///   state, so the user can keep stepping backwards through their own pushed operations.
+/// - `false` - the target is an ancestor, so the working copy DOES move back, and any
+///   later push lands that older content as a new forward commit.
+#[derive(Debug, Clone, Serialize, TS)]
+#[ts(export)]
+pub struct SpeleoUnwindTarget {
+    /// 40-hex commit SHA to check out.
+    pub hexsha: String,
+    /// The target is the working copy's own commit rather than an ancestor.
+    pub is_current: bool,
+}
+
 /// [#218] One commit projected for the frontend revision-history view. A read-only
 /// slice of [`RevisionCommit`] carrying only what the UI renders (no token, no
 /// server-internal fields). The list is server-ordered (newest first).
@@ -755,6 +774,14 @@ pub struct SpeleoLinkStatus {
     /// over the same `get_project` probe; `false` when logged out / offline / the
     /// lookup failed (never nag on a transient miss).
     pub exclude_geojson: bool,
+    /// [#303] The project's effective undo-history policy - what its next push will
+    /// carry - and whether that came from a per-project override or from the global
+    /// default. The settings control renders both: "Full" and "Full (following the
+    /// global default)" are different states, and collapsing them makes clearing an
+    /// override look like a no-op.
+    pub undo_mode: crate::models::UndoMode,
+    /// See [`Self::undo_mode`].
+    pub undo_mode_overridden: bool,
     /// [#213] The open remote project is being force-edited WITHOUT the write lock
     /// (`edit_enabled` is also true, but no lock is held). Drives the persistent
     /// big-red "unmergeable `.stalx`" banner + the "Reconnect to sync" action, and
@@ -1011,6 +1038,8 @@ mod tests {
             access_denied: false,
             server_error: None,
             exclude_geojson: false,
+            undo_mode: crate::models::UndoMode::Full,
+            undo_mode_overridden: false,
             force_editing: false,
             allow_force_edit: false,
             project_id: Some("11111111-1111-1111-1111-111111111111".to_owned()),

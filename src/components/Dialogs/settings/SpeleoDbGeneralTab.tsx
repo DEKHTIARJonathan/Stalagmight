@@ -1,6 +1,7 @@
 import { useTranslation } from 'react-i18next';
 import { SettingsSection } from './SettingsSection';
 import { Button } from '../../common/Button';
+import { SpeleoUndoModeControl } from './SpeleoUndoModeControl';
 import { COUNTRIES } from '../../../data/countries';
 import type { SpeleoProjectMetadataState } from '../../../hooks/useSpeleoProjectMetadata';
 import type { Visibility } from '../../../types/ipc.generated';
@@ -189,6 +190,11 @@ export function SpeleoDbGeneralTab({ metadata }: { metadata: SpeleoProjectMetada
             </p>
           )}
         </div>
+
+        {/* [#303] The one field here that is PROJECT-file state rather than server
+            metadata, which its own copy says. It belongs in this dialog anyway: this is
+            where a user comes to ask how the project is set up. */}
+        <SpeleoUndoModeControl />
       </SettingsSection>
     </div>
   );

@@ -448,6 +448,12 @@ export default function Toolbar({
             <UndoHistoryDropdown
               mode="undo"
               disabled={placementModeActive || !canUndo}
+              // [#303] An empty undo stack still has something to show on a linked
+              // project: the Unwind entry that continues the walk past the commit
+              // boundary. The button stays disabled (Undo / Ctrl+Z must keep doing
+              // nothing); only HOVER opens the panel. Placement mode is excluded - that
+              // reason for `disabled` must still suppress the panel entirely.
+              hoverableWhenEmpty={!placementModeActive}
               onSingleAction={onUndo}
               testId="toolbar-undo-button"
               ariaLabel={t('common.actions.undo')}

@@ -19,6 +19,8 @@ const LINK: SpeleoLinkState = {
   hasUnpushedEdits: false,
   forceEditing: false,
   forceEditAllowed: false,
+  undoMode: 'full',
+  undoModeOverridden: false,
   remoteState: 'up_to_date',
   noAccess: false,
   serverError: null,

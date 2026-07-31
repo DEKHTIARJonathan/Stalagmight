@@ -682,6 +682,9 @@ impl AppState {
         };
 
         if let Ok(undo_stack) = self.undo_stack.lock() {
+            // Every save writes the WHOLE (budgeted) stack, because the pipeline above
+            // built a fresh temp file and renamed it over the target: the reopened `db`
+            // has no undo tables to add to. See `StackSync`.
             let undo_plan = undo_stack.persist_plan(PersistStack::Undo, count_limit);
             let redo_plan = undo_stack.persist_plan(PersistStack::Redo, count_limit);
 
@@ -707,8 +710,9 @@ impl AppState {
                     false
                 }
             };
-            // Both halves are best-effort and independent: a failure on either is a
-            // warning, not a failed save, since the survey itself is already on disk.
+            // Both failures are already logged. Nothing to reconcile afterwards: the
+            // next save rewrites the whole stack regardless, so a partial failure costs
+            // this file's history and not the next one's.
             let _ = (undo_synced, redo_synced);
         }
     }
@@ -795,11 +799,9 @@ impl AppState {
             let mut undo_stack = self.undo_stack.lock().unwrap_or_else(|e| e.into_inner());
             tracing::debug!("close_project: clearing undo stack");
             undo_stack.clear();
-            // [#303] Back onto the configured entry window, and forget which file the
-            // incremental bookkeeping described - the next project's save must rewrite
-            // once rather than trust ids minted against a file that is no longer open.
+            // [#303] Back onto the configured entry window: the next project to open is
+            // local until a link says otherwise.
             undo_stack.use_count_limit();
-            undo_stack.require_full_rewrite();
             tracing::debug!("close_project: undo stack cleared");
         }
 
