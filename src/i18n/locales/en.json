@@ -2522,7 +2522,7 @@
           },
           "done": {
             "title": "That is the tour",
-            "description": "Guides do not run again after this first session. To replay them, use Settings > General > Restart guides."
+            "description": "This tour runs once. The guides for DMP import and station placement still appear the first time you reach those workflows. Settings > General > Restart onboarding replays all of them."
           }
         }
       },
