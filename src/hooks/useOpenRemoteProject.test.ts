@@ -1375,12 +1375,16 @@ describe('useOpenRemoteProject (#218)', () => {
    */
   it.each([
     ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
+    // NOT keyed on "you still hold it": both lock-branch strings now contain it
+    // ("release the lock IF you still hold it"), because after the holder re-check
+    // this outcome also covers "the release may have landed but we could not
+    // establish whose the mutex is". The tail is what separates the two.
     [
       'pushed but the lock did not come back',
       { kind: 'pushed_lock_held' },
       true,
       'warning',
-      'you still hold it',
+      'so others can edit',
     ],
     [
       'pushed but still typed ariane',

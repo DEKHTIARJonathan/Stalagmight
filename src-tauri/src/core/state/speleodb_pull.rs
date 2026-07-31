@@ -1331,7 +1331,17 @@ impl AppState {
                 // lock deliberately kept on another project, whose janitor retry pointer
                 // and authorship provenance would go with it, over a call that
                 // established nothing about that project at all.
-                let _ = self.speleodb_forget_lock_acquired_for(&project_id);
+                //
+                // And scoped to the account that TOOK it, for the same reason the guard
+                // above compares against a captured identity: the plain
+                // `speleodb_forget_lock_acquired_for` resolves the account from the live
+                // session, which a sign-out or switch landing in here has already moved.
+                // The claim would then outlive the demotion that disproved it, and the
+                // reclaim check is account-blind - so it would go on standing a later
+                // release down over a mutex the server has told us is not ours.
+                if let Some(email) = my_email.as_deref() {
+                    let _ = self.speleodb_forget_lock_acquired_as(&project_id, &endpoint, email);
+                }
                 AdoptUpload::Pushed
             }
             (upload, _) => upload,

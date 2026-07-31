@@ -2742,8 +2742,8 @@
       "doneToast": "Project adopted and uploaded to SpeleoDB.",
       "doneToastNoTypeFlip": "Project adopted and uploaded, but its SpeleoDB type could not be changed to \"other\" (you may not have write access).",
       "doneToastLocalOnly": "Project adopted on this machine only - it could not be uploaded. Use Start editing, then Done, to push it to SpeleoDB.",
-      "doneToastLockHeld": "Project adopted and uploaded to SpeleoDB, but the write lock could not be handed back - you still hold it. Your survey is safe on the server; release the lock from the SpeleoDB menu so others can edit.",
-      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: you still hold the write lock, and its SpeleoDB type could not be changed to \"other\". Your survey is safe on the server; release the lock from the SpeleoDB menu, and change the type in SpeleoDB so the project stops offering to be adopted."
+      "doneToastLockHeld": "Project adopted and uploaded to SpeleoDB, but handing the write lock back could not be confirmed. Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, so others can edit.",
+      "doneToastLockHeldNoTypeFlip": "Project adopted and uploaded to SpeleoDB, but two things are unfinished: handing the write lock back could not be confirmed, and its SpeleoDB type could not be changed to \"other\". Your survey is safe on the server; check the SpeleoDB menu and release the lock if you still hold it, and change the type in SpeleoDB so the project stops offering to be adopted."
     },
     "dumpPicker": {
       "titleStalx": "Choose which file to open",
