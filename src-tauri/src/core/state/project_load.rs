@@ -188,6 +188,20 @@ impl AppState {
                 Vec::new()
             }
         };
+        // [#303] ...and the inherited-history watermark that goes with them. Read from the
+        // SAME database handle, before it is swapped, so it describes these entries.
+        // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
+        // applies; without it, reopening an unwound project would lose the floor while
+        // keeping the rows it protects against.
+        let speleo_undo_watermark = db
+            .load_speleo_undo_watermark()
+            .ok()
+            .flatten()
+            .and_then(|ts| {
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
 
         // ALL commits under ONE `project` acquisition, exactly as
         // `do_load_project_full`'s finalization and for the same reason (round
@@ -225,6 +239,10 @@ impl AppState {
 
         // Restore persisted undo/redo stacks
         if let Ok(mut undo_stack) = self.undo_stack.lock() {
+            // [#303] Unconditionally, and before the entries: a project with no history
+            // can still carry a watermark, and a value left over from the PREVIOUS project
+            // would otherwise floor this one's stamps at an unrelated instant.
+            undo_stack.set_inherited_through(speleo_undo_watermark);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {
@@ -715,6 +733,20 @@ impl AppState {
                 Vec::new()
             }
         };
+        // [#303] ...and the inherited-history watermark that goes with them. Read from the
+        // SAME database handle, before it is swapped, so it describes these entries.
+        // `UndoStack::next_stamp` needs it to keep a new entry above the cut the push
+        // applies; without it, reopening an unwound project would lose the floor while
+        // keeping the rows it protects against.
+        let speleo_undo_watermark = db
+            .load_speleo_undo_watermark()
+            .ok()
+            .flatten()
+            .and_then(|ts| {
+                chrono::DateTime::parse_from_rfc3339(&ts)
+                    .ok()
+                    .map(|dt| dt.with_timezone(&chrono::Utc))
+            });
 
         // All finalization commits use unwrap_or_else(PoisonError::into_inner) to ensure
         // data is written even if a previous panic poisoned a mutex. This is acceptable
@@ -787,6 +819,10 @@ impl AppState {
                 .undo_stack
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
+            // [#303] Unconditionally, and before the entries: a project with no history
+            // can still carry a watermark, and a value left over from the PREVIOUS project
+            // would otherwise floor this one's stamps at an unrelated instant.
+            undo_stack.set_inherited_through(speleo_undo_watermark);
             if undo_entries.is_empty() && redo_entries.is_empty() {
                 undo_stack.clear();
             } else {

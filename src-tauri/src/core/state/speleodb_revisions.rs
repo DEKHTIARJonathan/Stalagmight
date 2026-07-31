@@ -204,18 +204,35 @@ impl AppState {
     /// loaded revision's history ride into the next commit as though it were authored
     /// here, which is the duplication this exists to stop. Hence the louder log.
     pub(super) fn speleodb_set_inherited_through(&self, instant: Option<&str>) {
-        let Ok(guard) = self.database.lock() else {
-            return;
-        };
-        if let Some(db) = guard.as_ref() {
-            if let Err(e) = db.save_speleo_undo_watermark(instant) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "record the inherited-history watermark (#303)",
-                    "could not persist the undo watermark; the next push may carry a loaded \
-                     revision's history as if this session had authored it"
-                );
+        {
+            let Ok(guard) = self.database.lock() else {
+                return;
+            };
+            if let Some(db) = guard.as_ref() {
+                if let Err(e) = db.save_speleo_undo_watermark(instant) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "record the inherited-history watermark (#303)",
+                        "could not persist the undo watermark; the next push may carry a \
+                         loaded revision's history as if this session had authored it"
+                    );
+                }
             }
+        }
+        // [#303] Mirror it onto the stack, which needs it to stamp new entries ABOVE the
+        // watermark - see `UndoStack::next_stamp`. This is the single funnel every set and
+        // clear goes through, so the mirror cannot drift by a caller forgetting it.
+        //
+        // Sequenced after the database guard is dropped rather than inside it: the house
+        // order is database-then-`undo_stack`, and holding neither across the other keeps
+        // that trivially true.
+        let parsed = instant.and_then(|ts| {
+            chrono::DateTime::parse_from_rfc3339(ts)
+                .ok()
+                .map(|dt| dt.with_timezone(&chrono::Utc))
+        });
+        if let Ok(mut stack) = self.undo_stack.lock() {
+            stack.set_inherited_through(parsed);
         }
     }
 
@@ -869,6 +886,41 @@ mod tests {
             !std::include_str!("undo.rs").contains("speleodb_forget_unwind_position"),
             "undo / redo walk the loaded history - clearing the position there would warn \
              on every ordinary step of an Unwind chain"
+        );
+    }
+
+    /// [#303] The fourth writer of the project file, which the test above cannot see.
+    ///
+    /// `a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not` counts sites in
+    /// `commands.rs`, so it was blind to `speleodb_set_undo_mode` - which writes
+    /// `speleo_link.undo_mode` into the `.stalx`, rides to the server in the next push, and
+    /// is therefore an edit of the project like any other. It dirtied the copy without
+    /// dropping the chain pointer, and the pointer is what EXCUSES the dirty bit: the next
+    /// Unwind's `discards_unpushed` answered false, so no warning rendered, the guard waved
+    /// it through, and the swap silently reverted the mode the user had just chosen.
+    #[test]
+    fn the_undo_mode_setter_forgets_the_unwind_position_too() {
+        let policy = std::include_str!("undo_policy.rs");
+        let dirty = policy
+            .find("self.mark_remote_dirty();")
+            .expect("setting the undo mode dirties the link");
+        let forget = policy
+            .find("self.speleodb_forget_unwind_position();")
+            .expect(
+                "...and must drop the chain pointer with it: this writes the project file, \
+                 so the Unwind excuse no longer applies",
+            );
+        assert!(
+            forget > dirty && policy[dirty..forget].lines().count() <= 12,
+            "the pointer clear belongs beside the dirty flip it explains"
+        );
+        assert_eq!(
+            policy.matches("self.mark_remote_dirty();").count(),
+            policy
+                .matches("self.speleodb_forget_unwind_position();")
+                .count(),
+            "every dirty flip in this file is a project-file write, so each one needs its \
+             own pointer clear"
         );
     }
 

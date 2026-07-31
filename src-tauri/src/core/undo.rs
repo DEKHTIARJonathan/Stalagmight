@@ -112,6 +112,20 @@ pub struct UndoStack {
     undo_sync: StackSync,
     /// [#303] The same, for the redo stack.
     redo_sync: StackSync,
+    /// [#303] The inherited-history watermark, mirrored from `speleo_undo_watermark` so
+    /// [`Self::next_stamp`] can stay above it.
+    ///
+    /// The push cuts every undo row stamped at or before this instant, on the grounds
+    /// that it came off another machine with a loaded revision rather than being authored
+    /// here (`repair::cut_inherited_undo_rows`). Staying above it is therefore the
+    /// difference between the user's new entry shipping and being deleted.
+    ///
+    /// Mirrored rather than read live because the authoritative copy lives in the
+    /// database, and the lock order is database-then-`undo_stack`: reading it from inside
+    /// a method that already holds this stack would invert that. Kept in sync by
+    /// `speleodb_set_inherited_through`, the single funnel every set and clear goes
+    /// through, and seeded on load beside the entries themselves.
+    inherited_through: Option<DateTime<Utc>>,
 }
 
 /// [#303] Per-stack id bookkeeping for persistence.
@@ -345,6 +359,7 @@ impl Default for UndoStack {
             depth_limit: DepthLimit::Count(DEFAULT_UNDO_HISTORY_LIMIT),
             undo_sync: StackSync::default(),
             redo_sync: StackSync::default(),
+            inherited_through: None,
         }
     }
 }
@@ -364,6 +379,7 @@ impl UndoStack {
             depth_limit: DepthLimit::Count(history_limit),
             undo_sync: StackSync::default(),
             redo_sync: StackSync::default(),
+            inherited_through: None,
         }
     }
 
@@ -404,8 +420,16 @@ impl UndoStack {
         self.depth_limit
     }
 
+    /// [#303] Mirror the inherited-history watermark onto this stack.
+    ///
+    /// See [`Self::inherited_through`]. Always call it on a load, with `None` when the
+    /// project has no watermark, so a value cannot outlive the project it came from.
+    pub fn set_inherited_through(&mut self, instant: Option<DateTime<Utc>>) {
+        self.inherited_through = instant;
+    }
+
     /// [#303] The stamp for the next entry: wall-clock, but never at or below the entry
-    /// beneath it.
+    /// beneath it, nor at or below the inherited-history watermark.
     ///
     /// Everything that reasons about this stack by time assumes later-in-the-stack means
     /// later-in-time - `drop_entries_up_to` says so outright and uses `partition_point`,
@@ -417,14 +441,32 @@ impl UndoStack {
     /// So the stack keeps its own order. The stamp is the real instant whenever that is
     /// already ahead - the ordinary case, and the one that keeps displayed times honest -
     /// and otherwise the smallest value that preserves the invariant.
+    ///
+    /// The watermark is the second floor, and staying above the entry beneath is NOT
+    /// enough to clear it. Undo far enough into a chain step's loaded rows and the entry
+    /// beneath is an OLD one: a peer whose clock ran a day fast stamps its rows across
+    /// (T+1d-5min .. T+1d), the watermark lands at T+1d, and an edit made after undoing to
+    /// the oldest of them took `T+1d-5min + 1ns` - correctly above its neighbour, and five
+    /// minutes below the watermark. `cut_inherited_undo_rows` then deletes the user's own
+    /// entry from the upload as inherited, so the commit ships the survey change with no
+    /// history for it and a later Unwind cannot step through the operation.
     fn next_stamp(&self) -> DateTime<Utc> {
         let now = Utc::now();
-        match self.undo_stack.back().and_then(|entry| entry.timestamp) {
+        // The highest instant a new entry must beat, whichever of the two floors it is.
+        let floor = match (
+            self.undo_stack.back().and_then(|entry| entry.timestamp),
+            self.inherited_through,
+        ) {
+            (Some(prev), Some(mark)) => Some(prev.max(mark)),
+            (prev, mark) => prev.or(mark),
+        };
+        match floor {
             // `>=`, not `>`: two entries sharing an instant would break the strict
-            // ordering just as an inversion does.
+            // ordering just as an inversion does - and the push's cut is itself `<=`, so
+            // an entry landing exactly ON the watermark is one it deletes.
             Some(prev) if prev >= now => prev + chrono::Duration::nanoseconds(1),
-            // No previous entry, or a legacy one carrying no timestamp at all: there is
-            // nothing to stay ahead of.
+            // No previous entry (or a legacy one carrying no timestamp), and no watermark:
+            // there is nothing to stay ahead of.
             _ => now,
         }
     }
@@ -2358,6 +2400,78 @@ mod tests {
             stack.newest_stamp(),
             stamps.last().copied(),
             "newest_stamp is the back, which the invariant makes the maximum"
+        );
+    }
+
+    /// [#303] The watermark is the SECOND floor, and clearing the entry beneath is not
+    /// enough to clear it.
+    ///
+    /// The shape that bit: a peer's clock runs a day fast, so a chain step loads rows
+    /// stamped across (T+1d-5min .. T+1d) and the watermark lands at T+1d. Undo back to
+    /// the OLDEST loaded row and edit: staying above that neighbour gives T+1d-5min+1ns,
+    /// five minutes UNDER the watermark - and `cut_inherited_undo_rows` deletes every row
+    /// at or below it, so the user's own entry never reaches the commit.
+    #[test]
+    fn a_new_entry_clears_the_inherited_watermark_even_from_deep_in_a_walk() {
+        let mut stack = UndoStack::new();
+        let watermark = Utc::now() + chrono::Duration::days(1);
+        let oldest_loaded = watermark - chrono::Duration::minutes(5);
+
+        // The stack as an Unwind leaves it: loaded rows, then undone back to the oldest,
+        // so the entry BENEATH a new push is the five-minutes-under one.
+        stack.push_with_data(
+            test_create_section_command("loaded"),
+            UndoData::InverseCommand(test_delete_section_command(0)),
+        );
+        stack.undo_stack.back_mut().expect("seeded").timestamp = Some(oldest_loaded);
+        stack.set_inherited_through(Some(watermark));
+
+        stack.push_with_data(
+            test_create_section_command("mine"),
+            UndoData::InverseCommand(test_delete_section_command(1)),
+        );
+
+        let mine = stack.newest_stamp().expect("stamped");
+        assert!(
+            mine > watermark,
+            "a new entry must sit ABOVE the watermark ({watermark:?}), got {mine:?} - at or \
+             below it the push cuts it as inherited history"
+        );
+    }
+
+    /// Without a watermark nothing changes: the clamp must not invent a floor.
+    #[test]
+    fn no_watermark_leaves_the_stamp_at_the_real_instant() {
+        let mut stack = UndoStack::new();
+        stack.set_inherited_through(None);
+        let before = Utc::now();
+        stack.push_with_data(
+            test_create_section_command("S0"),
+            UndoData::InverseCommand(test_delete_section_command(0)),
+        );
+        let after = Utc::now();
+        let stamp = stack.newest_stamp().expect("stamped");
+        assert!(
+            stamp >= before && stamp <= after,
+            "unexpected clamp: {stamp:?}"
+        );
+    }
+
+    /// A watermark already in the past is not a floor at all - the wall clock clears it.
+    #[test]
+    fn a_past_watermark_does_not_push_the_stamp_forward() {
+        let mut stack = UndoStack::new();
+        stack.set_inherited_through(Some(Utc::now() - chrono::Duration::days(1)));
+        let before = Utc::now();
+        stack.push_with_data(
+            test_create_section_command("S0"),
+            UndoData::InverseCommand(test_delete_section_command(0)),
+        );
+        let after = Utc::now();
+        let stamp = stack.newest_stamp().expect("stamped");
+        assert!(
+            stamp >= before && stamp <= after,
+            "unexpected clamp: {stamp:?}"
         );
     }
 
