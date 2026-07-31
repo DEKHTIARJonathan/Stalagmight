@@ -869,10 +869,23 @@ impl AppState {
         // The same answer decides whether to take the lock at all, so it is read once
         // and passed down: a mutex anybody holds is one this flow declines to push
         // through.
-        let holder = self.speleodb_lock_holder(&endpoint, &token, insecure_http, &project_id);
-        let concurrent_session = self
-            .speleodb_my_email()
-            .is_some_and(|me| sync::concurrent_session_notice(holder.as_deref(), &me));
+        //
+        // The CHECKED probe, which keeps "unheld" and "could not find out" apart. The
+        // collapsing variant beside it is right for the display probes it was written
+        // for - an unknown holder and no holder both render as "unknown" - and wrong
+        // here for the same reason it is wrong for `speleodb_start_editing`: this flow
+        // RELEASES on the way out, so reading a failed GET as "unheld" is what lets an
+        // adoption acquire over a mutex our own account is already holding in another
+        // window (that acquire is a server-side no-op, so it cannot report the
+        // collision) and then hand it back out from under that session, which goes on
+        // editing until its next push 403s. Another ACCOUNT's lock is safe either way -
+        // the server answers that acquire with the 400 - so it is only our own that
+        // needs the probe to be honest about not knowing.
+        let holder =
+            self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &project_id);
+        let concurrent_session = self.speleodb_my_email().is_some_and(|me| {
+            sync::concurrent_session_notice(holder.as_ref().ok().and_then(Option::as_deref), &me)
+        });
 
         // THE LOCK COMES FIRST - before the head resolve, before the download.
         //
@@ -1189,11 +1202,15 @@ impl AppState {
     /// Take the write mutex for an adoption that is about to download and convert,
     /// so no other writer can land a revision inside that window.
     ///
-    /// `holder` is the pre-read lock holder. Anybody at all stops it: another
-    /// account's mutex is not ours to take, and our own account's - a second window,
-    /// the website - belongs to a session that is mid-edit, which
-    /// [`AppState::speleodb_start_editing`] would read as inherited and
-    /// [`AppState::speleodb_done`] would then hand back out from under them.
+    /// `holder` is the pre-read lock holder, with its three outcomes kept apart.
+    /// Anybody at all stops the acquire: another account's mutex is not ours to take,
+    /// and our own account's - a second window, the website - belongs to a session
+    /// that is mid-edit, which [`AppState::speleodb_start_editing`] would read as
+    /// inherited and [`AppState::speleodb_done`] would then hand back out from under
+    /// them. A probe that FAILED stops it too, for the same reason in its unknowable
+    /// form: an acquire over a lock our account already holds is a server-side no-op,
+    /// so nothing later in the flow can discover the collision, and "cannot say" must
+    /// never be read as "unheld" by a caller that will release on the way out.
     ///
     /// Never fails the adoption. Every arm that does not end in
     /// [`AdoptLock::Held`] carries the [`AdoptUpload`] the caller reports instead
@@ -1213,8 +1230,26 @@ impl AppState {
         token: &str,
         insecure_http: bool,
         project_id: &str,
-        holder: Option<String>,
+        holder: Result<Option<String>, SpeleoDbError>,
     ) -> AdoptLock {
+        let holder = match holder {
+            Ok(holder) => holder,
+            // Unreadable. In practice the download two lines down is about to fail the
+            // same way, and the adoption then fails outright - so refusing to push here
+            // usually costs nothing, and when it does cost something it costs the push,
+            // never the conversion.
+            Err(e) => {
+                tracing::info!(
+                    error = %e,
+                    project_id,
+                    purpose = "refuse to acquire over a lock whose holder we could not read",
+                    "speleodb_adopt_ariane: lock state unknown; the conversion will stay local"
+                );
+                return AdoptLock::NotTaken(AdoptUpload::Failed {
+                    message: format!("could not check who holds the write lock: {e}"),
+                });
+            }
+        };
         if let Some(email) = holder {
             tracing::info!(
                 holder = %email,
@@ -2011,6 +2046,34 @@ mod tests {
             body.contains("matches!(upload, AdoptUpload::Pushed)"),
             "and it must be GATED on the one outcome that means the bytes landed - \
              flipping on a lock we could not take strands the project unopenable"
+        );
+    }
+
+    /// Adoption is a caller that RELEASES on the way out, which is what makes the
+    /// difference between the two lock probes matter here.
+    ///
+    /// `speleodb_lock_holder` collapses "unheld" and "could not find out" into `None`
+    /// - right for the display probes it was written for, where both render as
+    /// unknown. Adoption reading a failed GET as unheld goes on to acquire, and an
+    /// acquire over a mutex OUR OWN ACCOUNT already holds is a server-side no-op: it
+    /// returns 200 and reports no collision, so nothing later in the flow can discover
+    /// one. The push then lands and `speleodb_done` hands the lock back out from under
+    /// the window that was actually using it, which goes on editing until its next
+    /// push 403s. Another account's lock is safe either way - the server answers that
+    /// acquire with the 400 this flow already handles - so it is only our own that
+    /// needs the probe to admit it does not know.
+    #[test]
+    fn adoption_reads_the_lock_probe_honestly_rather_than_as_unheld() {
+        let body = adopt_body();
+        assert!(
+            body.contains("self.speleodb_lock_holder_checked("),
+            "adoption must use the probe that keeps `unheld` and `unreadable` apart"
+        );
+        assert!(
+            !body.contains("self.speleodb_lock_holder("),
+            "and must not use the collapsing one: it reads a failed GET as unheld, \
+             which is how an adoption acquires - and later releases - a lock our own \
+             account is holding in another window"
         );
     }
 
