@@ -7,6 +7,10 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- The pinned toolchain moved to **pnpm 11** (`11.18.0`, via `packageManager`), completing the toolchain pin that started with Node 24 - relevant if you build from source. Build-script approvals move out of `package.json` into a new `pnpm-workspace.yaml`, which is where pnpm 10 and later read them, and `scripts/mac-setup.sh` now derives the pnpm major from `packageManager` instead of hardcoding it, so it can no longer drift behind a bump. `pnpm-lock.yaml` is unchanged ([#109](https://github.com/Stalagmight/Stalagmight/issues/109))
+
 ### Fixed
 
 #### SpeleoDB

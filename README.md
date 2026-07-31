@@ -63,7 +63,7 @@ generated from the Rust types via `ts-rs`.
 platform.
 
 The toolchain is pinned so every machine builds the same versions - pnpm
-`9.15.9` (via `packageManager` in `package.json`) and Node `24.x` (via
+`11.18.0` (via `packageManager` in `package.json`) and Node `24.x` (via
 `.nvmrc`). On a fresh clone:
 
 ```bash

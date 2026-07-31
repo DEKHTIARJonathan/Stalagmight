@@ -25,32 +25,35 @@ characters in ASCII diagrams are fine.
 
 The toolchain is pinned so every machine + CI runs the same versions:
 
-- **pnpm `9.15.9`** via `"packageManager"` in `package.json` (corepack and
-  `pnpm/action-setup@v4` both read it - no per-workflow `version:`).
+- **pnpm `11.18.0`** via `"packageManager"` in `package.json` (corepack and
+  `pnpm/action-setup` both read it - no per-workflow `version:`). `scripts/mac-setup.sh`
+  derives the major from the same field.
 - **node `24.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
   on newer node). One toolchain everywhere, the agent harness included.
 
 First-time setup on a clean clone:
 
 ```bash
-corepack enable      # makes `pnpm` honor packageManager (pins to 9.15.9)
-pnpm install         # build scripts are pre-approved (pnpm.onlyBuiltDependencies)
+corepack enable      # makes `pnpm` honor packageManager (pins to 11.18.0)
+pnpm install         # build scripts are pre-approved (pnpm-workspace.yaml)
 ./scripts/dev.sh
 ```
 
-Without `corepack enable`, a globally-installed **pnpm 11** hard-fails
-`pnpm tauri dev` on a fresh clone (its stricter deps check rejects unapproved
-build scripts - issue #109). Don't commit a lockfile-only drift.
+Any pnpm 10+ self-switches to the pin before it does anything else, so a fresh
+clone installs correctly even without `corepack enable`. Don't commit a
+lockfile-only drift.
 
-The node half of that upgrade has landed (22 -> 24). **pnpm is still pinned at
-`9.15.9`, and bumping it is not just a version edit:** `pnpm.onlyBuiltDependencies`
-in `package.json` is a **silent no-op on pnpm 10 and 11**, which read the approval
-list from `pnpm-workspace.yaml` instead - as `allowBuilds:` **keyed by package**
-(`esbuild: true`), not a list. Get that wrong and fresh clones break again exactly
-as in #109, with no error pointing at the cause. Verified against the 10.34.5 and
-11.18.0 release tarballs: the list form of `allowBuilds` and `onlyBuiltDependencies`
-in either shape both fail on 11.18.0; the keyed `allowBuilds` map is the only form
-that works on both majors.
+**Build-script approvals live in `pnpm-workspace.yaml`, as `allowBuilds:` keyed by
+package** (`esbuild: true`), never a list. This shape is load-bearing: the older
+`pnpm.onlyBuiltDependencies` block in `package.json` is ignored from pnpm 11 on, a
+list under `allowBuilds` is rejected by both pnpm 10 and 11, and the list form of
+`onlyBuiltDependencies` works on 10 but not 11 - the keyed map is the only form
+valid on both majors (verified against the 10.34.5 and 11.18.0 release tarballs,
+one isolated store per case). Getting it wrong is loud, not silent: pnpm exits 1
+with `ERR_PNPM_IGNORED_BUILDS` naming the packages, so it cannot merge green.
+
+`pnpm-lock.yaml` stays at `lockfileVersion: '9.0'`; pnpm 11 accepts it under
+`--frozen-lockfile` and does not rewrite it.
 
 ### Never Use `cd` in Bash Commands
 

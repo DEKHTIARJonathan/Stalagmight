@@ -70,7 +70,8 @@ fi
 # ── Node.js ──────────────────────────────────────────────────────────────────
 # The major comes from .nvmrc so this script cannot drift from CI, which selects
 # node with `node-version-file: .nvmrc`. Keep them reading the same file.
-NVMRC="$(dirname "$(dirname "$(realpath "$0")")")/.nvmrc"
+REPO_ROOT="$(dirname "$(dirname "$(realpath "$0")")")"
+NVMRC="$REPO_ROOT/.nvmrc"
 [[ -f "$NVMRC" ]] || die "Could not find .nvmrc next to the repo root ($NVMRC)"
 # Take the leading version component, tolerating a `v` prefix and a full semver -
 # both of which are valid .nvmrc and both of which `setup-node` accepts. Stripping
@@ -98,7 +99,17 @@ else
   ok "Installed: $(node --version)"
 fi
 
-# ── pnpm 9 ───────────────────────────────────────────────────────────────────
+# ── pnpm ─────────────────────────────────────────────────────────────────────
+# The version comes from package.json's `packageManager` so this script cannot
+# drift from CI, where pnpm/action-setup reads that same field. Take only the
+# major: any pnpm 10+ self-switches to the exact pin before running anything.
+PKG_JSON="$REPO_ROOT/package.json"
+[[ -f "$PKG_JSON" ]] || die "Could not find package.json at the repo root ($PKG_JSON)"
+PNPM_SPEC="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([^"]*\)".*/\1/p' "$PKG_JSON")"
+[[ -n "$PNPM_SPEC" ]] || die "Could not read a pnpm version from $PKG_JSON"
+PNPM_MAJOR="${PNPM_SPEC%%.*}"
+[[ "$PNPM_MAJOR" =~ ^[0-9]+$ ]] || die "Could not read a pnpm major from $PKG_JSON (got '$PNPM_MAJOR')"
+
 # Ensure npm can reach the registry (Homebrew's source-built OpenSSL may not
 # have CA certs configured; point npm at Homebrew's ca-certificates bundle).
 CA_BUNDLE="$(brew --prefix ca-certificates 2>/dev/null)/share/ca-certificates/cacert.pem"
@@ -106,12 +117,12 @@ if [[ -f "$CA_BUNDLE" ]]; then
   npm config set cafile "$CA_BUNDLE"
 fi
 
-info "Checking pnpm 9"
-if command -v pnpm &>/dev/null && [[ "$(pnpm --version)" == 9.* ]]; then
+info "Checking pnpm $PNPM_MAJOR"
+if command -v pnpm &>/dev/null && [[ "$(pnpm --version)" == "$PNPM_MAJOR".* ]]; then
   ok "Already installed: pnpm $(pnpm --version)"
 else
-  info "Installing pnpm 9…"
-  npm install -g pnpm@9
+  info "Installing pnpm $PNPM_MAJOR…"
+  npm install -g "pnpm@$PNPM_MAJOR"
   command -v pnpm &>/dev/null || die "pnpm installation failed"
   ok "Installed: pnpm $(pnpm --version)"
 fi

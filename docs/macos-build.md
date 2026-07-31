@@ -24,7 +24,7 @@ Build artifacts land under `src-tauri/target/release/bundle/`.
 
 | Script | Purpose |
 |--------|---------|
-| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node from `.nvmrc`, pnpm 9, Rust, tauri-wd) |
+| `scripts/mac-setup.sh` | Install dev tools on macOS (Xcode CLI, Homebrew, Node from `.nvmrc`, pnpm from `packageManager`, Rust, tauri-wd) |
 | `scripts/mac-build.sh` | Run the full build pipeline (deps, tsc, cargo test, tauri build) |
 
 ## `mac-setup.sh` - Dev Tool Installer
@@ -36,7 +36,7 @@ Installs all required development tools, skipping anything already present. Safe
 1. **Xcode Command Line Tools** - headless install via `softwareupdate`
 2. **Homebrew** - standard installer if sudo is available, otherwise git-clones to `~/.homebrew`
 3. **Node.js** - major read from `.nvmrc` (currently 24), via `brew install node@<major>`, with PATH fix for keg-only installs
-4. **pnpm 9** - via `npm install -g pnpm@9`, with CA cert fix for Homebrew's OpenSSL
+4. **pnpm** - major read from `packageManager` in `package.json` (currently 11), via `npm install -g pnpm@<major>`, with CA cert fix for Homebrew's OpenSSL
 5. **Rust stable** - via rustup
 6. **tauri-wd** - via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
 

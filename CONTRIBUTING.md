@@ -73,11 +73,11 @@ needs, so point your agent at it. A few expectations:
 **Prerequisites:** [Rust](https://rustup.rs/) (stable), Node 24.x, and the
 [Tauri system dependencies](https://tauri.app/start/prerequisites/) for your OS.
 
-The toolchain is pinned - pnpm `9.15.9` (via `packageManager`) and Node `24.x`
+The toolchain is pinned - pnpm `11.18.0` (via `packageManager`) and Node `24.x`
 (via `.nvmrc`). On a fresh clone:
 
 ```bash
-corepack enable      # makes pnpm honor the pinned version (avoids a pnpm 11 hard-fail)
+corepack enable      # makes pnpm honor the pinned version
 pnpm install
 ./scripts/dev.sh     # always use this to start/restart the dev app
 ```

@@ -1,0 +1,15 @@
+# pnpm settings. This file is where pnpm 10+ reads its build-script approvals;
+# the old `pnpm.onlyBuiltDependencies` block in package.json is ignored from
+# pnpm 11 on (see #109).
+#
+# `allowBuilds` must be a MAP of `package: true`, not a list. A list under this
+# key is rejected by both pnpm 10 and 11, and the list form of
+# `onlyBuiltDependencies` works on 10 but not on 11 - the keyed map below is the
+# only shape valid on both majors.
+#
+# esbuild is needed by Vite on every install. edgedriver and geckodriver are
+# needed only by the quarantined WebdriverIO suite under e2e/legacy/.
+allowBuilds:
+  esbuild: true
+  edgedriver: true
+  geckodriver: true
