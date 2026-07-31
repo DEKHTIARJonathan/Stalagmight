@@ -1,3 +1,4 @@
+mod atomic_write;
 mod column_widths;
 pub mod defaults;
 mod gas;

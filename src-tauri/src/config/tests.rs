@@ -3027,10 +3027,38 @@ fn test_save_to_path_atomic_write_round_trips_settings() {
     assert_eq!(loaded.display.grid_spacing, 3.25);
 }
 
+/// Backdate a file's mtime so the staleness margin in `sweep_stale_temp_files`
+/// treats it as abandoned. `std::fs::FileTimes` keeps this dependency-free.
+fn backdate(path: &std::path::Path, age: std::time::Duration) {
+    let file = std::fs::File::options().write(true).open(path).unwrap();
+    let when = std::time::SystemTime::now() - age;
+    file.set_times(std::fs::FileTimes::new().set_modified(when))
+        .unwrap();
+}
+
+/// Comfortably past `Config::STALE_TEMP_AGE` (one hour).
+const ABANDONED: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+/// Every entry in `dir` whose name marks it as a `write_atomically` temp file.
+///
+/// The assertion has to be made against the DIRECTORY, not against a computed
+/// path: `write_atomically` names its temp file `config.toml.<pid>.<n>.tmp`, so
+/// a test that recomputes one specific name (the old `path.with_extension(
+/// "toml.tmp")`) asserts the absence of a path no implementation can ever
+/// create, and passes even against one that leaks every temp file it opens.
+fn temp_file_siblings(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .filter(|name| name.ends_with(".tmp"))
+        .collect()
+}
+
 #[test]
 fn test_save_to_path_leaves_no_temp_file_sibling() {
-    // Guard D: `write_atomically`'s sibling temp file (`config.toml.tmp`) must
-    // not survive a successful save.
+    // Guard D: `write_atomically`'s sibling temp file must not survive a
+    // successful save.
     use tempfile::tempdir;
     let dir = tempdir().unwrap();
     let path = dir.path().join("config.toml");
@@ -3039,11 +3067,107 @@ fn test_save_to_path_leaves_no_temp_file_sibling() {
     config.general.undo_history_limit = 55;
     config.save_to_path(&path).unwrap();
 
-    let temp_path = path.with_extension("toml.tmp");
+    let leaked = temp_file_siblings(dir.path());
     assert!(
-        !temp_path.exists(),
-        "a successful save must not leave config.toml.tmp behind"
+        leaked.is_empty(),
+        "a successful save must not leave a temp file behind, found: {leaked:?}"
     );
+    // Pin the other half: the save did land, so the emptiness above is not
+    // "nothing was written at all".
+    assert!(path.exists(), "the config itself must exist after a save");
+}
+
+#[test]
+fn test_repeated_saves_do_not_accumulate_temp_files() {
+    // The temp name is unique per write, so a leak does not overwrite the
+    // previous leak - it piles up. One save cannot tell those apart; several can.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    for limit in 1..=5 {
+        config.general.undo_history_limit = limit;
+        config.save_to_path(&path).unwrap();
+    }
+
+    let leaked = temp_file_siblings(dir.path());
+    assert!(
+        leaked.is_empty(),
+        "5 saves must leave no temp files, found: {leaked:?}"
+    );
+}
+
+#[test]
+fn test_load_sweeps_an_abandoned_temp_file() {
+    // A crash between `File::create` and the rename leaves a temp file nothing
+    // else collects. Load is the sweeper.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    // Stand in for the crashed writer, and backdate it past the staleness
+    // margin - a file younger than that belongs to a possibly-live writer.
+    let abandoned = dir.path().join("config.toml.99999.0.tmp");
+    std::fs::write(&abandoned, "partial").unwrap();
+    backdate(&abandoned, ABANDONED);
+
+    Config::load_from_path(&path).unwrap();
+
+    assert!(
+        !abandoned.exists(),
+        "load must sweep an abandoned config temp file"
+    );
+    assert!(path.exists(), "the sweep must not touch the config itself");
+}
+
+#[test]
+fn test_load_leaves_a_fresh_temp_file_alone() {
+    // The inverse, and the one that matters for correctness: a temp file young
+    // enough to belong to a writer that is still between `File::create` and its
+    // rename must survive. Deleting it reintroduces the ENOENT-on-rename failure
+    // the unique naming exists to prevent.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    let in_flight = dir.path().join("config.toml.12345.0.tmp");
+    std::fs::write(&in_flight, "a live writer owns this").unwrap();
+
+    Config::load_from_path(&path).unwrap();
+
+    assert!(
+        in_flight.exists(),
+        "load must not delete a temp file a live writer may still rename"
+    );
+}
+
+#[test]
+fn test_load_sweep_spares_unrelated_files() {
+    // The sweep is name-scoped. A project's own `.stalx.tmp` and any other
+    // sibling must be untouched even when they are ancient.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    let spared = ["cave.stalx.tmp", "notes.txt", "config.toml.backup"];
+    for name in spared {
+        let file = dir.path().join(name);
+        std::fs::write(&file, "keep me").unwrap();
+        backdate(&file, ABANDONED);
+    }
+
+    Config::load_from_path(&path).unwrap();
+
+    for name in spared {
+        assert!(
+            dir.path().join(name).exists(),
+            "the sweep must not delete {name}"
+        );
+    }
 }
 
 #[test]
@@ -3098,5 +3222,49 @@ fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
             survivor.general.undo_history_limit, 11,
             "the destination must be untouched by a save that could not complete"
         );
+    }
+}
+
+/// `connect-src` in BOTH policies must admit Tauri's own IPC origin.
+///
+/// Every `invoke` is a `fetch` to `ipc://localhost/<cmd>` (macOS/Linux) or
+/// `http://ipc.localhost/<cmd>` (Windows) - see `ipc-protocol.js` in the `tauri`
+/// crate - so `connect-src` governs it, and Tauri does NOT add the origin back:
+/// `set_csp` merges only script/style hashes, and its one automatic `default-src`
+/// addition is gated on the isolation pattern, which this app does not use.
+///
+/// Omitting it does not brick the app, which is exactly why this needs a test:
+/// the failure is silent. Tauri catches the CSP rejection, warns once to a
+/// console nobody reads in a packaged build, latches `customProtocolIpcFailed`
+/// and falls back to `postMessage` for the rest of the session - losing the
+/// binary response path for every IPC reply. Nothing else in this repo can catch
+/// it: `tauri.conf.json` has no linter, and the production `csp` (as opposed to
+/// `devCsp`) is not exercised by the dev server, Playwright, or vitest - only by
+/// a real `tauri build`.
+#[test]
+fn test_csp_allows_the_tauri_ipc_origin() {
+    let conf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let conf: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&conf_path).unwrap()).unwrap();
+
+    let security = &conf["app"]["security"];
+    for key in ["csp", "devCsp"] {
+        let policy = security[key]
+            .as_str()
+            .unwrap_or_else(|| panic!("app.security.{key} must be a string"));
+
+        let connect_src = policy
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("connect-src"))
+            .unwrap_or_else(|| panic!("{key} must declare connect-src"));
+
+        for origin in ["ipc:", "http://ipc.localhost"] {
+            assert!(
+                connect_src.split_whitespace().any(|src| src == origin),
+                "{key}'s connect-src must list `{origin}` or every invoke falls \
+                 back to the slower postMessage transport; got: {connect_src}"
+            );
+        }
     }
 }
