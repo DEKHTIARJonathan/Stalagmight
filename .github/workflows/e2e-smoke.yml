@@ -21,20 +21,8 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Same picker `check` uses - hekatrine when idle, else cloud. Shared rather than
-  # copied: see .github/workflows/pick-runner.yml. `leak-scan` deliberately does
-  # NOT route; it finishes in ~10s, which is less than the picker's own runner
-  # takes to start, so routing it would cost more wall-clock than it could save.
-  pick:
-    uses: ./.github/workflows/pick-runner.yml
-    secrets:
-      runner_read_pat: ${{ secrets.NUC_RUNNER_READ_PAT }}
-
   smoke:
-    needs: pick
-    # Default-guarded like `check`'s: if the picker somehow emits no output, fall
-    # back to hosted rather than crash the run with a fromJSON("") error.
-    runs-on: ${{ fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]') }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -83,26 +71,12 @@ jobs:
         with:
           path: ~/.cache/ms-playwright
           key: ${{ runner.os }}-playwright-${{ steps.pw.outputs.version }}
-      # `--with-deps` / `install-deps` shell out to `sudo apt-get`, which assumes
-      # the disposable hosted image: on a self-hosted box they need passwordless
-      # sudo and mutate a machine that persists between runs, re-installing the
-      # same packages on every build. So the system-deps half is hosted-only,
-      # matching `runner-bench`'s treatment of the tauri apt deps - self-hosted
-      # runners are provisioned once, out of band.
-      #
-      # The BROWSER half still runs everywhere: Playwright pins a browser build
-      # per version, so a self-hosted box is no more likely to have the right one
-      # already than a fresh image is. Split by runner rather than by cache-hit
-      # alone, which is why there are now four cases and not two.
-      - name: Install Playwright browsers + system deps (hosted)
-        if: runner.environment == 'github-hosted' && steps.pw-cache.outputs.cache-hit != 'true'
+      - name: Install Playwright browsers + system deps
+        if: steps.pw-cache.outputs.cache-hit != 'true'
         run: pnpm exec playwright install --with-deps chromium
-      - name: Install Playwright system deps (hosted, browser restored from cache)
-        if: runner.environment == 'github-hosted' && steps.pw-cache.outputs.cache-hit == 'true'
+      - name: Install Playwright system deps (browser restored from cache)
+        if: steps.pw-cache.outputs.cache-hit == 'true'
         run: pnpm exec playwright install-deps chromium
-      - name: Install Playwright browser (self-hosted; system deps are provisioned)
-        if: runner.environment != 'github-hosted' && steps.pw-cache.outputs.cache-hit != 'true'
-        run: pnpm exec playwright install chromium
       # TEMPORARY INSTRUMENTATION (remove once the @smoke pare-down lands).
       # CI gives no per-test timing: the `github` reporter prints a line only for
       # tests that failed or flaked, so a green run tells us the suite took ~6.5
