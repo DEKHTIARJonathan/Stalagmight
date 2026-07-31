@@ -16,10 +16,17 @@ import {
   getContrastColor,
   getNextSectionColor,
   SECTION_COLORS,
+  LIGHT_SECTION_COLORS,
+  relativeLuminance,
+  contrastRatio,
+  isLightCanvasTheme,
+  sectionColorPalette,
   hexToHSL,
   hslToHex,
   interpolateHue,
 } from '../colors';
+import { mapCanvasFor } from '../../types/config';
+import { themeTokens } from '../../theme/tokens';
 
 describe('getDepthColor', () => {
   const shallowColor = '#00bfff';
@@ -534,22 +541,107 @@ describe('getContrastColor', () => {
 
 describe('getNextSectionColor', () => {
   it('returns first palette color when none used', () => {
-    expect(getNextSectionColor([])).toBe(SECTION_COLORS[0]);
+    expect(getNextSectionColor([], 'dark')).toBe(SECTION_COLORS[0]);
   });
 
   it('returns second palette color when first is used', () => {
-    expect(getNextSectionColor([SECTION_COLORS[0]!])).toBe(SECTION_COLORS[1]);
+    expect(getNextSectionColor([SECTION_COLORS[0]!], 'dark')).toBe(SECTION_COLORS[1]);
   });
 
   it('skips used colors', () => {
     const used = [SECTION_COLORS[0]!, SECTION_COLORS[1]!];
-    expect(getNextSectionColor(used)).toBe(SECTION_COLORS[2]);
+    expect(getNextSectionColor(used, 'dark')).toBe(SECTION_COLORS[2]);
   });
 
   it('generates random color when all palette colors exhausted', () => {
     const allUsed = [...SECTION_COLORS];
-    const result = getNextSectionColor(allUsed);
+    const result = getNextSectionColor(allUsed, 'dark');
     expect(result).toMatch(/^#[0-9a-f]{6}$/i);
     expect(SECTION_COLORS).not.toContain(result);
+  });
+
+  // #357 item 9. `SECTION_COLORS` is dark-tuned pastel and draws at ~1.5:1 or
+  // worse on the light map canvas (`#faf7f2`), so a survey seeded under a
+  // light theme got barely-visible section lines. `LIGHT_SECTION_COLORS` is
+  // the fix; these guards measure it rather than trust it.
+  describe('theme-aware seeding (#357 item 9)', () => {
+    const ALL_THEMES = Object.keys(themeTokens);
+    /** WCAG's floor for a non-text graphical object, which is what a section line is. */
+    const FLOOR = 3;
+
+    it('every SECTION_COLORS entry clears 3:1 on the dark canvas', () => {
+      const canvas = themeTokens.dark['--cc-map-background'];
+      for (const color of SECTION_COLORS) {
+        const ratio = contrastRatio(color, canvas);
+        expect(ratio, `${color} on ${canvas} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(FLOOR);
+      }
+    });
+
+    it('every LIGHT_SECTION_COLORS entry clears 3:1 on the light canvas', () => {
+      const canvas = themeTokens.light['--cc-map-background'];
+      for (const color of LIGHT_SECTION_COLORS) {
+        const ratio = contrastRatio(color, canvas);
+        expect(ratio, `${color} on ${canvas} is ${ratio.toFixed(2)}:1`).toBeGreaterThanOrEqual(FLOOR);
+      }
+    });
+
+    /**
+     * Distinguishability: no entry may be a near-duplicate of another in the
+     * same palette (they exist to tell sections apart). Floor is below both
+     * palettes' measured minimum pairwise RGB distance (SECTION_COLORS: 31.2,
+     * teal/sky-blue; LIGHT_SECTION_COLORS: 28.2, the two teal-family entries)
+     * so the legitimate same-hue-family pairs (distinguished by saturation,
+     * not hue) still pass.
+     */
+    function minPairwiseRgbDistance(palette: string[]): number {
+      let min = Infinity;
+      for (let i = 0; i < palette.length; i++) {
+        for (let j = i + 1; j < palette.length; j++) {
+          const [r1, g1, b1] = hexToRgb(palette[i]!);
+          const [r2, g2, b2] = hexToRgb(palette[j]!);
+          const d = Math.sqrt((r1 - r2) ** 2 + (g1 - g2) ** 2 + (b1 - b2) ** 2);
+          min = Math.min(min, d);
+        }
+      }
+      return min;
+    }
+
+    it('SECTION_COLORS entries are pairwise distinguishable', () => {
+      expect(minPairwiseRgbDistance(SECTION_COLORS)).toBeGreaterThan(25);
+    });
+
+    it('LIGHT_SECTION_COLORS entries are pairwise distinguishable', () => {
+      expect(minPairwiseRgbDistance(LIGHT_SECTION_COLORS)).toBeGreaterThan(25);
+    });
+
+    it.each(ALL_THEMES)(
+      '%s: getNextSectionColor draws from the palette matching its MAP CANVAS, not its chrome',
+      (theme) => {
+        const canvasIsLight = relativeLuminance(mapCanvasFor(theme)) > 0.5;
+        expect(isLightCanvasTheme(theme)).toBe(canvasIsLight);
+
+        const result = getNextSectionColor([], theme);
+        if (canvasIsLight) {
+          expect(LIGHT_SECTION_COLORS, `${theme}: canvas is light`).toContain(result);
+          expect(SECTION_COLORS).not.toContain(result);
+        } else {
+          expect(SECTION_COLORS, `${theme}: canvas is dark`).toContain(result);
+          expect(LIGHT_SECTION_COLORS).not.toContain(result);
+        }
+      }
+    );
+
+    it('chrome-only light themes (solarized_light, catppuccin_latte) still get the DARK palette', () => {
+      // These themes have light chrome but leave --cc-map-background unset, so
+      // they inherit :root's dark canvas - the bug the first half of #357 item
+      // 9 fixed for Config defaults. Pin it here too, at the real seeding path.
+      expect(sectionColorPalette('solarized_light')).toEqual(SECTION_COLORS);
+      expect(sectionColorPalette('catppuccin_latte')).toEqual(SECTION_COLORS);
+    });
+
+    it('light and kaleido_eink get the LIGHT palette', () => {
+      expect(sectionColorPalette('light')).toEqual(LIGHT_SECTION_COLORS);
+      expect(sectionColorPalette('kaleido_eink')).toEqual(LIGHT_SECTION_COLORS);
+    });
   });
 });

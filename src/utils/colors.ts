@@ -5,6 +5,7 @@
  * (src/utils/themeColors.ts). Keep as literals here; consumers import.
  */
 import { clamp } from './clamp';
+import { mapCanvasFor } from '../types/config';
 
 export const SEVERITY_GREEN = '#22c55e';
 export const SEVERITY_YELLOW = '#eab308';
@@ -279,6 +280,31 @@ export const SECTION_COLORS = [
 ];
 
 /**
+ * Light-CANVAS counterpart of `SECTION_COLORS` (#357 item 9). `SECTION_COLORS`
+ * is dark-tuned pastel and draws at ~1.5:1 or worse on the light map canvas
+ * (`#faf7f2`), so a survey seeded under a light theme got barely-visible
+ * section lines. Section colour is per-project user data - a section keeps
+ * whatever colour it was created with, so this only affects what a NEW
+ * section seeds, never an already-persisted one.
+ *
+ * Same hue order/character as `SECTION_COLORS` (teal, coral, mint, salmon,
+ * lavender, pink, sky blue, peach), darker/more saturated so every entry
+ * clears WCAG's 3:1 floor for a non-text graphical object against `#faf7f2`.
+ * Measured (not eyeballed) in `__tests__/colors.test.ts`, which also asserts
+ * every pair is distinguishable from its neighbours.
+ */
+export const LIGHT_SECTION_COLORS = [
+  '#1a8a7d', // Teal
+  '#c0392b', // Coral
+  '#2e7d6e', // Mint
+  '#b94a4a', // Salmon
+  '#6b4fa0', // Lavender
+  '#c4587a', // Pink
+  '#2f7d9e', // Sky Blue
+  '#a86a1e', // Peach
+];
+
+/**
  * Move-comment tool palette (#52). Vivid, high-saturation colors used to
  * tint each comment label and the shot/station it belongs to, so the two
  * are visually paired while repositioning. Deliberately distinct from the
@@ -380,10 +406,51 @@ function generateRandomColor(usedColors: string[]): string {
 }
 
 /**
- * Get the next available color from the palette
+ * WCAG relative luminance (0-1). Shared by `contrastRatio` and the
+ * canvas-luminance check `isLightCanvasTheme` uses to pick a section palette.
  */
-export function getNextSectionColor(usedColors: string[]): string {
-  for (const color of SECTION_COLORS) {
+export function relativeLuminance(hex: string): number {
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const [r, g, b] = hexToRgb(hex);
+  return 0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b);
+}
+
+/**
+ * WCAG contrast ratio between two colors, 1:1 (identical) to 21:1
+ * (black/white).
+ */
+export function contrastRatio(a: string, b: string): number {
+  const [hi, lo] = [relativeLuminance(a), relativeLuminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/**
+ * Whether `resolvedTheme`'s MAP CANVAS - not its chrome - is light. Themes
+ * like `solarized_light` and `catppuccin_latte` have light chrome but leave
+ * `--cc-map-background` unset, so they inherit `:root`'s dark canvas and must
+ * NOT get the light section palette; `mapCanvasFor` resolves that distinction.
+ */
+export function isLightCanvasTheme(resolvedTheme: string): boolean {
+  return relativeLuminance(mapCanvasFor(resolvedTheme)) > 0.5;
+}
+
+/**
+ * The section-color palette a NEW section seeded under `resolvedTheme` should
+ * draw from - `LIGHT_SECTION_COLORS` on a light canvas, `SECTION_COLORS`
+ * otherwise. Never applies to a section's already-persisted color.
+ */
+export function sectionColorPalette(resolvedTheme: string): string[] {
+  return isLightCanvasTheme(resolvedTheme) ? LIGHT_SECTION_COLORS : SECTION_COLORS;
+}
+
+/**
+ * Get the next available color from the theme-appropriate palette.
+ */
+export function getNextSectionColor(usedColors: string[], resolvedTheme: string): string {
+  for (const color of sectionColorPalette(resolvedTheme)) {
     if (!usedColors.includes(color)) {
       return color;
     }

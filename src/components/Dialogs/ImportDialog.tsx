@@ -48,7 +48,7 @@ function validateField(field: EditableField, raw: string): string | null {
 }
 
 export default function ImportDialog() {
-  const { closeDialog, openDialog, startPlacementMode, dialogData } = useUIStore();
+  const { closeDialog, openDialog, startPlacementMode, dialogData, resolvedTheme } = useUIStore();
   const { createSection, createSectionAndMerge, moveSection, project } = useProjectStore();
   const precision = useDecimalPrecision();
 
@@ -72,7 +72,9 @@ export default function ImportDialog() {
 
   // Get next available color
   const usedColors = project?.sections.map((s) => s.color) ?? [];
-  const [color, setColor] = useState<string>(restored?.color ?? getNextSectionColor(usedColors));
+  const [color, setColor] = useState<string>(
+    restored?.color ?? getNextSectionColor(usedColors, resolvedTheme)
+  );
 
   const editableCols = showLrud ? [...BASE_COLS, ...LRUD_COLS] : BASE_COLS;
 

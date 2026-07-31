@@ -11,7 +11,7 @@ import {
   hasPitchDiscrepancy,
 } from '../utils/validation';
 import type { ValidationConfig } from '../types/config';
-import { SECTION_COLORS } from '../utils/colors';
+import { sectionColorPalette } from '../utils/colors';
 
 /**
  * Configuration from Step 1 (DmpSelectionDialog).
@@ -648,10 +648,12 @@ function initializeState(
     placedSections: number[];
     excludedSections?: number[];
     currentSectionIndex: number;
-  }
+  },
+  resolvedTheme = 'dark'
 ): ImportState {
   const selectedIndices = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
   const firstSectionIndex = selectedIndices[0];
+  const palette = sectionColorPalette(resolvedTheme);
 
   // Build original values (these never change)
   const originalValues = new Map<number, SectionConfig>();
@@ -666,7 +668,7 @@ function initializeState(
       name: section.name,
       surveyor: null, // DMP sections don't have surveyor - use defaultSurveyor from Step 1
       date: dateStr,
-      color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
+      color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
       direction: section.direction,
       quality: 1.0,
       shots: convertToEditableShots(section.shots),
@@ -710,7 +712,7 @@ function initializeState(
       name: section.name,
       surveyor,
       date: dateStr,
-      color: SECTION_COLORS[arrayIdx % SECTION_COLORS.length] ?? '#4ecdc4',
+      color: palette[arrayIdx % palette.length] ?? '#4ecdc4',
       direction,
       quality: 1.0,
       shots: convertToEditableShots(section.shots),
@@ -748,12 +750,14 @@ export function useImportState(
     placedSections: number[];
     excludedSections?: number[];
     currentSectionIndex: number;
-  }
+  },
+  resolvedTheme = 'dark'
 ) {
   const [state, dispatch] = useReducer(
     importReducer,
-    { dmpFile, selectionConfig, savedState },
-    ({ dmpFile, selectionConfig, savedState }) => initializeState(dmpFile, selectionConfig, savedState)
+    { dmpFile, selectionConfig, savedState, resolvedTheme },
+    ({ dmpFile, selectionConfig, savedState, resolvedTheme }) =>
+      initializeState(dmpFile, selectionConfig, savedState, resolvedTheme)
   );
 
   // Get selected indices in order

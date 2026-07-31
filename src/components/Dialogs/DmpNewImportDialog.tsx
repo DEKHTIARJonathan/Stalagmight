@@ -32,7 +32,6 @@ import {
   type TargetShotLike,
 } from '../../utils/overlapHelpers';
 import {
-  SECTION_COLORS,
   type VirtualConnection,
   type ExistingSectionGeoEntry,
   buildAdjacency,
@@ -42,6 +41,7 @@ import {
   computeUnreachableSegments,
   computeSegmentLayout,
 } from '../../utils/segmentContext';
+import { sectionColorPalette } from '../../utils/colors';
 import { useUIStore, type PlacementResult } from '../../store/uiStore';
 import { setSource, trackDialogComplete } from '../../utils/telemetry';
 import {
@@ -734,7 +734,9 @@ export function buildBatchImport(
   directPlacements?: DirectPlacement[],
   alreadyImported?: Map<number, number>,
   deferImportConnectedTo?: Set<number>,
+  resolvedTheme = 'dark',
 ): { configs: BackendImportSectionConfig[]; unreachable: number[]; emittedDmpIndices: number[] } {
+  const palette = sectionColorPalette(resolvedTheme);
   // Build adjacency + connections including any fallback anchors for disconnected components
   const allConnections = [...connections];
   const adjacency = buildAdjacency(allConnections);
@@ -1069,7 +1071,7 @@ export function buildBatchImport(
       const surveyorValue = edits?.surveyor ?? selectionConfig.defaultSurveyor ?? null;
       const dateStr = edits?.date ?? selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? null;
       const selectedPos = sortedSelected.indexOf(idx);
-      const colorValue = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
+      const colorValue = (edits?.color || null) ?? palette[(selectedPos >= 0 ? selectedPos : 0) % palette.length] ?? '#4ecdc4';
       const directionValue = edits?.direction ?? section.direction;
       const qualityValue = edits?.quality ?? 1.0;
       const reverseValue = edits?.reverse ?? false;
@@ -1212,6 +1214,11 @@ export default function DmpNewImportDialog({
   const markDirty = useProjectStore((s) => s.markDirty);
   const config = useProjectStore((s) => s.config);
   const updateConfig = useProjectStore((s) => s.updateConfig);
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
+  // #357 item 9: seed new sections from the palette legible on this theme's
+  // MAP CANVAS, not its chrome - a section keeps whatever color it was
+  // created with, so this only ever affects colors handed to NEW sections.
+  const sectionPalette = useMemo(() => sectionColorPalette(resolvedTheme), [resolvedTheme]);
 
   // Shorthand for restoring state
   const saved = savedManualPlacingState;
@@ -1742,7 +1749,7 @@ export default function DmpNewImportDialog({
       name: section.name,
       surveyor: selectionConfig.defaultSurveyor || '',
       date: selectionConfig.defaultDate ?? section.date?.split(/[T ]/)[0] ?? '',
-      color: SECTION_COLORS[(selectedPos >= 0 ? selectedPos : 0) % SECTION_COLORS.length] ?? '#4ecdc4',
+      color: sectionPalette[(selectedPos >= 0 ? selectedPos : 0) % sectionPalette.length] ?? '#4ecdc4',
       direction: section.direction === 'out' ? 'out' : 'in',
       quality: 1.0,
       reverse: false,
@@ -2163,6 +2170,7 @@ export default function DmpNewImportDialog({
           directPlacementsRef.current,
           undefined,
           skippedIndicesRef.current,
+          resolvedTheme,
         ));
 
         // 4. Import reachable sections immediately
@@ -2241,7 +2249,7 @@ export default function DmpNewImportDialog({
       transitionToPlacingInFlightRef.current = false;
       suggestionActionInFlightRef.current = false;
     }
-  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, markDirty]);
+  }, [zeroDatumConfig, dmpFile, selectionConfig, overlapMode, onComplete, refreshProjectState, markDirty, resolvedTheme]);
 
   // On mount: import zero datum section and fire suggest_all_import_placements
   useEffect(() => {
@@ -2369,6 +2377,8 @@ export default function DmpNewImportDialog({
           fullPoolRef.current,
           directPlacementsRef.current,
           earlyImportedRef.current,
+          undefined,
+          resolvedTheme,
         );
 
         // Filter to only the sections in the pending segment, remapping from_importing indices
@@ -2480,6 +2490,8 @@ export default function DmpNewImportDialog({
           fullPoolRef.current,
           directPlacementsRef.current,
           earlyImportedRef.current,
+          undefined,
+          resolvedTheme,
         ));
 
         if (configs.length > 0) {
@@ -2626,15 +2638,15 @@ export default function DmpNewImportDialog({
     const targetSection = dmpFile.sections[currentSuggestion.targetImportIndex];
     if (!targetSection) return null;
 
-    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % SECTION_COLORS.length;
+    const targetColorIdx = (currentSuggestion.targetImportIndex ?? 0) % sectionPalette.length;
 
     return {
       targetDmpSection: targetSection,
-      targetColor: SECTION_COLORS[targetColorIdx] ?? '#95a5a6',
+      targetColor: sectionPalette[targetColorIdx] ?? '#95a5a6',
       importStationIndex: selectedMergePair?.importStation ?? currentSuggestion.importStationIndex,
       targetStationIndex: selectedMergePair?.existingStation ?? currentSuggestion.existingStationIndex,
     };
-  }, [currentSuggestion, selectedMergePair, dmpFile.sections]);
+  }, [currentSuggestion, selectedMergePair, dmpFile.sections, sectionPalette]);
 
   // Merge target-side + import-side context for SectionPreview.
   // Import-side context is relative to the import section's station 0 and needs the same
@@ -2684,8 +2696,8 @@ export default function DmpNewImportDialog({
     if (editState?.color) return editState.color;
     const sectionIdx = currentSuggestion?.importSectionIndex ?? -1;
     const pos = selectedIndices.indexOf(sectionIdx);
-    return SECTION_COLORS[(pos >= 0 ? pos : 0) % SECTION_COLORS.length] ?? '#4ecdc4';
-  }, [editState?.color, currentSuggestion?.importSectionIndex, selectedIndices]);
+    return sectionPalette[(pos >= 0 ? pos : 0) % sectionPalette.length] ?? '#4ecdc4';
+  }, [editState?.color, currentSuggestion?.importSectionIndex, selectedIndices, sectionPalette]);
 
   // Target section name for display
   const targetSectionName = useMemo(() => {
@@ -2908,7 +2920,7 @@ export default function DmpNewImportDialog({
       if (!section) return null;
       const edits = sectionEditsRef.current.get(entry.sectionIndex);
       const selectedPos = selectedIndices.indexOf(entry.sectionIndex);
-      const sectionColor = (edits?.color || null) ?? SECTION_COLORS[(selectedPos >= 0 ? selectedPos : entry.sectionIndex) % SECTION_COLORS.length] ?? '#95a5a6';
+      const sectionColor = (edits?.color || null) ?? sectionPalette[(selectedPos >= 0 ? selectedPos : entry.sectionIndex) % sectionPalette.length] ?? '#95a5a6';
       return {
         section,
         color: sectionColor,
@@ -2917,7 +2929,7 @@ export default function DmpNewImportDialog({
         offsetY: entry.offsetY,
       };
     }).filter((x): x is NonNullable<typeof x> => x !== null);
-  }, [currentSegment, connections, dmpFile.sections]);
+  }, [currentSegment, connections, dmpFile.sections, sectionPalette]);
 
   // Compute target segment context for "From Existing" preview (shows the target section's
   // connected segment as dimmed lines behind the import segment preview)
@@ -3162,7 +3174,7 @@ export default function DmpNewImportDialog({
         date: edits?.date ?? selectionConfig.defaultDate ?? anchorDmpSection.date?.split(/[T ]/)[0] ?? null,
         color:
           (edits?.color || null) ??
-          SECTION_COLORS[selectedIndices.indexOf(anchor.sectionIndex) % SECTION_COLORS.length] ??
+          sectionPalette[selectedIndices.indexOf(anchor.sectionIndex) % sectionPalette.length] ??
           '#4ecdc4',
         direction: edits?.direction ?? anchorDmpSection.direction,
         quality: edits?.quality ?? 1.0,
@@ -3191,7 +3203,7 @@ export default function DmpNewImportDialog({
           const secSelectedPos = selectedIndices.indexOf(entry.sectionIndex);
           const secColor =
             (secEdits?.color || null) ??
-            SECTION_COLORS[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % SECTION_COLORS.length] ??
+            sectionPalette[(secSelectedPos >= 0 ? secSelectedPos : entry.sectionIndex) % sectionPalette.length] ??
             '#95a5a6';
           const secShots = secEdits
             ? secEdits.shots.filter((s) => !s.isDeleted).map(editableShotToShotData)
@@ -3215,7 +3227,7 @@ export default function DmpNewImportDialog({
 
       return { sectionData, additionalSections };
     },
-    [dmpFile.sections, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices],
+    [dmpFile.sections, selectionConfig.defaultDate, selectionConfig.defaultSurveyor, selectedIndices, sectionPalette],
   );
 
   const importPlacedSegmentNow = useCallback(
@@ -3230,6 +3242,8 @@ export default function DmpNewImportDialog({
         fullPoolRef.current,
         directPlacements,
         earlyImportedRef.current,
+        undefined,
+        resolvedTheme,
       );
 
       const pendingSet = new Set(segmentIndices);
@@ -3322,7 +3336,7 @@ export default function DmpNewImportDialog({
 
       return true;
     },
-    [buildBatchImport, dmpFile, markDirty, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex],
+    [buildBatchImport, dmpFile, markDirty, refreshProjectState, selectionConfig, zeroDatumConfig?.sectionIndex, resolvedTheme],
   );
 
   // Manual map placement for a segment
