@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
   useSpeleoStore,
@@ -151,7 +151,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       /** The project this open is FOR, so the seed names it rather than waiting for a poll. */
       projectId: string,
       opts: {
-        successToast?: { message: string; key: string };
+        /**
+         * `kind` defaults to `info` (the neutral grey) for the plain opens, which
+         * report nothing more than "it opened". A caller whose outcome has DEGREES -
+         * adoption, whose hand-over can half-land - passes the one that matches, so
+         * the colour is not saying "fine" over a result the user has to act on.
+         */
+        successToast?: { message: string; key: string; kind?: ToastKind };
         /**
          * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
          * pull (nothing local the server has not seen); "keep the local copy" and
@@ -274,7 +280,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         void useSpeleoStore.getState().refreshLinkStatus();
         return { status: 'load_failed' };
       }
-      if (successToast) showToast(successToast.message, successToast.key);
+      if (successToast) showToast(successToast.message, successToast.key, successToast.kind);
       return { status: 'opened' };
     },
     [showToast, setLinkOnOpen, loadProject, onBeforeLoad, t],
@@ -874,6 +880,21 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
               : t('speleodb.adopt.doneToastNoTypeFlip')
             : t('speleodb.adopt.doneToastLocalOnly'),
           key: 'speleodb-adopted',
+          /**
+           * Green for the one outcome where nothing is left to do, amber for the two
+           * where something is. The neutral default read as "done" over both of the
+           * others, which is the wrong signal for a result the user has to finish by
+           * hand - and the more misleading of the two directions, since the work is
+           * sitting in a cache directory they have no reason to look in.
+           *
+           * The half-landed arm - pushed, but the server `type` still says `ariane` -
+           * is amber with the local-only one rather than green with the finished one.
+           * The `.stalx` really is up there, so it is not a failure, but the project
+           * still advertises itself as an Ariane project: it keeps offering Adopt, and
+           * later `.tml` edits still look authoritative to anyone who makes them. That
+           * is unfinished business, and unfinished business is not green.
+           */
+          kind: pushed && result.type_flipped ? 'success' : 'warning',
         },
       });
     },

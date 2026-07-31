@@ -1335,6 +1335,42 @@ describe('useOpenRemoteProject (#218)', () => {
   });
 
   /**
+   * The toast's COLOUR is the only part of the outcome most users will read, so it has
+   * to track the outcome rather than the fact that a command returned. The neutral
+   * default said "done" over an adoption whose conversion never left this machine -
+   * the misleading direction, since that work is sitting in a cache directory nobody
+   * has a reason to look in.
+   *
+   * Green is reserved for the arm with nothing left to do. A push that landed under a
+   * project still typed `ariane` is amber with the local-only case, not green with the
+   * finished one: the `.stalx` is up there, but the project still advertises itself as
+   * an Ariane project, so it keeps offering Adopt and later `.tml` edits still look
+   * authoritative.
+   */
+  it.each([
+    ['pushed and re-typed', { kind: 'pushed' }, true, 'success'],
+    ['pushed but still typed ariane', { kind: 'pushed' }, false, 'warning'],
+    ['never uploaded', { kind: 'lock_held', email: null }, false, 'warning'],
+  ])('adoptRemote toasts %s as %s', async (_label, upload, typeFlipped, expected) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: typeFlipped,
+          concurrent_session: false,
+          upload,
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-adopted', expected);
+  });
+
+  /**
    * `pushed` is read from a shape that can grow arms, and only ONE of them means the
    * bytes are on the server. An outcome this build cannot read - an older backend, a
    * variant added later - must therefore fall to the protective answer, because the
