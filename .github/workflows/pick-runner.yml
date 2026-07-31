@@ -1,0 +1,91 @@
+name: Pick runner
+
+# The shared runner picker: hekatrine when it is online AND idle, else a
+# GitHub-hosted ubuntu-latest. Reusable so the workflows that want self-hosted
+# routing share ONE copy of the decision - three hand-copied pickers would drift,
+# and a router that disagrees with itself about which box is free is worse than
+# no router.
+#
+# hekatrine ONLY. Both self-hosted boxes now carry the shared
+# `ubuntu-latest-local` label, so asking for that label would route to whichever
+# happened to be free and make "which machine ran this" a coin toss. Cloud is the
+# failover instead - a known quantity, always available, and unlike the NUC it
+# cannot also be busy with the nightly E2E, which still targets the shared label.
+#
+# Matched on the `hekatrine` LABEL, not on a runner name. Those are not the same
+# thing: the box registers runners named `hekatrine-01`..., and the NUC registers
+# as `i5-nuc-runner` while serving `ubuntu-latest-local`. A name guessed wrong
+# fails SILENTLY - the count sits at 0 forever and every run goes to cloud with
+# nothing saying why. Counting the label we are about to request makes the probe
+# and the dispatch agree by construction, and keeps what a name test had: a
+# count, not a string compare, so a stale duplicate registration stays harmless.
+#
+# Callers must keep their own `runs-on` default-guarded
+# (`fromJSON(needs.pick.outputs.runs_on || '["ubuntu-latest"]')`) so a picker that
+# somehow emits nothing falls back to hosted rather than failing the run with a
+# `fromJSON("")` error.
+on:
+  workflow_call:
+    outputs:
+      runs_on:
+        description: >-
+          JSON array for the caller's `runs-on` - either
+          ["self-hosted","hekatrine"] or ["ubuntu-latest"].
+        value: ${{ jobs.pick.outputs.runs_on }}
+    secrets:
+      runner_read_pat:
+        description: >-
+          Fine-grained PAT with org permission "Self-hosted runners: Read". The
+          default GITHUB_TOKEN cannot read org runner status. Optional by design:
+          without it the picker returns hosted, so callers stay on cloud rather
+          than failing - which is also what makes this safe on fork PRs, where no
+          secret is available.
+        required: false
+
+# This job is deliberately NOT routable itself. It is the router, so putting it on
+# the self-hosted box would make that box a hard dependency for CI even starting -
+# hekatrine down would mean no routing decision at all, and every dependent job
+# skipped rather than spilled to cloud.
+permissions: {}
+
+jobs:
+  pick:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      runs_on: ${{ steps.pick.outputs.runs_on }}
+    steps:
+      - name: Choose runner - hekatrine when online & idle, else cloud
+        id: pick
+        env:
+          GH_TOKEN: ${{ secrets.runner_read_pat }}
+        run: |
+          # Default to hosted; only route to hekatrine if we can POSITIVELY
+          # confirm it is online AND idle. Any uncertainty - no token, API error,
+          # malformed response, runner missing/busy, or a DUPLICATE stale
+          # registration carrying the same label - sanitizes to 0 and stays on
+          # hosted.
+          runs_on='["ubuntu-latest"]'
+          idle=0
+          if [ -n "$GH_TOKEN" ]; then
+            # On an HTTP error gh writes the error JSON to *stdout* and exits
+            # non-zero - so DON'T `|| echo 0` (that appends 0 to the blob).
+            # `|| true` shields the assignment from the default bash -e (else
+            # this step aborts and every dependent job is skipped); then
+            # sanitize to a clean int.
+            idle=$(gh api 'orgs/Stalagmight/actions/runners?per_page=100' \
+              --jq '[.runners[] | select(.status=="online" and .busy==false and ([.labels[].name] | index("hekatrine")))] | length' \
+              2>/dev/null) || true
+            [[ "$idle" =~ ^[0-9]+$ ]] || idle=0
+            if [ "$idle" -ge 1 ]; then
+              runs_on='["self-hosted","hekatrine"]'
+            fi
+          fi
+          echo "runs_on=$runs_on" >> "$GITHUB_OUTPUT"
+          echo "Routed to $runs_on (idle hekatrine runner count: $idle)"
+          # Surface the routing on the run's summary page - no log-digging.
+          if [ "$runs_on" = '["self-hosted","hekatrine"]' ]; then
+            echo "🖥️ routed to **hekatrine** (idle: $idle)" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "☁️ routed to **github-hosted** (hekatrine busy/unavailable; idle count: $idle)" >> "$GITHUB_STEP_SUMMARY"
+          fi
