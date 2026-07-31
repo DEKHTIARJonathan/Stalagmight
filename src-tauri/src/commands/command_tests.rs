@@ -323,6 +323,233 @@ fn test_update_data_table_view_clamps_degenerate_widths() {
     });
 }
 
+/// The column-key LISTS (order + hidden, shot + station) get the same ceiling as
+/// the width maps beside them. They used to be written straight through from the
+/// renderer with no cap at all: `config.toml` is re-parsed at every launch, so an
+/// oversized list is not a one-off cost but a permanent one, and nothing on the
+/// load path pruned it either.
+///
+/// Both doors are checked here because the fix lives in `PanelsConfig::normalize`
+/// precisely so it covers both: the partial IPC command AND the whole-`Config`
+/// `update_config` (which is also the load path's normalizer).
+#[test]
+fn test_column_name_lists_are_bounded_on_both_write_paths() {
+    // Mirrors MAX_COLUMN_WIDTH_ENTRIES / MAX_COLUMN_KEY_LEN in
+    // src-tauri/src/config/column_widths.rs (private to that module).
+    const MAX_ENTRIES: usize = 256;
+    const OVERSIZE_KEY_LEN: usize = 129;
+
+    // 300 distinct keys, plus the three shapes that must not survive: an empty
+    // key, a key too long to name a real grid column, and a duplicate.
+    let hostile_order = || {
+        let mut names: Vec<String> = (0..300).map(|i| format!("col{i}")).collect();
+        names.push(String::new());
+        names.push("z".repeat(OVERSIZE_KEY_LEN));
+        names.push("col0".to_string());
+        names
+    };
+    let hostile_hidden = || {
+        vec![
+            "left".to_string(),
+            String::new(),
+            "left".to_string(),
+            "z".repeat(OVERSIZE_KEY_LEN),
+        ]
+    };
+    let assert_bounded = |names: &[String], field: &str| {
+        assert!(
+            names.len() <= MAX_ENTRIES,
+            "{field} kept {} entries, past the {MAX_ENTRIES} cap",
+            names.len()
+        );
+        assert!(
+            names
+                .iter()
+                .all(|n| !n.is_empty() && n.len() < OVERSIZE_KEY_LEN),
+            "{field} kept an empty or oversize key: {names:?}"
+        );
+        let mut sorted = names.to_vec();
+        sorted.sort();
+        let before = sorted.len();
+        sorted.dedup();
+        assert_eq!(before, sorted.len(), "{field} kept a duplicate key");
+    };
+
+    with_config_lock(|| {
+        let app = app_with_state();
+
+        // Door 1: the partial command the frontend actually calls.
+        config::update_data_table_view_impl(
+            state(&app).inner(),
+            Some(hostile_order()),
+            Some(hostile_hidden()),
+            None,
+            None,
+            Some(hostile_order()),
+            Some(hostile_hidden()),
+            None,
+            None,
+        )
+        .expect("update data-table view");
+        let panels = config::get_config(state(&app)).panels;
+        assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
+        assert_bounded(
+            &panels.data_table_shot_hidden_columns,
+            "shot_hidden_columns",
+        );
+        assert_bounded(
+            &panels.data_table_station_column_order,
+            "station_column_order",
+        );
+        assert_bounded(
+            &panels.data_table_station_hidden_columns,
+            "station_hidden_columns",
+        );
+        // Survivors keep their ORDER - these lists ARE the user's column order,
+        // so pruning must never reshuffle what is left.
+        assert_eq!(
+            panels.data_table_shot_column_order.len(),
+            MAX_ENTRIES,
+            "the 300 valid keys should truncate to exactly the cap"
+        );
+        assert_eq!(panels.data_table_shot_column_order[0], "col0");
+        assert_eq!(
+            panels.data_table_shot_column_order[MAX_ENTRIES - 1],
+            "col255"
+        );
+        assert_eq!(panels.data_table_shot_hidden_columns, vec!["left"]);
+
+        // Door 2: the whole-`Config` write, which does no per-field validation of
+        // its own and so relies entirely on the normalize pass.
+        with_restored_config(&app, || {
+            let mut cfg = config::get_config(state(&app));
+            cfg.panels.data_table_shot_column_order = hostile_order();
+            cfg.panels.data_table_shot_hidden_columns = hostile_hidden();
+            cfg.panels.data_table_station_column_order = hostile_order();
+            cfg.panels.data_table_station_hidden_columns = hostile_hidden();
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let panels = config::get_config(state(&app)).panels;
+            assert_bounded(&panels.data_table_shot_column_order, "shot_column_order");
+            assert_bounded(
+                &panels.data_table_shot_hidden_columns,
+                "shot_hidden_columns",
+            );
+            assert_bounded(
+                &panels.data_table_station_column_order,
+                "station_column_order",
+            );
+            assert_bounded(
+                &panels.data_table_station_hidden_columns,
+                "station_hidden_columns",
+            );
+        });
+    });
+}
+
+/// An angle display mode the PARTIAL command rejects must not sail through the
+/// whole-`Config` door. `update_data_table_view_impl` returns `Err` for
+/// "sideways", but `update_config` writes a whole `Config` and validated neither
+/// mode string - so the same value was refused at one door and persisted cleanly
+/// through the other, and the load path never repaired it either.
+///
+/// The whole-payload door cannot REJECT (it has one field's worth of nothing to
+/// report against a 20-block config), so the contract here is repair-to-default,
+/// which is also what the frontend already renders for an unknown mode.
+#[test]
+fn test_update_config_repairs_invalid_angle_modes() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Precondition: this is exactly the value the partial door refuses.
+            assert!(
+                config::update_data_table_view_impl(
+                    state(&app).inner(),
+                    None,
+                    None,
+                    Some("sideways".to_string()),
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                )
+                .is_err(),
+                "precondition: the partial command rejects 'sideways'"
+            );
+
+            let mut cfg = config::get_config(state(&app));
+            cfg.panels.data_table_azimuth_mode = "sideways".to_string();
+            cfg.panels.data_table_inclination_mode = String::new();
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let panels = config::get_config(state(&app)).panels;
+            assert_eq!(
+                panels.data_table_azimuth_mode, "avg",
+                "an invalid azimuth mode must fall back to its documented default"
+            );
+            assert_eq!(
+                panels.data_table_inclination_mode, "off",
+                "an invalid inclination mode must fall back to its documented default"
+            );
+
+            // The repair must be a repair, not a reset: a VALID non-default mode
+            // still has to survive the same door.
+            let mut cfg = config::get_config(state(&app));
+            cfg.panels.data_table_azimuth_mode = "inout".to_string();
+            cfg.panels.data_table_inclination_mode = "avg".to_string();
+            config::update_config(state(&app), cfg).expect("update config");
+
+            let panels = config::get_config(state(&app)).panels;
+            assert_eq!(panels.data_table_azimuth_mode, "inout");
+            assert_eq!(panels.data_table_inclination_mode, "avg");
+        });
+    });
+}
+
+/// `update_gas_config` is the partial door for the `[gas]` block, and both halves
+/// of what makes it correct are asserted here:
+///
+/// (a) going partial did not skip normalization - `modify_config` still ends in
+///     `normalize_except_shortcuts`, so a negative swim speed (which would later
+///     divide into `edge_gas` and poison the whole reachability field with +Inf
+///     or NaN) is repaired on the way in, exactly as the whole-`Config` door does;
+/// (b) the partial semantics that are the entire point of the command - an
+///     unrelated `[panels]` value written just before must SURVIVE. The whole-
+///     payload write this replaced carried a stale snapshot of every other field
+///     and silently reverted whatever landed inside its debounce window.
+#[test]
+fn test_update_gas_config_normalizes_and_leaves_other_sections_alone() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        // A value inside the 100..500 clamp, so anything other than 321 coming
+        // back means the write was lost rather than clamped.
+        config::update_panel_sizes_impl(state(&app).inner(), None, None, Some(321))
+            .expect("update panel sizes");
+
+        let mut gas = config::get_config(state(&app)).gas;
+        gas.swim_speed_m_per_min = -1.0;
+        // A valid change alongside it, so the test cannot pass by the command
+        // being a no-op.
+        gas.include_reference_legs = true;
+        config::update_gas_config_impl(state(&app).inner(), gas).expect("update gas config");
+
+        let cfg = config::get_config(state(&app));
+        assert_eq!(
+            cfg.gas.swim_speed_m_per_min, 10.0,
+            "a non-positive swim speed must be repaired to the default, not persisted"
+        );
+        assert!(
+            cfg.gas.include_reference_legs,
+            "the valid part of the gas payload must land"
+        );
+        assert_eq!(
+            cfg.panels.data_table_height, 321,
+            "a partial gas write must not revert an unrelated [panels] value"
+        );
+    });
+}
+
 #[test]
 fn test_get_config_defaults_validation() {
     // Same isolation as above: defaults must not depend on the real config.

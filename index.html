@@ -5,10 +5,21 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stalagmight</title>
     <!-- Remote origin is why style-src in src-tauri/tauri.conf.json's CSP lists
-         https://unpkg.com explicitly (#357 item 12). The <style> block below is
-         plain inline CSS with no per-request variation, so Tauri's build-time
-         asset scan (tauri-utils csp_hashes) computes a sha256 hash for it and
-         injects that into style-src automatically - no 'unsafe-inline' needed. -->
+         https://unpkg.com explicitly (#357 item 12). The <style> block below
+         needs no 'unsafe-inline', but the mechanism is a NONCE, not a hash:
+         tauri-codegen stamps nonce="__TAURI_STYLE_NONCE__" onto every <style>
+         at build time (map_core_assets -> inject_nonce_token), and at serve time
+         set_csp -> replace_csp_nonce swaps in a random value and appends the
+         matching 'nonce-...' to style-src. Tauri hashes .js/.mjs assets ONLY
+         (tauri-codegen embedded_assets.rs: "we only hash JavaScript files for
+         now"), and its style-hash vector is unreachable without the isolation
+         feature, so no sha256 is ever computed for this block.
+         Editing the CSS in here therefore cannot break the CSP. Two things can:
+         hand-writing a nonce attribute on the <style> (inject_nonce skips
+         elements that already have one), or setting
+         dangerousDisableAssetCspModification to true or to a list containing
+         "style-src" - either drops the nonce and this block is refused in
+         production only, since devCsp carries 'unsafe-inline'. -->
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <style>
       /* Anti-flash cover for the frame before the CSS bundle loads;

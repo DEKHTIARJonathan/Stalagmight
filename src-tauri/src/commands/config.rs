@@ -3,7 +3,9 @@ use tauri::State;
 
 use std::collections::BTreeMap;
 
-use crate::config::{normalize_column_widths, Config, ConfigSaveReport, GasConfig};
+use crate::config::{
+    normalize_column_widths, Config, ConfigSaveReport, GasConfig, DATA_TABLE_ANGLE_MODES,
+};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -96,7 +98,10 @@ pub(crate) fn update_data_table_view_impl(
     column_widths: Option<BTreeMap<String, u32>>,
     station_column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
-    const MODES: [&str; 3] = ["avg", "inout", "off"];
+    // The allowed values live in `config::types` next to the fields and the
+    // repair pass that coerces them, not as a literal here: this door REJECTS an
+    // unknown mode while `PanelsConfig::normalize` REPAIRS one, and two copies of
+    // the list would let those two doors disagree about what is valid.
     // Read-modify-write inside ONE critical section. Doing the read with
     // `get_config()` and the write with `update_config()` left a gap in which a
     // concurrent `update_panel_sizes` could land, and whichever of the two wrote
@@ -111,13 +116,13 @@ pub(crate) fn update_data_table_view_impl(
                 config.panels.data_table_shot_hidden_columns = hidden;
             }
             if let Some(mode) = azimuth_mode {
-                if !MODES.contains(&mode.as_str()) {
+                if !DATA_TABLE_ANGLE_MODES.contains(&mode.as_str()) {
                     return Err(anyhow!("Invalid azimuth mode '{mode}'"));
                 }
                 config.panels.data_table_azimuth_mode = mode;
             }
             if let Some(mode) = inclination_mode {
-                if !MODES.contains(&mode.as_str()) {
+                if !DATA_TABLE_ANGLE_MODES.contains(&mode.as_str()) {
                     return Err(anyhow!("Invalid inclination mode '{mode}'"));
                 }
                 config.panels.data_table_inclination_mode = mode;

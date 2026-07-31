@@ -1,7 +1,9 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::column_widths::{lenient_column_widths, normalize_column_widths};
+use super::column_widths::{
+    lenient_column_widths, normalize_column_names, normalize_column_widths,
+};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
@@ -400,6 +402,46 @@ impl PanelsConfig {
         normalize_panel_mode(&mut self.data_table_mode);
         normalize_column_widths(&mut self.data_table_shot_column_widths);
         normalize_column_widths(&mut self.data_table_station_column_widths);
+        // The four column-key LISTS need the same ceiling as the width maps
+        // beside them, and for the same reason - see `normalize_column_names`.
+        // Doing it here rather than in `update_data_table_view_impl` is what
+        // makes it hold on BOTH doors: the partial IPC command and the
+        // whole-`Config` `update_config` both end in `normalize_except_shortcuts`,
+        // and `Config::load` calls it too, so an already-bloated file on disk is
+        // pruned on the next launch instead of being carried forever.
+        normalize_column_names(&mut self.data_table_shot_column_order);
+        normalize_column_names(&mut self.data_table_shot_hidden_columns);
+        normalize_column_names(&mut self.data_table_station_column_order);
+        normalize_column_names(&mut self.data_table_station_hidden_columns);
+        // Same both-doors argument for the angle display modes. The PARTIAL
+        // command validates them and rejects an unknown string, but
+        // `update_config` takes a whole `Config` and used to write one through
+        // untouched - so `"sideways"` was refused at one door and persisted
+        // cleanly through the other, and the load path never repaired it either.
+        // Repair rather than reject here: `normalize` has no way to report an
+        // error, and the read side (`DataTable`) treats an unknown mode as its
+        // own default anyway, so falling back matches what the UI already shows.
+        normalize_angle_mode(&mut self.data_table_azimuth_mode, default_azimuth_mode);
+        normalize_angle_mode(
+            &mut self.data_table_inclination_mode,
+            default_inclination_mode,
+        );
+    }
+}
+
+/// The accepted values for `data_table_azimuth_mode` / `data_table_inclination_mode`.
+///
+/// Shared with `commands::config::update_data_table_view_impl`, which rejects
+/// anything outside it, so the validating door and the repairing door cannot
+/// drift apart into two different notions of "valid mode".
+pub(crate) const DATA_TABLE_ANGLE_MODES: [&str; 3] = ["avg", "inout", "off"];
+
+/// Coerce a persisted angle display mode to a known value, falling back to the
+/// documented default for that field (they differ: azimuth defaults to "avg",
+/// inclination to "off", so the default arrives as a fn rather than a literal).
+fn normalize_angle_mode(mode: &mut String, default: fn() -> String) {
+    if !DATA_TABLE_ANGLE_MODES.contains(&mode.as_str()) {
+        *mode = default();
     }
 }
 

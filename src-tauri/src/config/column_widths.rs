@@ -8,7 +8,7 @@
 //! nothing here needs the rest of `types.rs`, and `PanelsConfig` needs only the two
 //! entry points.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashSet};
 
 use serde::{Deserialize, Deserializer};
 
@@ -103,5 +103,44 @@ pub(crate) fn normalize_column_widths(widths: &mut BTreeMap<String, u32>) {
 
     for width in widths.values_mut() {
         *width = (*width).clamp(MIN_COLUMN_WIDTH, MAX_COLUMN_WIDTH);
+    }
+}
+
+/// Bound a persisted LIST of column keys - the column-order and hidden-column
+/// lists - the same way [`normalize_column_widths`] bounds the width maps.
+///
+/// These four `Vec<String>` fields were the one part of the data-table view state
+/// with no ceiling at all: `update_data_table_view_impl` wrote them straight
+/// through from the renderer, and nothing on the load path pruned them either.
+/// That is the same unbounded-growth hole the width maps already close, and it
+/// bites harder here because there is no per-entry value to clamp - the entries
+/// ARE the payload. `config.toml` is re-parsed at every launch, so one oversized
+/// write is paid for on every start until someone hand-edits the file.
+///
+/// The ceilings are deliberately the ones the width maps use
+/// (`MAX_COLUMN_WIDTH_ENTRIES` / `MAX_COLUMN_KEY_LEN`): both sides key the same
+/// grid columns, so a key too long to be a real column key is degenerate in a
+/// width map and in an order list for exactly the same reason, and letting the
+/// two drift apart would mean a key that survives one field and not its sibling.
+///
+/// Also dedups, which the width maps get for free from `BTreeMap`: a repeated key
+/// in an order list is meaningless to the grid and doubles the entry count a
+/// hostile caller has to send to reach the cap.
+pub(crate) fn normalize_column_names(names: &mut Vec<String>) {
+    // Shape only - there is no value half here. Order is preserved for the
+    // survivors because these lists ARE an order: reordering them would silently
+    // rearrange the user's columns.
+    let mut seen: HashSet<String> = HashSet::new();
+    names.retain(|name| {
+        !name.is_empty() && name.len() <= MAX_COLUMN_KEY_LEN && seen.insert(name.clone())
+    });
+
+    if names.len() > MAX_COLUMN_WIDTH_ENTRIES {
+        tracing::warn!(
+            "Column-name list has {} entries, truncating to {}",
+            names.len(),
+            MAX_COLUMN_WIDTH_ENTRIES
+        );
+        names.truncate(MAX_COLUMN_WIDTH_ENTRIES);
     }
 }

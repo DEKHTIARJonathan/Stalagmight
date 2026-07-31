@@ -77,8 +77,17 @@ pub(super) fn write_atomically(path: &Path, contents: &str) -> Result<()> {
     let temp_path = path.with_extension(format!("toml.{unique}.tmp"));
 
     let write = || -> Result<()> {
-        let mut file =
-            std::fs::File::create(&temp_path).context("Failed to create temporary config file")?;
+        // `create_new` (O_CREAT|O_EXCL), NOT `create`. The temp name is fully
+        // predictable - the counter starts at 0, so the first write of a process
+        // is at `config.toml.<pid>.0.tmp` - and plain `create` is O_CREAT|O_TRUNC
+        // WITHOUT O_EXCL, which follows symlinks. Anything able to write to the
+        // config dir could pre-plant that name as a symlink: the write would
+        // truncate and fill the link's target, and the rename below would then
+        // move the symlink itself over `config.toml`, leaving the live config
+        // path an attacker-controlled link for every later write. O_EXCL fails
+        // outright on an existing name, symlink included.
+        let mut file = std::fs::File::create_new(&temp_path)
+            .context("Failed to create temporary config file")?;
         file.write_all(contents.as_bytes())
             .context("Failed to write temporary config file")?;
         file.sync_all()
