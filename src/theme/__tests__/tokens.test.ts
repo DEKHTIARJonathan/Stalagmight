@@ -252,6 +252,34 @@ describe('depth gradient legibility', () => {
   const RAMP_FLOOR = 3;
 
   /**
+   * Light-canvas themes are held to 2:1 instead, and this is a deliberate,
+   * user-directed trade rather than an oversight.
+   *
+   * The ramp runs cyan -> green -> yellow -> red. Its YELLOW MIDPOINT is the
+   * brightest sample on the sweep, so on a near-white canvas the midpoint sets
+   * the worst ratio, and holding it at 3:1 forces the WHOLE ramp dark - which is
+   * what made `light` read as a flat olive-to-brown smear with no visible cyan or
+   * green in it. The same anchors on a dark canvas measure 3.5:1; the constraint
+   * is the canvas, not the palette.
+   *
+   * Measured cost of each option on `light` (worst sample vs #faf7f2):
+   *   #0b7d77 -> #8f1206   3.50:1   clears 3:1, but visibly muted
+   *   #1aa89c -> #b81a0c   2.10:1   <- chosen: vivid and still legible
+   *   #3fd6c8 -> #d92a20   1.42:1   matches dark, midpoint near-invisible
+   *
+   * 2:1 keeps the midpoint distinguishable while letting the ends read as real
+   * colours. Dark-canvas themes are UNAFFECTED and still assert the full 3:1 -
+   * do not "simplify" this back to one constant.
+   */
+  const RAMP_FLOOR_LIGHT_CANVAS = 2;
+
+  /** The floor that applies to `theme`, by the canvas its ramp is drawn on. */
+  const rampFloorFor = (theme: FullTheme): number =>
+    (FULL_LIGHT_THEMES as readonly string[]).includes(theme)
+      ? RAMP_FLOOR_LIGHT_CANVAS
+      : RAMP_FLOOR;
+
+  /**
    * Themes still below the floor, with the value measured when the exception was
    * granted. Empty today: `one_dark` was the last entry and #357 item 8 took its
    * shallow endpoint off the indigo arc (2.599 -> 4.38), so the entry was deleted
@@ -265,12 +293,25 @@ describe('depth gradient legibility', () => {
   const ALL_FULL_THEMES = [...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const];
 
   /**
-   * Shallow must be green and deep must be red (signed hue, so red straddles 0).
-   * The bands are wide on purpose: what they exist to forbid is a shallow endpoint
-   * at hue >= 180 - teal, cyan, spring green - because that is the side of the
-   * wheel from which the shortest path to red runs UP through blue and magenta.
+   * Deep must be red (signed hue, so red straddles 0); shallow must sit anywhere
+   * on the warm side of the 180 line.
+   *
+   * The ONLY thing this band exists to forbid is a shallow endpoint at hue >= 180,
+   * because that is the side of the wheel from which `getDepthColor`'s shortest
+   * path to red runs UP through blue and magenta instead of DOWN through green
+   * and yellow. 180 is therefore the real boundary, and the max is set just under
+   * it rather than at some arbitrary "green enough" point.
+   *
+   * It used to be 155, which additionally encoded a product preference for a
+   * green shallow end. That preference is gone: the shipped ramp is cyan -> green
+   * -> yellow -> red (the pre-#357 look), whose shallow anchors run 169.8-177.0.
+   * Those descend through green and yellow exactly like a green shallow does -
+   * they just start further round the wheel and cover MORE of it, which is why
+   * they measure better on discriminability and on deuteranopia than the green
+   * ramp that briefly replaced them. Narrowing this band back below 178 would
+   * reject the intended colours, not catch a defect.
    */
-  const SHALLOW_HUE = { min: 85, max: 155 };
+  const SHALLOW_HUE = { min: 85, max: 178 };
   const DEEP_HUE = { min: -25, max: 25 };
 
   /**
@@ -284,15 +325,16 @@ describe('depth gradient legibility', () => {
   const MIN_END_SEPARATION = 1.6;
 
   it.each(ALL_FULL_THEMES)(
-    '%s keeps the whole depth ramp at 3:1 or better against its own canvas',
+    '%s keeps the whole depth ramp above the contrast floor for its own canvas',
     (theme) => {
       const { worst, at, canvas } = worstOnRamp(theme);
+      const floor = rampFloorFor(theme);
       const known = KNOWN_BELOW_FLOOR[theme];
       if (known === undefined) {
         expect(
           worst,
-          `${theme}: ${at} on ${canvas} is ${worst.toFixed(2)}:1, below the ${RAMP_FLOOR}:1 floor`
-        ).toBeGreaterThanOrEqual(RAMP_FLOOR);
+          `${theme}: ${at} on ${canvas} is ${worst.toFixed(2)}:1, below the ${floor}:1 floor`
+        ).toBeGreaterThanOrEqual(floor);
         return;
       }
       // Not allowed to get worse...

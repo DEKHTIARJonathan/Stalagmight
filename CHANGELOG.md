@@ -11,6 +11,24 @@ Update this file every time a new version is tagged.
 
 - **Ariane collaboration mode** - the opt-in per-project mode that kept a sibling `.tml` next to the `.stalx`, saved both on every save, and reconciled external Ariane edits back in on the next open has been removed entirely. Plain Ariane `.tml`/`.tmlu` import and export are unaffected. `.stalx` schema v15 drops the now-unused `collab_state` table. **Persisted undo/redo history is cleared on first open of a pre-upgrade project** - a saved entry can name a collaboration operation this build no longer understands, and replaying the entries around it would corrupt the survey, so the stored history is dropped once and rebuilds as you work.
 
+### Fixed
+
+#### Legibility
+
+- **Depth coloring runs cyan to green to yellow to red on every theme, the direction it was always meant to** - six of the eight themes had their shallow anchor placed just past the point where the gradient's shortest path flips and starts running the wrong way around the color wheel, through blue and violet, instead of down through green and yellow. Every shallow anchor now sits on the correct side of that line, so no theme takes the detour. The two light-canvas themes (the light theme and E-Ink Kaleido) are held to a slightly lower contrast floor than the rest on purpose, so the ramp stays vivid instead of being forced dark enough to read as olive and brown ([#357](https://github.com/Stalagmight/Stalagmight/issues/357))
+
+#### Interface
+
+- **The map's color overlay could get stuck on Distance** - depth coloring is a saved preference while the distance overlay is not, so loading a project or restoring a SpeleoDB revision while distance was on wrote the saved depth setting back in underneath it. With both set, the overlay read as Distance, and picking Depth - or turning coloring off entirely - silently did nothing. Selecting a color mode now always lands on the one you picked, and loading a project no longer leaves the previous project's distance overlay, or the station it was measuring from, behind ([#34](https://github.com/Stalagmight/Stalagmight/issues/34))
+
+#### Packaging
+
+- **Every IPC call silently fell back to a slower transport for the rest of the session** - the production build's security policy did not list Tauri's own IPC origin, so the very first call to the backend failed its check and the app dropped to a slower fallback path for every call after. The policy now allows it, and two directives that had been left open with no safe default are now explicitly locked down as well.
+
+#### Settings and configuration
+
+- **An interrupted settings save could leave a stray file behind forever** - if the app crashed or lost power in the instant between writing a settings update and putting it in place, the in-progress copy was never cleaned up, and nothing ever would. Settings loading now sweeps away any such leftovers, and the in-progress copy is written in a way that can no longer be redirected by a file planted in advance at its name.
+
 ## [0.5.0] - 2026-07-29
 
 The first release with builds for all three platforms. The headline additions are

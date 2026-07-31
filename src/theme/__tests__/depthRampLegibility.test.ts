@@ -232,14 +232,18 @@ function monotonicityViolationsForColors(colors: string[]): number {
  * Green (~120) to red (~0) correctly falls through yellow/orange (~30-90); any
  * shallow hue >= ~180 relative to a reddish deep flips the shortest path
  * through cyan/blue/violet/magenta instead (the exact bug that made one_dark's
- * pre-fix ramp bottom out at 2.60:1, per the tokens.ts:440 comment). The
- * forbidden band (170-330) is the cool third of the wheel bounded away from
- * both true cyan and true magenta-red so a shallow hue that is itself
- * legitimately teal-adjacent (e.g. ~168) is not penalised for the one sample
- * at its own endpoint. Returns the deepest incursion in degrees (0 = the ramp
- * never enters the band).
+ * pre-fix ramp bottom out at 2.60:1, per the tokens.ts:440 comment).
+ *
+ * The band starts at 179 rather than 170 so that a CYAN shallow endpoint is not
+ * penalised for the single sample at its own start. 180 is the real dividing
+ * line - below it the path descends through green and yellow, at or above it the
+ * path inverts - so 179 is as tight as this can be without rejecting the shipped
+ * ramp, whose shallow anchors run 169.8-177.0. A ramp that genuinely inverts
+ * still gets caught: starting above 180 sends the sweep up through 240-300,
+ * which is deep inside the band. Returns the deepest incursion in degrees
+ * (0 = the ramp never enters the band).
  */
-const FORBIDDEN_HUE_MIN = 170;
+const FORBIDDEN_HUE_MIN = 179;
 const FORBIDDEN_HUE_MAX = 330;
 
 function maxHueIncursion(shallowColor: string, deepColor: string): number {
