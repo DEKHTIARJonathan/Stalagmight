@@ -103,11 +103,19 @@ test.describe('Ctrl+Drag Panning', () => {
       await page.mouse.up();
       await waitForMapIdle(page);
 
+      // Settle first, then assert on ONE read. A bare `poll(...).toBe('default')`
+      // would accept the wrong cursor followed by any later re-render healing it,
+      // which is exactly the failure mode under test - the raw write is what a
+      // subsequent recompute papers over.
       await expect
         .poll(() => page.evaluate(() => document.querySelector('canvas')?.style.cursor ?? ''), {
           timeout: 5000,
         })
-        .toBe('default');
+        .not.toBe('');
+      const settled = await page.evaluate(
+        () => document.querySelector('canvas')?.style.cursor ?? '',
+      );
+      expect(settled).toBe('default');
     });
   });
 

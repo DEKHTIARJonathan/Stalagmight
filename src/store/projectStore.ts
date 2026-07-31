@@ -2376,10 +2376,9 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   exportImage: async (path: string, options: ExportImageOptions) => {
-    // Resolve the depth ramp HERE, not at the callers (#360) - this is the one
-    // funnel every image export goes through, so no call site can forget it.
-    // Sent on every export, not just depth mode: the option is inert for the
-    // others, and a conditional is one more thing to get wrong.
+    // Stamped here, not at the callers (#360): this is the one funnel every
+    // image export passes through. Unconditional - the option is inert for the
+    // non-depth modes. See `utils/exportOptions.ts`.
     await invokeIpc('export_image', {
       path,
       options: withThemeDepthRamp(options),

@@ -3611,8 +3611,18 @@ function MapCanvas() {
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }
-      // Reset cursor based on current tool
-      map.current.getCanvas().style.cursor = toolCursor(activeTool);
+      // Reset cursor based on current tool. This effect keys on `activeTool` as
+      // well as `placementMode`, so it also runs on an ordinary tool switch,
+      // AFTER the passive effect above (effects run in declaration order) - a
+      // raw write here therefore lands on top of the precedence that effect just
+      // applied. Today the end state is still correct, because a later hover
+      // recompute settles it back, but that is luck rather than design: hand it
+      // to the same owner instead of racing it.
+      if (surveyLayerRef.current) {
+        surveyLayerRef.current.setBaseCursor(toolCursor(activeTool));
+      } else {
+        map.current.getCanvas().style.cursor = toolCursor(activeTool);
+      }
     }
   }, [placementMode, activeTool]);
 

@@ -3616,6 +3616,17 @@ mod tests {
         let ramp = themed.depth_ramp();
         assert_eq!(ramp.shallow, "#14487F");
         assert_eq!(ramp.deep, "#a52a1a");
+        // Uppercase must not merely pass the validator, it must RENDER the same:
+        // passthrough alone would still look right here while `hex_to_rgb` read
+        // it as black. Pin the rendered colour, not just the string.
+        let lower = ExportImageOptions {
+            depth_shallow: Some("#14487f".to_string()),
+            ..themed.clone()
+        };
+        assert_eq!(
+            depth_gradient_color(0.0, 0.0, 100.0, ramp),
+            depth_gradient_color(0.0, 0.0, 100.0, lower.depth_ramp()),
+        );
         // The whole point: a light-theme export must not paint the dark ramp.
         let defaults = ExportImageOptions::default();
         assert_ne!(

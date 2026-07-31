@@ -18,6 +18,13 @@ import type { ExportImageOptions } from '../types/commands';
  *
  * Read per call, never cached: the theme can change between two exports.
  * Returns a new object; the caller's own options are left untouched.
+ *
+ * This relies on `getComputedStyle().getPropertyValue()` handing back a custom
+ * property's token as authored rather than normalising it - the Rust side takes
+ * `#rrggbb` only, and falls back silently otherwise. Verified in Chromium
+ * (returns `#a89060` for `--cc-depth-shallow`, not `rgb(...)`); jsdom agreeing
+ * would not have been evidence for the shipped webview. `tokens.test.ts` pins
+ * the other half, that every theme declares those two as hex in the first place.
  */
 export function withThemeDepthRamp(options: ExportImageOptions): ExportImageOptions {
   const { depthShallow, depthDeep } = getMapThemeColors();
