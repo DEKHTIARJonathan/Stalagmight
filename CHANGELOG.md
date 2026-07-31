@@ -25,6 +25,10 @@ Update this file every time a new version is tagged.
 
 - **Reopening the data table could undo a column resize** - closing the table right after resizing a column and reopening it before the save had finished landing could resurrect the previous widths and write them back over the new ones.
 
+- **Resizing or hiding a data-table column could clear an active ruler measurement** - with the closure-adjusted geometry view on, the data table's own save was discarding cached map geometry it had no reason to touch, which cleared an in-progress ruler measurement and made the map briefly drop back to un-adjusted geometry while it recomputed.
+
+- **The data table could fail to open against an older backend** - if the saved settings predated the column-width and column-order fields, opening the data table threw instead of falling back to defaults.
+
 #### Packaging
 
 - **Every IPC call silently fell back to a slower transport for the rest of the session** - the production build's security policy did not list Tauri's own IPC origin, so the very first call to the backend failed its check and the app dropped to a slower fallback path for every call after. The policy now allows it, and two directives that had been left open with no safe default are now explicitly locked down as well.
