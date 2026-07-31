@@ -471,6 +471,22 @@ pub(super) enum PushOutcome {
 /// dirty bit are; the privacy-neutral local prefs are not).
 ///
 /// FATAL for the push: an unsanitized snapshot must never be uploaded.
+/// The server `type` an un-adopted Ariane project carries. Compared
+/// case-insensitively: the API answers `ARIANE` on a GET and takes `ariane` on a
+/// PATCH, and which one a given payload used is not a distinction worth trusting.
+const ARIANE_PROJECT_TYPE: &str = "ariane";
+
+/// Does the server still class this project as an Ariane one?
+///
+/// `None` - the type could not be read - is NOT "yes". A missing answer is the one
+/// case where acting would be a write issued against a project whose current state we
+/// failed to establish, and the cost of waiting is one push: the next one reads it
+/// again. Unknown types are left alone for the same reason, since only `ariane` is
+/// the state adoption is meant to leave behind.
+fn type_still_says_ariane(server_kind: Option<&str>) -> bool {
+    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(ARIANE_PROJECT_TYPE))
+}
+
 fn clear_snapshot_dirty(snapshot: &Path) -> Result<(), SpeleoDbError> {
     crate::persistence::Database::sanitize_push_snapshot(snapshot)
         .map_err(|e| SpeleoDbError::Io(format!("could not sanitize the push snapshot: {e}")))
@@ -2827,9 +2843,24 @@ impl AppState {
         // truly dead token), and the fold never dirties the link. Skipped on the initial
         // publish push (`fold_metadata == false`): that GET would hit a project created
         // milliseconds earlier whose name is already known-current, a wasted round-trip.
+        // The server's project `type` at push time, read off the SAME GET as the name
+        // fold so the self-heal below costs no extra round-trip. `None` means we could
+        // not read it, which is not the same as "it is fine" - see the heal.
+        let mut server_kind: Option<String> = None;
         if fold_metadata {
+            // `fetched`, not `project`, and deliberately so:
+            // `bump_sites_are_exactly_the_known_set` recognises a commit into the
+            // AppState project slot by the shape of the assignment, and assigning
+            // anything derived from a binding named `project` reads as one. The
+            // tripwire is a text heuristic on purpose - keeping look-alikes out of the
+            // tree is cheaper than teaching it to parse Rust, and far cheaper than the
+            // session-boundary bug it exists to catch. (Which is also why this comment
+            // describes the needle rather than quoting it.)
             match client::get_project(endpoint, token, insecure_http, project_id) {
-                Ok(project) => self.speleodb_fold_local_name(&project.name),
+                Ok(fetched) => {
+                    self.speleodb_fold_local_name(&fetched.name);
+                    server_kind = Some(fetched.kind);
+                }
                 Err(e) => tracing::warn!(
                     error = %e,
                     project_id,
@@ -2908,6 +2939,13 @@ impl AppState {
                 // here to prevent. The outcome is held and returned unchanged, so the
                 // "landed" conclusion and the invalidation still cannot drift apart.
                 let landed = self.speleodb_revision_landed(project_id);
+                self.speleodb_heal_managed_type(
+                    endpoint,
+                    token,
+                    insecure_http,
+                    project_id,
+                    server_kind.as_deref(),
+                );
                 let new_base = pushed.latest_commit.as_ref().map(|c| c.id.clone());
                 self.speleodb_mutate_link(|l| {
                     // NEVER let a successful push move BASE BACKWARD. A None BASE
@@ -2955,6 +2993,13 @@ impl AppState {
                     // stale, whatever this attempt returns. Concluded ahead of the
                     // fallible link write for the same reason as the 200 arm.
                     let landed = self.speleodb_revision_landed(project_id);
+                    self.speleodb_heal_managed_type(
+                        endpoint,
+                        token,
+                        insecure_http,
+                        project_id,
+                        server_kind.as_deref(),
+                    );
                     self.speleodb_mutate_link(|l| {
                         if sync::edits_captured_by_push(
                             l.last_edit_at.as_deref(),
@@ -2988,6 +3033,69 @@ impl AppState {
                 // A hard rejection (403 fence, 4xx, parse): surface it.
                 Err(dto_for_error(Endpoint::UploadAuto, &e))
             }
+        }
+    }
+
+    /// A project with a `.stalx` on the server is a Stalagmight project, so the server
+    /// `type` should say so. Flip it when it still says `ariane`.
+    ///
+    /// Adoption does this itself on the push it performs, and that covers the ordinary
+    /// route. It does NOT cover the one that skips that push: adoption declines to push
+    /// through somebody else's write lock (and cannot push at all offline or read-only),
+    /// so it converts locally and leaves the flip undone - and the Start-editing → Done
+    /// the user then runs had no reason to touch the project type. The result was a
+    /// permanent half-state: the `.stalx` up on the server under a project that still
+    /// advertises itself as Ariane, keeps offering Adopt, and makes later `.tml` edits
+    /// look authoritative to whoever makes them. Nothing in the app ever finished it.
+    ///
+    /// So the finishing move belongs to the push rather than to adoption: every push
+    /// that lands is proof the project is Stalagmight-managed, whichever route got it
+    /// there. Idempotent - a project already typed `other` costs nothing, which is
+    /// every push after the first.
+    ///
+    /// Called only from arms where the upload CONFLUDED, never before one. Flipping
+    /// ahead of a landing recreates the state this exists to avoid: a project typed
+    /// `other` whose only file is the Ariane one that type says to disregard, openable
+    /// by nobody.
+    ///
+    /// `server_kind` is the type read before the upload. `None` means the read failed,
+    /// and this declines to act on it: the flip is not urgent, and guessing costs a
+    /// write against a project we know nothing current about. The next push reads it
+    /// again.
+    ///
+    /// Called directly rather than through the auth handler, like adoption's own flip
+    /// and for the same reason: this is a swallowed best-effort call at the end of a
+    /// successful push, so a spurious 401 here would drop the session - keychain entry
+    /// included - over work that already landed.
+    fn speleodb_heal_managed_type(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        project_id: &str,
+        server_kind: Option<&str>,
+    ) {
+        if !type_still_says_ariane(server_kind) {
+            return;
+        }
+        match client::patch_project(
+            endpoint,
+            token,
+            insecure_http,
+            project_id,
+            r#"{"type":"other"}"#,
+        ) {
+            Ok(_) => tracing::info!(
+                project_id,
+                purpose = "finish an adoption whose own push never ran",
+                "speleodb: flipped the server project type ariane->other after a landed push"
+            ),
+            Err(e) => tracing::warn!(
+                error = %e,
+                project_id,
+                purpose = "finish an adoption whose own push never ran",
+                "speleodb: could not flip the project type after a landed push; the next push retries"
+            ),
         }
     }
 
@@ -3137,8 +3245,8 @@ mod tests {
     use super::{
         auth_error_drops_token, clear_snapshot_dirty, head_with_empty_retry,
         is_local_edits_refusal, local_dto, lock_held_by_me, resolve_endpoint, reverify_due,
-        validate_project_id, whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
-        REVERIFY_INTERVAL_SECS,
+        type_still_says_ariane, validate_project_id, whoami_indicates_dead_token, Endpoint,
+        PushOutcome, SpeleoDbSession, REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::{
         preserved_display_settings, restore_display_settings,
@@ -3152,6 +3260,88 @@ mod tests {
         DoneResult, KeychainReport, PushResult, RemoteState, SpeleoDbError, TransportCause,
     };
     use tempfile::TempDir;
+
+    /// A `.stalx` on the server means the project is Stalagmight-managed, so the type
+    /// should say so - and the ONE state worth healing is the one adoption leaves when
+    /// its own push never ran (lock held elsewhere, read-only, offline). Everything
+    /// else is left alone.
+    ///
+    /// `None` is the case worth being deliberate about: a type we could not READ is not
+    /// a type we may act on. Reading it as "still ariane" would issue a write against a
+    /// project whose current state we just failed to establish - on every push, since
+    /// the read that failed is the one that would have told us to stop.
+    #[test]
+    fn only_a_project_the_server_still_calls_ariane_gets_re_typed() {
+        assert!(type_still_says_ariane(Some("ariane")));
+        // The API answers `ARIANE` on a GET and takes `ariane` on a PATCH.
+        assert!(type_still_says_ariane(Some("ARIANE")));
+        assert!(type_still_says_ariane(Some(" Ariane ")));
+
+        assert!(!type_still_says_ariane(Some("other")), "already adopted");
+        assert!(
+            !type_still_says_ariane(Some("compass")),
+            "somebody else's format is not ours to re-type"
+        );
+        assert!(
+            !type_still_says_ariane(Some("")),
+            "an absent type field is not a claim that it is Ariane"
+        );
+        assert!(
+            !type_still_says_ariane(None),
+            "a type we could not read must not be acted on: the next push reads it again"
+        );
+    }
+
+    /// The heal has to run on EVERY arm that concludes an upload landed, and "landed"
+    /// is not the same set as "returned successfully" - the 304 arm concludes it too
+    /// (the content is already up there, put there by an attempt whose response we may
+    /// have lost). An arm that stops healing leaves the half-state standing silently,
+    /// which is the failure this whole mechanism exists to end.
+    ///
+    /// Structural, like the sibling tripwire on the recall invalidation: reaching the
+    /// real thing needs a server, and what is being guarded is someone adding a landing
+    /// arm without the finishing move.
+    #[test]
+    fn every_landing_upload_arm_finishes_the_adoption() {
+        // One definition plus the two landing arms inside `speleodb_upload`: the 200
+        // and the 304. Both are points at which the `.stalx` is provably on the server.
+        assert_eq!(
+            speleodb_prod_matches("speleodb_heal_managed_type(", &[]),
+            3,
+            "expected one definition plus the 200 and 304 landing arms"
+        );
+        // Never BEFORE a landing: flipping ahead of one recreates the state the flip
+        // exists to avoid - a project typed `other` whose only file is the Ariane one
+        // that type says to disregard. Checked arm by arm rather than once, so a heal
+        // added ahead of its landing cannot hide behind an earlier well-formed pair.
+        let src = prod_source();
+        let upload = src
+            .find("fn speleodb_upload")
+            .expect("the upload is defined");
+        let body = &src[upload
+            ..src
+                .find("fn speleodb_heal_managed_type")
+                .expect("the helper is defined after it")];
+        let landings: Vec<_> = body
+            .match_indices("let landed = self.speleodb_revision_landed(")
+            .map(|(at, _)| at)
+            .collect();
+        let heals: Vec<_> = body
+            .match_indices("self.speleodb_heal_managed_type(")
+            .map(|(at, _)| at)
+            .collect();
+        assert_eq!(
+            landings.len(),
+            heals.len(),
+            "every landing the upload concludes must be followed by the finishing move"
+        );
+        for (landed, heal) in landings.iter().zip(&heals) {
+            assert!(
+                landed < heal,
+                "the heal must follow the landing it is evidence of, never precede it"
+            );
+        }
+    }
 
     #[test]
     fn reverify_due_forces_a_check_when_never_verified_or_unparseable() {
