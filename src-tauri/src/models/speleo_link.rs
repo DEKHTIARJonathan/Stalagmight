@@ -43,7 +43,7 @@ pub struct SpeleoLink {
     #[ts(optional)]
     pub last_verify_at: Option<String>,
     /// [#303] Per-project override of whether this project's undo history rides to
-    /// the server (schema v15; nullable = follow `SpeleoDbConfig.undo_mode`).
+    /// the server (schema v16; nullable = follow `SpeleoDbConfig.undo_mode`).
     ///
     /// Stored HERE, in the `.stalx`, on purpose: it is a property of the project,
     /// not of the machine editing it. The row rides to the server in the pushed

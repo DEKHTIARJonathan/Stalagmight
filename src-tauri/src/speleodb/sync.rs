@@ -497,15 +497,6 @@ pub(crate) fn poll_verdict(
     }
 }
 
-/// SpeleoDB's own project-creation commit: the one it writes when a project is
-/// created, before any survey data exists.
-///
-/// Identified by its message, and only at the root of the history - both halves
-/// matter. The message alone would hide a real revision someone happened to name
-/// the same thing; parentless alone hides a genuine first revision on any project
-/// whose history has no separate creation commit. Matching is case-insensitive and
-/// ignores surrounding whitespace, because the marker is server-generated copy
-/// rather than a stable identifier.
 /// [#303] Which revision the next Unwind should check out, and whether that is the
 /// commit the working copy already equals.
 ///
@@ -618,6 +609,15 @@ pub(crate) fn rewind_target(
     None
 }
 
+/// SpeleoDB's own project-creation commit: the one it writes when a project is
+/// created, before any survey data exists.
+///
+/// Identified by its message, and only at the root of the history - both halves
+/// matter. The message alone would hide a real revision someone happened to name
+/// the same thing; parentless alone hides a genuine first revision on any project
+/// whose history has no separate creation commit. Matching is case-insensitive and
+/// ignores surrounding whitespace, because the marker is server-generated copy
+/// rather than a stable identifier.
 fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
     const CREATION_MESSAGE: &str = "[automated] project creation";
     commit.parent_ids.is_empty()

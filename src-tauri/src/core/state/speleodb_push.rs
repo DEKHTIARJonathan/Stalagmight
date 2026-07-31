@@ -326,20 +326,6 @@ impl AppState {
         }
     }
 
-    /// [#303] Throw the local copy away and come back at the server tip.
-    ///
-    /// Both surfaces that offer it have already said what it destroys: the push
-    /// confirmation raised when a copy is dirty only because it was walked back, and the
-    /// explicit "Discard changes" menu action, which offers it over ordinary edits too.
-    /// So this does not re-litigate the decision - it does not check
-    /// `unwound_not_edited`, because the menu action deliberately reaches it with real
-    /// edits pending.
-    ///
-    /// Ends holding the lock, which is the point: the user is discarding in order to carry
-    /// on working from the latest, not to be dropped into read-only. A lock we cannot get
-    /// (someone else took it meanwhile) surfaces as the ordinary contended-lock error, by
-    /// which time the discard has already happened and the copy is at the tip - which is
-    /// still the state they asked for.
     /// [#303] Replace the local copy with the server tip, throwing away whatever it held.
     ///
     /// The shared body of the two ways out of a copy the user does not want: Refresh while
@@ -370,6 +356,20 @@ impl AppState {
         .map_err(local_dto)
     }
 
+    /// [#303] Throw the local copy away and come back at the server tip.
+    ///
+    /// Both surfaces that offer it have already said what it destroys: the push
+    /// confirmation raised when a copy is dirty only because it was walked back, and the
+    /// explicit "Discard changes" menu action, which offers it over ordinary edits too.
+    /// So this does not re-litigate the decision - it does not check
+    /// `unwound_not_edited`, because the menu action deliberately reaches it with real
+    /// edits pending.
+    ///
+    /// Ends holding the lock, which is the point: the user is discarding in order to carry
+    /// on working from the latest, not to be dropped into read-only. A lock we cannot get
+    /// (someone else took it meanwhile) surfaces as the ordinary contended-lock error, by
+    /// which time the discard has already happened and the copy is at the tip - which is
+    /// still the state they asked for.
     pub(crate) fn speleodb_discard_changes(
         &self,
         keep_lock: bool,

@@ -110,42 +110,6 @@ impl Database {
     /// `fatal_tables_are_a_subset_of_local_tables` pins the relationship.
     const PUSH_SNAPSHOT_FATAL_TABLES: &[&str] = &["undo_stack", "redo_stack"];
 
-    /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
-    ///
-    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` - the dirty bit is
-    ///   local hand-off state, never server state (the next puller re-stamps it);
-    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] - per-machine /
-    ///   per-session local state that must not proliferate.
-    ///
-    /// `keep_undo` (#303) exempts `undo_stack` from that strip, for a project resolved to
-    /// [`crate::models::UndoMode::Full`]: there the history since the last commit is the
-    /// payload, and shipping it is what lets undo chain backwards commit by commit.
-    /// `redo_stack` is stripped either way. The caller resolves the mode - this function
-    /// must not, because it runs on a snapshot COPY whose link row is about to be
-    /// scrubbed and is in no position to arbitrate policy.
-    ///
-    /// Everything else PROLIFERATES with the project, by design: survey data,
-    /// `project_settings` (shared validation config #57), AND the durable
-    /// project-data tables `imported_file_hashes` / `imported_section_hashes`
-    /// (project-wide import-dedup - collaborators must not re-import the same file)
-    /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
-    /// a comment). These are NOT stripped - only a writer holding the lock can push,
-    /// so anything in the snapshot is a legitimate editor's change.
-    ///
-    /// Operates on a SNAPSHOT copy via its own connection; the live project file is
-    /// never touched.
-    ///
-    /// FAIL-CLOSED, per table. A table that is ABSENT is skipped (an older snapshot
-    /// shape legitimately lacks it, and what does not exist cannot leak). A table
-    /// that EXISTS but cannot be emptied is fatal for
-    /// [`Self::PUSH_SNAPSHOT_FATAL_TABLES`] and a logged warning for the rest, so a
-    /// snapshot still holding the pusher's undo/redo history - or a dirty bit -
-    /// never reaches the upload.
-    ///
-    /// Finishes with a `VACUUM`, which is load-bearing rather than cosmetic: `DELETE`
-    /// only marks pages free, so without it every deleted undo row is still
-    /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
-    /// from the live pages, dropping the freed ones for real.
     /// [#303] Delete the undo rows a chain step INHERITED, leaving the ones authored in
     /// this session. Snapshot-only: the live stack keeps everything, so the user can still
     /// undo back through the loaded history after the push.
@@ -189,6 +153,42 @@ impl Database {
         Ok(doomed.len())
     }
 
+    /// Sanitize a push SNAPSHOT in place (#197/#194) before upload:
+    ///
+    /// - clears `speleo_link.has_unpushed_edits` / `last_edit_at` - the dirty bit is
+    ///   local hand-off state, never server state (the next puller re-stamps it);
+    /// - empties every table in [`Self::PUSH_SNAPSHOT_LOCAL_TABLES`] - per-machine /
+    ///   per-session local state that must not proliferate.
+    ///
+    /// `keep_undo` (#303) exempts `undo_stack` from that strip, for a project resolved to
+    /// [`crate::models::UndoMode::Full`]: there the history since the last commit is the
+    /// payload, and shipping it is what lets undo chain backwards commit by commit.
+    /// `redo_stack` is stripped either way. The caller resolves the mode - this function
+    /// must not, because it runs on a snapshot COPY whose link row is about to be
+    /// scrubbed and is in no position to arbitrate policy.
+    ///
+    /// Everything else PROLIFERATES with the project, by design: survey data,
+    /// `project_settings` (shared validation config #57), AND the durable
+    /// project-data tables `imported_file_hashes` / `imported_section_hashes`
+    /// (project-wide import-dedup - collaborators must not re-import the same file)
+    /// and `resolved_warnings` (a resolved warning stays resolved for everyone, like
+    /// a comment). These are NOT stripped - only a writer holding the lock can push,
+    /// so anything in the snapshot is a legitimate editor's change.
+    ///
+    /// Operates on a SNAPSHOT copy via its own connection; the live project file is
+    /// never touched.
+    ///
+    /// FAIL-CLOSED, per table. A table that is ABSENT is skipped (an older snapshot
+    /// shape legitimately lacks it, and what does not exist cannot leak). A table
+    /// that EXISTS but cannot be emptied is fatal for
+    /// [`Self::PUSH_SNAPSHOT_FATAL_TABLES`] and a logged warning for the rest, so a
+    /// snapshot still holding the pusher's undo/redo history - or a dirty bit -
+    /// never reaches the upload.
+    ///
+    /// Finishes with a `VACUUM`, which is load-bearing rather than cosmetic: `DELETE`
+    /// only marks pages free, so without it every deleted undo row is still
+    /// physically present in the bytes that get uploaded. `VACUUM` rewrites the file
+    /// from the live pages, dropping the freed ones for real.
     pub fn sanitize_push_snapshot(
         snapshot: &Path,
         keep_undo: bool,

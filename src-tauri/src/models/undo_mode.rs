@@ -58,7 +58,7 @@ impl UndoMode {
         matches!(self.resolved(), Self::Full)
     }
 
-    /// The `speleo_link.undo_mode` column spelling (schema v15). `None` in the
+    /// The `speleo_link.undo_mode` column spelling (schema v16). `None` in the
     /// column means "follow the global default", which is why this is only ever
     /// called on a `Some`.
     #[must_use]
