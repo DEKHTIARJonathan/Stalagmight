@@ -99,6 +99,19 @@ impl AppState {
     fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
         // #213: a force-editor is edit-enabled but holds NO lock, so there is nothing
         // to release on close / app-exit / project-switch.
+        //
+        // The edit gate is a UI state, and there IS one flow where it reads false over a
+        // mutex that is still ours: adoption's `PushedLockHeld` closes the project and
+        // has the frontend reload it, and a fresh load starts with the gate shut. Quit
+        // inside that window and this returns `None` over a held lock. Deliberately not
+        // special-cased. `scanLocksOnOpen` asks the SERVER who holds what on every app
+        // open and login - `speleodb_list_projects` -> `lock_holder` -> the held-lock
+        // resume prompt - so recovery does not depend on this gate, on `edit_enabled`,
+        // or on the local claim. A lock outliving a session is a supported state here,
+        // not an anomaly: the close dialog offers "Keep lock" outright, which is what
+        // `LockClaim::kept` exists to protect. And the window only opens once a release
+        // has ALREADY failed, so retrying it a second later on the same connectivity
+        // buys little.
         if !self.edit_enabled() || self.force_editing() {
             return None;
         }
@@ -300,15 +313,59 @@ impl AppState {
         &self,
         project_id: &str,
     ) -> Option<super::speleodb_session::LockClaim> {
+        self.speleodb_forget_lock_acquired_inner(project_id, None)
+    }
+
+    /// [`Self::speleodb_forget_lock_acquired_for`] for a caller that knows the
+    /// account whose credentials took the mutex, and must not ask the live session
+    /// who that was.
+    ///
+    /// The sibling resolves the identity from whoever is signed in at call time,
+    /// which is right for every caller that released a moment ago with those same
+    /// credentials. It is wrong for one that CAPTURED a token earlier and may be
+    /// running after a sign-out or an account switch: the live session then names
+    /// nobody, or somebody else, so the claim the caller means to end is not the
+    /// one the filter looks for and survives untouched.
+    ///
+    /// That survival is not inert. The reclaim check
+    /// ([`AppState::speleodb_claim_on_deployment`]) is deliberately account-blind -
+    /// a captured release may outlive the sign-in that captured it, so its question
+    /// is "has any session in this process claimed this mutex?" - which means a
+    /// stale claim is exactly the shape that stands a later detached close or
+    /// delete release down, leaving a mutex held that nothing will now free.
+    pub(super) fn speleodb_forget_lock_acquired_as(
+        &self,
+        project_id: &str,
+        endpoint: &str,
+        email: &str,
+    ) -> Option<super::speleodb_session::LockClaim> {
+        self.speleodb_forget_lock_acquired_inner(project_id, Some((endpoint, email)))
+    }
+
+    /// Shared body of the two above. `as_account` overrides the identity the claim
+    /// is matched against; `None` reads it from the live session.
+    ///
+    /// One session-lock acquisition either way - the identity is resolved INSIDE
+    /// the guard, never read separately and passed in, because a read followed by a
+    /// clear is two acquisitions with a gap of their own and an acquisition landing
+    /// in that gap is erased just the same.
+    fn speleodb_forget_lock_acquired_inner(
+        &self,
+        project_id: &str,
+        as_account: Option<(&str, &str)>,
+    ) -> Option<super::speleodb_session::LockClaim> {
         let Ok(mut session) = self.speleodb_session_lock() else {
             return None;
         };
-        // The live account's claim on that project, and only that one. The id is
+        // The named account's claim on that project, and only that one. The id is
         // what closes this function's race (see above); the account is what keeps
         // the clear from reaching a claim some OTHER account is still owed a
-        // release for - every caller here released with the credentials signed in
-        // now, so those are the only claims it can have ended.
-        let (endpoint, email) = (session.endpoint.clone(), session.email.clone());
+        // release for - callers that pass `None` released with the credentials
+        // signed in now, so those are the only claims they can have ended.
+        let (endpoint, email) = match as_account {
+            Some((endpoint, email)) => (Some(endpoint.to_owned()), Some(email.to_owned())),
+            None => (session.endpoint.clone(), session.email.clone()),
+        };
         let removed = session
             .locks_acquired_here
             .iter()

@@ -1312,6 +1312,32 @@ describe('useOpenRemoteProject (#218)', () => {
    * project with nothing outstanding - a "you have unsaved work" prompt on the way
    * out of a project whose every byte is on the server.
    */
+  /**
+   * The dirty seed asks ONE question - is the survey on the server - and a landed
+   * upload whose lock release failed answers it yes. Folding that outcome in with
+   * "never uploaded" marked a project dirty whose every byte was already safe, and
+   * told the user it was "on this machine only": the most alarming way to be wrong
+   * about where someone's only copy is.
+   */
+  it('adoptRemote seeds the dirty bit FALSE when the upload landed but the lock did not', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: true,
+          concurrent_session: false,
+          upload: { kind: 'pushed_lock_held' },
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasUnpushedEdits: false }),
+    );
+  });
+
   it('adoptRemote seeds the dirty bit FALSE once the hand-over pushed', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_adopt_ariane')
@@ -1349,12 +1375,36 @@ describe('useOpenRemoteProject (#218)', () => {
    */
   it.each([
     ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
+    // NOT keyed on "you still hold it": both lock-branch strings now contain it
+    // ("release the lock IF you still hold it"), because after the holder re-check
+    // this outcome also covers "the release may have landed but we could not
+    // establish whose the mutex is". The tail is what separates the two.
+    [
+      'pushed but the lock did not come back',
+      { kind: 'pushed_lock_held' },
+      true,
+      'warning',
+      'so others can edit',
+    ],
     [
       'pushed but still typed ariane',
       { kind: 'pushed' },
       false,
       'warning',
       'type could not be changed',
+    ],
+    // Both halves unfinished, from ONE cause: connectivity dropping after the upload
+    // lands fails the release AND the type call that follows it. The ladder used to
+    // stop at the lock-held rung and never read `type_flipped`, so this row was told
+    // about the lock alone - and after releasing it the project was still typed
+    // `ariane`, still offering Adopt over a `.stalx` that already exists. No later
+    // poll corrects that one; the toast is the only place it is ever said.
+    [
+      'pushed but neither the lock nor the type came back',
+      { kind: 'pushed_lock_held' },
+      false,
+      'warning',
+      'two things are unfinished',
     ],
     [
       'never uploaded',

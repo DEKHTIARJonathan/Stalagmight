@@ -852,7 +852,12 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       // that may exist only in this cache; guessing "not pushed" leaves a clean project
       // marked dirty until the next status poll corrects it. Same fail-closed reading
       // the link gate takes of an `unknown` permission.
-      const pushed = result.upload?.kind === 'pushed';
+      const kind = result.upload?.kind;
+      // BOTH of these mean the survey is on the server, which is the only question the
+      // dirty seed is asking. `pushed_lock_held` is a landed upload whose lock release
+      // failed - the work is safe, and only the mutex is outstanding.
+      const landed = kind === 'pushed' || kind === 'pushed_lock_held';
+      const pushed = kind === 'pushed';
       return finishOpen(result, summary.permission, summary.id, {
         /**
          * [#270] An adopt is NOT a plain pull: the backend stamps the adopted
@@ -872,13 +877,28 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
          * bytes are on the server, so every other outcome - lock held, diverged,
          * upload failed - keeps the protective seed.
          */
-        hasUnpushedEdits: !pushed,
+        hasUnpushedEdits: !landed,
         successToast: {
-          message: pushed
-            ? result.type_flipped
-              ? t('speleodb.adopt.doneToast')
-              : t('speleodb.adopt.doneToastNoTypeFlip')
-            : t('speleodb.adopt.doneToastLocalOnly'),
+          /**
+           * Four outcomes, not three. The lock-held branch used to stop here and never
+           * read `type_flipped` - but both are reachable from ONE cause: connectivity
+           * dropping after the upload lands fails the release AND the type GET/PATCH
+           * that follows it. The user was then told about the lock alone, so after
+           * releasing it the project was still typed `ariane`: still offering Adopt
+           * over a `.stalx` that already exists, and later `.tml` edits still looking
+           * authoritative to whoever makes them. Unlike the other unfinished states
+           * there is no later poll that corrects this one - the toast is the only
+           * place it is ever said.
+           */
+          message: !landed
+            ? t('speleodb.adopt.doneToastLocalOnly')
+            : !pushed
+              ? result.type_flipped
+                ? t('speleodb.adopt.doneToastLockHeld')
+                : t('speleodb.adopt.doneToastLockHeldNoTypeFlip')
+              : result.type_flipped
+                ? t('speleodb.adopt.doneToast')
+                : t('speleodb.adopt.doneToastNoTypeFlip'),
           key: 'speleodb-adopted',
           /**
            * Green for the one outcome where nothing is left to do, amber for the two
@@ -895,6 +915,10 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
            * is unfinished business, and unfinished business is not green.
            */
           kind: pushed && result.type_flipped ? 'success' : 'warning',
+          // `landed` and not `pushed` decides the DIRTY SEED above; `pushed` decides the
+          // colour here. They are different questions: a landed upload whose lock is
+          // still held has nothing outstanding to save, but it does have something left
+          // for the user to do, so it is amber with a message that says which.
         },
       });
     },
