@@ -17,6 +17,7 @@ vi.mock('../../../utils/ipc', () => ({
 
 import { useSpeleoMenuItems } from '../useSpeleoMenuItems';
 import { useSpeleoStore, type SpeleoLinkState } from '../../../store/speleoStore';
+import { useUIStore } from '../../../store/uiStore';
 import type { AppMenuItem } from '../../common/AppMenu';
 
 const LINK: SpeleoLinkState = {
@@ -25,6 +26,7 @@ const LINK: SpeleoLinkState = {
   lockHolder: null,
   lockedByOther: false,
   hasUnpushedEdits: false,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: false,
   undoMode: 'full',
@@ -140,5 +142,34 @@ describe('useSpeleoMenuItems destinations', () => {
       'speleodb-menu-open-web',
       'speleodb-menu-project-settings',
     ]);
+  });
+});
+
+/**
+ * [#303] The status button and this menu open the push DIALOG directly when the copy is
+ * dirty, which walks straight past the guard inside `done()`. So an unwound copy has to be
+ * branched here too, or the user meets "Push & release" before anything explains that
+ * pushing it publishes a revert.
+ */
+describe('useSpeleoMenuItems - an unwound copy does not route to a push (#303)', () => {
+  it('opens the unwound confirmation instead of the done dialog', () => {
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const menu = items({ editState: 'editing', hasUnpushedEdits: true, unwound: true });
+
+    menu.find((i) => i.id === 'speleodb-menu-unlock')?.onClick?.();
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push');
+    expect(openDialog).not.toHaveBeenCalledWith('speleodb-done');
+  });
+
+  it('still routes an ordinary dirty copy to the done dialog', () => {
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const menu = items({ editState: 'editing', hasUnpushedEdits: true, unwound: false });
+
+    menu.find((i) => i.id === 'speleodb-menu-unlock')?.onClick?.();
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-done');
   });
 });

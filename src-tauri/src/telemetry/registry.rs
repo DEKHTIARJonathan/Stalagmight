@@ -169,6 +169,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_remove_link_at",
     "command.speleodb_unwind_target",
     "command.speleodb_rewind_target",
+    "command.speleodb_discard_changes",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -272,6 +273,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-managed-file",
     "action.dialog.speleodb-restore",
     "action.dialog.speleodb-unwind",
+    "action.dialog.speleodb-unwound-push",
+    "action.dialog.speleodb-discard-changes",
     "action.dialog.speleodb-revert",
     "action.dialog.speleodb-project",
     "action.dialog.publish-to-speleodb",
@@ -344,6 +347,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-managed-file",
     "dialog-cancel.speleodb-restore",
     "dialog-cancel.speleodb-unwind",
+    "dialog-cancel.speleodb-unwound-push",
+    "dialog-cancel.speleodb-discard-changes",
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.speleodb-project",
     "dialog-cancel.publish-to-speleodb",
@@ -443,6 +448,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-managed-file",
     "dwell.dialog.speleodb-restore",
     "dwell.dialog.speleodb-unwind",
+    "dwell.dialog.speleodb-unwound-push",
+    "dwell.dialog.speleodb-discard-changes",
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.speleodb-project",
     "dwell.dialog.publish-to-speleodb",
@@ -580,6 +587,8 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-managed-file",
     "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.speleodb-unwind",
+    "active-dwell.dialog.speleodb-unwound-push",
+    "active-dwell.dialog.speleodb-discard-changes",
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.speleodb-project",
     "active-dwell.dialog.publish-to-speleodb",
@@ -1010,7 +1019,17 @@ mod tests {
         //       people actually step BACK out of a version once they have stepped into
         //       one, or only ever go deeper:
         //       command.speleodb_rewind_target = 700.
-        assert_eq!(EVENT_NAMES.len(), 700);
+        //   + 1 speleodb_discard_changes (#303). The escape hatch from a copy the user
+        //       does not want. How often it is reached says whether the chain walk is
+        //       leaving people somewhere they did not mean to be:
+        //       command.speleodb_discard_changes = 701.
+        //   + 8 = 4 each for the two dialogs guarding it (#303). Both stand between a
+        //       user and a destructive push, so their CANCEL rates are the measurement
+        //       that matters: a high one means people are reaching a push they never
+        //       wanted, which is the bug that produced them:
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-{unwound-push,discard-changes} = 709.
+        assert_eq!(EVENT_NAMES.len(), 709);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

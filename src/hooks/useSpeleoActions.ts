@@ -2,7 +2,12 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
-import { useSpeleoStore, asPushKind, asDoneKind } from '../store/speleoStore';
+import {
+  useSpeleoStore,
+  asPushKind,
+  asDoneKind,
+  isUnwoundNotEdited,
+} from '../store/speleoStore';
 import { invokeIpc } from '../utils/ipc';
 import { speleoErrorAction, humanizeSpeleoError } from '../utils/speleoError';
 import type {
@@ -45,8 +50,15 @@ export interface SpeleoActions {
       a dialog open on a `divergence_needed` / `push_unconfirmed` result. */
   push: (message?: string | null) => Promise<PushResult | null>;
   /** The backend outcome, or `null` if the call threw. Callers key off `.kind`
-      (e.g. the close flow only leaves once the lock is actually `released`). */
-  done: (message?: string | null) => Promise<DoneResult | null>;
+      (e.g. the close flow only leaves once the lock is actually `released`).
+      [#303] Also `null` - having raised its own confirmation instead - when the copy is
+      dirty only because a chain step walked it back to an older version, since pushing
+      that publishes a revert rather than saving work. `acceptOlderVersion` is that
+      confirmation reporting the user chose it knowingly. */
+  done: (
+    message?: string | null,
+    opts?: { acceptOlderVersion?: boolean },
+  ) => Promise<DoneResult | null>;
   /** #198 "Take remote": DISCARD local unpushed edits and reset to the server
       tip. Returns `true` once the tree is reloaded, `false` if the call threw.
       The caller must gate this behind a destroy-confirmation. */
@@ -64,6 +76,7 @@ export function useSpeleoActions(): SpeleoActions {
   const beginBusy = useSpeleoStore((s) => s.beginBusy);
   const endBusy = useSpeleoStore((s) => s.endBusy);
   const showToast = useUIStore((s) => s.showToast);
+  const openDialog = useUIStore((s) => s.openDialog);
   const loadProject = useProjectStore((s) => s.loadProject);
   const refreshProjectState = useProjectStore((s) => s.refreshProjectState);
   const clearSelection = useUIStore((s) => s.clearSelection);
@@ -333,7 +346,26 @@ export function useSpeleoActions(): SpeleoActions {
   );
 
   const done = useCallback(
-    async (message?: string | null): Promise<DoneResult | null> => {
+    async (
+      message?: string | null,
+      opts?: { acceptOlderVersion?: boolean },
+    ): Promise<DoneResult | null> => {
+      // [#303] The copy is dirty ONLY because a chain step walked it back to an older
+      // version - the user has edited nothing. Pushing here does not save anyone's work,
+      // it records the OLD survey over the newer one for every collaborator, and that is
+      // not what "finish editing" means to the person pressing it.
+      //
+      // Guarded HERE rather than in each caller because every route to a push comes
+      // through this hook - the status button, the SpeleoDB menu, the close prompt and the
+      // quit prompt - and the trap was that one of them made pushing the primary action.
+      // `acceptOlderVersion` is the confirmation reporting that the user was shown what it
+      // does and chose it anyway.
+      if (!opts?.acceptOlderVersion && isUnwoundNotEdited(useSpeleoStore.getState().link)) {
+        openDialog('speleodb-unwound-push', { message: message ?? null });
+        // Null, not a result: the caller is mid-flow (the close prompt only leaves once a
+        // push RELEASES) and must stay put while the confirmation is up.
+        return null;
+      }
       const busyToken = beginBusy();
       clearPushFailedBanner();
       // #260: "Changes uploaded and the write lock released." lied whenever there was nothing to

@@ -149,6 +149,21 @@ export interface SpeleoSession {
   keychain: KeychainReport;
 }
 
+/**
+ * [#303] "This copy is dirty ONLY because a chain step walked it back" - the question the
+ * push routes, the close prompt and the status button all ask.
+ *
+ * Derived here rather than reported pre-combined by the backend, because the two halves
+ * arrive at different times: a step onto the tip leaves the copy CLEAN, so the composite
+ * was false at the moment of the poll, and the Undo that follows marks `hasUnpushedEdits`
+ * optimistically without asking the backend anything. Composing locally is what makes the
+ * status button react to that Undo instead of waiting a poll interval - which is exactly
+ * how it was still offering "Push & release" after an unwind.
+ */
+export function isUnwoundNotEdited(link: SpeleoLinkState | null | undefined): boolean {
+  return !!link && link.unwound && link.hasUnpushedEdits;
+}
+
 export interface SpeleoLinkState {
   permission: Permission | null;
   editState: SpeleoEditState;
@@ -162,6 +177,12 @@ export interface SpeleoLinkState {
    */
   lockedByOther: boolean;
   hasUnpushedEdits: boolean;
+  /**
+   * [#303] A chain step has moved this copy off the server tip - an Unwind (or a forward
+   * step) is mid-walk. RAW, not combined with `hasUnpushedEdits`: use
+   * {@link isUnwoundNotEdited} for the question the UI actually asks.
+   */
+  unwound: boolean;
   /**
    * [#213] We are editing this remote project WITHOUT the write lock (force-edit):
    * `editState === 'editing'` but no lock is held, so the `.stalx` cannot be merged
@@ -893,6 +914,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
           lockHolder: null,
           lockedByOther: false,
           hasUnpushedEdits: false,
+          unwound: false,
           forceEditing: false,
           forceEditAllowed: false,
           // [#303] The application default until the first status reply resolves the
@@ -1391,6 +1413,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         // and the backend gate stays the real enforcement.
         lockedByOther: editState !== 'editing' && !!s.lock_holder,
         hasUnpushedEdits: s.has_unpushed_edits,
+        unwound: s.unwound,
         // #213: force-edit (edit-enabled WITHOUT a held lock) is backend-authoritative
         // and reported every poll; a reconnect that acquires the lock clears it there.
         forceEditing: s.force_editing,
@@ -1442,6 +1465,8 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits,
+        // A fresh pull is at the server tip, so no chain step has walked it anywhere.
+        unwound: false,
         // A fresh pull always opens without the lock and not force-editing;
         // `seedFromStatus` refines the opt-in + any force-edit on the first poll.
         forceEditing: false,
@@ -1594,6 +1619,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
               ...state.link,
               editState: 'read-only',
               hasUnpushedEdits: false,
+              unwound: false,
               lockHolder: null,
               lockedByOther: false,
               remoteState: 'up_to_date',
@@ -1631,6 +1657,7 @@ export const useSpeleoStore = create<SpeleoStore>((set, get) => ({
             link: {
               ...state.link,
               hasUnpushedEdits: false,
+              unwound: false,
               remoteState: 'up_to_date',
               serverError: null,
             },

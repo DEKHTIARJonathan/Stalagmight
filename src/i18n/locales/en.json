@@ -2657,6 +2657,7 @@
     },
     "button": {
       "unlocked": "Read-only - click to start editing (take the write lock)",
+      "editingUnwound": "This copy is at an older version of the survey - click to choose what to do with it",
       "editingDirty": "You're editing - click to push your changes and release the write lock",
       "editingClean": "You hold the write lock - click to release it",
       "forceEditing": "Editing WITHOUT the write lock - your changes can't be merged until you reconnect. Click to reconnect.",
@@ -2679,6 +2680,7 @@
       "unlock": "Finish editing (push & release)",
       "push": "Push (keep the write lock)",
       "refresh": "Refresh from SpeleoDB",
+      "discardChanges": "Discard changes\u2026",
       "editWithoutLock": "Edit without the write lock…"
     },
     "close": {
@@ -2688,6 +2690,8 @@
       "keepLock": "Close & keep the write lock",
       "release": "Release & close",
       "pushRelease": "Push, release & close",
+      "unwoundMessage": "This copy is at an older version of the survey - you stepped back through its history and have not changed anything. Uploading it would record that older survey over the newer one for everyone.",
+      "pushOlderVersion": "Push this older version\u2026",
       "saveLocally": "Save changes locally before closing",
       "savedLocallyNote": "Your changes are saved locally - they just haven't been uploaded to SpeleoDB yet.",
       "messageNoLock": "You have changes that have not been uploaded to SpeleoDB, and you no longer hold the write lock - so they cannot be uploaded right now. They stay on this computer and will still be here next time you open the project.",
@@ -2832,6 +2836,31 @@
       "bodyLatest": "Step forward to the latest version and load the edit history stored with it, returning this copy to where the walk started.",
       "consequence": "The history is downloaded from SpeleoDB, replacing the version currently loaded. Nothing is lost: every step came from a revision the server still holds, so you can walk back again.",
       "confirmButton": "Redo into next version"
+    },
+    "unwoundPush": {
+      "title": "This copy is at an older version",
+      "body": "You stepped back through this project's history and have not changed anything since. The copy on this computer is an older version of the survey, not new work waiting to be uploaded.",
+      "warning": "Uploading it would record that older survey over the newer one, for everyone working on this project.",
+      "discardHint": "Discarding brings this computer back to the latest version and keeps the write lock, so you can carry on editing from there.",
+      "discardAndLock": "Discard and take the latest",
+      "pushAnyway": "Upload this older version\u2026",
+      "working": "Working\u2026",
+      "discardedToast": "Back at the latest version from SpeleoDB, and you still hold the write lock.",
+      "discardFailedTitle": "Could not get the latest version",
+      "discardFailedMessage": "The local copy was left as it was."
+    },
+    "discardChanges": {
+      "title": "Discard changes",
+      "bodyUnwound": "This copy is at an older version of the survey - you stepped back through its history and have not changed anything. Discarding brings this computer back to the latest version from SpeleoDB.",
+      "bodyEdited": "Everything on this computer that has not been uploaded to SpeleoDB will be thrown away, and this project replaced with the latest version from the server.",
+      "lockQuestion": "Keep the write lock to carry on editing from the latest version, or release it so someone else can.",
+      "discardAndKeep": "Discard and keep editing",
+      "discardAndRelease": "Discard and release the lock",
+      "working": "Working\u2026",
+      "doneKeptToast": "Back at the latest version from SpeleoDB, and you still hold the write lock.",
+      "doneReleasedToast": "Back at the latest version from SpeleoDB, and the write lock is released.",
+      "failedTitle": "Could not get the latest version",
+      "failedMessage": "The local copy was left as it was."
     },
     "undoMode": {
       "title": "Undo history in SpeleoDB",

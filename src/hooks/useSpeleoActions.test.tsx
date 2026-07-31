@@ -220,6 +220,7 @@ describe('useSpeleoActions - the release toast reflects whether anything was upl
         lockHolder: null,
         lockedByOther: false,
         hasUnpushedEdits,
+        unwound: false,
         forceEditing: false,
         forceEditAllowed: false,
         undoMode: 'full',
@@ -572,5 +573,77 @@ describe('useSpeleoActions - startEditing falls to the REFUSING answer (#270)', 
     });
 
     expect(held).toBe(true);
+  });
+});
+
+/**
+ * [#303] The guard that makes every push route safe at once.
+ *
+ * Placed in the hook rather than in each caller because there are four ways to reach a
+ * push - the status button, the SpeleoDB menu, the close prompt and the quit prompt - and
+ * the trap was that one of them made it the primary action. A guard per caller would have
+ * fixed that one and left the others.
+ */
+describe('useSpeleoActions - pushing an unwound copy is confirmed first (#303)', () => {
+  const seedUnwound = (unwoundNotEdited: boolean) =>
+    useSpeleoStore.setState({
+      link: {
+        permission: 'READ_AND_WRITE',
+        editState: 'editing',
+        lockHolder: null,
+        lockedByOther: false,
+        hasUnpushedEdits: true,
+        unwound: unwoundNotEdited,
+        forceEditing: false,
+        forceEditAllowed: false,
+        undoMode: 'full',
+        undoModeOverridden: false,
+        remoteState: 'up_to_date',
+        noAccess: false,
+        serverError: null,
+      },
+    });
+
+  it('raises the confirmation instead of uploading', async () => {
+    seedUnwound(true);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    let outcome: unknown;
+    await act(async () => {
+      outcome = await result.current.done('msg');
+    });
+
+    expect(openDialog).toHaveBeenCalledWith('speleodb-unwound-push', { message: 'msg' });
+    expect(invokeIpcMock).not.toHaveBeenCalledWith('speleodb_done', expect.anything());
+    // Null, not a result: the close prompt only leaves once a push RELEASES, so a
+    // fabricated outcome here would let it walk away mid-confirmation.
+    expect(outcome).toBeNull();
+  });
+
+  it('uploads once the confirmation reports the user chose it', async () => {
+    seedUnwound(true);
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('msg', { acceptOlderVersion: true });
+    });
+
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', { message: 'msg' });
+  });
+
+  it('leaves an ordinary dirty copy alone - the guard is not a nag', async () => {
+    seedUnwound(false);
+    const openDialog = vi.fn();
+    useUIStore.setState({ openDialog });
+    const { result } = renderHook(() => useSpeleoActions());
+
+    await act(async () => {
+      await result.current.done('msg');
+    });
+
+    expect(openDialog).not.toHaveBeenCalled();
+    expect(invokeIpcMock).toHaveBeenCalledWith('speleodb_done', { message: 'msg' });
   });
 });

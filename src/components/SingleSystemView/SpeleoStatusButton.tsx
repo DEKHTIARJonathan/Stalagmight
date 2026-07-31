@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
@@ -118,7 +118,12 @@ export function SpeleoStatusButton() {
   // (unsaved to disk) - it survives a save and a restart, and it is what a lock
   // release or a pull would put at risk. It colours the mark in EVERY state, so the
   // "unlocked" state stops being dirty-blind.
-  const unpushed = link.hasUnpushedEdits;
+  // [#303] ...unless the ONLY reason it is set is that a chain step walked this copy back
+  // to an older version. There is nothing of the user's on this computer then, so tinting
+  // the mark "you have work at risk" and routing the click to a push both say the wrong
+  // thing - and the push in particular publishes a revert.
+  const unwoundNotEdited = isUnwoundNotEdited(link);
+  const unpushed = link.hasUnpushedEdits && !unwoundNotEdited;
   // We hold the server write lock - see `holdsWriteLock` for why force-editing is
   // excluded, and why the predicate is shared rather than re-spelled here.
   const lockHeld = holdsWriteLock(link);
@@ -238,8 +243,12 @@ export function SpeleoStatusButton() {
         void startEditing();
         break;
       case 'editing':
-        // Release; push & release via the dialog when there are local changes.
-        if (link.hasUnpushedEdits) openDialog('speleodb-done');
+        // Release; push & release via the dialog when there are local changes. An
+        // unwound copy takes its own confirmation instead: `done` guards the push, but
+        // this route opens the push DIALOG first, so without the branch the user meets
+        // "Push & release" before anything has a chance to explain what it would do.
+        if (unwoundNotEdited) openDialog('speleodb-unwound-push');
+        else if (link.hasUnpushedEdits) openDialog('speleodb-done');
         else void done(null);
         break;
       case 'force_edit':
@@ -346,9 +355,13 @@ export function SpeleoStatusButton() {
     kind === 'unlocked'
       ? t('speleodb.button.unlocked')
       : kind === 'editing'
-        ? link.hasUnpushedEdits
-          ? t('speleodb.button.editingDirty')
-          : t('speleodb.button.editingClean')
+        ? // [#303] An unwound copy holds none of the user's work, so "push your changes"
+          // names something that does not exist - and the click does not go there either.
+          unwoundNotEdited
+          ? t('speleodb.button.editingUnwound')
+          : link.hasUnpushedEdits
+            ? t('speleodb.button.editingDirty')
+            : t('speleodb.button.editingClean')
         : kind === 'force_edit'
           ? link.lockedByOther
             ? t('speleodb.button.forceEditingLockedBy', {

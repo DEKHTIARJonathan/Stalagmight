@@ -35,6 +35,7 @@ const EDITING_LINK: SpeleoLinkState = {
   lockHolder: 'me@example.com',
   lockedByOther: false,
   hasUnpushedEdits: true,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: false,
   undoMode: 'full',

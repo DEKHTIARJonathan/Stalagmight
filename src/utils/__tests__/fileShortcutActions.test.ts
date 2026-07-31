@@ -28,6 +28,7 @@ const READ_ONLY_LINK: SpeleoLinkState = {
   lockHolder: 'someone-else',
   lockedByOther: true,
   hasUnpushedEdits: false,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: false,
   undoMode: 'full',

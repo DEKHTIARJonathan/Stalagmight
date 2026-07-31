@@ -42,6 +42,7 @@ const seed = (permission: Permission) => {
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: false,
+      unwound: false,
       remoteState: 'up_to_date',
       noAccess: false,
       serverError: null,

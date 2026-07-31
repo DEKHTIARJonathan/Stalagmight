@@ -24,6 +24,7 @@ const status = (o: Partial<SpeleoLinkStatus> = {}): SpeleoLinkStatus => ({
   is_remote: true,
   edit_enabled: false,
   has_unpushed_edits: false,
+  unwound: false,
   permission: 'READ_AND_WRITE',
   lock_holder: null,
   remote_state: 'up_to_date',

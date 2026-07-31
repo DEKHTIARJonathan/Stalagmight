@@ -30,6 +30,7 @@ const CLEAN_UNLOCKED: SpeleoLinkState = {
   lockHolder: null,
   lockedByOther: false,
   hasUnpushedEdits: false,
+  unwound: false,
   forceEditing: false,
   forceEditAllowed: true,
   undoMode: 'full',

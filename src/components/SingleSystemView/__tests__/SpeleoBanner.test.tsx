@@ -25,6 +25,7 @@ const LINK: SpeleoLinkState = {
   lockHolder: null,
   lockedByOther: false,
   hasUnpushedEdits: true,
+  unwound: false,
   forceEditing: true,
   forceEditAllowed: true,
   undoMode: 'full',

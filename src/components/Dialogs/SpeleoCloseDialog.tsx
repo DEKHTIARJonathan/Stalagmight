@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../../store/uiStore';
-import { useSpeleoStore } from '../../store/speleoStore';
+import { useSpeleoStore, isUnwoundNotEdited } from '../../store/speleoStore';
 import { useProjectStore } from '../../store/projectStore';
 import { useSpeleoActions } from '../../hooks/useSpeleoActions';
 import { surfaceSaveFailure } from '../../utils/saveFeedback';
@@ -49,6 +49,11 @@ export default function SpeleoCloseDialog() {
   const pendingNewProject = dialogData.pendingNewProject === true;
 
   const sdbDirty = link?.hasUnpushedEdits ?? false;
+  // [#303] Dirty ONLY because a chain step walked the copy back - the user edited nothing.
+  // The wording below must not call that "unpushed changes", and pushing it must not be
+  // the primary action: it publishes the older survey over the newer one. `done` raises
+  // its own confirmation, so the button here stays available but stops being the default.
+  const unwound = isUnwoundNotEdited(link);
   // #270: the close guard now also fires on un-pushed edits ALONE, matching
   // `guardQuit` - so this dialog is reachable with no lock (a re-verify divergence,
   // or a token loss that ran `clearSession()`). Every verb below needs one, so it
@@ -145,9 +150,11 @@ export default function SpeleoCloseDialog() {
         <p className="text-sm text-text-secondary">
           {!holdsLock
             ? t('speleodb.close.messageNoLock')
-            : sdbDirty
-              ? t('speleodb.close.dirtyMessage')
-              : t('speleodb.close.message')}
+            : unwound
+              ? t('speleodb.close.unwoundMessage')
+              : sdbDirty
+                ? t('speleodb.close.dirtyMessage')
+                : t('speleodb.close.message')}
         </p>
 
         {/* Say what happens AFTER the close when the user did not ask for one. Every
@@ -171,7 +178,7 @@ export default function SpeleoCloseDialog() {
             />
             {t('speleodb.close.saveLocally')}
           </label>
-        ) : sdbDirty ? (
+        ) : sdbDirty && !unwound ? (
           <p className="text-xs text-text-secondary" data-testid="speleodb-close-saved-locally-note">
             {t('speleodb.close.savedLocallyNote')}
           </p>
@@ -188,20 +195,25 @@ export default function SpeleoCloseDialog() {
           {holdsLock ? (
             <>
               <Button
-                variant="secondary"
+                variant={unwound ? 'primary' : 'secondary'}
                 onClick={() => void closeKeepingLock()}
                 disabled={busyAny}
+                data-primary-action={unwound ? '' : undefined}
                 data-testid="speleodb-close-keep-lock"
               >
                 {t('speleodb.close.keepLock')}
               </Button>
               <Button
-                variant="primary"
+                variant={unwound ? 'danger' : 'primary'}
                 onClick={() => void pushReleaseThenClose()}
                 disabled={busyAny}
                 data-testid="speleodb-close-push-release"
               >
-                {sdbDirty ? t('speleodb.close.pushRelease') : t('speleodb.close.release')}
+                {unwound
+                  ? t('speleodb.close.pushOlderVersion')
+                  : sdbDirty
+                    ? t('speleodb.close.pushRelease')
+                    : t('speleodb.close.release')}
               </Button>
             </>
           ) : (

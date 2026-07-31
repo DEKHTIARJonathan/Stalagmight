@@ -755,6 +755,8 @@ impl AppState {
                     is_remote: false,
                     edit_enabled: self.edit_enabled(),
                     has_unpushed_edits: false,
+                    // Not remote: there is no chain to be mid-walk on.
+                    unwound: false,
                     permission: None,
                     lock_holder: None,
                     remote_state: RemoteState::Unknown,
@@ -896,6 +898,11 @@ impl AppState {
             is_remote: true,
             edit_enabled,
             has_unpushed_edits,
+            // [#303] Mid-walk: a chain step has moved this copy off the tip. Reported RAW
+            // so the frontend can combine it with its own optimistic dirty bit - a step onto
+            // the tip leaves the copy clean, so a pre-combined flag was false at the only
+            // moment the frontend polls.
+            unwound: self.speleodb_unwound_from().is_some(),
             permission,
             lock_holder,
             remote_state,
@@ -2698,6 +2705,90 @@ impl AppState {
         }
     }
 
+    /// [#303] Throw the local copy away and come back at the server tip.
+    ///
+    /// Both surfaces that offer it have already said what it destroys: the push
+    /// confirmation raised when a copy is dirty only because it was walked back, and the
+    /// explicit "Discard changes" menu action, which offers it over ordinary edits too.
+    /// So this does not re-litigate the decision - it does not check
+    /// `unwound_not_edited`, because the menu action deliberately reaches it with real
+    /// edits pending.
+    ///
+    /// Ends holding the lock, which is the point: the user is discarding in order to carry
+    /// on working from the latest, not to be dropped into read-only. A lock we cannot get
+    /// (someone else took it meanwhile) surfaces as the ordinary contended-lock error, by
+    /// which time the discard has already happened and the copy is at the tip - which is
+    /// still the state they asked for.
+    /// [#303] Replace the local copy with the server tip, throwing away whatever it held.
+    ///
+    /// The shared body of the two ways out of a copy the user does not want: Refresh while
+    /// mid-walk, and the explicit Discard action. `Discard` rather than `Protect` because
+    /// destroying the local copy is the request, not a side effect - both callers have
+    /// already put that in front of the user.
+    ///
+    /// Its own method rather than an inline call, so `speleodb_update` still contains
+    /// exactly one `speleodb_fast_forward` - the FastForward arm - and the tripwire that
+    /// pins the lock-record capture ahead of it keeps measuring what it was written to
+    /// measure.
+    fn speleodb_return_to_tip_discarding(
+        &self,
+        endpoint: &str,
+        token: &str,
+        insecure_http: bool,
+        link: &crate::models::SpeleoLink,
+        tip: Option<&str>,
+    ) -> Result<String, SpeleoErrorDto> {
+        self.speleodb_fast_forward(
+            endpoint,
+            token,
+            insecure_http,
+            link,
+            tip,
+            LocalEditsPolicy::Discard,
+        )
+        .map_err(local_dto)
+    }
+
+    pub(crate) fn speleodb_discard_changes(
+        &self,
+        keep_lock: bool,
+    ) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
+        let link = self.speleodb_validated_link()?;
+        let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
+        let insecure_http = self.speleodb_insecure_http();
+
+        let (tip, _) = head_with_empty_retry(link.base_commit_sha.as_deref(), || {
+            self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
+        })
+        .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        tracing::info!(
+            project_id = %link.project_id,
+            keep_lock,
+            purpose = "discard the local copy (#303)",
+            "discarding local changes and returning to the server tip"
+        );
+        self.speleodb_return_to_tip_discarding(
+            &endpoint,
+            &token,
+            insecure_http,
+            &link,
+            tip.as_deref(),
+        )?;
+
+        if !keep_lock {
+            // Hand it back. `None` rather than a fabricated editing result, so no caller
+            // can mistake a released project for one it may still write to.
+            self.speleodb_release_current_lock()?;
+            return Ok(None);
+        }
+        // Re-acquire through the ordinary verb rather than by hand, so the fence, the
+        // authorship record and the concurrent-session notice all behave exactly as they
+        // do for Start editing. The copy is clean at the tip by now, so its fence is a
+        // no-op UpToDate.
+        self.speleodb_start_editing().map(Some)
+    }
+
     /// Read-only refresh of the open project against the server (#197): no lock is
     /// taken. UpToDate / FastForward (re-pull + reload) / DivergenceNeeded.
     pub(crate) fn speleodb_update(&self) -> Result<UpdateResult, SpeleoErrorDto> {
@@ -2709,6 +2800,31 @@ impl AppState {
             self.speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
         })
         .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
+
+        // [#303] A copy that is dirty ONLY because a chain step walked it back is not a
+        // reconciliation problem, it is a copy sitting somewhere the user asked to look.
+        // "Refresh from SpeleoDB" should therefore do what it says and return them to the
+        // tip - so it discards the walk rather than consulting the verdict.
+        //
+        // The verdict cannot help here anyway: a restore stamps BASE at the server tip, so
+        // BASE == tip and `reconcile_verdict` answers UpToDate. Update then reported
+        // "already up to date" while the user was staring at an older survey, which is the
+        // least useful true statement available.
+        if link.has_unpushed_edits && self.speleodb_unwound_from().is_some() {
+            tracing::info!(
+                project_id = %link.project_id,
+                purpose = "refresh from SpeleoDB while mid-walk (#303)",
+                "discarding an unwound copy and returning to the server tip"
+            );
+            let local_path = self.speleodb_return_to_tip_discarding(
+                &endpoint,
+                &token,
+                insecure_http,
+                &link,
+                tip.as_deref(),
+            )?;
+            return Ok(UpdateResult::FastForwarded { local_path });
+        }
 
         match sync::reconcile_verdict(
             link.base_commit_sha.as_deref(),

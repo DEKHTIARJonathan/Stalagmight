@@ -35,6 +35,7 @@ const seed = (permission: Permission, lockHolder: string | null = null, editStat
       lockHolder,
       lockedByOther: lockHolder != null && editState !== 'editing',
       hasUnpushedEdits: false,
+      unwound: false,
       remoteState: 'up_to_date',
       noAccess: false,
       serverError: null,

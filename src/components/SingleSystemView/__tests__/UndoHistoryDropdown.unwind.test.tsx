@@ -32,6 +32,7 @@ const seedLink = (editing: boolean, forceEditing = false) =>
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: false,
+      unwound: false,
       forceEditing,
       forceEditAllowed: false,
       undoMode: 'full',

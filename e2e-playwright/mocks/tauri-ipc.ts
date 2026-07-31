@@ -4774,6 +4774,11 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           case 'speleodb_unwind_target':
           case 'speleodb_rewind_target':
             return null;
+          // [#303] Discard the local copy and re-lock. Mocked as a plain successful
+          // acquire: the specs that reach it care that the app returns to an editing
+          // state, not about the download it does on the way.
+          case 'speleodb_discard_changes':
+            return { kind: 'editing' };
           // #215 collaborator management: the roster (users + teams). The mutating
           // commands echo the refreshed roster; the picker lists no teams by default.
           case 'speleodb_list_collaborators':

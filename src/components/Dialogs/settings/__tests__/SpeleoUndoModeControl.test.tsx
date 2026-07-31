@@ -37,6 +37,7 @@ const seed = (opts: {
       lockHolder: null,
       lockedByOther: false,
       hasUnpushedEdits: false,
+      unwound: false,
       forceEditing: opts.forceEditing ?? false,
       forceEditAllowed: false,
       undoMode: opts.undoMode ?? 'full',

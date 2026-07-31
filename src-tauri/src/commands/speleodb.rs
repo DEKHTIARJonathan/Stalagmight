@@ -399,6 +399,30 @@ pub async fn speleodb_unwind_target(
     run_blocking(app, AppState::speleodb_unwind_target).await
 }
 
+/// [#303] Discard the local copy and return to the server tip.
+///
+/// The way out of a copy the user does not want to keep - most often one a chain step
+/// walked back through history, where the dirty bit means "this is an older version",
+/// not "you have work to save". Both callers confirm first: the push dialog raised when
+/// a copy is dirty only because it was unwound, and the explicit Discard menu action,
+/// which offers it over ordinary edits too and says so.
+///
+/// DESTRUCTIVE and deliberately not second-guessed here: the backend does not re-check
+/// that the copy was merely unwound, because the menu action reaches it with real edits
+/// pending on purpose.
+///
+/// `keep_lock` decides the only thing left once the copy is gone - carry on editing from
+/// the latest, or hand the project back. Keeping returns the Start-editing outcome, so a
+/// lock someone else took meanwhile surfaces as it would anywhere else; releasing returns
+/// `null`, which is not the same as an editing result and must not be read as one.
+#[tauri::command]
+pub async fn speleodb_discard_changes(
+    app: AppHandle,
+    keep_lock: bool,
+) -> Result<Option<StartEditingResult>, SpeleoErrorDto> {
+    run_blocking(app, move |s| s.speleodb_discard_changes(keep_lock)).await
+}
+
 /// [#303] Which revision a "Redo into next SpeleoDB version" step would load, or `None`
 /// when there is nothing ahead: not mid-walk (the copy is already at BASE), already back
 /// at BASE, or a chain pointer that cannot be walked from.

@@ -1329,6 +1329,7 @@ pub fn run() {
             // SpeleoDB hybrid undo stack: the Unwind target + the per-project policy (#303)
             commands::speleodb::speleodb_unwind_target,
             commands::speleodb::speleodb_rewind_target,
+            commands::speleodb::speleodb_discard_changes,
             commands::speleodb::speleodb_set_undo_mode,
             // SpeleoDB Enable-rendering PATCH (#200)
             commands::speleodb::speleodb_set_exclude_geojson,

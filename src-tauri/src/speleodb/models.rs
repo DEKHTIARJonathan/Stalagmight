@@ -770,6 +770,25 @@ pub struct SpeleoLinkStatus {
     pub edit_enabled: bool,
     /// The command-driven dirty bit: un-pushed remote edits are pending.
     pub has_unpushed_edits: bool,
+    /// [#303] A chain step has moved this copy off the server tip: an Unwind (or a forward
+    /// step) is mid-walk.
+    ///
+    /// The two are not the same thing, and conflating them is how a look at history turned
+    /// into a published revert: the close prompt read the dirty bit, said "you have
+    /// unpushed changes", and offered to push as its primary action. Pushing here does not
+    /// save anyone's work; it records the OLD survey over the newer one for every
+    /// collaborator.
+    ///
+    /// True exactly while the Unwind chain pointer stands, since any forward command drops
+    /// it (`speleodb_forget_unwind_position`) - so the moment the user really does edit,
+    /// this goes false and the ordinary "unpushed changes" wording is correct again.
+    ///
+    /// RAW rather than combined with the dirty bit, which it was at first and could not
+    /// stay: a step onto the tip leaves the copy CLEAN, so the composite was false at the
+    /// only moment the frontend polls, and the Undo that follows marks dirty optimistically
+    /// without asking the backend anything. The frontend therefore has to be able to
+    /// compose the two itself, which means holding this half unmixed.
+    pub unwound: bool,
     /// This user's permission tier on the project. Best-effort - `None` when
     /// logged out / offline / the lookup failed.
     pub permission: Option<Permission>,
@@ -1058,6 +1077,7 @@ mod tests {
             is_remote: true,
             edit_enabled: false,
             has_unpushed_edits: false,
+            unwound: false,
             permission: Some(Permission::ReadAndWrite),
             lock_holder: Some("holder@example.com".to_owned()),
             remote_state: RemoteState::RemoteAhead,
