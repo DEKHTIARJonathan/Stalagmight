@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useUIStore } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import { useSpeleoStore } from '../store/speleoStore';
+import { useGasPlanStore } from '../store/gasPlanStore';
 import { invokeIpc } from '../utils/ipc';
 import type { SpeleoOpenResult } from '../types/ipc.generated';
 
@@ -106,6 +107,22 @@ export function useRestoreRevision() {
       // collide by construction - and a half-armed merge would then resolve its stored
       // endpoint against whatever holds that id in the new tree.
       useUIStore.getState().resetToolTransientsForProjectSwitch();
+      // [#345] The gas-plan store is per-survey runtime state - pins, the loaded-plan
+      // baseline, and (since #317) their captured anchors - and has exactly ONE
+      // production caller of `reset()`: `applyDisplaySettings`, reached only via
+      // `loadProject`/`createProject`. This swap bypasses that path entirely, same as
+      // the tool transients above, so without this call a live plan's positional pins
+      // would silently rename themselves onto whatever stations the swapped-in tree
+      // happens to have at those indices - and #258 means that tree can be a genuinely
+      // DIFFERENT survey whose section ids collide with the old one by construction.
+      // The anchor-capture staleness guard only compares pin VALUES, not project
+      // identity (see the guard's own comment in gasPlanStore.ts), so this load path
+      // is the one thing that defeats it. Not routed through `applyDisplaySettings`
+      // itself: that function also forces `appMode` back to survey, resets display
+      // toggles (geometryMode, showDevStats, showIssueSeverity, the Plan/Export
+      // snapshots) and expects a `DisplaySettings` payload this flow never fetches -
+      // all display-preference behaviour this swap has no business touching.
+      useGasPlanStore.getState().reset();
       setView('single');
       await refreshProjectState();
       useProjectStore.setState({ isDirty: false });

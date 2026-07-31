@@ -894,9 +894,9 @@
       },
       "validation": {
         "logSize": "Log directory size must be between 1 and 10000 MB",
-        "sectionsPanel": "Sections panel width must be between 100 and 800",
-        "detailPanel": "Detail panel width must be between 150 and 800",
-        "dataTable": "Data table height must be between 100 and 600",
+        "sectionsPanel": "Sections panel width must be between {{min}} and {{max}}",
+        "detailPanel": "Detail panel width must be between {{min}} and {{max}}",
+        "dataTable": "Data table height must be between {{min}} and {{max}}",
         "closureSigmaLength": "Base length sigma must be greater than 0",
         "closureSigmaAzimuth": "Base azimuth sigma must be greater than 0",
         "closureSigmaDepth": "Base depth sigma must be greater than 0"

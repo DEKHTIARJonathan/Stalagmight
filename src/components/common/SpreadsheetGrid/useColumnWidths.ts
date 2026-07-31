@@ -33,9 +33,12 @@ export const MAX_COL_WIDTH = 2000;
 export const AUTOFIT_MAX_COL_WIDTH = 600;
 
 // MIN_COL_WIDTH / MAX_COL_WIDTH are mirrored by MIN_COLUMN_WIDTH /
-// MAX_COLUMN_WIDTH in src-tauri/src/config/types.rs, which clamps the same range
-// when a persisted width is read back. Nothing enforces the mirror, so change all
-// four together.
+// MAX_COLUMN_WIDTH in src-tauri/src/config/column_widths.rs, which clamps the same
+// range when a persisted width is read back. The mirror is now ENFORCED by
+// src/test/__tests__/configBoundsMirror.test.ts, which parses the Rust constants
+// and fails on drift - a one-sided bump used to give a silent snap-back (the drag
+// commits locally, the backend clamps on save, and the post-save loadConfig feeds
+// the clamped value back down with no error anywhere).
 
 export type ColumnWidths = Record<string, number>;
 

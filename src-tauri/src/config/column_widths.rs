@@ -15,8 +15,9 @@ use serde::{Deserialize, Deserializer};
 /// Smallest column width the grid can render legibly, and the widest it will
 /// persist. Mirrors `MIN_COL_WIDTH` and `MAX_COL_WIDTH`, BOTH of which live in
 /// src/components/common/SpreadsheetGrid/useColumnWidths.ts (SpreadsheetGrid.tsx
-/// only imports them). Nothing enforces that mirror, so change all four together
-/// - this comment is the entire enforcement mechanism, so keep the pointer exact.
+/// only imports them). The mirror is enforced by
+/// src/test/__tests__/configBoundsMirror.test.ts, which parses this file and
+/// compares against the TS constants - change all four together.
 const MIN_COLUMN_WIDTH: u32 = 40;
 const MAX_COLUMN_WIDTH: u32 = 2000;
 
