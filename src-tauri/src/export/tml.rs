@@ -3978,4 +3978,479 @@ mod tests {
             }
         }
     }
+
+    // ========================================================================
+    // SpeleoDB sidecar profile
+    // ========================================================================
+
+    /// The check SpeleoDB's converter runs before it will draw anything: it
+    /// parses `Depth` and `Length` back out of the XML and rejects the WHOLE
+    /// survey when a shot's drop from its parent's depth exceeds its tape. There
+    /// is no epsilon, so the six-decimal write is part of the check - which is
+    /// why this measures the formatted values rather than the f64s we hold.
+    fn assert_written_chain_satisfies_speleodb(shots: &[ExportShot]) {
+        let depth_by_id: HashMap<i64, f64> =
+            shots.iter().map(|s| (s.id, as_written(s.depth))).collect();
+        for shot in shots {
+            let Some(&parent_depth) = depth_by_id.get(&shot.from_id) else {
+                continue;
+            };
+            let delta = (as_written(shot.depth) - parent_depth).abs();
+            let length = as_written(shot.length);
+            assert!(
+                delta <= length,
+                "shot {} writes Depth {} under a parent at {} with Length {}: the server \
+                 reads a {delta} m drop over a {length} m tape and fails the file",
+                shot.id,
+                format_f64(shot.depth),
+                format_f64(parent_depth),
+                format_f64(shot.length),
+            );
+        }
+    }
+
+    /// A project whose only section descends 0 -> 4.1 -> 5.4 m, with a closure
+    /// tying the two stations that end at those depths. The closure's length is
+    /// their difference by construction, so it sits exactly on the bound in f64
+    /// and crosses it once written: 5.4 - 4.1 is 1.3000000000000007, and the
+    /// tape that covers it goes into the file as "1.3".
+    fn closure_on_the_bound_project() -> Project {
+        let mut project = Project::new("On The Bound".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Main".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    depth_in: 0.0,
+                    depth_out: 4.1,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    depth_in: 4.1,
+                    depth_out: 5.4,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            path_length: 10.0,
+            misclosure_distance: 1.3,
+            error_percentage: 13.0,
+            horizontal_misclosure: 0.0,
+            vertical_misclosure: 1.3,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: false,
+        });
+        project
+    }
+
+    #[test]
+    fn a_tape_that_would_write_short_is_rounded_up_for_the_sidecar() {
+        // The production failure. A 4.1 m -> 5.4 m drop is 1.3000000000000007 m
+        // in f64, and the tape that exactly covers it writes as "1.3". The
+        // server re-parses both, computes the same 1.3000000000000007, and
+        // fails the whole file with "Shot is shorter than the vertical
+        // variation" - so repairing with the raw delta, which is what the user
+        // profile does and must keep doing, changes nothing.
+        let on_the_bound = 5.4_f64 - 4.1;
+        let chain = || {
+            vec![
+                geometry_shot(1, -1, 4.1, 4.1, 0.0, false),
+                geometry_shot(2, 1, 4.1, 5.4, on_the_bound, false),
+            ]
+        };
+
+        let mut user = chain();
+        enforce_ariane_geometry_invariants(&mut user, TmlProfile::User);
+        assert_eq!(
+            format_f64(user[1].length),
+            "1.3",
+            "the user export stays byte-for-byte what it always was"
+        );
+
+        let mut sidecar = chain();
+        enforce_ariane_geometry_invariants(&mut sidecar, TmlProfile::SpeleoDbSidecar);
+        assert_eq!(
+            format_f64(sidecar[1].length),
+            "1.300001",
+            "the sidecar tape has to still cover the drop after being written"
+        );
+        assert_written_chain_satisfies_speleodb(&sidecar);
+    }
+
+    #[test]
+    fn the_repaired_tape_never_writes_short() {
+        // The ceil is on the f64 delta while the file carries six decimals, and
+        // `{:.6}` rounds half to even where `round()` rounds half away from
+        // zero. Whatever the pair does at a tie, the written tape must still
+        // cover the written drop.
+        for (parent, depth) in [
+            (4.1_f64, 5.4_f64),
+            (0.1, 0.3),
+            (12.345_678, 19.87),
+            (-3.3, 2.2),
+            (0.0, 0.000_001),
+            (99.999_999_5, 100.0),
+        ] {
+            let delta = (as_written(depth) - as_written(parent)).abs();
+            let fixed = length_covering_written_delta(delta);
+            assert!(
+                as_written(fixed) >= delta,
+                "a {delta} m drop repaired to {fixed} writes as {} and no longer covers it",
+                format_f64(fixed)
+            );
+        }
+    }
+
+    #[test]
+    fn a_closure_sitting_on_the_bound_still_reads_back_for_the_sidecar() {
+        // A closure's length IS the vertical part of its own error, so every one
+        // of them sits exactly on the bound and only the rounding can push it
+        // over. This is the whole-project path to the same defect as the unit
+        // test above, through `build_export_shots`.
+        let project = closure_on_the_bound_project();
+
+        let user = build_export_shots(&project, TmlProfile::User);
+        let user_closure = user.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
+        assert_eq!(
+            format_f64(user_closure.length),
+            "1.3",
+            "the user export is unchanged"
+        );
+
+        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        let sidecar_closure = sidecar.iter().find(|s| s.shot_type == "CLOSURE").unwrap();
+        assert_eq!(format_f64(sidecar_closure.length), "1.300001");
+        assert_written_chain_satisfies_speleodb(&sidecar);
+    }
+
+    #[test]
+    fn the_sidecar_never_emits_exactly_one_survey_data() {
+        // A lone `<SurveyData>` parses as a dict in SpeleoDB's XML decoder, so
+        // iterating it yields the field NAMES and the conversion dies with an
+        // AttributeError. Zero elements it handles cleanly (EmptySurveyError),
+        // and two or more is the normal path - so the fix is to never emit one.
+        let mut project = Project::new("Lone Start".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Empty".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![],
+            ..Default::default()
+        });
+
+        let user = build_export_shots(&project, TmlProfile::User);
+        assert_eq!(user.len(), 1, "a shotless section exports its START alone");
+
+        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        assert_eq!(sidecar.len(), 2, "the sidecar pads the lone START");
+        let pad = &sidecar[1];
+        assert_eq!(pad.shot_type, "VIRTUAL", "VIRTUAL is dropped from the map");
+        assert_eq!(pad.from_id, -1, "a root orphan the converter ignores");
+        assert!(pad.uuid.is_none());
+        assert!(pad.length.abs() < f64::EPSILON);
+        assert!(
+            (pad.depth - sidecar[0].depth).abs() < f64::EPSILON,
+            "the pad sits on the START, so it cannot displace anything"
+        );
+        assert_ne!(pad.id, sidecar[0].id, "a duplicate ID fails the whole file");
+
+        let file = NamedTempFile::with_suffix(".tmlu").unwrap();
+        export_tml_for_speleodb(&project, file.path()).unwrap();
+        let content = std::fs::read_to_string(file.path()).unwrap();
+        assert_eq!(content.matches("<SRVD>").count(), 2);
+
+        // Nothing else is padded: no section means no shots at all, which is
+        // safe, and a project already emitting two or more is left alone.
+        let empty = Project::new("Nothing".to_string(), None);
+        assert!(build_export_shots(&empty, TmlProfile::SpeleoDbSidecar).is_empty());
+        let simple = simple_project();
+        assert_eq!(
+            build_export_shots(&simple, TmlProfile::SpeleoDbSidecar).len(),
+            build_export_shots(&simple, TmlProfile::User).len()
+        );
+    }
+
+    #[test]
+    fn the_sidecar_emits_a_date_the_server_can_parse_and_model() {
+        // A missing, empty or non-ISO `<Date>` fails validation for the ENTIRE
+        // file, and a year outside IGRF's [1900, 2035] silently drops the
+        // magnetic declination to 0.0, rotating the map.
+        assert_eq!(speleodb_date(None), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(Some("")), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(Some("   ")), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(Some("15/06/2025")), DEFAULT_EXPORT_DATE);
+        assert_eq!(speleodb_date(Some("2025-06-15")), "2025-06-15");
+        assert_eq!(speleodb_date(Some("1850-06-01")), "1900-01-01");
+        assert_eq!(speleodb_date(Some("2999-01-01")), "2035-12-31");
+
+        // Every emitted shot carries one, including the closure and the START,
+        // which have no section date of their own.
+        let sidecar =
+            build_export_shots(&closure_on_the_bound_project(), TmlProfile::SpeleoDbSidecar);
+        for shot in &sidecar {
+            let date = shot.date.as_deref().unwrap_or_default();
+            assert!(
+                chrono::NaiveDate::parse_from_str(date, "%Y-%m-%d").is_ok(),
+                "shot {} carries {date:?}, which the server cannot parse",
+                shot.id
+            );
+        }
+    }
+
+    #[test]
+    fn the_sidecar_emits_only_uuids_the_server_will_accept() {
+        // `<UUID>` is typed UUID4 there, so a v1 or a non-UUID fails the whole
+        // file; a repeat aliases two shots onto one GeoJSON feature. Shot UUIDs
+        // are unique per SECTION by design, so the repeat is reachable.
+        let v4 = "3f1e2d4c-5b6a-4789-8abc-def012345678";
+        let other_v4 = "11111111-2222-4333-9444-555555555555";
+        let v1 = "6f9619ff-8b86-1d01-b42d-00cf4fc964ff";
+        let wrong_variant = "3f1e2d4c-5b6a-4789-cabc-def012345678";
+
+        assert!(speleodb_uuid(v4).is_some());
+        assert!(speleodb_uuid(v1).is_none(), "not a v4");
+        assert!(speleodb_uuid(wrong_variant).is_none(), "not RFC 4122");
+        assert!(speleodb_uuid("not-a-uuid").is_none());
+        assert!(speleodb_uuid("").is_none());
+        assert!(
+            speleodb_uuid("00000000-0000-0000-0000-000000000000").is_none(),
+            "the nil UUID is version 0"
+        );
+
+        let mut shots = vec![
+            geometry_shot(1, -1, 0.0, 0.0, 0.0, false),
+            geometry_shot(2, 1, 0.0, 1.0, 5.0, false),
+            geometry_shot(3, 2, 1.0, 2.0, 5.0, false),
+            geometry_shot(4, 3, 2.0, 3.0, 5.0, false),
+            geometry_shot(5, 4, 3.0, 4.0, 5.0, false),
+        ];
+        shots[1].uuid = Some(v4.to_string());
+        shots[2].uuid = Some(v4.to_uppercase());
+        shots[3].uuid = Some(v1.to_string());
+        shots[4].uuid = Some(other_v4.to_string());
+
+        harden_for_speleodb(&mut shots);
+
+        assert_eq!(shots[1].uuid.as_deref(), Some(v4), "a valid v4 is kept");
+        assert!(
+            shots[2].uuid.is_none(),
+            "the same UUID in another case is still the same feature id"
+        );
+        assert!(shots[3].uuid.is_none(), "a v1 fails the whole file");
+        assert_eq!(shots[4].uuid.as_deref(), Some(other_v4));
+    }
+
+    #[test]
+    fn an_anchor_on_the_equator_is_nudged_off_zero_for_the_sidecar() {
+        // SpeleoDB anchors the map only when BOTH components exceed 1e-7, so a
+        // survey on the equator or the prime meridian silently gets no map at
+        // all. The nudge is a micro-degree, roughly 11 cm: a tenth of that is
+        // below `format_f64`'s six decimals and would go into the file as "0.0".
+        let (lat, lon) = speleodb_anchor(0.0, -87.5);
+        assert_eq!(format_f64(lat), "0.000001");
+        assert_eq!(format_f64(lon), "-87.5", "a real component is left alone");
+
+        let (lat, lon) = speleodb_anchor(-0.0, 0.0);
+        assert_eq!(format_f64(lat), "0.000001", "negative zero is still zero");
+        assert_eq!(format_f64(lon), "0.000001");
+
+        // Below the six decimals the sign is all that survives, and it is kept.
+        assert_eq!(format_f64(speleodb_anchor(-1e-9, 1.0).0), "-0.000001");
+
+        // Out of range parses fine there and explodes inside the projection.
+        let (lat, lon) = speleodb_anchor(95.0, 200.0);
+        assert_eq!(format_f64(lat), "90.0");
+        assert_eq!(format_f64(lon), "180.0");
+
+        // No datum means no anchor, in both profiles: inventing one would put
+        // the survey somewhere it has never been.
+        let no_datum = build_export_shots(&simple_project(), TmlProfile::SpeleoDbSidecar);
+        let start = no_datum.iter().find(|s| s.shot_type == "START").unwrap();
+        assert!(start.latitude.abs() < f64::EPSILON);
+        assert!(start.longitude.abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn the_sidecar_strips_the_section_identity_separator() {
+        // SpeleoDB groups shots into sections by hashing
+        // name/description/date/explorers/surveyors joined with U+220E, so the
+        // character inside one of those fields re-cuts the survey.
+        let mut project = simple_project();
+        project.sections[0].name = Some("Main\u{220e}Line".to_string());
+        project.sections[0].surveyor = Some("Alice\u{220e}Bob".to_string());
+
+        let user = build_export_shots(&project, TmlProfile::User);
+        assert_eq!(user[0].section, "Main\u{220e}Line");
+        assert_eq!(user[0].explorer.as_deref(), Some("Alice\u{220e}Bob"));
+
+        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        assert_eq!(sidecar[0].section, "Main Line");
+        assert_eq!(sidecar[0].explorer.as_deref(), Some("Alice Bob"));
+    }
+
+    #[test]
+    fn the_sidecar_normalizes_azimuth_for_every_shot_type() {
+        // The server normalises REAL shots and passes every other type through
+        // raw, so a VIRTUAL leg at -10 degrees walks off in a direction nothing
+        // was surveyed in.
+        let mut project = simple_project();
+        project.sections[0].shots[0].azimuth_in = -10.0;
+        project.sections[0].shots[0].kind = ShotKind::Jump;
+        project.sections[0].shots[1].azimuth_in = 400.0;
+
+        let user = build_export_shots(&project, TmlProfile::User);
+        assert!((user[1].azimuth + 10.0).abs() < f64::EPSILON);
+        assert!((user[2].azimuth - 400.0).abs() < f64::EPSILON);
+
+        let sidecar = build_export_shots(&project, TmlProfile::SpeleoDbSidecar);
+        assert_eq!(sidecar[1].shot_type, "VIRTUAL");
+        assert!((sidecar[1].azimuth - 350.0).abs() < f64::EPSILON);
+        assert!((sidecar[2].azimuth - 40.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn exported_ariane_ids_are_unique_across_the_whole_document() {
+        // A duplicate `<ID>` anywhere - across sections, split blocks, closures,
+        // the synthesized START - fails the whole file with a DuplicateValueError.
+        // Nothing renumbers here because nothing has to: ids come off one counter
+        // that is never reset, which this pins on the topologies that mint the
+        // most of them (a datum split, a mid-section merge, closures).
+        let mut project = Project::new("Ids".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Root".to_string()),
+            color: "#ff0000".to_string(),
+            shots: (0..4)
+                .map(|i| ShotData {
+                    length: 5.0,
+                    depth_in: f64::from(i),
+                    depth_out: f64::from(i) + 1.0,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        project.add_section(SectionData {
+            name: Some("Child".to_string()),
+            color: "#00ff00".to_string(),
+            shots: (0..3)
+                .map(|_| ShotData {
+                    length: 2.0,
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        });
+        project.station_merges.push(StationMerge {
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 1,
+            }
+            .into(),
+            merged_at: chrono::Utc::now(),
+        });
+        project.loop_closures.push(LoopClosure {
+            id: 1,
+            station_a: StationRef {
+                section_id: 0,
+                station_index: 1,
+            }
+            .into(),
+            station_b: StationRef {
+                section_id: 1,
+                station_index: 3,
+            }
+            .into(),
+            path_length: 12.0,
+            misclosure_distance: 0.3,
+            error_percentage: 2.5,
+            horizontal_misclosure: 0.3,
+            vertical_misclosure: 0.0,
+            strategy: ClosureStrategy::Batch,
+            is_aligned: false,
+        });
+        // A datum away from station 0 splits the root into two blocks.
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 2,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+
+        for profile in [TmlProfile::User, TmlProfile::SpeleoDbSidecar] {
+            let shots = build_export_shots(&project, profile);
+            assert!(shots.len() > 8, "the topology should mint plenty of ids");
+            let unique: HashSet<i64> = shots.iter().map(|s| s.id).collect();
+            assert_eq!(
+                unique.len(),
+                shots.len(),
+                "{profile:?} emitted a duplicate ID"
+            );
+        }
+    }
+
+    #[test]
+    fn the_user_export_keeps_every_value_the_sidecar_repairs() {
+        // The sidecar's concessions are lies about the survey, small enough for
+        // a map preview and not for the file a user asked for. One project that
+        // trips four of them at once, exported both ways.
+        let mut project = closure_on_the_bound_project();
+        project.sections[0].name = Some("Main\u{220e}Line".to_string());
+        project.sections[0].shots[0].uuid = Some("not-a-uuid".to_string());
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, 0.0, 0.0).unwrap(),
+        });
+
+        let dir = tempfile::TempDir::new().unwrap();
+        let user_path = dir.path().join("user.tmlu");
+        let sidecar_path = dir.path().join("sidecar.tmlu");
+        export_tml(&project, &user_path).unwrap();
+        export_tml_for_speleodb(&project, &sidecar_path).unwrap();
+        let user = std::fs::read_to_string(&user_path).unwrap();
+        let sidecar = std::fs::read_to_string(&sidecar_path).unwrap();
+
+        assert!(user.contains("<UU>not-a-uuid</UU>"), "verbatim, as always");
+        assert!(user.contains("Main\u{220e}Line"));
+        assert!(user.contains("<LGT>0.0</LGT>"));
+        assert!(
+            !user.contains("<LG>1.300001</LG>"),
+            "the closure tape is untouched in the user export"
+        );
+
+        assert!(!sidecar.contains("not-a-uuid"));
+        assert!(!sidecar.contains('\u{220e}'));
+        assert!(sidecar.contains("<LGT>0.000001</LGT>"));
+        assert!(sidecar.contains("<LG>1.300001</LG>"));
+
+        // And the sidecar is still deterministic, which the push relies on to
+        // stay a 304 no-op when nothing changed.
+        let again = dir.path().join("again.tmlu");
+        export_tml_for_speleodb(&project, &again).unwrap();
+        assert_eq!(sidecar, std::fs::read_to_string(&again).unwrap());
+    }
 }
