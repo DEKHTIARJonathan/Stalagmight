@@ -596,7 +596,16 @@ pub(crate) fn rewind_target(
     // Walk BASE -> root by first parents, remembering the commit we came from, and stop
     // when a parent is where we stand: that child is the next step on our own path.
     let mut child = commits.iter().find(|c| c.id.eq_ignore_ascii_case(base))?;
-    loop {
+    // Bounded by the commit count, the same runaway guard `display_history` walks with,
+    // and for the same reason: `parent_ids` is whatever the server said, and a first-parent
+    // CYCLE (`A -> B -> A`, or a self-parent) makes every lookup succeed while the exit
+    // condition never fires. Unbounded, that is not a wrong answer but a HANG - the Unwind
+    // wedges with no panic to report and nothing in the log. Git cannot author a cycle, so
+    // this is robustness against a malformed or hostile response rather than a shape any
+    // real history takes. A walk longer than the fetched range cannot reach a step we could
+    // offer anyway, so exhausting the budget hides the affordance exactly like walking off
+    // the end does.
+    for _ in 0..commits.len() {
         let parent = child.parent_ids.first()?;
         if parent.eq_ignore_ascii_case(current) {
             let is_latest = child.id.eq_ignore_ascii_case(base);
@@ -606,6 +615,7 @@ pub(crate) fn rewind_target(
         // yields `None`, so the affordance hides rather than offering an unreachable step.
         child = commits.iter().find(|c| c.id.eq_ignore_ascii_case(parent))?;
     }
+    None
 }
 
 fn is_project_creation_commit(commit: &RevisionCommit) -> bool {
@@ -1622,6 +1632,40 @@ mod tests {
         assert!(
             rewind_target(Some("side"), Some("merge"), &commits).is_none(),
             "the second parent is off the mainline, so it is not a step on our path"
+        );
+    }
+
+    /// A first-parent CYCLE must not wedge the forward walk.
+    ///
+    /// Git cannot author `A -> B -> A`, so this is robustness against a malformed or
+    /// hostile response rather than a shape any real history takes. It matters because
+    /// of HOW an unbounded walk fails: every lookup succeeds and the exit condition
+    /// never fires, so it does not return a wrong answer, it never returns at all -
+    /// a wedged Unwind with no panic and nothing in the log.
+    ///
+    /// Run on a worker with a deadline for that exact reason. Asserted in-line, a
+    /// regression here would hang the test run instead of failing it, which is the
+    /// difference between a red build and a mysteriously stuck one.
+    #[test]
+    fn rewind_terminates_on_a_cyclic_first_parent_chain() {
+        let commits = vec![commit("aaa", &["bbb"], ME), commit("bbb", &["aaa"], ME)];
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            // A pointer on neither commit: the walk can never match and must run out
+            // of budget rather than loop forever.
+            let _ = tx.send(rewind_target(Some("zzz"), Some("aaa"), &commits));
+        });
+        // Asserted rather than matched with a `panic!`: the module denies `panic` in
+        // favour of assertions, and a failed assert reports the same thing.
+        let answer = rx.recv_timeout(std::time::Duration::from_secs(10));
+        assert!(
+            answer.is_ok(),
+            "rewind_target did not terminate on a cyclic first-parent chain - the step \
+             budget is gone"
+        );
+        assert!(
+            answer.ok().flatten().is_none(),
+            "a cyclic history offers no reachable forward step"
         );
     }
 }
