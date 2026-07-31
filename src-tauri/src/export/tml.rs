@@ -6,9 +6,13 @@
 //! reproduces the naming convention used by Ariane.
 //!
 //! Key Ariane format rules learned from real files:
-//! - Only **one** START shot exists (the root of the entire survey graph).
-//!   Branch sections connect via `FromID` on their first REAL/VIRTUAL shot
-//!   pointing directly to the parent station - no extra START nodes.
+//! - One START shot per ENTRANCE, not per file. A section merged into the survey
+//!   connects via `FromID` on its first REAL/VIRTUAL shot pointing directly at the
+//!   parent station, and gets no START; a section merged into nothing is a separate
+//!   entrance and gets one of its own, as Ariane's own multi-entrance files do.
+//!   A parentless shot that is NOT a START is an orphan root, and Ariane draws an
+//!   empty map for any survey that has one alongside a closure - see
+//!   `ensure_rooted_chain`.
 //! - The ID element uses all-caps `<ID>` (not `<Id>`).
 //! - Every shot carries `<Locked>`, `<Name>`, and `<Profiletype>` fields.
 
@@ -474,18 +478,20 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
     Ok(())
 }
 
-/// Refuse to write a chain containing a parentless shot that is not a `START`.
+/// Refuse to write a chain Ariane would draw as an empty map.
 ///
 /// Ariane reads `FromID = -1` as an entrance and expects `Type = START` there; every
 /// parentless shot in an Ariane-authored file is one. A shot left parentless for any
 /// other reason is an orphan root, and although Ariane still lists it in the data
-/// table, ONE such shot anywhere in a survey that also has a `CLOSURE` row makes it
-/// abandon the loop solve and draw a completely empty map. Neither condition alone
-/// does any harm, which is why this shipped: the export succeeded, warned into a log
-/// nobody reads, and produced a file that opened to a blank map in Ariane 26.3.
+/// table, ONE such shot anywhere in a survey that ALSO has a `CLOSURE` row makes it
+/// abandon the loop solve and draw a completely empty map. That combination shipped:
+/// the export succeeded, warned into a log nobody reads, and produced a file that
+/// opened blank in Ariane 26.3.
 ///
-/// Failing here costs a user an export; not failing costs them a survey they cannot
-/// see and no reason why.
+/// It takes BOTH, so this refuses only when both are present. An orphan on its own is
+/// survivable - Ariane places it, and such files exported and drew correctly before -
+/// so failing that case would turn a drawable file into no file at all, which is a
+/// worse trade than the one this guard exists to make.
 fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> {
     // The SpeleoDB sidecar pads a lone START with a parentless VIRTUAL shot on
     // purpose (see `the_sidecar_never_emits_exactly_one_survey_data`). That file is
@@ -507,16 +513,28 @@ fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> 
     let mut sections: Vec<&str> = orphans.iter().map(|s| s.section.as_str()).collect();
     sections.sort_unstable();
     sections.dedup();
+    let listed = sections.join(", ");
+
+    // Without a closure Ariane never runs the loop solve, so the orphan is inert and
+    // the file draws. Say so once and let the export through.
+    if !shots.iter().any(|s| s.shot_type == "CLOSURE") {
+        tracing::warn!(
+            orphan_count = orphans.len(),
+            sections = listed,
+            "Exported shots have no parent station; Ariane will draw them as separate \
+             entrances. Adding a loop closure to this survey would blank its map."
+        );
+        return Ok(());
+    }
 
     anyhow::bail!(
-        "Cannot export: {} shot(s) have no parent station and are not entrances, so Ariane \
-         would draw an empty map for any survey with loop closures. First offender: shot id {} \
-         ({}) in section {:?}. Affected section(s): {}.",
+        "Cannot export {listed}: {} shot(s) there have no parent station, and this survey \
+         also has loop closures - Ariane draws an empty map for that combination. Connect \
+         the section to the rest of the survey, or remove the closures. \
+         (First unrooted shot: id {}, type {}.)",
         orphans.len(),
         first.id,
         first.shot_type,
-        first.section,
-        sections.join(", "),
     )
 }
 
@@ -553,8 +571,10 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
         return Vec::new();
     }
 
-    // Ariane supports one START; when a primary zero datum exists, root the
-    // topology from that section so GPS can be placed on START without remapping.
+    // Pick the section the topology hangs off. A survey can emit more than one START
+    // (one per entrance - see the module docs), but only this one is the graph root:
+    // when a primary zero datum exists, rooting here lets its GPS land on a START
+    // without remapping.
     let root_section_id = project
         .zero_datums
         .first()
@@ -2538,7 +2558,8 @@ mod tests {
         let project = simple_project();
         let shots = build_export_shots(&project, TmlProfile::User);
 
-        // Only one START shot should exist
+        // One entrance in this fixture, so one START. A survey with a section merged
+        // into nothing emits one per entrance - see `a_detached_section_exports_as_its_own_entrance`.
         let start_count = shots.iter().filter(|s| s.shot_type == "START").count();
         assert_eq!(start_count, 1, "expected exactly 1 START shot");
 
@@ -3949,11 +3970,13 @@ mod tests {
         assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
     }
 
-    /// The guard is the backstop for a chain the builder should never produce, and it
-    /// must stay Ariane-only: the SpeleoDB sidecar pads a lone START with a parentless
-    /// VIRTUAL shot on purpose.
+    /// The guard is the backstop for a chain the builder should never produce. It must
+    /// fire on the orphan+closure COMBINATION only - an orphan alone still draws, so
+    /// refusing it would cost a user an export for nothing - and it must stay
+    /// Ariane-only: the SpeleoDB sidecar pads a lone START with a parentless VIRTUAL
+    /// shot on purpose.
     #[test]
-    fn the_guard_rejects_a_parentless_non_start_shot() {
+    fn the_guard_rejects_an_orphan_only_when_a_closure_is_present() {
         let mut project = Project::new("Guard".to_string(), None);
         project.add_section(SectionData {
             name: Some("Only".to_string()),
@@ -3981,9 +4004,25 @@ mod tests {
         last.from_id = -1;
         assert_ne!(last.shot_type, "START");
 
+        // An orphan ALONE is survivable, and such files exported and drew correctly
+        // before. Refusing here would turn a drawable file into no file at all.
+        assert!(
+            ensure_rooted_chain(&shots, TmlProfile::User).is_ok(),
+            "an orphan with no closure must still export - Ariane draws it"
+        );
+
+        // Turn a DIFFERENT shot into a closure - the same chain is now the blank-map
+        // combination, and only the pairing changed.
+        let orphan_idx = shots.len() - 1;
+        shots[orphan_idx - 1].shot_type = "CLOSURE";
+        assert_eq!(
+            shots[orphan_idx].from_id, -1,
+            "the orphan is still the orphan"
+        );
+
         assert!(
             ensure_rooted_chain(&shots, TmlProfile::User).is_err(),
-            "an orphan root must not reach a written Ariane file"
+            "an orphan alongside a closure must not reach a written Ariane file"
         );
         assert!(
             ensure_rooted_chain(&shots, TmlProfile::SpeleoDbSidecar).is_ok(),
