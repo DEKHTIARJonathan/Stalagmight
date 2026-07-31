@@ -27,7 +27,13 @@ The toolchain is pinned so every machine + CI runs the same versions:
 
 - **pnpm `11.18.0`** via `"packageManager"` in `package.json` (corepack and
   `pnpm/action-setup` both read it - no per-workflow `version:`). `scripts/mac-setup.sh`
-  derives the major from the same field.
+  reads the same field and installs that exact version.
+  ⚠ **The pin carries a corepack integrity hash** (`pnpm@11.18.0+sha512.<hex>`), so
+  **bumping pnpm means regenerating it** - a stale hash makes corepack refuse to run
+  at all. The format is corepack's, **not** npm's: `+sha512.` + the tarball's sha512
+  as **hex**. npm's registry `integrity` field is `sha512-` + **base64** and corepack
+  rejects it as an "Invalid package manager specification". Regenerate with:
+  `curl -sL https://registry.npmjs.org/pnpm/-/pnpm-<v>.tgz | shasum -a 512`
 - **node `24.x`** via `.nvmrc` + advisory `engines` (a warning, not a hard block,
   on newer node). One toolchain everywhere, the agent harness included.
 
@@ -39,7 +45,9 @@ pnpm install         # build scripts are pre-approved (pnpm-workspace.yaml)
 ./scripts/dev.sh
 ```
 
-Any pnpm 10+ self-switches to the pin before it does anything else, so a fresh
+Prefer `corepack enable`: it is the only path that **verifies** the integrity hash
+(a tampered tarball is refused outright). Any pnpm 10+ self-switches to the pin
+before it does anything else, so a fresh
 clone installs correctly even without `corepack enable`. A global pnpm 9 does not
 self-switch, and installs only because it predates build approvals and runs the
 scripts anyway - `corepack enable` is what puts it on the pin. Don't commit a

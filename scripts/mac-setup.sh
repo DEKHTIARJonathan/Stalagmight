@@ -101,13 +101,23 @@ fi
 
 # ── pnpm ─────────────────────────────────────────────────────────────────────
 # The version comes from package.json's `packageManager` so this script cannot
-# drift from CI, where pnpm/action-setup reads that same field. Take only the
-# major: any pnpm 10+ self-switches to the exact pin before running anything.
+# drift from CI, where pnpm/action-setup reads that same field.
+#
+# That field carries a corepack integrity suffix (`pnpm@<version>+sha512.<hex>`),
+# so strip it two ways: PNPM_VERSION is what we install, PNPM_MAJOR is what we
+# accept as already-present. We install the EXACT pinned version rather than a
+# floating `pnpm@<major>` so this script never fetches an unpinned tarball; an
+# existing install only has to match the major, because any pnpm 10+ self-switches
+# to the exact pin (and verifies the hash) before it runs anything.
 PKG_JSON="$REPO_ROOT/package.json"
 [[ -f "$PKG_JSON" ]] || die "Could not find package.json at the repo root ($PKG_JSON)"
 PNPM_SPEC="$(sed -n 's/.*"packageManager"[[:space:]]*:[[:space:]]*"pnpm@\([^"]*\)".*/\1/p' "$PKG_JSON")"
 [[ -n "$PNPM_SPEC" ]] || die "Could not read a pnpm version from $PKG_JSON"
-PNPM_MAJOR="${PNPM_SPEC%%.*}"
+PNPM_VERSION="${PNPM_SPEC%%+*}"
+PNPM_MAJOR="${PNPM_VERSION%%.*}"
+# Guard both before either is interpolated into a command: PNPM_SPEC comes from a
+# file in a cloned repo, so treat it as untrusted input.
+[[ "$PNPM_VERSION" =~ ^[0-9]+(\.[0-9]+)*$ ]] || die "Could not read a pnpm version from $PKG_JSON (got '$PNPM_VERSION')"
 [[ "$PNPM_MAJOR" =~ ^[0-9]+$ ]] || die "Could not read a pnpm major from $PKG_JSON (got '$PNPM_MAJOR')"
 
 # Ensure npm can reach the registry (Homebrew's source-built OpenSSL may not
@@ -121,8 +131,8 @@ info "Checking pnpm $PNPM_MAJOR"
 if command -v pnpm &>/dev/null && [[ "$(pnpm --version)" == "$PNPM_MAJOR".* ]]; then
   ok "Already installed: pnpm $(pnpm --version)"
 else
-  info "Installing pnpm $PNPM_MAJOR…"
-  npm install -g "pnpm@$PNPM_MAJOR"
+  info "Installing pnpm $PNPM_VERSION…"
+  npm install -g "pnpm@$PNPM_VERSION"
   command -v pnpm &>/dev/null || die "pnpm installation failed"
   ok "Installed: pnpm $(pnpm --version)"
 fi

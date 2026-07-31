@@ -36,7 +36,7 @@ Installs all required development tools, skipping anything already present. Safe
 1. **Xcode Command Line Tools** - headless install via `softwareupdate`
 2. **Homebrew** - standard installer if sudo is available, otherwise git-clones to `~/.homebrew`
 3. **Node.js** - major read from `.nvmrc` (currently 24), via `brew install node@<major>`, with PATH fix for keg-only installs
-4. **pnpm** - major read from `packageManager` in `package.json` (currently 11), via `npm install -g pnpm@<major>`, with CA cert fix for Homebrew's OpenSSL
+4. **pnpm** - exact version read from `packageManager` in `package.json` (currently 11.18.0, integrity-pinned), via `npm install -g pnpm@<version>`, with CA cert fix for Homebrew's OpenSSL. An existing install is accepted if its major matches, since any pnpm 10+ self-switches to the pin
 5. **Rust stable** - via rustup
 6. **tauri-wd** - via `cargo install tauri-webdriver-automation` (WebDriver for macOS E2E tests)
 
