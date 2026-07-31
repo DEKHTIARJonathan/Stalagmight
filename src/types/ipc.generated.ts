@@ -176,6 +176,7 @@ export * from './ipc/TokenStorage';
 export * from './ipc/KeychainReport';
 export * from './ipc/SpeleoLoginResult';
 export * from './ipc/SpeleoOpenResult';
+export * from './ipc/AdoptUpload';
 export * from './ipc/SpeleoAdoptResult';
 export * from './ipc/SpeleoRevision';
 export * from './ipc/SpeleoSessionStatus';

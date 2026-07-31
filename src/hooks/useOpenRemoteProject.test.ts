@@ -1282,13 +1282,14 @@ describe('useOpenRemoteProject (#218)', () => {
    * that exists only locally. The only repair was the unawaited, error-swallowing
    * status refresh: never, offline.
    */
-  it('adoptRemote seeds the dirty bit TRUE - the adopted copy is unpushed by construction', async () => {
+  it('adoptRemote seeds the dirty bit TRUE when the hand-over did not push', async () => {
     invokeIpcMock.mockImplementation((cmd: string) => {
       if (cmd === 'speleodb_adopt_ariane')
         return Promise.resolve({
           local_path: '/cache/p1.stalx',
-          type_flipped: true,
+          type_flipped: false,
           concurrent_session: false,
+          upload: { kind: 'lock_held', email: 'someone@else.example' },
         });
       return Promise.resolve(null);
     });
@@ -1301,6 +1302,126 @@ describe('useOpenRemoteProject (#218)', () => {
       hasUnpushedEdits: true,
       projectId: 'p1',
     });
+  });
+
+  /**
+   * The other half of the rule above, and the reason it is keyed on the outcome
+   * rather than on "this was an adopt": adoption now hands the conversion back to
+   * the server itself, and a landed hand-over clears the backend's dirty bit as part
+   * of the push. Seeding TRUE over that arms `guardQuit` and the close guard for a
+   * project with nothing outstanding - a "you have unsaved work" prompt on the way
+   * out of a project whose every byte is on the server.
+   */
+  it('adoptRemote seeds the dirty bit FALSE once the hand-over pushed', async () => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: true,
+          concurrent_session: false,
+          upload: { kind: 'pushed' },
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith({
+      permission: 'READ_AND_WRITE',
+      forPath: '/cache/p1.stalx',
+      hasUnpushedEdits: false,
+      projectId: 'p1',
+    });
+  });
+
+  /**
+   * The toast's COLOUR is the only part of the outcome most users will read, so it has
+   * to track the outcome rather than the fact that a command returned. The neutral
+   * default said "done" over an adoption whose conversion never left this machine -
+   * the misleading direction, since that work is sitting in a cache directory nobody
+   * has a reason to look in.
+   *
+   * Green is reserved for the arm with nothing left to do. A push that landed under a
+   * project still typed `ariane` is amber with the local-only case, not green with the
+   * finished one: the `.stalx` is up there, but the project still advertises itself as
+   * an Ariane project, so it keeps offering Adopt and later `.tml` edits still look
+   * authoritative.
+   */
+  it.each([
+    ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
+    [
+      'pushed but still typed ariane',
+      { kind: 'pushed' },
+      false,
+      'warning',
+      'type could not be changed',
+    ],
+    [
+      'never uploaded',
+      { kind: 'lock_held', email: null },
+      false,
+      'warning',
+      'on this machine only',
+    ],
+  ])(
+    'adoptRemote toasts %s as %s',
+    async (_label, upload, typeFlipped, expectedKind, expectedPhrase) => {
+    const showToast = vi.fn();
+    useUIStore.setState({ showToast });
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: typeFlipped,
+          concurrent_session: false,
+          upload,
+        });
+      return Promise.resolve(null);
+    });
+
+      await hook().adoptRemote(SUMMARY);
+
+      // The MESSAGE is pinned too, not just the colour. Two of these three rows are
+      // amber, so asserting the colour alone let the two amber messages swap places
+      // and stay green - and "uploaded, but the type could not be changed" shown for
+      // an adoption that never reached the server is a materially wrong thing to tell
+      // someone about where their work is.
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining(expectedPhrase),
+        'speleodb-adopted',
+        expectedKind,
+      );
+    },
+  );
+
+  /**
+   * `pushed` is read from a shape that can grow arms, and only ONE of them means the
+   * bytes are on the server. An outcome this build cannot read - an older backend, a
+   * variant added later - must therefore fall to the protective answer, because the
+   * two ways of being wrong do not cost the same: a false "pushed" disarms both exit
+   * guards over a conversion that may exist only in this cache, while a false
+   * "unpushed" costs one redundant prompt until the next status poll.
+   */
+  it.each([
+    ['an outcome this build does not know', { kind: 'invented_later' }],
+    ['no outcome at all', undefined],
+  ])('adoptRemote treats %s as NOT pushed', async (_label, upload) => {
+    invokeIpcMock.mockImplementation((cmd: string) => {
+      if (cmd === 'speleodb_adopt_ariane')
+        return Promise.resolve({
+          local_path: '/cache/p1.stalx',
+          type_flipped: true,
+          concurrent_session: false,
+          upload,
+        });
+      return Promise.resolve(null);
+    });
+
+    await hook().adoptRemote(SUMMARY);
+
+    expect(setLinkOnOpenMock).toHaveBeenCalledWith(
+      expect.objectContaining({ hasUnpushedEdits: true }),
+    );
   });
 
   // End to end through the REAL seed, since the point is the state the exit guards

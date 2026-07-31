@@ -36,8 +36,8 @@ pub(crate) mod tls;
 // [Track A] #186/D-B2: SpeleoDbAction + the structured SpeleoErrorDto cross IPC.
 pub use contract::{SpeleoDbAction, TransportCause};
 pub use models::{
-    DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
-    SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate,
+    AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
+    RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDumpCandidate,
     SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState, SpeleoLoginResult, SpeleoOpenResult,
     SpeleoProjectMetadata, SpeleoProjectMetadataPatch, SpeleoProjectSummary, SpeleoPublishParams,
     SpeleoPublishResult, SpeleoRevision, SpeleoSessionStatus, SpeleoTeamGrant, SpeleoTeamOption,
@@ -1435,8 +1435,8 @@ mod live_tests {
 
     /// Build an in-memory project with one section of two real shots. With
     /// `anchor = Some((lat, lon))` it carries a georeferenced zero datum, so
-    /// [`export_tml`](crate::export::tml::export_tml) writes a real GPS anchor on
-    /// the exported START shot - the thing `openspeleo_lib` needs to emit a
+    /// [`export_tml_for_speleodb`](crate::export::tml::export_tml_for_speleodb)
+    /// writes a real GPS anchor on the exported START shot - the thing `openspeleo_lib` needs to emit a
     /// `ProjectGeoJSON`. With `None` the exported `.tml` START is 0/0 (no anchor).
     #[expect(clippy::expect_used, reason = "ignored live integration test helper")]
     fn build_render_project(anchor: Option<(f64, f64)>) -> crate::models::Project {
@@ -1551,7 +1551,8 @@ mod live_tests {
         let project = build_render_project(Some((20.25, -87.5)));
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml(&project, &tml).expect("export georeferenced .tml");
+        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+            .expect("export georeferenced .tml");
 
         // The .stalx part is a stand-in (the render is driven entirely by the
         // .tml); reuse the seed fixture, as the other upload tests do.
@@ -1635,7 +1636,8 @@ mod live_tests {
         let project = build_render_project(None); // no zero datum → 0/0 START
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml(&project, &tml).expect("export un-georeferenced .tml");
+        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+            .expect("export un-georeferenced .tml");
 
         let stalx = std::path::Path::new(SEED_FIXTURE);
         client::acquire_lock(&url, &token, false, &cleanup.id).expect("acquire mutex");
@@ -1711,7 +1713,8 @@ mod live_tests {
         let project = build_render_project(Some((20.25, -87.5)));
         let dir = tempfile::tempdir().expect("tempdir");
         let tml = dir.path().join("ariane.tml");
-        crate::export::tml::export_tml(&project, &tml).expect("export georeferenced .tml");
+        crate::export::tml::export_tml_for_speleodb(&project, &tml)
+            .expect("export georeferenced .tml");
 
         // A single `.tml` artifact part with NO explicit `.mime_str(...)` - let
         // ureq pick the Content-Type, then see whether the server accepts it.

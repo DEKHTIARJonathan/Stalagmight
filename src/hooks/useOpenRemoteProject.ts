@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { useUIStore } from '../store/uiStore';
+import { useUIStore, type ToastKind } from '../store/uiStore';
 import { useProjectStore } from '../store/projectStore';
 import {
   useSpeleoStore,
@@ -151,7 +151,13 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
       /** The project this open is FOR, so the seed names it rather than waiting for a poll. */
       projectId: string,
       opts: {
-        successToast?: { message: string; key: string };
+        /**
+         * `kind` defaults to `info` (the neutral grey) for the plain opens, which
+         * report nothing more than "it opened". A caller whose outcome has DEGREES -
+         * adoption, whose hand-over can half-land - passes the one that matches, so
+         * the colour is not saying "fine" over a result the user has to act on.
+         */
+        successToast?: { message: string; key: string; kind?: ToastKind };
         /**
          * [#270] Seed the link's dirty bit as TRUE. The seed's default is a fresh
          * pull (nothing local the server has not seen); "keep the local copy" and
@@ -274,7 +280,7 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
         void useSpeleoStore.getState().refreshLinkStatus();
         return { status: 'load_failed' };
       }
-      if (successToast) showToast(successToast.message, successToast.key);
+      if (successToast) showToast(successToast.message, successToast.key, successToast.kind);
       return { status: 'opened' };
     },
     [showToast, setLinkOnOpen, loadProject, onBeforeLoad, t],
@@ -819,39 +825,76 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
        * A pull extracts over a cache file, and only closes the open project when that
        * file IS the open project. An adopt does not extract at all: it rebuilds the
        * destination through `adopt_import_and_save` -> `do_create_project_full`,
-       * which COMMITS the new project into `AppState` unconditionally, whatever was
-       * open before ("Adoption replaces the open AppState project", as its own doc
-       * says). So the swap has already happened backend-side for EVERY target, not
-       * only for a re-adopt of the open one. Refusing on this side would not undo it;
-       * it would leave the shell rendering the old project while every command - each
-       * edit, each auto-save - lands on the adopted one. That is a worse failure than
-       * the one a late check would catch, and it is the failure `finishOpen` avoids
-       * by going through with the load.
+       * which commits the new project into `AppState` whatever was open before. So
+       * the swap has already happened backend-side for EVERY target, not only for a
+       * re-adopt of the open one. Refusing on this side would not undo it; it would
+       * leave the shell rendering the old project while every command - each edit,
+       * each auto-save - lands on the adopted one. That is a worse failure than the
+       * one a late check would catch, and it is the failure `finishOpen` avoids by
+       * going through with the load.
        *
        * So the adopt route's protection is the pre-command check above, and it stays
-       * exactly that. Closing this window properly has to start in
-       * `speleodb_adopt_ariane` - build the adopted `.stalx` without committing it to
-       * `AppState`, and let the FE's `loadProject` be what opens it, the way a pull
-       * already works - with this side following, never leading.
+       * exactly that. What HAS changed is the other half of that old asymmetry:
+       * adoption now CLOSES the project it built before returning, so the
+       * `loadProject` below is an ordinary full load rather than a backend
+       * `ALREADY_OPEN` short-circuit. It used to be the latter, and the short-circuit
+       * assumes the project is already on screen - which is true after a re-open and
+       * false after an adopt, so adoption ended with the view flipped, no project in
+       * any store, and the success toast below over an empty screen.
        */
-      // Post-adoption notice: Stalagmight now owns edits. When the server type could
-      // not be flipped (no write access), say so - the user can still edit locally.
+      // Post-adoption notice: Stalagmight now owns edits. Adoption also hands the
+      // conversion straight back to the server, so what to say depends on whether
+      // that landed - and when it did not, on why.
+      // Read defensively, and in the protective direction: an `upload` this build does
+      // not recognise - an older backend, a shape that grew an arm - is NOT proof the
+      // bytes landed, and the whole cost of being wrong here is asymmetric. Guessing
+      // "pushed" clears the dirty seed and disarms the quit guard over a conversion
+      // that may exist only in this cache; guessing "not pushed" leaves a clean project
+      // marked dirty until the next status poll corrects it. Same fail-closed reading
+      // the link gate takes of an `unknown` permission.
+      const pushed = result.upload?.kind === 'pushed';
       return finishOpen(result, summary.permission, summary.id, {
-        // [#270] An adopt is NOT a plain pull: the backend stamps the adopted
-        // `.stalx` `has_unpushed_edits: true` (it converted an Ariane .tml into a
-        // project the server has never been given), so the shared seed's
-        // pull-shaped default would claim "nothing outstanding" for a copy the
-        // backend has just declared dirty. `guardQuit` and `useProject`'s close
-        // guard both read exactly this flag, so both stayed disarmed over work
-        // that exists only locally - and the only repair was the unawaited,
-        // error-swallowing status refresh, i.e. never, offline. Same reasoning as
-        // `keepLocalCopy` one function up.
-        hasUnpushedEdits: true,
+        /**
+         * [#270] An adopt is NOT a plain pull: the backend stamps the adopted
+         * `.stalx` `has_unpushed_edits: true` (it converted an Ariane .tml into a
+         * project the server has never been given), so the shared seed's
+         * pull-shaped default would claim "nothing outstanding" for a copy the
+         * backend has just declared dirty. `guardQuit` and `useProject`'s close
+         * guard both read exactly this flag, so both stayed disarmed over work
+         * that exists only locally - and the only repair was the unawaited,
+         * error-swallowing status refresh, i.e. never, offline. Same reasoning as
+         * `keepLocalCopy` one function up.
+         *
+         * No longer unconditionally true, because the adopt no longer unconditionally
+         * leaves work behind: a landed hand-over clears the backend's dirty bit as
+         * part of the push, and seeding `true` over that would arm the quit guard for
+         * a project with nothing outstanding. Keyed on the ONE arm that means the
+         * bytes are on the server, so every other outcome - lock held, diverged,
+         * upload failed - keeps the protective seed.
+         */
+        hasUnpushedEdits: !pushed,
         successToast: {
-          message: result.type_flipped
-            ? t('speleodb.adopt.doneToast')
-            : t('speleodb.adopt.doneToastNoWrite'),
+          message: pushed
+            ? result.type_flipped
+              ? t('speleodb.adopt.doneToast')
+              : t('speleodb.adopt.doneToastNoTypeFlip')
+            : t('speleodb.adopt.doneToastLocalOnly'),
           key: 'speleodb-adopted',
+          /**
+           * Green for the one outcome where nothing is left to do, amber for the two
+           * where something is. The neutral default read as "done" over both of the
+           * others, which is the wrong signal for a result the user has to finish by
+           * hand - and the more misleading of the two directions, since the work is
+           * sitting in a cache directory they have no reason to look in.
+           *
+           * The half-landed arm - pushed, but the server `type` still says `ariane` -
+           * is amber with the local-only one rather than green with the finished one.
+           * The `.stalx` really is up there, so it is not a failure, but the project
+           * still advertises itself as an Ariane project: it keeps offering Adopt, and
+           * later `.tml` edits still look authoritative to anyone who makes them. That
+           * is unfinished business, and unfinished business is not green.
+           */
+          kind: pushed && result.type_flipped ? 'success' : 'warning',
         },
       });
     },

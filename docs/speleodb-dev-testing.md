@@ -346,31 +346,61 @@ archive says which file is the project, so it routes to the dump picker, as more
 than one `.stalx` does. The verbs that can neither ask nor replay an answer -
 Start editing, Update, Take remote - refuse with directions instead. `speleodb_open_project` surfaces the typed
 `SpeleoDbAction::Adopt` (not a hard error); the browser then offers a confirm
-dialog, and on confirm `speleodb_adopt_ariane` downloads the dump, imports the
-`ariane.tml` through the normal TML importer (`include_excluded=false`,
-`comments_on_stations=true` - the same settings a plain `.tml` import/export
-round-trip uses), saves a new `.stalx` at the pull cache path, stamps the `speleo_link`
-(`base = server tip`, `has_unpushed_edits = true`), and best-effort PATCHes the
-server project `type` ariane→other.
+dialog, and on confirm `speleodb_adopt_ariane` runs the whole hand-over:
+
+1. **Lock first.** The write mutex is taken before the head resolve and the
+   download, so no other writer can land a revision while the `.tml` is being
+   converted - the import is the slow part, and it used to sit in an open window.
+   The pre-read lock holder decides this: a mutex held by anybody, including our
+   own account in another window, stops the push (never the adoption).
+2. **Convert.** The `ariane.tml` is imported through the normal TML importer
+   (`include_excluded=false`, `comments_on_stations=true` - the same settings a
+   plain `.tml` import/export round-trip uses) and saved as a new `.stalx` at the
+   pull cache path, with the `speleo_link` stamped (`base = server tip`,
+   `has_unpushed_edits = true`) through the live handle.
+3. **Push.** The ordinary Start-editing → Done pair uploads the `.stalx` with the
+   `export_tml_for_speleodb` sidecar and releases the lock, which clears the dirty
+   bit and advances `base` to the new commit.
+4. **Flip the type**, ariane→other, and only once the `.stalx` has landed - a
+   project typed `other` whose only file is the Ariane one that type says to
+   disregard is openable by nobody.
+5. **Close**, so the frontend's `loadProject` is a real load. Leaving it open made
+   the backend answer that load with `ALREADY_OPEN`, which the frontend reads as
+   "already on screen" - true after a re-open, false after an adopt, so adoption
+   finished with the view flipped and nothing rendered.
+
+Every step after the lock is best-effort in one direction only: a lock that cannot
+be taken, or a push that does not land, still leaves the project adopted on disk
+and stamped dirty. `AdoptUpload` reports which happened, and an `AdoptLockGuard`
+hands the mutex back if the conversion fails before the push can use it.
 
 Offline coverage: the typed-signal seams are unit-tested (`dto_for_error(
 AdoptAriane) → Adopt`; the dump classifier's adopt arm carries the `ariane.tml`
-path), and the FE confirm→adopt→reload flow has a component test
-(`OpenFromSpeleoDbDialog.test.tsx`). The full create→import→save orchestration
+path), the ordering above is pinned by source tripwires in `speleodb_pull.rs`
+(lock before read, guard spanning the conversion, flip after push, close last),
+the guard's arm/disarm behaviour is a unit test, and the FE
+confirm→adopt→reload flow has a component test
+(`OpenFromSpeleoDbDialog.test.tsx`). The full create→import→push orchestration
 needs an app handle + a live box, so it is verified manually on the dev box:
 
 1. Seed / pick an `ariane`-type project whose dump contains only `ariane.tml`.
-2. Open-from-SpeleoDB → pick it → the confirm dialog spells out the consequences.
-3. Confirm → the survey imports, a `.stalx` lands in the cache, and the UI opens
-   it **read-only** (remote, no lock); a success toast shows.
-4. DB-inspect the cached `.stalx`: one `speleo_link` row, `base` = the server
-   tip, `has_unpushed_edits = 1`.
-5. On the server the project `type` is now `other`.
-6. Start editing (UpToDate, no divergence prompt) → edit → Done → the `.stalx`
-   pushes, and a later fresh pull now classifies as `Stalx` (normal open),
-   confirming the bootstrap is one-time.
-7. Negative: with a READ_ONLY account, adoption still opens the project locally
-   and the toast notes the server type was not updated (`type_flipped = false`).
+2. Open-from-SpeleoDB → pick it → the confirm dialog spells out the consequences,
+   including that adopting uploads and briefly takes the write lock.
+3. Confirm → the survey imports, a `.stalx` lands in the cache **and on the
+   server**, and the UI opens it **read-only** (remote, lock already handed back);
+   the success toast says it was uploaded.
+4. DB-inspect the cached `.stalx`: one `speleo_link` row, `base` = the commit the
+   adoption just pushed, `has_unpushed_edits = 0`.
+5. On the server the project `type` is now `other`, the repo holds both
+   `ariane.tml` and `misc/project.stalx`, and a GeoJSON row exists for the new
+   commit when the survey carries a GPS zero datum.
+6. A later fresh pull classifies as `Stalx` (normal open), confirming the
+   bootstrap is one-time.
+7. Negative: with a READ_ONLY account the lock cannot be taken, so adoption still
+   opens the project locally, stamped `has_unpushed_edits = 1`, the server `type`
+   stays `ariane`, and the toast says it was not uploaded.
+8. Negative: with the write lock held by another account, same as (7) - the
+   adoption never pushes through somebody else's mutex.
 
 ## Optimistic force-edit - editing without the lock (E2, #213)
 

@@ -188,12 +188,40 @@ visually centers Comment text on the station, not along the shot. A bare
 Ariane file has no markers at all, so every Comment line routes to the
 station.
 
+## The SpeleoDB sidecar profile
+
+Two things read our `.tml`: Ariane, and the `ariane.tml` sidecar SpeleoDB
+converts to GeoJSON for its map preview (see [SpeleoDB dev testing](speleodb-dev-testing.md)).
+The converter (`openspeleo_lib`) enforces rules Ariane never looks at, and when
+one is broken it either fails the whole file or silently skips the map - the
+upload still returns 200, so nothing surfaces to the user.
+
+`export_tml` and `export_tml_for_speleodb` therefore build the same document
+under different profiles. The **user** profile is what it has always been, down
+to the byte. The **sidecar** profile additionally:
+
+| Concession | Why |
+|------------|-----|
+| Rounds a repaired `Length` up to the next micrometre | The server re-derives `abs(Depth - parent.Depth) <= Length` from the DECIMAL STRINGS, and the six-decimal write can round a repaired tape back below the drop it was minted to cover |
+| Never emits exactly one `<SurveyData>` (pads with a VIRTUAL root) | A lone element parses as a dict in the server's decoder and crashes the conversion; zero is handled cleanly, two or more is the normal path |
+| Re-emits every `<Date>` as an ISO calendar date (`YYYY-MM-DD`), year clamped to `[1900, 2035]` | A missing, empty or non-ISO date fails the whole file; outside IGRF's range the declination silently becomes 0.0. Only `YYYY-MM-DD` is parsed - anything else, including a full ISO 8601 datetime, falls back to the placeholder and loses its real survey date |
+| Emits `<UUID>` only for a v4 not already used in the file | The field is typed `UUID4`; a repeat aliases two shots onto one GeoJSON feature (shot UUIDs are unique per SECTION only) |
+| Nudges a zero latitude or longitude by a micro-degree, and clamps out-of-range ones | Both components must exceed `1e-7` or the map is skipped, so a survey on the equator or the prime meridian gets none. No datum still means no anchor |
+| Replaces U+220E in section and explorer names with a space | The server hashes the section-identity fields joined with that character |
+| Normalises `Azimut` for every shot type | Only REAL shots are normalised server-side |
+
+None of this touches the project: the transformations run on the export
+representation, and only for the throwaway sidecar. Past 25,000 shots the
+sidecar render warns that the server may fail to build the preview - nothing is
+dropped or capped.
+
 ## Implementation
 
 | Component | File | Role |
 |-----------|------|------|
-| Export logic | `src-tauri/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution |
+| Export logic | `src-tauri/src/export/tml.rs` | XML generation, ZIP packaging, topology resolution, the two profiles |
 | Export command | `src-tauri/src/commands/export.rs` | `export_tml` IPC handler |
+| SpeleoDB sidecar | `src-tauri/src/core/state/speleodb.rs` | `speleodb_render_tml` renders the co-push sidecar via `export_tml_for_speleodb` |
 | Store method | `src/store/projectStore.ts` | `exportTml()` frontend binding |
 | Export dialog | `src/components/Dialogs/ExportDialog.tsx` | UI with TML format option |
 
