@@ -732,6 +732,12 @@ export default function DataTable({ sections }: DataTableProps) {
       stableWidths(stationWidths ?? {}),
     ]);
   }, [panelsConfig]);
+  // The debounced save that has been scheduled but has not fired yet, so unmount
+  // can flush it (#357 item 4). Cleared the moment it runs, and cleared on the
+  // no-change path below - otherwise changing a width and then undoing it inside
+  // the debounce window would leave a closure here that writes the OLD state over
+  // the value the user actually settled on.
+  const pendingViewSaveRef = useRef<(() => void) | null>(null);
   useEffect(() => {
     if (lastSavedViewRef.current === null) return undefined;
     const hidden = [...hiddenShotCols].sort();
@@ -746,8 +752,12 @@ export default function DataTable({ sections }: DataTableProps) {
       stableWidths(shotColumnWidths),
       stableWidths(stationColumnWidths),
     ]);
-    if (snapshot === lastSavedViewRef.current) return undefined;
-    const timer = setTimeout(() => {
+    if (snapshot === lastSavedViewRef.current) {
+      pendingViewSaveRef.current = null;
+      return undefined;
+    }
+    const save = () => {
+      pendingViewSaveRef.current = null;
       // Mark it saved up front so a re-render mid-flight does not queue a duplicate
       // write, but remember what to fall back to: if the IPC rejects, the state never
       // reached disk, and leaving the snapshot marked would mean no later change ever
@@ -776,10 +786,19 @@ export default function DataTable({ sections }: DataTableProps) {
             lastSavedViewRef.current = previouslySaved;
           }
           console.error('Failed to save data-table view state:', e);
+          // #357 item 5: the rollback above makes a later change RETRY, but on its
+          // own it is silent - a user who resizes a column and quits saw nothing
+          // and lost the layout with no indication it had not been kept. Keyed so
+          // a burst of failures refreshes one toast instead of stacking.
+          showToast(t('dataTable.viewSaveFailed'), 'data-table-view-save', 'error');
         });
-    }, 500);
+    };
+    pendingViewSaveRef.current = save;
+    const timer = setTimeout(save, 500);
     return () => clearTimeout(timer);
   }, [
+    showToast,
+    t,
     shotColumnOrder,
     hiddenShotCols,
     azimuthMode,
@@ -789,6 +808,19 @@ export default function DataTable({ sections }: DataTableProps) {
     shotColumnWidths,
     stationColumnWidths,
   ]);
+
+  // Flush a still-pending view save on unmount (#357 item 4). The cleanup above
+  // is `clearTimeout` only, and it runs on EVERY dep change as well as on
+  // unmount, so it cannot tell the two apart - which meant closing the data
+  // table, or the project, inside the 500 ms window dropped the write silently.
+  // A mount-only effect can: its cleanup runs exactly once, at unmount, by which
+  // point `pendingViewSaveRef` holds the newest scheduled save or nothing.
+  useEffect(
+    () => () => {
+      pendingViewSaveRef.current?.();
+    },
+    []
+  );
 
   // Close on outside mousedown / external scroll / resize (shared hook). The
   // dropdown is position:fixed at a captured rect (useAnchoredFixedMenu), so any

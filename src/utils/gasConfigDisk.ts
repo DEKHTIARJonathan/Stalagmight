@@ -17,7 +17,15 @@ import type { GasConfig } from '../types/ipc.generated';
  *   saved config at EXECUTION time, after the previous write has fully landed, and patches
  *   queued while a write is pending are merged into a single later write.
  *
- * Fire-and-forget by design (a failed write logs inside `updateConfig` and keeps the working
+ * The chaining above only ever solved that for gas-vs-gas. Against a writer in ANOTHER
+ * module it did nothing, because the payload was a whole `Config` spread from this store's
+ * snapshot: a data-table column resize (500 ms debounce) landing inside a gas field's 450 ms
+ * debounce was overwritten by this module's stale copy of `panels`, and silently - the open
+ * table keeps rendering its own state and only reverts on the next launch. So the write now
+ * goes through `updateGasConfig`, which posts ONLY the `[gas]` block (#357 item 2). Ordering
+ * could never have fixed that; not sending the other fields is what does.
+ *
+ * Fire-and-forget by design (a failed write logs inside the store action and keeps the working
  * copy authoritative for the session) - same contract the swim-speed writer always had.
  */
 const WRITE_DEBOUNCE_MS = 450;
@@ -35,7 +43,7 @@ function fire(): void {
     const store = useProjectStore.getState();
     const saved = store.config;
     if (!saved) return;
-    await store.updateConfig({ ...saved, gas: { ...saved.gas, ...patch } });
+    await store.updateGasConfig({ ...saved.gas, ...patch });
   });
 }
 

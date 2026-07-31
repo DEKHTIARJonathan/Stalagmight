@@ -38,6 +38,7 @@ import type {
 } from '../types/project';
 import type { ReversedSection } from '../types/ipc/ReversedSection';
 import type { Config } from '../types/config';
+import type { GasConfig } from '../types/ipc.generated';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, CollabState, CollabChangeSet, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
@@ -231,6 +232,13 @@ interface ProjectStore {
   // Actions
   loadConfig: () => Promise<void>;
   updateConfig: (config: Config) => Promise<CommandResult>;
+  /**
+   * Persist ONLY the `[gas]` block. Plan-mode gas controls must not go through
+   * `updateConfig`: that posts the whole `Config` built from this store's
+   * snapshot, which is refreshed only after a write completes, so it silently
+   * reverted any other partial save that landed in between (#357 item 2).
+   */
+  updateGasConfig: (gas: GasConfig) => Promise<CommandResult>;
   /** Update config state without persisting to disk */
   setConfig: (config: Config) => void;
 
@@ -795,6 +803,28 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
       if (get().config?.gas.include_reference_legs !== routingBefore) {
         await get().refreshProjectState();
       }
+      return emptyCommandResult(true, null);
+    } catch (e) {
+      return emptyCommandResult(false, String(e));
+    }
+  },
+
+  updateGasConfig: async (gas: GasConfig) => {
+    try {
+      const routingBefore = get().config?.gas.include_reference_legs;
+      await invokeIpc('update_gas_config', { gas }, { purpose: 'persist gas planning settings' });
+      // Re-fetch to pick up the backend-normalized values, same as updateConfig.
+      await get().loadConfig();
+      // Same reasoning as updateConfig's copy of this: `include_reference_legs`
+      // decides whether penetration routes through reference ties, and
+      // `stats.penetration_distance` is computed eagerly inside get_project_state.
+      if (get().config?.gas.include_reference_legs !== routingBefore) {
+        await get().refreshProjectState();
+      }
+      // Deliberately does NOT drop `stationsAdjusted` / `surveyDataAdjusted` the
+      // way updateConfig does. That drop is there for the closure-adjustment
+      // sigmas, which feed the least-squares solve; nothing in `[gas]` does, and
+      // these writes are debounced-but-frequent while typing in a gas field.
       return emptyCommandResult(true, null);
     } catch (e) {
       return emptyCommandResult(false, String(e));

@@ -489,6 +489,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Data-table spreadsheet editing: persisted view config + raw-table browsing
     // (fullscreen data table).
     "command.update_data_table_view",
+    "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).

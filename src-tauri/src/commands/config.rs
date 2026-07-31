@@ -3,7 +3,7 @@ use tauri::State;
 
 use std::collections::BTreeMap;
 
-use crate::config::{normalize_column_widths, Config, ConfigSaveReport};
+use crate::config::{normalize_column_widths, Config, ConfigSaveReport, GasConfig};
 use crate::core::AppState;
 
 /// Get the current configuration
@@ -242,6 +242,38 @@ pub(crate) fn update_panel_layout_impl(
                 validate(&mode)?;
                 config.panels.data_table_mode = mode;
             }
+            Ok(())
+        })
+        .map(|_| ())
+        .map_err(|e| e.to_string())
+}
+
+/// Update the `[gas]` block in configuration (efficient partial update).
+///
+/// Exists so Plan mode's gas controls stop persisting through a whole-`Config`
+/// write (#357 item 2). `gasConfigDisk.ts` built its payload by spreading
+/// `useProjectStore.getState().config`, a snapshot refreshed only by `loadConfig()`
+/// after a write completes - so any OTHER partial save that landed inside that
+/// window was overwritten by the stale copy of its own fields. It was reachable
+/// in Plan mode by resizing a data-table column (500 ms debounce) and nudging a
+/// gas field inside that window (450 ms debounce): the widths were lost, and
+/// silently, because the open table keeps rendering its own state and only
+/// reverts on the next launch.
+///
+/// Serializing the two commands could not fix that - the payload was already
+/// stale when it was built, so ordering only decides which stale copy wins. Not
+/// sending the other fields at all is what fixes it.
+#[tauri::command]
+pub fn update_gas_config(state: State<AppState>, gas: GasConfig) -> Result<(), String> {
+    update_gas_config_impl(state.inner(), gas)
+}
+
+pub(crate) fn update_gas_config_impl(state: &AppState, gas: GasConfig) -> Result<(), String> {
+    // Normalization is not skipped by going partial: `modify_config` ends in the
+    // same `normalize_except_shortcuts`, which runs `GasConfig::normalize`.
+    state
+        .modify_config(|config| {
+            config.gas = gas;
             Ok(())
         })
         .map(|_| ())
