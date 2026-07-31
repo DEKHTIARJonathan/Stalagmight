@@ -24,6 +24,7 @@ import { buildStationColumns } from './dataTableStationColumns';
 import RawTableView from './RawTableView';
 import { DetailLink } from '../common/DetailLink';
 import { buildShotUpdates, buildShotUpdateBatch, AZIMUTH_AVG_KEY, PITCH_AVG_KEY } from './dataTableEdits';
+import { useDataTableViewPersistence } from './useDataTableViewPersistence';
 import { canSplitShot } from '../../utils/shotSplit';
 import { nextShotKind } from '../../utils/shotKind';
 import {
@@ -90,19 +91,6 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
  *  used only as the pre-config-load initial state - once the persisted config
  *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
-
-/**
- * Column widths as sorted entries, for the change-detection snapshot only.
- *
- * `JSON.stringify` of an object preserves insertion order, and a resize appends a
- * newly-overridden column at the end - while the same map comes back from the
- * backend as an alphabetically-sorted `BTreeMap`. Comparing those two directly
- * reports a change that isn't one, costing a redundant save-and-resync cycle. The
- * sibling hidden-column lists are `.sort()`ed just above for the same reason.
- */
-function stableWidths(widths: Record<string, number>): Array<[string, number]> {
-  return Object.entries(widths).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-}
 
 /** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
  *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
@@ -679,147 +667,29 @@ export default function DataTable({ sections }: DataTableProps) {
   const stationHiddenColumns = useMemo(() => [...hiddenStationCols], [hiddenStationCols]);
 
 
-  // Persist the view state (order, visibility, angle modes) in the app config.
-  // Init once when the config arrives; later changes save debounced. The
-  // snapshot guard keeps the init itself (and no-op renders) from re-saving.
-  const panelsConfig = useProjectStore((s) => s.config?.panels);
-  const lastSavedViewRef = useRef<string | null>(null);
-  useEffect(() => {
-    if (lastSavedViewRef.current !== null || !panelsConfig) return;
-    const isMode = (m: string): m is 'avg' | 'inout' | 'off' =>
-      m === 'avg' || m === 'inout' || m === 'off';
-    const azimuth = isMode(panelsConfig.data_table_azimuth_mode)
-      ? panelsConfig.data_table_azimuth_mode
-      : 'avg';
-    const inclination = isMode(panelsConfig.data_table_inclination_mode)
-      ? panelsConfig.data_table_inclination_mode
-      : 'off';
-    setAzimuthMode(azimuth);
-    setInclinationMode(inclination);
-    setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
-    setShotColumnOrder(panelsConfig.data_table_shot_column_order);
-    // The persisted list is authoritative: the backend fills a missing/legacy
-    // config with the coordinate-column defaults (serde default), so an EMPTY
-    // array genuinely means the user unhid every station column ("show all") -
-    // it must not be re-defaulted, or that preference could never persist.
-    const stationHidden = panelsConfig.data_table_station_hidden_columns;
-    setHiddenStationCols(new Set(stationHidden));
-    setStationColumnOrder(panelsConfig.data_table_station_column_order);
-    const shotWidths = panelsConfig.data_table_shot_column_widths;
-    const stationWidths = panelsConfig.data_table_station_column_widths;
-    setShotColumnWidths(shotWidths);
-    setStationColumnWidths(stationWidths);
-    // Both hidden lists are sorted here because the save snapshot below sorts them,
-    // and this string is compared against that one verbatim. Storing the config's own
-    // order made the two differ whenever the persisted list was not already sorted -
-    // the station default `['_x','_y','_lat','_long']` is not - so merely OPENING the
-    // data table scheduled a save of state the user never touched. Pre-existing (the
-    // widths entries below always sorted via stableWidths); it stayed invisible until
-    // a test asserted "no save yet" and lost the race to the 500ms debounce.
-    // `?? []` / `?? {}` because panelsConfig comes straight from get_config with no
-    // defaultConfig merge: the only guarantee is the Rust #[serde(default)]. A frontend
-    // running against a backend that predates these fields would otherwise take the
-    // whole data table down on open (spread and Object.entries both throw on
-    // undefined) instead of starting with no overrides.
-    lastSavedViewRef.current = JSON.stringify([
-      panelsConfig.data_table_shot_column_order,
-      [...(panelsConfig.data_table_shot_hidden_columns ?? [])].sort(),
-      azimuth,
-      inclination,
-      panelsConfig.data_table_station_column_order,
-      [...(stationHidden ?? [])].sort(),
-      stableWidths(shotWidths ?? {}),
-      stableWidths(stationWidths ?? {}),
-    ]);
-  }, [panelsConfig]);
-  // The debounced save that has been scheduled but has not fired yet, so unmount
-  // can flush it (#357 item 4). Cleared the moment it runs, and cleared on the
-  // no-change path below - otherwise changing a width and then undoing it inside
-  // the debounce window would leave a closure here that writes the OLD state over
-  // the value the user actually settled on.
-  const pendingViewSaveRef = useRef<(() => void) | null>(null);
-  useEffect(() => {
-    if (lastSavedViewRef.current === null) return undefined;
-    const hidden = [...hiddenShotCols].sort();
-    const stationHidden = [...hiddenStationCols].sort();
-    const snapshot = JSON.stringify([
+  // Persist the view state (order, visibility, angle modes, widths) in the app
+  // config; see useDataTableViewPersistence for the seed/debounce/flush details.
+  useDataTableViewPersistence(
+    {
       shotColumnOrder,
-      hidden,
+      hiddenShotCols,
       azimuthMode,
       inclinationMode,
       stationColumnOrder,
-      stationHidden,
-      stableWidths(shotColumnWidths),
-      stableWidths(stationColumnWidths),
-    ]);
-    if (snapshot === lastSavedViewRef.current) {
-      pendingViewSaveRef.current = null;
-      return undefined;
-    }
-    const save = () => {
-      pendingViewSaveRef.current = null;
-      // Mark it saved up front so a re-render mid-flight does not queue a duplicate
-      // write, but remember what to fall back to: if the IPC rejects, the state never
-      // reached disk, and leaving the snapshot marked would mean no later change ever
-      // retries it - the column silently returns to its old width on next launch.
-      const previouslySaved = lastSavedViewRef.current;
-      lastSavedViewRef.current = snapshot;
-      void invokeIpc(
-        'update_data_table_view',
-        {
-          columnOrder: shotColumnOrder,
-          hiddenColumns: hidden,
-          azimuthMode,
-          inclinationMode,
-          stationColumnOrder,
-          stationHiddenColumns: stationHidden,
-          columnWidths: shotColumnWidths,
-          stationColumnWidths,
-        },
-        { purpose: 'persist data-table view state' }
-      )
-        // Re-sync the in-memory config: a remount re-seeds from it, so a stale
-        // copy would silently revert what was just saved to disk.
-        .then(() => useProjectStore.getState().loadConfig())
-        .catch((e) => {
-          if (lastSavedViewRef.current === snapshot) {
-            lastSavedViewRef.current = previouslySaved;
-          }
-          console.error('Failed to save data-table view state:', e);
-          // #357 item 5: the rollback above makes a later change RETRY, but on its
-          // own it is silent - a user who resizes a column and quits saw nothing
-          // and lost the layout with no indication it had not been kept. Keyed so
-          // a burst of failures refreshes one toast instead of stacking.
-          showToast(t('dataTable.viewSaveFailed'), 'data-table-view-save', 'error');
-        });
-    };
-    pendingViewSaveRef.current = save;
-    const timer = setTimeout(save, 500);
-    return () => clearTimeout(timer);
-  }, [
-    showToast,
-    t,
-    shotColumnOrder,
-    hiddenShotCols,
-    azimuthMode,
-    inclinationMode,
-    stationColumnOrder,
-    hiddenStationCols,
-    shotColumnWidths,
-    stationColumnWidths,
-  ]);
-
-  // Flush a still-pending view save on unmount (#357 item 4). The cleanup above
-  // is `clearTimeout` only, and it runs on EVERY dep change as well as on
-  // unmount, so it cannot tell the two apart - which meant closing the data
-  // table, or the project, inside the 500 ms window dropped the write silently.
-  // A mount-only effect can: its cleanup runs exactly once, at unmount, by which
-  // point `pendingViewSaveRef` holds the newest scheduled save or nothing.
-  useEffect(
-    () => () => {
-      pendingViewSaveRef.current?.();
+      hiddenStationCols,
+      shotColumnWidths,
+      stationColumnWidths,
     },
-    []
+    {
+      setShotColumnOrder,
+      setHiddenShotCols,
+      setAzimuthMode,
+      setInclinationMode,
+      setStationColumnOrder,
+      setHiddenStationCols,
+      setShotColumnWidths,
+      setStationColumnWidths,
+    }
   );
 
   // Close on outside mousedown / external scroll / resize (shared hook). The
