@@ -1389,6 +1389,19 @@ describe('useOpenRemoteProject (#218)', () => {
       'warning',
       'type could not be changed',
     ],
+    // Both halves unfinished, from ONE cause: connectivity dropping after the upload
+    // lands fails the release AND the type call that follows it. The ladder used to
+    // stop at the lock-held rung and never read `type_flipped`, so this row was told
+    // about the lock alone - and after releasing it the project was still typed
+    // `ariane`, still offering Adopt over a `.stalx` that already exists. No later
+    // poll corrects that one; the toast is the only place it is ever said.
+    [
+      'pushed but neither the lock nor the type came back',
+      { kind: 'pushed_lock_held' },
+      false,
+      'warning',
+      'two things are unfinished',
+    ],
     [
       'never uploaded',
       { kind: 'lock_held', email: null },

@@ -99,6 +99,19 @@ impl AppState {
     fn speleodb_lock_release_params(&self, intent: ReleaseIntent) -> Option<LockReleaseParams> {
         // #213: a force-editor is edit-enabled but holds NO lock, so there is nothing
         // to release on close / app-exit / project-switch.
+        //
+        // The edit gate is a UI state, and there IS one flow where it reads false over a
+        // mutex that is still ours: adoption's `PushedLockHeld` closes the project and
+        // has the frontend reload it, and a fresh load starts with the gate shut. Quit
+        // inside that window and this returns `None` over a held lock. Deliberately not
+        // special-cased. `scanLocksOnOpen` asks the SERVER who holds what on every app
+        // open and login - `speleodb_list_projects` -> `lock_holder` -> the held-lock
+        // resume prompt - so recovery does not depend on this gate, on `edit_enabled`,
+        // or on the local claim. A lock outliving a session is a supported state here,
+        // not an anomaly: the close dialog offers "Keep lock" outright, which is what
+        // `LockClaim::kept` exists to protect. And the window only opens once a release
+        // has ALREADY failed, so retrying it a second later on the same connectivity
+        // buys little.
         if !self.edit_enabled() || self.force_editing() {
             return None;
         }

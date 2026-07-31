@@ -879,10 +879,23 @@ export function useOpenRemoteProject(opts: UseOpenRemoteProjectOpts = {}) {
          */
         hasUnpushedEdits: !landed,
         successToast: {
+          /**
+           * Four outcomes, not three. The lock-held branch used to stop here and never
+           * read `type_flipped` - but both are reachable from ONE cause: connectivity
+           * dropping after the upload lands fails the release AND the type GET/PATCH
+           * that follows it. The user was then told about the lock alone, so after
+           * releasing it the project was still typed `ariane`: still offering Adopt
+           * over a `.stalx` that already exists, and later `.tml` edits still looking
+           * authoritative to whoever makes them. Unlike the other unfinished states
+           * there is no later poll that corrects this one - the toast is the only
+           * place it is ever said.
+           */
           message: !landed
             ? t('speleodb.adopt.doneToastLocalOnly')
             : !pushed
-              ? t('speleodb.adopt.doneToastLockHeld')
+              ? result.type_flipped
+                ? t('speleodb.adopt.doneToastLockHeld')
+                : t('speleodb.adopt.doneToastLockHeldNoTypeFlip')
               : result.type_flipped
                 ? t('speleodb.adopt.doneToast')
                 : t('speleodb.adopt.doneToastNoTypeFlip'),

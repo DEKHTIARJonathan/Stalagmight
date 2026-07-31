@@ -476,6 +476,22 @@ pub(super) enum PushOutcome {
 /// PATCH, and which one a given payload used is not a distinction worth trusting.
 const ARIANE_PROJECT_TYPE: &str = "ariane";
 
+/// The server `type` a project Stalagmight manages carries - the state adoption
+/// exists to leave behind. Compared case-insensitively for the same reason
+/// [`ARIANE_PROJECT_TYPE`] is.
+const MANAGED_PROJECT_TYPE: &str = "other";
+
+/// Is the server already calling this a project we manage?
+///
+/// The inverse of [`type_still_says_ariane`] only for the two types that flow
+/// through adoption; deliberately NOT `!type_still_says_ariane`, which answers
+/// "yes" for `compass`, `therion` and anything the API grows next. Adoption used
+/// that inverse to decide it had nothing to do, so a project re-typed under it
+/// mid-run was reported as flipped with the server left untouched.
+pub(super) fn type_says_managed(server_kind: Option<&str>) -> bool {
+    server_kind.is_some_and(|kind| kind.trim().eq_ignore_ascii_case(MANAGED_PROJECT_TYPE))
+}
+
 /// Does the server still class this project as an Ariane one?
 ///
 /// `None` - the type could not be read - is NOT "yes". A missing answer is the one
@@ -3247,8 +3263,9 @@ mod tests {
     use super::{
         auth_error_drops_token, clear_snapshot_dirty, head_with_empty_retry,
         is_local_edits_refusal, local_dto, lock_held_by_me, resolve_endpoint, reverify_due,
-        type_still_says_ariane, validate_project_id, whoami_indicates_dead_token, Endpoint,
-        PushOutcome, SpeleoDbSession, REVERIFY_INTERVAL_SECS,
+        type_says_managed, type_still_says_ariane, validate_project_id,
+        whoami_indicates_dead_token, Endpoint, PushOutcome, SpeleoDbSession,
+        REVERIFY_INTERVAL_SECS,
     };
     use crate::core::state::speleodb_cache::{
         preserved_display_settings, restore_display_settings,
@@ -3291,6 +3308,42 @@ mod tests {
         assert!(
             !type_still_says_ariane(None),
             "a type we could not read must not be acted on: the next push reads it again"
+        );
+    }
+
+    /// The half `type_still_says_ariane` cannot answer: "is this project ALREADY the
+    /// thing adoption is trying to make it?"
+    ///
+    /// Adoption asked that with `!type_still_says_ariane`, which is a different
+    /// question - it says yes for every label that is not `ariane`. A project re-typed
+    /// under a running adoption (someone editing metadata in SpeleoDB's own UI) then
+    /// took the "the heal got there first" short-circuit: no PATCH issued, and
+    /// `type_flipped: true` reported over a server left on the other type, so the UI
+    /// showed the green finished toast for a `.stalx` still advertising itself as
+    /// somebody else's format.
+    #[test]
+    fn only_the_managed_type_counts_as_already_adopted() {
+        assert!(type_says_managed(Some("other")));
+        // Same case-insensitivity the Ariane side needs, and for the same reason.
+        assert!(type_says_managed(Some("OTHER")));
+        assert!(type_says_managed(Some(" Other ")));
+
+        assert!(
+            !type_says_managed(Some("ariane")),
+            "the state adoption exists to leave behind, not one it may skip"
+        );
+        assert!(
+            !type_says_managed(Some("compass")),
+            "NOT managed - this is the case the old `!still_ariane` test got wrong"
+        );
+        assert!(!type_says_managed(Some("therion")), "likewise");
+        assert!(
+            !type_says_managed(Some("")),
+            "an absent type field is not a claim that it is managed"
+        );
+        assert!(
+            !type_says_managed(None),
+            "a type we could not read is not a type we may call finished"
         );
     }
 

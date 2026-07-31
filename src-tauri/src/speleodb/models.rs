@@ -556,6 +556,14 @@ pub enum AdoptUpload {
     /// only", which is both wrong and the more alarming of the two directions to be
     /// wrong in. Nothing is at risk here: the copy is safe on the server and the lock
     /// is released by the next Done, a close, or the held-lock prompt at next login.
+    ///
+    /// Means "the mutex is still ours, OR we could not establish that it is not" - not
+    /// "the release was refused". The release is a non-idempotent POST whose client also
+    /// parses the reply, so a mid-response transport failure returns `Err` over a lock
+    /// the server has already handed back. Adoption re-reads the holder from the GET it
+    /// makes for the type flip and demotes this to [`Self::Pushed`] when the answer is
+    /// positively "not us"; an unreadable holder leaves this arm standing, because "we
+    /// could not ask" must not become "the lock is free".
     PushedLockHeld,
     /// The lock or the upload failed outright (no write access, offline, a server
     /// error). `message` is the humanised reason.

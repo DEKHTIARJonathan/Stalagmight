@@ -17,7 +17,7 @@
 
 use std::path::Path;
 
-use super::speleodb::{local_dto, type_still_says_ariane, validate_project_id, DumpAt};
+use super::speleodb::{local_dto, lock_held_by_me, type_says_managed, validate_project_id, DumpAt};
 use super::speleodb_cache::{restore_display_settings, LocalEditsPolicy};
 use super::speleodb_revisions::validate_hexsha;
 use super::{AppState, VirtualShotMode};
@@ -93,6 +93,37 @@ enum AdoptLock {
     Held,
     /// It did not, and this is what the webview is told instead.
     NotTaken(AdoptUpload),
+}
+
+/// What the single post-push GET established about the server project.
+///
+/// Both answers come off ONE request. The type flip needs that GET anyway, and the
+/// same response carries `active_mutex` - so reading the holder here costs nothing
+/// and replaces a guess the hand-over could not make for itself.
+struct AdoptFinalize {
+    /// Whether the project is typed `other` on the way out.
+    type_flipped: bool,
+    /// Who the server says holds the write mutex.
+    ///
+    /// The outer `Option` is UNKNOWN - the GET failed - and is deliberately kept
+    /// apart from `Some(None)`, a project nobody holds. Collapsing the two would
+    /// read "we could not ask" as "the lock is free", which is the one direction
+    /// that turns a held mutex into a silent one.
+    holder: Option<Option<String>>,
+}
+
+impl AdoptFinalize {
+    /// The verdict for a push that never landed: nothing was asked, so nothing is
+    /// known. `type_flipped: false` is the honest answer rather than a failure -
+    /// the flip is deliberately not attempted until the bytes are up, because a
+    /// project typed `other` whose only file is the Ariane one that type says to
+    /// disregard is openable by nobody.
+    const fn not_attempted() -> Self {
+        Self {
+            type_flipped: false,
+            holder: None,
+        }
+    }
 }
 
 /// Hands an adoption's write lock back if the adoption never gets far enough to use
@@ -1229,7 +1260,7 @@ impl AppState {
         // project on disk, stamped dirty, and reports why - adoption that could not
         // reach the server is still an adoption.
         let upload = match (stamped, lock) {
-            (Ok(()), AdoptLock::Held) => self.adopt_hand_over(),
+            (Ok(()), AdoptLock::Held) => self.adopt_hand_over(&project_id),
             (Ok(()), AdoptLock::NotTaken(why)) => why,
             // Nothing to hand over: the push reads the link to decide whether to run at
             // all. Say so rather than letting `start_editing` discover it and report the
@@ -1244,8 +1275,43 @@ impl AppState {
         // did. Only after a landed push, which is the precondition either way: flipping
         // first leaves a project typed `other` whose only file is the Ariane one that
         // type says to disregard, openable by nobody.
-        let type_flipped = matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld)
-            && self.adopt_ensure_managed_type(&endpoint, &token, insecure_http, &project_id);
+        let finalized = if matches!(upload, AdoptUpload::Pushed | AdoptUpload::PushedLockHeld) {
+            self.adopt_finalize(&endpoint, &token, insecure_http, &project_id)
+        } else {
+            AdoptFinalize::not_attempted()
+        };
+        let type_flipped = finalized.type_flipped;
+
+        // Correct a release verdict the hand-over could only guess at. It reports
+        // `PushedLockHeld` whenever `speleodb_done` returned `Err` over a landed push -
+        // but that `Err` covers a release the server REFUSED and one whose success we
+        // failed to read alike, and the GET above has just asked the server outright.
+        // A mutex that is not ours means the release did land, whatever the transport
+        // said on the way back.
+        //
+        // Only ever demotes, and only on a positive answer: an unreadable holder
+        // (`None`) leaves the protective reading in place, because "we could not ask"
+        // must never become "the lock is free".
+        let upload = match (upload, &finalized.holder) {
+            (AdoptUpload::PushedLockHeld, Some(holder))
+                if !lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref()) =>
+            {
+                tracing::info!(
+                    holder = ?holder,
+                    project_id,
+                    purpose = "correct a release that landed despite reporting an error",
+                    "speleodb_adopt_ariane: the write lock is not ours; the release did land"
+                );
+                // The claim says we hold a mutex the server has just told us we do not.
+                // Left standing it outlives this call: the close teardown, the janitor
+                // and the held-lock prompt all read it, and each would try to hand back
+                // a lock that is either gone or, if another writer took it in between,
+                // somebody else's.
+                self.speleodb_note_lock_acquired(None);
+                AdoptUpload::Pushed
+            }
+            (upload, _) => upload,
+        };
 
         // Hand the project BACK to the frontend to open, instead of leaving it
         // committed to `AppState` for a `loadProject` that then short-circuits.
@@ -1377,11 +1443,20 @@ impl AppState {
         }
     }
 
-    /// Leave the server project typed `other`, and report whether it is.
+    /// Leave the server project typed `other`, and report both what it ended up
+    /// typed and who the server says holds its write mutex.
     ///
     /// Called only after a landed push, and it is a READ first: the push's own type
     /// heal has usually flipped it already, so asking costs one GET and the common case
     /// issues no write at all.
+    ///
+    /// The holder rides along on that same GET because it is free there and it is the
+    /// only evidence that separates a release which failed server-side from one whose
+    /// 2xx we simply did not manage to read. `speleodb_done`'s release is a
+    /// non-idempotent POST whose client also parses the response, so a mid-response
+    /// transport failure returns `Err` over a mutex the server has already handed back;
+    /// [`AdoptUpload::PushedLockHeld`] then told the user to go and release a lock that
+    /// no longer existed. See the caller for what it does with the answer.
     ///
     /// Adoption used to PATCH here unconditionally, which meant every adoption sent the
     /// same PATCH twice - and `type_flipped` was decided by the SECOND one, so a
@@ -1403,31 +1478,45 @@ impl AppState {
     /// above: this runs after the conversion is safely local and its failure is
     /// swallowed, so a spurious 401 here would drop the session - keychain entry
     /// included - over work that already landed.
-    fn adopt_ensure_managed_type(
+    fn adopt_finalize(
         &self,
         endpoint: &str,
         token: &str,
         insecure_http: bool,
         project_id: &str,
-    ) -> bool {
-        let needs_flip = match client::get_project(endpoint, token, insecure_http, project_id) {
-            // Already `other`: the push's heal got there first, which is the ordinary
-            // path. Nothing to do, and nothing to report but success.
-            Ok(fetched) if !type_still_says_ariane(Some(&fetched.kind)) => return true,
-            Ok(_) => true,
-            Err(e) => {
-                tracing::info!(
-                    error = %e,
-                    project_id,
-                    purpose = "flip the adopted project's type without a readable current type",
-                    "speleodb_adopt_ariane: could not read the project type; flipping anyway"
-                );
-                true
-            }
-        };
+    ) -> AdoptFinalize {
+        let (needs_flip, holder) =
+            match client::get_project(endpoint, token, insecure_http, project_id) {
+                // Already `other`: the push's heal got there first, which is the ordinary
+                // path. Nothing to do, and nothing to report but success - but the holder
+                // still comes back, because the release verdict needs it either way.
+                Ok(fetched) if type_says_managed(Some(&fetched.kind)) => {
+                    return AdoptFinalize {
+                        type_flipped: true,
+                        holder: Some(fetched.active_mutex.map(|m| m.user)),
+                    }
+                }
+                // Anything else: still `ariane`, or re-typed under us to `compass` /
+                // `therion` while the adoption ran. Both get the PATCH. This test used to
+                // be `!type_still_says_ariane`, which treated every non-Ariane label as
+                // "already managed" - so a project whose metadata changed mid-run was
+                // reported flipped with the server left on the other type. We converted
+                // this project; whatever the label says now, the artefact up there is a
+                // `.stalx` and `other` is the truthful type for it.
+                Ok(fetched) => (true, Some(fetched.active_mutex.map(|m| m.user))),
+                Err(e) => {
+                    tracing::info!(
+                        error = %e,
+                        project_id,
+                        purpose = "flip the adopted project's type without a readable current type",
+                        "speleodb_adopt_ariane: could not read the project type; flipping anyway"
+                    );
+                    (true, None)
+                }
+            };
         debug_assert!(needs_flip);
 
-        match client::patch_project(
+        let type_flipped = match client::patch_project(
             endpoint,
             token,
             insecure_http,
@@ -1444,6 +1533,10 @@ impl AppState {
                 );
                 false
             }
+        };
+        AdoptFinalize {
+            type_flipped,
+            holder,
         }
     }
 
@@ -1464,8 +1557,8 @@ impl AppState {
     /// this runs, and no failure here should turn a finished local conversion into a
     /// failed command. Each arm reports what happened so the webview can seed its
     /// dirty bit honestly and say what is left to do.
-    fn adopt_hand_over(&self) -> AdoptUpload {
-        let outcome = self.adopt_hand_over_inner();
+    fn adopt_hand_over(&self, expected_id: &str) -> AdoptUpload {
+        let outcome = self.adopt_hand_over_inner(expected_id);
         // Logged HERE rather than at each arm, so no arm can be added without one.
         // Every non-`Pushed` outcome reaches the user as the same "it stayed local"
         // toast, deliberately - there is nothing they can do differently about a lock
@@ -1487,7 +1580,10 @@ impl AppState {
     }
 
     /// [`Self::adopt_hand_over`] without the logging, so the arms stay readable.
-    fn adopt_hand_over_inner(&self) -> AdoptUpload {
+    ///
+    /// `expected_id` is the project this adoption converted, and the landed-but-locked
+    /// inference below is only sound about THAT project's link - see the arm.
+    fn adopt_hand_over_inner(&self, expected_id: &str) -> AdoptUpload {
         match self.speleodb_start_editing() {
             Ok(StartEditingResult::Editing) => {}
             // Unreachable while the lock is ours - nobody can have advanced the tip
@@ -1526,21 +1622,40 @@ impl AppState {
             // that landed clears `has_unpushed_edits`, and nothing else in this flow
             // clears it. Read it back rather than guessing from the error, which cannot
             // distinguish a release that failed from an upload that never happened.
-            Err(e) => {
-                if self
-                    .speleodb_open_link()
-                    .is_ok_and(|link| !link.has_unpushed_edits)
-                {
+            //
+            // The link has to be the ADOPTED project's for any of that to follow.
+            // `speleodb_open_link` answers for whatever is open in `AppState`, not for a
+            // project id, so a load landing under an in-flight hand-over would have it
+            // read a stranger's link - and an unrelated CLEAN project then satisfies the
+            // predicate, reporting an upload that never happened and seeding the
+            // conversion clean over a copy that exists only in the cache. Nothing in this
+            // flow is supposed to permit that swap, which is exactly why a mismatch is
+            // logged as an error rather than absorbed: it means an invariant this
+            // inference rests on has gone, and the log is the only place that would say
+            // so. `Failed` is the fail-closed direction either way - it keeps the dirty
+            // seed and arms the quit guard.
+            Err(e) => match self.speleodb_open_link() {
+                Ok(link) if link.project_id != expected_id => {
+                    tracing::error!(
+                        expected = expected_id,
+                        found = %link.project_id,
+                        purpose = "prove the adoption's own push landed",
+                        "speleodb_adopt_ariane: the open link names a DIFFERENT project; \
+                         the open database changed under the hand-over"
+                    );
+                    AdoptUpload::Failed { message: e.message }
+                }
+                Ok(link) if !link.has_unpushed_edits => {
                     tracing::warn!(
                         error = %e.message,
                         purpose = "report an adoption whose upload landed but whose lock did not come back",
                         "speleodb_adopt_ariane: pushed, but the write lock is still held"
                     );
                     AdoptUpload::PushedLockHeld
-                } else {
-                    AdoptUpload::Failed { message: e.message }
                 }
-            }
+                // Still dirty, or unreadable: neither proves a landing.
+                _ => AdoptUpload::Failed { message: e.message },
+            },
         }
     }
 
@@ -2203,7 +2318,7 @@ mod tests {
             .find("has_unpushed_edits: true")
             .expect("adoption stamps the link dirty");
         let hand_over = body
-            .find("self.adopt_hand_over()")
+            .find("self.adopt_hand_over(")
             .expect("the hand-over follows it");
         assert!(
             stamp < hand_over,
@@ -2218,13 +2333,39 @@ mod tests {
         let inner = &src[start..];
         let inner = &inner[..inner.find("\n    }\n").expect("fn body terminates")];
         assert!(
-            inner.contains("is_ok_and(|link| !link.has_unpushed_edits)"),
-            "the inference reads the link, and `is_ok_and` is what makes an unreadable \
-             one fall to `Failed` rather than claim a landing nobody can confirm"
+            inner.contains("Ok(link) if !link.has_unpushed_edits"),
+            "the inference reads the link, and only a CLEAN one may claim a landing"
+        );
+        assert!(
+            inner.contains("_ => AdoptUpload::Failed"),
+            "and the catch-all is what makes an unreadable link fall to `Failed` rather \
+             than claim a landing nobody can confirm"
         );
         assert!(
             inner.contains("AdoptUpload::PushedLockHeld"),
             "and reports the landed-but-locked outcome apart from a failure"
+        );
+
+        // The link is read from `AppState`, not by project id, so the clean bit only
+        // proves OUR push landed if the open link is still the adopted project's. A
+        // mismatch is an invariant failure, not an ordinary one: it is logged at error
+        // level precisely because nothing else in the flow would report it, and it
+        // falls to `Failed` so the conversion keeps its protective dirty seed.
+        let mismatch = inner
+            .find("link.project_id != expected_id")
+            .expect("the inference checks the link belongs to this adoption");
+        let clean = inner
+            .find("Ok(link) if !link.has_unpushed_edits")
+            .expect("checked above, so it is present");
+        assert!(
+            mismatch < clean,
+            "the identity check has to come BEFORE the dirty-bit read, or a stranger \
+             project's clean link satisfies the inference first"
+        );
+        assert!(
+            inner.contains("tracing::error!"),
+            "and a foreign link is surfaced as an error - it means the open database \
+             changed under the hand-over, which nothing else would report"
         );
     }
 
@@ -2380,7 +2521,7 @@ mod tests {
              early return in between hands the mutex back"
         );
         assert!(
-            body.find("self.adopt_hand_over()")
+            body.find("self.adopt_hand_over(")
                 .is_some_and(|h| disarmed < h),
             "the hand-over owns the lock from the disarm onwards - `speleodb_done`'s \
              rules decide whether it is released or kept for a retry"
@@ -2396,7 +2537,7 @@ mod tests {
     fn the_server_type_flips_only_after_the_stalx_lands() {
         let body = adopt_body();
 
-        // The verb itself issues no PATCH: the flip lives in `adopt_ensure_managed_type`,
+        // The verb itself issues no PATCH: the flip lives in `adopt_finalize`,
         // which reads before it writes. Two PATCHes was not merely wasteful - the push's
         // own heal had already flipped it, and `type_flipped` was decided by the second
         // request, so a transient failure there reported "the type could not be changed"
@@ -2407,10 +2548,10 @@ mod tests {
         );
 
         let hand_over = body
-            .find("self.adopt_hand_over()")
+            .find("self.adopt_hand_over(")
             .expect("adoption hands the conversion over");
         let ensure = body
-            .find("self.adopt_ensure_managed_type(")
+            .find("self.adopt_finalize(")
             .expect("adoption settles the project type");
         assert!(
             hand_over < ensure,
@@ -2435,7 +2576,7 @@ mod tests {
     fn an_unreadable_project_type_still_gets_flipped() {
         let src = prod_source();
         let start = src
-            .find("fn adopt_ensure_managed_type")
+            .find("fn adopt_finalize")
             .expect("the helper is present");
         let body = &src[start..];
         let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
@@ -2738,7 +2879,7 @@ mod tests {
             .find("self.close_project();")
             .expect("counted above, so it is present");
         let ensure = body
-            .find("self.adopt_ensure_managed_type(")
+            .find("self.adopt_finalize(")
             .expect("adoption settles the project type");
         assert!(
             ensure < close,
