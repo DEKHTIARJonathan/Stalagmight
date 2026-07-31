@@ -345,7 +345,7 @@ function App() {
   //
   // The decision is held in session state so that burning the flag (below) does
   // not tear down the tour currently on screen, and is re-taken when "Restart
-  // guides" clears the flag mid-session.
+  // onboarding" clears the flag mid-session.
   const [orientationConsumed, setOrientationConsumed] = useState(false);
   const orientationDecidedRef = useRef(false);
   const firstLaunchBurnedRef = useRef(false);
