@@ -38,7 +38,6 @@ angle = "degrees"                   # degrees, gradians
 decimal_precision = { length = 1, coordinates = 2, depth = 1, azimuth = 1, inclination = 1, gps = 6 }
 
 [display]
-default_background = "#1a1a2e"      # Map background color
 grid_color = "#333366"              # Grid overlay line color
 grid_spacing = 10.0                 # Grid spacing in meters
 font_size = 12                      # Map label font size

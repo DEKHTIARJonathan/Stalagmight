@@ -350,7 +350,6 @@ async function setupTauriMocksWithErrorSimulation(page: Page): Promise<void> {
               decimal_precision: 1,
             },
             display: {
-              default_background: '#1a1a2e',
               grid_color: '#333366',
               grid_spacing: 10,
               font_size: 12,

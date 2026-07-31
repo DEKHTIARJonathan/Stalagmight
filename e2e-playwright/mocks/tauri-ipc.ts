@@ -3232,7 +3232,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 dpv: null,
               },
               display: {
-                default_background: '#1a1a2e',
                 grid_color: '#333366',
                 grid_spacing: 10,
                 font_size: 12,
@@ -3519,7 +3518,6 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 dpv: null,
               },
               display: {
-                default_background: '#1a1a2e',
                 grid_color: '#333366',
                 grid_spacing: 10,
                 font_size: 12,

@@ -397,7 +397,6 @@
       "title": "Display",
       "sections": {
         "interface": "Interface",
-        "background": "Background",
         "grid": "Grid",
         "font": "Font",
         "depthGradient": "Depth Gradient",
@@ -408,11 +407,6 @@
         "label": "UI scale",
         "help": "Scale the entire interface. Also adjustable with Ctrl + = and Ctrl + - (Ctrl + 0 resets).",
         "aria": "Interface scale"
-      },
-      "background": {
-        "label": "Background color",
-        "help": "Default background color for the map view",
-        "aria": "Background color"
       },
       "grid": {
         "color": {
