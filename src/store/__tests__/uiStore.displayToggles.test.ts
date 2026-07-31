@@ -11,12 +11,22 @@ vi.mock('@tauri-apps/api/core', () => ({
   invoke: vi.fn().mockResolvedValue({}),
 }));
 
-import { useUIStore, type DisplayToggleKey } from '../uiStore';
+import { useUIStore, colorModeOf, colorModeFlags, type DisplayToggleKey } from '../uiStore';
 import {
   DISPLAY_DEFAULTS,
   getEffectiveShowReferenceShots,
   getEffectiveShowShotData,
 } from '../displaySelectors';
+import type { DisplaySettings } from '../../types/loading';
+
+// A saved-settings payload for the load path. Spreads the documented single source
+// of truth for the defaults instead of hand-listing them, so a changed default
+// fails loudly here rather than the test asserting against a stale copy.
+const settingsWith = (overrides: Partial<DisplaySettings>): DisplaySettings => ({
+  ...DISPLAY_DEFAULTS,
+  geometryMode: 'measured',
+  ...overrides,
+});
 
 // Helper function to get a clean test state for non-default tests
 // This is used to reset between tests that modify state, NOT for testing defaults
@@ -352,6 +362,150 @@ describe('Display Toggle State', () => {
         'save_display_setting',
         expect.objectContaining({ key: 'showIssueSeverity' })
       );
+    });
+  });
+
+  // The three overlays are single-select, but only depth is persisted - so the
+  // pair "saved depth = on" + "runtime distance = on" was reachable: any re-apply
+  // of the saved display settings (project load, revision restore) wrote depth
+  // back to true while distance was still up. colorModeOf reads that pair as
+  // 'distance', and the old writers were `if (!flag) toggle()` guards that no-op
+  // on it - so picking Depth in the Display menu did nothing, for good. These
+  // pin that setColorMode is authoritative (lands on the requested mode from ANY
+  // starting combination) and that the load path can't build the bad pair.
+  describe('setColorMode single-select authority (stuck-overlay regression)', () => {
+    const ui = () => useUIStore.getState();
+
+    beforeEach(() => {
+      useUIStore.setState(getCleanTestState());
+      vi.clearAllMocks();
+    });
+
+    it('reaches depth from the invalid depth+distance pair', () => {
+      useUIStore.setState({ showDepthGradient: true, showDistanceGradient: true });
+      // The pair reads as distance, so the menu shows Distance selected...
+      expect(colorModeOf(ui())).toBe('distance');
+      ui().setColorMode('depth');
+      expect(colorModeOf(ui())).toBe('depth');
+      expect(ui().showDistanceGradient).toBe(false);
+    });
+
+    it('repro: distance on, a load re-applies the saved depth preference, then pick Depth', () => {
+      ui().setColorMode('distance');
+      ui().setDistanceGradientOrigin({ section_id: 1, station_index: 2 });
+      // Project load / revision restore: the saved depth=on comes back underneath
+      // the runtime-only distance overlay. The load must leave ONE valid mode.
+      ui().applyDisplaySettings(settingsWith({ showDepthGradient: true }));
+      expect(ui().showDistanceGradient).toBe(false);
+      expect(ui().distanceGradientOrigin).toBeNull();
+      // ...and the Display menu must still be able to select Depth.
+      ui().setColorMode('depth');
+      expect(colorModeOf(ui())).toBe('depth');
+      expect(ui().showDistanceGradient).toBe(false);
+    });
+
+    it('round-trips distance -> depth -> distance -> depth with the saved depth live', () => {
+      // A bare round trip always worked; what broke it is the persisted depth flag
+      // returning underneath the runtime-only distance overlay, so the re-apply is
+      // part of the round trip being pinned here.
+      ui().setColorMode('distance');
+      ui().applyDisplaySettings(settingsWith({ showDepthGradient: true }));
+      ui().setColorMode('depth');
+      expect(colorModeOf(ui())).toBe('depth');
+      ui().setColorMode('distance');
+      expect(colorModeOf(ui())).toBe('distance');
+      expect(ui().showDepthGradient).toBe(false);
+      ui().setColorMode('depth');
+      expect(colorModeOf(ui())).toBe('depth');
+      expect(ui().showDistanceGradient).toBe(false);
+    });
+
+    it("selecting 'section' from the invalid pair clears every overlay and the distance cache", () => {
+      useUIStore.setState({
+        showDepthGradient: true,
+        showDistanceGradient: true,
+        distanceGradientOrigin: { section_id: 1, station_index: 2 },
+        distanceField: {} as never,
+      });
+      ui().setColorMode('section');
+      const s = ui();
+      expect(colorModeOf(s)).toBe('section');
+      expect(s.showDepthGradient).toBe(false);
+      expect(s.showDistanceGradient).toBe(false);
+      expect(s.distanceGradientOrigin).toBeNull();
+      expect(s.distanceField).toBeNull();
+    });
+
+    it("leaving distance for 'section' still clears the origin and cached field", () => {
+      ui().setColorMode('distance');
+      ui().setDistanceGradientOrigin({ section_id: 3, station_index: 4 });
+      useUIStore.setState({ distanceField: {} as never });
+      ui().setColorMode('section');
+      const s = ui();
+      expect(colorModeOf(s)).toBe('section');
+      expect(s.distanceGradientOrigin).toBeNull();
+      expect(s.distanceField).toBeNull();
+    });
+
+    it('selecting distance suppresses depth at runtime without touching its saved preference', () => {
+      // Distance is transient (#34): the depth preference must survive it and come
+      // back next session, so no save_display_setting for depth may be emitted.
+      useUIStore.setState({ showDepthGradient: true });
+      ui().setColorMode('distance');
+      expect(ui().showDepthGradient).toBe(false);
+      expect(invoke).not.toHaveBeenCalledWith(
+        'save_display_setting',
+        expect.objectContaining({ key: 'showDepthGradient' })
+      );
+    });
+
+    it('selecting depth persists it on, and deselecting it persists it off', async () => {
+      ui().setColorMode('depth');
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+          key: 'showDepthGradient',
+          value: 'true',
+        });
+      });
+      ui().setColorMode('section');
+      await vi.waitFor(() => {
+        expect(invoke).toHaveBeenCalledWith('save_display_setting', {
+          key: 'showDepthGradient',
+          value: 'false',
+        });
+      });
+    });
+
+    it.each([
+      ['distance', () => useUIStore.setState({ showDistanceGradient: true })],
+      ['issue-severity', () => useUIStore.setState({ showIssueSeverity: true })],
+    ])(
+      'applyDisplaySettings cannot restore depth on top of the %s overlay',
+      (_name, enableRuntimeOverlay) => {
+        enableRuntimeOverlay();
+        ui().applyDisplaySettings(settingsWith({ showDepthGradient: true }));
+        const s = ui();
+        expect(colorModeOf(s)).toBe('depth');
+        expect(s.showDistanceGradient).toBe(false);
+        expect(s.showIssueSeverity).toBe(false);
+      }
+    );
+
+    it('loadDisplaySettings cannot restore depth on top of the distance overlay', async () => {
+      // The other re-apply entry point (same hole): a saved depth=on written back
+      // underneath the runtime-only distance overlay.
+      useUIStore.setState({ showDistanceGradient: true });
+      vi.mocked(invoke).mockResolvedValueOnce({ showDepthGradient: 'true' });
+      await ui().loadDisplaySettings();
+      const s = ui();
+      expect(colorModeOf(s)).toBe('depth');
+      expect(s.showDistanceGradient).toBe(false);
+    });
+
+    it('colorModeFlags is the exact inverse of colorModeOf for every mode', () => {
+      for (const mode of ['section', 'depth', 'distance', 'issues'] as const) {
+        expect(colorModeOf({ ...getCleanTestState(), ...colorModeFlags(mode) })).toBe(mode);
+      }
     });
   });
 });
