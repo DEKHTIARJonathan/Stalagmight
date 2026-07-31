@@ -171,8 +171,12 @@ export function interpolateColor(
  * Returns null for invalid inputs - caller should fallback to section color
  *
  * @param depth - The depth value to get color for
- * @param shallowColor - Color for shallowest depth (default: '#00bfff' light blue)
- * @param deepColor - Color for deepest depth (default: '#ff4444' red)
+ * @param shallowColor - Color for shallowest depth. REQUIRED - there is no
+ *   default; callers resolve it from the live theme's `--cc-depth-shallow`
+ *   (see `getMapThemeColors`). The hexes previously named here as defaults
+ *   were never defaults and no longer match any theme.
+ * @param deepColor - Color for deepest depth. REQUIRED, as above, from
+ *   `--cc-depth-deep`.
  * @param minDepth - Shallowest depth value (smallest z)
  * @param maxDepth - Deepest depth value (largest z)
  * @returns Hex color string or null if inputs are invalid
