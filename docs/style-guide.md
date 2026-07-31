@@ -7,6 +7,14 @@ This guide captures the current UI conventions and design tokens for Stalagmight
 - Use token-backed utility classes (examples): `bg-panel`, `bg-background`, `text-text-primary`, `text-text-secondary`, `border-border`, `bg-accent`, `text-accent-on`, `text-warning`, `text-error`, `text-success`.
 - Opacity variants are available as token utilities (examples): `bg-accent-10`, `bg-accent-20`, `bg-background-50`.
 
+## Colors
+- **No color value ships without a human seeing it rendered.** Measure and propose; do not merge. Covers `--cc-*` tokens on all 8 themes, display defaults in `src/types/config.ts`, section palettes, and renderer/export constants.
+- Contrast and CIEDE2000 numbers are evidence for that review, not a substitute: the legibility harness scores endpoint distance, which lightness dominates, so washing a color out *raises* its score.
+- If a test rejects an approved color, the test is wrong.
+- Depth ramp direction is load-bearing: `getDepthColor` walks the shortest HSL hue path, so a shallow anchor at hue >= 180 inverts the theme. Anchors sit below 180; `SHALLOW_HUE.max` is 178.
+- Light canvases hold a 2:1 ramp contrast floor, not 3:1 - the yellow midpoint is the ramp's brightest sample, and 3:1 on near-white reads olive-brown.
+- Outstanding measurements: [#380](https://github.com/Stalagmight/Stalagmight/issues/380).
+
 ## Typography
 - Defaults are inherited from the app shell. Use consistent size tiers:
   - `text-xs` for metadata and hints.
