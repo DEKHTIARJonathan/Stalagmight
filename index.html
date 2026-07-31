@@ -4,6 +4,22 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stalagmight</title>
+    <!-- Remote origin is why style-src in src-tauri/tauri.conf.json's CSP lists
+         https://unpkg.com explicitly (#357 item 12). The <style> block below
+         needs no 'unsafe-inline', but the mechanism is a NONCE, not a hash:
+         tauri-codegen stamps nonce="__TAURI_STYLE_NONCE__" onto every <style>
+         at build time (map_core_assets -> inject_nonce_token), and at serve time
+         set_csp -> replace_csp_nonce swaps in a random value and appends the
+         matching 'nonce-...' to style-src. Tauri hashes .js/.mjs assets ONLY
+         (tauri-codegen embedded_assets.rs: "we only hash JavaScript files for
+         now"), and its style-hash vector is unreachable without the isolation
+         feature, so no sha256 is ever computed for this block.
+         Editing the CSS in here therefore cannot break the CSP. Two things can:
+         hand-writing a nonce attribute on the <style> (inject_nonce skips
+         elements that already have one), or setting
+         dangerousDisableAssetCspModification to true or to a list containing
+         "style-src" - either drops the nonce and this block is refused in
+         production only, since devCsp carries 'unsafe-inline'. -->
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
     <style>
       /* Anti-flash cover for the frame before the CSS bundle loads;
@@ -21,7 +37,13 @@
          Do NOT put a background back on <body>: an inline style there outranks
          its own bg-background class, which is what pinned this first frame dark
          in every theme (#332); App.tsx's root div covers the body after that.
-         Both rules are pinned by src/theme/__tests__/tokens.test.ts. */
+         Both rules are pinned by src/theme/__tests__/tokens.test.ts.
+
+         #1a1a2e is also the native window's `backgroundColor` in
+         src-tauri/tauri.conf.json (#357 item 13): the OS paints that color
+         before this stylesheet or any HTML exists, so it is a single static
+         value picked to match the app's default (dark) theme and cannot
+         itself follow a light/dark theme switch - only this later CSS can. */
       html {
         background-color: #1a1a2e;
       }

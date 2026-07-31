@@ -33,7 +33,7 @@ beforeEach(async () => {
   useGasPlanStore.setState({ gasConfig: structuredClone(defaultConfig.gas) });
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
-    updateConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
   });
 });
 
@@ -56,12 +56,10 @@ describe('DpvRigEditor enable/disable', () => {
     expect(screen.getByTestId('dpv-rig-fields')).toBeInTheDocument();
 
     await flushGasConfigWrite();
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).toHaveBeenCalledTimes(1);
-    expect(updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gas: expect.objectContaining({ dpv: expect.objectContaining({ primary: expect.any(Object) }) }),
-      })
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).toHaveBeenCalledTimes(1);
+    expect(updateGasConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ dpv: expect.objectContaining({ primary: expect.any(Object) }) })
     );
   });
 
@@ -75,11 +73,9 @@ describe('DpvRigEditor enable/disable', () => {
     expect(screen.queryByTestId('dpv-rig-fields')).not.toBeInTheDocument();
 
     await flushGasConfigWrite();
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).toHaveBeenCalledTimes(1);
-    expect(updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ gas: expect.objectContaining({ dpv: null }) })
-    );
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).toHaveBeenCalledTimes(1);
+    expect(updateGasConfig).toHaveBeenCalledWith(expect.objectContaining({ dpv: null }));
   });
 });
 
@@ -98,16 +94,14 @@ describe('DpvRigEditor disk-write debounce', () => {
     // The working copy tracks every commit immediately...
     expect(useGasPlanStore.getState().gasConfig.dpv?.primary.burn_minutes).toBe(100);
     // ...but nothing has hit the disk inside the debounce window.
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).not.toHaveBeenCalled();
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).not.toHaveBeenCalled();
 
     await flushGasConfigWrite();
-    expect(updateConfig).toHaveBeenCalledTimes(1);
-    expect(updateConfig).toHaveBeenCalledWith(
+    expect(updateGasConfig).toHaveBeenCalledTimes(1);
+    expect(updateGasConfig).toHaveBeenCalledWith(
       expect.objectContaining({
-        gas: expect.objectContaining({
-          dpv: expect.objectContaining({ primary: expect.objectContaining({ burn_minutes: 100 }) }),
-        }),
+        dpv: expect.objectContaining({ primary: expect.objectContaining({ burn_minutes: 100 }) }),
       })
     );
   });
@@ -124,13 +118,9 @@ describe('DpvRigEditor range-reserve cap clamp', () => {
     expect(useGasPlanStore.getState().gasConfig.dpv?.range_reserve_fraction).toBe(0.9);
 
     await flushGasConfigWrite();
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({
-        gas: expect.objectContaining({
-          dpv: expect.objectContaining({ range_reserve_fraction: 0.9 }),
-        }),
-      })
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ dpv: expect.objectContaining({ range_reserve_fraction: 0.9 }) })
     );
   });
 });

@@ -21243,3 +21243,81 @@ fn a_failed_undo_still_pushes_its_entry_back() {
         "the entry must not move to the redo stack"
     );
 }
+
+// ========================================================================
+// `AppState::update_config` normalization tests (#357 item 1:
+// `normalize_except_shortcuts()` now runs on the whole-`Config` IPC write
+// path, which previously normalized nothing).
+// ========================================================================
+
+#[test]
+fn test_update_config_repairs_a_degenerate_whole_config_payload() {
+    // Guard A: a whole-`Config` payload carrying junk in several unrelated
+    // sections must be repaired on the way in, exactly as the load path
+    // repairs a hand-edited config.toml - not persisted as-is and left for
+    // the NEXT launch to quietly fix.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let mut payload = state.get_config();
+        payload.panels.sections_panel_width = 5; // out of the 150..400 bound
+        payload.placement_suggestion.azimuth_sigma = f64::NAN;
+        payload.general.locale = "   ".to_string(); // blank after trim
+
+        state.update_config(payload).expect("settings saved");
+
+        let after = state.get_config();
+        assert_eq!(
+            after.panels.sections_panel_width, 150,
+            "an out-of-range panel width must be clamped on write, not just on the next load"
+        );
+        assert_eq!(
+            after.placement_suggestion.azimuth_sigma,
+            crate::config::default_ps_azimuth_sigma(),
+            "a NaN sigma must be repaired on write"
+        );
+        assert_eq!(
+            after.general.locale, "system",
+            "a blank locale must be repaired on write to the default (\"system\")"
+        );
+    });
+}
+
+#[test]
+fn test_update_config_leaves_an_explicitly_cleared_shortcut_empty() {
+    // Guard B - the important one: `normalize_shortcut_field` reads an EMPTY
+    // binding list as "key missing from the file" and re-seeds the stock
+    // binding, which is right on LOAD and wrong on WRITE (the Settings UI
+    // sends an empty array when the user clears the last binding for an
+    // action - ShortcutsSettings.tsx). `update_config` must go through
+    // `normalize_except_shortcuts`, not the full `normalize`, so a
+    // deliberately cleared shortcut survives the write path.
+    crate::test_helpers::with_isolated_config(|| {
+        let state = AppState::new().unwrap();
+        let mut payload = state.get_config();
+        assert!(
+            !payload.shortcuts.select.is_empty(),
+            "test assumes the stock binding is non-empty by default"
+        );
+        payload.shortcuts.select = Vec::new();
+
+        state.update_config(payload).expect("settings saved");
+
+        let after = state.get_config();
+        assert!(
+            after.shortcuts.select.is_empty(),
+            "a shortcut the user explicitly cleared must not be re-defaulted by a settings save"
+        );
+    });
+
+    // The other direction, in the same test so the distinction stays pinned:
+    // the LOAD path's plain `normalize()` DOES re-seed an empty binding, since
+    // there an empty list can only mean "missing from the file".
+    let mut loaded = crate::config::Config::default();
+    loaded.shortcuts.select = Vec::new();
+    loaded.normalize();
+    assert_eq!(
+        loaded.shortcuts.select,
+        crate::config::Config::default().shortcuts.select,
+        "the load path must still re-seed an empty binding read from config.toml"
+    );
+}

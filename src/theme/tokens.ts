@@ -31,7 +31,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(15, 52, 96, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#0f3460',
+    // Was #0f3460 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.36:1 on --cc-map-background, invisible. Lifted to 3.22:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#1f6bc5',
     '--cc-map-scale-text': '#f5f5f5',
 
     // Map Visualization (see mapVizTokenNames - light and kaleido_eink override these)
@@ -49,8 +52,36 @@ export const themeTokens = {
     '--cc-grid-default': '#333366',
     '--cc-zero-datum': '#ffd700',
     '--cc-compass-color': '#ffffff',
-    '--cc-depth-shallow': '#4ecdc4',
-    '--cc-depth-deep': '#ff6b6b',
+    // DEPTH RAMP CONTRACT - applies to every theme that sets these two tokens.
+    //
+    // Green (shallower) -> red (deeper). Three things must hold, and the
+    // "depth gradient legibility" suite in __tests__/tokens.test.ts measures all
+    // three over the whole 41-step sweep, not just at the endpoints:
+    //
+    // 1. HUE PATH. `getDepthColor` interpolates along the SHORTEST HSL hue path,
+    //    so the endpoints alone do not determine what gets drawn. Shallow in
+    //    ~90..150 and deep in ~340..20 makes the short path run DOWNWARD through
+    //    yellow (60) and orange (30) - the readable depth scale. A shallow hue at
+    //    or above 180 (teal, cyan, spring green) flips it onto the upward path
+    //    through blue and magenta instead, which is unreadable AND is what put
+    //    one_dark at 2.60:1 (#357 item 8).
+    // 2. FLOOR. Worst contrast anywhere on the sweep >= 3:1 on the theme's own
+    //    `--cc-map-background` (WCAG's floor for a non-text graphical object).
+    // 3. LIGHTNESS TRAVEL. The ramp ENDS in the classic red/green confusable
+    //    pair, so it must also carry its information in lightness or it collapses
+    //    to a flat band under deuteranopia / protanopia. Every theme therefore
+    //    runs LIGHT cyan -> DARKER red, monotonically. Two floors enforce it: >= 1.6:1
+    //    end-to-end contrast here, and CIEDE2000 separation of the CVD-simulated
+    //    endpoints in __tests__/depthRampLegibility.test.ts. Note HSL lightness is
+    //    a poor proxy on its own - yellow and blue at equal HSL L differ ~5x in
+    //    relative luminance - which is why both floors are perceptual, not HSL.
+    //
+    // This ramp: hue 173 -> 3, worst 3.49:1 at #d92a20 on #1a1a2e, ends 3.54:1 apart,
+    // HSL L 0.69 -> 0.49, deuteranopia 40.88 / protanopia 47.42 dE2000.
+    // "solarized_light" and "catppuccin_latte" declare no map-viz tokens, so they
+    // inherit this ramp AND this canvas.
+    '--cc-depth-shallow': '#6ff0e0',
+    '--cc-depth-deep': '#d92a20',
     '--cc-depth-text': '#f5f5f5',
 
     // Canvas Preview (dark only)
@@ -127,7 +158,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'none',
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#d4c5a9',
+    // Was #d4c5a9 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.59:1 on --cc-map-background, invisible. Darkened to 3.23:1 - #357
+    // contrast audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#a38651',
     '--cc-map-scale-text': '#1a120b',
 
     // Map Visualization - warm paper canvas, dark ink outlines
@@ -145,11 +179,16 @@ export const themeTokens = {
     '--cc-grid-default': '#ddd0bb',
     '--cc-zero-datum': '#b8860b',
     '--cc-compass-color': '#1a120b',
-    // Navy -> brick, not the dark theme's teal -> coral: getDepthColor takes the
-    // shortest HSL hue path, and teal to coral runs through yellow at 1.14:1 on
-    // this canvas. See the fuller note in index.css.
-    '--cc-depth-shallow': '#14487f',
-    '--cc-depth-deep': '#a52a1a',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`,
+    // tuned for paper: on a
+    // light canvas the ramp's own yellow MIDPOINT is the worst case (it is the
+    // brightest thing on the sweep), so both ends run dark enough to hold the
+    // mid at 2.10:1. hue 175 -> 5, worst 2.10:1 at #b2b311 on #faf7f2, ends
+    // 2.23:1 apart, HSL L 0.38 -> 0.38, deuteranopia 34.99 / protanopia
+    // 39.52 dE2000. Held to a 2:1 floor, not 3:1 - see RAMP_FLOOR_LIGHT_CANVAS
+    // in tokens.test.ts for why, and for the measured cost of the alternatives.
+    '--cc-depth-shallow': '#1aa89c',
+    '--cc-depth-deep': '#b81a0c',
     '--cc-depth-text': '#1a120b',
 
     // Canvas Preview
@@ -226,7 +265,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(42, 40, 38, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#2a2826',
+    // Was #2a2826 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.32:1 on --cc-map-background, invisible. Lifted to 3.21:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#66625d',
     '--cc-map-scale-text': '#d5d0ca',
 
     // Map Visualization
@@ -244,8 +286,13 @@ export const themeTokens = {
     '--cc-grid-default': '#2a2826',
     '--cc-zero-datum': '#b8a868',
     '--cc-compass-color': '#d5d0ca',
-    '--cc-depth-shallow': '#a89060',
-    '--cc-depth-deep': '#b85048',
+    // Was tan #a89060 -> salmon #b85048: 35 degrees of hue travel across the whole
+    // depth range, so a survey drew as one flat salmon and depth was effectively
+    // not encoded at all. Sage green -> brick in cave's muted register instead:
+    // hue 173 -> 3, worst 3.98:1 at #d92a20 on #0e0d0c, ends 3.54:1 apart,
+    // HSL L 0.69 -> 0.49, deuteranopia 40.88 / protanopia 47.42 dE2000.
+    '--cc-depth-shallow': '#6ff0e0',
+    '--cc-depth-deep': '#d92a20',
     '--cc-depth-text': '#d5d0ca',
 
     // Canvas Preview
@@ -296,7 +343,10 @@ export const themeTokens = {
     '--cc-panel': '#21222c',
     '--cc-border': '#44475a',
     '--cc-text-primary': '#f8f8f2',
-    '--cc-text-secondary': '#6272a4',
+    // Lifted from #6272a4 (3.03:1 on --cc-panel/--cc-background/--cc-hover/--cc-input-bg,
+    // the worst of the four) to 4.61:1 minimum across all four - #357 contrast audit
+    // finding 1. Hue/saturation preserved, lightness only.
+    '--cc-text-secondary': '#8592b8',
     '--cc-accent': '#bd93f9',
     '--cc-accent-on': '#282a36',
     '--cc-warning': '#ffb86c',
@@ -322,7 +372,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(68, 71, 90, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#44475a',
+    // Was #44475a (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.56:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#717694',
     '--cc-map-scale-text': '#f8f8f2',
 
     // Map Visualization
@@ -340,8 +393,15 @@ export const themeTokens = {
     '--cc-grid-default': '#44475a',
     '--cc-zero-datum': '#f1fa8c',
     '--cc-compass-color': '#f8f8f2',
-    '--cc-depth-shallow': '#8be9fd',
-    '--cc-depth-deep': '#ff5555',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`. The
+    // shallow end is a Dracula-register cyan rather than the palette's #50fa7b
+    // green: starting at hue 172 puts the whole green/yellow arc INSIDE the ramp
+    // instead of at its start, which is what widens both the endpoint separation
+    // and the deuteranopia margin. Ends spread apart in lightness for the same
+    // reason. hue 172 -> 3, worst 3.18:1 at #e0342a on #282a36, ends 3.34:1 apart,
+    // HSL L 0.72 -> 0.52, deuteranopia 38.94 / protanopia 45.01 dE2000.
+    '--cc-depth-shallow': '#7ff2e2',
+    '--cc-depth-deep': '#e0342a',
     '--cc-depth-text': '#f8f8f2',
 
     // Canvas Preview
@@ -392,7 +452,9 @@ export const themeTokens = {
     '--cc-panel': '#21252b',
     '--cc-border': '#3e4451',
     '--cc-text-primary': '#abb2bf',
-    '--cc-text-secondary': '#5c6370',
+    // Lifted from #5c6370 (2.16:1 worst of panel/background/hover/input) to
+    // 4.55:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#939aa6',
     '--cc-accent': '#61afef',
     '--cc-accent-on': '#282c34',
     '--cc-warning': '#e5c07b',
@@ -418,7 +480,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(62, 68, 81, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#3e4451',
+    // Was #3e4451 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.43:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#6e7990',
     '--cc-map-scale-text': '#abb2bf',
 
     // Map Visualization
@@ -436,8 +501,17 @@ export const themeTokens = {
     '--cc-grid-default': '#3e4451',
     '--cc-zero-datum': '#e5c07b',
     '--cc-compass-color': '#abb2bf',
-    '--cc-depth-shallow': '#56b6c2',
-    '--cc-depth-deep': '#e06c75',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`. This
+    // is the theme #357 item 8 was filed against, and the distinction matters:
+    // the defect was never "cyan", it was hue 187 - the WRONG SIDE of the 180
+    // line, where the shortest path to red runs UP through indigo (it bottomed
+    // out at #5f5ccd = 2.60:1). The shallow end is cyan again here, at hue 169.8,
+    // which descends through green and yellow instead. Ends spread apart in
+    // lightness so the ramp survives deuteranopia.
+    // hue 170 -> 4, worst 3.05:1 at #dd3327 on #282c34, ends 3.35:1 apart, HSL L 0.71 -> 0.51,
+    // deuteranopia 37.92 / protanopia 44.59 dE2000.
+    '--cc-depth-shallow': '#7af0dc',
+    '--cc-depth-deep': '#dd3327',
     '--cc-depth-text': '#abb2bf',
 
     // Canvas Preview
@@ -488,7 +562,9 @@ export const themeTokens = {
     '--cc-panel': '#eee8d5',
     '--cc-border': '#d3cbb7',
     '--cc-text-primary': '#586e75',
-    '--cc-text-secondary': '#93a1a1',
+    // Darkened from #93a1a1 (2.18:1 worst of panel/background/hover/input) to
+    // 4.60:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#5c6a6a',
     '--cc-accent': '#268bd2',
     '--cc-accent-on': '#fdf6e3',
     '--cc-warning': '#b58900',
@@ -515,7 +591,10 @@ export const themeTokens = {
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#d3cbb7',
-    '--cc-map-scale-text': '#586e75',
+    // Lifted from #586e75 (3.17:1 - tuned for the light panel, but this text sits
+    // on the DARK map canvas this chrome-only theme inherits from :root) to
+    // 4.64:1 on #1a1a2e - #357 contrast audit finding 3. Hue/saturation preserved.
+    '--cc-map-scale-text': '#6e8a92',
 
     // Opacity Variants: accent
     '--cc-accent-5': 'rgba(38, 139, 210, 0.05)',
@@ -561,7 +640,9 @@ export const themeTokens = {
     '--cc-panel': '#e6e9ef',
     '--cc-border': '#ccd0da',
     '--cc-text-primary': '#4c4f69',
-    '--cc-text-secondary': '#6c6f85',
+    // Darkened from #6c6f85 (4.06:1 worst of panel/background/hover/input) to
+    // 4.63:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#64667b',
     '--cc-accent': '#1e66f5',
     '--cc-accent-on': '#eff1f5',
     '--cc-warning': '#df8e1d',
@@ -588,7 +669,10 @@ export const themeTokens = {
     '--cc-map-ctrl-shadow': 'rgba(0, 0, 0, 0.15)',
     '--cc-map-scale-bg': 'transparent',
     '--cc-map-scale-border': '#ccd0da',
-    '--cc-map-scale-text': '#4c4f69',
+    // Lifted from #4c4f69 (2.14:1 - tuned for the light panel, but this text sits
+    // on the DARK map canvas this chrome-only theme inherits from :root) to
+    // 4.61:1 on #1a1a2e - #357 contrast audit finding 3. Hue/saturation preserved.
+    '--cc-map-scale-text': '#7f83a2',
 
     // Opacity Variants: accent
     '--cc-accent-5': 'rgba(30, 102, 245, 0.05)',
@@ -634,7 +718,10 @@ export const themeTokens = {
     '--cc-panel': '#3b4252',
     '--cc-border': '#4c566a',
     '--cc-text-primary': '#d8dee9',
-    '--cc-text-secondary': '#616e88',
+    // Lifted from #616e88 (1.96:1 worst of panel/background/hover/input, the
+    // worst pairing in the repo) to 4.61:1 minimum - #357 contrast audit
+    // finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#a7b0c0',
     '--cc-accent': '#88c0d0',
     '--cc-accent-on': '#2e3440',
     '--cc-warning': '#ebcb8b',
@@ -660,7 +747,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(76, 86, 106, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#4c566a',
+    // Was #4c566a (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.69:1 on --cc-map-background, invisible. Lifted to 3.22:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#74829c',
     '--cc-map-scale-text': '#d8dee9',
 
     // Map Visualization
@@ -678,8 +768,15 @@ export const themeTokens = {
     '--cc-grid-default': '#434c5e',
     '--cc-zero-datum': '#ebcb8b',
     '--cc-compass-color': '#d8dee9',
-    '--cc-depth-shallow': '#88c0d0',
-    '--cc-depth-deep': '#bf616a',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`. This
+    // canvas is the lightest of the dark set, so the deep end is lifted off
+    // Nord's Aurora red #bf616a, which was the whole ramp's worst case at 3.05:1
+    // - clearing the floor by 1.8%. The light shallow end is on-register for Nord
+    // (cf. Snow Storm) and is what buys the lightness travel.
+    // hue 170 -> 4, worst 3.30:1 at #ea4a3e on #2e3440, ends 2.76:1 apart, HSL L 0.71 -> 0.58,
+    // deuteranopia 34.22 / protanopia 37.91 dE2000.
+    '--cc-depth-shallow': '#7af0dc',
+    '--cc-depth-deep': '#ea4a3e',
     '--cc-depth-text': '#d8dee9',
 
     // Canvas Preview
@@ -730,7 +827,9 @@ export const themeTokens = {
     '--cc-panel': '#181825',
     '--cc-border': '#313244',
     '--cc-text-primary': '#cdd6f4',
-    '--cc-text-secondary': '#6c7086',
+    // Lifted from #6c7086 (3.36:1 worst of panel/background/hover/input) to
+    // 4.61:1 minimum - #357 contrast audit finding 1. Hue/saturation preserved.
+    '--cc-text-secondary': '#83879b',
     '--cc-accent': '#89b4fa',
     '--cc-accent-on': '#1e1e2e',
     '--cc-warning': '#f9e2af',
@@ -756,7 +855,10 @@ export const themeTokens = {
     '--cc-map-ctrl-icon-filter': 'brightness(0) invert(1)',
     '--cc-map-ctrl-shadow': 'rgba(49, 50, 68, 0.3)',
     '--cc-map-scale-bg': 'transparent',
-    '--cc-map-scale-border': '#313244',
+    // Was #313244 (same as --cc-border, tuned for the panel, not the map canvas):
+    // 1.30:1 on --cc-map-background, invisible. Lifted to 3.20:1 - #357 contrast
+    // audit finding 2. Hue/saturation preserved.
+    '--cc-map-scale-border': '#686b91',
     '--cc-map-scale-text': '#cdd6f4',
 
     // Map Visualization
@@ -774,8 +876,14 @@ export const themeTokens = {
     '--cc-grid-default': '#313244',
     '--cc-zero-datum': '#f9e2af',
     '--cc-compass-color': '#cdd6f4',
-    '--cc-depth-shallow': '#94e2d5',
-    '--cc-depth-deep': '#f38ba8',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`. The
+    // deep end is pulled off Mocha's pink-leaning Red #f38ba8 (hue 343) toward a
+    // truer red so the ramp ends in red rather than magenta, stopping at hue 354
+    // to keep some Mocha character.
+    // hue 170 -> 354, worst 3.57:1 at #dd3040 on #1e1e2e, ends 3.35:1 apart, HSL L 0.71 -> 0.53,
+    // deuteranopia 35.78 / protanopia 42.71 dE2000.
+    '--cc-depth-shallow': '#7af0dc',
+    '--cc-depth-deep': '#dd3040',
     '--cc-depth-text': '#cdd6f4',
 
     // Canvas Preview
@@ -870,8 +978,14 @@ export const themeTokens = {
     '--cc-grid-default': '#cccccc',
     '--cc-zero-datum': '#cc7700',
     '--cc-compass-color': '#000000',
-    '--cc-depth-shallow': '#0050a0',
-    '--cc-depth-deep': '#cc0000',
+    // Cyan -> green -> yellow -> red per the depth-ramp contract on `dark`,
+    // tuned for the e-ink
+    // white canvas: as on `light`, the ramp's yellow midpoint is the worst case,
+    // so both ends run dark. hue 175 -> 5, worst 2.25:1 at #b2b311 on #ffffff,
+    // ends 2.23:1 apart, HSL L 0.38 -> 0.38, deuteranopia 34.99 /
+    // protanopia 39.52 dE2000. 2:1 floor, as on `light`.
+    '--cc-depth-shallow': '#1aa89c',
+    '--cc-depth-deep': '#b81a0c',
     '--cc-depth-text': '#000000',
 
     // Canvas Preview

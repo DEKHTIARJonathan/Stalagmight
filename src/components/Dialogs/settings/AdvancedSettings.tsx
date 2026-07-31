@@ -12,6 +12,7 @@ import { isFieldChanged, createNumericHandler, createToggleHandler, createSelect
 import { defaultConfig } from '../../../types/config';
 import type { Config, PlacementSuggestionConfig } from '../../../types/config';
 import { useProjectStore } from '../../../store/projectStore';
+import { PANEL_SIZE_BOUNDS, DATA_TABLE_MIN_HEIGHT, DATA_TABLE_MAX_HEIGHT } from '../../SingleSystemView/layoutConstants';
 
 /** Reusable row for placement suggestion numeric fields. */
 function PsRow({ field, i18nKey, step, min, max, config, changedFields, onChange, onInput, t }: {
@@ -193,15 +194,18 @@ export function AdvancedSettings({
       errors.push(t('settings.advanced.validation.logSize'));
     }
 
-    // Validate panel dimensions
-    if (config.panels.sections_panel_width < 100 || config.panels.sections_panel_width > 800) {
-      errors.push(t('settings.advanced.validation.sectionsPanel'));
+    // Validate panel dimensions against the same bounds the backend clamps to
+    // (PANEL_SIZE_BOUNDS / DATA_TABLE_MIN_HEIGHT / DATA_TABLE_MAX_HEIGHT), so
+    // validation can never accept a value the save round-trip then silently
+    // snaps back (#357 item 18).
+    if (config.panels.sections_panel_width < PANEL_SIZE_BOUNDS.sections.min || config.panels.sections_panel_width > PANEL_SIZE_BOUNDS.sections.max) {
+      errors.push(t('settings.advanced.validation.sectionsPanel', { min: PANEL_SIZE_BOUNDS.sections.min, max: PANEL_SIZE_BOUNDS.sections.max }));
     }
-    if (config.panels.detail_panel_width < 150 || config.panels.detail_panel_width > 800) {
-      errors.push(t('settings.advanced.validation.detailPanel'));
+    if (config.panels.detail_panel_width < PANEL_SIZE_BOUNDS.detail.min || config.panels.detail_panel_width > PANEL_SIZE_BOUNDS.detail.max) {
+      errors.push(t('settings.advanced.validation.detailPanel', { min: PANEL_SIZE_BOUNDS.detail.min, max: PANEL_SIZE_BOUNDS.detail.max }));
     }
-    if (config.panels.data_table_height < 100 || config.panels.data_table_height > 600) {
-      errors.push(t('settings.advanced.validation.dataTable'));
+    if (config.panels.data_table_height < DATA_TABLE_MIN_HEIGHT || config.panels.data_table_height > DATA_TABLE_MAX_HEIGHT) {
+      errors.push(t('settings.advanced.validation.dataTable', { min: DATA_TABLE_MIN_HEIGHT, max: DATA_TABLE_MAX_HEIGHT }));
     }
 
     if (config.closure_adjustment.base_sigma_length_m <= 0) {
@@ -550,8 +554,8 @@ export function AdvancedSettings({
           <div className="flex items-center gap-2">
             <input
               type="number" inputMode="decimal"
-              min={100}
-              max={800}
+              min={PANEL_SIZE_BOUNDS.sections.min}
+              max={PANEL_SIZE_BOUNDS.sections.max}
               value={config.panels.sections_panel_width}
               onChange={(e) => handleSectionsPanelWidthChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
@@ -573,8 +577,8 @@ export function AdvancedSettings({
           <div className="flex items-center gap-2">
             <input
               type="number" inputMode="decimal"
-              min={150}
-              max={800}
+              min={PANEL_SIZE_BOUNDS.detail.min}
+              max={PANEL_SIZE_BOUNDS.detail.max}
               value={config.panels.detail_panel_width}
               onChange={(e) => handleDetailPanelWidthChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"
@@ -596,8 +600,8 @@ export function AdvancedSettings({
           <div className="flex items-center gap-2">
             <input
               type="number" inputMode="decimal"
-              min={100}
-              max={600}
+              min={DATA_TABLE_MIN_HEIGHT}
+              max={DATA_TABLE_MAX_HEIGHT}
               value={config.panels.data_table_height}
               onChange={(e) => handleDataTableHeightChange(e.target.value)}
               className="w-20 px-2 py-1 bg-background border border-border rounded text-sm text-right"

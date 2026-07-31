@@ -82,6 +82,24 @@ pub struct AppState {
     pub(super) undo_stack: Mutex<UndoStack>,
     /// Application configuration
     pub(super) config: Mutex<Config>,
+    /// Serialization lock for config READ-MODIFY-WRITE, held across all three
+    /// steps. `config` above is only ever held for the read or the write, never
+    /// both, so it cannot serialize a partial update: every partial-update command
+    /// (`update_data_table_view`, `update_panel_sizes`, `update_panel_layout`)
+    /// clones the whole `Config`, edits its own fields and writes the whole thing
+    /// back. Two of them interleaving means A reads v1, B reads v1, A writes v1+A,
+    /// B writes v1+B - and A is gone, from memory and from disk.
+    ///
+    /// That is reachable without contrivance: `savePanelSizes` (`store/uiStore.ts`)
+    /// fires undebounced when a panel divider is released while the data-table view
+    /// save fires 500 ms after the last change, and both live in `SingleSystemView`.
+    ///
+    /// NOT `command_lock`: that one serializes shot/project mutations and undo, and
+    /// widening it to cover config would put a settings save behind an in-flight
+    /// batch command for no benefit. Take it via [`AppState::modify_config`] rather
+    /// than by hand - `update_config` takes it too, so a nested acquisition
+    /// deadlocks.
+    pub(super) config_write_lock: Mutex<()>,
     /// Recent projects list
     pub(super) recent_projects: Mutex<Vec<PathBuf>>,
     /// SpeleoDB per-session connection state (endpoint, email, token store).
@@ -203,6 +221,7 @@ impl AppState {
             initial_save_deferred: AtomicBool::new(false),
             undo_stack: Mutex::new(UndoStack::new_with_limit(undo_limit)),
             config: Mutex::new(config),
+            config_write_lock: Mutex::new(()),
             recent_projects: Mutex::new(recent),
             speleodb: Mutex::new(super::speleodb::SpeleoDbSession::default()),
             // Default-true: editing is enabled unless a remote project is opened

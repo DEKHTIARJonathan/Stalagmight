@@ -118,8 +118,14 @@ fn escape_xml_text(s: &str) -> String {
 // distanceGradient.ts). To match on screen, port those exact endpoints + math
 // here (the HSL lerp lives in depth_colors.rs).
 
-/// Fallback depth-gradient endpoints: the dark theme's shallow teal → deep coral,
-/// i.e. `--cc-depth-shallow` / `--cc-depth-deep` under `[data-theme="dark"]`.
+/// Fallback depth-gradient endpoints: a teal -> coral pair.
+///
+/// These do NOT mirror any current theme, and must not be read as if they did.
+/// They were `dark`'s `--cc-depth-shallow` / `--cc-depth-deep` when they were
+/// written; `dark` has been retuned twice since and no longer matches. Syncing
+/// them is deliberately NOT done - they are a last-resort default, several Rust
+/// tests pin these exact values, and a constant that silently tracks a token it
+/// cannot see is the drift this comment exists to warn about.
 ///
 /// These are only a FALLBACK. The endpoints that actually reach the page are the
 /// ones the frontend resolved from the live theme and sent on

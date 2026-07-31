@@ -3,7 +3,7 @@
  *
  * `PositiveNumberField` fires `onCommit` on every valid keystroke (not just
  * blur), and the swim-speed field's `onCommit` used to call
- * `useProjectStore.getState().updateConfig(...)` unsequenced on every one of
+ * `useProjectStore.getState().updateGasConfig(...)` unsequenced on every one of
  * those commits - a fast typist fired one disk write per keystroke, and
  * out-of-order completion could persist an earlier intermediate value. The
  * fix debounces the disk write (keeping the in-memory `setGasConfig` update
@@ -84,7 +84,7 @@ beforeEach(async () => {
   });
   useProjectStore.setState({
     config: structuredClone(defaultConfig) as Config,
-    updateConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
+    updateGasConfig: vi.fn(async () => ({ success: true, error: null, warnings: [], section_ids: [] })),
   });
 });
 
@@ -93,7 +93,7 @@ afterEach(() => {
 });
 
 describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
-  it('coalesces rapid keystrokes into a single debounced updateConfig call', async () => {
+  it('coalesces rapid keystrokes into a single debounced updateGasConfig call', async () => {
     render(<GasPlanPanel />);
     const input = screen.getByTestId('gas-swim-speed-input');
 
@@ -102,16 +102,16 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     fireEvent.change(input, { target: { value: '13' } });
 
     // No disk write yet - only the debounce timer has been (re)armed.
-    expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().updateGasConfig).not.toHaveBeenCalled();
 
     vi.runAllTimers();
     // The debounce timer only QUEUES the write onto the serialized chain - await it landing.
     await flushGasConfigWrite();
 
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).toHaveBeenCalledTimes(1);
-    expect(updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ gas: expect.objectContaining({ swim_speed_m_per_min: 13 }) }),
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).toHaveBeenCalledTimes(1);
+    expect(updateGasConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ swim_speed_m_per_min: 13 }),
     );
   });
 
@@ -123,7 +123,7 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
 
     expect(useGasPlanStore.getState().gasConfig.swim_speed_m_per_min).toBe(14);
     // Still debounced - the disk write hasn't fired.
-    expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().updateGasConfig).not.toHaveBeenCalled();
   });
 
   it('flushes a pending write on unmount so a value typed right before leaving is not lost', async () => {
@@ -131,7 +131,7 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     const input = screen.getByTestId('gas-swim-speed-input');
 
     fireEvent.change(input, { target: { value: '15' } });
-    expect(useProjectStore.getState().updateConfig).not.toHaveBeenCalled();
+    expect(useProjectStore.getState().updateGasConfig).not.toHaveBeenCalled();
 
     // Leaving Plan mode unmounts the panel before the 450ms debounce elapses; the
     // pending value must still be persisted (parity with the pre-debounce behavior
@@ -140,10 +140,10 @@ describe('GasPlanPanel swim-speed persist debounce (#241)', () => {
     // Unmount flushes fire-and-forget; await the chain so the assertion sees the landed write.
     await flushGasConfigWrite();
 
-    const updateConfig = useProjectStore.getState().updateConfig;
-    expect(updateConfig).toHaveBeenCalledTimes(1);
-    expect(updateConfig).toHaveBeenCalledWith(
-      expect.objectContaining({ gas: expect.objectContaining({ swim_speed_m_per_min: 15 }) }),
+    const updateGasConfig = useProjectStore.getState().updateGasConfig;
+    expect(updateGasConfig).toHaveBeenCalledTimes(1);
+    expect(updateGasConfig).toHaveBeenCalledWith(
+      expect.objectContaining({ swim_speed_m_per_min: 15 }),
     );
   });
 });

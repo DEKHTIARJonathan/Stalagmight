@@ -142,7 +142,26 @@ export function getCategoryDefaults(
         debug: { map: { ...defaultConfig.debug.map }, memory_probe: defaultConfig.debug.memory_probe },
         logging: { ...defaultConfig.logging },
         closure_adjustment: { ...defaultConfig.closure_adjustment },
-        panels: { ...defaultConfig.panels },
+        // ONLY the three panel sizes this tab actually shows. Same reasoning as
+        // the DPV rig above: resetting the whole `panels` block destroyed the
+        // data-table view state - column order, hidden columns, the two width
+        // maps and the angle modes - none of which this page displays or reports
+        // in its change summary (#357 item 15).
+        //
+        // It was also incoherent rather than merely wide. The open DataTable
+        // never noticed (its seed effect is one-shot), so it kept rendering the
+        // old layout while the defaults sat on disk, and the next unrelated view
+        // change posted the whole in-memory map straight back - so the reset read
+        // as a no-op until restart, or was actively undone. Pre-existing for
+        // order/hidden columns; #334 enrolled the width maps in it.
+        panels: current
+          ? {
+              ...current.panels,
+              sections_panel_width: defaultConfig.panels.sections_panel_width,
+              detail_panel_width: defaultConfig.panels.detail_panel_width,
+              data_table_height: defaultConfig.panels.data_table_height,
+            }
+          : { ...defaultConfig.panels },
       };
     default:
       return {};

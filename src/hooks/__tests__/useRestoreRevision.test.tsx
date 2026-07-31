@@ -1,0 +1,98 @@
+/**
+ * #345: the backend closes and reopens the project at a DIFFERENT revision tree in
+ * place, bypassing `loadProject`'s full reset path. It already resets selection and
+ * the tool transients; this pins that the gas-plan store gets the same treatment.
+ *
+ * #258 is what makes a leftover plan dangerous here specifically: two `.stalx` under
+ * one SpeleoDB project are independent SQLite databases with independently assigned
+ * section ids, so a restore can swap in a survey whose ids collide with the old one by
+ * construction. A pin or anchor that survives the swap silently renames itself onto
+ * whatever station holds that id in the new tree.
+ */
+import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { renderHook, act } from '@testing-library/react';
+
+const invokeIpcMock = vi.hoisted(() => vi.fn());
+vi.mock('../../utils/ipc', () => ({ invokeIpc: invokeIpcMock }));
+
+import { useRestoreRevision, type RestoreRevisionArgs } from '../useRestoreRevision';
+import { useGasPlanStore } from '../../store/gasPlanStore';
+import { useProjectStore } from '../../store/projectStore';
+import { useSpeleoStore } from '../../store/speleoStore';
+import { useUIStore } from '../../store/uiStore';
+
+const ARGS: RestoreRevisionArgs = {
+  projectId: 'p1',
+  projectName: 'Cave A',
+  hexsha: 'abcdef0123',
+  shortSha: 'abcdef01',
+  restore: true,
+};
+
+const RESTORED = { local_path: '/cache/p1.stalx', concurrent_session: false };
+
+const run = async (over: Partial<RestoreRevisionArgs> = {}): Promise<void> => {
+  const { result } = renderHook(() => useRestoreRevision());
+  await act(async () => {
+    await result.current({ ...ARGS, ...over });
+  });
+};
+
+beforeEach(() => {
+  invokeIpcMock.mockReset();
+  invokeIpcMock.mockResolvedValue(RESTORED);
+  useGasPlanStore.getState().reset();
+  useProjectStore.setState({
+    refreshProjectState: vi.fn(async () => {}),
+    checkProjectIntegrity: vi.fn(async () => []),
+    isDirty: true,
+  });
+  useSpeleoStore.setState({ refreshLinkStatus: vi.fn(async () => {}) });
+  useUIStore.setState({ showToast: vi.fn(), setView: vi.fn(), clearSelection: vi.fn() });
+});
+
+describe('useRestoreRevision resets the gas-plan store (#345)', () => {
+  it('leaves NO live gas-plan state behind after the swap', async () => {
+    // A live plan with a positional pin and a captured anchor for it - the exact shape
+    // #345 says survives today: `useGasPlanStore.reset()` has exactly one production
+    // caller (`applyDisplaySettings`), reached only from `loadProject`/`createProject`,
+    // never from this in-place swap.
+    useGasPlanStore.getState().setEndpoint({ section_id: 1, station_index: 2 });
+    useGasPlanStore.getState().setPushyAck(true);
+    useGasPlanStore.setState({
+      loadedPlanId: 7,
+      loadedPlanBaseline: useGasPlanStore.getState().loadedPlanBaseline,
+      anchors: {
+        origin: null,
+        endpoint: { id: 'anchor-1' },
+        waypoints: [],
+        markedPoints: [],
+        stageDropOverrides: [],
+      },
+      anchoredPins: {
+        origin: null,
+        endpoint: { section_id: 1, station_index: 2 },
+        waypoints: [],
+        markedPoints: [],
+        stageDropOverrides: [],
+      },
+    });
+    const before = useGasPlanStore.getState();
+    expect(before.endpoint).not.toBeNull();
+    expect(before.anchors).not.toBeNull();
+    expect(before.loadedPlanId).not.toBeNull();
+    expect(before.pushyAck).toBe(true);
+
+    await run();
+
+    const after = useGasPlanStore.getState();
+    expect(after.endpoint).toBeNull();
+    expect(after.origin).toBeNull();
+    expect(after.waypoints).toEqual([]);
+    expect(after.anchors).toBeNull();
+    expect(after.anchoredPins).toBeNull();
+    expect(after.loadedPlanId).toBeNull();
+    expect(after.loadedPlanBaseline).toBeNull();
+    expect(after.pushyAck).toBe(false);
+  });
+});

@@ -33,9 +33,12 @@ export const MAX_COL_WIDTH = 2000;
 export const AUTOFIT_MAX_COL_WIDTH = 600;
 
 // MIN_COL_WIDTH / MAX_COL_WIDTH are mirrored by MIN_COLUMN_WIDTH /
-// MAX_COLUMN_WIDTH in src-tauri/src/config/types.rs, which clamps the same range
-// when a persisted width is read back. Nothing enforces the mirror, so change all
-// four together.
+// MAX_COLUMN_WIDTH in src-tauri/src/config/column_widths.rs, which clamps the same
+// range when a persisted width is read back. The mirror is now ENFORCED by
+// src/test/__tests__/configBoundsMirror.test.ts, which parses the Rust constants
+// and fails on drift - a one-sided bump used to give a silent snap-back (the drag
+// commits locally, the backend clamps on save, and the post-save loadConfig feeds
+// the clamped value back down with no error anywhere).
 
 export type ColumnWidths = Record<string, number>;
 
@@ -111,9 +114,16 @@ export interface ColumnWidthsController {
   revertWidths: () => void;
 }
 
+/**
+ * @param declaredKeys Every column this grid declares, HIDDEN ONES INCLUDED.
+ *   Widths for anything outside this set are dropped on commit (see
+ *   `commitWidths`). Passing only the visible columns would delete a hidden
+ *   column's width and lose it the moment the user re-shows the column.
+ */
 export function useColumnWidths(
   columnWidths: ColumnWidths | undefined,
   onColumnWidthsChange: ((widths: ColumnWidths) => void) | undefined,
+  declaredKeys: string[],
 ): ColumnWidthsController {
   const [widths, setWidths] = useState<ColumnWidths>(() => columnWidths ?? {});
   const widthsRef = useRef<ColumnWidths>(widths);
@@ -126,13 +136,36 @@ export function useColumnWidths(
     setWidths(next);
   }, []);
 
+  // Held in a ref, not a dep: the hosts build `declaredKeys` inline, so it is a
+  // fresh array every render and putting it in `commitWidths`'s dep list would
+  // give the callback a new identity per render - which the grid passes straight
+  // down to the resize handlers. The ref is written during render so a commit
+  // always reads the columns as they are right now.
+  const declaredRef = useRef(declaredKeys);
+  declaredRef.current = declaredKeys;
+
   const commitWidths = useCallback(
     (next: ColumnWidths) => {
       // Whole integer pixels only: the persisted config stores u32, and clampRound
       // also absorbs a non-finite width rather than letting NaN reach the backend
       // and be silently rejected.
+      //
+      // Keys outside the declared set are DROPPED here. This map is spread whole
+      // on every commit and the host persists it whole, so without a prune a key
+      // that stops naming a real column - renamed, removed, or left behind by an
+      // older build - is re-persisted forever and `config.toml` grows
+      // monotonically (#357 item 6). The entry-count and key-length ceilings in
+      // `config/column_widths.rs` bound the damage but never shrink it, because
+      // they cannot tell a stale key from a live one; only the grid knows that.
+      //
+      // Pruning happens on the next COMMIT, i.e. the next resize in this grid -
+      // opening the table does not clean the map, and it should not: a grid whose
+      // columns are still being built would read as "every key is an orphan".
+      const declared = new Set(declaredRef.current);
       const settled = Object.fromEntries(
-        Object.entries(next).map(([k, w]) => [k, clampRound(w, MIN_COL_WIDTH, MAX_COL_WIDTH)]),
+        Object.entries(next)
+          .filter(([k]) => declared.has(k))
+          .map(([k, w]) => [k, clampRound(w, MIN_COL_WIDTH, MAX_COL_WIDTH)]),
       );
       applyWidths(settled);
       // Nothing to tell the host if this is already the map it agreed to. A bare

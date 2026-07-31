@@ -6,7 +6,7 @@ import { completeImportToSingleView, deferredSaveWarnings, surfaceImportWarnings
 import { Button } from '../common/Button';
 import { DialogWrapper } from './DialogWrapper';
 import type { GpxFile, GpxSectionPlacement } from '../../types/commands';
-import { SECTION_COLORS } from '../../utils/colors';
+import { sectionColorPalette } from '../../utils/colors';
 import { setSource } from '../../utils/telemetry';
 
 /**
@@ -18,7 +18,7 @@ import { setSource } from '../../utils/telemetry';
  */
 export default function GpxPlacementDialog() {
   const { executeGpxImport } = useProjectStore();
-  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds } = useUIStore();
+  const { closeDialog, openDialog, dialogData, setView, triggerFitToBounds, resolvedTheme } = useUIStore();
 
   const gpxFile = dialogData.gpxFile as GpxFile;
   const filePath = dialogData.filePath as string;
@@ -108,6 +108,7 @@ export default function GpxPlacementDialog() {
     setIsImporting(true);
 
     // Build GpxSectionPlacement objects with proper ImportPlacement zero_datum
+    const palette = sectionColorPalette(resolvedTheme);
     const placements: GpxSectionPlacement[] = sections.map((sec, i) => {
       const stationIdx = zeroDatumIndices[i] ?? 0;
       const point = sec.points[stationIdx] ?? sec.points[0];
@@ -123,7 +124,7 @@ export default function GpxPlacementDialog() {
           station_index: stationIdx,
         },
         name: null,
-        color: SECTION_COLORS[i % SECTION_COLORS.length] ?? '#4A90D9',
+        color: palette[i % palette.length] ?? '#4A90D9',
       };
     });
 

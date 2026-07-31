@@ -57,7 +57,7 @@ beforeEach(() => {
 });
 
 describe('SpeleoStatusButton un-pushed local edits (#270)', () => {
-  it('leaves a clean project white, with no badge', () => {
+  it('leaves a clean project untinted (inherits currentColor), with no badge', () => {
     seed();
     render(<SpeleoStatusButton />);
     expect(button()).toHaveAttribute('data-kind', 'unlocked');

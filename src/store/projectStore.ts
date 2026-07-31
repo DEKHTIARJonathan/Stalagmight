@@ -43,9 +43,9 @@ import type { Config } from '../types/config';
 import type { CommandResult, CommentHolder, ConnectivityResult, DmpFile, TmlFile, CompassFile, WallsFile, GpxFile, GpxSectionPlacement, ExportImageOptions, ProjectWarning, BatchCommand, UndoHistoryItem, ImportSectionConfig, PlacementSuggestion, IntegrityRepairResult, IntegrityCheckResult } from '../types/commands';
 import type { CreateProjectFullResult } from '../types/loading';
 import type { UnrecognisedShotKind } from '../types/ipc/UnrecognisedShotKind';
-import type { ConfigSaveReport } from '../types/ipc/ConfigSaveReport';
 import type { SurveyData } from '../types/survey-data';
 import { emptySurveyData, surveyDataFromLegacy, surveyDataWithAdjustedStations } from '../types/survey-data';
+import { createProjectConfigActions, type ProjectConfigActions } from './projectConfigActions';
 
 type ShotUpdatesPatch = Partial<ShotUpdates>;
 
@@ -123,7 +123,7 @@ interface CreateProjectOptions {
   deferInitialSave?: boolean;
 }
 
-function emptyCommandResult(
+export function emptyCommandResult(
   success: boolean,
   error?: string | null,
   warnings: CommandResult['warnings'] = []
@@ -188,7 +188,7 @@ export interface LoadProjectOutcome {
   superseded?: boolean;
 }
 
-interface ProjectStore {
+export interface ProjectStore extends ProjectConfigActions {
   // State
   project: Project | null;
   /**
@@ -232,11 +232,7 @@ interface ProjectStore {
   /** Guard to prevent concurrent close operations (rapid Back clicks) */
   isClosing: boolean;
 
-  // Actions
-  loadConfig: () => Promise<void>;
-  updateConfig: (config: Config) => Promise<CommandResult>;
-  /** Update config state without persisting to disk */
-  setConfig: (config: Config) => void;
+  // Actions (loadConfig / updateConfig / updateGasConfig / setConfig: see ProjectConfigActions)
 
   // Loading state actions
   /** Start a new loading operation, returns the loadingId */
@@ -760,97 +756,8 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   isDirty: false,
   isClosing: false,
 
-  // Config
-  loadConfig: async () => {
-    try {
-      const config = await invokeIpc<Config>('get_config', undefined, {
-        purpose: 'load user configuration',
-      });
-      set({ config });
-    } catch (e) {
-      console.error('Failed to load config:', e);
-    }
-  },
-
-  updateConfig: async (config: Config) => {
-    try {
-      const routingBefore = get().config?.gas.include_reference_legs;
-      // Rust command returns Result<ConfigSaveReport, String> - an error throws; the
-      // report carries the one thing a save can half-do (see below).
-      const report = await invokeIpc<ConfigSaveReport | null>(
-        'update_config',
-        { config },
-        { purpose: 'persist user settings' },
-      );
-      // Turning the "never use the OS keychain" switch on EVICTS the API key an
-      // earlier login left in the keyring, and a locked or read-only keyring can
-      // refuse that delete. The settings are saved either way (the eviction runs
-      // before the write precisely so a partial failure lands in the recoverable
-      // direction), so this cannot be an error - but it must not pass as unqualified
-      // success either: Settings would be telling the user their key is not in the
-      // OS keychain while a working bearer token sits in it. The backend reports
-      // only a residue that may GENUINELY have survived, so this does not fire on
-      // the headless box that has no keychain to strand anything in.
-      if (report?.keychain_residue) {
-        useUIStore
-          .getState()
-          .showToast(
-            i18n.t('settings.speleodb.disableKeychain.evictionFailed', {
-              reason: report.keychain_residue,
-            }),
-            'speleodb-keychain-residue',
-            'warning',
-          );
-      }
-      // The other half of that same move: the key is re-landed wherever the closed
-      // gate allows, which under the default "this session only" preference is
-      // memory - and the sweep that makes that true has to remove any copy an
-      // earlier storage choice wrote to disk. When it cannot, the saved settings say
-      // the key is gone when the app closes while the next launch reads the survivor
-      // straight back and signs the user in. Deliberately does not name the keyring:
-      // the backend cannot tell which store stranded it, and it is mutually
-      // exclusive with the message above, which can.
-      if (report?.persistent_residue) {
-        useUIStore
-          .getState()
-          .showToast(
-            i18n.t('settings.speleodb.disableKeychain.sweepFailed', {
-              reason: report.persistent_residue,
-            }),
-            'speleodb-token-residue',
-            'warning',
-          );
-      }
-      // Re-fetch config to get backend-normalized values (e.g., zoom_step clamped to valid range)
-      await get().loadConfig();
-      // The closure-adjustment sigmas feed the adjusted solve, so a settings change
-      // can change the adjusted geometry. Drop the cached set; the map re-fetches
-      // lazily (the backend memo is keyed on the config, so a stale config would
-      // otherwise keep rendering the old weighted solve until an unrelated edit).
-      set({ stationsAdjusted: null, surveyDataAdjusted: null });
-      // `gas.include_reference_legs` decides whether penetration routes through
-      // reference ties, and `stats.penetration_distance` is computed inside
-      // `get_project_state` - not lazily like the geometry above. Nothing else
-      // here re-runs it, so without this the Detail panel keeps showing the old
-      // figure while the distance overlay and ruler (both keyed on the setting)
-      // have already switched, until some unrelated command refreshes state.
-      // Gated on an actual change: this is a full project refetch, too heavy to
-      // fire on every unrelated settings tweak.
-      if (get().config?.gas.include_reference_legs !== routingBefore) {
-        await get().refreshProjectState();
-      }
-      return emptyCommandResult(true, null);
-    } catch (e) {
-      return emptyCommandResult(false, String(e));
-    }
-  },
-
-  setConfig: (config: Config) => {
-    // Replacing the config (e.g. Settings ▸ Advanced "Reload from disk") can change
-    // the closure-adjustment sigmas, so drop the cached adjusted geometry here too -
-    // this is the shared config-replacement path that `updateConfig` doesn't use.
-    set({ config, stationsAdjusted: null, surveyDataAdjusted: null });
-  },
+  // Config (loadConfig / updateConfig / updateGasConfig / setConfig live in projectConfigActions.ts)
+  ...createProjectConfigActions(set, get),
 
   // Loading state actions
   startLoading: (projectName: string, projectPath: string) => {

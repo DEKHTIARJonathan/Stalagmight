@@ -1,8 +1,10 @@
 use anyhow::{Context, Result};
 use serde::{Deserialize, Deserializer, Serialize};
 
-use super::column_widths::{lenient_column_widths, normalize_column_widths};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use super::column_widths::{
+    lenient_column_widths, normalize_column_names, normalize_column_widths,
+};
+use std::collections::{BTreeMap, HashMap};
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -388,7 +390,9 @@ impl PanelsConfig {
     /// path did not - so a hand-edited, older, or otherwise degenerate config
     /// could load e.g. a 0-pixel width that the frontend then renders as a
     /// collapsed, invisible panel. Bounds mirror PANEL_SIZE_BOUNDS in
-    /// src/components/SingleSystemView/layoutConstants.ts.
+    /// src/components/SingleSystemView/layoutConstants.ts. The mirror is
+    /// enforced by src/test/__tests__/configBoundsMirror.test.ts, which parses
+    /// these clamp calls and compares against the TS constants.
     pub fn normalize(&mut self) {
         self.sections_panel_width = self.sections_panel_width.clamp(150, 400);
         self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
@@ -398,6 +402,46 @@ impl PanelsConfig {
         normalize_panel_mode(&mut self.data_table_mode);
         normalize_column_widths(&mut self.data_table_shot_column_widths);
         normalize_column_widths(&mut self.data_table_station_column_widths);
+        // The four column-key LISTS need the same ceiling as the width maps
+        // beside them, and for the same reason - see `normalize_column_names`.
+        // Doing it here rather than in `update_data_table_view_impl` is what
+        // makes it hold on BOTH doors: the partial IPC command and the
+        // whole-`Config` `update_config` both end in `normalize_except_shortcuts`,
+        // and `Config::load` calls it too, so an already-bloated file on disk is
+        // pruned on the next launch instead of being carried forever.
+        normalize_column_names(&mut self.data_table_shot_column_order);
+        normalize_column_names(&mut self.data_table_shot_hidden_columns);
+        normalize_column_names(&mut self.data_table_station_column_order);
+        normalize_column_names(&mut self.data_table_station_hidden_columns);
+        // Same both-doors argument for the angle display modes. The PARTIAL
+        // command validates them and rejects an unknown string, but
+        // `update_config` takes a whole `Config` and used to write one through
+        // untouched - so `"sideways"` was refused at one door and persisted
+        // cleanly through the other, and the load path never repaired it either.
+        // Repair rather than reject here: `normalize` has no way to report an
+        // error, and the read side (`DataTable`) treats an unknown mode as its
+        // own default anyway, so falling back matches what the UI already shows.
+        normalize_angle_mode(&mut self.data_table_azimuth_mode, default_azimuth_mode);
+        normalize_angle_mode(
+            &mut self.data_table_inclination_mode,
+            default_inclination_mode,
+        );
+    }
+}
+
+/// The accepted values for `data_table_azimuth_mode` / `data_table_inclination_mode`.
+///
+/// Shared with `commands::config::update_data_table_view_impl`, which rejects
+/// anything outside it, so the validating door and the repairing door cannot
+/// drift apart into two different notions of "valid mode".
+pub(crate) const DATA_TABLE_ANGLE_MODES: [&str; 3] = ["avg", "inout", "off"];
+
+/// Coerce a persisted angle display mode to a known value, falling back to the
+/// documented default for that field (they differ: azimuth defaults to "avg",
+/// inclination to "off", so the default arrives as a fn rather than a literal).
+fn normalize_angle_mode(mode: &mut String, default: fn() -> String) {
+    if !DATA_TABLE_ANGLE_MODES.contains(&mode.as_str()) {
+        *mode = default();
     }
 }
 
@@ -779,11 +823,11 @@ pub struct GeneralConfig {
     pub telemetry_opt_in_shown: bool,
 }
 
-fn default_locale() -> String {
+pub(super) fn default_locale() -> String {
     "system".to_string()
 }
 
-fn default_format_locale() -> String {
+pub(super) fn default_format_locale() -> String {
     "locale".to_string()
 }
 
@@ -905,9 +949,22 @@ pub enum AngleUnit {
     Gradians,
 }
 
+/// Map-drawing defaults.
+///
+/// `default_background` used to live here (#357 item 10). It was removed rather
+/// than wired: it had no renderer consumer anywhere in `src` or `src-tauri`, and
+/// wiring it back would have undone #332 / PR #361, which made the map canvas
+/// theme-driven off `--cc-map-background`. A single global background hex cannot
+/// be right for all ten themes at once - the shipped default was the dark
+/// `#1a1a2e`, so honouring it would have repainted every light theme's canvas
+/// dark, which is the exact bug #332 fixed.
+///
+/// Removal is load-path safe: neither `Config` nor `DisplayConfig` sets
+/// `deny_unknown_fields`, so a `default_background = "..."` line left in an
+/// existing `config.toml` is ignored. Seven `[display]` fixtures in `tests.rs`
+/// still carry that line and still parse, which is the regression coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DisplayConfig {
-    pub default_background: String,
     pub grid_color: String,
     /// Grid spacing in meters (e.g., 1, 5, 10, 25, 50)
     #[serde(default = "default_grid_spacing")]
@@ -1786,6 +1843,14 @@ impl Config {
 
     /// Load config from a specific path, falling back to defaults
     pub fn load_from_path(path: &Path) -> Result<Self> {
+        // Collect anything a previous run leaked before reading. This is the only
+        // sweeper for these files (see `write_atomically`), and load is the one
+        // moment we know the directory is being used and no write is in flight
+        // from *this* call.
+        if let Some(parent) = path.parent() {
+            super::atomic_write::sweep_stale_temp_files(parent);
+        }
+
         if path.exists() {
             let contents = std::fs::read_to_string(path).context("Failed to read config file")?;
             let mut config: Config =
@@ -1830,7 +1895,7 @@ impl Config {
             contents.push('\n');
             contents.push_str(&section);
         }
-        std::fs::write(path, contents).context("Failed to write config file")?;
+        super::atomic_write::write_atomically(path, &contents)?;
         tracing::info!(config_path = ?path, "Saved config to file");
         Ok(())
     }
@@ -1871,8 +1936,34 @@ impl Config {
     /// Normalize all config values to valid ranges
     /// Handles NaN/inf by falling back to defaults
     pub fn normalize(&mut self) {
-        self.map.normalize();
         self.shortcuts.normalize();
+        self.normalize_except_shortcuts();
+    }
+
+    /// Everything [`Self::normalize`] repairs EXCEPT `[shortcuts]`, for the IPC
+    /// write path (`AppState::update_config`).
+    ///
+    /// The split exists because normalization is doing two different jobs, and
+    /// only one of them is right for an arriving payload. Clamping a NaN sigma or
+    /// a 100000-pixel column is REPAIR: the value is unusable however it got here,
+    /// and repairing it on the way in is strictly better than persisting it and
+    /// repairing it on the next launch. `normalize_shortcut_field` is DEFAULTING:
+    /// it reads an empty binding list as "this key is missing from the file" and
+    /// re-seeds the stock binding.
+    ///
+    /// That reading is correct for a config file and wrong for a Settings payload,
+    /// where an empty list is the user having deliberately cleared the binding -
+    /// `ShortcutsSettings.tsx` produces exactly that when the last slot for an
+    /// action is cleared. Running it on the write path would restore the default
+    /// binding under them and make clearing a shortcut impossible, which is the
+    /// same trap `Config::save`'s comment already warns about.
+    ///
+    /// Shortcuts that arrive malformed rather than empty are therefore left for
+    /// the load path to canonicalize, exactly as before this split. The frontend
+    /// already canonicalizes on entry (`normalizeShortcut`), so that window is the
+    /// pre-existing one, not a new one.
+    pub fn normalize_except_shortcuts(&mut self) {
+        self.map.normalize();
         self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();
@@ -1884,14 +1975,7 @@ impl Config {
         self.gas.normalize();
         self.webkit_memory.normalize();
         self.units.decimal_precision.normalize();
-        if self.general.locale.trim().is_empty() {
-            self.general.locale = default_locale();
-        }
-        let mut seen = HashSet::new();
-        self.general.onboarding_completed_flows.retain(|flow_id| {
-            let trimmed = flow_id.trim();
-            !trimmed.is_empty() && seen.insert(trimmed.to_string())
-        });
+        super::general::normalize_general(&mut self.general);
     }
 
     /// Migrate legacy config fields to new structure

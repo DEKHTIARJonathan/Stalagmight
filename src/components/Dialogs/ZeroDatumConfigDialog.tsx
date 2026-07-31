@@ -14,7 +14,8 @@ import { editableShotsToDmpSection } from '../../utils/shotConversion';
 import type { DmpFile } from '../../types/commands';
 import type { DmpSelectionConfig } from './DmpSelectionDialog';
 import type { GpsCoordinates } from '../../types/project';
-import { SECTION_COLORS } from '../../utils/colors';
+import { sectionColorPalette } from '../../utils/colors';
+import { useUIStore } from '../../store/uiStore';
 
 export interface ZeroDatumConfigResult {
   sectionIndex: number;
@@ -118,12 +119,15 @@ export default function ZeroDatumConfigDialog({
   const precision = useDecimalPrecision();
 
   const section = dmpFile.sections[sectionIndex];
+  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
 
   // Figure out the color index based on position in selected indices
   const colorIndex = useMemo(() => {
     const sorted = Array.from(selectionConfig.selectedIndices).sort((a, b) => a - b);
     return sorted.indexOf(sectionIndex);
   }, [selectionConfig.selectedIndices, sectionIndex]);
+
+  const sectionPalette = useMemo(() => sectionColorPalette(resolvedTheme), [resolvedTheme]);
 
   // Station selection: stationIndex is the committed value, previewStationIndex
   // tracks what the map highlights (follows hover, reverts on dropdown close).
@@ -143,7 +147,7 @@ export default function ZeroDatumConfigDialog({
   const [date, setDate] = useState(
     selectionConfig.defaultDate ?? section?.date?.split(/[T ]/)[0] ?? ''
   );
-  const [color, setColor] = useState(SECTION_COLORS[colorIndex % SECTION_COLORS.length] ?? '#4ecdc4');
+  const [color, setColor] = useState(sectionPalette[colorIndex % sectionPalette.length] ?? '#4ecdc4');
   const [direction, setDirection] = useState<'in' | 'out'>(section?.direction === 'out' ? 'out' : 'in');
   const [reverse, setReverse] = useState(false);
 

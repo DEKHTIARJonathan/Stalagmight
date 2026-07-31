@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapVizTokenNames, themeTokens } from '../tokens';
-import { getDepthColor } from '../../utils/colors';
+import { getDepthColor, hexToHSL } from '../../utils/colors';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -47,6 +47,37 @@ function sortedKeys(tokens: Record<string, string>): string[] {
   return Object.keys(tokens).sort();
 }
 
+/** WCAG relative luminance. */
+function luminance(hex: string): number {
+  const channel = (v: number) => {
+    const c = v / 255;
+    return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+  };
+  const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+  return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+}
+
+function contrast(a: string, b: string): number {
+  const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+  return (hi! + 0.05) / (lo! + 0.05);
+}
+
+/**
+ * The map canvas a theme actually paints on. Chrome-only themes
+ * (`solarized_light`, `catppuccin_latte`) declare no `--cc-map-background` of
+ * their own and inherit `:root`'s dark canvas - mirrors `mapCanvasFor` in
+ * src/types/config.ts, duplicated here rather than imported so this suite
+ * doesn't couple to that module's own in-flight changes.
+ */
+function mapCanvasFor(theme: string): string {
+  const tokens = (themeTokens as Record<string, Record<string, string> | undefined>)[theme];
+  return tokens?.['--cc-map-background'] ?? themeTokens.dark['--cc-map-background'];
+}
+
+type ThemeName = keyof typeof themeTokens;
+
+const ALL_THEME_NAMES = Object.keys(themeTokens) as ThemeName[];
+
 const cssDarkTokens = extractTokens(extractBlock(cssSource, ':root,'));
 const cssLightTokens = extractTokens(extractBlock(cssSource, '[data-theme="light"]'));
 const cssCaveTokens = extractTokens(extractBlock(cssSource, '[data-theme="cave"]'));
@@ -64,7 +95,15 @@ const FULL_DARK_THEMES = ['cave', 'dracula', 'one_dark', 'nord', 'catppuccin_moc
 /** Light themes only override UI chrome + controls (no map viz tokens). */
 const LIGHT_THEMES = ['solarized_light', 'catppuccin_latte'] as const;
 
-/** Light themes with full token sets (including map visualization overrides). */
+/**
+ * Light themes with full token sets (including map visualization overrides).
+ *
+ * This list is about the token SHAPE of a light-CHROME theme, and it is only
+ * ever used by the shape checks below. It is deliberately NOT the input to any
+ * perceptual rule: a theme can have light chrome and still paint on the dark
+ * `:root` canvas. Anything that depends on the canvas measures the canvas -
+ * see `rampFloorFor`.
+ */
 const FULL_LIGHT_THEMES = ['kaleido_eink', 'light'] as const;
 
 const cssTokensByTheme: Record<string, Record<string, string>> = {
@@ -157,35 +196,48 @@ describe('theme tokens', () => {
  * theme's own canvas, using the production interpolation rather than a copy of it.
  */
 describe('depth gradient legibility', () => {
-  /** WCAG relative luminance. */
-  function luminance(hex: string): number {
-    const channel = (v: number) => {
-      const c = v / 255;
-      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
-    };
-    const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
-    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
-  }
-
-  function contrast(a: string, b: string): number {
-    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
-    return (hi! + 0.05) / (lo! + 0.05);
-  }
-
   /** Worst contrast anywhere along the drawn ramp, plus where it occurs. */
-  /** Themes that declare their own map-visualization tokens. */
-  type FullTheme =
-    | (typeof FULL_LIGHT_THEMES)[number]
-    | (typeof FULL_DARK_THEMES)[number]
-    | 'dark';
+  /**
+   * Themes that declare their own map-visualization tokens, derived from the
+   * tokens themselves rather than hand-listed. A hand-maintained union is a
+   * silent coverage hole: a theme added to tokens.ts and forgotten here would
+   * get NONE of the three properties below (contrast floor, endpoint hue bands,
+   * hue traversal) and nothing would fail. Declaring `--cc-map-background` is
+   * the marker because the map-viz tokens are all-or-nothing - the
+   * "only override UI chrome and controls" test above asserts a chrome-only
+   * theme is missing exactly `mapVizTokenNames`, never a subset of it.
+   *
+   * The same derivation runs at the type level so `KNOWN_BELOW_FLOOR` still
+   * cannot name a theme without a ramp, and so `themeTokens[theme]` keeps its
+   * literal types instead of degrading to `Record<string, string>`.
+   */
+  type FullTheme = {
+    [K in ThemeName]: (typeof themeTokens)[K] extends { '--cc-map-background': string } ? K : never;
+  }[ThemeName];
 
-  function worstOnRamp(theme: FullTheme) {
+  /**
+   * Hue as a SIGNED offset from red, i.e. 355 reads as -5 rather than 355. Reds
+   * straddle the 0/360 seam, so raw hue makes a perfectly ordinary green -> red
+   * ramp look like it jumps backwards at the last step.
+   */
+  function signedHue(hex: string): number {
+    const hsl = hexToHSL(hex);
+    expect(hsl).not.toBeNull();
+    return hsl!.h > 180 ? hsl!.h - 360 : hsl!.h;
+  }
+
+  /**
+   * The whole drawn ramp, sampled the way the renderer draws it. Endpoint-only
+   * checks are the trap this suite exists for: `getDepthColor` interpolates along
+   * the shortest HSL hue path, so two perfectly good endpoints can be joined by a
+   * detour through blue and magenta that no endpoint assertion can see.
+   */
+  function sweepRamp(theme: FullTheme) {
     const tokens = themeTokens[theme];
     const canvas = tokens['--cc-map-background'];
     const shallow = tokens['--cc-depth-shallow'];
     const deep = tokens['--cc-depth-deep'];
-    let worst = Number.POSITIVE_INFINITY;
-    let at = '';
+    const samples: { color: string; ratio: number; hue: number }[] = [];
     for (let i = 0; i <= 40; i++) {
       // Depths are negative elevations, so minDepth is the DEEPER end. Passing them
       // the other way round makes getDepthColor's own clamp degenerate (min > max)
@@ -193,10 +245,24 @@ describe('depth gradient legibility', () => {
       // this into an endpoint check and misses the mid-ramp hue entirely.
       const color = getDepthColor(-40 + i, shallow, deep, -40, 0);
       expect(color).not.toBeNull();
-      const ratio = contrast(color!, canvas);
-      if (ratio < worst) {
-        worst = ratio;
-        at = color!;
+      samples.push({
+        color: color!,
+        ratio: contrast(color!, canvas),
+        hue: signedHue(color!),
+      });
+    }
+    // Sample 0 is the SHALLOW end (depth -40 is the shallowest elevation passed).
+    return { samples, canvas, shallow, deep };
+  }
+
+  function worstOnRamp(theme: FullTheme) {
+    const { samples, canvas } = sweepRamp(theme);
+    let worst = Number.POSITIVE_INFINITY;
+    let at = '';
+    for (const s of samples) {
+      if (s.ratio < worst) {
+        worst = s.ratio;
+        at = s.color;
       }
     }
     return { worst, at, canvas };
@@ -208,27 +274,122 @@ describe('depth gradient legibility', () => {
   const RAMP_FLOOR = 3;
 
   /**
-   * Themes already below the floor when this guard was added, with the value measured
-   * at the time. Pre-existing and out of scope for #332 (which is about the light
-   * canvas), but recorded so they cannot quietly get worse. `one_dark` interpolates
-   * indigo -> indigo through a mid-blue that sits close to its own dark canvas.
+   * Light-canvas themes are held to 2:1 instead, and this is a deliberate,
+   * user-directed trade rather than an oversight.
    *
-   * Carried to 3dp on purpose. The assertion below is `worst >= known`, so every digit
-   * dropped here is slack the ratchet grants a real regression: at 2.59 the ramp could
-   * quietly decay to 2.590 before this failed. The sweep measures 2.5992.
+   * The ramp runs cyan -> green -> yellow -> red. Its YELLOW MIDPOINT is the
+   * brightest sample on the sweep, so on a near-white canvas the midpoint sets
+   * the worst ratio, and holding it at 3:1 forces the WHOLE ramp dark - which is
+   * what made `light` read as a flat olive-to-brown smear with no visible cyan or
+   * green in it. The same anchors on a dark canvas measure 3.5:1; the constraint
+   * is the canvas, not the palette.
+   *
+   * Measured cost of each option on `light` (worst sample vs #faf7f2):
+   *   #0b7d77 -> #8f1206   3.50:1   clears 3:1, but visibly muted
+   *   #1aa89c -> #b81a0c   2.10:1   <- chosen: vivid and still legible
+   *   #3fd6c8 -> #d92a20   1.42:1   matches dark, midpoint near-invisible
+   *
+   * 2:1 keeps the midpoint distinguishable while letting the ends read as real
+   * colours. Dark-canvas themes are UNAFFECTED and still assert the full 3:1 -
+   * do not "simplify" this back to one constant.
    */
-  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = { one_dark: 2.599 };
+  const RAMP_FLOOR_LIGHT_CANVAS = 2;
 
-  it.each([...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const])(
-    '%s keeps the whole depth ramp at 3:1 or better against its own canvas',
+  /**
+   * Whether `theme`'s ramp is drawn on a light canvas, MEASURED off that
+   * canvas rather than read off a list of light-chrome themes.
+   *
+   * The distinction is load-bearing: the 2:1 trade above exists because of the
+   * canvas the ramp is painted on, so selecting by chrome would hold a future
+   * light-chrome/dark-canvas theme to 2:1 while it draws on `#1a1a2e` - a real
+   * accessibility regression with no failing test. `solarized_light` and
+   * `catppuccin_latte` are exactly that shape today (light chrome, inherited
+   * dark canvas); they are out of scope here only because they declare no ramp.
+   *
+   * `> 0.5` relative luminance is the same rule `isLightCanvasTheme`
+   * (src/utils/colors.ts) applies to pick a section palette, and the rule
+   * `LIGHT_CANVAS_THEMES` in src/types/config.ts is pinned against. Recomputed
+   * from this file's own helpers rather than imported, so this stays an
+   * independent check instead of re-asserting the module's own definition.
+   */
+  const isLightCanvas = (theme: FullTheme): boolean => luminance(mapCanvasFor(theme)) > 0.5;
+
+  /** The floor that applies to `theme`, by the canvas its ramp is drawn on. */
+  const rampFloorFor = (theme: FullTheme): number =>
+    isLightCanvas(theme) ? RAMP_FLOOR_LIGHT_CANVAS : RAMP_FLOOR;
+
+  /**
+   * Themes still below the floor, with the value measured when the exception was
+   * granted. Empty today: `one_dark` was the last entry and #357 item 8 took its
+   * shallow endpoint off the indigo arc (2.599 -> 4.38), so the entry was deleted
+   * exactly as the "once it clears the floor, remove it" assertion below demands.
+   *
+   * Carry any future value to 3dp on purpose. The assertion below is `worst >= known`,
+   * so every digit dropped here is slack the ratchet grants a real regression.
+   */
+  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = {};
+
+  const ALL_FULL_THEMES = ALL_THEME_NAMES.filter(
+    (name): name is FullTheme => '--cc-map-background' in themeTokens[name]
+  );
+
+  /**
+   * Deep must be red (signed hue, so red straddles 0); shallow must sit anywhere
+   * on the warm side of the 180 line.
+   *
+   * The ONLY thing this band exists to forbid is a shallow endpoint at hue >= 180,
+   * because that is the side of the wheel from which `getDepthColor`'s shortest
+   * path to red runs UP through blue and magenta instead of DOWN through green
+   * and yellow. 180 is therefore the real boundary, and the max is set just under
+   * it rather than at some arbitrary "green enough" point.
+   *
+   * It used to be 155, which additionally encoded a product preference for a
+   * green shallow end. That preference is gone: the shipped ramp is cyan -> green
+   * -> yellow -> red (the pre-#357 look), whose shallow anchors run 169.8-174.9.
+   * Those descend through green and yellow exactly like a green shallow does -
+   * they just start further round the wheel and cover MORE of it, which is why
+   * they measure better on discriminability and on deuteranopia than the green
+   * ramp that briefly replaced them. Narrowing this band back below 178 would
+   * reject the intended colours, not catch a defect.
+   */
+  const SHALLOW_HUE = { min: 85, max: 178 };
+  const DEEP_HUE = { min: -25, max: 25 };
+
+  /**
+   * End-to-end contrast between the two endpoints. Green -> red is the classic
+   * red/green confusable pair, so the ramp has to carry its information in
+   * luminance too, or it is a flat grey ramp under deuteranopia / protanopia.
+   * Note this is a LUMINANCE ratio, not HSL lightness: yellow and blue at equal
+   * HSL L differ about 5x in relative luminance, so equal-L endpoints prove
+   * nothing.
+   */
+  const MIN_END_SEPARATION = 1.6;
+
+  it('grants the 2:1 light-canvas floor to exactly light and kaleido_eink', () => {
+    // Pins the measured predicate to the set it is expected to produce TODAY, in
+    // both directions. `rampFloorFor` is deliberately derived, so without this a
+    // theme joining or leaving the light-canvas set would silently change which
+    // floor it is judged against - the 2:1 trade was granted per-canvas by a
+    // human and a new theme inheriting it is a decision, not a detail.
+    // These are the same two names as `LIGHT_CANVAS_THEMES` in src/types/config.ts.
+    expect(ALL_FULL_THEMES.filter(isLightCanvas).slice().sort()).toEqual(['kaleido_eink', 'light']);
+    expect(ALL_FULL_THEMES.filter((t) => rampFloorFor(t) === RAMP_FLOOR_LIGHT_CANVAS).slice().sort()).toEqual([
+      'kaleido_eink',
+      'light',
+    ]);
+  });
+
+  it.each(ALL_FULL_THEMES)(
+    '%s keeps the whole depth ramp above the contrast floor for its own canvas',
     (theme) => {
       const { worst, at, canvas } = worstOnRamp(theme);
+      const floor = rampFloorFor(theme);
       const known = KNOWN_BELOW_FLOOR[theme];
       if (known === undefined) {
         expect(
           worst,
-          `${theme}: ${at} on ${canvas} is ${worst.toFixed(2)}:1, below the ${RAMP_FLOOR}:1 floor`
-        ).toBeGreaterThanOrEqual(RAMP_FLOOR);
+          `${theme}: ${at} on ${canvas} is ${worst.toFixed(2)}:1, below the ${floor}:1 floor`
+        ).toBeGreaterThanOrEqual(floor);
         return;
       }
       // Not allowed to get worse...
@@ -237,12 +398,96 @@ describe('depth gradient legibility', () => {
         `${theme} regressed: ${at} on ${canvas} is now ${worst.toFixed(2)}:1, was ${known}:1`
       ).toBeGreaterThanOrEqual(known);
       // ...and once it clears the floor, this entry is stale - delete it.
+      // Compared against THIS theme's floor, not the bare RAMP_FLOOR: a
+      // light-canvas theme is held to 2:1, so measuring 2.0-3.0 clears its own
+      // floor while still sitting below 3. Hard-coding 3 here would let such an
+      // entry survive forever, which defeats the whole point of a staleness
+      // check that exists to force exemptions back off the list.
       expect(
         worst,
-        `${theme} now clears ${RAMP_FLOOR}:1 (${worst.toFixed(2)}:1) - remove it from KNOWN_BELOW_FLOOR`
-      ).toBeLessThan(RAMP_FLOOR);
+        `${theme} now clears ${floor}:1 (${worst.toFixed(2)}:1) - remove it from KNOWN_BELOW_FLOOR`
+      ).toBeLessThan(floor);
     }
   );
+
+  it.each(ALL_FULL_THEMES)('%s ramps from green (shallower) to red (deeper)', (theme) => {
+    const { shallow, deep } = sweepRamp(theme);
+    const hs = signedHue(shallow);
+    const hd = signedHue(deep);
+    expect(hs, `${theme}: shallow ${shallow} is at hue ${hs.toFixed(0)}, not green`).toBeGreaterThanOrEqual(SHALLOW_HUE.min);
+    expect(hs, `${theme}: shallow ${shallow} is at hue ${hs.toFixed(0)}, not green`).toBeLessThanOrEqual(SHALLOW_HUE.max);
+    expect(hd, `${theme}: deep ${deep} is at hue ${hd.toFixed(0)}, not red`).toBeGreaterThanOrEqual(DEEP_HUE.min);
+    expect(hd, `${theme}: deep ${deep} is at hue ${hd.toFixed(0)}, not red`).toBeLessThanOrEqual(DEEP_HUE.max);
+  });
+
+  it.each(ALL_FULL_THEMES)(
+    '%s traverses green -> yellow -> orange -> red, with no detour through blue',
+    (theme) => {
+      // THIS is the assertion the endpoints cannot make. Two green/red endpoints
+      // joined the wrong way round the wheel still satisfy the test above; they
+      // fail here, because the sweep's hue climbs towards blue (180+) instead of
+      // falling towards red.
+      const { samples } = sweepRamp(theme);
+      const hues = samples.map((s) => s.hue);
+      for (let i = 1; i < hues.length; i++) {
+        expect(
+          hues[i]!,
+          `${theme}: hue rose from ${hues[i - 1]!.toFixed(0)} to ${hues[i]!.toFixed(0)} at ` +
+            `${samples[i]!.color} - the ramp is taking the long way round through blue/magenta`
+        ).toBeLessThanOrEqual(hues[i - 1]! + 1e-9);
+      }
+      for (const s of samples) {
+        expect(
+          s.hue,
+          `${theme}: ${s.color} sits at hue ${s.hue.toFixed(0)}, outside the green -> red band`
+        ).toBeGreaterThanOrEqual(DEEP_HUE.min);
+        expect(
+          s.hue,
+          `${theme}: ${s.color} sits at hue ${s.hue.toFixed(0)}, outside the green -> red band`
+        ).toBeLessThanOrEqual(SHALLOW_HUE.max);
+      }
+    }
+  );
+
+  it.each(ALL_FULL_THEMES)('%s separates its two ends in luminance, not just hue', (theme) => {
+    const { shallow, deep } = sweepRamp(theme);
+    const separation = contrast(shallow, deep);
+    expect(
+      separation,
+      `${theme}: ${shallow} and ${deep} are only ${separation.toFixed(2)}:1 apart - a ` +
+        `red/green ramp this flat in luminance is unreadable under deuteranopia`
+    ).toBeGreaterThanOrEqual(MIN_END_SEPARATION);
+  });
+
+  it('would reject a ramp that takes the long way round the wheel', () => {
+    // Proves the traversal test above can fail, on the exact pairing `one_dark`
+    // shipped (#357 item 8): its #56b6c2 cyan sits at hue 187, just past the 180
+    // line, so the shortest path to the #e06c75 red at 355 climbs through indigo
+    // instead of falling through yellow. Both ENDPOINTS look defensible in
+    // isolation - which is the whole reason the sweep exists.
+    const canvas = themeTokens.one_dark['--cc-map-background'];
+    const samples: { hue: number; ratio: number }[] = [];
+    for (let i = 0; i <= 40; i++) {
+      const color = getDepthColor(-40 + i, '#56b6c2', '#e06c75', -40, 0)!;
+      samples.push({ hue: signedHue(color), ratio: contrast(color, canvas) });
+    }
+
+    // 1. The endpoint check alone does NOT catch it: the deep end is a perfectly
+    //    ordinary red. Only the shallow end is out of band, and a ramp built from
+    //    two in-band endpoints could take this same detour.
+    expect(signedHue('#e06c75')).toBeGreaterThanOrEqual(DEEP_HUE.min);
+    expect(signedHue('#e06c75')).toBeLessThanOrEqual(DEEP_HUE.max);
+
+    // 2. The traversal check does catch it, twice over. Signed hue puts the
+    //    blue/magenta arc at -173..-5, so the sweep both RISES (the band is meant
+    //    to fall, green -> red) and leaves the band on the blue side.
+    const rose = samples.some((s, i) => i > 0 && s.hue > samples[i - 1]!.hue + 1e-9);
+    expect(rose, 'the bad ramp should show a rising hue').toBe(true);
+    expect(Math.min(...samples.map((s) => s.hue))).toBeLessThan(DEEP_HUE.min);
+
+    // 3. And the mid it detours through is what breaks the contrast floor.
+    expect(Math.min(...samples.map((s) => s.ratio))).toBeLessThan(RAMP_FLOOR);
+  });
 
   it('would reject the dark endpoints on the light canvas', () => {
     // Proves the test above can fail: this is the exact pairing light shipped with
@@ -260,6 +505,66 @@ describe('depth gradient legibility', () => {
       worst = Math.min(worst, contrast(color!, light));
     }
     expect(worst).toBeLessThan(2);
+  });
+});
+
+/**
+ * Read-only contrast audit findings 1-3 (#357). Each pairing failed WCAG on at
+ * least one theme without any token being missing - the CSS/tokens.ts sync
+ * checks above cannot see this class of defect, only a real luminance
+ * comparison can. Guards live here (not a parallel harness) so a future retune
+ * of any of these three tokens is checked the same way the depth ramp is.
+ */
+describe('contrast audit (#357)', () => {
+  // Finding 1: --cc-text-secondary on --cc-panel. Drives the vertical "Sections"
+  // tab label (11px text, needs 4.5:1) and the pin/close icons (needs 3:1) in
+  // PanelOpenerTab.tsx - one shared box, one shared token. 4.5:1 is the binding
+  // threshold since it's stricter than the icon floor.
+  const TEXT_SECONDARY_ON_PANEL_FLOOR = 4.5;
+
+  it.each(ALL_THEME_NAMES)(
+    '%s: --cc-text-secondary on --cc-panel clears 4.5:1 (11px label) and 3:1 (icons)',
+    (theme) => {
+      const ratio = contrast(themeTokens[theme]['--cc-text-secondary'], themeTokens[theme]['--cc-panel']);
+      expect(
+        ratio,
+        `${theme}: --cc-text-secondary ${themeTokens[theme]['--cc-text-secondary']} on ` +
+          `--cc-panel ${themeTokens[theme]['--cc-panel']} is ${ratio.toFixed(2)}:1, below 4.5:1`
+      ).toBeGreaterThanOrEqual(TEXT_SECONDARY_ON_PANEL_FLOOR);
+    }
+  );
+
+  // Finding 2: --cc-map-scale-border on --cc-map-background. 3:1 is the WCAG
+  // floor for a non-text UI boundary (the "200 m" scale box border).
+  const MAP_SCALE_BORDER_FLOOR = 3;
+
+  it.each(ALL_THEME_NAMES)(
+    '%s: --cc-map-scale-border on its map canvas clears 3:1',
+    (theme) => {
+      const canvas = mapCanvasFor(theme);
+      const ratio = contrast(themeTokens[theme]['--cc-map-scale-border'], canvas);
+      expect(
+        ratio,
+        `${theme}: --cc-map-scale-border ${themeTokens[theme]['--cc-map-scale-border']} on ` +
+          `map canvas ${canvas} is ${ratio.toFixed(2)}:1, below 3:1`
+      ).toBeGreaterThanOrEqual(MAP_SCALE_BORDER_FLOOR);
+    }
+  );
+
+  // Finding 3: --cc-map-scale-text on --cc-map-background. --cc-map-scale-bg is
+  // transparent on every theme, so this text sits directly on the map canvas -
+  // which for the chrome-only light themes is the DARK :root canvas, not their
+  // own light panel.
+  const MAP_SCALE_TEXT_FLOOR = 4.5;
+
+  it.each(ALL_THEME_NAMES)('%s: --cc-map-scale-text on its map canvas clears 4.5:1', (theme) => {
+    const canvas = mapCanvasFor(theme);
+    const ratio = contrast(themeTokens[theme]['--cc-map-scale-text'], canvas);
+    expect(
+      ratio,
+      `${theme}: --cc-map-scale-text ${themeTokens[theme]['--cc-map-scale-text']} on ` +
+        `map canvas ${canvas} is ${ratio.toFixed(2)}:1, below 4.5:1`
+    ).toBeGreaterThanOrEqual(MAP_SCALE_TEXT_FLOOR);
   });
 });
 
@@ -303,14 +608,55 @@ describe('index.html anti-flash cover', () => {
     // `#fff` would revert #360 with no error and no failing test anywhere.
     // This is the only place the contract can be pinned in the language that
     // owns the tokens.
+    //
+    // Absence is a FAILURE here, not a skip. This loop used to `continue` past
+    // an undefined value, which made it silently vacuous in two directions: a
+    // theme whose endpoints stopped being parsed out of the CSS (a renamed
+    // token, a reformatted block `extractTokens` no longer matches) checked
+    // nothing, and a theme missing from the hand-maintained `cssTokensByTheme`
+    // was never visited at all. Both are pinned below instead.
+    expect(
+      Object.keys(cssTokensByTheme).slice().sort(),
+      'cssTokensByTheme is hand-maintained - a theme missing from it is never checked by this test'
+    ).toEqual([...ALL_THEME_NAMES].slice().sort());
+
+    // The themes that declare depth endpoints, pinned in both directions. The
+    // other two (solarized_light, catppuccin_latte) are chrome-only and inherit
+    // :root's ramp - see the "only override UI chrome and controls" test above.
+    const DEPTH_ENDPOINT_THEMES = [
+      'catppuccin_mocha',
+      'cave',
+      'dark',
+      'dracula',
+      'kaleido_eink',
+      'light',
+      'nord',
+      'one_dark',
+    ];
+
+    const declaring: string[] = [];
     for (const [theme, tokens] of Object.entries(cssTokensByTheme)) {
-      for (const name of ['--cc-depth-shallow', '--cc-depth-deep']) {
-        const value = tokens[name];
-        // Not every theme declares them; the ones that do must be hex.
-        if (value === undefined) continue;
+      const shallow = tokens['--cc-depth-shallow'];
+      const deep = tokens['--cc-depth-deep'];
+      // All-or-nothing: the map-viz tokens ship as one block, so half a ramp is
+      // a defect regardless of which half is missing.
+      expect(
+        deep === undefined,
+        `${theme} declares one depth endpoint but not the other`
+      ).toBe(shallow === undefined);
+      if (shallow === undefined) continue;
+      declaring.push(theme);
+      for (const [name, value] of [
+        ['--cc-depth-shallow', shallow],
+        ['--cc-depth-deep', deep!],
+      ] as const) {
         expect(value, `${theme} ${name} is not #rrggbb`).toMatch(/^#[0-9a-fA-F]{6}$/);
       }
     }
+    expect(
+      declaring.slice().sort(),
+      'a theme dropped out of (or joined) the set with depth endpoints'
+    ).toEqual(DEPTH_ENDPOINT_THEMES);
   });
 
   it('does not guess the theme from the OS colour scheme', () => {

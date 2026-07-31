@@ -15,6 +15,11 @@ export const DATA_TABLE_MAX_HEIGHT = 500;
  * (e.g. a degenerate 0 from a zero-height layout) would reload the panel
  * collapsed - there is no "unset" sentinel, the stored u32 is taken at face
  * value - so the clamp and the resize bounds must agree.
+ *
+ * Also mirrored by `PanelsConfig::normalize` in src-tauri/src/config/types.rs,
+ * which re-clamps these same three values on load. That mirror is enforced by
+ * src/test/__tests__/configBoundsMirror.test.ts, which parses the Rust clamp
+ * calls and compares against these constants - change both sides together.
  */
 export const PANEL_SIZE_BOUNDS = {
   sections: { min: 150, max: 400 },

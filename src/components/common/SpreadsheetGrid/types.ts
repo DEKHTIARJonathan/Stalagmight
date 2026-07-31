@@ -28,10 +28,15 @@ export interface GridColumn<Row> {
    *  container instead of leaving an empty gutter on the right (e.g. a comment
    *  column). {@link width} is its minimum; extra space is split across all grow
    *  columns. A manual resize PINS the column: it keeps the dragged width and stops
-   *  absorbing leftover, so the grid may then sit narrower than its container. A
-   *  pinned width is capped at the room the current container has for it, so one
-   *  resize on a wide window cannot strand the layout on a narrow one - widths
-   *  persist across sessions and nothing clears them. */
+   *  absorbing leftover, so the grid may then sit narrower than its container.
+   *
+   *  A pinned width is NOT capped to the current container. A per-window cap was
+   *  tried and reverted - see the rationale on `applyWidthOverrides` in
+   *  `useColumnWidths.ts`, which is the authority here: capping froze the handle
+   *  on a widening drag while the raw dragged value still reached config.toml.
+   *  So a wide drag on a big monitor can leave a horizontal scrollbar on a
+   *  smaller one; that is bounded by MAX_COL_WIDTH and is recoverable by dragging
+   *  back, which the frozen handle was not. */
   grow?: boolean;
   align?: 'left' | 'center' | 'right';
 

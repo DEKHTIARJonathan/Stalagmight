@@ -89,7 +89,6 @@ impl Default for UnitsConfig {
 impl Default for DisplayConfig {
     fn default() -> Self {
         Self {
-            default_background: "#1a1a2e".to_string(),
             grid_color: "#333366".to_string(),
             grid_spacing: 10.0,
             font_size: 12,

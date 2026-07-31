@@ -397,7 +397,6 @@
       "title": "Display",
       "sections": {
         "interface": "Interface",
-        "background": "Background",
         "grid": "Grid",
         "font": "Font",
         "depthGradient": "Depth Gradient",
@@ -408,11 +407,6 @@
         "label": "UI scale",
         "help": "Scale the entire interface. Also adjustable with Ctrl + = and Ctrl + - (Ctrl + 0 resets).",
         "aria": "Interface scale"
-      },
-      "background": {
-        "label": "Background color",
-        "help": "Default background color for the map view",
-        "aria": "Background color"
       },
       "grid": {
         "color": {
@@ -894,9 +888,9 @@
       },
       "validation": {
         "logSize": "Log directory size must be between 1 and 10000 MB",
-        "sectionsPanel": "Sections panel width must be between 100 and 800",
-        "detailPanel": "Detail panel width must be between 150 and 800",
-        "dataTable": "Data table height must be between 100 and 600",
+        "sectionsPanel": "Sections panel width must be between {{min}} and {{max}}",
+        "detailPanel": "Detail panel width must be between {{min}} and {{max}}",
+        "dataTable": "Data table height must be between {{min}} and {{max}}",
         "closureSigmaLength": "Base length sigma must be greater than 0",
         "closureSigmaAzimuth": "Base azimuth sigma must be greater than 0",
         "closureSigmaDepth": "Base depth sigma must be greater than 0"
@@ -1382,6 +1376,7 @@
     "empty": "No shots in this section.",
     "stationsEmpty": "No stations in this section.",
     "frozen": "Geometry locked - part of adjusted network",
+    "viewSaveFailed": "Could not save the table layout. Your column widths and visibility may not be restored next time.",
     "pasteReport": {
       "written_one": "Pasted {{count}} cell",
       "written_other": "Pasted {{count}} cells",

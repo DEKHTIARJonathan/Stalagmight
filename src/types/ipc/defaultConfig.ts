@@ -34,7 +34,6 @@ export const defaultConfig: Config = {
     }
   },
   "display": {
-    "default_background": "#1a1a2e",
     "grid_color": "#333366",
     "grid_spacing": 10.0,
     "font_size": 12,

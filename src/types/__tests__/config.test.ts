@@ -10,6 +10,7 @@ import {
   lightSectionColorDefaults,
   getThemedDisplayDefaults,
   getThemedSectionColorDefaults,
+  mapCanvasFor,
   type Config,
   type StationConfig,
   type ShotConfig,
@@ -20,6 +21,7 @@ import {
   type ThemeMode,
 } from '../config';
 import { defaultConfig as generatedDefaultConfig } from '../ipc/defaultConfig';
+import { themeTokens } from '../../theme/tokens';
 
 describe('defaultConfig single-sourcing (#275)', () => {
   it('re-exports the generated Config::default() unmodified', () => {
@@ -309,10 +311,6 @@ describe('Config value consistency', () => {
 
 describe('theme-aware display defaults', () => {
   describe('lightDisplayDefaults', () => {
-    it('has light-appropriate background color', () => {
-      expect(lightDisplayDefaults.default_background).toBe('#f5f0e8');
-    });
-
     it('has light-appropriate grid color', () => {
       expect(lightDisplayDefaults.grid_color).toBe('#c1a07a');
     });
@@ -322,7 +320,6 @@ describe('theme-aware display defaults', () => {
     });
 
     it('uses correct field names matching DisplayConfig', () => {
-      expect(lightDisplayDefaults).toHaveProperty('default_background');
       expect(lightDisplayDefaults).toHaveProperty('grid_color');
       expect(lightDisplayDefaults).toHaveProperty('font_color');
       expect(lightDisplayDefaults).toHaveProperty('grid_spacing');
@@ -360,16 +357,26 @@ describe('theme-aware display defaults', () => {
   describe('getThemedDisplayDefaults', () => {
     it('returns dark defaults for dark theme', () => {
       const result = getThemedDisplayDefaults('dark');
-      expect(result.default_background).toBe(defaultConfig.display.default_background);
       expect(result.grid_color).toBe(defaultConfig.display.grid_color);
       expect(result.font_color).toBe(defaultConfig.display.font_color);
+      expect(result.measure_path_color).toBe(defaultConfig.display.measure_path_color);
     });
 
     it('returns light defaults for light theme', () => {
       const result = getThemedDisplayDefaults('light');
-      expect(result.default_background).toBe(lightDisplayDefaults.default_background);
       expect(result.grid_color).toBe(lightDisplayDefaults.grid_color);
       expect(result.font_color).toBe(lightDisplayDefaults.font_color);
+      expect(result.measure_path_color).toBe(lightDisplayDefaults.measure_path_color);
+    });
+
+    it('returns DARK defaults for the chrome-only light themes (#357 item 9)', () => {
+      // solarized_light and catppuccin_latte set no map-visualization tokens, so
+      // their map canvas is :root's dark #1a1a2e. These defaults are all drawn on
+      // that canvas, so the light (dark-ink) set would be the wrong one.
+      for (const theme of ['solarized_light', 'catppuccin_latte']) {
+        expect(mapCanvasFor(theme)).toBe(themeTokens.dark['--cc-map-background']);
+        expect(getThemedDisplayDefaults(theme).grid_color).toBe(defaultConfig.display.grid_color);
+      }
     });
 
     it('returns deep copies (not references)', () => {
@@ -396,5 +403,90 @@ describe('theme-aware display defaults', () => {
       const result2 = getThemedSectionColorDefaults('dark');
       expect(result1.palette).not.toBe(result2.palette);
     });
+  });
+});
+
+/**
+ * #357 items 9 and 17. Both were the same defect: a "themed" default specified a
+ * colour tuned for the wrong canvas, so the thing it draws was invisible. Neither
+ * was caught by anything, because every existing assertion here compares hexes to
+ * hexes. These measure instead.
+ */
+describe('themed defaults are legible on the canvas they are drawn on', () => {
+  /** WCAG relative luminance. */
+  function luminance(hex: string): number {
+    const channel = (v: number) => {
+      const c = v / 255;
+      return c <= 0.03928 ? c / 12.92 : Math.pow((c + 0.055) / 1.055, 2.4);
+    };
+    const [r, g, b] = [1, 3, 5].map((i) => channel(parseInt(hex.slice(i, i + 2), 16)));
+    return 0.2126 * r! + 0.7152 * g! + 0.0722 * b!;
+  }
+
+  function contrast(a: string, b: string): number {
+    const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x);
+    return (hi! + 0.05) / (lo! + 0.05);
+  }
+
+  /** WCAG's floor for a non-text graphical object, which is what a survey line is. */
+  const FLOOR = 3;
+
+  const ALL_THEMES = Object.keys(themeTokens);
+
+  it('light-canvas themes are exactly the ones with a light map background', () => {
+    // Pins the hand-written LIGHT_CANVAS_THEMES set in config.ts against the
+    // tokens it is meant to describe, so adding a theme cannot silently hand it
+    // the wrong palette. `light` and `kaleido_eink` override --cc-map-background;
+    // everyone else, including the chrome-only light themes, inherits the dark one.
+    for (const theme of ALL_THEMES) {
+      const canvasIsLight = luminance(mapCanvasFor(theme)) > 0.5;
+      const usesLightDefaults =
+        getThemedSectionColorDefaults(theme).palette[0] === lightSectionColorDefaults.palette[0];
+      expect(
+        usesLightDefaults,
+        `${theme}: canvas ${mapCanvasFor(theme)} is ${canvasIsLight ? 'light' : 'dark'} but it ` +
+          `gets the ${usesLightDefaults ? 'light' : 'dark'} palette`
+      ).toBe(canvasIsLight);
+    }
+  });
+
+  // #357 item 9. A section keeps whatever colour it was created with - per-project
+  // user data, never rewritten on a theme flip - so the only place this can be
+  // fixed is what a NEW project seeds. Every colour that seed can hand out has to
+  // be legible on the canvas of the theme it was seeded under.
+  it.each(ALL_THEMES)('%s: every seedable section colour clears 3:1 on its canvas', (theme) => {
+    const canvas = mapCanvasFor(theme);
+    for (const color of getThemedSectionColorDefaults(theme).palette) {
+      const ratio = contrast(color, canvas);
+      expect(
+        ratio,
+        `${theme}: section colour ${color} on ${canvas} is ${ratio.toFixed(2)}:1, below ${FLOOR}:1`
+      ).toBeGreaterThanOrEqual(FLOOR);
+    }
+  });
+
+  // #357 item 17. The ruler's measured path is tinted with this, over the canvas.
+  it.each(ALL_THEMES)('%s: the default measure-path colour clears 3:1 on its canvas', (theme) => {
+    const canvas = mapCanvasFor(theme);
+    const color = getThemedDisplayDefaults(theme).measure_path_color;
+    const ratio = contrast(color, canvas);
+    expect(
+      ratio,
+      `${theme}: measure path ${color} on ${canvas} is ${ratio.toFixed(2)}:1, below ${FLOOR}:1`
+    ).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it('would reject the values these two guards were added for', () => {
+    // Proves neither guard is vacuous. Both of these shipped: `#22d3ee` was the
+    // light theme's own measure-path default, and `#c7873a` was an entry of the
+    // "light" section palette. Measured on the light canvas they were written for.
+    const lightCanvas = themeTokens.light['--cc-map-background'];
+    expect(contrast('#22d3ee', lightCanvas)).toBeLessThan(2);
+    expect(contrast('#c7873a', lightCanvas)).toBeLessThan(FLOOR);
+    // ...and the dark palette on the light canvas, which is what item 9 describes
+    // a light-mode user actually seeing today for an already-created project.
+    for (const color of defaultConfig.section_colors.palette) {
+      expect(contrast(color, lightCanvas)).toBeLessThan(FLOOR);
+    }
   });
 });

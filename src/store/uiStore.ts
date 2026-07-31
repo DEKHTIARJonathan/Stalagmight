@@ -129,6 +129,39 @@ export function colorModeOf(
         : 'section';
 }
 
+/**
+ * The overlay flags (plus the distance overlay's cache) that represent a
+ * {@link ColorMode} - the inverse of {@link colorModeOf}, and the ONE place that
+ * maps a single-select mode back onto the three booleans.
+ *
+ * Every writer that can turn an overlay on goes through this, so "two overlays on
+ * at once" is not representable after any entry point runs. That mattered:
+ * `showDepthGradient` is persisted (a DisplayToggleKey) while
+ * `showDistanceGradient` is runtime-only, so re-applying the saved display
+ * settings while distance was on (project load / revision restore) wrote depth
+ * back to true underneath it. `colorModeOf` reads that pair as 'distance', and
+ * the old `if (!flag) toggle()` writers no-op'd on it - picking Depth did nothing
+ * and the overlay was stuck in distance mode for good (#34, #22).
+ *
+ * `distanceGradientOrigin`/`distanceField` are the distance overlay's cache: left
+ * alone when distance IS the mode, cleared with it otherwise, so re-enabling
+ * starts fresh at the entrance (zero-datum) default.
+ */
+export type ColorOverlayFlags = Pick<
+  UIStore,
+  'showDepthGradient' | 'showDistanceGradient' | 'showIssueSeverity'
+> &
+  Partial<Pick<UIStore, 'distanceGradientOrigin' | 'distanceField'>>;
+
+export function colorModeFlags(mode: ColorMode): ColorOverlayFlags {
+  return {
+    showDepthGradient: mode === 'depth',
+    showDistanceGradient: mode === 'distance',
+    showIssueSeverity: mode === 'issues',
+    ...(mode === 'distance' ? {} : { distanceGradientOrigin: null, distanceField: null }),
+  };
+}
+
 /** Reveal behavior for a side/data panel.
  *  - `pin`: click to open; stays open (reflows the map) until closed.
  *  - `hover`: pops open on hover (floats over the map); hides on mouse-leave. */
@@ -526,7 +559,6 @@ interface UIStore {
   gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
   setGridSpacing: (spacing: number) => void;
-  loadDisplaySettings: () => Promise<void>;
   saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
   resetDisplaySettings: () => void;
   /** Apply display settings from backend (merges with existing state using ??) */
@@ -570,9 +602,10 @@ interface UIStore {
    *  auto-switch). Enabling turns off both gradients. */
   setIssueSeverity: (on: boolean) => void;
   /** Select the active coloring mode (single-select over the three mutually-
-   *  exclusive overlays). The one place that owns the "which overlay for which
-   *  mode" mapping - delegates to the per-overlay actions so persistence/telemetry/
-   *  cleanup stay identical. Read the current mode via {@link colorModeOf}. */
+   *  exclusive overlays). Authoritative: it writes the whole flag set from
+   *  {@link colorModeFlags}, so it lands on the requested mode from ANY starting
+   *  combination, while depth keeps its persistence/telemetry. Read the current
+   *  mode via {@link colorModeOf}. */
   setColorMode: (mode: ColorMode) => void;
 
   // Geometry display mode (measured vs non-destructive closure-adjusted)
@@ -1419,7 +1452,7 @@ export const useUIStore = create<UIStore>((set) => ({
     if (on) useUIStore.getState().exitGasPlan();
     set(
       on
-        ? { showDistanceGradient: true, showDepthGradient: false, showIssueSeverity: false }
+        ? colorModeFlags('distance')
         : { showDistanceGradient: false, distanceGradientOrigin: null, distanceField: null }
     );
   },
@@ -1432,59 +1465,58 @@ export const useUIStore = create<UIStore>((set) => ({
     // distance overlay's origin/field like toggleDistanceGradient does.
     // Also leave the gas sub-mode (#38) - it owns the same layer paint.
     if (on) useUIStore.getState().exitGasPlan();
-    set(
-      on
-        ? {
-            showIssueSeverity: true,
-            showDepthGradient: false,
-            showDistanceGradient: false,
-            distanceGradientOrigin: null,
-            distanceField: null,
-          }
-        : { showIssueSeverity: false }
-    );
+    set(on ? colorModeFlags('issues') : { showIssueSeverity: false });
   },
   setIssueSeverity: (on) => {
     if (useUIStore.getState().showIssueSeverity === on) return;
     // Enabling issue-severity leaves the gas sub-mode (#38) - shared layer paint.
     if (on) useUIStore.getState().exitGasPlan();
-    set(
-      on
-        ? {
-            showIssueSeverity: true,
-            showDepthGradient: false,
-            showDistanceGradient: false,
-            distanceGradientOrigin: null,
-            distanceField: null,
-          }
-        : { showIssueSeverity: false }
-    );
+    set(on ? colorModeFlags('issues') : { showIssueSeverity: false });
   },
   setColorMode: (mode) => {
-    const s = useUIStore.getState();
     // Selecting any color overlay leaves the gas sub-mode - both own the shots
     // layer paint, so they can't coexist (gas entry is the toolbar toggle,
-    // outside this menu). Done before the no-op check so picking 'section' while
-    // gas is active still exits it. No-op when gas is off.
-    s.exitGasPlan();
-    if (colorModeOf(s) === mode) return;
-    // Single entry point for the mutually-exclusive coloring overlays. Delegates to
-    // the per-overlay actions, which each turn the others off and handle their own
-    // persistence (depth is a saved DisplayToggleKey), telemetry, and cleanup (the
-    // distance overlay clears its origin/field) - so the "select one of N" mapping
-    // lives here in the store instead of being duplicated in the DisplayMenu pills.
-    if (mode === 'depth') {
-      if (!s.showDepthGradient) s.toggleDisplay('showDepthGradient');
-    } else if (mode === 'distance') {
-      if (!s.showDistanceGradient) s.toggleDistanceGradient();
-    } else if (mode === 'issues') {
-      s.setIssueSeverity(true);
-    } else {
-      // 'section' = none: turn off whichever single overlay is currently on.
-      if (s.showDepthGradient) s.toggleDisplay('showDepthGradient');
-      else if (s.showDistanceGradient) s.toggleDistanceGradient();
-      else if (s.showIssueSeverity) s.setIssueSeverity(false);
+    // outside this menu). Done FIRST, before the flags are read: picking 'section'
+    // while gas is active must still exit it, and the exit restores the Plan-entry
+    // display snapshot - so a state read taken before it would be stale. No-op
+    // when gas is off.
+    useUIStore.getState().exitGasPlan();
+    const s = useUIStore.getState();
+    // This action is AUTHORITATIVE: it drives the three overlay flags straight
+    // from the requested mode via colorModeFlags, whatever combination they were
+    // in. It used to delegate to the per-overlay actions behind `if (!flag)`
+    // guards, which silently no-op'd on an invalid combination - and an invalid
+    // combination was reachable, because depth is persisted and distance is not
+    // (see colorModeFlags). Depth on + distance on read as 'distance', picking
+    // Depth hit `if (!s.showDepthGradient)` = false, and the overlay was stuck.
+    //
+    // Depth's persistence semantics are unchanged (#34): the distance/issue
+    // overlays suppress depth at RUNTIME only, leaving the saved preference to
+    // come back next session. So the persisted write (and its telemetry) happens
+    // exactly when the user selected or DEselected depth itself - never when
+    // another overlay took it over. toggleDisplay still owns that write; the
+    // set() below is what makes the whole flag set correct regardless.
+    //
+    // The runtime flag is NOT a stand-in for the saved one, and the two diverge in
+    // exactly the state this branch has to handle: while distance/issues suppresses
+    // depth, `showDepthGradient` already reads false while the saved value is still
+    // true. Picking 'None' from there is the user DEselecting depth (that is what
+    // 'None' means - no overlay, suppressed or not), so it must reach the disk;
+    // gating on the runtime flag alone made it a no-op and depth came back next
+    // session. toggleDisplay can't do it - there is no runtime flip left to make -
+    // so persist directly, with the toggle's telemetry so the pairing above holds.
+    // The write is idempotent when the saved value was already false; only this one
+    // transition can even reach it.
+    if (mode === 'depth' || mode === 'section') {
+      const wantDepth = mode === 'depth';
+      if (s.showDepthGradient !== wantDepth) {
+        s.toggleDisplay('showDepthGradient');
+      } else if (!wantDepth && (s.showDistanceGradient || s.showIssueSeverity)) {
+        trackAction('toggle.showDepthGradient');
+        void s.saveDisplaySetting('showDepthGradient', false);
+      }
     }
+    set(colorModeFlags(mode));
   },
   setDistanceGradientOrigin: (distanceGradientOrigin) =>
     // Clear the cached field so stale colors from the previous origin aren't shown
@@ -1551,11 +1583,11 @@ export const useUIStore = create<UIStore>((set) => ({
     set({
       appMode: mode,
       geometryMode: 'closureAdjusted',
-      showDepthGradient: false,
-      showDistanceGradient: false,
-      showIssueSeverity: false,
-      distanceGradientOrigin: null,
-      distanceField: null,
+      // Through colorModeFlags like every other overlay writer, so the "ONE place
+      // that maps a mode back onto the three booleans" claim on it stays true and a
+      // fourth overlay can never be added here and forgotten. 'section' = no
+      // overlay, and it clears the distance cache the same way.
+      ...colorModeFlags('section'),
       ...MEASURE_CLEARED,
     });
     // Both Plan (setup sidebar) and Export (export stub) render in the right Dock -
@@ -1623,54 +1655,6 @@ export const useUIStore = create<UIStore>((set) => ({
     ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
-  },
-  loadDisplaySettings: async () => {
-    try {
-      const settings = await invokeIpc<Record<string, string>>('load_display_settings', undefined, {
-        purpose: 'load display settings for UI',
-      });
-      const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
-      let gridSpacing: number | undefined;
-      let geometryMode: GeometryMode | undefined;
-      for (const [key, value] of Object.entries(settings)) {
-        if (key.startsWith('show')) {
-          displayState[key as DisplayToggleKey] = value === 'true';
-        } else if (key === 'gridSpacing') {
-          const parsed = parseFloat(value);
-          if (!isNaN(parsed) && parsed > 0) {
-            gridSpacing = parsed;
-          }
-        } else if (key === 'geometryMode') {
-          // "Remember last used": restore the persisted geometry mode, ignoring
-          // any unrecognized value.
-          if (value === 'measured' || value === 'closureAdjusted') {
-            geometryMode = value;
-          }
-        }
-      }
-      // Migration fallback: if we loaded some settings but showShots wasn't among them,
-      // default it to true (older saved settings won't have this newer key)
-      const hasLoadedSettings =
-        Object.keys(displayState).length > 0 || gridSpacing !== undefined || geometryMode !== undefined;
-      if (hasLoadedSettings && displayState.showShots === undefined) {
-        displayState.showShots = true;
-      }
-      // geometryMode is per-project ("remember last used"): restore the saved value
-      // or reset to the measured default. Applied unconditionally so a project with
-      // no saved preference (or no display settings at all) doesn't inherit the
-      // previous project's mode.
-      set({ geometryMode: geometryMode ?? GEOMETRY_MODE_DEFAULT });
-      if (hasLoadedSettings) {
-        set({
-          ...displayState,
-          ...(gridSpacing !== undefined ? { gridSpacing } : {}),
-        });
-        trackDisplayState(useUIStore.getState());
-      }
-    } catch (e) {
-      // No project open or other error - use defaults
-      console.warn('Failed to load display settings:', e);
-    }
   },
   saveDisplaySetting: async (key, value) => {
     try {
@@ -1746,7 +1730,6 @@ export const useUIStore = create<UIStore>((set) => ({
       showZeroDatum: settings.showZeroDatum ?? state.showZeroDatum,
       showGrid: settings.showGrid ?? state.showGrid,
       showSatellite: settings.showSatellite ?? state.showSatellite,
-      showDepthGradient: settings.showDepthGradient ?? state.showDepthGradient,
       showStationComments: settings.showStationComments ?? state.showStationComments,
       gridSpacing: settings.gridSpacing ?? state.gridSpacing,
       // Dev stats is a session-only developer overlay (memory probe + map dev
@@ -1754,11 +1737,17 @@ export const useUIStore = create<UIStore>((set) => ({
       // backend payload. Reset it on every load so enabling it for one project
       // can't leak the overlay - and its 2 s memory-IPC poll - into the next.
       showDevStats: DISPLAY_DEFAULTS.showDevStats,
-      // Issue-severity coloring is a runtime-only overlay (never persisted); reset
-      // it on every load so a manual enable in one project doesn't leak the
-      // traffic-light coloring into the next (issue #57 / Codex). The Warnings-tab
-      // auto-switch re-derives it transiently via effectiveIssueSeverity.
-      showIssueSeverity: false,
+      // The three color overlays are restored as ONE single-select mode, never as
+      // three independent booleans: only depth is persisted, so writing the saved
+      // depth flag back on its own - while the runtime-only distance/issue overlay
+      // from the previous project was still on - produced the invalid pair that
+      // wedged the Display menu in distance mode (see colorModeFlags). Going
+      // through colorModeFlags also gives the two runtime-only overlays the
+      // per-load reset they need anyway: issue-severity coloring must not leak its
+      // traffic lights into the next project (issue #57 / Codex; the Warnings-tab
+      // auto-switch re-derives it transiently via effectiveIssueSeverity), and the
+      // distance overlay's origin/field name a station in the project we just left.
+      ...colorModeFlags((settings.showDepthGradient ?? state.showDepthGradient) ? 'depth' : 'section'),
       // Restore the saved geometry mode ("remember last used"). The backend
       // defaults geometryMode to "measured" for projects with no saved
       // preference, so a load is authoritative and never inherits the previous

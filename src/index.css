@@ -45,7 +45,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(15, 52, 96, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #0f3460;
+  --cc-map-scale-border: #1f6bc5;
   --cc-map-scale-text: #f5f5f5;
 
   /* --- Map Visualization --- */
@@ -63,8 +63,13 @@
   --cc-grid-default: #333366;
   --cc-zero-datum: #ffd700;
   --cc-compass-color: #ffffff;
-  --cc-depth-shallow: #4ecdc4;
-  --cc-depth-deep: #ff6b6b;
+  /* Depth ramp: green (shallower) -> red (deeper). The full contract - the
+     shortest-hue-path trap, the 3:1 floor and the lightness travel that keeps the
+     ramp readable under deuteranopia - is documented once on this block in
+     src/theme/tokens.ts, which these values must match exactly.
+     hue 173 -> 3, worst 3.49:1 at #d92a20 on #1a1a2e, ends 3.54:1 apart, HSL L 0.69 -> 0.49. */
+  --cc-depth-shallow: #6ff0e0;
+  --cc-depth-deep: #d92a20;
   --cc-depth-text: #f5f5f5;
 
   /* --- Canvas Preview --- */
@@ -144,7 +149,7 @@
   --cc-map-ctrl-icon-filter: none;
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #d4c5a9;
+  --cc-map-scale-border: #a38651;
   --cc-map-scale-text: #1a120b;
 
   /* --- Map Visualization --- warm paper canvas, dark ink outlines.
@@ -173,8 +178,11 @@
   --cc-grid-default: #ddd0bb;
   --cc-zero-datum: #b8860b;
   --cc-compass-color: #1a120b;
-  --cc-depth-shallow: #14487f;
-  --cc-depth-deep: #a52a1a;
+  /* Cyan -> green -> yellow -> red, tuned for paper: the ramp's yellow MIDPOINT is the worst case
+     on a light canvas, so both ends run dark to hold it at 2.10:1.
+     hue 175 -> 5, worst 2.10:1 at #b2b311 on #faf7f2, ends 2.23:1 apart (2:1 floor). */
+  --cc-depth-shallow: #1aa89c;
+  --cc-depth-deep: #b81a0c;
   --cc-depth-text: #1a120b;
 
   /* --- Canvas Preview --- */
@@ -254,7 +262,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(42, 40, 38, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #2a2826;
+  --cc-map-scale-border: #66625d;
   --cc-map-scale-text: #d5d0ca;
 
   /* --- Map Visualization --- */
@@ -272,8 +280,11 @@
   --cc-grid-default: #2a2826;
   --cc-zero-datum: #b8a868;
   --cc-compass-color: #d5d0ca;
-  --cc-depth-shallow: #a89060;
-  --cc-depth-deep: #b85048;
+  /* Was tan -> salmon: 35 degrees of hue travel over the whole depth range, so a
+     survey drew as one flat salmon. Sage green -> brick in cave's muted register.
+     hue 173 -> 3, worst 3.98:1 at #d92a20 on #0e0d0c, ends 3.54:1 apart, HSL L 0.69 -> 0.49. */
+  --cc-depth-shallow: #6ff0e0;
+  --cc-depth-deep: #d92a20;
   --cc-depth-text: #d5d0ca;
 
   /* --- Canvas Preview --- */
@@ -327,7 +338,7 @@
   --cc-panel: #21222c;
   --cc-border: #44475a;
   --cc-text-primary: #f8f8f2;
-  --cc-text-secondary: #6272a4;
+  --cc-text-secondary: #8592b8;
   --cc-accent: #bd93f9;
   --cc-accent-on: #282a36;
   --cc-warning: #ffb86c;
@@ -353,7 +364,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(68, 71, 90, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #44475a;
+  --cc-map-scale-border: #717694;
   --cc-map-scale-text: #f8f8f2;
 
   /* --- Map Visualization --- */
@@ -371,8 +382,10 @@
   --cc-grid-default: #44475a;
   --cc-zero-datum: #f1fa8c;
   --cc-compass-color: #f8f8f2;
-  --cc-depth-shallow: #8be9fd;
-  --cc-depth-deep: #ff5555;
+  /* Cyan -> green -> yellow -> red; a Dracula-register cyan shallow, ends spread apart in lightness.
+     hue 172 -> 3, worst 3.18:1 at #e0342a on #282a36, ends 3.34:1 apart. */
+  --cc-depth-shallow: #7ff2e2;
+  --cc-depth-deep: #e0342a;
   --cc-depth-text: #f8f8f2;
 
   /* --- Canvas Preview --- */
@@ -426,7 +439,7 @@
   --cc-panel: #21252b;
   --cc-border: #3e4451;
   --cc-text-primary: #abb2bf;
-  --cc-text-secondary: #5c6370;
+  --cc-text-secondary: #939aa6;
   --cc-accent: #61afef;
   --cc-accent-on: #282c34;
   --cc-warning: #e5c07b;
@@ -452,7 +465,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(62, 68, 81, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #3e4451;
+  --cc-map-scale-border: #6e7990;
   --cc-map-scale-text: #abb2bf;
 
   /* --- Map Visualization --- */
@@ -470,8 +483,13 @@
   --cc-grid-default: #3e4451;
   --cc-zero-datum: #e5c07b;
   --cc-compass-color: #abb2bf;
-  --cc-depth-shallow: #56b6c2;
-  --cc-depth-deep: #e06c75;
+  /* Cyan -> green -> yellow -> red. The theme #357 item 8 was filed against - the
+     defect was hue 187, not cyan as such: its #56b6c2 sat
+     at hue 187, on the wrong side of the 180 line, so the shortest hue path ran
+     UP through indigo and bottomed out at #5f5ccd = 2.60:1 on this canvas.
+     hue 170 -> 4, worst 3.05:1 at #dd3327 on #282c34, ends 3.35:1 apart. */
+  --cc-depth-shallow: #7af0dc;
+  --cc-depth-deep: #dd3327;
   --cc-depth-text: #abb2bf;
 
   /* --- Canvas Preview --- */
@@ -525,7 +543,7 @@
   --cc-panel: #eee8d5;
   --cc-border: #d3cbb7;
   --cc-text-primary: #586e75;
-  --cc-text-secondary: #93a1a1;
+  --cc-text-secondary: #5c6a6a;
   --cc-accent: #268bd2;
   --cc-accent-on: #fdf6e3;
   --cc-warning: #b58900;
@@ -552,7 +570,7 @@
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #d3cbb7;
-  --cc-map-scale-text: #586e75;
+  --cc-map-scale-text: #6e8a92;
 
   /* --- Opacity Variants: accent --- */
   --cc-accent-5: rgba(38, 139, 210, 0.05);
@@ -601,7 +619,7 @@
   --cc-panel: #e6e9ef;
   --cc-border: #ccd0da;
   --cc-text-primary: #4c4f69;
-  --cc-text-secondary: #6c6f85;
+  --cc-text-secondary: #64667b;
   --cc-accent: #1e66f5;
   --cc-accent-on: #eff1f5;
   --cc-warning: #df8e1d;
@@ -628,7 +646,7 @@
   --cc-map-ctrl-shadow: rgba(0, 0, 0, 0.15);
   --cc-map-scale-bg: transparent;
   --cc-map-scale-border: #ccd0da;
-  --cc-map-scale-text: #4c4f69;
+  --cc-map-scale-text: #7f83a2;
 
   /* --- Opacity Variants: accent --- */
   --cc-accent-5: rgba(30, 102, 245, 0.05);
@@ -677,7 +695,7 @@
   --cc-panel: #3b4252;
   --cc-border: #4c566a;
   --cc-text-primary: #d8dee9;
-  --cc-text-secondary: #616e88;
+  --cc-text-secondary: #a7b0c0;
   --cc-accent: #88c0d0;
   --cc-accent-on: #2e3440;
   --cc-warning: #ebcb8b;
@@ -703,7 +721,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(76, 86, 106, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #4c566a;
+  --cc-map-scale-border: #74829c;
   --cc-map-scale-text: #d8dee9;
 
   /* --- Map Visualization --- */
@@ -721,8 +739,11 @@
   --cc-grid-default: #434c5e;
   --cc-zero-datum: #ebcb8b;
   --cc-compass-color: #d8dee9;
-  --cc-depth-shallow: #88c0d0;
-  --cc-depth-deep: #bf616a;
+  /* Cyan -> green -> yellow -> red. Deep end lifted off Nord's Aurora red: this is the lightest
+     canvas of the dark set and the unlifted #bf616a was the ramp's worst case at
+     3.05:1. hue 170 -> 4, worst 3.30:1 at #ea4a3e on #2e3440, ends 2.76:1 apart. */
+  --cc-depth-shallow: #7af0dc;
+  --cc-depth-deep: #ea4a3e;
   --cc-depth-text: #d8dee9;
 
   /* --- Canvas Preview --- */
@@ -776,7 +797,7 @@
   --cc-panel: #181825;
   --cc-border: #313244;
   --cc-text-primary: #cdd6f4;
-  --cc-text-secondary: #6c7086;
+  --cc-text-secondary: #83879b;
   --cc-accent: #89b4fa;
   --cc-accent-on: #1e1e2e;
   --cc-warning: #f9e2af;
@@ -802,7 +823,7 @@
   --cc-map-ctrl-icon-filter: brightness(0) invert(1);
   --cc-map-ctrl-shadow: rgba(49, 50, 68, 0.3);
   --cc-map-scale-bg: transparent;
-  --cc-map-scale-border: #313244;
+  --cc-map-scale-border: #686b91;
   --cc-map-scale-text: #cdd6f4;
 
   /* --- Map Visualization --- */
@@ -820,8 +841,11 @@
   --cc-grid-default: #313244;
   --cc-zero-datum: #f9e2af;
   --cc-compass-color: #cdd6f4;
-  --cc-depth-shallow: #94e2d5;
-  --cc-depth-deep: #f38ba8;
+  /* Cyan -> green -> yellow -> red. The deep end is pulled off Mocha's
+     pink-leaning Red #f38ba8 (hue 343) to a true red.
+     hue 170 -> 354, worst 3.57:1 at #dd3040 on #1e1e2e, ends 3.35:1 apart. */
+  --cc-depth-shallow: #7af0dc;
+  --cc-depth-deep: #dd3040;
   --cc-depth-text: #cdd6f4;
 
   /* --- Canvas Preview --- */
@@ -919,8 +943,11 @@
   --cc-grid-default: #cccccc;
   --cc-zero-datum: #cc7700;
   --cc-compass-color: #000000;
-  --cc-depth-shallow: #0050a0;
-  --cc-depth-deep: #cc0000;
+  /* Cyan -> green -> yellow -> red, tuned for the e-ink white canvas: as on `light`, the ramp's
+     yellow midpoint is the worst case, so both ends run dark.
+     hue 175 -> 5, worst 2.25:1 at #b2b311 on #ffffff, ends 2.23:1 apart (2:1 floor). */
+  --cc-depth-shallow: #1aa89c;
+  --cc-depth-deep: #b81a0c;
   --cc-depth-text: #000000;
 
   /* --- Canvas Preview --- */
