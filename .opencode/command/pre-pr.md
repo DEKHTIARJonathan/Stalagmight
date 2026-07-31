@@ -8,9 +8,37 @@ otherwise. Do not rubber-stamp it.
 
 ## Scope
 
-Review `git diff master...HEAD`. If that is empty, review the staged diff, then
-the unstaged diff. Read enough surrounding code and documentation to judge the
-change and its blast radius. If the diff is too large for complete review, tell
+Resolve the base against the REMOTE and pin it, before anything else, in ONE command
+so the values survive to be read (shell state may not persist between tool calls):
+
+```bash
+git fetch --quiet origin master   # writes FETCH_HEAD + remote-tracking refs, nothing else
+echo "BASE=$(git merge-base origin/master HEAD)"
+echo "HEAD_SHA=$(git rev-parse HEAD)"
+echo "BASE_AGE=$(git log -1 --format=%cI origin/master)"
+git ls-files --others --exclude-standard    # uncommitted work the pinned diff cannot see
+```
+
+Then write the **literal SHAs** into the review command and into every reviewer brief -
+do not rely on `$BASE` still being set. Review `git diff <BASE> <HEAD>`.
+**Never `git diff master...HEAD`**: it reads the *local* `master`, which in a clone that
+has not pulled is silently many commits behind, so the review surface fills with other
+people's already-merged work (seen live: 130 files for a 14-file change). Pinned SHAs
+also keep the base still while reviewers run, which matters because several clones share
+this repo. Check the file count against the change you made before launching anything.
+If `git fetch` fails, check `BASE_AGE` before trusting `origin/master` - a never-pulled
+remote ref is exactly as stale as the local one. If that diff is empty, review the
+staged diff, then the unstaged diff; if base and HEAD are the same commit, pin to the
+range you actually mean and say which. Read enough surrounding code and documentation to
+judge the change and its blast radius.
+
+Give every reviewer this verbatim, with the SHAs substituted in:
+
+> **The change under review is exactly `git diff <BASE> <HEAD>`** - both are pinned
+> SHAs, so use that expression verbatim and resolve nothing yourself. `master`,
+> `origin/master` and `HEAD` are all wrong here: they move, and they are not what this
+> review is scoped to. Read-only git only - no `status`, no `fetch`, no `checkout`: you
+> share this working tree with the orchestrator and with gates running in parallel. If the diff is too large for complete review, tell
 each reviewer to inspect the riskiest files first and report what it did not
 reach.
 

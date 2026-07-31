@@ -11,6 +11,7 @@ use crate::models::{
 use crate::persistence::Database;
 use crate::test_helpers::TestDb;
 use chrono::NaiveDate;
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::{env, fs};
 use tauri::test::{mock_app, MockRuntime};
@@ -222,6 +223,11 @@ fn test_update_data_table_view_roundtrip() {
             None,
             Some(vec!["_zeroDatum".to_string(), "_x".to_string()]),
             Some(vec!["_connections".to_string()]),
+            Some(BTreeMap::from([
+                ("length".to_string(), 180),
+                ("_azimuth_avg".to_string(), 95),
+            ])),
+            Some(BTreeMap::from([("_zeroDatum".to_string(), 140)])),
         )
         .expect("update data-table view");
         let cfg = config::get_config(state(&app));
@@ -244,12 +250,25 @@ fn test_update_data_table_view_roundtrip() {
             cfg.panels.data_table_station_hidden_columns,
             vec!["_connections"]
         );
+        assert_eq!(
+            cfg.panels.data_table_shot_column_widths,
+            BTreeMap::from([
+                ("length".to_string(), 180),
+                ("_azimuth_avg".to_string(), 95)
+            ])
+        );
+        assert_eq!(
+            cfg.panels.data_table_station_column_widths,
+            BTreeMap::from([("_zeroDatum".to_string(), 140)])
+        );
         // invalid mode is rejected, config untouched
         let err = config::update_data_table_view_impl(
             state(&app).inner(),
             None,
             None,
             Some("sideways".to_string()),
+            None,
+            None,
             None,
             None,
             None,
@@ -260,6 +279,46 @@ fn test_update_data_table_view_roundtrip() {
                 .panels
                 .data_table_azimuth_mode,
             "inout"
+        );
+    });
+}
+
+#[test]
+fn test_update_data_table_view_clamps_degenerate_widths() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        // A 0-px column renders invisible AND un-resizable (no border left to
+        // grab), and a 100000-px one pushes every later column off-screen. Both
+        // must be repaired before they reach disk.
+        config::update_data_table_view_impl(
+            state(&app).inner(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(BTreeMap::from([
+                ("collapsed".to_string(), 0),
+                ("runaway".to_string(), 100_000),
+                ("sane".to_string(), 150),
+            ])),
+            Some(BTreeMap::from([("also_collapsed".to_string(), 3)])),
+        )
+        .expect("update data-table view");
+        let cfg = config::get_config(state(&app));
+        assert_eq!(
+            cfg.panels.data_table_shot_column_widths,
+            BTreeMap::from([
+                ("collapsed".to_string(), 40),
+                ("runaway".to_string(), 2000),
+                ("sane".to_string(), 150),
+            ]),
+            "degenerate widths clamp to the renderable range, sane ones pass through"
+        );
+        assert_eq!(
+            cfg.panels.data_table_station_column_widths,
+            BTreeMap::from([("also_collapsed".to_string(), 40)])
         );
     });
 }

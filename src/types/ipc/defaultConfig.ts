@@ -16,6 +16,7 @@ export const defaultConfig: Config = {
     "splash_screen": false,
     "onboarding_enabled": true,
     "onboarding_completed_flows": [],
+    "onboarding_first_launch_done": false,
     "telemetry_enabled": false,
     "telemetry_opt_in_shown": false
   },
@@ -230,6 +231,7 @@ export const defaultConfig: Config = {
       "section_id",
       "shot_id"
     ],
+    "data_table_shot_column_widths": {},
     "data_table_azimuth_mode": "avg",
     "data_table_inclination_mode": "off",
     "data_table_station_column_order": [],
@@ -239,6 +241,7 @@ export const defaultConfig: Config = {
       "_lat",
       "_long"
     ],
+    "data_table_station_column_widths": {},
     "sections_panel_open": true,
     "sections_panel_mode": "pin",
     "detail_panel_open": true,

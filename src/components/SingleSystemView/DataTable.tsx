@@ -91,6 +91,19 @@ const STATION_MENU_COLS: { keys: string[]; nameKey: string }[] = [
  *  arrives it is authoritative (an empty list there means "show all"). */
 const STATION_DEFAULT_HIDDEN = ['_x', '_y', '_lat', '_long'];
 
+/**
+ * Column widths as sorted entries, for the change-detection snapshot only.
+ *
+ * `JSON.stringify` of an object preserves insertion order, and a resize appends a
+ * newly-overridden column at the end - while the same map comes back from the
+ * backend as an alphabetically-sorted `BTreeMap`. Comparing those two directly
+ * reports a change that isn't one, costing a redundant save-and-resync cycle. The
+ * sibling hidden-column lists are `.sort()`ed just above for the same reason.
+ */
+function stableWidths(widths: Record<string, number>): Array<[string, number]> {
+  return Object.entries(widths).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+}
+
 /** Pill-as-trigger picker used in the sub-header: the whole pill (rendered via
  *  {@link renderTrigger}, which embeds the chevron) toggles the dropdown.
  *  Closes on outside click and Escape (and declares data-dropdown-open so the
@@ -579,6 +592,10 @@ export default function DataTable({ sections }: DataTableProps) {
   const [hiddenStationCols, setHiddenStationCols] = useState<ReadonlySet<string>>(
     () => new Set(STATION_DEFAULT_HIDDEN)
   );
+  // Manual column widths, keyed by column key. Empty = every column keeps its
+  // declared width. The grid commits these on resize release, not per mousemove.
+  const [shotColumnWidths, setShotColumnWidths] = useState<Record<string, number>>({});
+  const [stationColumnWidths, setStationColumnWidths] = useState<Record<string, number>>({});
   const [colMenuOpen, setColMenuOpen] = useState(false);
   // Wraps both the eye trigger and its anchored dropdown, so an outside-mousedown
   // check can treat the whole control as "inside".
@@ -688,13 +705,31 @@ export default function DataTable({ sections }: DataTableProps) {
     const stationHidden = panelsConfig.data_table_station_hidden_columns;
     setHiddenStationCols(new Set(stationHidden));
     setStationColumnOrder(panelsConfig.data_table_station_column_order);
+    const shotWidths = panelsConfig.data_table_shot_column_widths;
+    const stationWidths = panelsConfig.data_table_station_column_widths;
+    setShotColumnWidths(shotWidths);
+    setStationColumnWidths(stationWidths);
+    // Both hidden lists are sorted here because the save snapshot below sorts them,
+    // and this string is compared against that one verbatim. Storing the config's own
+    // order made the two differ whenever the persisted list was not already sorted -
+    // the station default `['_x','_y','_lat','_long']` is not - so merely OPENING the
+    // data table scheduled a save of state the user never touched. Pre-existing (the
+    // widths entries below always sorted via stableWidths); it stayed invisible until
+    // a test asserted "no save yet" and lost the race to the 500ms debounce.
+    // `?? []` / `?? {}` because panelsConfig comes straight from get_config with no
+    // defaultConfig merge: the only guarantee is the Rust #[serde(default)]. A frontend
+    // running against a backend that predates these fields would otherwise take the
+    // whole data table down on open (spread and Object.entries both throw on
+    // undefined) instead of starting with no overrides.
     lastSavedViewRef.current = JSON.stringify([
       panelsConfig.data_table_shot_column_order,
-      panelsConfig.data_table_shot_hidden_columns,
+      [...(panelsConfig.data_table_shot_hidden_columns ?? [])].sort(),
       azimuth,
       inclination,
       panelsConfig.data_table_station_column_order,
-      stationHidden,
+      [...(stationHidden ?? [])].sort(),
+      stableWidths(shotWidths ?? {}),
+      stableWidths(stationWidths ?? {}),
     ]);
   }, [panelsConfig]);
   useEffect(() => {
@@ -708,9 +743,16 @@ export default function DataTable({ sections }: DataTableProps) {
       inclinationMode,
       stationColumnOrder,
       stationHidden,
+      stableWidths(shotColumnWidths),
+      stableWidths(stationColumnWidths),
     ]);
     if (snapshot === lastSavedViewRef.current) return undefined;
     const timer = setTimeout(() => {
+      // Mark it saved up front so a re-render mid-flight does not queue a duplicate
+      // write, but remember what to fall back to: if the IPC rejects, the state never
+      // reached disk, and leaving the snapshot marked would mean no later change ever
+      // retries it - the column silently returns to its old width on next launch.
+      const previouslySaved = lastSavedViewRef.current;
       lastSavedViewRef.current = snapshot;
       void invokeIpc(
         'update_data_table_view',
@@ -721,16 +763,32 @@ export default function DataTable({ sections }: DataTableProps) {
           inclinationMode,
           stationColumnOrder,
           stationHiddenColumns: stationHidden,
+          columnWidths: shotColumnWidths,
+          stationColumnWidths,
         },
         { purpose: 'persist data-table view state' }
       )
         // Re-sync the in-memory config: a remount re-seeds from it, so a stale
         // copy would silently revert what was just saved to disk.
         .then(() => useProjectStore.getState().loadConfig())
-        .catch((e) => console.error('Failed to save data-table view state:', e));
+        .catch((e) => {
+          if (lastSavedViewRef.current === snapshot) {
+            lastSavedViewRef.current = previouslySaved;
+          }
+          console.error('Failed to save data-table view state:', e);
+        });
     }, 500);
     return () => clearTimeout(timer);
-  }, [shotColumnOrder, hiddenShotCols, azimuthMode, inclinationMode, stationColumnOrder, hiddenStationCols]);
+  }, [
+    shotColumnOrder,
+    hiddenShotCols,
+    azimuthMode,
+    inclinationMode,
+    stationColumnOrder,
+    hiddenStationCols,
+    shotColumnWidths,
+    stationColumnWidths,
+  ]);
 
   // Close on outside mousedown / external scroll / resize (shared hook). The
   // dropdown is position:fixed at a captured rect (useAnchoredFixedMenu), so any
@@ -1846,6 +1904,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 hiddenColumns={shotHiddenColumns}
                 columnOrder={shotColumnOrder}
                 onColumnOrderChange={setShotColumnOrder}
+                columnWidths={shotColumnWidths}
+                onColumnWidthsChange={setShotColumnWidths}
               />
             ) : sectionStations.length === 0 ? (
               <div className="flex items-center justify-center h-full text-text-secondary">
@@ -1872,6 +1932,8 @@ export default function DataTable({ sections }: DataTableProps) {
                 hiddenColumns={stationHiddenColumns}
                 columnOrder={stationColumnOrder}
                 onColumnOrderChange={setStationColumnOrder}
+                columnWidths={stationColumnWidths}
+                onColumnWidthsChange={setStationColumnWidths}
               />
             )
           ) : (

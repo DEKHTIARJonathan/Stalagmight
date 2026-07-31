@@ -12,6 +12,7 @@ import { guardQuit } from './utils/quit';
 import { IMPORTABLE_EXTENSIONS } from './utils/fileDialogs';
 import { useBeforeUnload, useLoadingProgress, useTheme, useSyntacticHighlighting, useNetworkStatus, useUiScale } from './hooks';
 import { useOnboarding } from './hooks/useOnboarding';
+import { ORIENTATION_FLOW_ID } from './onboarding/flows';
 import i18n from './i18n';
 import { setNumberFormatLocale, setDateFormatLocale } from './i18n/format';
 import GlobalView from './components/GlobalView/GlobalView';
@@ -336,6 +337,35 @@ function App() {
     });
   }, []);
 
+  // The one-shot rule applies to the ORIENTATION tour only (#331). It used to
+  // gate the shared `enabled` switch, which also suppressed the contextual
+  // DMP/placement guides - so a surveyor who imported their first DMP in week
+  // three never saw its guide. Those repeat-suppress per flow via
+  // `onboarding_completed_flows` instead.
+  //
+  // The decision is held in session state so that burning the flag (below) does
+  // not tear down the tour currently on screen, and is re-taken when "Restart
+  // guides" clears the flag mid-session.
+  const [orientationConsumed, setOrientationConsumed] = useState(false);
+  const orientationDecidedRef = useRef(false);
+  const firstLaunchBurnedRef = useRef(false);
+  useEffect(() => {
+    if (!config) {
+      return;
+    }
+    if (!config.general.onboarding_first_launch_done) {
+      // Fresh install, or re-armed from Settings.
+      orientationDecidedRef.current = true;
+      firstLaunchBurnedRef.current = false;
+      setOrientationConsumed(false);
+      return;
+    }
+    if (!orientationDecidedRef.current) {
+      orientationDecidedRef.current = true;
+      setOrientationConsumed(true);
+    }
+  }, [config]);
+
   const onboarding = useOnboarding({
     view,
     hasProject: project !== null,
@@ -348,11 +378,36 @@ function App() {
     loadingProject: loading.isLoading,
     splashVisible: splashMounted,
     configLoaded: config !== null,
+    orientationConsumed,
   }, {
     enabled: config?.general?.onboarding_enabled ?? true,
     completedFlowIds: config?.general?.onboarding_completed_flows ?? [],
     onCompletedFlowIdsChange: persistCompletedOnboardingFlows,
   });
+
+  // Burn the flag once the orientation tour is actually on screen - not when
+  // config loads (a first launch has no project, so the tour cannot start yet
+  // and the one chance would be spent on a session that showed nothing), and
+  // not on any other flow (they are not what the flag governs). The config is
+  // re-read from the store rather than closed over, so this merges against the
+  // live value instead of the snapshot the effect was scheduled with.
+  useEffect(() => {
+    if (onboarding.activeFlowId !== ORIENTATION_FLOW_ID || firstLaunchBurnedRef.current) {
+      return;
+    }
+    const store = useProjectStore.getState();
+    const currentConfig = store.config;
+    if (!currentConfig || currentConfig.general.onboarding_first_launch_done) {
+      return;
+    }
+    firstLaunchBurnedRef.current = true;
+    const nextConfig = {
+      ...currentConfig,
+      general: { ...currentConfig.general, onboarding_first_launch_done: true },
+    };
+    store.setConfig(nextConfig);
+    void store.updateConfig(nextConfig);
+  }, [onboarding.activeFlowId]);
 
   const disableOnboardingGuides = useCallback(() => {
     const store = useProjectStore.getState();

@@ -55,6 +55,7 @@ impl Default for GeneralConfig {
             splash_screen: false,
             onboarding_enabled: true,
             onboarding_completed_flows: Vec::new(),
+            onboarding_first_launch_done: false,
             telemetry_enabled: false,
             telemetry_opt_in_shown: false,
         }
@@ -263,6 +264,7 @@ impl Default for PanelsConfig {
             data_table_height: 200,
             data_table_shot_column_order: Vec::new(),
             data_table_shot_hidden_columns: vec!["section_id".to_string(), "shot_id".to_string()],
+            data_table_shot_column_widths: std::collections::BTreeMap::new(),
             data_table_azimuth_mode: "avg".to_string(),
             data_table_inclination_mode: "off".to_string(),
             data_table_station_column_order: Vec::new(),
@@ -272,6 +274,7 @@ impl Default for PanelsConfig {
                 "_lat".to_string(),
                 "_long".to_string(),
             ],
+            data_table_station_column_widths: std::collections::BTreeMap::new(),
             sections_panel_open: true,
             sections_panel_mode: "pin".to_string(),
             detail_panel_open: true,

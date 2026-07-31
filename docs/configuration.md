@@ -171,6 +171,20 @@ data_table_mode = "pin"
 # data_table_station_hidden_columns (default ["_x", "_y", "_lat", "_long"]),
 # data_table_azimuth_mode ("avg" | "inout" | "off", default "avg") and
 # data_table_inclination_mode (same values, default "off").
+#
+# Column widths are two sub-tables rather than scalars, so in a real file they appear
+# AFTER every key above (TOML writes a table's own values before its child tables):
+#
+#   [panels.data_table_shot_column_widths]
+#   length = 120                      # Pixels (clamped to 40-2000 on load)
+#   comment = 480
+#
+#   [panels.data_table_station_column_widths]
+#
+# Only resized columns get an entry; the rest use their declared width. An empty
+# table means no overrides. A junk entry costs that one column its width rather
+# than failing the whole [panels] table, and nothing prunes an entry whose column
+# no longer exists. At most 256 entries per table, keys up to 128 bytes.
 
 [export]
 default_image_format = "png"        # Default image format for exports

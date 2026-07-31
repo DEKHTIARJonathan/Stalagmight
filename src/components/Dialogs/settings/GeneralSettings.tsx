@@ -92,6 +92,8 @@ export function GeneralSettings({
         ...config.general,
         onboarding_enabled: true,
         onboarding_completed_flows: [],
+        // Re-arms the guides for this session; App re-sets the flag once they arm.
+        onboarding_first_launch_done: false,
       },
     });
   }, [config.general, onChange]);
@@ -112,8 +114,12 @@ export function GeneralSettings({
   const handleTelemetryToggle = createToggleHandler(onChange,
     (v) => ({ general: { ...config.general, telemetry_enabled: v } }));
 
+  // The first-launch flag alone is enough to offer a restart: guides can arm and
+  // then never fire (no project opened that session), leaving nothing completed
+  // but no way for them to run again.
   const canRestartOnboarding =
     (config.general.onboarding_completed_flows?.length ?? 0) > 0 ||
+    config.general.onboarding_first_launch_done ||
     !config.general.onboarding_enabled;
 
   return (
@@ -357,7 +363,7 @@ export function GeneralSettings({
         <SettingRow
           label={t('settings.general.onboarding.restart.label')}
           helpText={t('settings.general.onboarding.restart.help')}
-          isChanged={isFieldChanged(changedFields, 'general.onboarding_completed_flows', 'general.onboarding_enabled')}
+          isChanged={isFieldChanged(changedFields, 'general.onboarding_completed_flows', 'general.onboarding_enabled', 'general.onboarding_first_launch_done')}
           onReset={handleRestartOnboarding}
           isDefault={!canRestartOnboarding}
           data-testid="setting-onboarding-restart"

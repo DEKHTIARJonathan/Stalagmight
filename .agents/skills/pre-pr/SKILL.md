@@ -13,11 +13,39 @@ or open a PR while running this skill.
 
 1. Read `AGENTS.md` and `references/lenses.md` completely.
 2. Inspect `git status --short` and the current branch.
-3. Prefer `git diff master...HEAD` as the review diff.
+3. Resolve the base against the REMOTE and pin it, in ONE command so the values survive
+   to be read (shell state may not persist between tool calls):
+
+   ```bash
+   git fetch --quiet origin master   # writes FETCH_HEAD + remote-tracking refs, nothing else
+   echo "BASE=$(git merge-base origin/master HEAD)"
+   echo "HEAD_SHA=$(git rev-parse HEAD)"
+   echo "BASE_AGE=$(git log -1 --format=%cI origin/master)"
+   ```
+
+   Then write the **literal SHAs** into the review command and into every reviewer brief;
+   do not rely on `$BASE` still being set. The review diff is `git diff <BASE> <HEAD>`.
+   **Never `git diff master...HEAD`** - it reads the *local* `master`, which in a clone
+   that has not pulled is silently many commits behind, so the surface fills with other
+   people's already-merged work (seen live: 130 files for a 14-file change). Pinned SHAs
+   also hold the base still while reviewers run, which matters because several clones
+   share this repo. Sanity-check the file count against the change you made before
+   launching anything. If `git fetch` fails, check `BASE_AGE` before trusting
+   `origin/master` - a never-pulled remote ref is exactly as stale as the local one.
 4. If that diff is empty, review `git diff --cached`. If that is also empty,
-   review `git diff`.
-5. Note relevant untracked files from `git status --short`; inspect them when they
-   are part of the intended change.
+   review `git diff`. If base and HEAD are the same commit, pin to the range you
+   actually mean and record which range you chose.
+5. Note relevant untracked files (`git ls-files --others --exclude-standard`) and name
+   them in each brief when they are part of the intended change - reviewers are held to
+   read-only git and a commit-pinned diff cannot see them.
+5a. Give every reviewer this verbatim, with the SHAs substituted in:
+
+   > **The change under review is exactly `git diff <BASE> <HEAD>`** - both are pinned
+   > SHAs, so use that expression verbatim and resolve nothing yourself. `master`,
+   > `origin/master` and `HEAD` are all wrong here: they move, and they are not what
+   > this review is scoped to. Read-only git only - no `status`, no `fetch`, no
+   > `checkout`: you share this working tree with the orchestrator and with gates
+   > running in parallel.
 6. Read enough surrounding code and consumers to judge the diff and its blast
    radius. For a large diff, prioritize the riskiest files and record what was not
    reached.

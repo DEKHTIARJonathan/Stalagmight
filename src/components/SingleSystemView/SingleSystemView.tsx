@@ -492,7 +492,7 @@ export default function SingleSystemView() {
   // via the shared hook. Only this view's flow drives the panel reveals here.
   const onboarding = useOnboardingStep();
   const singleViewOnboardingStepId =
-    onboarding.flowId === 'single-view-basics' ? onboarding.stepId : null;
+    onboarding.flowId === 'workspace-basics' ? onboarding.stepId : null;
 
   // Reveal the right panel during late SURVEY WORKSPACE steps (avoids a visible
   // tooltip jump when entering a panel step), without clobbering the user's
@@ -541,9 +541,22 @@ export default function SingleSystemView() {
       }
     };
 
-    syncOnboardingPanel('sections', singleViewOnboardingStepId === 'sections', sectionsOnboardingSnapRef);
-    syncOnboardingPanel('detail', singleViewOnboardingStepId === 'detail-panel', detailOnboardingSnapRef);
-    syncOnboardingPanel('data-table', singleViewOnboardingStepId === 'data-table', dataTableOnboardingSnapRef);
+    // One merged "docks" step (#331) spotlights all three panels at once, so all
+    // three reveal together instead of one per step.
+    const onDocksStep = singleViewOnboardingStepId === 'docks';
+    syncOnboardingPanel('sections', onDocksStep, sectionsOnboardingSnapRef);
+    syncOnboardingPanel('detail', onDocksStep, detailOnboardingSnapRef);
+    syncOnboardingPanel('data-table', onDocksStep, dataTableOnboardingSnapRef);
+
+    // Restore on unmount too, not just on the next step. The reveal is a pinned
+    // override of the user's saved layout, and unmounting mid-step (project
+    // closed from the app menu while the tour is up) would otherwise strand all
+    // three panels pinned open with the real layout lost.
+    return () => {
+      syncOnboardingPanel('sections', false, sectionsOnboardingSnapRef);
+      syncOnboardingPanel('detail', false, detailOnboardingSnapRef);
+      syncOnboardingPanel('data-table', false, dataTableOnboardingSnapRef);
+    };
   }, [singleViewOnboardingStepId]);
 
   // Shared panel content - each rendered in exactly ONE place (its Dock), so the

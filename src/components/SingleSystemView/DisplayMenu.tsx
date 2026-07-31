@@ -312,9 +312,11 @@ export default function DisplayMenu({
   // Auto-open the display menu during onboarding "display options" steps. The
   // active step is observed once (shared hook); this effect just reacts to it
   // changing, instead of running a full DOM re-check on every app-wide mutation.
+  // The geometry step (#331) spotlights the measured/closure-adjusted controls,
+  // which only exist inside the open menu - so it opens the menu the same way.
   const isDisplayOptionsStep =
-    onboardingStep.stepId === 'display-options' &&
-    (onboardingStep.flowId === 'placement-mode-map' || onboardingStep.flowId === 'single-view-basics');
+    onboardingStep.flowId === 'workspace-basics' &&
+    (onboardingStep.stepId === 'display-options' || onboardingStep.stepId === 'geometry');
   useEffect(() => {
     if (isDisplayOptionsStep) {
       setIsOpen((current) => {

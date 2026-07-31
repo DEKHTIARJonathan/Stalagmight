@@ -3541,66 +3541,6 @@ export default function DmpNewImportDialog({
   // Whether we're in the manual_placing phase
   const showManualPlacing = phase === 'manual_placing' && currentSegment != null;
 
-  // Keep segment placement mode synced with onboarding steps so each step shows
-  // the intended controls and context while the user progresses.
-  useEffect(() => {
-    if (!showManualPlacing) {
-      return;
-    }
-
-    const getSegmentPlacementOnboardingStepId = (): string | null => {
-      const overlay = document.querySelector('[data-testid="onboarding-overlay"]');
-      if (!overlay) {
-        return null;
-      }
-      const flowId = overlay.getAttribute('data-onboarding-flow-id');
-      const stepId = overlay.getAttribute('data-onboarding-step-id');
-      return flowId === 'dmp-segment-placement' ? stepId : null;
-    };
-
-    const syncPlacementModeForStep = () => {
-      const stepId = getSegmentPlacementOnboardingStepId();
-      let requiredMode: 'fromExisting' | 'manual' | 'discard' | null = null;
-
-      if (stepId === 'from-existing') {
-        requiredMode = 'fromExisting';
-      } else if (
-        stepId === 'manual-placement' ||
-        stepId === 'section-name' ||
-        stepId === 'other-data' ||
-        stepId === 'actions'
-      ) {
-        requiredMode = 'manual';
-      } else if (stepId === 'do-not-place') {
-        requiredMode = 'discard';
-      }
-
-      if (!requiredMode) {
-        return;
-      }
-
-      setSegmentPlacementMode((current) => (current === requiredMode ? current : requiredMode));
-    };
-
-    syncPlacementModeForStep();
-
-    if (typeof MutationObserver === 'undefined') {
-      return;
-    }
-
-    const observer = new MutationObserver(syncPlacementModeForStep);
-    observer.observe(document.body, {
-      subtree: true,
-      childList: true,
-      attributes: true,
-      attributeFilter: ['data-onboarding-flow-id', 'data-onboarding-step-id'],
-    });
-
-    return () => {
-      observer.disconnect();
-    };
-  }, [showManualPlacing]);
-
   // Target type label for import-to-import connections
   const isImportTarget = currentSuggestion?.targetType === 'importing';
 

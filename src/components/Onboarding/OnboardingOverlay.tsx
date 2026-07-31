@@ -4,7 +4,6 @@ import { useTranslation } from 'react-i18next';
 import type { ActiveOnboardingStep } from '../../hooks/useOnboarding';
 import type { OnboardingIllustration, OnboardingPlacement } from '../../onboarding/flows';
 import {
-  CenterMapIcon,
   FitToViewIcon,
   MinusIcon,
   PlusIcon,
@@ -48,6 +47,15 @@ const STEP_SCROLL_TOP_PADDING = 10;
 const STEP_SCROLL_MAX_ATTEMPTS = 12;
 const STEP_SCROLL_RETRY_MS = 80;
 const TOOLTIP_SETTLE_DELAY_MS = 220;
+/**
+ * How long to wait for a step's target before giving up on anchoring to it.
+ * A step can out-live its target (the anchoring dialog closed, the control moved
+ * behind a mode switch). Waiting forever leaves a spotlight-less dim with the
+ * card hidden and `locked` swallowing every event - including the Escape that
+ * would dismiss it, since the skip confirmation renders inside that same hidden
+ * card. Give up and center the step instead, so Next/Skip stay reachable (#331).
+ */
+const TARGET_GIVE_UP_DELAY_MS = 1200;
 
 function boundsFromDomRect(rect: DOMRect): RectBounds {
   return {
@@ -486,91 +494,6 @@ function renderStepIllustration(
     );
   }
 
-  if (illustration === 'sections-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-sections-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <PlusIcon size={14} />
-            <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.addTitle')}</span>
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-            {t('onboarding.illustrations.sections.addDescription')}
-          </p>
-        </div>
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text-primary">
-                <span className="whitespace-nowrap">{t('onboarding.illustrations.sections.focusTitle')}</span>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-                {t('onboarding.illustrations.sections.focusDescription')}
-              </p>
-            </div>
-            <div className="flex flex-shrink-0 flex-col items-end">
-              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
-              <div className="flex items-end gap-2">
-                {renderMouseIcon('h-8 w-7', 'left')}
-                {renderMouseIcon('h-8 w-7', 'left')}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
-
-  if (illustration === 'detail-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-detail-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="flex items-center gap-2 text-sm font-semibold text-text-primary">
-            <CenterMapIcon size={14} />
-            <span className="whitespace-nowrap">{t('onboarding.illustrations.detail.centerTitle')}</span>
-          </div>
-          <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-            {t('onboarding.illustrations.detail.centerDescription')}
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  if (illustration === 'data-table-controls') {
-    return (
-      <div
-        className="mb-2 grid grid-cols-1 gap-2"
-        data-testid="onboarding-illustration-data-table-controls"
-      >
-        <div className="rounded-md border border-border bg-background px-3 py-2">
-          <div className="grid grid-cols-[minmax(0,1fr)_auto] items-end gap-4">
-            <div className="min-w-0">
-              <div className="text-sm font-semibold text-text-primary">
-                <span className="whitespace-nowrap">{t('onboarding.illustrations.dataTable.focusTitle')}</span>
-              </div>
-              <p className="mt-1 text-sm leading-relaxed text-text-secondary">
-                {t('onboarding.illustrations.dataTable.focusDescription')}
-              </p>
-            </div>
-            <div className="flex flex-shrink-0 flex-col items-end">
-              <span className="mb-1.5 text-xs font-medium leading-none text-text-secondary">{t('onboarding.illustrations.sections.doubleClick')}</span>
-              <div className="flex items-end gap-2">
-                {renderMouseIcon('h-8 w-7', 'left')}
-                {renderMouseIcon('h-8 w-7', 'left')}
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    );
-  }
 
   if (illustration !== 'mouse-pan-zoom') {
     return null;
@@ -736,6 +659,8 @@ export default function OnboardingOverlay({
   const [viewportVersion, setViewportVersion] = useState(0);
   const [tooltipHeight, setTooltipHeight] = useState(TOOLTIP_ESTIMATED_HEIGHT);
   const [isTooltipSettled, setIsTooltipSettled] = useState(true);
+  // True once we have stopped waiting for a target that never appeared.
+  const [targetUnresolvable, setTargetUnresolvable] = useState(false);
   const [showSkipConfirm, setShowSkipConfirm] = useState(false);
 
   const isLastStep = stepIndex >= stepCount - 1;
@@ -795,8 +720,10 @@ export default function OnboardingOverlay({
   }, []);
 
   // Publish the active step to the onboarding-step store for consumers outside
-  // this overlay's tree (DisplayMenu, SingleSystemView). The DOM attributes on
-  // the overlay element below are kept for DmpNewImportDialog's own observer.
+  // this overlay's tree (DisplayMenu, SingleSystemView). The matching DOM
+  // attributes on the overlay element below now have no in-app consumer - the
+  // observer that read them is gone (#331) - and are kept only as a test/debug
+  // handle.
   useEffect(() => {
     publishOnboardingStep(step.flowId, step.id);
   }, [step.flowId, step.id]);
@@ -1098,9 +1025,16 @@ export default function OnboardingOverlay({
 
     if (tooltipTargetSignature === 'none') {
       setIsTooltipSettled(false);
-      return;
+      setTargetUnresolvable(false);
+      const giveUpId = window.setTimeout(() => {
+        setTargetUnresolvable(true);
+      }, TARGET_GIVE_UP_DELAY_MS);
+      return () => {
+        window.clearTimeout(giveUpId);
+      };
     }
 
+    setTargetUnresolvable(false);
     setIsTooltipSettled(false);
     const timeoutId = window.setTimeout(() => {
       setIsTooltipSettled(true);
@@ -1134,8 +1068,12 @@ export default function OnboardingOverlay({
       viewportVersion,
     ]
   );
+  // `targetUnresolvable` short-circuits the anchor wait: the step renders
+  // centered (computeTooltipStyle already centers a null rect) rather than
+  // staying hidden behind a dim the user cannot dismiss.
   const isTooltipAnchorReady =
-    (!hasTargetSelectors || tooltipTargetRect !== null) && isTooltipSettled;
+    targetUnresolvable ||
+    ((!hasTargetSelectors || tooltipTargetRect !== null) && isTooltipSettled);
 
   const overlay = (
     <div

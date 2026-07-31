@@ -5,8 +5,32 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>Stalagmight</title>
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@4.7.1/dist/maplibre-gl.css" />
+    <style>
+      /* Anti-flash cover for the frame before the CSS bundle loads;
+         html[data-theme] then hands over to the live token. #1a1a2e is :root's
+         --cc-background, which is also what the first React commit paints:
+         config arrives async over IPC, so useTheme stamps data-theme="dark"
+         before the real theme is known (src/hooks/useTheme.ts). Matching it
+         means cover and first commit agree instead of stepping. A light-theme
+         user still gets these dark frames - fixing that needs a last-known
+         theme readable before the bundle runs, which nothing persists today.
+         Do NOT key this off prefers-color-scheme: useTheme consults the OS only
+         when theme is "auto", and the shipped default is "dark"
+         (src/types/ipc/defaultConfig.ts), so that guess paints cream then dark
+         on a light-appearance machine - a flash the default did not have.
+         Do NOT put a background back on <body>: an inline style there outranks
+         its own bg-background class, which is what pinned this first frame dark
+         in every theme (#332); App.tsx's root div covers the body after that.
+         Both rules are pinned by src/theme/__tests__/tokens.test.ts. */
+      html {
+        background-color: #1a1a2e;
+      }
+      html[data-theme] {
+        background-color: var(--cc-background);
+      }
+    </style>
   </head>
-  <body class="bg-background text-text-primary" style="background-color: #1a1a2e;">
+  <body class="bg-background text-text-primary">
     <div id="root"></div>
     <div id="dialog-root"></div>
     <script type="module" src="/src/main.tsx"></script>

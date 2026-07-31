@@ -3366,10 +3366,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 data_table_shot_column_order: [],
                 data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.
@@ -3451,6 +3453,16 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             if (stationColumnOrder != null) mockDataTableView.data_table_station_column_order = stationColumnOrder;
             const stationHiddenColumns = (args?.stationHiddenColumns ?? args?.station_hidden_columns) as string[] | undefined;
             if (stationHiddenColumns != null) mockDataTableView.data_table_station_hidden_columns = stationHiddenColumns;
+            const columnWidths = (args?.columnWidths ?? args?.column_widths) as
+              | Record<string, number>
+              | undefined;
+            if (columnWidths != null) mockDataTableView.data_table_shot_column_widths = columnWidths;
+            const stationColumnWidths = (args?.stationColumnWidths ?? args?.station_column_widths) as
+              | Record<string, number>
+              | undefined;
+            if (stationColumnWidths != null) {
+              mockDataTableView.data_table_station_column_widths = stationColumnWidths;
+            }
             return null; // Tauri serializes () as null
           }
 
@@ -3625,10 +3637,12 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 data_table_height: 200,
                 data_table_shot_column_order: [],
                 data_table_shot_hidden_columns: ['section_id', 'shot_id'],
+                data_table_shot_column_widths: {},
                 data_table_azimuth_mode: 'avg',
                 data_table_inclination_mode: 'off',
                 data_table_station_column_order: [],
                 data_table_station_hidden_columns: ['_x', '_y', '_lat', '_long'],
+                data_table_station_column_widths: {},
                 // Mirror the Rust serde defaults for the reveal state so initPanels
                 // reads concrete values (side panels pinned open, data closed),
                 // matching the real config shape get_config returns.

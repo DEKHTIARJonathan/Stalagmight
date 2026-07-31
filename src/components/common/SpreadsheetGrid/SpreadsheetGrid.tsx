@@ -21,6 +21,13 @@ import {
   ROW_HEIGHT,
 } from './types';
 import { parseLocaleNumber, parseTSV, serializeRangeToTSV } from './gridClipboard';
+import {
+  useColumnWidths,
+  computeColumnWidths,
+  MIN_COL_WIDTH,
+  MAX_COL_WIDTH,
+  AUTOFIT_MAX_COL_WIDTH,
+} from './useColumnWidths';
 import { DEFAULT_GRID_LABELS, type GridLabels } from './gridLabels';
 import {
   arrowTarget,
@@ -51,7 +58,6 @@ function measureEditorText(text: string): number {
 }
 
 const HEADER_HEIGHT = 33;
-const MIN_COL_WIDTH = 40;
 const EDGE_SCROLL_ZONE = 26;
 const GUTTER_WIDTH = 48; // frozen row-number gutter on the left
 
@@ -86,6 +92,14 @@ export interface SpreadsheetGridProps<Row> {
   columnOrder?: string[];
   onColumnOrderChange?: (order: string[]) => void;
   onHiddenColumnsChange?: (hidden: string[]) => void;
+  /** Manual column-width overrides in px, keyed by column key. A missing key
+   *  means "no override", so the column keeps its declared `width`. Seeds the
+   *  grid; live resizing is tracked internally for responsiveness. */
+  columnWidths?: Record<string, number>;
+  /** Fired when a resize COMMITS (mouse-up or double-click autofit), not on every
+   *  mousemove - so a host that persists this doesn't write once per pixel. A
+   *  resize abandoned via window blur is not committed. */
+  onColumnWidthsChange?: (widths: Record<string, number>) => void;
   /** Reorder rows by dragging the row-number gutter. Move the contiguous block
    *  of data-row indices [fromStart..fromEnd] so it starts before `toIndex` (an
    *  insertion boundary in the ORIGINAL indexing). Omit to disable row moving
@@ -192,6 +206,8 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     columnOrder,
     onColumnOrderChange,
     onHiddenColumnsChange,
+    columnWidths,
+    onColumnWidthsChange,
     onMoveRows,
     onInsertRows,
     onDeleteRows,
@@ -240,30 +256,24 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       .filter((c): c is GridColumn<Row> => c !== undefined);
   }, [columns, orderedKeys, hiddenColumns]);
 
-  const [colWidthOverrides, setColWidthOverrides] = useState<Record<string, number>>({});
+  // Manual width overrides. Seeded from the host (which may be restoring them
+  // from config) and tracked locally during a drag, so resizing stays smooth
+  // without re-rendering the host on every mousemove. Committed back on release.
+  const {
+    widths: colWidthOverrides,
+    widthsRef,
+    applyWidths,
+    commitWidths,
+    revertWidths,
+  } = useColumnWidths(columnWidths, onColumnWidthsChange);
   // The scroller's inner width, tracked so `grow` columns can absorb the
   // leftover space and the grid fills its container (no empty right gutter).
   const [availWidth, setAvailWidth] = useState(0);
   const colKeys = useMemo(() => visibleColumns.map((c) => c.key), [visibleColumns]);
-  const widths = useMemo(() => {
-    const base = visibleColumns.map((c) => colWidthOverrides[c.key] ?? c.width ?? DEFAULT_COL_WIDTH);
-    // Distribute leftover width across grow columns the user hasn't pinned by
-    // resizing (a manual override is a deliberate fixed width). `width` is the
-    // floor, so a grow column never shrinks below its declared size.
-    const growIdx = visibleColumns
-      .map((c, i) => (c.grow && colWidthOverrides[c.key] === undefined ? i : -1))
-      .filter((i) => i >= 0);
-    if (growIdx.length === 0 || availWidth <= 0) return base;
-    const leftover = availWidth - gutterWidth - base.reduce((sum, w) => sum + w, 0);
-    if (leftover <= 0) return base;
-    const add = Math.floor(leftover / growIdx.length);
-    const rem = leftover - add * growIdx.length;
-    const out = base.slice();
-    growIdx.forEach((i, n) => {
-      out[i] = (out[i] ?? 0) + add + (n < rem ? 1 : 0);
-    });
-    return out;
-  }, [visibleColumns, colWidthOverrides, availWidth, gutterWidth]);
+  const widths = useMemo(
+    () => computeColumnWidths(visibleColumns, colWidthOverrides, availWidth, gutterWidth),
+    [visibleColumns, colWidthOverrides, availWidth, gutterWidth],
+  );
   const offsets = useMemo(() => columnOffsets(widths), [widths]);
   const totalWidth = gutterWidth + (offsets[offsets.length - 1] ?? 0);
   const colIndexOf = useCallback((key: string) => colKeys.indexOf(key), [colKeys]);
@@ -1493,8 +1503,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       const node = el as HTMLElement;
       if (node.dataset.testid?.endsWith(`-${key}`)) max = Math.max(max, node.scrollWidth);
     });
-    if (max > 0) setColWidthOverrides((m) => ({ ...m, [key]: clamp(max + 18, MIN_COL_WIDTH, 600) }));
-  }, []);
+    if (max > 0) {
+      commitWidths({
+        ...widthsRef.current,
+        [key]: clamp(max + 18, MIN_COL_WIDTH, AUTOFIT_MAX_COL_WIDTH),
+      });
+    }
+  }, [commitWidths]);
 
   // Double-click the fill handle: fill down to the data extent of the left
   // neighbour column (Google-Sheets auto-fill), or the selection's own column.
@@ -1666,7 +1681,13 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
       colDrag.current !== null ||
       rowDrag.current !== null;
     if (e.buttons === 0 && anyDrag) {
-      cancelDragRef.current();
+      // A resize reaches here only because the mouseup landed outside the window: the
+      // user DID finish it, so route to the release path, which commits. Reverting
+      // (what the abandon path must do) would throw away completed work. Only one
+      // gesture is ever active, so onUp cannot commit a reorder or cell move here.
+      // Those kinds keep aborting - a buttonless move is too weak a signal to commit.
+      if (resizing.current) onUpRef.current();
+      else cancelDragRef.current();
       return;
     }
     if (cellMove.current) {
@@ -1716,7 +1737,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (resizing.current) {
       const { key, startX, startW } = resizing.current;
-      setColWidthOverrides((m) => ({ ...m, [key]: Math.max(MIN_COL_WIDTH, startW + (e.clientX - startX)) }));
+      applyWidths({
+        ...widthsRef.current,
+        [key]: clamp(startW + (e.clientX - startX), MIN_COL_WIDTH, MAX_COL_WIDTH),
+      });
       return;
     }
     if (pendingDrag.current && !dragging.current) {
@@ -1757,7 +1781,14 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     setRowMoveDrop(null);
     setCellMoveDrop(null);
   };
-  cancelDragRef.current = resetDrag;
+  // Abandoning a drag has to undo the width it was previewing, not just clear the
+  // flag: the in-progress value is already in the live map, and every commit
+  // spreads that whole map, so a later resize of an unrelated column would
+  // otherwise persist this one too.
+  cancelDragRef.current = () => {
+    if (resizing.current) revertWidths();
+    resetDrag();
+  };
   onUpRef.current = () => {
     if (colDrag.current?.mode === 'move' && colMoveDrop) {
       reorderColumns(colDrag.current.fromC0, colDrag.current.fromC1, colMoveDrop.index);
@@ -1767,6 +1798,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     }
     if (cellMove.current && cellMoveDrop) moveCells(cellMove.current.src, cellMoveDrop);
     if (fillDragging.current && fillPreview) commitFill(fillPreview);
+    // Persist the width only once the drag lands. The abandon path routes to
+    // cancelDragRef, which reverts instead; commitWidths itself drops a commit that
+    // matches the map the host already has, so a bare click is not a save.
+    if (resizing.current) commitWidths(widthsRef.current);
     resetDrag();
   };
   useEffect(() => {
