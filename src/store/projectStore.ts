@@ -5,6 +5,7 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
+import { withThemeDepthRamp } from '../utils/exportOptions';
 import {
   isEditDisabledError,
   isReverifyDivergedError,
@@ -2375,7 +2376,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   exportImage: async (path: string, options: ExportImageOptions) => {
-    await invokeIpc('export_image', { path, options }, {
+    // Stamped here, not at the callers (#360): this is the one funnel every
+    // image export passes through. Unconditional - the option is inert for the
+    // non-depth modes. See `utils/exportOptions.ts`.
+    await invokeIpc('export_image', {
+      path,
+      options: withThemeDepthRamp(options),
+    }, {
       purpose: 'export map image',
       fields: { path, format: options.format },
     });

@@ -118,20 +118,50 @@ fn escape_xml_text(s: &str) -> String {
 // distanceGradient.ts). To match on screen, port those exact endpoints + math
 // here (the HSL lerp lives in depth_colors.rs).
 
-/// DARK-theme depth-gradient endpoints: shallow teal → deep coral, the values of
-/// `--cc-depth-shallow` / `--cc-depth-deep` under `[data-theme="dark"]`.
+/// Fallback depth-gradient endpoints: the dark theme's shallow teal → deep coral,
+/// i.e. `--cc-depth-shallow` / `--cc-depth-deep` under `[data-theme="dark"]`.
 ///
-/// ⚠ These are NOT theme-independent any more, and the "mirror the live survey map"
-/// promise above does not hold for them. `getMapThemeColors()` in
-/// src/utils/themeColors.ts used to force the dark constants for every theme, which
-/// is what made a single hardcoded pair correct here; #332 made it resolve the live
-/// token instead. So depth-mode export now matches `dark` only - on the light theme
-/// the screen draws navy → brick while the export draws teal → coral onto a white
-/// page, which is the pairing src/theme/__tests__/tokens.test.ts measures at 1.13:1.
-/// Fixing it means threading the resolved endpoints through `ExportImageOptions`
-/// rather than duplicating the per-theme table in Rust. Tracked in #360.
+/// These are only a FALLBACK. The endpoints that actually reach the page are the
+/// ones the frontend resolved from the live theme and sent on
+/// [`ExportImageOptions`] (#360); the constants apply when a caller omits them
+/// (an older frontend, a Rust test, a hand-built options struct).
+///
+/// They used to be the whole story, and correctly so: `getMapThemeColors()` in
+/// src/utils/themeColors.ts forced the dark pair for every theme, so one
+/// hardcoded pair really was theme-independent. #332 made it resolve the live
+/// token per theme, which left the export matching `dark` alone - on the light
+/// theme the screen drew navy → brick while the export drew teal → coral onto a
+/// white page, the pairing src/theme/__tests__/tokens.test.ts measures at 1.13:1.
 const DEPTH_SHALLOW: &str = "#4ecdc4";
 const DEPTH_DEEP: &str = "#ff6b6b";
+
+/// The depth-gradient endpoints for one export: whatever the frontend resolved
+/// from the live theme, else the dark-theme constants.
+#[derive(Clone, Copy)]
+struct DepthRamp<'a> {
+    shallow: &'a str,
+    deep: &'a str,
+}
+
+/// A `#rrggbb` literal, or `None`. Deliberately strict: `hex_to_rgb` answers
+/// black for anything it cannot parse, so an unrecognised CSS colour would paint
+/// a black survey rather than fall back to the readable dark ramp. Only a shape
+/// we know that helper reads correctly is allowed through.
+fn parse_hex_endpoint(value: Option<&String>) -> Option<&str> {
+    let s = value?.trim();
+    let rest = s.strip_prefix('#')?;
+    (rest.len() == 6 && rest.bytes().all(|b| b.is_ascii_hexdigit())).then_some(s)
+}
+
+impl ExportImageOptions {
+    /// Resolve this export's depth ramp, falling back per-endpoint.
+    fn depth_ramp(&self) -> DepthRamp<'_> {
+        DepthRamp {
+            shallow: parse_hex_endpoint(self.depth_shallow.as_ref()).unwrap_or(DEPTH_SHALLOW),
+            deep: parse_hex_endpoint(self.depth_deep.as_ref()).unwrap_or(DEPTH_DEEP),
+        }
+    }
+}
 
 /// Live-map distance-gradient endpoints (near gold → far purple) + the grey the
 /// map paints unreachable features. From `src/utils/distanceGradient.ts`.
@@ -142,15 +172,15 @@ const DIST_UNREACHABLE: &str = "#666666";
 /// Depth-gradient color for `depth` normalized over `[min_d, max_d]`, matching
 /// the survey map: a 2-stop HSL shortest-hue-path lerp shallow→deep. Non-finite
 /// input falls back to black; a flat range collapses to the shallow color.
-fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64) -> String {
+fn depth_gradient_color(depth: f64, min_d: f64, max_d: f64, ramp: DepthRamp<'_>) -> String {
     if !depth.is_finite() || !min_d.is_finite() || !max_d.is_finite() {
         return "#000000".to_string();
     }
     if max_d == min_d {
-        return DEPTH_SHALLOW.to_string();
+        return ramp.shallow.to_string();
     }
     let t = ((depth.clamp(min_d, max_d) - min_d) / (max_d - min_d)).clamp(0.0, 1.0);
-    crate::export::depth_colors::interpolate_hsl(DEPTH_SHALLOW, DEPTH_DEEP, t)
+    crate::export::depth_colors::interpolate_hsl(ramp.shallow, ramp.deep, t)
 }
 
 /// The global depth range the survey map normalizes over: min/max across every
@@ -224,7 +254,9 @@ pub enum ColorMode {
 /// format, the PNG DPI, the branching-factor threshold that decides where to
 /// split between the two stroke widths, whether to draw the penetration-distance
 /// labels, and how to color the shots.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, TS)]
+// No longer `Copy`: the theme's depth endpoints arrive as owned `String`s (#360).
+// Every consumer already takes `&ExportImageOptions`, so this costs nothing.
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct ExportImageOptions {
     /// Image format (png, svg, pdf).
     pub format: ImageFormat,
@@ -281,6 +313,26 @@ pub struct ExportImageOptions {
     #[serde(default)]
     #[ts(skip)]
     pub include_reference_legs: bool,
+    /// The live theme's `--cc-depth-shallow` / `--cc-depth-deep`, as `#rrggbb`.
+    ///
+    /// The depth ramp is the one colour rule the export cannot own: #332 made
+    /// each theme declare its own endpoints, so the only way the file can match
+    /// the screen is for the frontend to send what it resolved (#360). Threaded
+    /// rather than tabulated here on purpose - a second copy of the per-theme
+    /// table, in a second language, is exactly what drifted the first time.
+    ///
+    /// Omitted (or not `#rrggbb`) falls back to the dark-theme constants, which
+    /// is what every caller got before this existed.
+    /// `ts(optional)`, not `ts(skip)`: unlike `include_reference_legs` the
+    /// frontend is exactly who must supply these, but they are plumbing rather
+    /// than a user-facing export option, so the UI's options literals need not
+    /// carry them - `projectStore.exportImage` fills them in on the way out.
+    #[serde(default)]
+    #[ts(optional)]
+    pub depth_shallow: Option<String>,
+    #[serde(default)]
+    #[ts(optional)]
+    pub depth_deep: Option<String>,
 }
 
 impl Default for ExportImageOptions {
@@ -297,6 +349,8 @@ impl Default for ExportImageOptions {
             show_shot_comments: false,
             show_shot_data: false,
             include_reference_legs: false,
+            depth_shallow: None,
+            depth_deep: None,
         }
     }
 }
@@ -909,6 +963,7 @@ pub fn generate_svg_string_with_stations(
         options.color_mode
     };
     let depth_rng = (mode == ColorMode::Depth).then(|| depth_range(project, &stations));
+    let depth_ramp = options.depth_ramp();
     let dist_field = (mode == ColorMode::Distance).then(|| {
         // The map colors the distance ramp from MEASURED distances (it draws
         // adjusted geometry but deliberately computes the distance field from
@@ -983,7 +1038,7 @@ pub fn generate_svg_string_with_stations(
                         let t1 = (s + 1) as f64 / segs as f64;
                         let mid = shot.depth_in
                             + (shot.depth_out - shot.depth_in) * ((s as f64 + 0.5) / segs as f64);
-                        let color = depth_gradient_color(mid, min_d, max_d);
+                        let color = depth_gradient_color(mid, min_d, max_d, depth_ramp);
                         let (ax, ay) = (x0 + (x1 - x0) * t0, y0 + (y1 - y0) * t0);
                         let (bx, by) = (x0 + (x1 - x0) * t1, y0 + (y1 - y0) * t1);
                         let _ = writeln!(
@@ -3534,19 +3589,70 @@ mod tests {
 
     #[test]
     fn depth_gradient_color_matches_map_scheme() {
+        let defaults = ExportImageOptions::default();
+        let ramp = defaults.depth_ramp();
         // Flat range collapses to the shallow endpoint; non-finite falls back to black.
-        assert_eq!(depth_gradient_color(5.0, 10.0, 10.0), "#4ecdc4");
-        assert_eq!(depth_gradient_color(f64::NAN, 0.0, 1.0), "#000000");
+        assert_eq!(depth_gradient_color(5.0, 10.0, 10.0, ramp), "#4ecdc4");
+        assert_eq!(depth_gradient_color(f64::NAN, 0.0, 1.0, ramp), "#000000");
         // Shallow (t=0) and deep (t=1) differ, and the midpoint differs from both.
-        let shallow = depth_gradient_color(0.0, 0.0, 100.0);
-        let deep = depth_gradient_color(100.0, 0.0, 100.0);
-        let mid = depth_gradient_color(50.0, 0.0, 100.0);
+        let shallow = depth_gradient_color(0.0, 0.0, 100.0, ramp);
+        let deep = depth_gradient_color(100.0, 0.0, 100.0, ramp);
+        let mid = depth_gradient_color(50.0, 0.0, 100.0, ramp);
         assert_ne!(shallow, deep);
         assert_ne!(mid, shallow);
         assert_ne!(mid, deep);
         // Out-of-range depths clamp to the endpoints.
-        assert_eq!(depth_gradient_color(-10.0, 0.0, 100.0), shallow);
-        assert_eq!(depth_gradient_color(999.0, 0.0, 100.0), deep);
+        assert_eq!(depth_gradient_color(-10.0, 0.0, 100.0, ramp), shallow);
+        assert_eq!(depth_gradient_color(999.0, 0.0, 100.0, ramp), deep);
+    }
+
+    #[test]
+    fn depth_ramp_takes_the_themes_endpoints_and_rejects_junk() {
+        let themed = ExportImageOptions {
+            depth_shallow: Some("#14487F".to_string()),
+            depth_deep: Some("#a52a1a".to_string()),
+            ..Default::default()
+        };
+        let ramp = themed.depth_ramp();
+        assert_eq!(ramp.shallow, "#14487F");
+        assert_eq!(ramp.deep, "#a52a1a");
+        // Uppercase must not merely pass the validator, it must RENDER the same:
+        // passthrough alone would still look right here while `hex_to_rgb` read
+        // it as black. Pin the rendered colour, not just the string.
+        let lower = ExportImageOptions {
+            depth_shallow: Some("#14487f".to_string()),
+            ..themed.clone()
+        };
+        assert_eq!(
+            depth_gradient_color(0.0, 0.0, 100.0, ramp),
+            depth_gradient_color(0.0, 0.0, 100.0, lower.depth_ramp()),
+        );
+        // The whole point: a light-theme export must not paint the dark ramp.
+        let defaults = ExportImageOptions::default();
+        assert_ne!(
+            depth_gradient_color(50.0, 0.0, 100.0, ramp),
+            depth_gradient_color(50.0, 0.0, 100.0, defaults.depth_ramp()),
+        );
+
+        // Anything `hex_to_rgb` would read as black falls back per-endpoint
+        // instead, so a colour this side cannot parse never blackens a survey.
+        for junk in [
+            "",
+            "#fff",
+            "rgb(1,2,3)",
+            "oklch(0.7 0.1 200)",
+            "4ecdc4",
+            "#zzzzzz",
+        ] {
+            let bad = ExportImageOptions {
+                depth_shallow: Some(junk.to_string()),
+                depth_deep: Some("#a52a1a".to_string()),
+                ..Default::default()
+            };
+            let ramp = bad.depth_ramp();
+            assert_eq!(ramp.shallow, DEPTH_SHALLOW, "junk endpoint {junk:?} leaked");
+            assert_eq!(ramp.deep, "#a52a1a", "the good endpoint was dropped too");
+        }
     }
 
     #[test]

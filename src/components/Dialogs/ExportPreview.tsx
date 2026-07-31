@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';
+import { withThemeDepthRamp } from '../../utils/exportOptions';
 import { useProjectStore } from '../../store/projectStore';
+import { useUIStore } from '../../store/uiStore';
 import type { ExportImageOptions } from '../../types/commands';
 
 interface ExportPreviewProps {
@@ -26,6 +28,13 @@ const PREVIEW_SIZE = 300;
  */
 export default function ExportPreview({ options, fill = false }: ExportPreviewProps) {
   const project = useProjectStore((state) => state.project);
+  // The depth endpoints this preview sends are read from the live document, so
+  // the theme is an INPUT to the request even though it appears nowhere in
+  // `options` (#360). Without it the Export-mode panel keeps showing the old
+  // theme's ramp after an in-place theme switch, while the file written from
+  // the same options follows the new one - the drift this was meant to close,
+  // moved rather than removed.
+  const resolvedTheme = useUIStore((state) => state.resolvedTheme);
 
   const [svg, setSvg] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -62,8 +71,10 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       // `preview_svg_export` always returns SVG markup regardless of `format`
       // (PNG/PDF are SVG-derived), but the format DOES drive whether colors are
       // emitted (SVG is always monochrome). Pass the real options through so the
-      // preview matches what the chosen format will actually write.
-      invokeIpc<string>('preview_svg_export', { options }, {
+      // preview matches what the chosen format will actually write - including
+      // the live theme's depth endpoints, which the backend cannot resolve and
+      // which the export path stamps on the same way (#360).
+      invokeIpc<string>('preview_svg_export', { options: withThemeDepthRamp(options) }, {
         purpose: 'render export preview',
       })
         .then((markup) => {
@@ -86,7 +97,9 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
         timeoutRef.current = null;
       }
     };
-  }, [project, options]);
+    // `resolvedTheme` is a dependency for the depth endpoints `withThemeDepthRamp`
+    // reads off the document, not for anything in `options` - see above.
+  }, [project, options, resolvedTheme]);
 
   return (
     <div
