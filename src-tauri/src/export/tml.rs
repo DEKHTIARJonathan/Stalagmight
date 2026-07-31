@@ -279,6 +279,7 @@ fn write_output(path: &Path, xml: &[u8]) -> Result<()> {
 
 fn build_xml(project: &Project, n: &Names, profile: TmlProfile) -> Result<Vec<u8>> {
     let shots = build_export_shots(project, profile);
+    ensure_rooted_chain(&shots, profile)?;
 
     let mut buf = Vec::new();
     let mut writer = Writer::new_with_indent(Cursor::new(&mut buf), b' ', 4);
@@ -473,6 +474,52 @@ fn write_zip(path: &Path, xml: &[u8]) -> Result<()> {
     Ok(())
 }
 
+/// Refuse to write a chain containing a parentless shot that is not a `START`.
+///
+/// Ariane reads `FromID = -1` as an entrance and expects `Type = START` there; every
+/// parentless shot in an Ariane-authored file is one. A shot left parentless for any
+/// other reason is an orphan root, and although Ariane still lists it in the data
+/// table, ONE such shot anywhere in a survey that also has a `CLOSURE` row makes it
+/// abandon the loop solve and draw a completely empty map. Neither condition alone
+/// does any harm, which is why this shipped: the export succeeded, warned into a log
+/// nobody reads, and produced a file that opened to a blank map in Ariane 26.3.
+///
+/// Failing here costs a user an export; not failing costs them a survey they cannot
+/// see and no reason why.
+fn ensure_rooted_chain(shots: &[ExportShot], profile: TmlProfile) -> Result<()> {
+    // The SpeleoDB sidecar pads a lone START with a parentless VIRTUAL shot on
+    // purpose (see `the_sidecar_never_emits_exactly_one_survey_data`). That file is
+    // read by `openspeleo_lib`, which drops VIRTUAL from the map and never runs a
+    // loop solve, so the orphan is inert there. Only the Ariane-facing export cares.
+    if !matches!(profile, TmlProfile::User) {
+        return Ok(());
+    }
+
+    let orphans: Vec<&ExportShot> = shots
+        .iter()
+        .filter(|s| s.from_id == -1 && s.shot_type != "START")
+        .collect();
+
+    let Some(first) = orphans.first() else {
+        return Ok(());
+    };
+
+    let mut sections: Vec<&str> = orphans.iter().map(|s| s.section.as_str()).collect();
+    sections.sort_unstable();
+    sections.dedup();
+
+    anyhow::bail!(
+        "Cannot export: {} shot(s) have no parent station and are not entrances, so Ariane \
+         would draw an empty map for any survey with loop closures. First offender: shot id {} \
+         ({}) in section {:?}. Affected section(s): {}.",
+        orphans.len(),
+        first.id,
+        first.shot_type,
+        first.section,
+        sections.join(", "),
+    )
+}
+
 // ============================================================================
 // Build flat shot list from project model
 // ============================================================================
@@ -534,6 +581,16 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
     for section in &project.sections {
         let is_root = section.id == root_section_id;
+
+        // A section that never merges into the tree is a separate entrance, not a
+        // child of anything - two unconnected galleries in one project is an ordinary
+        // state. Ariane represents those as additional START shots and its own files
+        // do exactly that (`chanchemuyil_sur.tml` ships two). Leaving the first shot
+        // parentless instead produces an orphan root, which makes Ariane abandon the
+        // loop solve and draw an empty map for the WHOLE survey once any closure
+        // exists. Zero-datum splitting below stays root-only; this is just about who
+        // owns a START.
+        let is_entrance = is_root || !parent_map.contains_key(&section.id);
 
         let section_name = section
             .name
@@ -931,8 +988,8 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
         let mut shots = Vec::new();
 
-        if is_root {
-            // Only the root section gets a START shot
+        if is_entrance {
+            // The root, and any section not merged into it, each get a START shot
             let start_id = next_id;
             next_id += 1;
 
@@ -983,7 +1040,7 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
             // Chain from_id: first shot chains from START (root) or placeholder (child)
             let prev_id = if i == 0 {
-                if is_root {
+                if is_entrance {
                     // Chain from the START shot
                     shots[0].id
                 } else {
@@ -1034,55 +1091,85 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
 
         blocks.push(SectionBlock {
             section_id: section.id,
-            apply_parent_link: !is_root && !shots.is_empty(),
+            apply_parent_link: !is_entrance && !shots.is_empty(),
             merge_station_index_override: None,
             shots,
         });
     }
 
     // Second pass: resolve parent links from station merges.
-    for block in &mut blocks {
-        if !block.apply_parent_link || block.shots.is_empty() {
-            continue;
+    //
+    // A section's parent station is often another section's MERGE station, and that
+    // station only enters `station_to_ariane` through the alias at the bottom of this
+    // loop - that is, when the other section resolves. Walking `blocks` once therefore
+    // makes resolution order-dependent even though the tree `build_parent_map` builds
+    // is not: a child stored before its parent missed the lookup and kept the `-1`
+    // placeholder. Ariane reads a parentless non-START shot as a second entrance, gives
+    // up on the whole loop solve, and draws an empty map while the data table still
+    // fills - silently, because this only warned. Iterate to a fixpoint instead, since
+    // every pass that resolves something can unblock the next.
+    let mut pending: Vec<usize> = (0..blocks.len())
+        .filter(|&i| blocks[i].apply_parent_link && !blocks[i].shots.is_empty())
+        .collect();
+
+    while !pending.is_empty() {
+        let mut unresolved = Vec::new();
+        let mut progressed = false;
+
+        for i in pending {
+            let section_id = blocks[i].section_id;
+            let override_idx = blocks[i].merge_station_index_override;
+
+            // No parent link at all means a genuinely detached section, which is a
+            // different shape from an unresolved one; `ensure_rooted_chain` decides.
+            let Some(parent_link) = parent_map.get(&section_id) else {
+                continue;
+            };
+
+            let Some(&parent_ariane_id) = station_to_ariane.get(&(
+                parent_link.parent_station.section_id,
+                parent_link.parent_station.station_index,
+            )) else {
+                unresolved.push(i);
+                continue;
+            };
+
+            let child_station_idx =
+                override_idx.unwrap_or(parent_link.child_station_index) as usize;
+            if child_station_idx < blocks[i].shots.len() {
+                blocks[i].shots[child_station_idx].from_id = parent_ariane_id;
+            } else {
+                tracing::warn!(
+                    child_section_id = section_id,
+                    child_station_index = parent_link.child_station_index,
+                    shot_count = blocks[i].shots.len(),
+                    "Skipping parent from_id rewrite: child merge station has no outgoing shot"
+                );
+            }
+
+            // Treat merged stations as the same Ariane node ID so closures and GPS
+            // references resolve to the parent-attached node.
+            station_to_ariane.insert(
+                (section_id, parent_link.child_station_index),
+                parent_ariane_id,
+            );
+            progressed = true;
         }
 
-        let Some(parent_link) = parent_map.get(&block.section_id) else {
-            continue;
-        };
-
-        let Some(&parent_ariane_id) = station_to_ariane.get(&(
-            parent_link.parent_station.section_id,
-            parent_link.parent_station.station_index,
-        )) else {
-            tracing::warn!(
-                child_section_id = block.section_id,
-                parent_section_id = parent_link.parent_station.section_id,
-                parent_station_index = parent_link.parent_station.station_index,
-                "Skipping parent link: parent station is not representable in Ariane export"
-            );
-            continue;
-        };
-
-        let child_station_idx = block
-            .merge_station_index_override
-            .unwrap_or(parent_link.child_station_index) as usize;
-        if child_station_idx < block.shots.len() {
-            block.shots[child_station_idx].from_id = parent_ariane_id;
-        } else {
-            tracing::warn!(
-                child_section_id = block.section_id,
-                child_station_index = parent_link.child_station_index,
-                shot_count = block.shots.len(),
-                "Skipping parent from_id rewrite: child merge station has no outgoing shot"
-            );
+        pending = unresolved;
+        if !progressed {
+            // Nothing moved, so nothing will: the rest are unreachable parents.
+            for &i in &pending {
+                let parent_link = &parent_map[&blocks[i].section_id];
+                tracing::warn!(
+                    child_section_id = blocks[i].section_id,
+                    parent_section_id = parent_link.parent_station.section_id,
+                    parent_station_index = parent_link.parent_station.station_index,
+                    "Unresolved parent link: parent station is not representable in Ariane export"
+                );
+            }
+            break;
         }
-
-        // Treat merged stations as the same Ariane node ID so closures and GPS
-        // references resolve to the parent-attached node.
-        station_to_ariane.insert(
-            (block.section_id, parent_link.child_station_index),
-            parent_ariane_id,
-        );
     }
 
     // Fold station comments into the TML <Comment> field of the shot whose
@@ -1315,25 +1402,30 @@ fn build_export_shots(project: &Project, profile: TmlProfile) -> Vec<ExportShot>
     let mut all_shots: Vec<ExportShot> = blocks.into_iter().flat_map(|b| b.shots).collect();
     all_shots.extend(closure_shots);
 
-    // Final pass: Ariane stores GPS on the single START shot.
-    let start_idx = all_shots.iter().position(|s| s.shot_type == "START");
-    if let Some(start_idx) = start_idx {
-        if let Some(primary_datum) = primary_datum {
-            let (latitude, longitude) = match profile {
-                TmlProfile::User => (primary_datum.gps.latitude, primary_datum.gps.longitude),
-                TmlProfile::SpeleoDbSidecar => {
-                    speleodb_anchor(primary_datum.gps.latitude, primary_datum.gps.longitude)
-                }
-            };
-            all_shots[start_idx].latitude = latitude;
-            all_shots[start_idx].longitude = longitude;
-
-            if project.zero_datums.len() > 1 {
-                tracing::warn!(
-                    datum_count = project.zero_datums.len(),
-                    "Ariane export supports only one GPS anchor; using the first zero datum"
-                );
+    // Final pass: Ariane stores GPS on the START shots.
+    //
+    // There can be more than one - the root, plus any section that never merges into
+    // it - and Ariane repeats the same coordinates on each; its own files do exactly
+    // that. Anchoring only the first leaves the rest at 0,0, which drops those
+    // sections on null island thousands of kilometres from the survey, and a
+    // zoom-to-fit then shows half a hemisphere.
+    if let Some(primary_datum) = primary_datum {
+        let (latitude, longitude) = match profile {
+            TmlProfile::User => (primary_datum.gps.latitude, primary_datum.gps.longitude),
+            TmlProfile::SpeleoDbSidecar => {
+                speleodb_anchor(primary_datum.gps.latitude, primary_datum.gps.longitude)
             }
+        };
+        for shot in all_shots.iter_mut().filter(|s| s.shot_type == "START") {
+            shot.latitude = latitude;
+            shot.longitude = longitude;
+        }
+
+        if project.zero_datums.len() > 1 {
+            tracing::warn!(
+                datum_count = project.zero_datums.len(),
+                "Ariane export supports only one GPS anchor; using the first zero datum"
+            );
         }
     }
 
@@ -2963,6 +3055,58 @@ mod tests {
         }
     }
 
+    /// Companion to `reexport_of_a_real_tml_keeps_the_chain_representable`, from the
+    /// project side: exports a real `.stalx` and checks Ariane can root every shot.
+    /// A parentless non-START shot plus any closure blanks Ariane's map entirely, and
+    /// the shape that produces one needs a real merge topology (a station shared by
+    /// three sections) that is tedious to hand-build. Skips when the var is unset.
+    ///
+    /// ```text
+    /// STALX_EXPORT_IN=/path/project.stalx \
+    ///   cargo test --features telemetry export_of_a_real_stalx -- --ignored --nocapture
+    /// ```
+    #[test]
+    #[ignore = "needs a real .stalx via STALX_EXPORT_IN"]
+    #[expect(
+        clippy::print_stdout,
+        reason = "a hand-run diagnostic tool; the orphan list is its result"
+    )]
+    fn export_of_a_real_stalx_roots_every_shot() {
+        let Ok(input) = std::env::var("STALX_EXPORT_IN") else {
+            return;
+        };
+        let db = crate::persistence::sqlite::Database::open_readonly(Path::new(&input)).unwrap();
+        let project = db.load_project().unwrap();
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+        let orphans: Vec<&ExportShot> = shots
+            .iter()
+            .filter(|s| s.from_id == -1 && s.shot_type != "START")
+            .collect();
+        for o in &orphans {
+            println!(
+                "  ORPHAN id={} type={} section={:?}",
+                o.id, o.shot_type, o.section
+            );
+        }
+        println!(
+            "{} shots, {} orphan(s) from {input}",
+            shots.len(),
+            orphans.len()
+        );
+
+        assert!(
+            orphans.is_empty(),
+            "{} parentless non-START shot(s) would blank Ariane's map",
+            orphans.len()
+        );
+
+        if let Ok(out) = std::env::var("STALX_EXPORT_OUT") {
+            export_tml(&project, Path::new(&out)).unwrap();
+            println!("wrote {out}");
+        }
+    }
+
     #[test]
     fn closure_shots_carry_the_depths_of_the_stations_they_tie() {
         // They used to be written with `depth: 0.0` regardless of where the
@@ -3677,6 +3821,174 @@ mod tests {
         assert!(content.contains("<LCK>"));
         assert!(content.contains("<NM>"));
         assert!(content.contains("<PT>VERTICAL</PT>"));
+    }
+
+    /// A child whose parent station is ANOTHER section's merge station must still be
+    /// rooted, whatever order the sections happen to be stored in.
+    ///
+    /// Station 0 of a non-root section only enters `station_to_ariane` when that
+    /// section itself resolves, so resolving blocks in storage order left a child
+    /// stored earlier pointing at nothing and it shipped with `from_id = -1`. Ariane
+    /// reads that as a second entrance, abandons the loop solve, and draws an empty
+    /// map for any survey that also has closures - which is exactly what happened to
+    /// a real 538-shot Naharon export (section `Trifurcate  North`, whose parent was
+    /// station 1 of `Trifurcate South`, a station shared by three sections).
+    #[test]
+    fn a_child_of_a_merge_station_is_rooted_regardless_of_section_order() {
+        let mut project = Project::new("Out Of Order".to_string(), None);
+
+        let shot = || ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        };
+
+        // Deliberately added BEFORE the section it hangs off: Root(0), Branch(1), Middle(2).
+        for name in ["Root", "Branch", "Middle"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![shot(), shot()],
+                ..Default::default()
+            });
+        }
+
+        let at = |section_id, station_index| {
+            StationRef {
+                section_id,
+                station_index,
+            }
+            .into()
+        };
+
+        // Middle hangs off Root, and Branch hangs off Middle's station 0 - the same
+        // station, so three sections meet there just as they do in the real survey.
+        project.station_merges.push(StationMerge {
+            station_a: at(0, 1),
+            station_b: at(2, 0),
+            merged_at: chrono::Utc::now(),
+        });
+        project.station_merges.push(StationMerge {
+            station_a: at(2, 0),
+            station_b: at(1, 0),
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+        let orphans: Vec<&ExportShot> = shots
+            .iter()
+            .filter(|s| s.from_id == -1 && s.shot_type != "START")
+            .collect();
+
+        assert!(
+            orphans.is_empty(),
+            "parentless non-START shot(s) {:?} - Ariane would draw an empty map",
+            orphans
+                .iter()
+                .map(|s| (s.id, s.shot_type, s.section.as_str()))
+                .collect::<Vec<_>>()
+        );
+
+        // And the guard agrees, so a regression cannot slip out as a written file.
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    /// Two galleries with no merge between them is an ordinary project, not an error.
+    /// Each is an entrance and gets its own START, which is how Ariane stores them
+    /// (`chanchemuyil_sur.tml` ships two). Before this, the second gallery's first
+    /// shot was left parentless - harmless until the survey gained a closure, at
+    /// which point Ariane drew nothing at all.
+    #[test]
+    fn a_detached_section_exports_as_its_own_entrance() {
+        let mut project = Project::new("Detached".to_string(), None);
+        for name in ["Gallery A", "Gallery B"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            });
+        }
+        // No station_merges at all.
+
+        project.zero_datums.push(ZeroDatum {
+            station_ref: StationRef {
+                section_id: 0,
+                station_index: 0,
+            }
+            .into(),
+            gps: GpsCoordinates::new(20.25, -87.5, 0.0).unwrap(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+        assert_eq!(starts.len(), 2, "each detached gallery is its own entrance");
+
+        // Every entrance carries the anchor. Leaving the second at 0,0 puts that
+        // gallery on null island, ~9000 km from the rest of the survey.
+        for start in &starts {
+            assert!(
+                (start.latitude - 20.25).abs() < f64::EPSILON
+                    && (start.longitude - -87.5).abs() < f64::EPSILON,
+                "entrance in section {:?} was left unanchored at {},{}",
+                start.section,
+                start.latitude,
+                start.longitude
+            );
+        }
+        assert!(
+            shots
+                .iter()
+                .all(|s| s.from_id != -1 || s.shot_type == "START"),
+            "no shot may be left parentless without being an entrance"
+        );
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    /// The guard is the backstop for a chain the builder should never produce, and it
+    /// must stay Ariane-only: the SpeleoDB sidecar pads a lone START with a parentless
+    /// VIRTUAL shot on purpose.
+    #[test]
+    fn the_guard_rejects_a_parentless_non_start_shot() {
+        let mut project = Project::new("Guard".to_string(), None);
+        project.add_section(SectionData {
+            name: Some("Only".to_string()),
+            color: "#ff0000".to_string(),
+            shots: vec![
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+                ShotData {
+                    length: 5.0,
+                    azimuth_in: 90.0,
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        });
+
+        let mut shots = build_export_shots(&project, TmlProfile::User);
+        assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+
+        // Force the exact shape the fix prevents.
+        let last = shots.last_mut().unwrap();
+        last.from_id = -1;
+        assert_ne!(last.shot_type, "START");
+
+        assert!(
+            ensure_rooted_chain(&shots, TmlProfile::User).is_err(),
+            "an orphan root must not reach a written Ariane file"
+        );
+        assert!(
+            ensure_rooted_chain(&shots, TmlProfile::SpeleoDbSidecar).is_ok(),
+            "the sidecar's deliberate VIRTUAL pad must still be allowed"
+        );
     }
 
     #[test]
