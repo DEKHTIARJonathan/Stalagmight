@@ -4281,6 +4281,45 @@ mod tests {
         assert_eq!(shots[4].uuid.as_deref(), Some(other_v4));
     }
 
+    /// The gate above decides WHETHER to emit; this is about WHAT gets emitted.
+    ///
+    /// `Uuid::parse_str` is permissive - `{braced}`, `urn:uuid:` and hyphenless all
+    /// parse, and all of them are genuine v4s that sail through `speleodb_uuid`. Wire
+    /// the accepted value straight through and the file carries a spelling the
+    /// server's `UUID4` field will not match, failing the whole document on a value
+    /// the check had just approved. That is the same class of silent, whole-file
+    /// rejection the rest of this hardening exists to remove, so the canonical
+    /// `8-4-4-4-12` form is what goes in.
+    #[test]
+    fn a_uuid_the_gate_accepts_is_written_in_the_form_the_server_expects() {
+        let canonical = "3f1e2d4c-5b6a-4789-8abc-def012345678";
+        for spelling in [
+            format!("{{{canonical}}}"),
+            format!("urn:uuid:{canonical}"),
+            canonical.replace('-', ""),
+            canonical.to_uppercase(),
+        ] {
+            assert!(
+                speleodb_uuid(&spelling).is_some(),
+                "{spelling} is a real v4 and the gate accepts it"
+            );
+
+            let mut shots = vec![
+                geometry_shot(1, -1, 0.0, 0.0, 0.0, false),
+                geometry_shot(2, 1, 0.0, 1.0, 5.0, false),
+            ];
+            shots[1].uuid = Some(spelling.clone());
+
+            harden_for_speleodb(&mut shots);
+
+            assert_eq!(
+                shots[1].uuid.as_deref(),
+                Some(canonical),
+                "{spelling} must be written as the canonical hyphenated form"
+            );
+        }
+    }
+
     #[test]
     fn an_anchor_on_the_equator_is_nudged_off_zero_for_the_sidecar() {
         // SpeleoDB anchors the map only when BOTH components exceed 1e-7, so a
