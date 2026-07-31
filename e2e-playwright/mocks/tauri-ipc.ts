@@ -522,7 +522,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
       // back into get_config's panels: the frontend re-syncs its in-memory
       // config via loadConfig() after each save, so without the merge a
       // saved view change would silently revert on the next remount.
-      const mockDataTableView: Record<string, unknown> = {};
+      //
+      // Seeded from `window.__E2E_SEED_DATA_TABLE_VIEW__`, set by a test's OWN
+      // `page.addInitScript` call registered before `setupMockedPage` (init
+      // scripts run in registration order, before any app JS) - this is the
+      // only way to have a seeded value present for the app's FIRST
+      // `get_config` call at boot, which `update_data_table_view` (an
+      // in-page IPC call, necessarily after boot) cannot reach in time.
+      const mockDataTableView: Record<string, unknown> = {
+        ...(((window as unknown as Record<string, unknown>).__E2E_SEED_DATA_TABLE_VIEW__ as
+          | Record<string, unknown>
+          | undefined) ?? {}),
+      };
+
+      // The `[gas]` block persisted via update_gas_config, overlaid onto
+      // get_config the same way. Null until something writes it, so an untouched
+      // run keeps whatever gas config get_config would otherwise return.
+      let mockGasConfig: Record<string, unknown> | null = null;
 
       // Station comments set via set_station_comment, keyed
       // "sectionId:stationIndex". get_project_state derives its station array
@@ -3163,7 +3179,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
 
           case 'get_config':
             // Return saved config if available (for testing persistence),
-            // overlaying any view state stored via update_data_table_view.
+            // overlaying any view state stored via update_data_table_view and any
+            // `[gas]` block stored via update_gas_config.
             if (savedConfig) {
               return {
                 ...savedConfig,
@@ -3171,6 +3188,7 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                   ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
                   ...mockDataTableView,
                 },
+                ...(mockGasConfig ? { gas: mockGasConfig } : {}),
               };
             }
             return {
@@ -3391,6 +3409,8 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 insecure_http: false,
                 poll_interval_seconds: 60,
               },
+              // Spread LAST so a stored `[gas]` block wins over the literal's own.
+              ...(mockGasConfig ? { gas: mockGasConfig } : {}),
             };
 
           case 'update_config':
@@ -3400,6 +3420,20 @@ export async function setupTauriMocks(page: Page): Promise<void> {
             console.log('[Mock IPC] update_config called with:', args);
             savedConfig = args?.config as Record<string, unknown> | undefined ?? null;
             return { keychain_residue: null };
+
+          case 'update_gas_config': {
+            // Partial update of the `[gas]` block only, mirroring the Rust impl.
+            // Overlaid in get_config the same way mockDataTableView is, rather
+            // than written into savedConfig: savedConfig is null until something
+            // posts a whole Config, and assigning a lone `{ gas }` to it would
+            // make get_config return a config with no general/display/panels at
+            // all. Keeping the two separate is also what lets a test assert that
+            // a gas write left the OTHER fields untouched (#357 item 2).
+            console.log('[Mock IPC] update_gas_config called with:', args);
+            const gas = args?.gas as Record<string, unknown> | undefined;
+            if (gas) mockGasConfig = gas;
+            return null;
+          }
 
           case 'update_data_table_view': {
             console.log('[Mock IPC] update_data_table_view called with:', args);

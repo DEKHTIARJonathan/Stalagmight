@@ -94,6 +94,20 @@ async function beginColumnDrag(page: Page, colKey: string, dx: number): Promise<
   return before;
 }
 
+/**
+ * Registers `window.__E2E_SEED_DATA_TABLE_VIEW__` via its own `page.addInitScript`,
+ * which the mock's `mockDataTableView` reads at init (see tauri-ipc.ts). Init
+ * scripts run in registration order before any app JS on every navigation, so
+ * this MUST be called before `setupMockedPage` - it is the only way to have a
+ * seeded value present for the app's first `get_config()` call at boot, which
+ * the DataTable's one-shot seed effect reads from.
+ */
+async function seedColumnWidths(page: Page, seed: Record<string, unknown>): Promise<void> {
+  await page.addInitScript((s) => {
+    (window as unknown as Record<string, unknown>).__E2E_SEED_DATA_TABLE_VIEW__ = s;
+  }, seed);
+}
+
 /** Open the DataTable via keyboard shortcut. */
 async function openDataTable(page: Page): Promise<void> {
   await page.keyboard.press('Control+3');
@@ -383,5 +397,62 @@ test.describe('Data table column preferences', () => {
       'section_id',
       'shot_id',
     ]);
+  });
+});
+
+test.describe('Data table column preferences - restore direction (#357 item 16)', () => {
+  /**
+   * Every width test above (242, 277) proves the WRITE half of persistence: a
+   * resize fires `update_data_table_view`. None of them ever mounts against a
+   * config that already carries a width, so the READ half - config ->
+   * DataTable's one-shot seed effect (DataTable.tsx ~687-734) -> columnWidths
+   * prop -> computeColumnWidths -> rendered header width - had no coverage at
+   * any tier, though it is exactly the half the CHANGELOG's "survive a
+   * restart" claim rests on.
+   *
+   * The seed must be in place before the app's FIRST get_config() call (the
+   * boot-time loadConfig() the seed effect only ever runs against once), so
+   * each test here registers its own `page.addInitScript` via
+   * `seedColumnWidths` BEFORE `setupMockedPage`, rather than sharing this
+   * file's `beforeEach`.
+   */
+
+  test('a shot-grid width restored from config renders on first paint, not the declared default', async ({
+    page,
+  }) => {
+    // 187px: `length`'s declared default is 100 (dataTableShotColumns.tsx), and
+    // `length` is not a `grow` column (only `comment` is), so an override is
+    // always its final rendered width - never touched by the leftover/grow
+    // distribution. A rendered width this far from 100 can only have come from
+    // the seeded config.
+    await seedColumnWidths(page, { data_table_shot_column_widths: { length: 187 } });
+    await setupMockedPage(page);
+    await createProject(page, 'Restore Shot Width Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    await openDataTable(page);
+
+    await expect
+      .poll(async () => (await page.getByTestId('grid-header-length').boundingBox())!.width)
+      .toBeGreaterThan(150);
+  });
+
+  test('a station-grid width restored from config renders on first paint too', async ({ page }) => {
+    // 205px: `_depth`'s declared default is 90 (dataTableStationColumns.tsx),
+    // also not a `grow` column - same reasoning as the shot-grid case above.
+    await seedColumnWidths(page, { data_table_station_column_widths: { _depth: 205 } });
+    await setupMockedPage(page);
+    await createProject(page, 'Restore Station Width Test');
+    await seedProjectWithSections(page, sectionSeeds);
+    await waitForMapReady(page);
+    await waitForNoDialogs(page);
+    await openDataTable(page);
+    await page.getByTestId('data-table-view-stations').click();
+    await expect(page.getByTestId('grid-header-_depth')).toBeVisible({ timeout: 5000 });
+
+    await expect
+      .poll(async () => (await page.getByTestId('grid-header-_depth').boundingBox())!.width)
+      .toBeGreaterThan(150);
   });
 });

@@ -19,11 +19,13 @@
         "minWidth": 800,
         "minHeight": 600,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "backgroundColor": "#1a1a2e"
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; style-src 'self' https://unpkg.com; script-src 'self'; img-src 'self' data: blob:; connect-src 'self' stalagmight-tiles: http://stalagmight-tiles.localhost https://fonts.openmaptiles.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'",
+      "devCsp": "default-src 'self' http://localhost:1420; style-src 'self' 'unsafe-inline' https://unpkg.com; script-src 'self' 'unsafe-inline' http://localhost:1420; img-src 'self' data: blob:; connect-src 'self' ws://localhost:1420 http://localhost:1420 stalagmight-tiles: http://stalagmight-tiles.localhost https://fonts.openmaptiles.org; worker-src 'self' blob:; object-src 'none'; base-uri 'self'"
     }
   },
   "bundle": {
