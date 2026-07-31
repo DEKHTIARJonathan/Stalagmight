@@ -46,6 +46,12 @@ function mockRoutes(overrides: Record<string, () => Promise<unknown>> = {}) {
           local_path: '/cache/p1/project.stalx',
           type_flipped: true,
           concurrent_session: false,
+          // The whole hand-over landed: converted, uploaded, lock handed back, and
+          // the server project re-typed. Named explicitly because the toast's colour
+          // is keyed on it - an adopt result that describes no upload is read as
+          // "did not reach the server" and toasts amber, which is the right default
+          // and the wrong thing for this test to be asserting about.
+          upload: { kind: 'pushed' },
         }),
       ...overrides,
     };
@@ -115,7 +121,12 @@ describe('OpenFromSpeleoDbDialog adopt flow (#214)', () => {
       expect(loadProjectMock).toHaveBeenCalledWith('/cache/p1/project.stalx'),
     );
     await waitFor(() => expect(closeDialogMock).toHaveBeenCalled());
-    expect(showToastMock).toHaveBeenCalledWith(expect.any(String), 'speleodb-adopted');
+    // Green, not the neutral default: this adoption has nothing left to do.
+    expect(showToastMock).toHaveBeenCalledWith(
+      expect.any(String),
+      'speleodb-adopted',
+      'success',
+    );
   });
 
   it('cancel dismisses the confirm without adopting', async () => {
