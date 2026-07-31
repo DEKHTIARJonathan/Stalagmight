@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest';
-import { getMapThemeColors, getThemeColor } from '../themeColors';
+import { getMapThemeColors, getThemeColor, withThemeDepthColors } from '../themeColors';
 import { themeTokens } from '../../theme/tokens';
+import { DEFAULT_IMAGE_OPTIONS } from '../../store/exportStore';
 
 /**
  * MapLibre and the custom WebGL layers cannot read CSS variables, so every map colour
@@ -73,5 +74,44 @@ describe('getMapThemeColors', () => {
     expect(after.severityClear).toBe(before.severityClear);
     expect(after.severityWarning).toBe(before.severityWarning);
     expect(after.severityError).toBe(before.severityError);
+  });
+});
+
+describe('withThemeDepthColors', () => {
+  // #360: depth-mode PNG/PDF export used to hardcode the `dark` theme's
+  // endpoints in Rust regardless of the active theme. This is the frontend
+  // half of the fix: the export/preview call sites must send the ACTIVE
+  // theme's own `--cc-depth-shallow` / `--cc-depth-deep`, not a fixed pair -
+  // a test only exercising one theme cannot fail for this bug.
+  it('resolves depth_shallow/depth_deep from the live theme when unset', () => {
+    document.documentElement.style.setProperty('--cc-depth-shallow', '#a89060');
+    document.documentElement.style.setProperty('--cc-depth-deep', '#b85048');
+    const result = withThemeDepthColors(DEFAULT_IMAGE_OPTIONS);
+    expect(result.depth_shallow).toBe('#a89060');
+    expect(result.depth_deep).toBe('#b85048');
+  });
+
+  it('sends different endpoints for different active themes', () => {
+    document.documentElement.style.setProperty('--cc-depth-shallow', '#a89060');
+    document.documentElement.style.setProperty('--cc-depth-deep', '#b85048');
+    const cave = withThemeDepthColors(DEFAULT_IMAGE_OPTIONS);
+
+    document.documentElement.style.setProperty('--cc-depth-shallow', '#1a2f6b');
+    document.documentElement.style.setProperty('--cc-depth-deep', '#8b2f2f');
+    const light = withThemeDepthColors(DEFAULT_IMAGE_OPTIONS);
+
+    expect(cave.depth_shallow).not.toBe(light.depth_shallow);
+    expect(cave.depth_deep).not.toBe(light.depth_deep);
+    expect(light.depth_shallow).toBe('#1a2f6b');
+    expect(light.depth_deep).toBe('#8b2f2f');
+  });
+
+  it('does not override an explicitly set value', () => {
+    document.documentElement.style.setProperty('--cc-depth-shallow', '#a89060');
+    const result = withThemeDepthColors({
+      ...DEFAULT_IMAGE_OPTIONS,
+      depth_shallow: '#custom',
+    });
+    expect(result.depth_shallow).toBe('#custom');
   });
 });
