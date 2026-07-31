@@ -52,14 +52,51 @@ impl AppState {
             .clone()
     }
 
-    /// Update config.
+    /// Update config from a whole-`Config` payload.
     ///
     /// Returns a [`ConfigSaveReport`] rather than `()`: the save is a yes/no in
     /// every respect but one, and that one - evicting the keyring entry when the
     /// "never use the OS keychain" switch goes on - can fail over settings that
     /// were nevertheless written. See the eviction branch below for why that is
     /// reported instead of refused.
-    pub fn update_config(&self, mut config: Config) -> Result<ConfigSaveReport> {
+    pub fn update_config(&self, config: Config) -> Result<ConfigSaveReport> {
+        let _guard = self
+            .config_write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        self.update_config_locked(config)
+    }
+
+    /// Read-modify-write the config under ONE lock, for the partial-update
+    /// commands.
+    ///
+    /// This is the whole of the fix for the lost-update race described on
+    /// `AppState::config_write_lock`: `get_config()` then `update_config()` is two
+    /// critical sections with a gap in the middle, and a concurrent writer that
+    /// lands in the gap has its write overwritten by this caller's stale clone.
+    /// Going through here closes the gap, so every partial update is applied to
+    /// whatever is current at the moment it runs.
+    ///
+    /// `mutate` may reject the payload (`Err`), in which case NOTHING is written -
+    /// the validation the partial commands do on modes and panel names happens
+    /// inside the critical section, on the config that is actually about to be
+    /// saved.
+    pub fn modify_config<F>(&self, mutate: F) -> Result<ConfigSaveReport>
+    where
+        F: FnOnce(&mut Config) -> Result<()>,
+    {
+        let _guard = self
+            .config_write_lock
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let mut config = self.get_config();
+        mutate(&mut config)?;
+        self.update_config_locked(config)
+    }
+
+    /// The body of [`Self::update_config`], with `config_write_lock` already held.
+    /// Never call this directly - the lock is what makes a partial update safe.
+    fn update_config_locked(&self, mut config: Config) -> Result<ConfigSaveReport> {
         tracing::info!(purpose = "apply user settings", "Updating configuration");
         // Preserve backend-only fields the frontend never receives. `webkit_memory`
         // is `#[serde(skip_serializing)]` + `#[ts(skip)]`, so a settings-save payload
@@ -126,6 +163,25 @@ impl AppState {
                 existing.cache.tile_cache_enabled,
             )
         };
+        // Repair the payload the same way the load path repairs a file. Without
+        // this, the write path was the ONE door into `config.toml` with no
+        // normalization behind it: a whole-`Config` payload could persist a NaN
+        // sigma, an out-of-range column width or a blank locale that
+        // `Config::normalize` would have fixed, and the value then survived until
+        // the next launch read it back and quietly repaired it - so the running
+        // session and its own config file disagreed. The partial commands already
+        // clamp their own fields; this generalises it to every field.
+        //
+        // AFTER the restore above, not before: normalization touches `speleodb`,
+        // and it has to see the backend-owned values that were just put back
+        // rather than the form's serde defaults.
+        //
+        // `_except_shortcuts`, NOT the full `normalize`: an empty binding list
+        // means "missing" in a file and "the user cleared it" in a payload, and
+        // only the load path may read it the first way. See the method's own doc
+        // comment - getting this wrong silently restores a default binding over a
+        // shortcut the user just cleared.
+        config.normalize_except_shortcuts();
         let mut report = ConfigSaveReport::default();
         // The keyring switch has to bite NOW, not at the next launch: a user turning
         // it on has just been asked one unlock prompt too many, and the live session

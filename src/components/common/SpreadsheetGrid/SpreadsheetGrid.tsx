@@ -265,7 +265,10 @@ export function SpreadsheetGrid<Row>(props: SpreadsheetGridProps<Row>) {
     applyWidths,
     commitWidths,
     revertWidths,
-  } = useColumnWidths(columnWidths, onColumnWidthsChange);
+    // `orderedKeys`, not `visibleColumns`: it is every declared column including
+    // the hidden ones, so a hidden column keeps its persisted width instead of
+    // being pruned as an orphan and losing it when re-shown.
+  } = useColumnWidths(columnWidths, onColumnWidthsChange, orderedKeys);
   // The scroller's inner width, tracked so `grow` columns can absorb the
   // leftover space and the grid fills its container (no empty right gutter).
   const [availWidth, setAvailWidth] = useState(0);

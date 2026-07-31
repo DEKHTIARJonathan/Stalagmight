@@ -3,6 +3,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 
 use super::column_widths::{lenient_column_widths, normalize_column_widths};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use ts_rs::TS;
 
@@ -1828,8 +1829,58 @@ impl Config {
             contents.push('\n');
             contents.push_str(&section);
         }
-        std::fs::write(path, contents).context("Failed to write config file")?;
+        Self::write_atomically(path, &contents)?;
         tracing::info!(config_path = ?path, "Saved config to file");
+        Ok(())
+    }
+
+    /// Write `contents` to `path` via a sibling temp file and a rename, the same
+    /// shape the project save uses (`core::state::project_io`).
+    ///
+    /// `fs::write` truncates the destination before it writes a byte, so a crash
+    /// or a full disk part-way through left `config.toml` empty or holding half a
+    /// TOML document. Neither is recoverable by the load path and the failure is
+    /// SILENT in the worst direction: `Config::load()` is called through
+    /// `unwrap_or_default()` (`AppState::new`), so a truncated file reads back as
+    /// "no config" and every setting the user ever changed is reset without an
+    /// error anywhere. The rename is atomic, so a reader sees the whole old file
+    /// or the whole new one.
+    ///
+    /// The temp file is a SIBLING rather than one in `$TMPDIR`: a rename across
+    /// filesystems is not atomic and on most platforms fails outright, and the
+    /// config directory is the one place we have just confirmed is writable.
+    ///
+    /// `sync_all` before the rename is the durability half, and it is not
+    /// redundant with the atomicity half: without it the rename can reach the disk
+    /// ahead of the data, which on a crash leaves a correctly-named file full of
+    /// zeroes - i.e. exactly the silent reset above, reintroduced.
+    fn write_atomically(path: &Path, contents: &str) -> Result<()> {
+        // `with_extension` replaces `.toml`, so `config.toml` -> `config.toml.tmp`.
+        // `sqlite::repair` already sweeps `*.tmp` next to a project, and this one is
+        // removed on every failure path below, so a crash leaves at most one stale
+        // sibling that the next successful save overwrites.
+        let temp_path = path.with_extension("toml.tmp");
+
+        let write = || -> Result<()> {
+            let mut file = std::fs::File::create(&temp_path)
+                .context("Failed to create temporary config file")?;
+            file.write_all(contents.as_bytes())
+                .context("Failed to write temporary config file")?;
+            file.sync_all()
+                .context("Failed to flush temporary config file")?;
+            Ok(())
+        };
+        if let Err(e) = write() {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(e);
+        }
+
+        if let Err(e) = std::fs::rename(&temp_path, path) {
+            // The destination is untouched, which is the recoverable direction:
+            // the user keeps the settings they had rather than losing all of them.
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(anyhow::Error::new(e).context("Failed to replace config file"));
+        }
         Ok(())
     }
 
@@ -1869,8 +1920,34 @@ impl Config {
     /// Normalize all config values to valid ranges
     /// Handles NaN/inf by falling back to defaults
     pub fn normalize(&mut self) {
-        self.map.normalize();
         self.shortcuts.normalize();
+        self.normalize_except_shortcuts();
+    }
+
+    /// Everything [`Self::normalize`] repairs EXCEPT `[shortcuts]`, for the IPC
+    /// write path (`AppState::update_config`).
+    ///
+    /// The split exists because normalization is doing two different jobs, and
+    /// only one of them is right for an arriving payload. Clamping a NaN sigma or
+    /// a 100000-pixel column is REPAIR: the value is unusable however it got here,
+    /// and repairing it on the way in is strictly better than persisting it and
+    /// repairing it on the next launch. `normalize_shortcut_field` is DEFAULTING:
+    /// it reads an empty binding list as "this key is missing from the file" and
+    /// re-seeds the stock binding.
+    ///
+    /// That reading is correct for a config file and wrong for a Settings payload,
+    /// where an empty list is the user having deliberately cleared the binding -
+    /// `ShortcutsSettings.tsx` produces exactly that when the last slot for an
+    /// action is cleared. Running it on the write path would restore the default
+    /// binding under them and make clearing a shortcut impossible, which is the
+    /// same trap `Config::save`'s comment already warns about.
+    ///
+    /// Shortcuts that arrive malformed rather than empty are therefore left for
+    /// the load path to canonicalize, exactly as before this split. The frontend
+    /// already canonicalizes on entry (`normalizeShortcut`), so that window is the
+    /// pre-existing one, not a new one.
+    pub fn normalize_except_shortcuts(&mut self) {
+        self.map.normalize();
         self.panels.normalize();
         self.global_view.normalize();
         self.appearance.normalize();

@@ -1,3 +1,4 @@
+use anyhow::anyhow;
 use tauri::State;
 
 use std::collections::BTreeMap;
@@ -96,54 +97,53 @@ pub(crate) fn update_data_table_view_impl(
     station_column_widths: Option<BTreeMap<String, u32>>,
 ) -> Result<(), String> {
     const MODES: [&str; 3] = ["avg", "inout", "off"];
-    let mut config = state.get_config();
-    if let Some(order) = column_order {
-        config.panels.data_table_shot_column_order = order;
-    }
-    if let Some(hidden) = hidden_columns {
-        config.panels.data_table_shot_hidden_columns = hidden;
-    }
-    if let Some(mode) = azimuth_mode {
-        if !MODES.contains(&mode.as_str()) {
-            return Err(format!("Invalid azimuth mode '{mode}'"));
-        }
-        config.panels.data_table_azimuth_mode = mode;
-    }
-    if let Some(mode) = inclination_mode {
-        if !MODES.contains(&mode.as_str()) {
-            return Err(format!("Invalid inclination mode '{mode}'"));
-        }
-        config.panels.data_table_inclination_mode = mode;
-    }
-    if let Some(order) = station_column_order {
-        config.panels.data_table_station_column_order = order;
-    }
-    if let Some(hidden) = station_hidden_columns {
-        config.panels.data_table_station_hidden_columns = hidden;
-    }
-    // Clamp on the way in as well as on load, so a width that arrived here
-    // degenerate is repaired before it reaches disk rather than only on the next
-    // read. NB this is not the only door into these fields: `update_config` takes
-    // a whole `Config` and `Config::save` deliberately skips normalize.
-    //
-    // Do NOT read that as "harmless until the next load". Settings > Advanced >
-    // Reset posts a whole Config carrying `defaultConfig.panels`, i.e. EMPTY width
-    // maps, and `update_config` preserves only webkit_memory and four speleodb
-    // fields - so the reset genuinely wipes these off disk. The running DataTable
-    // does not notice (its seed effect is one-shot) and the next unrelated view
-    // change posts the whole in-memory map straight back, so the reset reads as a
-    // no-op until restart. Pre-existing for column_order/hidden_columns; these two
-    // fields join it. Tracked in #357.
-    if let Some(mut widths) = column_widths {
-        normalize_column_widths(&mut widths);
-        config.panels.data_table_shot_column_widths = widths;
-    }
-    if let Some(mut widths) = station_column_widths {
-        normalize_column_widths(&mut widths);
-        config.panels.data_table_station_column_widths = widths;
-    }
+    // Read-modify-write inside ONE critical section. Doing the read with
+    // `get_config()` and the write with `update_config()` left a gap in which a
+    // concurrent `update_panel_sizes` could land, and whichever of the two wrote
+    // second silently reverted the other from memory and from disk. See
+    // `AppState::config_write_lock`.
     state
-        .update_config(config)
+        .modify_config(|config| {
+            if let Some(order) = column_order {
+                config.panels.data_table_shot_column_order = order;
+            }
+            if let Some(hidden) = hidden_columns {
+                config.panels.data_table_shot_hidden_columns = hidden;
+            }
+            if let Some(mode) = azimuth_mode {
+                if !MODES.contains(&mode.as_str()) {
+                    return Err(anyhow!("Invalid azimuth mode '{mode}'"));
+                }
+                config.panels.data_table_azimuth_mode = mode;
+            }
+            if let Some(mode) = inclination_mode {
+                if !MODES.contains(&mode.as_str()) {
+                    return Err(anyhow!("Invalid inclination mode '{mode}'"));
+                }
+                config.panels.data_table_inclination_mode = mode;
+            }
+            if let Some(order) = station_column_order {
+                config.panels.data_table_station_column_order = order;
+            }
+            if let Some(hidden) = station_hidden_columns {
+                config.panels.data_table_station_hidden_columns = hidden;
+            }
+            // Clamp on the way in as well as on load, so a width that arrived
+            // degenerate is repaired before it reaches disk rather than only on
+            // the next read. `update_config` now normalizes the whole payload as
+            // well (`normalize_except_shortcuts`), so this is belt-and-braces
+            // rather than the only guard it used to be - kept because it states
+            // the constraint at the field it applies to.
+            if let Some(mut widths) = column_widths {
+                normalize_column_widths(&mut widths);
+                config.panels.data_table_shot_column_widths = widths;
+            }
+            if let Some(mut widths) = station_column_widths {
+                normalize_column_widths(&mut widths);
+                config.panels.data_table_station_column_widths = widths;
+            }
+            Ok(())
+        })
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -154,18 +154,23 @@ pub(crate) fn update_panel_sizes_impl(
     detail_panel_width: Option<u32>,
     data_table_height: Option<u32>,
 ) -> Result<(), String> {
-    let mut config = state.get_config();
-    if let Some(w) = sections_panel_width {
-        config.panels.sections_panel_width = w;
-    }
-    if let Some(w) = detail_panel_width {
-        config.panels.detail_panel_width = w;
-    }
-    if let Some(h) = data_table_height {
-        config.panels.data_table_height = h;
-    }
+    // One critical section, same reason as `update_data_table_view_impl`: this is
+    // the OTHER half of the pair that raced. `savePanelSizes` fires undebounced on
+    // divider release while the data-table view save fires 500 ms after the last
+    // change, and both live in `SingleSystemView`.
     state
-        .update_config(config)
+        .modify_config(|config| {
+            if let Some(w) = sections_panel_width {
+                config.panels.sections_panel_width = w;
+            }
+            if let Some(w) = detail_panel_width {
+                config.panels.detail_panel_width = w;
+            }
+            if let Some(h) = data_table_height {
+                config.panels.data_table_height = h;
+            }
+            Ok(())
+        })
         .map(|_| ())
         .map_err(|e| e.to_string())
 }
@@ -203,37 +208,42 @@ pub(crate) fn update_panel_layout_impl(
     data_table_mode: Option<String>,
 ) -> Result<(), String> {
     const MODES: [&str; 2] = ["pin", "hover"];
-    let validate = |m: &str| -> Result<(), String> {
+    let validate = |m: &str| -> Result<(), anyhow::Error> {
         if MODES.contains(&m) {
             Ok(())
         } else {
-            Err(format!("Invalid panel mode '{m}'"))
+            Err(anyhow!("Invalid panel mode '{m}'"))
         }
     };
-    let mut config = state.get_config();
-    if let Some(open) = sections_panel_open {
-        config.panels.sections_panel_open = open;
-    }
-    if let Some(mode) = sections_panel_mode {
-        validate(&mode)?;
-        config.panels.sections_panel_mode = mode;
-    }
-    if let Some(open) = detail_panel_open {
-        config.panels.detail_panel_open = open;
-    }
-    if let Some(mode) = detail_panel_mode {
-        validate(&mode)?;
-        config.panels.detail_panel_mode = mode;
-    }
-    if let Some(open) = data_table_open {
-        config.panels.data_table_open = open;
-    }
-    if let Some(mode) = data_table_mode {
-        validate(&mode)?;
-        config.panels.data_table_mode = mode;
-    }
+    // The third command with the read-modify-write shape, and #357 item 14 named
+    // only the first two. Its exposure is the same: the reveal-layout writes fire
+    // on panel open/close and mode flips, i.e. exactly while the user is dragging
+    // dividers and resizing columns.
     state
-        .update_config(config)
+        .modify_config(|config| {
+            if let Some(open) = sections_panel_open {
+                config.panels.sections_panel_open = open;
+            }
+            if let Some(mode) = sections_panel_mode {
+                validate(&mode)?;
+                config.panels.sections_panel_mode = mode;
+            }
+            if let Some(open) = detail_panel_open {
+                config.panels.detail_panel_open = open;
+            }
+            if let Some(mode) = detail_panel_mode {
+                validate(&mode)?;
+                config.panels.detail_panel_mode = mode;
+            }
+            if let Some(open) = data_table_open {
+                config.panels.data_table_open = open;
+            }
+            if let Some(mode) = data_table_mode {
+                validate(&mode)?;
+                config.panels.data_table_mode = mode;
+            }
+            Ok(())
+        })
         .map(|_| ())
         .map_err(|e| e.to_string())
 }

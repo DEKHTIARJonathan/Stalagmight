@@ -118,14 +118,18 @@ describe('computeColumnWidths', () => {
 });
 
 describe('useColumnWidths', () => {
+  /** Every column key these tests use, i.e. "nothing here is an orphan". The
+   *  pruning behaviour itself is covered by its own test below. */
+  const ALL_KEYS = ['a', 'b', 'tiny', 'huge', 'bad'];
+
   it('starts from the host-provided widths', () => {
-    const { result } = renderHook(() => useColumnWidths({ a: 200 }, undefined));
+    const { result } = renderHook(() => useColumnWidths({ a: 200 }, undefined, ALL_KEYS));
     expect(result.current.widths).toEqual({ a: 200 });
   });
 
   it('applyWidths updates locally WITHOUT notifying the host', () => {
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths({}, onChange));
+    const { result } = renderHook(() => useColumnWidths({}, onChange, ALL_KEYS));
     act(() => result.current.applyWidths({ a: 180 }));
     expect(result.current.widths).toEqual({ a: 180 });
     expect(onChange).not.toHaveBeenCalled();
@@ -133,7 +137,7 @@ describe('useColumnWidths', () => {
 
   it('commitWidths notifies the host with whole integers', () => {
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths(undefined, onChange));
+    const { result } = renderHook(() => useColumnWidths(undefined, onChange, ALL_KEYS));
     act(() => result.current.commitWidths({ a: 180.6 }));
     expect(onChange).toHaveBeenCalledWith({ a: 181 });
     expect(result.current.widths).toEqual({ a: 181 });
@@ -145,7 +149,7 @@ describe('useColumnWidths', () => {
     // width map outward - a host render, and for a persisting host a config write -
     // for a stray click. Also covers a drag returned to where it started.
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths({ a: 200 }, onChange));
+    const { result } = renderHook(() => useColumnWidths({ a: 200 }, onChange, ALL_KEYS));
     act(() => result.current.commitWidths({ a: 200 }));
     expect(onChange).not.toHaveBeenCalled();
     // A real change still gets through, so this is not just a dead commit path.
@@ -156,7 +160,7 @@ describe('useColumnWidths', () => {
 
   it('commitWidths clamps out-of-range and non-finite widths', () => {
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths(undefined, onChange));
+    const { result } = renderHook(() => useColumnWidths(undefined, onChange, ALL_KEYS));
     act(() => result.current.commitWidths({ tiny: 1, huge: 99999, bad: Number.NaN }));
     expect(onChange).toHaveBeenCalledWith({
       tiny: MIN_COL_WIDTH,
@@ -167,7 +171,7 @@ describe('useColumnWidths', () => {
 
   it('revertWidths drops an uncommitted change', () => {
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths({ a: 100 }, onChange));
+    const { result } = renderHook(() => useColumnWidths({ a: 100 }, onChange, ALL_KEYS));
     act(() => result.current.applyWidths({ a: 900 }));
     expect(result.current.widths).toEqual({ a: 900 });
 
@@ -181,7 +185,7 @@ describe('useColumnWidths', () => {
     // The abandoned-drag path: a resize lands on `a`, then a second drag on `b` is
     // abandoned. Reverting must keep `a`'s committed width and drop only `b`.
     const onChange = vi.fn();
-    const { result } = renderHook(() => useColumnWidths(undefined, onChange));
+    const { result } = renderHook(() => useColumnWidths(undefined, onChange, ALL_KEYS));
     act(() => result.current.commitWidths({ a: 200 }));
     act(() => result.current.applyWidths({ a: 200, b: 900 }));
 
@@ -198,7 +202,7 @@ describe('useColumnWidths', () => {
     // (Hosts that want the grid to own widths pass no prop at all.)
     const onChange = vi.fn();
     const { result, rerender } = renderHook(
-      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, onChange),
+      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, onChange, ALL_KEYS),
       { initialProps: { widths: { a: 100 } } },
     );
     act(() => result.current.commitWidths({ a: 300 }));
@@ -212,7 +216,7 @@ describe('useColumnWidths', () => {
 
   it('adopts a genuine host change, e.g. config arriving after mount', () => {
     const { result, rerender } = renderHook(
-      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, undefined),
+      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, undefined, ALL_KEYS),
       { initialProps: { widths: {} } },
     );
     rerender({ widths: { a: 300 } });
@@ -224,7 +228,7 @@ describe('useColumnWidths', () => {
     // object identity. Adopting that echo would fight a resize already in progress.
     const onChange = vi.fn();
     const { result, rerender } = renderHook(
-      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, onChange),
+      ({ widths }: { widths: ColumnWidths }) => useColumnWidths(widths, onChange, ALL_KEYS),
       { initialProps: { widths: {} } },
     );
     act(() => result.current.commitWidths({ a: 200 }));
@@ -234,5 +238,44 @@ describe('useColumnWidths', () => {
     // A re-render with the echo again must not wipe the in-progress `b`.
     rerender({ widths: { a: 200 } });
     expect(result.current.widths).toEqual({ a: 200, b: 400 });
+  });
+
+  it('commitWidths drops widths for columns this grid no longer declares', () => {
+    // #357 item 6: the map is spread whole on every commit and persisted whole, so
+    // a key that stopped naming a real column was re-persisted forever and
+    // config.toml grew monotonically. The host arrives holding a stale key here.
+    const onChange = vi.fn();
+    const { result } = renderHook(() =>
+      useColumnWidths({ a: 120, gone: 300 }, onChange, ['a', 'b']),
+    );
+    act(() => result.current.commitWidths({ a: 160, gone: 300 }));
+    // What the host is TOLD to persist is the whole assertion. The rendered map is
+    // not: this host is controlled and keeps handing its own prop back, so the
+    // "follows the host prop when the host does not accept a commit" contract
+    // above re-adopts `{ a: 120, gone: 300 }` on the next render.
+    expect(onChange).toHaveBeenCalledWith({ a: 160 });
+  });
+
+  it('commitWidths KEEPS the width of a declared-but-hidden column', () => {
+    // The prune has to run against every declared column, not the visible ones:
+    // hiding a column and then resizing another must not throw away the hidden
+    // column's width, or it comes back at the default when re-shown. This is why
+    // SpreadsheetGrid passes `orderedKeys` rather than `visibleColumns`.
+    const onChange = vi.fn();
+    const { result } = renderHook(() =>
+      useColumnWidths({ a: 120, hiddenCol: 250 }, onChange, ['a', 'hiddenCol']),
+    );
+    act(() => result.current.commitWidths({ a: 160, hiddenCol: 250 }));
+    expect(onChange).toHaveBeenCalledWith({ a: 160, hiddenCol: 250 });
+  });
+
+  it('a prune alone is a real change, even with every surviving width unchanged', () => {
+    // The no-op guard compares against the last SETTLED map, so a commit whose only
+    // effect is dropping an orphan must still reach the host - otherwise the stale
+    // key is never actually removed from config.toml.
+    const onChange = vi.fn();
+    const { result } = renderHook(() => useColumnWidths({ a: 120, gone: 300 }, onChange, ['a']));
+    act(() => result.current.commitWidths({ a: 120, gone: 300 }));
+    expect(onChange).toHaveBeenCalledWith({ a: 120 });
   });
 });
