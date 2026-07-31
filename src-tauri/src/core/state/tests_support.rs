@@ -83,14 +83,14 @@ mod tests {
     /// The array above must list EVERY `speleodb*.rs` in the family, and nothing
     /// enforced that but a doc comment.
     ///
-    /// It matters because of what rides on it. Two of the tripwires it feeds are
-    /// ABSENCE assertions - `replace_cache_stalx_abandoning` must have no caller outside
-    /// its own file, `write_collab_sibling` likewise - and an absence assertion over a
-    /// scan that has stopped seeing a file goes on passing while the thing it forbids
-    /// walks in through that file. A forgotten line is loud for the counting tripwires
-    /// and completely silent for those two, which is the wrong way round. The #275 plan
-    /// schedules two more modules (`speleodb_push.rs`, `speleodb_session.rs`), so this
-    /// is not hypothetical.
+    /// It matters because of what rides on it. One of the tripwires it feeds is an
+    /// ABSENCE assertion - `replace_cache_stalx_abandoning` must have no caller outside
+    /// its own file - and an absence assertion over a scan that has stopped seeing a
+    /// file goes on passing while the thing it forbids walks in through that file. A
+    /// forgotten line is loud for the counting tripwires and completely silent for that
+    /// one, which is the wrong way round. The #275 plan schedules one more module
+    /// (`speleodb_push.rs`; `speleodb_session.rs` has since landed), so this is not
+    /// hypothetical.
     ///
     /// `include_str!` needs literal paths, so the array itself cannot be derived. What
     /// CAN be derived is whether it is complete - read the directory and say which file

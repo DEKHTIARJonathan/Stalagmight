@@ -25,7 +25,7 @@ pub(super) const PRESERVED_SPELEOLINK_COLUMNS: &[(&str, &str, bool)] = &[
     ("has_unpushed_edits", "INTEGER", true),
     ("last_edit_at", "TEXT", false), // v10; nullable = never edited since pull
     ("last_verify_at", "TEXT", false), // v11; nullable = never re-verified since pull
-    ("undo_mode", "TEXT", false),    // v15; nullable = follow the global default (#303)
+    ("undo_mode", "TEXT", false),    // v16; nullable = follow the global default (#303)
 ];
 
 impl Database {
@@ -1328,7 +1328,7 @@ impl Database {
             -- base_commit_sha NULL = empty-repo BASE (never coerced to ''). is_remote is
             -- DERIVED from EXISTS(this table), never stored. ADDITIVE: no future migration
             -- rewrites this table (see PRESERVED_SPELEOLINK_COLUMNS / carry-forward fence).
-            -- undo_mode NULL (v15) = follow the global default (#303).
+            -- undo_mode NULL (v16) = follow the global default (#303).
             CREATE TABLE IF NOT EXISTS speleo_link (
                 id INTEGER PRIMARY KEY CHECK (id = 1),
                 endpoint TEXT NOT NULL,
