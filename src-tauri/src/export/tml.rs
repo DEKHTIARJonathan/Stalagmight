@@ -236,8 +236,8 @@ pub fn export_tml(project: &Project, path: &Path) -> Result<()> {
 }
 
 /// Render the SpeleoDB co-push sidecar (#196) - the same document, hardened for
-/// `openspeleo_lib`'s GeoJSON conversion. See [`TmlProfile`] and
-/// [`harden_for_speleodb`] for what differs and why; the survey itself does not.
+/// `openspeleo_lib`'s GeoJSON conversion. See `TmlProfile` and
+/// `harden_for_speleodb` for what differs and why; the survey itself does not.
 pub fn export_tml_for_speleodb(project: &Project, path: &Path) -> Result<()> {
     export_with_profile(project, path, TmlProfile::SpeleoDbSidecar)
 }
