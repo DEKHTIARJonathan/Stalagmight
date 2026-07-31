@@ -64,8 +64,8 @@ use stalagmight_lib::parsers::tml::{
 use stalagmight_lib::parsers::walls::{WallsFile, WallsSurveySummary};
 use stalagmight_lib::persistence::{BackupInfo, RawTableData, RepairResult, SalvagedData};
 use stalagmight_lib::speleodb::{
-    AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult, RemoteState,
-    SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
+    AdoptUpload, DoneResult, DumpCandidateKind, KeychainReport, Permission, PushResult,
+    RemoteState, SpeleoAdoptResult, SpeleoCollaborator, SpeleoCollaborators, SpeleoDbAction,
     SpeleoDumpCandidate, SpeleoErrorDto, SpeleoLinkStatus, SpeleoLocalProjectState,
     SpeleoLoginResult, SpeleoOpenResult, SpeleoProjectMetadata, SpeleoProjectMetadataPatch,
     SpeleoProjectSummary, SpeleoPublishParams, SpeleoPublishResult, SpeleoRevision,

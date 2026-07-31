@@ -1480,7 +1480,7 @@ impl AppState {
 mod tests {
     use super::{
         classify_dump_entry, probe_inputs_valid, pull_dating, resolve_dump_entry, usable_tip,
-        ArianeRoute, DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
+        AdoptLockGuard, ArianeRoute, DumpAt, PullDating, StalxAmbiguity, UnopenableDump,
     };
     use crate::core::state::tests_support::speleodb_prod_matches;
     use crate::core::state::AppState;
@@ -1782,6 +1782,232 @@ mod tests {
             body.contains("pull_dating(adopt_at"),
             "BASE must come from the sha adoption downloaded by hash, through the same \
              split that keeps the advisory fallback off the choice dating"
+        );
+    }
+
+    /// A project id for the lock-guard tests below. Any valid-looking id will do -
+    /// nothing here reaches a server.
+    const GUARDED: &str = "77777777-7777-7777-7777-777777777777";
+
+    /// Nothing listens here, so the release POST fails immediately. Best-effort is the
+    /// contract, and the claim is dropped either way - the same endpoint the unwind
+    /// tests use for the same reason.
+    const UNREACHABLE: &str = "http://127.0.0.1:1/";
+
+    /// Sign in against [`UNREACHABLE`], because an acquisition claim is keyed to the
+    /// account that made it and the accessors answer only for the account signed in
+    /// NOW. Without this the claim below is invisible to the assertion in BOTH
+    /// directions, and the tests pass vacuously.
+    fn sign_in_unreachable(state: &AppState) {
+        let mut session = state.speleodb_session_lock().expect("session lock");
+        session.endpoint = Some(UNREACHABLE.to_owned());
+        session.email = Some("diver@example.com".to_owned());
+        session.token_store = crate::speleodb::auth::TokenStore::from_in_memory_token("tok");
+    }
+
+    /// The guard's whole purpose: an adoption that took the mutex and then failed
+    /// before it had anything to push must not walk away still holding it. The
+    /// acquisition claim is the observable half - `speleodb_release_best_effort` drops
+    /// it whether or not the POST lands, precisely so a lock this process can no longer
+    /// account for is not left recorded as ours.
+    #[test]
+    fn the_lock_guard_hands_back_a_lock_the_conversion_never_used() {
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        state.speleodb_note_lock_acquired(Some(GUARDED));
+
+        drop(AdoptLockGuard::new(
+            &state,
+            UNREACHABLE,
+            "token",
+            true,
+            GUARDED,
+            true,
+        ));
+
+        assert!(
+            !state.speleodb_lock_acquired_here(GUARDED),
+            "a lock taken for a conversion that never happened is handed straight back"
+        );
+    }
+
+    /// The other half: once the conversion exists, the lock belongs to the hand-over,
+    /// and `speleodb_done` is what decides its fate - released when the push lands,
+    /// KEPT when a retry could still recover the work. A guard that released anyway
+    /// would free the project while the only copy of that work is local.
+    #[test]
+    fn a_disarmed_lock_guard_leaves_the_lock_to_the_hand_over() {
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        state.speleodb_note_lock_acquired(Some(GUARDED));
+
+        let mut guard = AdoptLockGuard::new(&state, UNREACHABLE, "token", true, GUARDED, true);
+        guard.disarm();
+        drop(guard);
+
+        assert!(
+            state.speleodb_lock_acquired_here(GUARDED),
+            "after the disarm the hand-over owns the lock; the guard must not touch it"
+        );
+    }
+
+    /// An adoption that never took the mutex has nothing to hand back, and a release
+    /// it issued anyway would be a release for a lock somebody ELSE is holding - the
+    /// exact contention this flow declines to push through.
+    #[test]
+    fn an_unarmed_lock_guard_releases_nothing() {
+        let state = AppState::new().expect("state");
+        sign_in_unreachable(&state);
+        state.speleodb_note_lock_acquired(Some(GUARDED));
+
+        drop(AdoptLockGuard::new(
+            &state,
+            UNREACHABLE,
+            "token",
+            true,
+            GUARDED,
+            false,
+        ));
+
+        assert!(
+            state.speleodb_lock_acquired_here(GUARDED),
+            "no lock taken means no lock to release, and no claim to end"
+        );
+    }
+
+    /// The body of `speleodb_adopt_ariane`, for the ordering tripwires below.
+    ///
+    /// Sliced the same way the dating tripwire above slices it: to the first line that
+    /// is a closing brace at method indentation, which is the method's own.
+    fn adopt_body() -> &'static str {
+        let src = prod_source();
+        let start = src
+            .find("fn speleodb_adopt_ariane")
+            .expect("the adoption verb is present");
+        let body = &src[start..];
+        &body[..body.find("\n    }\n").expect("fn body terminates")]
+    }
+
+    /// Adoption reads a tree and writes it straight back, so the whole span between
+    /// those two acts is a window in which another writer's push makes the converted
+    /// bytes stale. Fetching by hash closes the window between the two REQUESTS; it
+    /// does nothing about the one that spans the import, which is the slow part
+    /// (parse the `.tml`, build the project, save it). Taking the write mutex before
+    /// the first byte is what closes that one, and the ORDER is the entire mechanism -
+    /// a lock taken after the download protects nothing that was read before it.
+    ///
+    /// By source, because the real thing needs a server that can advance its head
+    /// mid-import. The live orchestration tests are where a behavioural version goes.
+    #[test]
+    fn adoption_takes_the_lock_before_it_reads_anything() {
+        let body = adopt_body();
+        let lock = body
+            .find("self.adopt_take_lock(")
+            .expect("adoption takes the write mutex");
+        let resolve = body
+            .find("client::get_revisions(")
+            .expect("adoption resolves the head");
+        let download = body
+            .find("download_dump")
+            .expect("adoption downloads the dump");
+
+        assert!(
+            lock < resolve && lock < download,
+            "the mutex must be taken BEFORE the head resolve and the download, or the \
+             tree adoption converts can be superseded while it is converting it"
+        );
+    }
+
+    /// The lock is taken before a long fallible stretch - resolve, download, classify,
+    /// extract, guard, import, save - and every `?` in it is a way to walk away holding
+    /// a mutex that blocks every other writer until the server-side timeout. One guard
+    /// covers them all, which is what stops the next arm added from having to remember.
+    ///
+    /// Pinned as an ordering because that is what makes it a guard rather than a
+    /// release: armed before the stretch, disarmed only once there is a converted
+    /// project for the lock to be about.
+    #[test]
+    fn the_lock_guard_spans_every_early_return_between_the_lock_and_the_conversion() {
+        let body = adopt_body();
+        let armed = body
+            .find("AdoptLockGuard::new(")
+            .expect("adoption arms the hand-back guard");
+        let disarmed = body
+            .find("lock_guard.disarm()")
+            .expect("adoption disarms it once the conversion exists");
+        let import = body
+            .find("self.adopt_import_and_save(")
+            .expect("adoption imports the .tml");
+
+        assert!(
+            armed < import && import < disarmed,
+            "the guard must be armed before the import and disarmed after it, so every \
+             early return in between hands the mutex back"
+        );
+        assert!(
+            body.find("self.adopt_hand_over()")
+                .is_some_and(|h| disarmed < h),
+            "the hand-over owns the lock from the disarm onwards - `speleodb_done`'s \
+             rules decide whether it is released or kept for a retry"
+        );
+    }
+
+    /// A project typed `other` whose only file is the Ariane one that type says to
+    /// disregard is openable by nobody: the dump classifies as adopt-Ariane, and the
+    /// flipped type is what tells the app not to trust it. Flipping only after the
+    /// `.stalx` is actually on the server means the failure mode is the honest one -
+    /// an un-flipped project that still offers Adopt.
+    #[test]
+    fn the_server_type_flips_only_after_the_stalx_lands() {
+        let body = adopt_body();
+        let hand_over = body
+            .find("self.adopt_hand_over()")
+            .expect("adoption hands the conversion over");
+        let flip = body
+            .find("client::patch_project(")
+            .expect("adoption flips the project type");
+
+        assert!(
+            hand_over < flip,
+            "the type flip must come after the upload, never before it"
+        );
+        assert!(
+            body.contains("matches!(upload, AdoptUpload::Pushed)"),
+            "and it must be GATED on the one outcome that means the bytes landed - \
+             flipping on a lock we could not take strands the project unopenable"
+        );
+    }
+
+    /// `do_create_project_full` inside the import commits the adopted project into
+    /// `AppState`, so without this the backend held it open at the very path the
+    /// frontend was about to load - and `do_load_project_full` answers a load of the
+    /// path it already has open with `ALREADY_OPEN`. The frontend reads that as "it is
+    /// on screen already", which is true after a re-open and false after an adopt, so
+    /// adoption ended with the view flipped, nothing in any store, and a success toast
+    /// over an empty screen.
+    ///
+    /// LAST is load-bearing, not tidiness: the link stamp writes through the live
+    /// handle and the hand-over renders the sidecar from the open survey, so a close
+    /// anywhere earlier takes the project out from under both.
+    #[test]
+    fn adoption_hands_the_project_back_to_the_frontend_to_open() {
+        let body = adopt_body();
+        assert_eq!(
+            body.matches("self.close_project();").count(),
+            1,
+            "adoption must close the project it built exactly once, so the frontend's \
+             loadProject is a real load rather than an ALREADY_OPEN short-circuit"
+        );
+        let close = body
+            .find("self.close_project();")
+            .expect("counted above, so it is present");
+        let flip = body
+            .find("client::patch_project(")
+            .expect("adoption flips the project type");
+        assert!(
+            flip < close,
+            "everything that needs the project open - the link stamp, the sidecar \
+             render, the type flip's gate - has to run before the close"
         );
     }
 

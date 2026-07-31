@@ -7,7 +7,13 @@ Update this file every time a new version is tagged.
 
 ## [Unreleased]
 
+### Changed
+
+- **Adopting an Ariane project now finishes the job** - adoption takes the SpeleoDB write lock, converts the `.tml`, uploads the resulting `.stalx` with its Ariane sidecar, and hands the lock back, so the converted project lives on the server instead of sitting in a local cache waiting to be pushed. Taking the lock *before* the download also closes the window in which another writer's push could make the tree being converted stale. If the lock cannot be taken - somebody else is editing, you have read-only access, the machine is offline - the project is still adopted locally, marked as having un-pushed edits, and the app says so; the SpeleoDB project `type` is only switched to "other" once the `.stalx` has actually landed, so a failed upload leaves a project that still offers Adopt rather than one nothing can open.
+
 ### Fixed
+
+- **Adopting an Ariane project showed an empty screen** - adoption left the converted project open in the backend, so the app's own load of it was refused as "already open" and short-circuited to a view switch. The survey never appeared: the adoption had worked, and reported success, over a blank window. Adoption now hands the project back for the app to open normally.
 
 - **SpeleoDB map previews that never appeared** - the `ariane.tml` pushed alongside a commit is converted to GeoJSON server-side, and several shapes our exporter could emit made that conversion fail or be skipped without any error reaching the app (the upload still succeeded). The pushed sidecar is now hardened for it: shot lengths are written so they still cover the vertical drop after rounding, a survey that would emit a single shot is padded, dates are always valid ISO within the declination model's year range, `UUID` elements are emitted only when they are unique v4s, a GPS anchor on the equator or the prime meridian is nudged off zero, and the section-identity separator is stripped from section and surveyor names. The user-facing "Export to Ariane" output is unchanged.
 
