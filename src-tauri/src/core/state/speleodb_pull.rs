@@ -35,6 +35,18 @@ use crate::speleodb::{SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto, SpeleoOp
 /// "what happened to this project" is the only useful thing a message can say.
 const ADOPT_COMMIT_MESSAGE: &str = "Adopt into Stalagmight";
 
+/// Filename an adoption builds its converted project into, beside the cache `.stalx`
+/// it will be renamed over.
+///
+/// A fixed name rather than a unique one: adoption is single-writer by construction
+/// (it holds the project's write mutex, and the cache path is per project), so two
+/// of them cannot race for it - and a fixed name is one a crashed adoption's
+/// leftovers can be recognised and removed by, which a random one is not. Nothing
+/// scans this directory for `.stalx` files: `scan_cache` walks project-id
+/// DIRECTORIES and reads the one canonical path inside each, so a leftover here is
+/// inert rather than a second candidate.
+const ADOPT_STAGING_STALX: &str = "adopt-staging.stalx";
+
 /// Whether an adoption is holding the project's write mutex.
 ///
 /// Not a `bool`: the interesting half is WHY a lock was not taken, and that answer
@@ -1374,17 +1386,85 @@ impl AppState {
     /// round-trip and the FE import dialog use, so adoption yields the identical
     /// survey a manual TML import would. Overwrites any stale cache `.stalx`
     /// (re-adoption is a clean re-pull, like the pull path).
+    ///
+    /// Built into a STAGING file beside `dest` and renamed over it only once the
+    /// survey is complete on disk, which is the same order the pull path's extract
+    /// uses and for the same two reasons.
+    ///
+    /// It used to delete `dest` and rebuild in place, so the copy being replaced was
+    /// destroyed before anything that could fail had run: a `.tml` that would not
+    /// parse cost the user the cached project as well as the adoption, and a
+    /// re-adopt over un-pushed work turned a refusal into a loss if any later step
+    /// gave way. Renaming means every failure below leaves `dest` byte-for-byte as
+    /// it was - and the only window where it is not is the rename itself, which the
+    /// filesystem makes atomic.
+    ///
+    /// The half-built project is closed on the failure path as well. `do_create_project_full`
+    /// commits into `AppState` before the parse, so an import that failed after it left
+    /// the backend holding a project the shell was not rendering, and every later
+    /// command - each edit, each auto-save - landed on that stub. The previously open
+    /// project is reopened behind it where there was one, which is the same undo the
+    /// cache replace performs when its extract fails.
     fn adopt_import_and_save(
         &self,
         tml_path: &Path,
         dest: &Path,
         project_name: String,
     ) -> Result<(), SpeleoErrorDto> {
-        // Re-adoption overwrites: remove a stale cache `.stalx` so create reserves the
-        // exact cache path (it auto-renames around an existing file otherwise).
-        let _ = std::fs::remove_file(dest);
+        // Captured BEFORE the create commits over it, so the failure path can put it
+        // back rather than leaving the backend with nothing open under a shell that is
+        // still drawing it.
+        let previous = self.open_project_path();
+        // Beside `dest`, so the promote is a same-directory rename: cross-filesystem
+        // renames are not atomic and would reintroduce the torn window this avoids.
+        let staged = dest.with_file_name(ADOPT_STAGING_STALX);
+        // A leftover from an adoption that died mid-flight. Create reserves the exact
+        // path only when nothing is there (it auto-renames around an existing file).
+        let _ = std::fs::remove_file(&staged);
 
-        self.do_create_project_full(project_name, None, None, Some(dest.to_path_buf()), true)
+        if let Err(e) = self.adopt_build_into(tml_path, &staged, project_name) {
+            self.adopt_abandon_staging(&staged, previous.as_deref());
+            return Err(e);
+        }
+
+        // Close before the rename: `Database::open_existing` holds a 256 MB mmap over
+        // the staging file, and on Windows SQLite opens without `FILE_SHARE_DELETE`,
+        // so renaming a live handle is the hazard `close_project_if_open_at` exists
+        // for. This is the same close, at the same point in the same sequence.
+        self.close_project();
+        if let Err(e) = std::fs::rename(&staged, dest) {
+            // `rename` is atomic, so a failure leaves `dest` exactly as it was.
+            self.adopt_abandon_staging(&staged, previous.as_deref());
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "could not put the adopted project in place: {e}"
+            ))));
+        }
+
+        // Reopen at the canonical path, because everything after this reads the OPEN
+        // project: the link stamp writes through the live handle, and the hand-over
+        // renders the sidecar from the in-memory survey. The legacy open is the right
+        // one here for the reason its doc gives - this is a reopen of a canonical cache
+        // path, the same case the failed-replace recovery uses it for.
+        let reopened = self.open_project(dest.to_path_buf());
+        if !reopened.success {
+            return Err(local_dto(SpeleoDbError::Io(format!(
+                "could not open the adopted project: {}",
+                reopened.error.unwrap_or_else(|| "unknown error".to_owned())
+            ))));
+        }
+        Ok(())
+    }
+
+    /// Create → import → save the `ariane.tml` at `tml_path` into a project saved at
+    /// `staged`. The pure pipeline half of [`Self::adopt_import_and_save`], split out
+    /// so its caller has ONE failure path to clean up after rather than four.
+    fn adopt_build_into(
+        &self,
+        tml_path: &Path,
+        staged: &Path,
+        project_name: String,
+    ) -> Result<(), SpeleoErrorDto> {
+        self.do_create_project_full(project_name, None, None, Some(staged.to_path_buf()), true)
             .map_err(|e| local_dto(SpeleoDbError::Io(e.to_string())))?;
 
         let tml = crate::parsers::tml::parse_tml(tml_path)
@@ -1405,7 +1485,7 @@ impl AppState {
             ))));
         }
 
-        let saved = crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()));
+        let saved = crate::commands::project::save_project_impl(self, Some(staged.to_path_buf()));
         if !saved.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not save the adopted project: {}",
@@ -1413,6 +1493,49 @@ impl AppState {
             ))));
         }
         Ok(())
+    }
+
+    /// Throw away a staging file the adoption is not going to promote, and put the
+    /// project that was open before it back.
+    ///
+    /// Both halves matter and neither is optional. The staging file is a whole survey
+    /// on disk that nothing will ever open again; the reopen is what stops a failed
+    /// adoption from leaving the backend empty - or, before the staging existed,
+    /// holding a stub - under a shell that is still rendering the old project and
+    /// still sending it edits.
+    ///
+    /// Best-effort throughout: this runs on a path that is ALREADY returning an error,
+    /// and the caller's error is the one worth reporting.
+    fn adopt_abandon_staging(&self, staged: &Path, previous: Option<&Path>) {
+        // Closing is what releases the handle the remove needs on Windows. Harmless
+        // when the create never got as far as committing anything.
+        self.close_project();
+        if let Err(e) = std::fs::remove_file(staged) {
+            if e.kind() != std::io::ErrorKind::NotFound {
+                tracing::warn!(
+                    error = %e,
+                    path = %staged.display(),
+                    purpose = "clean up an adoption that will not be promoted",
+                    "speleodb_adopt_ariane: could not remove the staging .stalx"
+                );
+            }
+        }
+        let Some(previous) = previous else { return };
+        let reopened = self.open_project(previous.to_path_buf());
+        if reopened.success {
+            tracing::info!(
+                path = %previous.display(),
+                purpose = "undo the create that a failed adoption committed",
+                "speleodb_adopt_ariane: reopened the project the adoption replaced"
+            );
+        } else {
+            tracing::warn!(
+                error = ?reopened.error,
+                path = %previous.display(),
+                purpose = "undo the create that a failed adoption committed",
+                "speleodb_adopt_ariane: could not reopen the project the adoption replaced"
+            );
+        }
     }
 
     /// Fast-forward the open remote project to the server tip: re-pull the dump,
@@ -2046,6 +2169,97 @@ mod tests {
             body.contains("matches!(upload, AdoptUpload::Pushed)"),
             "and it must be GATED on the one outcome that means the bytes landed - \
              flipping on a lock we could not take strands the project unopenable"
+        );
+    }
+
+    /// Adoption used to delete the cache `.stalx` and rebuild in place, so the copy
+    /// being replaced was destroyed before anything that could fail had run. A `.tml`
+    /// that would not parse then cost the user the cached project as well as the
+    /// adoption - and re-adoption is reachable (an adopted copy is stamped dirty, and
+    /// the type flip is best-effort, so a project can keep offering Adopt), which is
+    /// exactly when there is un-pushed work behind that file.
+    ///
+    /// Building into a staging file and renaming means the only window in which `dest`
+    /// is not the old copy is the rename, which the filesystem makes atomic.
+    ///
+    /// What this reaches offline is the DELETE, which the old code ran before anything
+    /// else: `AppState::new()` has no app handle, so the create refuses immediately and
+    /// the run stops one step in. That step is the one that used to destroy the file,
+    /// so the test fails against the old ordering and passes against this one. The
+    /// deeper half - a create that COMMITS and a parse that then refuses - needs a
+    /// handle, and is covered by the dev-box runbook.
+    #[test]
+    fn a_failed_conversion_leaves_the_cached_copy_untouched() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let dest = temp.path().join("project.stalx");
+        let sentinel = b"the cached copy, which this adoption must not cost the user";
+        std::fs::write(&dest, sentinel).expect("seed the cache copy");
+        // Not a `.tml`, so the conversion fails after the create has already committed.
+        let not_a_tml = temp.path().join("adopt-source.tml");
+        std::fs::write(&not_a_tml, b"<nope/>").expect("seed the source");
+
+        let state = AppState::new().expect("state");
+        let failed = state.adopt_import_and_save(&not_a_tml, &dest, "Adopted".to_owned());
+
+        assert!(
+            failed.is_err(),
+            "the conversion cannot succeed on that input"
+        );
+        assert_eq!(
+            std::fs::read(&dest).expect("the cache copy still exists"),
+            sentinel,
+            "a failed adoption must leave the copy it was replacing byte-for-byte"
+        );
+        assert!(
+            !temp.path().join(super::ADOPT_STAGING_STALX).exists(),
+            "and must not leave a whole survey behind in a staging file nothing will \
+             ever open"
+        );
+    }
+
+    /// The other half of that failure. `do_create_project_full` commits into
+    /// `AppState` before the parse can refuse, so an adoption that failed afterwards
+    /// left the backend holding a stub the shell was not rendering - and every later
+    /// command, each edit and each auto-save, landed on it.
+    ///
+    /// The same undo the cache replace performs when its extract fails: put back what
+    /// was open before.
+    ///
+    /// Offline this reaches the ABANDON path but not the stub that motivates it (the
+    /// create needs an app handle to get as far as committing one), so read it as
+    /// pinning what that path must never do: the close it performs has to be followed
+    /// by the reopen. Drop the reopen and this fails with nothing open at all, which is
+    /// the failure mode that would replace the old one rather than fix it.
+    #[test]
+    fn a_failed_conversion_puts_the_project_it_replaced_back() {
+        let temp = tempfile::TempDir::new().expect("temp");
+        let previous = temp.path().join("previous.stalx");
+        {
+            let mut db = crate::persistence::Database::open(&previous).expect("open db");
+            db.save_project(&crate::models::Project::new("Previous".to_owned(), None))
+                .expect("seed the project that was open");
+        }
+        let not_a_tml = temp.path().join("adopt-source.tml");
+        std::fs::write(&not_a_tml, b"<nope/>").expect("seed the source");
+
+        let state = AppState::new().expect("state");
+        assert!(
+            state.open_project(previous.clone()).success,
+            "the project the adoption is about to replace"
+        );
+
+        let dest = temp.path().join("project.stalx");
+        let failed = state.adopt_import_and_save(&not_a_tml, &dest, "Adopted".to_owned());
+
+        assert!(
+            failed.is_err(),
+            "the conversion cannot succeed on that input"
+        );
+        assert_eq!(
+            state.open_project_path().as_deref(),
+            Some(previous.as_path()),
+            "the backend must be back on the project the shell is still drawing, not \
+             empty and not holding the stub the create committed"
         );
     }
 
