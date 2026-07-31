@@ -58,10 +58,32 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // When the telemetry feature is enabled, TELEMETRY_ENDPOINT must be set.
     // This prevents forks from accidentally reporting to our server.
+    //
+    // "Set" has to mean non-empty, not merely present. An undefined GitHub
+    // Actions secret expands to the empty string rather than being omitted, so
+    // `${{ secrets.TELEMETRY_ENDPOINT }}` on a repo that never had the secret
+    // still puts TELEMETRY_ENDPOINT="" in the build environment. A presence-only
+    // check passes, `ENDPOINT_URL` becomes "", and the release ships telemetry
+    // that posts to nowhere - with nothing anywhere reporting a problem. Requiring
+    // a scheme as well keeps a hostname pasted in without one from failing the
+    // same silent way, at the one point where it is still cheap to catch.
     if std::env::var("CARGO_FEATURE_TELEMETRY").is_ok() {
         let endpoint = std::env::var("TELEMETRY_ENDPOINT").map_err(|_| {
             "TELEMETRY_ENDPOINT must be set when building with --features telemetry"
         })?;
+        let endpoint = endpoint.trim();
+        if endpoint.is_empty() {
+            return Err("TELEMETRY_ENDPOINT is set but empty when building with \
+                 --features telemetry (an undefined CI secret expands to \"\") - \
+                 set it to the full events URL"
+                .into());
+        }
+        if !endpoint.starts_with("https://") && !endpoint.starts_with("http://") {
+            return Err(format!(
+                "TELEMETRY_ENDPOINT must be a full URL including the scheme, got {endpoint:?}"
+            )
+            .into());
+        }
         println!("cargo::rustc-env=TELEMETRY_ENDPOINT={endpoint}");
     }
 
