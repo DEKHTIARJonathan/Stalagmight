@@ -1,0 +1,186 @@
+# Runner benchmark — MANUAL ONLY.
+#
+# Mirrors ci.yml's `check` job step-for-step, but lets you pin it at a specific
+# runner so the same work can be timed on each machine. Nothing here triggers
+# automatically: `workflow_dispatch` only, so it cannot affect merge gating or
+# compete with real CI for the self-hosted runners.
+#
+# Why it exists: hekatrine (Xeon E3-1270 v6, 4C/8T @3.8-4.2GHz, 2x NVMe RAID-0,
+# 12G/600% cgroup slice) was added as a second self-hosted runner. Before giving
+# it the shared `ubuntu-latest-local` label — which would route real CI at it —
+# we want a like-for-like number against the NUC's existing baseline
+# (check ~9 min).
+#
+# Usage: Actions > "Runner benchmark (manual)" > Run workflow > pick a target.
+#   hekatrine           -> [self-hosted, hekatrine]            (the new box)
+#   ubuntu-latest-local -> [self-hosted, ubuntu-latest-local]  (the NUC)
+#   ubuntu-latest       -> GitHub-hosted                       (control)
+#
+# NOTE: `ubuntu-latest-local` is currently served ONLY by i5-nuc-runner. If
+# hekatrine is later given that label, this option becomes "whichever is idle"
+# and stops being a clean per-machine measurement — use the `hekatrine` option
+# for that machine specifically.
+
+name: Runner benchmark (manual)
+
+on:
+  workflow_dispatch:
+    inputs:
+      target:
+        description: Runner to benchmark
+        type: choice
+        default: hekatrine
+        options:
+          - hekatrine
+          - ubuntu-latest-local
+          - ubuntu-latest
+      skip_cargo_test:
+        description: Skip `cargo test` (fast pass — toolchain + node only)
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  resolve:
+    runs-on: ubuntu-latest
+    outputs:
+      runs_on: ${{ steps.r.outputs.runs_on }}
+    steps:
+      - id: r
+        run: |
+          case "${{ inputs.target }}" in
+            hekatrine)           v='["self-hosted","hekatrine"]' ;;
+            ubuntu-latest-local) v='["self-hosted","ubuntu-latest-local"]' ;;
+            *)                   v='["ubuntu-latest"]' ;;
+          esac
+          echo "runs_on=$v" >> "$GITHUB_OUTPUT"
+          echo "Benchmarking on: $v"
+
+  bench:
+    needs: resolve
+    runs-on: ${{ fromJSON(needs.resolve.outputs.runs_on) }}
+    timeout-minutes: 60
+    env:
+      CARGO_INCREMENTAL: "0"
+    steps:
+      # Record what we actually landed on. A benchmark whose hardware is
+      # unknown is just a number.
+      - name: Machine under test
+        run: |
+          {
+            echo "### Runner benchmark — \`${{ inputs.target }}\`"
+            echo
+            echo "| | |"
+            echo "|---|---|"
+            echo "| runner name | \`${RUNNER_NAME:-?}\` |"
+            echo "| environment | \`${{ runner.environment }}\` |"
+            echo "| cpu model | $(grep -m1 'model name' /proc/cpuinfo | cut -d: -f2- | xargs) |"
+            echo "| cpus visible | $(nproc) |"
+            echo "| cgroup cpu.max | $(cat /sys/fs/cgroup/cpu.max 2>/dev/null || echo n/a) |"
+            echo "| cgroup memory.max | $(cat /sys/fs/cgroup/memory.max 2>/dev/null || echo n/a) |"
+            echo "| mem total | $(awk '/MemTotal/{printf "%.1f GiB", $2/1048576}' /proc/meminfo) |"
+            echo "| uid / sudo | $(id -u) / $(command -v sudo >/dev/null && echo present || echo absent) |"
+            echo "| sccache | $(command -v sccache >/dev/null && sccache --version || echo absent) |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "T0=$(date +%s)" >> "$GITHUB_ENV"
+
+      - uses: actions/checkout@v7
+
+      - name: Install tauri apt deps (hosted only)
+        if: runner.environment == 'github-hosted'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - uses: dtolnay/rust-toolchain@4be7066ada62dd38de10e7b70166bc74ed198c30 # stable branch @ 2026-06-30
+        with:
+          components: rustfmt, clippy
+
+      - name: mark toolchain ready
+        run: echo "T_TOOLCHAIN=$(date +%s)" >> "$GITHUB_ENV"
+
+      - name: Rust formatting (cargo fmt --check)
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml --check
+
+      - name: Rust cache (hosted only)
+        if: runner.environment == 'github-hosted'
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          workspaces: src-tauri
+
+      - uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6.0.9
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - name: mark deps ready
+        run: echo "T_DEPS=$(date +%s)" >> "$GITHUB_ENV"
+
+      - run: pnpm tsc --noEmit
+      - run: pnpm typecheck:agent
+      - name: Release tooling
+        run: ./scripts/test-release.sh
+      - name: Rust file-size ratchet
+        run: |
+          pnpm lint:rust-file-size:test
+          pnpm lint:rust-file-size
+      - name: TS file-size ratchet
+        run: |
+          pnpm lint:ts-file-size:test
+          pnpm lint:ts-file-size
+      - name: Read-only gating tripwire
+        run: |
+          pnpm lint:readonly-gates:test
+          pnpm lint:readonly-gates
+      - run: pnpm test
+      - name: mark node phase done
+        run: echo "T_NODE=$(date +%s)" >> "$GITHUB_ENV"
+
+      # Self-hosted only — hosted has no sccache. `|| true`: observability must
+      # never fail the run.
+      - name: sccache zero-stats (self-hosted only)
+        if: runner.environment == 'self-hosted'
+        run: sccache --zero-stats || true
+
+      - name: cargo test
+        if: ${{ !inputs.skip_cargo_test }}
+        run: cargo test --manifest-path src-tauri/Cargo.toml --features telemetry
+        env:
+          XDG_CONFIG_HOME: ${{ runner.temp }}/config
+          TELEMETRY_ENDPOINT: "https://test.invalid/v1/events"
+
+      - name: mark cargo done
+        run: echo "T_CARGO=$(date +%s)" >> "$GITHUB_ENV"
+
+      # The number that actually matters for "is hekatrine faster than the NUC",
+      # broken down so a slow total can be attributed rather than guessed at.
+      - name: Timing breakdown
+        if: ${{ !cancelled() }}
+        run: |
+          fmt() { printf '%dm%02ds' $(( $1 / 60 )) $(( $1 % 60 )); }
+          {
+            echo
+            echo "#### Timing"
+            echo
+            echo "| phase | duration |"
+            echo "|---|---|"
+            echo "| rust toolchain install | $(fmt $(( T_TOOLCHAIN - T0 ))) |"
+            echo "| pnpm install | $(fmt $(( T_DEPS - T_TOOLCHAIN ))) |"
+            echo "| typecheck + lints + vitest | $(fmt $(( T_NODE - T_DEPS ))) |"
+            echo "| cargo test | $(fmt $(( T_CARGO - T_NODE ))) |"
+            echo "| **total** | **$(fmt $(( T_CARGO - T0 )))** |"
+            echo
+            echo "_NUC baseline for comparison: \`check\` ≈ 9m, \`full\` ≈ 38m._"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      # Cache effectiveness dominates the second and subsequent runs, so a
+      # single cold number is misleading on its own.
+      - name: sccache stats (self-hosted only)
+        if: ${{ !cancelled() && runner.environment == 'self-hosted' }}
+        run: |
+          stats=$(sccache --show-stats 2>&1) || true
+          echo "$stats"
+          rate=$(printf '%s\n' "$stats" | grep -m1 -E 'Cache hits rate +[0-9]' | grep -oE '[0-9.]+ %' | head -1)
+          echo "🦀 **sccache hit rate:** ${rate:-n/a}" >> "$GITHUB_STEP_SUMMARY"
