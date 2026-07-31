@@ -521,10 +521,22 @@ mod tests {
             format!("line-{}", total - RING_BUFFER_CAPACITY),
             "oldest entries evicted in order"
         );
+        // Strictly increasing, NOT a fixed delta. `seq` is handed out by a
+        // process-wide counter, so ANY other test that logs while this one runs takes
+        // numbers out of the middle of our range - and `back.seq - front.seq ==
+        // CAPACITY - 1` then fails on a ring that has done nothing wrong. It held only
+        // as long as nothing else in a 2700-test parallel run happened to log during
+        // these few microseconds, which is luck rather than a property, and it stopped
+        // holding the moment the suite grew enough to reschedule around it.
+        //
+        // What eviction must not do is reorder or renumber what it keeps. Monotonicity
+        // across the retained window says exactly that, and says it without the test
+        // having to claim it is the only thing logging in the process.
         assert!(
-            buf.back().expect("newest").seq - buf.front().expect("oldest").seq
-                == (RING_BUFFER_CAPACITY as u64) - 1,
-            "seq stays dense across eviction"
+            buf.iter()
+                .zip(buf.iter().skip(1))
+                .all(|(a, b)| a.seq < b.seq),
+            "eviction keeps the retained entries in seq order"
         );
     }
 }
