@@ -2056,35 +2056,52 @@ fn build_parent_map(
     visited.insert(root_section_id);
     queue.push_back(root_section_id);
 
-    while let Some(parent_section_id) = queue.pop_front() {
-        let Some(links) = adjacency.get(&parent_section_id) else {
-            continue;
-        };
-        for link in links {
-            if visited.insert(link.neighbor_section_id) {
-                map.insert(
-                    link.neighbor_section_id,
-                    ParentLink {
-                        parent_station: link.parent_station,
-                        child_station_index: link.child_station_index,
-                    },
-                );
-                queue.push_back(link.neighbor_section_id);
+    // Traverse from the export root, then from one section per REMAINING merge-connected
+    // component. Seeding only from `root_section_id` leaves every section outside that
+    // component absent from `map`, and the caller reads absence as "this is an entrance"
+    // - so a gallery of sections merged to each other exported as that many disconnected
+    // STARTs stacked on one anchor, with the merges between them never applied. One root
+    // per component instead: that component's first section is the entrance, and the rest
+    // resolve their parent links normally.
+    loop {
+        while let Some(parent_section_id) = queue.pop_front() {
+            let Some(links) = adjacency.get(&parent_section_id) else {
+                continue;
+            };
+            for link in links {
+                if visited.insert(link.neighbor_section_id) {
+                    map.insert(
+                        link.neighbor_section_id,
+                        ParentLink {
+                            parent_station: link.parent_station,
+                            child_station_index: link.child_station_index,
+                        },
+                    );
+                    queue.push_back(link.neighbor_section_id);
+                }
             }
         }
-    }
 
-    for section in &project.sections {
-        if section.id == root_section_id || map.contains_key(&section.id) {
-            continue;
-        }
-        if adjacency.contains_key(&section.id) {
-            tracing::warn!(
-                section_id = section.id,
-                root_section_id,
-                "Section has merges but is disconnected from export root; leaving section without parent link"
-            );
-        }
+        // `project.sections` order, so which section becomes the component's entrance is
+        // deterministic and the export stays byte-stable. A section with no merges at all
+        // is not in `adjacency` and is left out of the map deliberately: it is an
+        // entrance in its own right.
+        let Some(next_root) = project
+            .sections
+            .iter()
+            .map(|section| section.id)
+            .find(|id| !visited.contains(id) && adjacency.contains_key(id))
+        else {
+            break;
+        };
+
+        tracing::debug!(
+            section_id = next_root,
+            root_section_id,
+            "Rooting a merge component that is disconnected from the export root"
+        );
+        visited.insert(next_root);
+        queue.push_back(next_root);
     }
 
     map
@@ -3968,6 +3985,68 @@ mod tests {
             "no shot may be left parentless without being an entrance"
         );
         assert!(ensure_rooted_chain(&shots, TmlProfile::User).is_ok());
+    }
+
+    /// A gallery merged to itself but not to the rest of the survey is ONE entrance, not
+    /// one per section. `build_parent_map` used to traverse only from the export root, so
+    /// every section in a second component was absent from the map and read as its own
+    /// entrance: the gallery exported as N disconnected STARTs stacked on one anchor,
+    /// with the merges between its sections silently dropped.
+    #[test]
+    fn a_disconnected_gallery_is_rooted_once_not_per_section() {
+        let mut project = Project::new("Two Galleries".to_string(), None);
+
+        let shot = || ShotData {
+            length: 5.0,
+            azimuth_in: 90.0,
+            ..Default::default()
+        };
+
+        // Root component: A. Second component: B -> C -> D, chained to each other only.
+        for name in ["A", "B", "C", "D"] {
+            project.add_section(SectionData {
+                name: Some(name.to_string()),
+                color: "#ff0000".to_string(),
+                shots: vec![shot(), shot()],
+                ..Default::default()
+            });
+        }
+
+        let at = |section_id, station_index| {
+            StationRef {
+                section_id,
+                station_index,
+            }
+            .into()
+        };
+        // B(1)-C(0) and C(1)-D(0): a three-section gallery touching nothing in A.
+        project.station_merges.push(StationMerge {
+            station_a: at(1, 1),
+            station_b: at(2, 0),
+            merged_at: chrono::Utc::now(),
+        });
+        project.station_merges.push(StationMerge {
+            station_a: at(2, 1),
+            station_b: at(3, 0),
+            merged_at: chrono::Utc::now(),
+        });
+
+        let shots = build_export_shots(&project, TmlProfile::User);
+        let starts: Vec<&ExportShot> = shots.iter().filter(|s| s.shot_type == "START").collect();
+
+        assert_eq!(
+            starts.len(),
+            2,
+            "one entrance per component, got {:?}",
+            starts
+                .iter()
+                .map(|s| s.section.as_str())
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            ensure_rooted_chain(&shots, TmlProfile::User).is_ok(),
+            "the second component must be rooted, not orphaned"
+        );
     }
 
     /// The guard is the backstop for a chain the builder should never produce. It must
