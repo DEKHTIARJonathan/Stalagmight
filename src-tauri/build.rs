@@ -73,14 +73,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         let endpoint = endpoint.trim();
         if endpoint.is_empty() {
-            return Err("TELEMETRY_ENDPOINT is set but empty when building with \
-                 --features telemetry (an undefined CI secret expands to \"\") - \
+            return Err(
+                "TELEMETRY_ENDPOINT is empty or whitespace-only when building \
+                 with --features telemetry (an undefined CI secret expands to \"\") - \
                  set it to the full events URL"
-                .into());
+                    .into(),
+            );
         }
-        if !endpoint.starts_with("https://") && !endpoint.starts_with("http://") {
+        // Schemes are case-insensitive per RFC 3986, and `HTTPS://host/path` is a
+        // legal URL - rejecting it with "must include the scheme" would be telling
+        // the developer their scheme is missing while they are looking at it.
+        let scheme = endpoint.to_ascii_lowercase();
+        if !scheme.starts_with("https://") && !scheme.starts_with("http://") {
             return Err(format!(
-                "TELEMETRY_ENDPOINT must be a full URL including the scheme, got {endpoint:?}"
+                "TELEMETRY_ENDPOINT must start with http:// or https://, got {endpoint:?}"
             )
             .into());
         }
