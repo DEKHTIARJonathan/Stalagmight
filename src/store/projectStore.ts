@@ -5,7 +5,7 @@ import { trackCommand, setSource, peekProjectActionSource, clearProjectActionSou
 import { debugLog } from '../utils/debugLog';
 import { extractFilename } from '../utils/path';
 import { isPermissionError } from '../utils/saveErrors';
-import { getMapThemeColors } from '../utils/themeColors';
+import { withThemeDepthRamp } from '../utils/exportOptions';
 import {
   isEditDisabledError,
   isReverifyDivergedError,
@@ -2376,16 +2376,13 @@ export const useProjectStore = create<ProjectStore>((set, get) => {
   },
 
   exportImage: async (path: string, options: ExportImageOptions) => {
-    // Resolve the depth ramp HERE, not at the callers (#360). The backend cannot
-    // know it - #332 made each theme declare its own `--cc-depth-*`, so a
-    // hardcoded pair in Rust matches `dark` alone - and this is the one funnel
-    // every image export goes through, so no call site can forget it. Sent on
-    // every export, not just depth mode: the option is inert for the others, and
-    // a conditional is one more thing to get wrong.
-    const { depthShallow, depthDeep } = getMapThemeColors();
+    // Resolve the depth ramp HERE, not at the callers (#360) - this is the one
+    // funnel every image export goes through, so no call site can forget it.
+    // Sent on every export, not just depth mode: the option is inert for the
+    // others, and a conditional is one more thing to get wrong.
     await invokeIpc('export_image', {
       path,
-      options: { ...options, depth_shallow: depthShallow, depth_deep: depthDeep },
+      options: withThemeDepthRamp(options),
     }, {
       purpose: 'export map image',
       fields: { path, format: options.format },

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { invokeIpc } from '../../utils/ipc';
+import { withThemeDepthRamp } from '../../utils/exportOptions';
 import { useProjectStore } from '../../store/projectStore';
 import type { ExportImageOptions } from '../../types/commands';
 
@@ -62,8 +63,10 @@ export default function ExportPreview({ options, fill = false }: ExportPreviewPr
       // `preview_svg_export` always returns SVG markup regardless of `format`
       // (PNG/PDF are SVG-derived), but the format DOES drive whether colors are
       // emitted (SVG is always monochrome). Pass the real options through so the
-      // preview matches what the chosen format will actually write.
-      invokeIpc<string>('preview_svg_export', { options }, {
+      // preview matches what the chosen format will actually write - including
+      // the live theme's depth endpoints, which the backend cannot resolve and
+      // which the export path stamps on the same way (#360).
+      invokeIpc<string>('preview_svg_export', { options: withThemeDepthRamp(options) }, {
         purpose: 'render export preview',
       })
         .then((markup) => {
