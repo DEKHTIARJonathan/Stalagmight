@@ -42,7 +42,7 @@ const seedLink = (editing: boolean, forceEditing = false) =>
     },
   });
 
-const TARGET = { hexsha: 'abcdef0123456789', is_current: true };
+const TARGET = { hexsha: 'abcdef0123456789', is_current: true, discards_unpushed: true };
 
 /** The undo trigger, with the stack empty (`canUndo === false`) unless told otherwise. */
 function renderUndo(opts: { disabled?: boolean; hoverable?: boolean } = {}) {
@@ -156,6 +156,9 @@ describe('UndoHistoryDropdown - the Unwind entry (#303)', () => {
     expect(useUIStore.getState().dialogData).toMatchObject({
       hexsha: TARGET.hexsha,
       isCurrent: true,
+      // [#303] Carried through, or the confirmation cannot warn on open and the user
+      // meets the consequence as a failure after pressing instead.
+      discardsUnpushed: true,
     });
     expect(invokeIpcMock).not.toHaveBeenCalledWith(
       'speleodb_restore_revision',

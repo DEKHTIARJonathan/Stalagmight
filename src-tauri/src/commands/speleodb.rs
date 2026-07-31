@@ -344,6 +344,14 @@ pub async fn speleodb_get_revisions(
 /// what the action came for. Its extra preconditions (an empty undo stack, and any dirt
 /// being a previous Unwind's own doing) are enforced in the backend, never trusted from
 /// here.
+///
+/// `discard_unpushed` (#303) says the Unwind dialog raised its red warning and the user
+/// went ahead anyway - the copy holds un-pushed work that this swap replaces (typically
+/// edits the user undid, which sit on the redo stack). It is an acknowledgement, not a
+/// decision: `speleodb_unwind_target.discards_unpushed` is what tells the FE to warn, and
+/// the backend re-derives the same predicate before honouring this. Omitted or `false`,
+/// the guard refuses exactly as it did before, so nothing else that passes
+/// `keep_undo_history` can discard un-pushed work by accident.
 #[tauri::command]
 pub async fn speleodb_restore_revision(
     app: AppHandle,
@@ -354,9 +362,11 @@ pub async fn speleodb_restore_revision(
     discard_local: Option<bool>,
     entry_path: Option<String>,
     keep_undo_history: Option<bool>,
+    discard_unpushed: Option<bool>,
 ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
     let discard_local = discard_local.unwrap_or(false);
     let keep_undo_history = keep_undo_history.unwrap_or(false);
+    let discard_unpushed = discard_unpushed.unwrap_or(false);
     run_blocking(app, move |s| {
         s.speleodb_restore_revision(
             project_id,
@@ -366,6 +376,7 @@ pub async fn speleodb_restore_revision(
             discard_local,
             entry_path,
             keep_undo_history,
+            discard_unpushed,
         )
     })
     .await

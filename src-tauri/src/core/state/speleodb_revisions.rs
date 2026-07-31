@@ -80,6 +80,24 @@ fn revision_swap_base(
     }
 }
 
+/// [#303] Would an Unwind here throw away work that was never pushed?
+///
+/// True when the copy is dirty and no chain pointer accounts for it. A restore stamps the
+/// copy un-pushed itself, so from an Unwind's second step onwards the dirt IS an Unwind's
+/// own doing and the pointer proves it - that case discards nothing the user did not
+/// already agree to. Dirt with NO pointer is different: real un-pushed work whose history
+/// the undo stack no longer covers (edits the user undid, so they sit on the redo stack; a
+/// byte-budget trim; a legacy file), and the swap replaces all of it.
+///
+/// One predicate, two readers - `speleodb_unwind_target` puts the answer on the DTO so the
+/// dialog can warn BEFORE the user commits, and `speleodb_guard_unwind` decides with it.
+/// Keeping them on the same function is what stops the warning and the refusal from
+/// drifting apart, which is how this surfaced: the entry offered an action that only ever
+/// failed.
+fn unwind_discards_unpushed(has_unpushed_edits: bool, unwound_from: Option<&str>) -> bool {
+    has_unpushed_edits && unwound_from.is_none()
+}
+
 impl AppState {
     /// [#303] The preconditions for an Unwind - the one action allowed to keep a
     /// downloaded copy's undo history, and therefore the one that has to earn it.
@@ -91,16 +109,20 @@ impl AppState {
     ///    undoing everything since then returns the tree to exactly that commit's state.
     ///    With entries still on the stack, the copy sits somewhere BETWEEN commits, and
     ///    checking out a revision would silently discard the un-undone work.
-    /// 2. **Any dirt must be an Unwind's own doing.** A restore stamps the copy un-pushed
-    ///    itself, so from the second step onwards the copy IS dirty and the download needs
-    ///    the `discard_local` waiver - which is safe precisely because the only unpushed
-    ///    content is what the previous step created, and the chain pointer proves it.
-    ///    Dirty with NO pointer means real un-pushed work whose history the stack no
-    ///    longer covers (a byte-budget trim, a legacy file), and that must not be
-    ///    discarded on the strength of a waiver the user was never shown.
+    /// 2. **Dirt that no Unwind put there must be acknowledged.** See
+    ///    [`unwind_discards_unpushed`] for which dirt that is. It used to be a flat
+    ///    refusal, on the grounds that un-pushed work "must not be discarded on the
+    ///    strength of a waiver the user was never shown" - but the affordance is offered
+    ///    exactly when the undo stack is empty, which is also what undoing everything
+    ///    produces, so the button existed only to fail. The waiver is now SHOWN: the DTO
+    ///    carries the same predicate, the dialog raises a red warning on it, and
+    ///    `discard_unpushed` is that dialog reporting it did. Absent the acknowledgement
+    ///    this still refuses, so no other caller can discard un-pushed work by passing
+    ///    `keep_undo_history` alone.
     fn speleodb_guard_unwind(
         &self,
         link: &crate::models::SpeleoLink,
+        discard_unpushed: bool,
     ) -> Result<(), SpeleoErrorDto> {
         // A poisoned lock reads as "not empty", i.e. REFUSE: the guard exists to stop an
         // Unwind over un-undone work, so it has to fail closed on not knowing.
@@ -110,7 +132,12 @@ impl AppState {
                 "undo the remaining steps before loading earlier history".to_owned(),
             )));
         }
-        if link.has_unpushed_edits && self.speleodb_unwound_from().is_none() {
+        if !discard_unpushed
+            && unwind_discards_unpushed(
+                link.has_unpushed_edits,
+                self.speleodb_unwound_from().as_deref(),
+            )
+        {
             return Err(local_dto(SpeleoDbError::Io(
                 "this copy holds un-pushed edits that the undo history no longer covers; \
                  push or discard them before loading earlier history"
@@ -132,6 +159,26 @@ impl AppState {
             })?
             .ok()
             .flatten()
+    }
+
+    /// [#303] A forward edit means the working copy is no longer where the Unwind walk
+    /// left it, so the chain pointer stops describing it - and, more to the point, stops
+    /// EXCUSING the dirty bit.
+    ///
+    /// That excuse is the whole reason walking the chain does not warn: the dirt is the
+    /// Unwind's own doing, and every operation at risk came from a commit the server still
+    /// holds, so another Unwind fetches it straight back. An edit breaks that. The new work
+    /// exists nowhere but this copy, and a later Unwind would replace it - which is exactly
+    /// the case the red warning is for, so dropping the pointer re-arms it.
+    ///
+    /// Called from the three forward-command sites in `commands.rs` and nowhere else:
+    /// undo / redo must NOT clear it, since walking back through loaded history is the
+    /// thing the pointer exists to track.
+    pub(super) fn speleodb_forget_unwind_position(&self) {
+        // Skip the write on the overwhelmingly common path - no Unwind in play at all.
+        if self.speleodb_unwound_from().is_some() {
+            self.speleodb_set_unwound_from(None);
+        }
     }
 
     /// [#303] Record (or clear) the Unwind chain pointer. Best-effort: losing it costs
@@ -177,12 +224,22 @@ impl AppState {
             .speleodb_server_head(&endpoint, &token, insecure_http, &link.project_id)
             .map_err(|e| dto_for_error(Endpoint::GetProject, &e))?;
 
+        let unwound_from = self.speleodb_unwound_from();
+        // The same predicate the guard decides with, so the dialog's red warning and the
+        // backend's refusal can never disagree about this copy.
+        let discards_unpushed =
+            unwind_discards_unpushed(link.has_unpushed_edits, unwound_from.as_deref());
+
         Ok(sync::unwind_target(
-            self.speleodb_unwound_from().as_deref(),
+            unwound_from.as_deref(),
             link.base_commit_sha.as_deref(),
             &commits,
         )
-        .map(|(hexsha, is_current)| SpeleoUnwindTarget { hexsha, is_current }))
+        .map(|(hexsha, is_current)| SpeleoUnwindTarget {
+            hexsha,
+            is_current,
+            discards_unpushed,
+        }))
     }
 
     /// [#218] The project's revision history for the read-only history view:
@@ -246,6 +303,7 @@ impl AppState {
         discard_local: bool,
         entry_path: Option<String>,
         keep_undo_history: bool,
+        discard_unpushed: bool,
     ) -> Result<SpeleoOpenResult, SpeleoErrorDto> {
         validate_project_id(&project_id).map_err(local_dto)?;
         validate_hexsha(&hexsha).map_err(local_dto)?;
@@ -277,9 +335,11 @@ impl AppState {
         }
         // [#303] The Unwind flavour: keeping the downloaded copy's undo history is a
         // waiver of the #194 b3 guard, so its preconditions are checked HERE and never
-        // taken on trust from the frontend.
+        // taken on trust from the frontend. `discard_unpushed` is not a decision the FE
+        // gets to make either - it only reports that the dialog showed the user what this
+        // throws away; the guard still decides whether that matters.
         if keep_undo_history {
-            self.speleodb_guard_unwind(&open_link)?;
+            self.speleodb_guard_unwind(&open_link, discard_unpushed)?;
         }
 
         let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
@@ -506,7 +566,7 @@ impl AppState {
 #[cfg(test)]
 #[expect(clippy::expect_used, reason = "unit test fixtures")]
 mod tests {
-    use super::{revision_swap_base, validate_hexsha};
+    use super::{revision_swap_base, unwind_discards_unpushed, validate_hexsha};
     use crate::speleodb::SpeleoDbError;
 
     /// The production region of this file, split out of the test module so the
@@ -551,8 +611,8 @@ mod tests {
              working copy that had already been replaced"
         );
 
-        // And the two refusals themselves: a non-empty stack, and dirt that no Unwind
-        // put there.
+        // And the two refusals themselves: a non-empty stack, and unacknowledged dirt that
+        // no Unwind put there.
         let body = src
             .split_once("fn speleodb_guard_unwind")
             .map(|(_, rest)| rest)
@@ -563,9 +623,114 @@ mod tests {
             "an Unwind over a non-empty undo stack would discard the un-undone steps"
         );
         assert!(
-            body.contains("link.has_unpushed_edits && self.speleodb_unwound_from().is_none()"),
-            "dirt with no chain pointer is real un-pushed work, not a previous Unwind's \
-             doing, and must not be discarded under the waiver"
+            body.contains("unwind_discards_unpushed("),
+            "the guard must decide with the SAME predicate the DTO reports, or the dialog's \
+             warning and the refusal can drift apart"
+        );
+        // The acknowledgement gates that refusal and nothing else: dropping the `!` would
+        // let any `keep_undo_history` caller discard un-pushed work silently, which is the
+        // invariant the flat refusal used to carry on its own.
+        assert!(
+            body.contains("if !discard_unpushed"),
+            "un-pushed work may only be discarded by a caller that acknowledged it"
+        );
+    }
+
+    /// [#303] A save must carry the Unwind chain position onto the fresh file.
+    ///
+    /// `save_project` writes a brand-new `.stalx` and renames it over the destination, so
+    /// every local-only table it does not explicitly re-apply is destroyed - the same shape
+    /// of bug as the undo history losing its rows. Here the loss is not just "the walk
+    /// restarts from BASE" (documented, benign): the pointer is what EXCUSES the dirty bit
+    /// an Unwind leaves, so dropping it makes a copy the user only unwound read as holding
+    /// un-pushed work. The confirmation resolves the flag before an autosave and the guard
+    /// re-derives it after, they disagree, and the Unwind fails on press. Nothing in a
+    /// scripted run saves between two Unwinds; a person pausing between them always does.
+    #[test]
+    fn a_save_carries_the_unwind_chain_position_onto_the_fresh_file() {
+        let io = std::include_str!("project_io.rs");
+        let snapshot = io
+            .find("load_speleo_undo_chain")
+            .expect("the save path must snapshot the chain pointer before rebuilding");
+        let reapply = io
+            .find("save_speleo_undo_chain")
+            .expect("...and re-apply it to the fresh file");
+        assert!(
+            snapshot < reapply,
+            "the snapshot has to be read from the OLD database - taken after the rebuild it \
+             would read the fresh file's empty table and preserve nothing"
+        );
+        // Re-applied while the temp database is still open, like its `speleo_link` sibling.
+        let closed = io
+            .find("// Close the temp database before renaming")
+            .expect("the save path closes the temp db before the rename");
+        assert!(
+            reapply < closed,
+            "the write must land before the temp database is dropped and renamed"
+        );
+    }
+
+    /// [#303] A forward edit drops the Unwind chain position; undo / redo must not.
+    ///
+    /// The asymmetry is the point, and it is what makes the confirmation warn again after
+    /// an unwound copy is edited. Walking back through loaded history risks nothing the
+    /// server has not already got, so the pointer stays and the dialog stays quiet. A new
+    /// edit exists only in this copy, so the pointer goes and the dirt stops being excused.
+    /// Clearing it from the undo path would collapse the two cases back together and warn
+    /// on every step of an ordinary walk.
+    #[test]
+    fn a_forward_edit_forgets_the_unwind_position_but_an_undo_does_not() {
+        let forward = std::include_str!("commands.rs");
+        assert_eq!(
+            forward
+                .matches("self.speleodb_forget_unwind_position();")
+                .count(),
+            3,
+            "all three forward-command sites (execute, repair, batch) must forget the \
+             Unwind position - they are the only places a NEW undo entry is created"
+        );
+        // Each one sits with the dirty-bit flip it belongs to: same condition, same reason.
+        for (before, _) in forward.match_indices("self.speleodb_forget_unwind_position();") {
+            let preceding = &forward[..before];
+            assert!(
+                preceding
+                    .rmatch_indices("self.mark_remote_dirty();")
+                    .next()
+                    .is_some_and(|(dirty, _)| preceding[dirty..].lines().count() <= 6),
+                "the pointer clear belongs beside the dirty flip it explains"
+            );
+        }
+        assert!(
+            !std::include_str!("undo.rs").contains("speleodb_forget_unwind_position"),
+            "undo / redo walk the loaded history - clearing the position there would warn \
+             on every ordinary step of an Unwind chain"
+        );
+    }
+
+    /// [#303] The predicate behind both the warning and the refusal.
+    ///
+    /// Dirty ALONE is not enough to mean "un-pushed work at risk": an Unwind stamps the copy
+    /// dirty itself, so from its second step onwards the dirt is its own doing and the chain
+    /// pointer says so. Only dirt with no pointer is work the user would actually lose -
+    /// which is the state that undoing everything leaves behind (the undone steps sit on the
+    /// redo stack), and the state that used to make the offered entry fail when pressed.
+    #[test]
+    fn only_dirt_without_a_chain_pointer_counts_as_unpushed_work() {
+        assert!(
+            unwind_discards_unpushed(true, None),
+            "dirty with nothing to explain it is real un-pushed work"
+        );
+        assert!(
+            !unwind_discards_unpushed(true, Some("deadbeefcafe")),
+            "dirty because a previous Unwind made it so discards nothing new"
+        );
+        assert!(
+            !unwind_discards_unpushed(false, None),
+            "a clean copy has nothing to lose"
+        );
+        assert!(
+            !unwind_discards_unpushed(false, Some("deadbeefcafe")),
+            "a clean copy mid-chain has nothing to lose either"
         );
     }
 

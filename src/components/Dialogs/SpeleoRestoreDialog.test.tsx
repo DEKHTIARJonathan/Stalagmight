@@ -76,6 +76,10 @@ describe('SpeleoRestoreDialog (#218)', () => {
       // [#303] A plain Restore drops the downloaded copy's undo history like every
       // other adopt path; only the Unwind keeps it.
       keepUndoHistory: false,
+      // ...so there is no un-pushed-work waiver to acknowledge either. Pinned false:
+      // this flag is the only thing that lets the backend discard work the user never
+      // pushed, and it belongs to the Unwind confirmation alone.
+      discardUnpushed: false,
     });
     expect(closeDialogMock).toHaveBeenCalled();
     expect(showToastMock).toHaveBeenCalled();

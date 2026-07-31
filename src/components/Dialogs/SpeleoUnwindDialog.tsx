@@ -26,6 +26,16 @@ import { humanizeSpeleoError } from '../../utils/speleoError';
  * The backend re-checks every precondition (lock held, no force-edit session, an empty
  * undo stack, and any dirt being a previous Unwind's own doing), so this dialog is the
  * user-facing half of the gate, never the whole of it.
+ *
+ * `discardsUnpushed` is the third thing it has to say. The affordance is offered when the
+ * UNDO stack is empty, which is also what undoing everything produces - and that leaves the
+ * copy dirty with the undone steps sitting on the REDO stack. The backend used to refuse
+ * that outright, so the entry existed only to fail once pressed. Now the same predicate
+ * that drives the refusal rides on the unwind target, this dialog states the consequence in
+ * red BEFORE the user commits, and confirming reports back that it did (`discardUnpushed`).
+ * The warning names the survey changes as well as the history: this copy can also be dirty
+ * for reasons no undo explains (a byte-budget trim, a legacy file), and there the swap
+ * really does replace content.
  */
 export default function SpeleoUnwindDialog() {
   const { t } = useTranslation();
@@ -38,6 +48,7 @@ export default function SpeleoUnwindDialog() {
 
   const hexsha = typeof dialogData.hexsha === 'string' ? dialogData.hexsha : '';
   const isCurrent = dialogData.isCurrent === true;
+  const discardsUnpushed = dialogData.discardsUnpushed === true;
   const shortSha = hexsha.slice(0, 8);
 
   const [busy, setBusy] = useState(false);
@@ -59,6 +70,9 @@ export default function SpeleoUnwindDialog() {
         // that. Real un-pushed work with no pointer is refused there, not here.
         discardLocal: true,
         keepUndoHistory: true,
+        // Only ever set when the warning above was actually rendered, so the backend's
+        // refusal still stands for a copy the user was told nothing about.
+        discardUnpushed: discardsUnpushed,
         // The toast would say "restored to revision X. Push to make it the latest",
         // which misreads the action: nothing is being restored FORWARD, the user is
         // stepping backwards through history.
@@ -107,6 +121,16 @@ export default function SpeleoUnwindDialog() {
             ? t('speleodb.unwind.consequenceCurrent')
             : t('speleodb.unwind.consequenceAncestor')}
         </p>
+        {/* Stated on OPEN, not on press: this is the one shape of the action that destroys
+            work, and the user has to be able to back out before committing to it. */}
+        {discardsUnpushed && (
+          <p
+            className="text-error font-medium"
+            data-testid="speleodb-unwind-discard-warning"
+          >
+            {t('speleodb.unwind.discardWarning', { sha: shortSha })}
+          </p>
+        )}
         {error && (
           <p className="text-error" data-testid="speleodb-unwind-error">
             {error}

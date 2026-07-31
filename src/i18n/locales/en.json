@@ -2818,7 +2818,8 @@
       "consequenceAncestor": "This moves the survey back. SpeleoDB has no revert, so pushing afterwards records the older survey as a new revision rather than removing the newer ones.",
       "confirmButton": "Unwind",
       "loading": "Loading history...",
-      "failed": "Could not load the earlier history."
+      "failed": "Could not load the earlier history.",
+      "discardWarning": "This copy holds changes you have not pushed. Unwinding replaces it with revision {{sha}}, so those changes and the current edit history are discarded - including any steps you have undone but not yet redone."
     },
     "undoMode": {
       "title": "Undo history in SpeleoDB",

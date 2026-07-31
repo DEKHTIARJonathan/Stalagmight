@@ -1052,6 +1052,12 @@ export default function UndoHistoryDropdown({
                 openDialog('speleodb-unwind', {
                   hexsha: unwindTarget.hexsha,
                   isCurrent: unwindTarget.is_current,
+                  // [#303] Carried through so the confirmation can warn on OPEN. This
+                  // dropdown offers the entry whenever the UNDO stack is empty, which
+                  // undoing everything also satisfies - and that copy is dirty, with the
+                  // undone steps on the redo stack. Without the flag the dialog looked
+                  // ordinary and the action failed once pressed.
+                  discardsUnpushed: unwindTarget.discards_unpushed,
                 });
               }}
               className="w-full px-3 py-2 flex items-center gap-2 text-left border-t border-border

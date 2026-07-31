@@ -27,12 +27,12 @@ const HEXSHA = 'abcdef0123456789';
 
 let closeDialogMock: ReturnType<typeof vi.fn>;
 
-const open = (isCurrent: boolean) => {
+const open = (isCurrent: boolean, discardsUnpushed = false) => {
   useSpeleoStore.setState({ remoteProjectId: 'p1' });
   useProjectStore.setState({ project: { name: 'Cave A' } as never });
   useUIStore.setState({
     activeDialog: 'speleodb-unwind',
-    dialogData: { hexsha: HEXSHA, isCurrent },
+    dialogData: { hexsha: HEXSHA, isCurrent, discardsUnpushed },
   });
 };
 
@@ -99,6 +99,64 @@ describe('SpeleoUnwindDialog (#303)', () => {
           // step made it so. The backend only honours it when its chain pointer agrees.
           discardLocal: true,
         }),
+      ),
+    );
+  });
+
+  // [#303] The dropdown offers Unwind whenever the UNDO stack is empty, which undoing
+  // everything also satisfies - and that copy is dirty, with the undone steps parked on the
+  // redo stack. The backend refused it, so the entry existed only to fail once pressed. The
+  // consequence now has to be on screen BEFORE the user commits, and it has to name the
+  // survey changes too: a copy can be dirty for reasons no undo explains.
+  it('warns about discarded work when the dialog OPENS, not when it is pressed', () => {
+    open(true, true);
+    render(<SpeleoUnwindDialog />);
+
+    const warning = screen.getByTestId('speleodb-unwind-discard-warning');
+    expect(warning).toBeInTheDocument();
+    expect(warning).toHaveTextContent(/have not pushed/);
+    // The survey changes, not just the history - under-stating this would be the bug again
+    // in the cases where content really is replaced.
+    expect(warning).toHaveTextContent(/discarded/);
+    // Red, per the same reasoning: it is the one shape of this action that destroys work.
+    expect(warning.className).toContain('text-error');
+    // ...and nothing has happened yet - the warning is a statement, not an outcome.
+    expect(invokeIpcMock).not.toHaveBeenCalled();
+  });
+
+  it('stays quiet when there is no un-pushed work to lose', () => {
+    open(true, false);
+    render(<SpeleoUnwindDialog />);
+
+    expect(screen.queryByTestId('speleodb-unwind-discard-warning')).not.toBeInTheDocument();
+  });
+
+  it('reports the acknowledgement only when it actually warned', async () => {
+    open(true, true);
+    render(<SpeleoUnwindDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwind-confirm-btn'));
+
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith(
+        'speleodb_restore_revision',
+        expect.objectContaining({ discardUnpushed: true }),
+      ),
+    );
+  });
+
+  it('does not claim an acknowledgement it never showed', async () => {
+    open(true, false);
+    render(<SpeleoUnwindDialog />);
+
+    await userEvent.click(screen.getByTestId('speleodb-unwind-confirm-btn'));
+
+    // The backend re-derives the predicate; a blanket `true` here would hand it a waiver
+    // for a copy the user was told nothing about.
+    await waitFor(() =>
+      expect(invokeIpcMock).toHaveBeenCalledWith(
+        'speleodb_restore_revision',
+        expect.objectContaining({ discardUnpushed: false }),
       ),
     );
   });

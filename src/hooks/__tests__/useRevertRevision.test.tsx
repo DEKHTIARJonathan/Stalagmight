@@ -130,6 +130,11 @@ describe('useRevertRevision - the happy path', () => {
       // [#303] A revert is not an Unwind: it rides the old tree FORWARD, so the
       // downloaded copy's undo history is dropped like any other adopt.
       keepUndoHistory: false,
+      // ...and with no history kept there is no un-pushed-work waiver to acknowledge.
+      // Pinned false deliberately: this flag is the ONE thing that lets the backend
+      // discard work the user never pushed, and no path but the Unwind confirmation
+      // may ever carry it.
+      discardUnpushed: false,
     });
     expect(argsOf('speleodb_done')).toEqual({ message: 'undo the bad survey' });
   });

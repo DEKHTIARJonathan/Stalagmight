@@ -176,7 +176,18 @@ the whole swap path. What the flavour adds is `speleodb_guard_unwind`, enforced 
 backend: the in-memory undo stack must be EMPTY (that is what makes "the copy equals a
 commit" true), and any dirt must be a previous Unwind's own doing, proven by the chain
 pointer - which is what makes the `discard_local` waiver safe from the second step onwards.
-Real un-pushed work with no pointer is refused.
+
+Dirt with **no** pointer is real un-pushed work, and it is not refused outright - it is
+**warned about**. That state is ordinary, not exotic: the entry is offered exactly when the
+undo stack is empty, which is also what undoing everything produces, and that leaves the
+copy dirty with the undone steps on the redo stack. A flat refusal there meant the app
+offered a button whose only outcome was an error. So `unwind_discards_unpushed` (one
+predicate, two readers) both fills `SpeleoUnwindTarget.discards_unpushed` and decides the
+guard: the confirmation raises a red warning on the flag when it OPENS, naming the survey
+changes as well as the history (a copy can be dirty for reasons no undo explains - a
+byte-budget trim, a legacy file - and there content really is replaced), and confirming
+sends `discard_unpushed` back. Without that acknowledgement the guard refuses exactly as
+before, so no other `keep_undo_history` caller can discard un-pushed work by accident.
 
 The frontend offers it as one entry pinned below the undo history list, and clicking it
 opens a confirmation rather than acting. Undo / Ctrl+Z on an empty stack still do nothing.

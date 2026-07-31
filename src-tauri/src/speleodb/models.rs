@@ -109,6 +109,14 @@ pub struct SpeleoUnwindTarget {
     pub hexsha: String,
     /// The target is the working copy's own commit rather than an ancestor.
     pub is_current: bool,
+    /// [#303] Going ahead would throw away un-pushed work: the copy is dirty and no
+    /// Unwind chain pointer accounts for it, so the swap replaces edits the user never
+    /// pushed (and the redo steps that would have replayed them).
+    ///
+    /// The dialog raises its red warning on this, and only a caller that passes the
+    /// matching acknowledgement gets past the backend guard - the frontend is told what
+    /// will happen, it is not trusted to decide it.
+    pub discards_unpushed: bool,
 }
 
 /// [#218] One commit projected for the frontend revision-history view. A read-only

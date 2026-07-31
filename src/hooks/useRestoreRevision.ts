@@ -48,6 +48,17 @@ export interface RestoreRevisionArgs {
    * doing) rather than trusting this flag.
    */
   keepUndoHistory?: boolean;
+  /**
+   * [#303] The user was shown, and accepted, that this Unwind throws away un-pushed work -
+   * the copy is dirty with no Unwind chain pointer to account for it, so the swap replaces
+   * edits that were never pushed (typically ones the user undid, now on the redo stack).
+   *
+   * An acknowledgement, not a decision: the backend re-derives the same predicate that put
+   * `discards_unpushed` on the unwind target, and without this flag it refuses exactly as
+   * before. Only `SpeleoUnwindDialog` sets it, and only when it actually rendered the
+   * warning.
+   */
+  discardUnpushed?: boolean;
 }
 
 /**
@@ -83,6 +94,7 @@ export function useRestoreRevision() {
       quiet = false,
       entryPath,
       keepUndoHistory = false,
+      discardUnpushed = false,
     }: RestoreRevisionArgs) => {
       // The backend hardcodes concurrent_session:false for an in-place revision swap
       // (the open project is unchanged), so unlike the open/adopt flow there is no
@@ -98,6 +110,9 @@ export function useRestoreRevision() {
         // [#303] Likewise only meaningful for a Restore: a View leaves the project
         // read-only, so there would be nothing to undo with the history it kept.
         keepUndoHistory: restore && keepUndoHistory,
+        // ...and the acknowledgement only means anything alongside that history-keeping
+        // Restore, which is the only shape the backend consults it for.
+        discardUnpushed: restore && keepUndoHistory && discardUnpushed,
       });
       // The backend closed + reopened the project at the swapped tree; pull the new
       // geometry + link state in. The on-disk copy IS the checked-out tree (saved),

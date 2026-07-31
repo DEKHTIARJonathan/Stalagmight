@@ -439,6 +439,22 @@ impl AppState {
                 ));
             }
         }
+        // [#303] The Unwind chain pointer needs the same treatment, and for a sharper
+        // reason than "it would be lost". Losing it is documented as benign - the next
+        // Unwind restarts from BASE - but the pointer is also what EXCUSES the dirty bit
+        // a walk leaves behind. Dropped here, a copy the user only unwound reads as
+        // holding un-pushed work nobody warned them about, so the confirmation and the
+        // backend guard disagree: the dialog resolved the flag before an autosave, the
+        // guard re-derived it after, and the Unwind failed on press with "this copy holds
+        // un-pushed edits that the undo history no longer covers". A scripted run never
+        // sees it because nothing saves in between; a person pausing between two Unwinds
+        // hits it every time.
+        let speleo_undo_chain = {
+            let db_guard = self.database.lock().unwrap_or_else(|e| e.into_inner());
+            db_guard
+                .as_ref()
+                .and_then(|db| db.load_speleo_undo_chain().ok().flatten())
+        };
 
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
@@ -515,6 +531,21 @@ impl AppState {
         // opens.
         if copy_only {
             self.persist_undo_stacks_into(&db);
+        }
+
+        // [#303] ...and the Unwind chain position with it. Only written when one exists:
+        // `None` is already the fresh file's state, and writing it unconditionally would
+        // mean every save of every project touched this table for nothing.
+        if let Some(sha) = &speleo_undo_chain {
+            if let Err(e) = db.save_speleo_undo_chain(Some(sha)) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve the Unwind chain position on save (#303)",
+                    "Failed to copy speleo_undo_chain onto the fresh save file; the next \
+                     Unwind will restart from BASE and may warn about un-pushed work that \
+                     is only a previous Unwind's own doing"
+                );
+            }
         }
 
         // Close the temp database before renaming
