@@ -63,8 +63,13 @@
   --cc-grid-default: #333366;
   --cc-zero-datum: #ffd700;
   --cc-compass-color: #ffffff;
-  --cc-depth-shallow: #4ecdc4;
-  --cc-depth-deep: #ff6b6b;
+  /* Depth ramp: green (shallower) -> red (deeper). The full contract - the
+     shortest-hue-path trap, the 3:1 floor and the lightness travel that keeps the
+     ramp readable under deuteranopia - is documented once on this block in
+     src/theme/tokens.ts, which these values must match exactly.
+     hue 134 -> 0, worst 4.46:1 on #1a1a2e, ends 2.79:1 apart, HSL L 0.79 -> 0.60. */
+  --cc-depth-shallow: #a8ecb8;
+  --cc-depth-deep: #e2504f;
   --cc-depth-text: #f5f5f5;
 
   /* --- Canvas Preview --- */
@@ -173,8 +178,11 @@
   --cc-grid-default: #ddd0bb;
   --cc-zero-datum: #b8860b;
   --cc-compass-color: #1a120b;
-  --cc-depth-shallow: #14487f;
-  --cc-depth-deep: #a52a1a;
+  /* Green -> red, tuned for paper: the ramp's yellow MIDPOINT is the worst case
+     on a light canvas, so both ends run dark to hold it at 3.45:1.
+     hue 125 -> 5, worst 3.45:1 at #878a2c on #faf7f2, ends 2.40:1 apart. */
+  --cc-depth-shallow: #458f4b;
+  --cc-depth-deep: #82231a;
   --cc-depth-text: #1a120b;
 
   /* --- Canvas Preview --- */
@@ -272,7 +280,10 @@
   --cc-grid-default: #2a2826;
   --cc-zero-datum: #b8a868;
   --cc-compass-color: #d5d0ca;
-  --cc-depth-shallow: #a89060;
+  /* Was tan -> salmon: 35 degrees of hue travel over the whole depth range, so a
+     survey drew as one flat salmon. Sage green -> brick in cave's muted register.
+     hue 92 -> 4, worst 3.96:1 on #0e0d0c, ends 2.36:1 apart, HSL L 0.62 -> 0.50. */
+  --cc-depth-shallow: #9cbe7e;
   --cc-depth-deep: #b85048;
   --cc-depth-text: #d5d0ca;
 
@@ -371,8 +382,10 @@
   --cc-grid-default: #44475a;
   --cc-zero-datum: #f1fa8c;
   --cc-compass-color: #f8f8f2;
-  --cc-depth-shallow: #8be9fd;
-  --cc-depth-deep: #ff5555;
+  /* Green -> red, Dracula's own green and red spread apart in lightness.
+     hue 133 -> 0, worst 3.92:1 on #282a36, ends 2.95:1 apart. */
+  --cc-depth-shallow: #9afdb0;
+  --cc-depth-deep: #f04a4a;
   --cc-depth-text: #f8f8f2;
 
   /* --- Canvas Preview --- */
@@ -470,8 +483,12 @@
   --cc-grid-default: #3e4451;
   --cc-zero-datum: #e5c07b;
   --cc-compass-color: #abb2bf;
-  --cc-depth-shallow: #56b6c2;
-  --cc-depth-deep: #e06c75;
+  /* Green -> red. The theme #357 item 8 was filed against: its #56b6c2 cyan sat
+     at hue 187, on the wrong side of the 180 line, so the shortest hue path ran
+     UP through indigo and bottomed out at #5f5ccd = 2.60:1 on this canvas.
+     hue 91 -> -5, worst 3.49:1 on #282c34, ends 2.67:1 apart. */
+  --cc-depth-shallow: #bcdd9e;
+  --cc-depth-deep: #d4545f;
   --cc-depth-text: #abb2bf;
 
   /* --- Canvas Preview --- */
@@ -721,8 +738,11 @@
   --cc-grid-default: #434c5e;
   --cc-zero-datum: #ebcb8b;
   --cc-compass-color: #d8dee9;
-  --cc-depth-shallow: #88c0d0;
-  --cc-depth-deep: #bf616a;
+  /* Green -> red. Nord's Aurora green + red, both lifted: this is the lightest
+     canvas of the dark set and the unlifted #bf616a was the ramp's worst case at
+     3.05:1. hue 88 -> 5, worst 3.40:1 on #2e3440, ends 2.76:1 apart. */
+  --cc-depth-shallow: #d6e4c6;
+  --cc-depth-deep: #c96a62;
   --cc-depth-text: #d8dee9;
 
   /* --- Canvas Preview --- */
@@ -820,8 +840,11 @@
   --cc-grid-default: #313244;
   --cc-zero-datum: #f9e2af;
   --cc-compass-color: #cdd6f4;
-  --cc-depth-shallow: #94e2d5;
-  --cc-depth-deep: #f38ba8;
+  /* Green -> red. Mocha's own Green; the deep end is pulled off Mocha's
+     pink-leaning Red #f38ba8 (hue 343) to a true red.
+     hue 112 -> -10, worst 4.51:1 on #1e1e2e, ends 2.79:1 apart. */
+  --cc-depth-shallow: #c4ecbe;
+  --cc-depth-deep: #dd5a70;
   --cc-depth-text: #cdd6f4;
 
   /* --- Canvas Preview --- */
@@ -919,8 +942,11 @@
   --cc-grid-default: #cccccc;
   --cc-zero-datum: #cc7700;
   --cc-compass-color: #000000;
-  --cc-depth-shallow: #0050a0;
-  --cc-depth-deep: #cc0000;
+  /* Green -> red, tuned for the e-ink white canvas: as on `light`, the ramp's
+     yellow midpoint is the worst case, so both ends run dark.
+     hue 125 -> 0, worst 3.44:1 at #8b9021 on #ffffff, ends 2.45:1 apart. */
+  --cc-depth-shallow: #38913f;
+  --cc-depth-deep: #8a0f0f;
   --cc-depth-text: #000000;
 
   /* --- Canvas Preview --- */

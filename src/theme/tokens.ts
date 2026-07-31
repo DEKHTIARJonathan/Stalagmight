@@ -49,8 +49,36 @@ export const themeTokens = {
     '--cc-grid-default': '#333366',
     '--cc-zero-datum': '#ffd700',
     '--cc-compass-color': '#ffffff',
-    '--cc-depth-shallow': '#4ecdc4',
-    '--cc-depth-deep': '#ff6b6b',
+    // DEPTH RAMP CONTRACT - applies to every theme that sets these two tokens.
+    //
+    // Green (shallower) -> red (deeper). Three things must hold, and the
+    // "depth gradient legibility" suite in __tests__/tokens.test.ts measures all
+    // three over the whole 41-step sweep, not just at the endpoints:
+    //
+    // 1. HUE PATH. `getDepthColor` interpolates along the SHORTEST HSL hue path,
+    //    so the endpoints alone do not determine what gets drawn. Shallow in
+    //    ~90..150 and deep in ~340..20 makes the short path run DOWNWARD through
+    //    yellow (60) and orange (30) - the readable depth scale. A shallow hue at
+    //    or above 180 (teal, cyan, spring green) flips it onto the upward path
+    //    through blue and magenta instead, which is unreadable AND is what put
+    //    one_dark at 2.60:1 (#357 item 8).
+    // 2. FLOOR. Worst contrast anywhere on the sweep >= 3:1 on the theme's own
+    //    `--cc-map-background` (WCAG's floor for a non-text graphical object).
+    // 3. LIGHTNESS TRAVEL. Green -> red is the classic confusable pair, so the
+    //    ramp must also carry its information in lightness or it collapses to a
+    //    flat band under deuteranopia / protanopia. Every theme therefore runs
+    //    LIGHT green -> DARKER red, monotonically. Two floors enforce it: >= 1.6:1
+    //    end-to-end contrast here, and CIEDE2000 separation of the CVD-simulated
+    //    endpoints in __tests__/depthRampLegibility.test.ts. Note HSL lightness is
+    //    a poor proxy on its own - yellow and blue at equal HSL L differ ~5x in
+    //    relative luminance - which is why both floors are perceptual, not HSL.
+    //
+    // This ramp: hue 134 -> 0, worst 4.46:1 on #1a1a2e, ends 2.79:1 apart,
+    // HSL L 0.79 -> 0.60, deuteranopia 22.96 / protanopia 33.84 dE2000.
+    // "solarized_light" and "catppuccin_latte" declare no map-viz tokens, so they
+    // inherit this ramp AND this canvas.
+    '--cc-depth-shallow': '#a8ecb8',
+    '--cc-depth-deep': '#e2504f',
     '--cc-depth-text': '#f5f5f5',
 
     // Canvas Preview (dark only)
@@ -145,11 +173,13 @@ export const themeTokens = {
     '--cc-grid-default': '#ddd0bb',
     '--cc-zero-datum': '#b8860b',
     '--cc-compass-color': '#1a120b',
-    // Navy -> brick, not the dark theme's teal -> coral: getDepthColor takes the
-    // shortest HSL hue path, and teal to coral runs through yellow at 1.14:1 on
-    // this canvas. See the fuller note in index.css.
-    '--cc-depth-shallow': '#14487f',
-    '--cc-depth-deep': '#a52a1a',
+    // Green -> red per the depth-ramp contract on `dark`, tuned for paper: on a
+    // light canvas the ramp's own yellow MIDPOINT is the worst case (it is the
+    // brightest thing on the sweep), so both ends run dark enough to hold the
+    // mid at 3.45:1. hue 125 -> 5, worst 3.45:1 at #878a2c on #faf7f2, ends
+    // 2.40:1 apart, HSL L 0.42 -> 0.31.
+    '--cc-depth-shallow': '#458f4b',
+    '--cc-depth-deep': '#82231a',
     '--cc-depth-text': '#1a120b',
 
     // Canvas Preview
@@ -244,7 +274,11 @@ export const themeTokens = {
     '--cc-grid-default': '#2a2826',
     '--cc-zero-datum': '#b8a868',
     '--cc-compass-color': '#d5d0ca',
-    '--cc-depth-shallow': '#a89060',
+    // Was tan #a89060 -> salmon #b85048: 35 degrees of hue travel across the whole
+    // depth range, so a survey drew as one flat salmon and depth was effectively
+    // not encoded at all. Sage green -> brick in cave's muted register instead:
+    // hue 92 -> 4, worst 3.96:1 on #0e0d0c, ends 2.36:1 apart, HSL L 0.62 -> 0.50.
+    '--cc-depth-shallow': '#9cbe7e',
     '--cc-depth-deep': '#b85048',
     '--cc-depth-text': '#d5d0ca',
 
@@ -340,8 +374,12 @@ export const themeTokens = {
     '--cc-grid-default': '#44475a',
     '--cc-zero-datum': '#f1fa8c',
     '--cc-compass-color': '#f8f8f2',
-    '--cc-depth-shallow': '#8be9fd',
-    '--cc-depth-deep': '#ff5555',
+    // Green -> red per the depth-ramp contract on `dark`. Dracula's own #50fa7b
+    // green and #ff5555 red, spread apart in lightness so the ramp survives
+    // deuteranopia. hue 133 -> 0, worst 3.92:1 on #282a36, ends 2.95:1 apart,
+    // HSL L 0.80 -> 0.62, deuteranopia 22.54 / protanopia 36.61 dE2000.
+    '--cc-depth-shallow': '#9afdb0',
+    '--cc-depth-deep': '#f04a4a',
     '--cc-depth-text': '#f8f8f2',
 
     // Canvas Preview
@@ -436,8 +474,15 @@ export const themeTokens = {
     '--cc-grid-default': '#3e4451',
     '--cc-zero-datum': '#e5c07b',
     '--cc-compass-color': '#abb2bf',
-    '--cc-depth-shallow': '#56b6c2',
-    '--cc-depth-deep': '#e06c75',
+    // Green -> red per the depth-ramp contract on `dark`. This is the theme #357
+    // item 8 was filed against: its #56b6c2 cyan sat at hue 187, on the wrong side
+    // of the 180 line, so the ramp ran up through indigo and bottomed out at
+    // #5f5ccd = 2.60:1. One Dark's own #98c379 green and #e06c75 red, spread
+    // apart in lightness so the ramp survives deuteranopia.
+    // hue 91 -> -5, worst 3.49:1 on #282c34, ends 2.67:1 apart, HSL L 0.74 -> 0.58,
+    // deuteranopia 20.86 / protanopia 33.35 dE2000.
+    '--cc-depth-shallow': '#bcdd9e',
+    '--cc-depth-deep': '#d4545f',
     '--cc-depth-text': '#abb2bf',
 
     // Canvas Preview
@@ -678,8 +723,15 @@ export const themeTokens = {
     '--cc-grid-default': '#434c5e',
     '--cc-zero-datum': '#ebcb8b',
     '--cc-compass-color': '#d8dee9',
-    '--cc-depth-shallow': '#88c0d0',
-    '--cc-depth-deep': '#bf616a',
+    // Green -> red per the depth-ramp contract on `dark`. Nord's Aurora green
+    // #a3be8c and red #bf616a, both lifted: this canvas is the lightest of the
+    // dark set, and the unlifted #bf616a was the whole ramp's worst case at
+    // 3.05:1 - clearing the floor by 1.8%. The pale shallow end is on-register
+    // for Nord (cf. Snow Storm) and is what buys the lightness travel.
+    // hue 88 -> 5, worst 3.40:1 on #2e3440, ends 2.76:1 apart, HSL L 0.84 -> 0.59,
+    // deuteranopia 23.49 / protanopia 29.64 dE2000.
+    '--cc-depth-shallow': '#d6e4c6',
+    '--cc-depth-deep': '#c96a62',
     '--cc-depth-text': '#d8dee9',
 
     // Canvas Preview
@@ -774,8 +826,13 @@ export const themeTokens = {
     '--cc-grid-default': '#313244',
     '--cc-zero-datum': '#f9e2af',
     '--cc-compass-color': '#cdd6f4',
-    '--cc-depth-shallow': '#94e2d5',
-    '--cc-depth-deep': '#f38ba8',
+    // Green -> red per the depth-ramp contract on `dark`. Mocha's own Green
+    // #a6e3a1 lightened; the deep end is pulled off Mocha's pink-leaning Red
+    // #f38ba8 (hue 343) to a true red so the ramp ends in red, not magenta.
+    // hue 112 -> -10, worst 4.51:1 on #1e1e2e, ends 2.79:1 apart, HSL L 0.84 -> 0.61,
+    // deuteranopia 21.64 / protanopia 34.13 dE2000.
+    '--cc-depth-shallow': '#c4ecbe',
+    '--cc-depth-deep': '#dd5a70',
     '--cc-depth-text': '#cdd6f4',
 
     // Canvas Preview
@@ -870,8 +927,12 @@ export const themeTokens = {
     '--cc-grid-default': '#cccccc',
     '--cc-zero-datum': '#cc7700',
     '--cc-compass-color': '#000000',
-    '--cc-depth-shallow': '#0050a0',
-    '--cc-depth-deep': '#cc0000',
+    // Green -> red per the depth-ramp contract on `dark`, tuned for the e-ink
+    // white canvas: as on `light`, the ramp's yellow midpoint is the worst case,
+    // so both ends run dark. hue 125 -> 0, worst 3.44:1 at #8b9021 on #ffffff,
+    // ends 2.45:1 apart, HSL L 0.39 -> 0.30.
+    '--cc-depth-shallow': '#38913f',
+    '--cc-depth-deep': '#8a0f0f',
     '--cc-depth-text': '#000000',
 
     // Canvas Preview

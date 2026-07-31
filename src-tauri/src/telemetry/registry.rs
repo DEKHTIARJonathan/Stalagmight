@@ -974,7 +974,11 @@ mod tests {
         //       finds its context stale after acquiring can hand back what IT took
         //       without surrendering a lock inherited from a sibling session on the
         //       same account: command.speleodb_release_lock_acquired_here = 697.
-        assert_eq!(EVENT_NAMES.len(), 697);
+        //   + 1 gas-only config write (#357 item 2), so Plan mode's gas controls
+        //       stop persisting a whole `Config` spread from a store snapshot that
+        //       could already be stale, and silently reverting another partial
+        //       save: command.update_gas_config = 698.
+        assert_eq!(EVENT_NAMES.len(), 698);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

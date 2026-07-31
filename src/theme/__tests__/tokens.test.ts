@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mapVizTokenNames, themeTokens } from '../tokens';
-import { getDepthColor } from '../../utils/colors';
+import { getDepthColor, hexToHSL } from '../../utils/colors';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -179,13 +179,29 @@ describe('depth gradient legibility', () => {
     | (typeof FULL_DARK_THEMES)[number]
     | 'dark';
 
-  function worstOnRamp(theme: FullTheme) {
+  /**
+   * Hue as a SIGNED offset from red, i.e. 355 reads as -5 rather than 355. Reds
+   * straddle the 0/360 seam, so raw hue makes a perfectly ordinary green -> red
+   * ramp look like it jumps backwards at the last step.
+   */
+  function signedHue(hex: string): number {
+    const hsl = hexToHSL(hex);
+    expect(hsl).not.toBeNull();
+    return hsl!.h > 180 ? hsl!.h - 360 : hsl!.h;
+  }
+
+  /**
+   * The whole drawn ramp, sampled the way the renderer draws it. Endpoint-only
+   * checks are the trap this suite exists for: `getDepthColor` interpolates along
+   * the shortest HSL hue path, so two perfectly good endpoints can be joined by a
+   * detour through blue and magenta that no endpoint assertion can see.
+   */
+  function sweepRamp(theme: FullTheme) {
     const tokens = themeTokens[theme];
     const canvas = tokens['--cc-map-background'];
     const shallow = tokens['--cc-depth-shallow'];
     const deep = tokens['--cc-depth-deep'];
-    let worst = Number.POSITIVE_INFINITY;
-    let at = '';
+    const samples: { color: string; ratio: number; hue: number }[] = [];
     for (let i = 0; i <= 40; i++) {
       // Depths are negative elevations, so minDepth is the DEEPER end. Passing them
       // the other way round makes getDepthColor's own clamp degenerate (min > max)
@@ -193,10 +209,24 @@ describe('depth gradient legibility', () => {
       // this into an endpoint check and misses the mid-ramp hue entirely.
       const color = getDepthColor(-40 + i, shallow, deep, -40, 0);
       expect(color).not.toBeNull();
-      const ratio = contrast(color!, canvas);
-      if (ratio < worst) {
-        worst = ratio;
-        at = color!;
+      samples.push({
+        color: color!,
+        ratio: contrast(color!, canvas),
+        hue: signedHue(color!),
+      });
+    }
+    // Sample 0 is the SHALLOW end (depth -40 is the shallowest elevation passed).
+    return { samples, canvas, shallow, deep };
+  }
+
+  function worstOnRamp(theme: FullTheme) {
+    const { samples, canvas } = sweepRamp(theme);
+    let worst = Number.POSITIVE_INFINITY;
+    let at = '';
+    for (const s of samples) {
+      if (s.ratio < worst) {
+        worst = s.ratio;
+        at = s.color;
       }
     }
     return { worst, at, canvas };
@@ -208,18 +238,38 @@ describe('depth gradient legibility', () => {
   const RAMP_FLOOR = 3;
 
   /**
-   * Themes already below the floor when this guard was added, with the value measured
-   * at the time. Pre-existing and out of scope for #332 (which is about the light
-   * canvas), but recorded so they cannot quietly get worse. `one_dark` interpolates
-   * indigo -> indigo through a mid-blue that sits close to its own dark canvas.
+   * Themes still below the floor, with the value measured when the exception was
+   * granted. Empty today: `one_dark` was the last entry and #357 item 8 took its
+   * shallow endpoint off the indigo arc (2.599 -> 4.38), so the entry was deleted
+   * exactly as the "once it clears the floor, remove it" assertion below demands.
    *
-   * Carried to 3dp on purpose. The assertion below is `worst >= known`, so every digit
-   * dropped here is slack the ratchet grants a real regression: at 2.59 the ramp could
-   * quietly decay to 2.590 before this failed. The sweep measures 2.5992.
+   * Carry any future value to 3dp on purpose. The assertion below is `worst >= known`,
+   * so every digit dropped here is slack the ratchet grants a real regression.
    */
-  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = { one_dark: 2.599 };
+  const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = {};
 
-  it.each([...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const])(
+  const ALL_FULL_THEMES = [...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const];
+
+  /**
+   * Shallow must be green and deep must be red (signed hue, so red straddles 0).
+   * The bands are wide on purpose: what they exist to forbid is a shallow endpoint
+   * at hue >= 180 - teal, cyan, spring green - because that is the side of the
+   * wheel from which the shortest path to red runs UP through blue and magenta.
+   */
+  const SHALLOW_HUE = { min: 85, max: 155 };
+  const DEEP_HUE = { min: -25, max: 25 };
+
+  /**
+   * End-to-end contrast between the two endpoints. Green -> red is the classic
+   * red/green confusable pair, so the ramp has to carry its information in
+   * luminance too, or it is a flat grey ramp under deuteranopia / protanopia.
+   * Note this is a LUMINANCE ratio, not HSL lightness: yellow and blue at equal
+   * HSL L differ about 5x in relative luminance, so equal-L endpoints prove
+   * nothing.
+   */
+  const MIN_END_SEPARATION = 1.6;
+
+  it.each(ALL_FULL_THEMES)(
     '%s keeps the whole depth ramp at 3:1 or better against its own canvas',
     (theme) => {
       const { worst, at, canvas } = worstOnRamp(theme);
@@ -243,6 +293,85 @@ describe('depth gradient legibility', () => {
       ).toBeLessThan(RAMP_FLOOR);
     }
   );
+
+  it.each(ALL_FULL_THEMES)('%s ramps from green (shallower) to red (deeper)', (theme) => {
+    const { shallow, deep } = sweepRamp(theme);
+    const hs = signedHue(shallow);
+    const hd = signedHue(deep);
+    expect(hs, `${theme}: shallow ${shallow} is at hue ${hs.toFixed(0)}, not green`).toBeGreaterThanOrEqual(SHALLOW_HUE.min);
+    expect(hs, `${theme}: shallow ${shallow} is at hue ${hs.toFixed(0)}, not green`).toBeLessThanOrEqual(SHALLOW_HUE.max);
+    expect(hd, `${theme}: deep ${deep} is at hue ${hd.toFixed(0)}, not red`).toBeGreaterThanOrEqual(DEEP_HUE.min);
+    expect(hd, `${theme}: deep ${deep} is at hue ${hd.toFixed(0)}, not red`).toBeLessThanOrEqual(DEEP_HUE.max);
+  });
+
+  it.each(ALL_FULL_THEMES)(
+    '%s traverses green -> yellow -> orange -> red, with no detour through blue',
+    (theme) => {
+      // THIS is the assertion the endpoints cannot make. Two green/red endpoints
+      // joined the wrong way round the wheel still satisfy the test above; they
+      // fail here, because the sweep's hue climbs towards blue (180+) instead of
+      // falling towards red.
+      const { samples } = sweepRamp(theme);
+      const hues = samples.map((s) => s.hue);
+      for (let i = 1; i < hues.length; i++) {
+        expect(
+          hues[i]!,
+          `${theme}: hue rose from ${hues[i - 1]!.toFixed(0)} to ${hues[i]!.toFixed(0)} at ` +
+            `${samples[i]!.color} - the ramp is taking the long way round through blue/magenta`
+        ).toBeLessThanOrEqual(hues[i - 1]! + 1e-9);
+      }
+      for (const s of samples) {
+        expect(
+          s.hue,
+          `${theme}: ${s.color} sits at hue ${s.hue.toFixed(0)}, outside the green -> red band`
+        ).toBeGreaterThanOrEqual(DEEP_HUE.min);
+        expect(
+          s.hue,
+          `${theme}: ${s.color} sits at hue ${s.hue.toFixed(0)}, outside the green -> red band`
+        ).toBeLessThanOrEqual(SHALLOW_HUE.max);
+      }
+    }
+  );
+
+  it.each(ALL_FULL_THEMES)('%s separates its two ends in luminance, not just hue', (theme) => {
+    const { shallow, deep } = sweepRamp(theme);
+    const separation = contrast(shallow, deep);
+    expect(
+      separation,
+      `${theme}: ${shallow} and ${deep} are only ${separation.toFixed(2)}:1 apart - a ` +
+        `red/green ramp this flat in luminance is unreadable under deuteranopia`
+    ).toBeGreaterThanOrEqual(MIN_END_SEPARATION);
+  });
+
+  it('would reject a ramp that takes the long way round the wheel', () => {
+    // Proves the traversal test above can fail, on the exact pairing `one_dark`
+    // shipped (#357 item 8): its #56b6c2 cyan sits at hue 187, just past the 180
+    // line, so the shortest path to the #e06c75 red at 355 climbs through indigo
+    // instead of falling through yellow. Both ENDPOINTS look defensible in
+    // isolation - which is the whole reason the sweep exists.
+    const canvas = themeTokens.one_dark['--cc-map-background'];
+    const samples: { hue: number; ratio: number }[] = [];
+    for (let i = 0; i <= 40; i++) {
+      const color = getDepthColor(-40 + i, '#56b6c2', '#e06c75', -40, 0)!;
+      samples.push({ hue: signedHue(color), ratio: contrast(color, canvas) });
+    }
+
+    // 1. The endpoint check alone does NOT catch it: the deep end is a perfectly
+    //    ordinary red. Only the shallow end is out of band, and a ramp built from
+    //    two in-band endpoints could take this same detour.
+    expect(signedHue('#e06c75')).toBeGreaterThanOrEqual(DEEP_HUE.min);
+    expect(signedHue('#e06c75')).toBeLessThanOrEqual(DEEP_HUE.max);
+
+    // 2. The traversal check does catch it, twice over. Signed hue puts the
+    //    blue/magenta arc at -173..-5, so the sweep both RISES (the band is meant
+    //    to fall, green -> red) and leaves the band on the blue side.
+    const rose = samples.some((s, i) => i > 0 && s.hue > samples[i - 1]!.hue + 1e-9);
+    expect(rose, 'the bad ramp should show a rising hue').toBe(true);
+    expect(Math.min(...samples.map((s) => s.hue))).toBeLessThan(DEEP_HUE.min);
+
+    // 3. And the mid it detours through is what breaks the contrast floor.
+    expect(Math.min(...samples.map((s) => s.ratio))).toBeLessThan(RAMP_FLOOR);
+  });
 
   it('would reject the dark endpoints on the light canvas', () => {
     // Proves the test above can fail: this is the exact pairing light shipped with

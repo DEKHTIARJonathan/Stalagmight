@@ -389,7 +389,9 @@ impl PanelsConfig {
     /// path did not - so a hand-edited, older, or otherwise degenerate config
     /// could load e.g. a 0-pixel width that the frontend then renders as a
     /// collapsed, invisible panel. Bounds mirror PANEL_SIZE_BOUNDS in
-    /// src/components/SingleSystemView/layoutConstants.ts.
+    /// src/components/SingleSystemView/layoutConstants.ts. The mirror is
+    /// enforced by src/test/__tests__/configBoundsMirror.test.ts, which parses
+    /// these clamp calls and compares against the TS constants.
     pub fn normalize(&mut self) {
         self.sections_panel_width = self.sections_panel_width.clamp(150, 400);
         self.detail_panel_width = self.detail_panel_width.clamp(200, 500);
@@ -904,9 +906,22 @@ pub enum AngleUnit {
     Gradians,
 }
 
+/// Map-drawing defaults.
+///
+/// `default_background` used to live here (#357 item 10). It was removed rather
+/// than wired: it had no renderer consumer anywhere in `src` or `src-tauri`, and
+/// wiring it back would have undone #332 / PR #361, which made the map canvas
+/// theme-driven off `--cc-map-background`. A single global background hex cannot
+/// be right for all ten themes at once - the shipped default was the dark
+/// `#1a1a2e`, so honouring it would have repainted every light theme's canvas
+/// dark, which is the exact bug #332 fixed.
+///
+/// Removal is load-path safe: neither `Config` nor `DisplayConfig` sets
+/// `deny_unknown_fields`, so a `default_background = "..."` line left in an
+/// existing `config.toml` is ignored. Seven `[display]` fixtures in `tests.rs`
+/// still carry that line and still parse, which is the regression coverage.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct DisplayConfig {
-    pub default_background: String,
     pub grid_color: String,
     /// Grid spacing in meters (e.g., 1, 5, 10, 25, 50)
     #[serde(default = "default_grid_spacing")]

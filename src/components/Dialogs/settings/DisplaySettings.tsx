@@ -86,9 +86,9 @@ export function DisplaySettings({
     { value: '50', label: t('settings.display.grid.spacingOptionOther', { value: 50 }) },
   ], [t]);
 
-  // --- Background ---
-  const handleBackgroundChange = createSelectHandler(onChange,
-    (v) => ({ display: { ...config.display, default_background: v } }));
+  // The "Background" colour picker that used to live here drove
+  // `display.default_background`, which no renderer ever read (#357 item 10). The
+  // field is gone; the map canvas comes from the theme's `--cc-map-background`.
 
   // --- Grid ---
   const handleGridColorChange = createSelectHandler(onChange,
@@ -155,26 +155,6 @@ export function DisplaySettings({
               {Math.round(uiScale * 100)}%
             </span>
           </div>
-        </SettingRow>
-      </SettingsSection>
-
-      <SettingsSection title={t('settings.display.sections.background')} data-testid="section-background">
-        <SettingRow
-          label={t('settings.display.background.label')}
-          helpText={t('settings.display.background.help')}
-          isChanged={isFieldChanged(changedFields, 'display.default_background')}
-          data-testid="setting-background-color"
-          onReset={() => onChange({ display: { ...config.display, default_background: displayDefaults.default_background } })}
-          isDefault={config.display.default_background === displayDefaults.default_background}
-        >
-          <input
-            type="color"
-            value={config.display.default_background}
-            onChange={(e) => handleBackgroundChange(e.target.value)}
-            className="w-12 h-8 rounded border border-border cursor-pointer"
-            aria-label={t('settings.display.background.aria')}
-            data-testid="input-background-color"
-          />
         </SettingRow>
       </SettingsSection>
 
