@@ -398,10 +398,15 @@ describe('depth gradient legibility', () => {
         `${theme} regressed: ${at} on ${canvas} is now ${worst.toFixed(2)}:1, was ${known}:1`
       ).toBeGreaterThanOrEqual(known);
       // ...and once it clears the floor, this entry is stale - delete it.
+      // Compared against THIS theme's floor, not the bare RAMP_FLOOR: a
+      // light-canvas theme is held to 2:1, so measuring 2.0-3.0 clears its own
+      // floor while still sitting below 3. Hard-coding 3 here would let such an
+      // entry survive forever, which defeats the whole point of a staleness
+      // check that exists to force exemptions back off the list.
       expect(
         worst,
-        `${theme} now clears ${RAMP_FLOOR}:1 (${worst.toFixed(2)}:1) - remove it from KNOWN_BELOW_FLOOR`
-      ).toBeLessThan(RAMP_FLOOR);
+        `${theme} now clears ${floor}:1 (${worst.toFixed(2)}:1) - remove it from KNOWN_BELOW_FLOOR`
+      ).toBeLessThan(floor);
     }
   );
 

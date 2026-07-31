@@ -74,13 +74,25 @@ export const lightDisplayDefaults: DisplayConfig = {
   // #357 item 17: the dark default is `#22d3ee`, a bright cyan that measures
   // 1.69:1 on light's `#faf7f2` - the ruler's measured path was all but invisible
   // even after resetting Display settings, because these defaults specified the
-  // same cyan. Dark green instead of a dark cyan: hue ~130 is the one region the
-  // light map palette leaves free. It clears the selection highlight (`#3a8a82`),
-  // the hover/zero-datum gold (`#b8860b`), the snap brick (`#c0392b`), both ends
-  // of the distance/gas overlay ramp (`#f4d03f` -> `#7d3c98`), and - unlike any
-  // violet - it sits entirely outside the light depth ramp's hue arc, which runs
-  // FORWARD from navy 211 through indigo and magenta to brick 7. 4.87:1, pinned
-  // by "light default measure color clears the floor" in __tests__/config.test.ts.
+  // same cyan. So light needs its own dark colour. Dark green, hue 130, 4.86:1
+  // on `#faf7f2`, pinned by "light default measure color clears the floor" in
+  // __tests__/config.test.ts. It clears the selection highlight (`#3a8a82`), the
+  // hover/zero-datum gold (`#b8860b`), the snap brick (`#c0392b`) and both ends
+  // of the distance/gas overlay ramp (`#f4d03f` -> `#7d3c98`).
+  //
+  // KNOWN COLLISION, deliberately NOT fixed here. This green was chosen when the
+  // light depth ramp ran navy 211 -> brick 7 the LONG way round, through indigo
+  // and magenta, which left hue 130 free. That ramp is gone: light now runs cyan
+  // 175 -> red 5, descending THROUGH green and yellow, so hue 130 is no longer
+  // free - it is mid-ramp. Measured separation from the nearest sample on the
+  // light ramp is 15.4 dE2000, so with Depth colouring on, the ruler is drawn in
+  // close to the same colour as mid-depth passage.
+  //
+  // Left alone because every colour on this branch is visually QA'd before it
+  // ships and this one has not been. If it is ever revisited, indigo near hue
+  // 224 (e.g. `#1e3a8a`) measured 9.69:1 on the canvas and 43.9 dE2000 from the
+  // ramp, while still clearing every overlay above (nearest: the gas deep end,
+  // 18.1) - but that is a proposal, not a decision.
   measure_path_color: '#157e27',
 };
 
