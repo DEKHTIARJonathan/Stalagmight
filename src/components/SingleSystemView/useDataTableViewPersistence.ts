@@ -91,17 +91,28 @@ export function useDataTableViewPersistence(
       : 'off';
     setAzimuthMode(azimuth);
     setInclinationMode(inclination);
-    setHiddenShotCols(new Set(panelsConfig.data_table_shot_hidden_columns));
-    setShotColumnOrder(panelsConfig.data_table_shot_column_order);
+    // `?? []` / `?? {}` ONCE, up here, because panelsConfig comes straight from
+    // get_config with no defaultConfig merge: the only guarantee is the Rust
+    // #[serde(default)]. A frontend running against a backend that predates these
+    // fields would otherwise take the whole data table down on open (spread and
+    // Object.entries both throw on undefined) instead of starting with no
+    // overrides. Guarded here rather than at each use because the guard was
+    // originally applied to the snapshot below but not to these setters, which
+    // seeded the state `undefined` and left the crash exactly where it was.
+    const shotHidden = panelsConfig.data_table_shot_hidden_columns ?? [];
+    const shotOrder = panelsConfig.data_table_shot_column_order ?? [];
     // The persisted list is authoritative: the backend fills a missing/legacy
     // config with the coordinate-column defaults (serde default), so an EMPTY
     // array genuinely means the user unhid every station column ("show all") -
     // it must not be re-defaulted, or that preference could never persist.
-    const stationHidden = panelsConfig.data_table_station_hidden_columns;
+    const stationHidden = panelsConfig.data_table_station_hidden_columns ?? [];
+    const stationOrder = panelsConfig.data_table_station_column_order ?? [];
+    const shotWidths = panelsConfig.data_table_shot_column_widths ?? {};
+    const stationWidths = panelsConfig.data_table_station_column_widths ?? {};
+    setHiddenShotCols(new Set(shotHidden));
+    setShotColumnOrder(shotOrder);
     setHiddenStationCols(new Set(stationHidden));
-    setStationColumnOrder(panelsConfig.data_table_station_column_order);
-    const shotWidths = panelsConfig.data_table_shot_column_widths;
-    const stationWidths = panelsConfig.data_table_station_column_widths;
+    setStationColumnOrder(stationOrder);
     setShotColumnWidths(shotWidths);
     setStationColumnWidths(stationWidths);
     // Both hidden lists are sorted here because the save snapshot below sorts them,
@@ -111,20 +122,19 @@ export function useDataTableViewPersistence(
     // data table scheduled a save of state the user never touched. Pre-existing (the
     // widths entries below always sorted via stableWidths); it stayed invisible until
     // a test asserted "no save yet" and lost the race to the 500ms debounce.
-    // `?? []` / `?? {}` because panelsConfig comes straight from get_config with no
-    // defaultConfig merge: the only guarantee is the Rust #[serde(default)]. A frontend
-    // running against a backend that predates these fields would otherwise take the
-    // whole data table down on open (spread and Object.entries both throw on
-    // undefined) instead of starting with no overrides.
+    // Built from the same guarded locals the setters above seeded the state with,
+    // for that same reason: reading the raw config here would record a legacy
+    // `undefined` order as `null` while the state holds `[]` - the same spurious
+    // save in a different disguise.
     lastSavedViewRef.current = JSON.stringify([
-      panelsConfig.data_table_shot_column_order,
-      [...(panelsConfig.data_table_shot_hidden_columns ?? [])].sort(),
+      shotOrder,
+      [...shotHidden].sort(),
       azimuth,
       inclination,
-      panelsConfig.data_table_station_column_order,
-      [...(stationHidden ?? [])].sort(),
-      stableWidths(shotWidths ?? {}),
-      stableWidths(stationWidths ?? {}),
+      stationOrder,
+      [...stationHidden].sort(),
+      stableWidths(shotWidths),
+      stableWidths(stationWidths),
     ]);
   }, [
     panelsConfig,
@@ -179,20 +189,33 @@ export function useDataTableViewPersistence(
       // edit would write the stale widths straight back over what was just
       // flushed. Publishing first makes the remount seed correct no matter
       // which side of the IPC it lands on.
+      //
+      // Deliberately `setState`, NOT the `setConfig` action: that one is the
+      // whole-config REPLACEMENT path (Settings > Advanced "Reload from disk")
+      // and so also nulls `stationsAdjusted` / `surveyDataAdjusted`, correctly,
+      // because a replaced config can carry different closure sigmas. Nothing
+      // under `[panels]` feeds the least-squares solve, so reached from HERE
+      // that invalidation is pure collateral damage on every resize / hide /
+      // angle-mode edit: MapCanvas clears an active ruler measurement whenever
+      // the adjusted geometry changes in `closureAdjusted` mode, and re-fetches
+      // and re-solves it while the selectors fall back to measured geometry - a
+      // visible jump, 500ms after a column resize.
       const config = useProjectStore.getState().config;
       if (config) {
-        useProjectStore.getState().setConfig({
-          ...config,
-          panels: {
-            ...config.panels,
-            data_table_shot_column_order: shotColumnOrder,
-            data_table_shot_hidden_columns: hidden,
-            data_table_azimuth_mode: azimuthMode,
-            data_table_inclination_mode: inclinationMode,
-            data_table_station_column_order: stationColumnOrder,
-            data_table_station_hidden_columns: stationHidden,
-            data_table_shot_column_widths: shotColumnWidths,
-            data_table_station_column_widths: stationColumnWidths,
+        useProjectStore.setState({
+          config: {
+            ...config,
+            panels: {
+              ...config.panels,
+              data_table_shot_column_order: shotColumnOrder,
+              data_table_shot_hidden_columns: hidden,
+              data_table_azimuth_mode: azimuthMode,
+              data_table_inclination_mode: inclinationMode,
+              data_table_station_column_order: stationColumnOrder,
+              data_table_station_hidden_columns: stationHidden,
+              data_table_shot_column_widths: shotColumnWidths,
+              data_table_station_column_widths: stationColumnWidths,
+            },
           },
         });
       }
