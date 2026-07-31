@@ -5189,8 +5189,12 @@ fn sanitize_push_snapshot_keeps_undo_but_never_redo_in_full_mode() {
         "redo is never uploaded, in ANY mode (clarification #1)"
     );
     // The rest of the sanitize still runs: local-only state goes, dirty bit clears.
+    // `collab_state` is deliberately NOT asserted on: schema v15 drops the table, so a
+    // freshly-created file has none to count. It stays on the strip LIST for the
+    // downgrade-and-return round trip (see `PUSH_SNAPSHOT_LOCAL_TABLES`), where the loop
+    // skips it as absent - which is exactly the behaviour that makes counting it here an
+    // error rather than a check.
     assert_eq!(count("display_settings"), 0);
-    assert_eq!(count("collab_state"), 0);
     let dirty: i64 = snap
         .query_row(
             "SELECT has_unpushed_edits FROM speleo_link WHERE id = 1",
