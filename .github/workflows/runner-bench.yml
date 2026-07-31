@@ -1,4 +1,4 @@
-# Runner benchmark — MANUAL ONLY.
+# Runner benchmark - MANUAL ONLY.
 #
 # Mirrors ci.yml's `check` job step-for-step, but lets you pin it at a specific
 # runner so the same work can be timed on each machine. Nothing here triggers
@@ -7,7 +7,7 @@
 #
 # Why it exists: hekatrine (Xeon E3-1270 v6, 4C/8T @3.8-4.2GHz, 2x NVMe RAID-0,
 # 12G/600% cgroup slice) was added as a second self-hosted runner. Before giving
-# it the shared `ubuntu-latest-local` label — which would route real CI at it —
+# it the shared `ubuntu-latest-local` label - which would route real CI at it -
 # we want a like-for-like number against the NUC's existing baseline
 # (check ~9 min).
 #
@@ -18,7 +18,7 @@
 #
 # NOTE: `ubuntu-latest-local` is currently served ONLY by i5-nuc-runner. If
 # hekatrine is later given that label, this option becomes "whichever is idle"
-# and stops being a clean per-machine measurement — use the `hekatrine` option
+# and stops being a clean per-machine measurement - use the `hekatrine` option
 # for that machine specifically.
 
 name: Runner benchmark (manual)
@@ -35,7 +35,7 @@ on:
           - ubuntu-latest-local
           - ubuntu-latest
       skip_cargo_test:
-        description: Skip `cargo test` (fast pass — toolchain + node only)
+        description: Skip `cargo test` (fast pass - toolchain + node only)
         type: boolean
         default: false
 
@@ -75,7 +75,7 @@ jobs:
       - name: Machine under test
         run: |
           {
-            echo "### Runner benchmark — \`${{ inputs.target }}\`"
+            echo "### Runner benchmark - \`${{ inputs.target }}\`"
             echo
             echo "| | |"
             echo "|---|---|"
@@ -143,7 +143,7 @@ jobs:
       - name: mark node phase done
         run: echo "T_NODE=$(date +%s)" >> "$GITHUB_ENV"
 
-      # Self-hosted only — hosted has no sccache. `|| true`: observability must
+      # Self-hosted only - hosted has no sccache. `|| true`: observability must
       # never fail the run.
       - name: sccache zero-stats (self-hosted only)
         if: runner.environment == 'self-hosted'
