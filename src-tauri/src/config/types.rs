@@ -1870,11 +1870,34 @@ impl Config {
     /// ahead of the data, which on a crash leaves a correctly-named file full of
     /// zeroes - i.e. exactly the silent reset above, reintroduced.
     fn write_atomically(path: &Path, contents: &str) -> Result<()> {
-        // `with_extension` replaces `.toml`, so `config.toml` -> `config.toml.tmp`.
+        // The temp name is UNIQUE PER WRITE, and that is load-bearing rather than
+        // tidiness. A fixed `config.toml.tmp` is itself a shared resource: two
+        // writers racing on the same config directory both create that one path,
+        // and the first to finish renames it away, leaving the second's rename to
+        // fail with ENOENT over a config it believed it had written.
+        //
+        // `AppState::config_write_lock` does NOT cover this. That lock is per
+        // AppState INSTANCE, and the collision is between processes and between
+        // independent instances: every tree on this machine shares one app-data
+        // directory, so two running copies of Stalagmight write the same
+        // `config.toml`. Caught by the full Rust suite, where the failure is a
+        // real "Failed to replace config file: No such file or directory" from
+        // unrelated tests saving concurrently - master is green, so this was
+        // introduced with the atomic write itself.
+        //
+        // pid plus a monotonic counter distinguishes both axes: the pid separates
+        // processes, the counter separates concurrent writers inside one process.
+        static WRITE_SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let unique = format!(
+            "{}.{}",
+            std::process::id(),
+            WRITE_SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
+        // `with_extension` replaces `.toml`, so this is `config.toml.<pid>.<n>.tmp`.
         // `sqlite::repair` already sweeps `*.tmp` next to a project, and this one is
         // removed on every failure path below, so a crash leaves at most one stale
-        // sibling that the next successful save overwrites.
-        let temp_path = path.with_extension("toml.tmp");
+        // sibling per interrupted write.
+        let temp_path = path.with_extension(format!("toml.{unique}.tmp"));
 
         let write = || -> Result<()> {
             let mut file = std::fs::File::create(&temp_path)

@@ -3048,37 +3048,55 @@ fn test_save_to_path_leaves_no_temp_file_sibling() {
 
 #[test]
 fn test_save_to_path_leaves_destination_untouched_when_write_cannot_complete() {
-    // Guard E: simulate a write that cannot complete by pre-occupying the
-    // sibling temp path with a directory, so `File::create` fails with
-    // "Is a directory" before a single byte of the destination is touched -
-    // this is EISDIR on both macOS and Linux, no root required. The
-    // destination must be left exactly as the previous successful save left
-    // it, which is the whole point of writing to a sibling and renaming
-    // rather than truncating `config.toml` directly.
-    use tempfile::tempdir;
-    let dir = tempdir().unwrap();
-    let path = dir.path().join("config.toml");
+    // Guard E: simulate a write that cannot complete, and assert the destination
+    // is left exactly as the previous successful save left it - the whole point
+    // of writing to a sibling and renaming rather than truncating `config.toml`.
+    //
+    // The failure is forced by making the config DIRECTORY unwritable, so
+    // `File::create` fails with EACCES before a byte of the destination is
+    // touched. An earlier version pre-occupied `config.toml.tmp` with a directory
+    // to get EISDIR, which was simpler but depended on the temp name being
+    // predictable - and it is deliberately NOT: `write_atomically` makes it unique
+    // per write (pid plus a counter) so two writers on one config directory cannot
+    // clobber each other's temp file. Pinning the old fixed name here would have
+    // quietly re-asserted the shared-resource bug as the spec.
+    //
+    // Unix-only: it turns on POSIX permission bits, and the Windows ACL equivalent
+    // is not the same test. The behaviour under guard is platform-independent, so
+    // covering it on one family is enough.
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        use tempfile::tempdir;
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("config.toml");
 
-    let mut old = Config::default();
-    old.general.undo_history_limit = 11;
-    old.save_to_path(&path).unwrap();
+        let mut old = Config::default();
+        old.general.undo_history_limit = 11;
+        old.save_to_path(&path).unwrap();
 
-    let temp_path = path.with_extension("toml.tmp");
-    std::fs::create_dir(&temp_path).unwrap();
+        // r-xr-xr-x: readable, so the survivor can still be loaded below, but no
+        // new file may be created in it. Not effective as root, which is why this
+        // is not run in a container as root.
+        let original = std::fs::metadata(dir.path()).unwrap().permissions();
+        std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o555)).unwrap();
 
-    let mut new = Config::default();
-    new.general.undo_history_limit = 99;
-    let result = new.save_to_path(&path);
-    assert!(
-        result.is_err(),
-        "a temp file that cannot be created must fail the save"
-    );
+        let mut new = Config::default();
+        new.general.undo_history_limit = 99;
+        let result = new.save_to_path(&path);
 
-    let survivor = Config::load_from_path(&path).unwrap();
-    assert_eq!(
-        survivor.general.undo_history_limit, 11,
-        "the destination must be untouched by a save that could not complete"
-    );
+        // Restore BEFORE asserting, so a failed assertion cannot leave the
+        // TempDir undeletable and take unrelated tests down with it.
+        std::fs::set_permissions(dir.path(), original).unwrap();
 
-    std::fs::remove_dir(&temp_path).unwrap();
+        assert!(
+            result.is_err(),
+            "a temp file that cannot be created must fail the save"
+        );
+        let survivor = Config::load_from_path(&path).unwrap();
+        assert_eq!(
+            survivor.general.undo_history_limit, 11,
+            "the destination must be untouched by a save that could not complete"
+        );
+    }
 }
