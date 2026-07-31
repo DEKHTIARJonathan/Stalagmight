@@ -74,7 +74,9 @@ function mapCanvasFor(theme: string): string {
   return tokens?.['--cc-map-background'] ?? themeTokens.dark['--cc-map-background'];
 }
 
-const ALL_THEME_NAMES = Object.keys(themeTokens) as (keyof typeof themeTokens)[];
+type ThemeName = keyof typeof themeTokens;
+
+const ALL_THEME_NAMES = Object.keys(themeTokens) as ThemeName[];
 
 const cssDarkTokens = extractTokens(extractBlock(cssSource, ':root,'));
 const cssLightTokens = extractTokens(extractBlock(cssSource, '[data-theme="light"]'));
@@ -93,7 +95,15 @@ const FULL_DARK_THEMES = ['cave', 'dracula', 'one_dark', 'nord', 'catppuccin_moc
 /** Light themes only override UI chrome + controls (no map viz tokens). */
 const LIGHT_THEMES = ['solarized_light', 'catppuccin_latte'] as const;
 
-/** Light themes with full token sets (including map visualization overrides). */
+/**
+ * Light themes with full token sets (including map visualization overrides).
+ *
+ * This list is about the token SHAPE of a light-CHROME theme, and it is only
+ * ever used by the shape checks below. It is deliberately NOT the input to any
+ * perceptual rule: a theme can have light chrome and still paint on the dark
+ * `:root` canvas. Anything that depends on the canvas measures the canvas -
+ * see `rampFloorFor`.
+ */
 const FULL_LIGHT_THEMES = ['kaleido_eink', 'light'] as const;
 
 const cssTokensByTheme: Record<string, Record<string, string>> = {
@@ -187,11 +197,23 @@ describe('theme tokens', () => {
  */
 describe('depth gradient legibility', () => {
   /** Worst contrast anywhere along the drawn ramp, plus where it occurs. */
-  /** Themes that declare their own map-visualization tokens. */
-  type FullTheme =
-    | (typeof FULL_LIGHT_THEMES)[number]
-    | (typeof FULL_DARK_THEMES)[number]
-    | 'dark';
+  /**
+   * Themes that declare their own map-visualization tokens, derived from the
+   * tokens themselves rather than hand-listed. A hand-maintained union is a
+   * silent coverage hole: a theme added to tokens.ts and forgotten here would
+   * get NONE of the three properties below (contrast floor, endpoint hue bands,
+   * hue traversal) and nothing would fail. Declaring `--cc-map-background` is
+   * the marker because the map-viz tokens are all-or-nothing - the
+   * "only override UI chrome and controls" test above asserts a chrome-only
+   * theme is missing exactly `mapVizTokenNames`, never a subset of it.
+   *
+   * The same derivation runs at the type level so `KNOWN_BELOW_FLOOR` still
+   * cannot name a theme without a ramp, and so `themeTokens[theme]` keeps its
+   * literal types instead of degrading to `Record<string, string>`.
+   */
+  type FullTheme = {
+    [K in ThemeName]: (typeof themeTokens)[K] extends { '--cc-map-background': string } ? K : never;
+  }[ThemeName];
 
   /**
    * Hue as a SIGNED offset from red, i.e. 355 reads as -5 rather than 355. Reds
@@ -273,11 +295,28 @@ describe('depth gradient legibility', () => {
    */
   const RAMP_FLOOR_LIGHT_CANVAS = 2;
 
+  /**
+   * Whether `theme`'s ramp is drawn on a light canvas, MEASURED off that
+   * canvas rather than read off a list of light-chrome themes.
+   *
+   * The distinction is load-bearing: the 2:1 trade above exists because of the
+   * canvas the ramp is painted on, so selecting by chrome would hold a future
+   * light-chrome/dark-canvas theme to 2:1 while it draws on `#1a1a2e` - a real
+   * accessibility regression with no failing test. `solarized_light` and
+   * `catppuccin_latte` are exactly that shape today (light chrome, inherited
+   * dark canvas); they are out of scope here only because they declare no ramp.
+   *
+   * `> 0.5` relative luminance is the same rule `isLightCanvasTheme`
+   * (src/utils/colors.ts) applies to pick a section palette, and the rule
+   * `LIGHT_CANVAS_THEMES` in src/types/config.ts is pinned against. Recomputed
+   * from this file's own helpers rather than imported, so this stays an
+   * independent check instead of re-asserting the module's own definition.
+   */
+  const isLightCanvas = (theme: FullTheme): boolean => luminance(mapCanvasFor(theme)) > 0.5;
+
   /** The floor that applies to `theme`, by the canvas its ramp is drawn on. */
   const rampFloorFor = (theme: FullTheme): number =>
-    (FULL_LIGHT_THEMES as readonly string[]).includes(theme)
-      ? RAMP_FLOOR_LIGHT_CANVAS
-      : RAMP_FLOOR;
+    isLightCanvas(theme) ? RAMP_FLOOR_LIGHT_CANVAS : RAMP_FLOOR;
 
   /**
    * Themes still below the floor, with the value measured when the exception was
@@ -290,7 +329,9 @@ describe('depth gradient legibility', () => {
    */
   const KNOWN_BELOW_FLOOR: Partial<Record<FullTheme, number>> = {};
 
-  const ALL_FULL_THEMES = [...FULL_LIGHT_THEMES, ...FULL_DARK_THEMES, 'dark' as const];
+  const ALL_FULL_THEMES = ALL_THEME_NAMES.filter(
+    (name): name is FullTheme => '--cc-map-background' in themeTokens[name]
+  );
 
   /**
    * Deep must be red (signed hue, so red straddles 0); shallow must sit anywhere
@@ -323,6 +364,20 @@ describe('depth gradient legibility', () => {
    * nothing.
    */
   const MIN_END_SEPARATION = 1.6;
+
+  it('grants the 2:1 light-canvas floor to exactly light and kaleido_eink', () => {
+    // Pins the measured predicate to the set it is expected to produce TODAY, in
+    // both directions. `rampFloorFor` is deliberately derived, so without this a
+    // theme joining or leaving the light-canvas set would silently change which
+    // floor it is judged against - the 2:1 trade was granted per-canvas by a
+    // human and a new theme inheriting it is a decision, not a detail.
+    // These are the same two names as `LIGHT_CANVAS_THEMES` in src/types/config.ts.
+    expect(ALL_FULL_THEMES.filter(isLightCanvas).slice().sort()).toEqual(['kaleido_eink', 'light']);
+    expect(ALL_FULL_THEMES.filter((t) => rampFloorFor(t) === RAMP_FLOOR_LIGHT_CANVAS).slice().sort()).toEqual([
+      'kaleido_eink',
+      'light',
+    ]);
+  });
 
   it.each(ALL_FULL_THEMES)(
     '%s keeps the whole depth ramp above the contrast floor for its own canvas',

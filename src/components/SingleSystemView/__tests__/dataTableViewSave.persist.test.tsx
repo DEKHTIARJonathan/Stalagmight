@@ -13,8 +13,10 @@
  * an error toast alongside the existing rollback.
  *
  * Rendered at the full-component tier (real DataTable, real projectStore /
- * uiStore, mocked `invokeIpc`) because the debounce state lives inline in the
- * component, not in an extractable hook. `sections={[]}` keeps the grid itself
+ * uiStore, mocked `invokeIpc`) even though the debounce state has since been
+ * extracted into `useDataTableViewPersistence`: what these guards exercise is
+ * the mount/unmount lifecycle and the store round trip around that hook, and
+ * DataTable is what owns the view state the hook reads. `sections={[]}` keeps the grid itself
  * (SpreadsheetGrid) out of the render - these guards only exercise the toolbar's
  * column-visibility checkbox, which is enough to change the view snapshot and
  * schedule a save. NOT covered at this tier: actual column-resize drag

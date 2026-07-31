@@ -257,10 +257,15 @@ describe('useColumnWidths', () => {
   });
 
   it('commitWidths KEEPS the width of a declared-but-hidden column', () => {
-    // The prune has to run against every declared column, not the visible ones:
-    // hiding a column and then resizing another must not throw away the hidden
-    // column's width, or it comes back at the default when re-shown. This is why
-    // SpreadsheetGrid passes `orderedKeys` rather than `visibleColumns`.
+    // Documents the contract from the hook's side: a key inside `declaredKeys`
+    // survives a commit whether or not the grid is currently showing it.
+    //
+    // It CANNOT pin the real property, and is kept only as documentation. The
+    // hook has no notion of "hidden" - it just trusts `declaredKeys` - so this
+    // passes with the orphan prune removed outright, and the choice it is
+    // really about (SpreadsheetGrid passing `orderedKeys` rather than the
+    // visible keys) is invisible at this tier. That choice is pinned by
+    // __tests__/spreadsheetGridColumnWidths.test.tsx, which renders the grid.
     const onChange = vi.fn();
     const { result } = renderHook(() =>
       useColumnWidths({ a: 120, hiddenCol: 250 }, onChange, ['a', 'hiddenCol']),

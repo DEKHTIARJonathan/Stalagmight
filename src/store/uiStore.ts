@@ -559,7 +559,6 @@ interface UIStore {
   gridSpacing: number;
   toggleDisplay: (key: DisplayToggleKey) => void;
   setGridSpacing: (spacing: number) => void;
-  loadDisplaySettings: () => Promise<void>;
   saveDisplaySetting: (key: DisplayToggleKey, value: boolean) => Promise<void>;
   resetDisplaySettings: () => void;
   /** Apply display settings from backend (merges with existing state using ??) */
@@ -1497,8 +1496,25 @@ export const useUIStore = create<UIStore>((set) => ({
     // exactly when the user selected or DEselected depth itself - never when
     // another overlay took it over. toggleDisplay still owns that write; the
     // set() below is what makes the whole flag set correct regardless.
-    if ((mode === 'depth' || mode === 'section') && s.showDepthGradient !== (mode === 'depth')) {
-      s.toggleDisplay('showDepthGradient');
+    //
+    // The runtime flag is NOT a stand-in for the saved one, and the two diverge in
+    // exactly the state this branch has to handle: while distance/issues suppresses
+    // depth, `showDepthGradient` already reads false while the saved value is still
+    // true. Picking 'None' from there is the user DEselecting depth (that is what
+    // 'None' means - no overlay, suppressed or not), so it must reach the disk;
+    // gating on the runtime flag alone made it a no-op and depth came back next
+    // session. toggleDisplay can't do it - there is no runtime flip left to make -
+    // so persist directly, with the toggle's telemetry so the pairing above holds.
+    // The write is idempotent when the saved value was already false; only this one
+    // transition can even reach it.
+    if (mode === 'depth' || mode === 'section') {
+      const wantDepth = mode === 'depth';
+      if (s.showDepthGradient !== wantDepth) {
+        s.toggleDisplay('showDepthGradient');
+      } else if (!wantDepth && (s.showDistanceGradient || s.showIssueSeverity)) {
+        trackAction('toggle.showDepthGradient');
+        void s.saveDisplaySetting('showDepthGradient', false);
+      }
     }
     set(colorModeFlags(mode));
   },
@@ -1567,11 +1583,11 @@ export const useUIStore = create<UIStore>((set) => ({
     set({
       appMode: mode,
       geometryMode: 'closureAdjusted',
-      showDepthGradient: false,
-      showDistanceGradient: false,
-      showIssueSeverity: false,
-      distanceGradientOrigin: null,
-      distanceField: null,
+      // Through colorModeFlags like every other overlay writer, so the "ONE place
+      // that maps a mode back onto the three booleans" claim on it stays true and a
+      // fourth overlay can never be added here and forgotten. 'section' = no
+      // overlay, and it clears the distance cache the same way.
+      ...colorModeFlags('section'),
       ...MEASURE_CLEARED,
     });
     // Both Plan (setup sidebar) and Export (export stub) render in the right Dock -
@@ -1639,61 +1655,6 @@ export const useUIStore = create<UIStore>((set) => ({
     ).catch((e) => {
       console.warn('Failed to save grid spacing:', e);
     });
-  },
-  loadDisplaySettings: async () => {
-    try {
-      const settings = await invokeIpc<Record<string, string>>('load_display_settings', undefined, {
-        purpose: 'load display settings for UI',
-      });
-      const displayState: Partial<Record<DisplayToggleKey, boolean>> = {};
-      let gridSpacing: number | undefined;
-      let geometryMode: GeometryMode | undefined;
-      for (const [key, value] of Object.entries(settings)) {
-        if (key.startsWith('show')) {
-          displayState[key as DisplayToggleKey] = value === 'true';
-        } else if (key === 'gridSpacing') {
-          const parsed = parseFloat(value);
-          if (!isNaN(parsed) && parsed > 0) {
-            gridSpacing = parsed;
-          }
-        } else if (key === 'geometryMode') {
-          // "Remember last used": restore the persisted geometry mode, ignoring
-          // any unrecognized value.
-          if (value === 'measured' || value === 'closureAdjusted') {
-            geometryMode = value;
-          }
-        }
-      }
-      // Migration fallback: if we loaded some settings but showShots wasn't among them,
-      // default it to true (older saved settings won't have this newer key)
-      const hasLoadedSettings =
-        Object.keys(displayState).length > 0 || gridSpacing !== undefined || geometryMode !== undefined;
-      if (hasLoadedSettings && displayState.showShots === undefined) {
-        displayState.showShots = true;
-      }
-      // geometryMode is per-project ("remember last used"): restore the saved value
-      // or reset to the measured default. Applied unconditionally so a project with
-      // no saved preference (or no display settings at all) doesn't inherit the
-      // previous project's mode.
-      set({ geometryMode: geometryMode ?? GEOMETRY_MODE_DEFAULT });
-      if (hasLoadedSettings) {
-        set({
-          ...displayState,
-          ...(gridSpacing !== undefined ? { gridSpacing } : {}),
-          // Same hazard as applyDisplaySettings: the persisted depth flag must
-          // never be written back on its own while a runtime-only overlay
-          // (distance / issues) is on, or the pair reads as that other overlay and
-          // the Display menu can no longer reach depth. Only the true case can
-          // create the conflict, so a saved depth=false leaves the runtime
-          // overlays exactly as they were.
-          ...(displayState.showDepthGradient ? colorModeFlags('depth') : {}),
-        });
-        trackDisplayState(useUIStore.getState());
-      }
-    } catch (e) {
-      // No project open or other error - use defaults
-      console.warn('Failed to load display settings:', e);
-    }
   },
   saveDisplaySetting: async (key, value) => {
     try {

@@ -3500,9 +3500,23 @@ export async function setupTauriMocks(page: Page): Promise<void> {
           }
 
           case 'reload_config': {
-            // Return saved config if available (for testing persistence)
+            // Return saved config if available (for testing persistence),
+            // overlaying the same two stores get_config does. Without the
+            // overlay, Settings > Advanced "Reload from disk" handed back a
+            // config with neither the view state stored via
+            // update_data_table_view nor the `[gas]` block stored via
+            // update_gas_config - so a reload discarded state the mock
+            // otherwise treats as persisted, and a reload-after-save test would
+            // have asserted against the wrong baseline.
             if (savedConfig) {
-              return savedConfig;
+              return {
+                ...savedConfig,
+                panels: {
+                  ...((savedConfig.panels as Record<string, unknown> | undefined) ?? {}),
+                  ...mockDataTableView,
+                },
+                ...(mockGasConfig ? { gas: mockGasConfig } : {}),
+              };
             }
             // Return mock config with any test overrides applied
             // This allows tests to modify config values via __MOCK_SET_CONFIG_OVERRIDES__
@@ -3712,6 +3726,10 @@ export async function setupTauriMocks(page: Page): Promise<void> {
                 preset: 'default',
                 overrides: {},
               },
+              // Spread LAST so a stored `[gas]` block wins over the literal's
+              // own, exactly as in get_config. (`panels` already picks up
+              // mockDataTableView above.)
+              ...(mockGasConfig ? { gas: mockGasConfig } : {}),
             };
             return baseConfig;
           }

@@ -169,6 +169,33 @@ export function useDataTableViewPersistence(
       // retries it - the column silently returns to its old width on next launch.
       const previouslySaved = lastSavedViewRef.current;
       lastSavedViewRef.current = snapshot;
+      // Publish the same values into the IN-MEMORY config before the IPC, not
+      // only in the loadConfig re-sync below (#357 item 4, the reopen half).
+      // The unmount flush races the user reopening the data table: a fresh
+      // mount SEEDS from `config.panels`, and until the re-sync lands that
+      // still holds the pre-save values. The new mount would pin those stale
+      // values as "last saved", then ignore the fresher config when it arrives
+      // moments later (the seed is one-shot and never re-runs), and the next
+      // edit would write the stale widths straight back over what was just
+      // flushed. Publishing first makes the remount seed correct no matter
+      // which side of the IPC it lands on.
+      const config = useProjectStore.getState().config;
+      if (config) {
+        useProjectStore.getState().setConfig({
+          ...config,
+          panels: {
+            ...config.panels,
+            data_table_shot_column_order: shotColumnOrder,
+            data_table_shot_hidden_columns: hidden,
+            data_table_azimuth_mode: azimuthMode,
+            data_table_inclination_mode: inclinationMode,
+            data_table_station_column_order: stationColumnOrder,
+            data_table_station_hidden_columns: stationHidden,
+            data_table_shot_column_widths: shotColumnWidths,
+            data_table_station_column_widths: stationColumnWidths,
+          },
+        });
+      }
       void invokeIpc(
         'update_data_table_view',
         {
@@ -189,6 +216,11 @@ export function useDataTableViewPersistence(
         .catch((e) => {
           if (lastSavedViewRef.current === snapshot) {
             lastSavedViewRef.current = previouslySaved;
+            // Undo the optimistic publish from DISK - the same re-sync the
+            // success path does. Without it a remount would seed from values
+            // that never reached disk and treat them as saved, which is exactly
+            // the retry the rollback above exists to preserve (#357 item 5).
+            void useProjectStore.getState().loadConfig();
           }
           console.error('Failed to save data-table view state:', e);
           // #357 item 5: the rollback above makes a later change RETRY, but on its

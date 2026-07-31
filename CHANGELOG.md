@@ -21,6 +21,10 @@ Update this file every time a new version is tagged.
 
 - **The map's color overlay could get stuck on Distance** - depth coloring is a saved preference while the distance overlay is not, so loading a project or restoring a SpeleoDB revision while distance was on wrote the saved depth setting back in underneath it. With both set, the overlay read as Distance, and picking Depth - or turning coloring off entirely - silently did nothing. Selecting a color mode now always lands on the one you picked, and loading a project no longer leaves the previous project's distance overlay, or the station it was measuring from, behind ([#34](https://github.com/Stalagmight/Stalagmight/issues/34))
 
+- **Turning map coloring off now sticks** - if you switched to Distance or issue-severity coloring while depth coloring was your saved preference and then chose None, depth quietly came back on the next launch. Whether None sticks no longer depends on the route you took to it.
+
+- **Reopening the data table could undo a column resize** - closing the table right after resizing a column and reopening it before the save had finished landing could resurrect the previous widths and write them back over the new ones.
+
 #### Packaging
 
 - **Every IPC call silently fell back to a slower transport for the rest of the session** - the production build's security policy did not list Tauri's own IPC origin, so the very first call to the backend failed its check and the app dropped to a slower fallback path for every call after. The policy now allows it, and two directives that had been left open with no safe default are now explicitly locked down as well.
