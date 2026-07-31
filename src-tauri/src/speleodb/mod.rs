@@ -139,6 +139,15 @@ pub(crate) enum SpeleoDbError {
     /// update require one). Fails closed (Fatal).
     #[error("no open SpeleoDB project")]
     NoRemoteProject,
+    /// The open project changed - or went away - between the moment Start Editing
+    /// read it and the moment it was ready to open the edit gate (a delete, close,
+    /// project switch or logout landed inside the network window). Nothing was
+    /// committed: the gate stayed shut and no acquisition was recorded. Retrying in
+    /// the new world does the right thing, whatever that is.
+    #[error(
+        "the project changed while Start Editing was in flight; nothing was changed - try again"
+    )]
+    SessionMoved,
     /// A re-pull would have overwritten a local copy that still holds edits the
     /// server has never seen. REFUSED rather than performed: un-pushed local work
     /// exists in no git anywhere, so replacing it is unrecoverable, and the user

@@ -36,7 +36,8 @@ replacement for, cave survey training.
 - **Import** - mNemo `.dmp` (raw survey, versions 2-5), Ariane `.tml`/`.tmlu`,
   Compass `.mak`/`.dat` projects, Walls (experimental), and GPX (waypoints,
   tracks, routes).
-- **Export** - map images (`.svg`, `.png`, `.pdf`) plus `.tml`, `.csv`, `.json`
+- **Export** - map images (`.svg`, `.png`, `.pdf`) plus Ariane `.tml`/`.tmlu`,
+  `.csv`, `.json`
 - **Map** - survey lines and stations rendered with [MapLibre](https://maplibre.org/)
   over satellite imagery, with snapping, measurement, a distance-gradient overlay,
   and hover/selection highlighting.
@@ -45,8 +46,6 @@ replacement for, cave survey training.
 - **Loop closure** - least-squares loop adjustment to distribute survey error.
 - **Plan** - a dive/gas planning mode: gas-weighted reachability over the survey
   graph, with turnaround and stage-drop points along the chosen route.
-- **Collaboration** - an Ariane-compatible collab mode (sibling `.tml`,
-  save-both, reconcile/diff). See [docs/collaboration.md](docs/collaboration.md).
 - **Safe by default** - atomic saves, auto-save, dirty-state guards, and a
   recent-projects list.
 

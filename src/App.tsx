@@ -19,7 +19,7 @@ import GlobalView from './components/GlobalView/GlobalView';
 import SingleSystemView from './components/SingleSystemView/SingleSystemView';
 import SplashScreen from './components/SplashScreen/SplashScreen';
 import OnboardingOverlay from './components/Onboarding/OnboardingOverlay';
-import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, CollabReviewDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog } from './components/Dialogs';
+import { ImportDialog, ExportDialog, NewProjectDialog, NewProjectForImportDialog, DmpSelectionDialog, DmpNewImportDialog, ZeroDatumSelectionDialog, ZeroDatumConfigDialog, TmlImportDialog, CompassImportDialog, WallsImportDialog, GpxSelectionDialog, GpxPlacementDialog, ConfirmDialog, ReverseSectionDialog, DeleteShotChoiceDialog, BulkDeleteDialog, MergeDialog, ClosureDialog, MergeProjectsDialog, DrawShotDialog, EditSectionDialog, EditShotDialog, EditStationDialog, UnmergeStationsDialog, RemoveClosureDialog, UnsavedChangesDialog, ErrorDialog, SavePermissionDialog, OverwriteConfirmDialog, DeleteProjectDialog, SectionAdjustDialog, SettingsDialog, ProjectSettingsDialog, SplitSectionDialog, InsertStationDialog, CorruptionRecoveryDialog, DebugDialog, SwapCommentsDialog, OrphanPlacementDialog, KeyboardShortcutsDialog, TelemetryOptInDialog, OpenFromSpeleoDbDialog, PublishToSpeleoDbDialog, SpeleoDoneDialog, SpeleoDivergenceDialog, SpeleoForceEditDialog, SpeleoRestoreDialog, SpeleoRevertDialog, SpeleoCloseDialog, SpeleoQuitDialog, SpeleoNoPermissionDialog, HeldLockResumeDialog, UnrecognisedShotKindDialog, SpeleoUnpushedLocalDialog, SpeleoManagedFileDialog, SpeleoDbProjectDialog, SpeleoStorageChoiceDialog, SpeleoDumpPickerDialog } from './components/Dialogs';
 import { initTelemetry, flushTelemetry, setProjectActionSource } from './utils/telemetry';
 import { ContextMenu, ToastStack } from './components/common';
 import { MemoryProbe } from './components/MemoryProbe/MemoryProbe';
@@ -345,7 +345,7 @@ function App() {
   //
   // The decision is held in session state so that burning the flag (below) does
   // not tear down the tour currently on screen, and is re-taken when "Restart
-  // guides" clears the flag mid-session.
+  // onboarding" clears the flag mid-session.
   const [orientationConsumed, setOrientationConsumed] = useState(false);
   const orientationDecidedRef = useRef(false);
   const firstLaunchBurnedRef = useRef(false);
@@ -598,6 +598,7 @@ function App() {
       {activeDialog === 'speleodb-quit' && <SpeleoQuitDialog />}
       {activeDialog === 'speleodb-no-permission' && <SpeleoNoPermissionDialog />}
       {activeDialog === 'speleodb-unpushed-local' && <SpeleoUnpushedLocalDialog />}
+      {activeDialog === 'speleodb-managed-file' && <SpeleoManagedFileDialog />}
       {activeDialog === 'speleodb-project' && <SpeleoDbProjectDialog />}
       {activeDialog === 'new-project-for-import' && <NewProjectForImportDialog />}
       {activeDialog === 'dmp-selection' && dialogData.dmpFile ? (
@@ -740,11 +741,6 @@ function App() {
         <WallsImportDialog
           wallsFile={dialogData.wallsFile as import('./types/commands').WallsFile}
           filePath={dialogData.filePath as string}
-        />
-      ) : null}
-      {activeDialog === 'collab-review' && dialogData.changeSet ? (
-        <CollabReviewDialog
-          changeSet={dialogData.changeSet as import('./types/commands').CollabChangeSet}
         />
       ) : null}
       {activeDialog === 'gpx-selection' && dialogData.gpxFile ? (

@@ -18,7 +18,6 @@ import { PlanTablesPanel } from './PlanTablesPanel';
 import { ExportPanel } from './ExportPanel';
 import ExportPreview from '../Dialogs/ExportPreview';
 import { useExportStore } from '../../store/exportStore';
-import { withThemeDepthColors } from '../../utils/themeColors';
 import DataTable from './DataTable';
 import MapCanvas from '../Map/MapCanvas';
 import {
@@ -96,15 +95,6 @@ export default function SingleSystemView() {
   // mirrors the inline ExportControls options via the shared export store.
   const exportPreviewType = useExportStore((s) => s.exportType);
   const exportImageOptions = useExportStore((s) => s.imageOptions);
-  // Depth-mode preview must track the ACTIVE theme's ramp (#360), same as the
-  // inline ExportControls preview - resolve here too so this second preview
-  // surface can't drift from it or from the map.
-  const resolvedThemeForExport = useUIStore((s) => s.resolvedTheme);
-  const effectiveExportImageOptions = useMemo(
-    () => withThemeDepthColors(exportImageOptions),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [exportImageOptions, resolvedThemeForExport],
-  );
 
   // Depend on the stable cancelPending useCallback (not the whole autoSave object,
   // which is a fresh object each render) so handleSaveProject keeps a stable
@@ -748,7 +738,7 @@ export default function SingleSystemView() {
                 data-testid="export-mode-preview"
               >
                 <ErrorBoundary panelName="Export Preview">
-                  <ExportPreview options={effectiveExportImageOptions} fill />
+                  <ExportPreview options={exportImageOptions} fill />
                 </ErrorBoundary>
               </div>
             )}

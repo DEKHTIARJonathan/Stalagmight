@@ -21,6 +21,10 @@ genuinely-unique UI cases - the import-section dialog and the shortcut-recorder
 `aria-live` announcements - were ported to `e2e-playwright/`. The remaining 11 were
 already duplicated. See git history for the retired specs.
 
+(Ariane collaboration mode - and with it `core/reconcile.rs` and
+`core/state/collab.rs` - was later removed from the codebase entirely. This note
+is left as-is as the historical record of the #120 cleanup.)
+
 ## Running
 
 ```bash
@@ -58,6 +62,8 @@ relevant spec here before a release:
 > `export-scaling`, `dmp-integration`, `collab-roundtrip`) - retired in #120; that
 > coverage is now in Rust tests (`export/image.rs`, `parsers/dmp.rs`,
 > `core/reconcile.rs`, `core/state/collab.rs`), which run on every CI `cargo test`.
+> (Collaboration mode was later removed entirely, taking `core/reconcile.rs` and
+> `core/state/collab.rs` with it; this note is preserved as historical record.)
 
 ## What's duplicated by Playwright (redundant - low priority to maintain)
 

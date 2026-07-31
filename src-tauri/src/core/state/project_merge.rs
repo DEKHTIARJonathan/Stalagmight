@@ -94,9 +94,9 @@ impl AppState {
         let mut section_id_map: std::collections::HashMap<(usize, SectionId), SectionId> =
             std::collections::HashMap::new();
 
-        // Shot UUIDs already placed in the merged project. Shots carry a stable
-        // collaboration UUID that cross-references and Ariane matching anchor on;
-        // preserve it across the merge instead of re-minting. Two source files can
+        // Shot UUIDs already placed in the merged project. Shots carry a
+        // persistent UUID that station cross-references anchor on; preserve it
+        // across the merge instead of re-minting. Two source files can
         // legitimately share a UUID (one branched from the other), so dedup
         // globally - a colliding UUID keeps a fresh mint to stay unique.
         let mut seen_uuids: std::collections::HashSet<String> = std::collections::HashSet::new();

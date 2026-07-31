@@ -15,8 +15,10 @@ export const DEFAULT_IMAGE_OPTIONS: ExportImageOptions = {
   branching_threshold: 2,
   show_penetration_labels: true,
   color_mode: 'none',
-  depth_shallow: null,
-  depth_deep: null,
+  // `depth_shallow` / `depth_deep` are deliberately absent: they are optional on
+  // the generated type and are stamped per call by `withThemeDepthRamp`, which
+  // reads the live theme tokens. A default here would be a second source of
+  // truth for the ramp and would be the stale one.
   show_station_labels: false,
   show_section_names: false,
   show_station_comments: false,

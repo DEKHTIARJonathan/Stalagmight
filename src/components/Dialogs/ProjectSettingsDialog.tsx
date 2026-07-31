@@ -3,11 +3,10 @@ import { useTranslation } from 'react-i18next';
 import { useShallow } from 'zustand/react/shallow';
 import { DialogWrapper } from './DialogWrapper';
 import { ValidationSettings } from './settings/ValidationSettings';
-import { CollaborationSection } from './settings/CollaborationSettings';
 import { SettingsSection } from './settings/SettingsSection';
 import { SettingRow } from './settings/SettingRow';
 import { ProjectSettingsSpeleoStub } from './settings/ProjectSettingsSpeleoStub';
-import type { SettingsCategory } from './SettingsSidebar';
+import { getPanelId, getTabId, type SettingsCategory } from './SettingsSidebar';
 import { Button } from '../common/Button';
 import { useUIStore } from '../../store/uiStore';
 import { useProjectStore } from '../../store/projectStore';
@@ -15,9 +14,11 @@ import { useSpeleoStore } from '../../store/speleoStore';
 import { defaultConfig, type Config } from '../../types/config';
 import { isValidationConfigValid } from '../../utils/validation';
 
-type ProjectSettingsTab = 'general' | 'validation' | 'experimental' | 'speleodb';
+// A compiler-checked subset of SettingsCategory, so these tabs can never drift
+// from the shared id helpers they are paired with.
+type ProjectSettingsTab = Extract<SettingsCategory, 'general' | 'validation' | 'speleodb'>;
 // The local (always-shown) tabs; the remote-only 'speleodb' tab is appended below.
-const TABS: readonly ProjectSettingsTab[] = ['general', 'validation', 'experimental'];
+const TABS: readonly ProjectSettingsTab[] = ['general', 'validation'];
 const EMPTY_CHANGED: ReadonlySet<string> = new Set();
 
 /**
@@ -35,20 +36,14 @@ export function ProjectSettingsDialog() {
   // every poll tick, so selecting the object re-rendered the whole settings dialog
   // on each one.
   const isRemote = useSpeleoStore((s) => s.link != null);
-  const { project, globalConfig, updateProjectSettings, setCollabEnabled } = useProjectStore(
+  const { project, globalConfig, updateProjectSettings } = useProjectStore(
     useShallow((s) => ({
       project: s.project,
       globalConfig: s.config,
       updateProjectSettings: s.updateProjectSettings,
-      setCollabEnabled: s.setCollabEnabled,
     })),
   );
   const panelIdBase = useId();
-  // Same id format as SettingsSidebar's getTabId/getPanelId, but accepting the
-  // project-only 'experimental' tab. The validation tab's ids therefore still
-  // match what ValidationSettings emits for its aria-labelledby/panel id.
-  const tabId = (tk: ProjectSettingsTab) => `${panelIdBase}-tab-${tk}`;
-  const panelId = (tk: ProjectSettingsTab) => `${panelIdBase}-panel-${tk}`;
 
   const [tab, setTab] = useState<ProjectSettingsTab>('general');
   const renderedTabs = useMemo<readonly ProjectSettingsTab[]>(
@@ -78,9 +73,6 @@ export function ProjectSettingsDialog() {
   );
   const [hasValidationError, setHasValidationError] = useState(false);
   const [saving, setSaving] = useState(false);
-  // Stage the collab flag in dialog state so the toggle honors Save/Cancel like
-  // the rest of the dialog; persisted only in handleSave (#57).
-  const [collabEnabled, setCollabEnabledState] = useState(project?.collab?.enabled ?? false);
 
   // ValidationSettings is built against a full Config; wrap the project's
   // validation in a synthetic config and funnel its onChange back into local
@@ -118,18 +110,6 @@ export function ProjectSettingsDialog() {
         return;
       }
     }
-    // Commit the staged collab flag only when it actually changed. setCollabEnabled
-    // (set_collab_enabled) sets the in-memory flag + project.touch() in one IPC;
-    // the sibling .tml is written by the normal save pipeline as before.
-    const currentCollab = project.collab?.enabled ?? false;
-    if (collabEnabled !== currentCollab) {
-      const collabResult = await setCollabEnabled(collabEnabled);
-      if (!collabResult.success) {
-        setSaving(false);
-        showToast(collabResult.error ?? t('detailPanel.collaboration.toggleFailed'), 'project-settings', 'error');
-        return;
-      }
-    }
     setSaving(false);
     closeDialog();
   }, [
@@ -141,8 +121,6 @@ export function ProjectSettingsDialog() {
     closeDialog,
     showToast,
     t,
-    collabEnabled,
-    setCollabEnabled,
     project,
   ]);
 
@@ -168,10 +146,10 @@ export function ProjectSettingsDialog() {
               {renderedTabs.map((tk) => (
                 <button
                   key={tk}
-                  id={tabId(tk)}
+                  id={getTabId(panelIdBase, tk)}
                   role="tab"
                   aria-selected={tab === tk}
-                  aria-controls={panelId(tk)}
+                  aria-controls={getPanelId(panelIdBase, tk)}
                   onClick={() => setTab(tk)}
                   className={`w-full text-left px-3 py-1.5 rounded text-sm ${tab === tk ? 'bg-accent-10 text-text-primary' : 'text-text-secondary hover:bg-background-50'}`}
                   data-testid={`project-settings-tab-${tk}`}
@@ -183,7 +161,7 @@ export function ProjectSettingsDialog() {
 
             <div className="flex-1 min-w-0 overflow-auto p-4">
               {tab === 'general' && (
-                <div role="tabpanel" id={panelId('general')} aria-labelledby={tabId('general')}>
+                <div role="tabpanel" id={getPanelId(panelIdBase, 'general')} aria-labelledby={getTabId(panelIdBase, 'general')}>
                   <SettingsSection title={t('dialogs.projectSettings.tabs.general')}>
                     <SettingRow
                       label={t('dialogs.projectSettings.name.label')}
@@ -221,15 +199,8 @@ export function ProjectSettingsDialog() {
                   defaults={globalConfig?.validation ?? defaultConfig.validation}
                 />
               )}
-              {tab === 'experimental' && (
-                <div role="tabpanel" id={panelId('experimental')} aria-labelledby={tabId('experimental')}>
-                  <SettingsSection title={t('dialogs.projectSettings.tabs.experimental')}>
-                    <CollaborationSection project={project} enabled={collabEnabled} onChange={setCollabEnabledState} />
-                  </SettingsSection>
-                </div>
-              )}
               {tab === 'speleodb' && isRemote && (
-                <div role="tabpanel" id={panelId('speleodb')} aria-labelledby={tabId('speleodb')}>
+                <div role="tabpanel" id={getPanelId(panelIdBase, 'speleodb')} aria-labelledby={getTabId(panelIdBase, 'speleodb')}>
                   <ProjectSettingsSpeleoStub />
                 </div>
               )}

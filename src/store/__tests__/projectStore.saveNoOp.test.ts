@@ -41,6 +41,11 @@ describe('projectStore.saveProject no-op identity (#mem)', () => {
       saved_path: '/cave.stalx',
     } as CommandResult);
 
+    // `true` = the quiet background save, and it is load-bearing here: the
+    // autosave is the ONLY path that re-saves the same path every 30 s, so it is
+    // the one that would republish the whole survey on every tick. A manual save
+    // to the same path hits the same branch, but exercising only that leaves the
+    // hazard's actual caller unpinned.
     await useProjectStore.getState().saveProject('/cave.stalx', true);
 
     // Identity preserved - no republish trigger for a no-op save.

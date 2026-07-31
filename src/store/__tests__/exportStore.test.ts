@@ -21,8 +21,6 @@ describe('exportStore', () => {
       branching_threshold: 2,
       show_penetration_labels: true,
       color_mode: 'none',
-      depth_shallow: null,
-      depth_deep: null,
       show_station_labels: false,
       show_section_names: false,
       show_station_comments: false,

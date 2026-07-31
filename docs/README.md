@@ -48,7 +48,6 @@ in determines how you write it, and picking wrong is the most common rework.
 | [map-renderer.md](map-renderer.md) | The custom WebGL survey renderer (a MapLibre `CustomLayerInterface`): tessellation, shaders, labels, incremental updates. |
 | [gas-planning.md](gas-planning.md) | Plan mode's gas engine: gas-weighted reachability over the survey graph, turnaround and stage-drop points. |
 | [move-tools.md](move-tools.md) | Move Station / Shot / Segment: scope of each, the shared drag-preview engine, Ctrl+drag panning, immovable stations. |
-| [collaboration.md](collaboration.md) | Ariane collab mode: the sibling `.tml`, save-both, reconcile on open, shot matching tiers. |
 | [telemetry.md](telemetry.md) | Opt-in anonymous counters: the event registry, source tracking, and how to add events for a new feature. |
 | [style-guide.md](style-guide.md) | UI conventions: design tokens, typography, buttons, panels, tables, forms, accessibility. |
 | [touch-support.md](touch-support.md) | What touch and pointer support exists, the long-press paths, and the verified gaps. |
@@ -67,7 +66,6 @@ in determines how you write it, and picking wrong is the most common rework.
 |-----|----------|
 | [TESTING.md](TESTING.md) | The tier model and how to pick one, plus the contract a UI component has to satisfy to be testable. Read before your first PR. |
 | [testing-recipes.md](testing-recipes.md) | Lookup reference: exact commands per tier, per-framework patterns, mock and fixture conventions, troubleshooting. |
-| [collab-stress-testing.md](collab-stress-testing.md) | Invariants, scenario matrix, adversarial inputs and the fuzz/soak harness for the collab round-trip. |
 | [speleodb-dev-testing.md](speleodb-dev-testing.md) | Testing the SpeleoDB client against a real server: env setup, env-gated live tests, the verified v2 API contract. |
 | [agent-harness.md](agent-harness.md) | The MCP + WebdriverIO harness that drives the real app: tools, oracles, stress scenarios, replay and repro reports. Runs on the repo-pinned Node. |
 | [debug-gates.md](debug-gates.md) | Where every dev-only log, assert and profile harness lives, how to switch it on, and the rules for adding more. |

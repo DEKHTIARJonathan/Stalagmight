@@ -3387,88 +3387,6 @@ fn test_migrate_undo_redo_to_blob_on_fresh_db() {
     assert_eq!(loaded[0].1, "cmd");
 }
 
-// === Collaboration mode persistence (schema v5) ===
-#[test]
-fn test_collab_state_roundtrip() {
-    use crate::models::{CollabState, ShotBaselineEntry};
-    let mut db = Database::in_memory().unwrap();
-    let mut project = Project::new("Collab Cave".to_string(), None);
-    let mut collab = CollabState::new("collab-cave.tml".to_string());
-    collab.last_export_tml_sha256 = Some("deadbeef".to_string());
-    collab.shot_baseline = vec![ShotBaselineEntry {
-        section_id: 0,
-        shot_index: 3,
-        ariane_id: 42,
-        uuid: "11111111-2222-3333-4444-555555555555".to_string(),
-        geo_key: "351.5|2.27|0.10".to_string(),
-        section_name: "Mainline 2".to_string(),
-        station_comment: None,
-    }];
-    collab.section_name_map = vec![("Mainline 2".to_string(), 0)];
-    project.collab = Some(collab);
-
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
-
-    let c = loaded.collab.expect("collab state should round-trip");
-    assert!(c.enabled);
-    assert_eq!(c.sibling_tml_relative, "collab-cave.tml");
-    assert_eq!(c.last_export_tml_sha256.as_deref(), Some("deadbeef"));
-    assert_eq!(c.shot_baseline.len(), 1);
-    assert_eq!(c.shot_baseline[0].ariane_id, 42);
-    assert_eq!(c.shot_baseline[0].shot_index, 3);
-    assert_eq!(c.section_name_map, vec![("Mainline 2".to_string(), 0)]);
-    assert!(c.write_tml_on_autosave);
-}
-
-#[test]
-fn test_collab_none_when_absent() {
-    // A normal (non-collab) project must load with collab == None,
-    // proving collaboration persistence doesn't affect existing projects.
-    let mut db = Database::in_memory().unwrap();
-    let project = Project::new("Plain Cave".to_string(), None);
-    assert!(project.collab.is_none());
-    db.save_project(&project).unwrap();
-    let loaded = db.load_project().unwrap();
-    assert!(loaded.collab.is_none());
-}
-
-#[test]
-fn test_save_collab_state_upsert() {
-    use crate::models::CollabState;
-    let mut db = Database::in_memory().unwrap();
-    let project = Project::new("Upsert Cave".to_string(), None);
-    db.save_project(&project).unwrap();
-
-    // Upsert a state without rewriting the whole project.
-    db.save_collab_state(Some(&CollabState::new("up.tml".to_string())))
-        .unwrap();
-    assert_eq!(
-        db.load_project()
-            .unwrap()
-            .collab
-            .unwrap()
-            .sibling_tml_relative,
-        "up.tml"
-    );
-    // Upsert again (ON CONFLICT path).
-    let mut c2 = CollabState::new("up.tml".to_string());
-    c2.last_export_tml_sha256 = Some("abc".to_string());
-    db.save_collab_state(Some(&c2)).unwrap();
-    assert_eq!(
-        db.load_project()
-            .unwrap()
-            .collab
-            .unwrap()
-            .last_export_tml_sha256
-            .as_deref(),
-        Some("abc")
-    );
-    // Clearing removes the row.
-    db.save_collab_state(None).unwrap();
-    assert!(db.load_project().unwrap().collab.is_none());
-}
-
 #[test]
 fn two_dangling_station_offsets_in_one_section_save_without_pk_collision() {
     // Regression for the save crash (review finding #7): two dangling station
@@ -4555,9 +4473,9 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
                 [],
             )
             .unwrap();
-        // Per-session LOCAL state that MUST be stripped (#194 b3 + collab leak):
-        // undo/redo edit history (a data-corruption vector if a collaborator
-        // inherited + replayed it) and the local Ariane-collab wiring.
+        // Per-session LOCAL state that MUST be stripped (#194 b3): undo/redo
+        // edit history, a data-corruption vector if a collaborator inherited
+        // and replayed it.
         db.conn
             .execute(
                 "INSERT INTO undo_stack (sequence, command_json, undo_data_json, executed_at) \
@@ -4569,12 +4487,6 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
             .execute(
                 "INSERT INTO redo_stack (sequence, command_json, undo_data_json, executed_at) \
                  VALUES (1, X'00', X'00', '2026-01-01T00:00:00Z')",
-                [],
-            )
-            .unwrap();
-        db.conn
-            .execute(
-                "INSERT INTO collab_state (id, state_json) VALUES (1, '{}')",
                 [],
             )
             .unwrap();
@@ -4606,12 +4518,6 @@ fn sanitize_push_snapshot_clears_dirty_and_view_only_keeps_project_data() {
         count("redo_stack"),
         0,
         "redo_stack must be stripped from the push snapshot (#194 b3)"
-    );
-    // Local Ariane-collab wiring (sibling .tml path / per-machine toggle) stripped.
-    assert_eq!(
-        count("collab_state"),
-        0,
-        "collab_state (local Ariane-collab wiring) must not ride to collaborators"
     );
     // Durable project data proliferates - NOT stripped.
     assert_eq!(
@@ -4739,14 +4645,22 @@ fn sanitize_push_snapshot_clears_the_dirty_bit() {
 }
 
 #[test]
-fn sanitize_push_snapshot_tolerates_a_snapshot_without_collab_state() {
-    // An older snapshot shape can legitimately lack a local-only table. What does
-    // not exist cannot leak, so a missing table must never abort the push.
+fn sanitize_push_snapshot_tolerates_a_snapshot_without_a_redo_stack() {
+    // An older snapshot shape can legitimately lack a local-only table - the v15
+    // migration's own strip helper (`drop_legacy_undo_history`) is guarded on exactly
+    // that - and what does not exist cannot leak, so a missing table must never abort
+    // the push. `redo_stack` is the sharp end of the branch: it is on
+    // PUSH_SNAPSHOT_FATAL_TABLES, so without the absent-table `continue` the
+    // `DELETE FROM redo_stack` would error with "no such table" and take the FATAL
+    // arm - failing every push from a snapshot that simply never had one.
+    //
+    // Every other sanitize test builds its fixture through `Database::open`, whose
+    // `init_schema` creates all the local-only tables, so none of them can reach this.
     let temp = TempDir::new().unwrap();
     let path = dirty_push_snapshot(&temp, "x", 3);
     Connection::open(&path)
         .unwrap()
-        .execute("DROP TABLE collab_state", [])
+        .execute("DROP TABLE redo_stack", [])
         .unwrap();
 
     Database::sanitize_push_snapshot(&path).expect("a missing local table must not fail the push");
@@ -4756,6 +4670,14 @@ fn sanitize_push_snapshot_tolerates_a_snapshot_without_collab_state() {
         .query_row("SELECT COUNT(*) FROM undo_stack", [], |r| r.get(0))
         .unwrap();
     assert_eq!(undo, 0, "the tables that DO exist are still stripped");
+    // The skip continues the loop rather than short-circuiting the function: the
+    // dirty-bit clear that comes AFTER the strip loop must still have run.
+    let dirty: i64 = snap
+        .query_row("SELECT has_unpushed_edits FROM speleo_link", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(dirty, 0, "the rest of the sanitize still ran to completion");
 }
 
 #[test]
@@ -5618,7 +5540,7 @@ fn migrate_v12_is_idempotent_when_run_twice() {
 /// themselves: a flip that committed alone would look already-correct on the
 /// next open, so the migration would decline, the invalidation would never run,
 /// and v12 would be stamped over permanently stale undo history, warning
-/// dismissals and collab baseline.
+/// dismissals.
 ///
 /// Rolling back the caller's transaction must therefore undo the flip. If this
 /// fails, the migration has taken a transaction of its own again and that
@@ -5744,12 +5666,6 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
             shot_uuid: None,
         }])
         .unwrap();
-        db.conn
-            .execute(
-                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
-                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
-            )
-            .unwrap();
         db.set_user_version(11).unwrap();
     }
 
@@ -5767,27 +5683,6 @@ fn migrate_v12_discards_state_that_still_holds_pre_flip_pitch() {
     assert!(
         db.load_resolved_warnings().unwrap().is_empty(),
         "an inclination dismissal taken under the old convention must be cleared"
-    );
-
-    let state_json: String = db
-        .conn
-        .query_row(
-            "SELECT state_json FROM collab_state WHERE id = 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
-    assert!(
-        !state_json.contains("last_export_tml_sha256"),
-        "the sidecar hash must be cleared so the .tml is re-exported before any reconcile: {state_json}"
-    );
-    assert!(
-        !state_json.contains("shot_baseline"),
-        "the per-shot baseline still describes the old frame: {state_json}"
-    );
-    assert!(
-        state_json.contains(r#""enabled":true"#),
-        "clearing the baseline must not disable collab: {state_json}"
     );
 }
 
@@ -5936,82 +5831,92 @@ fn migrate_v12_rejects_a_shot_with_one_out_of_range_leg() {
     );
 }
 
-/// The collab sidecar goes stale on the convention change itself, not on any
-/// stored shot moving, so its provenance must be cleared even when the
-/// migration flips nothing.
+/// v14 -> v15 removes the `collab_state` table AND the persisted undo history.
 ///
-/// A project whose sections were all already +down (Walls/Compass) still has a
-/// sibling `.tml` written by an older build in the old frame. Reconciling
-/// against it would report a phantom inclination edit on every shot.
+/// Dropping the table is the visible half. The undo drop is the load-bearing one:
+/// `Command` is an internally tagged enum with no catch-all, so an entry stored as
+/// `{"type":"apply_collab_changes"}` no longer deserializes - and the loader SKIPS a
+/// bad entry rather than truncating, keeping the entries on both sides of it. A v14
+/// file reaches this migration with its stacks intact (`UNDO_FORMAT_SAFE_VERSION` is
+/// 7), so without the drop a user who had applied collaborator changes would undo
+/// straight through the hole and replay stale entries over the applied edits.
 #[test]
-fn migrate_v12_clears_the_collab_baseline_even_when_nothing_was_flipped() {
+fn migrate_v15_drops_collab_state_and_the_undo_history() {
     let temp = TempDir::new().unwrap();
-    let path = temp.path().join("collab_no_flip.stalx");
-
-    let mut project = Project::new("NoFlip".to_string(), None);
-    project.add_section(descending_section("FromCompass", 1.0, 4));
+    let path = temp.path().join("v14.stalx");
 
     {
         let mut db = Database::open(&path).unwrap();
-        db.save_project(&project).unwrap();
+        db.save_project(&Project::new("V14".to_string(), None))
+            .unwrap();
+        // A v14 file as it would exist in the wild: the sidecar table, plus an undo
+        // entry naming a command this build can no longer deserialize, plus one it
+        // still can (so the test would catch a drop that only removed the bad row).
         db.conn
-            .execute(
-                "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
-                [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
+            .execute_batch(
+                "CREATE TABLE IF NOT EXISTS collab_state (
+                     id INTEGER PRIMARY KEY CHECK (id = 1),
+                     state_json TEXT NOT NULL
+                 );
+                 INSERT INTO collab_state (id, state_json) VALUES (1, '{\"enabled\":true}');",
             )
             .unwrap();
-        db.set_user_version(11).unwrap();
+        db.save_undo_stack(vec![
+            (
+                r#"{"type":"apply_collab_changes"}"#.to_string(),
+                "null".to_string(),
+            ),
+            (
+                r#"{"type":"update_project_settings"}"#.to_string(),
+                "null".to_string(),
+            ),
+        ])
+        .unwrap();
+        // The REDO stack too: `drop_legacy_undo_history` loops both, and a redo entry
+        // is just as unsafe to replay - a v14 user who undid past an
+        // `apply_collab_changes` reaches this migration with the apply sitting in
+        // redo. Asserting only `undo_stack` would let a helper that stopped looping
+        // both tables through unnoticed.
+        db.save_redo_stack_with_timestamps(vec![(
+            r#"{"type":"apply_collab_changes"}"#.to_string(),
+            "null".to_string(),
+            None,
+        )])
+        .unwrap();
+        db.set_user_version(14).unwrap();
     }
 
     let db = Database::open_existing(&path).unwrap();
-    assert_eq!(
-        section_pitches(&db, "FromCompass"),
-        vec![Some(30.0); 4],
-        "precondition: nothing was flipped"
-    );
-
-    let state_json: String = db
-        .conn
-        .query_row(
-            "SELECT state_json FROM collab_state WHERE id = 1",
-            [],
-            |r| r.get(0),
-        )
-        .unwrap();
+    assert_eq!(db.get_user_version().unwrap(), SCHEMA_VERSION);
     assert!(
-        !state_json.contains("last_export_tml_sha256"),
-        "the sidecar is in the old frame regardless of whether a section moved: {state_json}"
+        !db.table_exists("collab_state").unwrap(),
+        "v15 must drop the collab sidecar table, not leave a dead one in every file"
     );
-    assert!(
-        state_json.contains(r#""enabled":true"#),
-        "clearing the baseline must not disable collab: {state_json}"
-    );
+    for table in ["undo_stack", "redo_stack"] {
+        let remaining: i64 = db
+            .conn
+            .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |r| r.get(0))
+            .unwrap();
+        assert_eq!(
+            remaining, 0,
+            "the whole {table} must go: skipping only the undeserializable entry \
+             would leave a hole that replays stale entries over the applied changes"
+        );
+    }
 }
 
-/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`, and
-/// leaves the collab sidecar provenance alone while doing it.
+/// #24: opening a pre-v14 project rewrites every stored azimuth into `[0, 360)`.
 ///
 /// Nothing changed meaning - `Shot::average_azimuth` used Rust's truncated `%`, which
 /// returned the ANTIPODE of the circular mean for a pair more than 540 degrees apart, and
 /// now wraps with `rem_euclid`. Normalising takes the ambiguity out of the FILE so the
 /// same `.stalx` renders identically on either build.
 ///
-/// The sidecar is NOT touched, in either fixture. The exporter writes the raw
-/// `azimuth_in` and both `normalize_tml_shot` and `geo_key` apply the same
-/// `rem_euclid(360.0)` the migration wraps with, and the migration writes through
-/// `normalize_azimuth`, so every migrated reading lands in `[0, 360)` and `rem_euclid`
-/// returns it untouched on the reconcile side. A migrated project and an untouched
-/// sibling therefore agree on every field reconcile compares - unconditionally, which
-/// the fourth shot below pins. Dropping `last_export_tml_sha256` would instead make
-/// `compute_collab` bail, so the reconcile dialog could never open and the next save
-/// would overwrite the collaborator's unmerged edits with no prompt - see
-/// `migrate_v14_leaves_an_untouched_sibling_reconcilable`.
-///
 /// Both fixtures run because this used to be gated on a "reinterpreted" verdict: the
 /// first holds a shot whose walked bearing really did move, the second only readings no
 /// build ever misread. The gate is gone, so the two cases must behave identically.
 #[test]
-fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
+fn migrate_v14_normalises_stored_azimuths() {
     let temp = TempDir::new().unwrap();
 
     let out_of_range = |azimuth_in: f64, azimuth_out: f64| ShotData {
@@ -6060,12 +5965,6 @@ fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
         {
             let mut db = Database::open(&path).unwrap();
             db.save_project(&project).unwrap();
-            db.conn
-                .execute(
-                    "INSERT OR REPLACE INTO collab_state (id, state_json) VALUES (1, ?1)",
-                    [r#"{"enabled":true,"sibling_tml_relative":"s.tml","last_export_tml_sha256":"deadbeef","shot_baseline":[{"shot_uuid":"u"}]}"#],
-                )
-                .unwrap();
             db.set_user_version(13).unwrap();
         }
 
@@ -6084,115 +5983,7 @@ fn migrate_v14_normalises_stored_azimuths_and_keeps_the_sidecar() {
             stored, expected,
             "{file}: every reading must land in [0, 360) and an in-range one must be untouched"
         );
-
-        let state_json: String = db
-            .conn
-            .query_row(
-                "SELECT state_json FROM collab_state WHERE id = 1",
-                [],
-                |r| r.get(0),
-            )
-            .unwrap();
-        assert!(
-            state_json.contains("last_export_tml_sha256"),
-            "{file}: the sibling .tml is still ours and still comparable, so its \
-             provenance must survive: {state_json}"
-        );
-        assert!(
-            state_json.contains("shot_baseline"),
-            "{file}: the baseline's (section_id, shot_index) keys did not move either, \
-             so reconcile can still place a returned edit: {state_json}"
-        );
-        assert!(
-            state_json.contains(r#""enabled":true"#),
-            "{file}: the migration must not disable collab: {state_json}"
-        );
     }
-}
-
-/// The migration must leave a sibling `.tml` the collaborator has since edited
-/// RECONCILABLE. This is what the dropped invalidation actually cost: without the
-/// provenance sha `compute_collab` bails, the reconcile dialog never opens, and the next
-/// save rewrites the sibling over the collaborator's unmerged work with no prompt.
-///
-/// The fixture is the worst case for the old gate - a `(600.0, 0.0)` shot, whose walked
-/// bearing genuinely moved. Even there the sibling stays comparable: the export carried
-/// the raw `600.0`, and `normalize_tml_shot` wraps it with the same `rem_euclid(360.0)`
-/// the migration applied to the stored row, so reconcile sees no azimuth difference at
-/// all - only the length the collaborator really changed.
-#[test]
-fn migrate_v14_leaves_an_untouched_sibling_reconcilable() {
-    // `open_project` persists the recent-projects list, which lives in the config.
-    let _cfg = crate::test_helpers::isolated_config();
-    let temp = TempDir::new().unwrap();
-    let path = temp.path().join("collab.stalx");
-    let sibling = temp.path().join("collab.tml");
-
-    let mut project = Project::new("Collab".to_string(), None);
-    project.add_section(SectionData {
-        name: Some("Wide".to_string()),
-        shots: vec![ShotData {
-            azimuth_in: 600.0,
-            azimuth_out: 0.0,
-            length: 10.0,
-            depth_in: 0.0,
-            depth_out: 1.0,
-            ..Default::default()
-        }],
-        ..Default::default()
-    });
-    // The save path mints these before exporting, so both sides of the round trip have
-    // to agree on them for reconcile's UUID tier to match.
-    project.ensure_shot_uuids();
-    let section_id = project.sections[0].id;
-
-    // The pre-migration build's export, verbatim - this is the file we handed over.
-    let mut collab = crate::models::CollabState::new("collab.tml".to_string());
-    let (baseline, sha, synthetic) =
-        crate::export::tml::export_tml_with_baseline(&project, &sibling).unwrap();
-    collab.last_export_tml_sha256 = Some(sha);
-    collab.shot_baseline = baseline;
-    collab.synthetic_section_names = synthetic;
-    collab.section_name_map = vec![("Wide".to_string(), section_id)];
-    project.collab = Some(collab);
-
-    {
-        let mut db = Database::open(&path).unwrap();
-        db.save_project(&project).unwrap();
-        db.set_user_version(13).unwrap();
-    }
-
-    // The collaborator opens it in Ariane, retapes one shot and saves. Only the sha
-    // moving is what makes `compute_collab` run the diff rather than short-circuit.
-    let mut returned = project.clone();
-    returned.sections[0].shots[0].length = 11.0;
-    crate::export::tml::export_tml_with_baseline(&returned, &sibling).unwrap();
-
-    let state = crate::core::state::AppState::new().unwrap();
-    let opened = state.execute(crate::core::Command::OpenProject { path });
-    assert!(opened.success, "{:?}", opened.error);
-
-    let changes = state.detect_collab_changes().unwrap().expect(
-        "the migration must leave the sibling reconcilable - a dropped baseline makes \
-         compute_collab bail, so the dialog never opens and the next save silently \
-         overwrites the collaborator's edits",
-    );
-    assert_eq!(
-        changes.shots_edited.len(),
-        1,
-        "the collaborator's one edit must be surfaced: {changes:#?}"
-    );
-    let fields: Vec<&str> = changes.shots_edited[0]
-        .changes
-        .iter()
-        .map(|c| c.field.as_str())
-        .collect();
-    assert_eq!(
-        fields,
-        vec!["length"],
-        "the migration rewrote 600 -> 240 on our side only; the sibling's raw 600 wraps \
-         to the same bearing, so no azimuth change may be reported: {changes:#?}"
-    );
 }
 
 /// The "this shot was walked 180 degrees off" verdict must not fire on a pair the old

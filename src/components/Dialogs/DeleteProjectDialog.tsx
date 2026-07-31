@@ -9,7 +9,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * Destructive confirm for permanently deleting a project from disk (#118).
  *
  * Distinct from "Remove from recent" (which only forgets the entry): this hands
- * the project's files to the OS delete - the Trash where the platform provides
+ * the project's `.stalx` to the OS delete - the Trash where the platform provides
  * one, otherwise a permanent remove. Opened via
  * `openDialog('delete-project', { path, name })` from the GlobalView context menu
  * and the metadata panel.
@@ -19,7 +19,7 @@ import { trackDialogComplete } from '../../utils/telemetry';
  * irreversible.
  */
 export default function DeleteProjectDialog() {
-  const { closeDialog, dialogData } = useUIStore();
+  const { closeDialog, dialogData, showToast } = useUIStore();
   const { deleteProject } = useProjectStore();
   const [isDeleting, setIsDeleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,16 +30,6 @@ export default function DeleteProjectDialog() {
     (dialogData.name as string | undefined) ||
     path?.split(/[\\/]/).pop()?.replace(/\.stalx$/i, '') ||
     'this project';
-
-  // Name the actual files the backend will remove, by full path: the .stalx, plus
-  // its .tml collab sibling when the project is collab-enabled.
-  const collabEnabled = Boolean(dialogData.collabEnabled);
-  const tmlPath = path?.replace(/\.stalx$/i, '.tml');
-  const fileNames = path
-    ? collabEnabled && tmlPath && tmlPath !== path
-      ? `${path} and ${tmlPath}`
-      : path
-    : name;
 
   // A remote (SpeleoDB) recent is only a local cache copy: deleting it leaves the
   // project on the server (re-openable via Open from SpeleoDB), so we frame it as a
@@ -56,8 +46,22 @@ export default function DeleteProjectDialog() {
     }
     setIsDeleting(true);
     setError(null);
-    const result = await deleteProject(path, collabEnabled);
+    const result = await deleteProject(path);
     if (result.success) {
+      // A SUCCESSFUL delete can still carry warnings. Once the `.stalx` is
+      // trashed the backend refuses to report the whole call as a failure (that
+      // would strand a "File not found" zombie row), so everything after that
+      // point degrades to a warning - today `delete_project_persist_failed`,
+      // where the file is gone but the recent-projects list could not be
+      // persisted, so the entry silently reappears on the next launch. This
+      // dialog is the only thing watching the result, and it is about to close,
+      // so a warning nobody surfaces here is a warning nobody ever sees. Toast
+      // the backend's own wording (this dialog is deliberately literal-copy, no
+      // i18n) rather than paraphrasing it - it carries the OS error detail.
+      const warnings = result.warnings ?? [];
+      if (warnings.length > 0) {
+        showToast(warnings.map((w) => w.message).join(' '), 'delete-project-warning', 'warning');
+      }
       // Mark the dialog completed BEFORE closing: closeDialog() runs
       // checkDialogCancel('delete-project'), which would otherwise record a
       // successful delete as a cancel (mirrors OverwriteConfirmDialog).
@@ -84,8 +88,8 @@ export default function DeleteProjectDialog() {
         </p>
 
         <div className="p-3 bg-warning-10 border border-warning-20 rounded text-warning text-sm">
-          This removes the local files{' '}
-          <span className="font-medium break-all">{fileNames}</span> from disk.{' '}
+          This removes the local file{' '}
+          <span className="font-medium break-all">{path ?? name}</span> from disk.{' '}
           {isRemote
             ? 'The project stays on SpeleoDB and can be downloaded again, but any local changes not yet pushed to SpeleoDB will be lost.'
             : 'It cannot be undone.'}

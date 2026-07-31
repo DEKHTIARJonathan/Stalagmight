@@ -496,6 +496,26 @@ describe('index.html anti-flash cover', () => {
     expect(bodyTag![0]).not.toMatch(/style\s*=/i);
   });
 
+  it('declares every depth endpoint as a plain #rrggbb literal (#360)', () => {
+    // These two tokens are the only colour rule that crosses into Rust: the
+    // image export is sent whatever the document resolves them to, and the
+    // Rust side accepts ONLY `#rrggbb` (src-tauri/src/export/image.rs,
+    // `parse_hex_endpoint`), falling back to the dark ramp for anything else.
+    // That fallback is SILENT by design - a malformed colour must not paint a
+    // black survey - so a future theme written as `rgb(...)`, `oklch(...)` or
+    // `#fff` would revert #360 with no error and no failing test anywhere.
+    // This is the only place the contract can be pinned in the language that
+    // owns the tokens.
+    for (const [theme, tokens] of Object.entries(cssTokensByTheme)) {
+      for (const name of ['--cc-depth-shallow', '--cc-depth-deep']) {
+        const value = tokens[name];
+        // Not every theme declares them; the ones that do must be hex.
+        if (value === undefined) continue;
+        expect(value, `${theme} ${name} is not #rrggbb`).toMatch(/^#[0-9a-fA-F]{6}$/);
+      }
+    }
+  });
+
   it('does not guess the theme from the OS colour scheme', () => {
     // The OS preference is only consulted when appearance.theme is "auto"
     // (src/hooks/useTheme.ts), so keying the cover off it repaints the shipped

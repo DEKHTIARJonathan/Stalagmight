@@ -1,6 +1,5 @@
 import { themeTokens } from '../theme/tokens';
 import { SEVERITY_GREEN, SEVERITY_YELLOW, SEVERITY_RED } from './colors';
-import type { ExportImageOptions } from '../types/commands';
 
 /**
  * Theme color utilities for reading CSS custom properties at runtime.
@@ -104,26 +103,5 @@ export function getMapThemeColors(): MapThemeColors {
     severityClear: SEVERITY_CLEAR,
     severityWarning: SEVERITY_WARNING,
     severityError: SEVERITY_ERROR,
-  };
-}
-
-/**
- * Fills in `depth_shallow` / `depth_deep` on export/preview options from the
- * ACTIVE theme's resolved `--cc-depth-shallow` / `--cc-depth-deep`, unless
- * the caller already set them. The Rust export backend (`export_image`,
- * `preview_svg_export`) has no access to CSS custom properties, so this is
- * how depth-mode PNG/PDF export and the WYSIWYG preview stay in sync with
- * whatever theme is on screen instead of a single hardcoded ramp - the
- * export used to hardcode the `dark` theme's endpoints regardless of the
- * active theme (#360). Call at every site that sends `ExportImageOptions`
- * across the IPC boundary, memoized on `resolvedTheme` so it recomputes on
- * theme change.
- */
-export function withThemeDepthColors(options: ExportImageOptions): ExportImageOptions {
-  const { depthShallow, depthDeep } = getMapThemeColors();
-  return {
-    ...options,
-    depth_shallow: options.depth_shallow ?? depthShallow,
-    depth_deep: options.depth_deep ?? depthDeep,
   };
 }

@@ -344,7 +344,7 @@ impl Project {
     /// through the closure itself (a sole bridge), which is a merge, not a loop.
     /// [`Self::convert_orphan_closures_to_merges`] normally fixes these the
     /// moment they appear (on delete/split and on load), so this is a safety-net
-    /// detector for any path that bypassed that (e.g. a collaborator's reconciled
+    /// detector for any path that bypassed that (e.g. a repair or an import
     /// edit) - it lets the integrity banner surface the condition.
     pub fn check_orphan_closures(&self) -> Vec<IntegrityViolation> {
         let mut violations = Vec::new();

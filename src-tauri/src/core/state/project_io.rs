@@ -2,8 +2,7 @@ use super::AppState;
 use crate::core::{CommandResult, UndoStack};
 use crate::models::{Project, SectionId};
 use crate::persistence::Database;
-use anyhow::Result;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 /// Build a save-failure `CommandResult`, tagging filesystem permission
 /// denials with `PERMISSION_DENIED_CODE` so the frontend can surface
@@ -16,11 +15,7 @@ use std::path::PathBuf;
 /// deleted/renamed save folder yields SQLite's same generic "unable to open
 /// database file", but that's a vanished-location error, not a denial, and
 /// should stay an ordinary failure rather than show Privacy & Security steps.
-pub(super) fn save_failure(
-    context: &str,
-    target: &std::path::Path,
-    err: &anyhow::Error,
-) -> CommandResult {
+pub(super) fn save_failure(context: &str, target: &Path, err: &anyhow::Error) -> CommandResult {
     let detail = format!("{context}: {err}");
     let dir_present = target
         .parent()
@@ -48,7 +43,7 @@ impl AppState {
             .load(std::sync::atomic::Ordering::Relaxed)
     }
 
-    pub(super) fn save_project(&self, path: Option<PathBuf>, is_autosave: bool) -> CommandResult {
+    pub(super) fn save_project(&self, path: Option<PathBuf>) -> CommandResult {
         let Ok(mut proj_guard) = self.project.lock() else {
             return CommandResult::failure("Failed to lock project".to_string());
         };
@@ -90,7 +85,6 @@ impl AppState {
                 .count();
             tracing::error!(
                 count,
-                is_autosave,
                 purpose = "block persisting unresolvable cross-references",
                 "Refused to save project with dangling cross-references"
             );
@@ -103,13 +97,11 @@ impl AppState {
         }
 
         // Mint UUIDs for any shot still missing one (pre-v6 .stalx
-        // files loaded today come back with NULL uuid columns).
-        // Doing this BEFORE the SQLite write and BEFORE the sibling
-        // .tml export guarantees both sides receive the same UUIDs -
-        // without it, db.save_project's INSERT path would mint one set
-        // of fresh UUIDs and `write_collab_sibling`'s export would mint
-        // a different set, leaving the .stalx and the .tml disagreeing
-        // about every shot's identity until the next reload.
+        // files loaded today come back with NULL uuid columns). The UUID
+        // is the station identity every cross-reference anchors to
+        // (`StationKey::AfterShot`), and it is what keeps the `.tml`
+        // SpeleoDB renders byte-stable across re-exports, so it has to be
+        // settled BEFORE the SQLite write rather than minted per-consumer.
         project.ensure_shot_uuids();
         // Re-mint any within-section duplicate shot UUID before refs are resolved
         // to positional form for persistence. resolve_key snaps AfterShot(uuid) to
@@ -405,6 +397,49 @@ impl AppState {
                 .and_then(|db| db.load_speleo_link().ok().flatten())
         };
 
+        // Save a Copy: an EXPLICIT destination on a SpeleoDB-managed project does
+        // not relocate the session - it writes a detached copy WITHOUT the
+        // `speleo_link` row and leaves the session on the managed file. A managed
+        // project is usable at exactly one path (its cache slot - see
+        // `speleodb_foreign`), so carrying the link to an arbitrary destination
+        // would mint the second linked copy that module exists to refuse. The
+        // predicate is safe for every in-tree caller: `speleodb_publish` and the
+        // Ariane adopt both save to the cache path while the project is STILL
+        // UNLINKED (the link is stamped after - pinned by
+        // `publish_relocates_into_the_cache_before_it_stamps_the_link`), and
+        // `speleodb_upload`'s pre-push flush is an implicit save.
+        let copy_only = speleo_link.is_some() && !is_implicit_save;
+        if copy_only {
+            // Refuse the managed file itself as the copy's destination: writing an
+            // unlinked copy over it would strip the managed project's link in
+            // place - the one outcome this whole arrangement exists to prevent.
+            // Both spellings of "itself" are checked: the open file, and the
+            // project's canonical cache slot (they are normally the same file, but
+            // `same_file` cannot bridge them when one side does not resolve).
+            let names_the_managed_file = project
+                .file_path
+                .as_ref()
+                .is_some_and(|open| same_file(open, &save_path))
+                || speleo_link.as_ref().is_some_and(|link| {
+                    super::speleodb::validate_project_id(&link.project_id).is_ok()
+                        && super::speleodb_local_state::cache_root().is_some_and(|root| {
+                            super::speleodb_local_state::is_the_cached_copy(
+                                &root,
+                                &link.project_id,
+                                &save_path,
+                            )
+                        })
+                });
+            if names_the_managed_file {
+                return CommandResult::failure(format!(
+                    "\"{}\" is the managed copy of \"{}\" - Save a Copy needs a \
+                     different destination. Use Save to save the project itself.",
+                    save_path.display(),
+                    project.name
+                ));
+            }
+        }
+
         // Remove any leftover temp file from previous failed saves
         if temp_path.exists() {
             let _ = std::fs::remove_file(&temp_path);
@@ -458,18 +493,60 @@ impl AppState {
         // [Track B] (#191, D-B13c) Carry the SpeleoDB hand-off link forward so a
         // local save never un-remotes the project or clears the dirty bit. The
         // dirty bit is set-only here - only a later server push clears it.
-        if let Some(link) = &speleo_link {
-            if let Err(e) = db.save_speleo_link(Some(link)) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "preserve SpeleoDB hand-off link on save",
-                    "Failed to copy speleo_link onto the fresh save file"
-                );
+        // EXCEPT on a copy save, where dropping the row is the whole point: the
+        // copy is a plain unmanaged project.
+        if !copy_only {
+            if let Some(link) = &speleo_link {
+                if let Err(e) = db.save_speleo_link(Some(link)) {
+                    tracing::warn!(
+                        error = %e,
+                        purpose = "preserve SpeleoDB hand-off link on save",
+                        "Failed to copy speleo_link onto the fresh save file"
+                    );
+                }
             }
+        }
+
+        // A copy gets the undo/redo history too (into the temp handle, while it
+        // is still open - the normal path writes them into the REOPENED db after
+        // the rename, but a copy never reopens). This keeps Save a Copy a
+        // faithful Save As minus the link, and it is what lets the detach flow
+        // (convert to unmanaged) carry the edit history onto the file it then
+        // opens.
+        if copy_only {
+            self.persist_undo_stacks_into(&db);
         }
 
         // Close the temp database before renaming
         drop(db);
+
+        if copy_only {
+            // The destination is provably NOT the live file (refused above), so
+            // the live connection stays open, the session keeps its file_path and
+            // database handle, and no cache is invalidated. Rename the temp into
+            // place, list the copy, and report it via `unlinked_copy_path` -
+            // deliberately NOT `saved_path`, which the frontend treats as "the
+            // open project now lives here".
+            if let Err(e) = std::fs::rename(&temp_path, &save_path) {
+                let _ = std::fs::remove_file(&temp_path);
+                let e = anyhow::Error::from(e);
+                tracing::error!(
+                    error = %e,
+                    purpose = "write a detached unlinked copy",
+                    "Failed to rename temp file to the copy destination"
+                );
+                return save_failure("Failed to finalize save", &save_path, &e);
+            }
+            drop(proj_guard);
+            self.note_recent_project(&save_path);
+            tracing::info!(
+                path = ?save_path,
+                purpose = "write a detached unlinked copy",
+                "Saved an unlinked copy of a SpeleoDB-managed project"
+            );
+            return CommandResult::success()
+                .with_unlinked_copy_path(save_path.display().to_string());
+        }
 
         // Close our own persistent connection to the destination BEFORE the
         // rename. Windows refuses to rename a file over a destination that
@@ -549,6 +626,39 @@ impl AppState {
         };
 
         // Persist undo/redo stacks (best-effort, synchronous to avoid race with readers)
+        self.persist_undo_stacks_into(&db);
+
+        // Update file path after successful save
+        project.file_path = Some(save_path.clone());
+
+        // Update database handle
+        drop(proj_guard);
+        if let Ok(mut database) = self.database.lock() {
+            *database = Some(db);
+        }
+
+        // Clear in-memory cache since settings are now persisted to DB
+        self.clear_display_settings_cache();
+        self.invalidate_adjusted_cache();
+
+        // Add to recent projects and persist to config
+        self.note_recent_project(&save_path);
+
+        let save_path_str = save_path.display().to_string();
+        tracing::info!(
+            path = ?save_path,
+            purpose = "persist edits safely",
+            "Project saved successfully"
+        );
+        CommandResult::success().with_path(save_path_str)
+    }
+
+    /// Persist the undo/redo stacks into `db`, best-effort (shared by the normal
+    /// save, which writes them into the reopened destination, and the copy save,
+    /// which writes them into the temp handle before the rename). Locks
+    /// `undo_stack` only - callers may hold `project` (the established order is
+    /// `project` before `undo_stack`).
+    fn persist_undo_stacks_into(&self, db: &Database) {
         let persist_limit = self
             .config
             .lock()
@@ -580,46 +690,15 @@ impl AppState {
                 );
             }
         }
+    }
 
-        // Update file path after successful save
-        project.file_path = Some(save_path.clone());
-
-        // Collaboration mode: also write the sibling .tml and refresh the
-        // baseline. Best-effort - never fail the .stalx save if this
-        // fails.  Autosaves honour `CollabState.write_tml_on_autosave`
-        // - when that flag is `false` we skip the .tml rewrite on
-        // background saves so the file Ariane is editing doesn't churn
-        // every 30 seconds; manual / explicit saves always rewrite.
-        let collab_writes_tml = project
-            .collab
-            .as_ref()
-            .is_some_and(|c| c.enabled && (!is_autosave || c.write_tml_on_autosave));
-        let mut collab_sibling_error: Option<String> = None;
-        if collab_writes_tml {
-            if let Err(e) = Self::write_collab_sibling(project, &save_path, &db) {
-                tracing::warn!(
-                    error = %e,
-                    purpose = "write collaborator .tml on save",
-                    "Saved .stalx but failed to write sibling .tml"
-                );
-                collab_sibling_error = Some(e.to_string());
-            }
-        }
-
-        // Update database handle
-        drop(proj_guard);
-        if let Ok(mut database) = self.database.lock() {
-            *database = Some(db);
-        }
-
-        // Clear in-memory cache since settings are now persisted to DB
-        self.clear_display_settings_cache();
-        self.invalidate_adjusted_cache();
-
-        // Add to recent projects and persist to config
+    /// Put `path` at the head of the recent-projects list and persist it to
+    /// config. Takes no state locks other than `recent_projects` + `config`;
+    /// callers must NOT hold `project` (the save paths drop it first).
+    fn note_recent_project(&self, path: &Path) {
         if let Ok(mut recent) = self.recent_projects.lock() {
-            recent.retain(|p| p != &save_path);
-            recent.insert(0, save_path.clone());
+            recent.retain(|p| p != path);
+            recent.insert(0, path.to_path_buf());
             if let Ok(mut config) = self.config.lock() {
                 recent.truncate(config.general.recent_projects_max);
                 config.general.recent_projects.clone_from(&recent);
@@ -632,80 +711,6 @@ impl AppState {
                 }
             }
         }
-
-        let save_path_str = save_path.display().to_string();
-        tracing::info!(
-            path = ?save_path,
-            purpose = "persist edits safely",
-            "Project saved successfully"
-        );
-        let mut result = CommandResult::success().with_path(save_path_str);
-        // Surface a partial-save warning when the .stalx persisted but the
-        // sibling .tml didn't.  Without this the UI shows a green checkmark
-        // even though the collaborator's copy is now stale, so they keep
-        // editing data the Stalagmight user already replaced.
-        if let Some(err) = collab_sibling_error {
-            result.warnings.push(crate::core::ValidationWarning {
-                code: "COLLAB_SIBLING_WRITE_FAILED".to_string(),
-                message: format!(
-                    "Saved the .stalx but the companion .tml could not be written ({err}); the file Ariane is editing is now out of date.",
-                ),
-                severity: crate::core::WarningSeverity::Warning,
-            });
-        }
-        result
-    }
-
-    /// Write the sibling `.tml` for collaboration mode and refresh the stored
-    /// baseline + content hash on the (already-open) project database.
-    fn write_collab_sibling(
-        project: &mut Project,
-        save_path: &std::path::Path,
-        db: &Database,
-    ) -> Result<()> {
-        // Always derive the sibling name from the current .stalx stem so the
-        // companion .tml tracks the project file even if collaboration was
-        // enabled before the project had a path (or the file was renamed).
-        let sibling_name = save_path
-            .file_stem()
-            .map(|s| format!("{}.tml", s.to_string_lossy()))
-            .unwrap_or_else(|| "collaboration.tml".to_string());
-        let sibling = match save_path.parent() {
-            Some(dir) => dir.join(&sibling_name),
-            None => PathBuf::from(&sibling_name),
-        };
-
-        let (baseline, sha, synthetic_section_names) =
-            crate::export::tml::export_tml_with_baseline(project, &sibling)?;
-
-        // One (section_name -> id) entry per project section.  Includes
-        // sections with NO baseline shots (e.g. an empty root section that
-        // only had a START before any real measurements) so that if a
-        // collaborator adds the first shots to such a section in Ariane,
-        // the returned shots' section_name still matches the existing
-        // SectionId via the name-map fallback, and reconcile fills the
-        // existing section instead of creating a duplicate.  The exporter's
-        // section_name string (used in the baseline) follows the same
-        // fallback so the empty-section entries here use a matching key.
-        let mut section_name_map = Vec::new();
-        for section in &project.sections {
-            let name = section
-                .name
-                .clone()
-                .unwrap_or_else(|| format!("Section {}", section.id));
-            section_name_map.push((name, section.id));
-        }
-
-        if let Some(c) = project.collab.as_mut() {
-            c.sibling_tml_relative = sibling_name;
-            c.last_export_tml_sha256 = Some(sha);
-            c.shot_baseline = baseline;
-            c.section_name_map = section_name_map;
-            c.synthetic_section_names = synthetic_section_names;
-        }
-
-        db.save_collab_state(project.collab.as_ref())?;
-        Ok(())
     }
 
     /// Drop the open project's resources.
@@ -721,12 +726,40 @@ impl AppState {
     /// exact SIGBUS / `MoveFileEx`-denied hazard the guard exists to prevent.
     pub(super) fn close_project(&self) -> CommandResult {
         tracing::debug!("close_project: acquiring project lock");
-        {
-            let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
-            tracing::debug!("close_project: dropping project");
-            *proj = None;
-            tracing::debug!("close_project: project dropped");
-        }
+        let mut proj = self.project.lock().unwrap_or_else(|e| e.into_inner());
+        self.close_open_project_locked(&mut proj)
+    }
+
+    /// [`close_project`](Self::close_project)'s teardown, with the `project` guard
+    /// supplied by the caller so that a caller which must first DECIDE whether to
+    /// close can decide and close under ONE acquisition.
+    ///
+    /// `delete_project` is that caller: it closes only when the `.stalx` it is
+    /// about to hand to the OS delete is the file backing the open project, and
+    /// doing the check through `open_project_path` (which releases the lock) and
+    /// only then calling `close_project` (which re-acquires it) is a TOCTOU - a
+    /// load that finished installing a DIFFERENT project in that gap had ITS
+    /// database handle and undo stack torn down while the delete went on to remove
+    /// the original file.
+    ///
+    /// Holding `project` across the `database` and `undo_stack` acquisitions below
+    /// is the ordering the rest of the state layer already uses - `save_project`
+    /// holds its `project` guard while it takes both - and no path acquires either
+    /// of those BEFORE `project`, so it cannot deadlock. Calling
+    /// [`close_project`](Self::close_project) with the guard held, by contrast,
+    /// would self-deadlock on its own first acquisition.
+    ///
+    /// The caller owns the poison recovery for the `project` lock (both of this
+    /// function's callers use `PoisonError::into_inner`, for the reason spelled out
+    /// on `close_project`); the locks taken here recover it themselves.
+    pub(super) fn close_open_project_locked(&self, project: &mut Option<Project>) -> CommandResult {
+        tracing::debug!("close_project: dropping project");
+        *project = None;
+        // A session boundary: the caller holds the `project` guard (it passed it
+        // in), which is the bump rule (`speleodb_session`). Covers close, delete
+        // and the project switch, which all route through here.
+        self.bump_speleodb_session();
+        tracing::debug!("close_project: project dropped");
 
         tracing::debug!("close_project: acquiring database lock");
         {
@@ -788,7 +821,7 @@ impl AppState {
     /// USUALLY, but not always, the open project (a pull can target a cached
     /// project the user does not currently have open), and dropping an unrelated
     /// open project would throw away its undo/redo history for nothing.
-    pub(super) fn close_project_if_open_at(&self, dest: &std::path::Path) -> bool {
+    pub(super) fn close_project_if_open_at(&self, dest: &Path) -> bool {
         let Some(open_path) = self.open_project_path() else {
             return false;
         };
@@ -817,7 +850,7 @@ impl AppState {
 /// Shared with `speleodb_local_state`, where the same question ("is the open
 /// project THIS file?") decides whether the live in-memory link may vouch for a
 /// copy that could not be read.
-pub(super) fn same_file(a: &std::path::Path, b: &std::path::Path) -> bool {
+pub(super) fn same_file(a: &Path, b: &Path) -> bool {
     match (a.canonicalize(), b.canonicalize()) {
         (Ok(ca), Ok(cb)) => ca == cb,
         _ => a == b,

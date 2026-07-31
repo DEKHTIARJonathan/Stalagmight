@@ -52,12 +52,48 @@ These are written per-shot since Ariane stores section metadata on every shot ro
 | `shot.depth_in` | `DepthIn` / `DPI` | -1.0 sentinel when equal to previous `depth_out` |
 | `shot.pitch_in` | `Inclination` / `INC` | 0.0 if unset |
 | LRUD | `Left`/`Right`/`Up`/`Down` | 0.0 for `None` |
-| `shot.comment` | `Comment` / `CM` | Empty string if unset. In collaboration mode also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
+| `shot.comment` | `Comment` / `CM` | Empty string if unset. Also carries the **to-station's** `project.station_comments` entry, joined with the shot comment via the ZWSP marker - see [Station-comment co-encoding](#station-comment-co-encoding). |
 | `shot.kind` | `Type` / `TY` | Both `Jump` and `Reference` export as `VIRTUAL`; `Normal` as `REAL`. Ariane has a single virtual category, so the #27 distinction is lossy on export by design (q9) and is preserved locally instead. |
+| `shot.uuid` | `UUID` / `UU` | Emitted for every REAL/VIRTUAL forward shot; omitted on the synthesized shots (START, CLOSURE, reversed and pre-zero-datum legs), which have no 1:1 Stalagmight shot behind them. See [Shot UUIDs](#shot-uuids). |
 | - | `Locked` / `LCK` | `false` for normal shots, `true` for START |
 | - | `Name` / `NM` | `"START"` for START shot, empty otherwise |
 | - | `Profiletype` / `PT` | Always `VERTICAL` |
 | - | `Excluded` / `EXC` | Always `false` |
+
+## Shot UUIDs
+
+Every real forward shot carries its persistent `shot.uuid` into the export as
+`<UUID>` (`<UU>` in `.tmlu`). This is what makes a re-export of an unchanged
+project **byte-identical**, which the SpeleoDB push depends on: the `.tml` is
+rendered as a sidecar so the server can regenerate GeoJSON.
+`Project::ensure_shot_uuids` settles the UUIDs before every save and before that
+render, so nothing is minted per-export (a project loaded but never saved is the
+one case where a UUID is minted on the fly, and it is persisted by the next
+save).
+
+What the value guarantees is **stability across re-exports, not uniqueness
+within the file**. Shot-UUID uniqueness in the model is **per-section only**, and
+deliberately so: `Project::ensure_unique_shot_uuids` resets its dedup set inside
+the section loop, and the companion `duplicate_shot_uuid` integrity check is
+section-scoped for the same reason - `resolve_key` is section-local, so a
+cross-section repeat cannot mis-resolve a station anchor and is not treated as a
+violation. Nothing in the model, the integrity pass or the exporter therefore
+makes `<UUID>` unique across the exported document.
+
+The consequence for the SpeleoDB render is that a consumer keying features by
+`<UUID>` alone - as a GeoJSON feature `id`, say - would alias the colliding shots
+if such a repeat ever appeared, and neither the export nor our integrity pass
+would flag it. No current edit path is known to mint a cross-section duplicate
+(there is no section split/duplicate command, and the importer mints fresh
+identities), so this is a documented property of the guarantee rather than a live
+bug. What it means in practice: do not build a consumer that assumes
+project-wide uniqueness, and do not describe `<UUID>` as one.
+
+The importer does **not** read the element back: a fresh import mints its own
+shot identities, so `<UUID>` is write-only as far as Stalagmight is concerned.
+It exists for the SpeleoDB render and for any consumer that wants a stable
+per-shot key. Ariane 26+ round-trips it; Ariane 25 and older drop it silently,
+which is harmless here.
 
 ## Topology
 
@@ -90,22 +126,67 @@ Internal `#RRGGBB` hex colors are converted to Ariane's `0xRRGGBBff` format (8-d
 
 ## Station-comment co-encoding
 
-The TML format has one `<Comment>` field per shot and no per-station comment
-field. To round-trip both `shot.comment` and `project.station_comments` through
-Ariane, the exporter packs both into the shot's `<Comment>`:
+Ariane's `.tml` format has one `<Comment>` field per shot and no per-station
+comment field, so a Stalagmight station comment otherwise has nowhere to live
+in `.tml`. To round-trip both `shot.comment` and `project.station_comments`
+through Ariane, the exporter packs both into the shot's `<Comment>`:
 
-- Lines of `shot.comment` are prefixed with a zero-width space (`U+200B`).
-- Lines of the **to-station's** `station_comments` entry (the station at
-  `shot_index + 1`) are appended unmarked.
-- When a child section's station 0 is merged into a parent station, both
-  StationRefs alias the same Ariane shot id and both station comments are
-  concatenated (sorted by `(section_id, station_index)` for reproducibility).
+- Each station comment is attached to the shot whose **`to` station** matches
+  it - the shot that "creates" that station, i.e. the one at `shot_index + 1`.
+- Shot vs station lines inside the resulting Comment are distinguished by a
+  zero-width-space (`U+200B`) prefix: lines prefixed with `ZWSP` are shot
+  comments; lines without the prefix are station comments.
+- The marker is invisible in any editor, including Ariane's, so a reader sees
+  a single readable Comment block.
 
-START shots keep their hardcoded `"START"` content untouched (no station-
-comment fold), and CLOSURE shots have no `to` station in the create-station
-sense. The same split is applied in reverse on `.tml` import via
-`core::comment_split::split`. See
-[docs/collaboration.md → Station comments via the ZWSP marker](collaboration.md#station-comments-via-the-zwsp-marker).
+Caveats:
+
+The fold walks the emitted REAL/VIRTUAL shots and skips START (its `"START"`
+content is hardcoded) and CLOSURE (no `to` station in the create-station sense).
+Every station whose Ariane id **is** the START shot's therefore loses its comment
+on export. Three ways a station ends up there:
+
+- **Root station 0.** In an unsplit root section, station 0 *is* the START shot,
+  so a comment on it is dropped. Add the note one shot downstream if you need it
+  to survive.
+- **The primary zero datum's station.** When the root section is split at a
+  non-zero zero datum, the datum's own station is aliased onto the synthesized
+  START shot, so a comment on that station is dropped too - even though a real
+  shot of the project sits at that index.
+- **A station merged onto either of the above.** The parent-link pass maps a
+  merged child station to the *parent's* Ariane id, so a child station merged
+  into root station 0 (or into the aliased datum station) inherits the START id
+  and is dropped with it.
+
+Comments that survive but move:
+
+- **Stations before the zero-datum split index.** Those stations are emitted on
+  the reverse `"<Section> (pre-zero-datum)"` leg, so their comments are folded
+  onto that synthetic leg's shots. The text survives, but it re-imports onto a
+  *fabricated* section that never existed in the project - not onto the section
+  the surveyor wrote it in.
+- **Two StationRefs on one Ariane shot.** When a child section's station 0 is
+  merged into a parent station that *is* a real shot, both refs alias that shot
+  id, so both station comments are concatenated into its exported Comment
+  (sorted by `(section_id, station_index)` for reproducibility).
+
+A fourth, rarer drop: a station the Ariane topology does not represent at all
+(nothing in the exporter's station-to-node map), which is what happens when the
+shape of a merge leaves a station with no node of its own.
+
+Every one of these drops emits a `tracing::debug!` naming the section id and
+station index (plus the Ariane node id where there is one), so a lost comment is
+diagnosable from a debug-level log rather than silent. Which comments get dropped
+is deliberately unchanged - the logging exists so the loss is observable, not to
+change the behaviour.
+
+The same split logic is applied in reverse on `.tml` import
+(`core::comment_split::split`) when the import dialog's "comments on
+stations" option is on (the default). Text typed in Ariane carries no marker
+and therefore routes to the **station** on import - matching how Ariane
+visually centers Comment text on the station, not along the shot. A bare
+Ariane file has no markers at all, so every Comment line routes to the
+station.
 
 ## Implementation
 

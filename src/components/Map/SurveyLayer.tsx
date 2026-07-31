@@ -985,7 +985,13 @@ export default class SurveyLayer {
         }
         this.hoveredStationId = null;
         this.hoveredShotId = null;
-        this.map.getCanvas().style.cursor = '';
+        // Fall back to the TOOL's resting cursor, not to `''` (#316). Writing
+        // `''` here left a bare arrow behind that nothing restored: on re-entry
+        // `processHoverUpdate` only calls `refreshHoverCursor` when the hovered
+        // id CHANGES, and this handler already nulled it, so the measure
+        // crosshair / merge cell / comment crosshair stayed lost until the
+        // pointer happened to hover a feature.
+        this.refreshHoverCursor();
         // Update visual state immediately
         this.updateVisualState();
         // Defer React callbacks

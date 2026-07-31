@@ -1051,8 +1051,7 @@ impl AppState {
             ))));
         }
 
-        let saved =
-            crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()), false);
+        let saved = crate::commands::project::save_project_impl(self, Some(dest.to_path_buf()));
         if !saved.success {
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not save the adopted project: {}",

@@ -97,7 +97,7 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
     // Keep in sync with BINARY_FORMAT_VERSION / EXPECTED_VERSION. This fixture
     // feeds buildResult() directly, bypassing the envelope-version gate, so a
     // stale value here rots silently rather than failing.
-    version: 3,
+    version: 4,
     loading_id: 1,
     is_remote: false,
     project_header: {
@@ -117,7 +117,6 @@ function makeEnvelope(nSections: number, shotsPer: number): BinaryEnvelope {
       station_comments_map: [],
       imported_file_hashes: [],
       imported_section_hashes: [],
-      collab: null,
       validation: {} as BinaryEnvelope['project_header']['validation'],
     },
     shot_count: shotCount,

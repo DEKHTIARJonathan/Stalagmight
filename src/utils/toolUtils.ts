@@ -26,3 +26,53 @@ export const READ_ONLY_TOOLS: ToolType[] = ['select', 'pan', 'zoom', 'measure'];
 export function isMutatingTool(tool: ToolType): boolean {
   return !READ_ONLY_TOOLS.includes(tool);
 }
+
+/**
+ * The RESTING map cursor for a tool - what the canvas shows while the tool is
+ * active and nothing is hovered.
+ *
+ * Single owner on purpose (#316). Three copies of this table used to live in
+ * MapCanvas and had drifted: two still named tools that no longer exist
+ * (`draw`, `delete`, `move_section`) and they disagreed on `merge`
+ * (`cell` vs `crosshair`) and on the move tools (`move` vs `default`). Any
+ * writer that guesses wrong re-opens the class of bug where one cursor writer
+ * silently clobbers another's.
+ *
+ * This is the tool's resting cursor only. Two things legitimately outrank it,
+ * and both live with the code that knows about them, not here:
+ * - a hovered feature's `pointer`, and Move Station/Shot's arrow fallback
+ *   (`SurveyLayer.refreshHoverCursor`);
+ * - the Ctrl-held pan `grab` (`MapCanvas`, which owns the Ctrl state).
+ *
+ * The switch is exhaustive over `ToolType`: adding a tool without giving it a
+ * cursor is a compile error, not a silently blank canvas.
+ */
+export function toolCursor(tool: ToolType): string {
+  switch (tool) {
+    case 'select':
+      return 'default';
+    case 'pan':
+      return 'grab';
+    case 'zoom':
+      return 'zoom-in';
+    case 'merge':
+      return 'cell';
+    case 'measure':
+      return 'crosshair';
+    case 'move_station':
+    case 'move_segment':
+    case 'move_shot':
+      return 'move';
+    case 'comment':
+    case 'move_comment':
+      return 'crosshair';
+    default: {
+      // The `never` binding makes a new ToolType without a cursor a COMPILE
+      // error here rather than a silently blank canvas; at runtime a value that
+      // reached us from outside the type system falls back to the arrow.
+      const _exhaustive: never = tool;
+      void _exhaustive;
+      return 'default';
+    }
+  }
+}

@@ -49,7 +49,13 @@ export default function OverwriteConfirmDialog() {
         // Save succeeded.
         trackDialogComplete('confirm-overwrite');
         closeDialog();
-        if (closeAfterSave) {
+        // A managed project's explicit-destination save writes a detached COPY;
+        // the open project itself was NOT saved, so "Save and Close" must not
+        // proceed to close it (that would discard the unsaved edits the save
+        // appeared to persist). Unreachable today - saveAndClose only routes
+        // through Save As when the project has no path, and a managed project
+        // always has one - but the failure mode is silent data loss, so gate it.
+        if (closeAfterSave && !result?.unlinked_copy_path) {
           // Project is now saved (not dirty), so this closes straight to GlobalView.
           void handleCloseProject();
         }

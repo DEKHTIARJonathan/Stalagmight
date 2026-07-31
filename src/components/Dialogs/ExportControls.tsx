@@ -1,9 +1,7 @@
-import { useState, useEffect, useMemo, useRef, useCallback, useId } from 'react';
+import { useState, useEffect, useRef, useCallback, useId } from 'react';
 import { listen } from '@tauri-apps/api/event';
 import { saveDialog } from '../../utils/fileDialogs';
 import { useProjectStore } from '../../store/projectStore';
-import { useUIStore } from '../../store/uiStore';
-import { withThemeDepthColors } from '../../utils/themeColors';
 import { Button } from '../common/Button';
 import { Select } from '../common/Select';
 import { AlertDialog } from './AlertDialog';
@@ -65,22 +63,6 @@ export default function ExportControls({
 }: ExportControlsProps) {
   const { project, exportCsv, exportJson, exportTml, exportImage, getAnchoredSectionIds } =
     useProjectStore();
-
-  // Subscribe so `effectiveImageOptions` recomputes on theme change (mirrors
-  // how DepthLegend re-reads its live tokens on `resolvedTheme`).
-  const resolvedTheme = useUIStore((s) => s.resolvedTheme);
-
-  // Depth-mode export/preview must track the ACTIVE theme's ramp, not a
-  // hardcoded pair (#360): resolve `--cc-depth-shallow` / `--cc-depth-deep`
-  // here - the same source MapCanvas/DepthLegend read - and thread them
-  // across the IPC boundary via `ExportImageOptions`, since the backend has
-  // no access to CSS custom properties. Both the WYSIWYG preview and the
-  // actual export use this so they never drift from each other or the map.
-  const effectiveImageOptions: ExportImageOptions = useMemo(
-    () => withThemeDepthColors(imageOptions),
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [imageOptions, resolvedTheme],
-  );
 
   const [isExporting, setIsExporting] = useState(false);
   const [labelsOptionsExpanded, setLabelsOptionsExpanded] = useState(false);
@@ -222,7 +204,7 @@ export default function ExportControls({
           exportLoadingIdRef.current = null;
 
           try {
-            await exportImage(finalPath, effectiveImageOptions);
+            await exportImage(finalPath, imageOptions);
           } finally {
             // Clean up listener and reset state only if still mounted
             unlisten();
@@ -529,7 +511,7 @@ export default function ExportControls({
         {!isPanel && exportType === 'image' && (
           <div className="flex flex-col gap-2">
             <span className="text-sm text-text-secondary">Preview</span>
-            <ExportPreview options={effectiveImageOptions} />
+            <ExportPreview options={imageOptions} />
           </div>
         )}
       </div>

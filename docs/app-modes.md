@@ -38,8 +38,8 @@ closures, and again when an adjusted-geometry fetch fails. So on a freshly
 imported project with no closures, Plan mode runs with
 `geometryMode === 'measured'`, and a gate written as
 `geometryMode === 'closureAdjusted'` reports "editable" in a workspace that must
-not be. `DataTable`, `SectionsPanel`, `WarningResolution`, `DetailPanel` and
-`CollabReviewDialog` all shipped with exactly that bug.
+not be. `DataTable`, `SectionsPanel`, `WarningResolution` and `DetailPanel` all
+shipped with exactly that bug.
 
 **There is no server backstop for this half of the predicate.** The backend's
 `AppState::guard_mutation` rejects a mutation only when `edit_enabled` is false,

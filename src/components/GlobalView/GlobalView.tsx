@@ -1214,7 +1214,6 @@ export default function GlobalView() {
                   openDialog('delete-project', {
                     path: contextMenu.projectPath,
                     name: ctxProj?.name,
-                    collabEnabled: ctxProj?.collab_enabled,
                     isRemote: ctxProj?.is_remote,
                   });
                   setContextMenu((prev) => ({ ...prev, visible: false }));

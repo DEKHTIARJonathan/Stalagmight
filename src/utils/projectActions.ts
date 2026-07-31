@@ -117,22 +117,31 @@ export async function saveProjectAs(opts?: {
 }
 
 /**
- * Detach the open SpeleoDB project from SpeleoDB, keeping the local copy as a
- * plain unmanaged `.stalx` (#204 - the shared action behind the no-permission
- * prompt (10) and the divergence "keep my copy" path (11)).
+ * Detach the open SpeleoDB project from SpeleoDB, keeping the user's work as a
+ * plain unmanaged `.stalx` at a path they pick (#204 - the shared action behind
+ * the no-permission prompt (10) and the divergence "keep my copy" path (11)).
  *
- * Pick a permanent home via the native Save dialog, write the CURRENT (possibly
- * locally-edited) content there, then `speleodb_unlink` so the open project is no
- * longer tied to SpeleoDB and edits freely. Nothing is pushed or released - the
- * SpeleoDB copy is simply abandoned; a later Open-from-SpeleoDB re-pulls the
- * server tip, so the managed side stays clean. Returns true once converted.
+ * Order is the data-safety argument:
  *
- * The save must land first: if it is cancelled or fails, we do NOT unlink (that
- * would silently strand the user's work in the cache with no SpeleoDB link).
+ * 1. Save first. On a linked project an explicit destination writes a detached
+ *    UNLINKED copy (`unlinked_copy_path`; the session stays on the managed
+ *    file). The copy carries the survey data, settings and undo history - the
+ *    user's work is durable at `finalPath` before anything is given up. If the
+ *    dialog is cancelled or the save fails, NOTHING has changed.
+ * 2. Only then `speleodb_unlink`: the ABANDONING lock release + gate reset for
+ *    the open (managed) project. Its link-row delete lands on the cache copy,
+ *    which is the right end state - an abandoned cache file is plain debris the
+ *    next pull replaces, instead of a linked-and-dirty leftover that nags the
+ *    next Open-from-SpeleoDB.
+ * 3. Load the copy, so the session actually lands on the file the user chose
+ *    (the save no longer relocates it there).
+ *
+ * Returns true once converted; the caller keys only on the boolean.
  */
 export async function convertToUnmanagedStalx(): Promise<boolean> {
   const { openDialog } = useUIStore.getState();
   let finalPath: string;
+  let wroteDetachedCopy: boolean;
   try {
     const selected = await saveDialog({ filters: projectSaveFilters() });
     if (!selected) return false;
@@ -142,12 +151,21 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
       surfaceSaveFailure(result?.error ?? null, openDialog);
       return false;
     }
+    wroteDetachedCopy = Boolean(result.unlinked_copy_path);
   } catch (e) {
     openDialog('error', {
       title: 'Save Failed',
       message: getErrorMessage(e, 'Failed to save a local copy'),
     });
     return false;
+  }
+
+  // The project turned out not to be linked: the save was an ordinary Save As
+  // that already relocated the session to finalPath, and there is nothing to
+  // detach. Degenerate, but keep the old contract for it.
+  if (!wroteDetachedCopy) {
+    await useSpeleoStore.getState().refreshLinkStatus();
+    return true;
   }
 
   // The copy is safe on disk - now drop the SpeleoDB link and re-seed the shell as
@@ -165,5 +183,9 @@ export async function convertToUnmanagedStalx(): Promise<boolean> {
     return false;
   }
   await useSpeleoStore.getState().refreshLinkStatus();
+  // Land the session on the file the user chose. A failed load surfaces its own
+  // error through loadProject; the conversion itself already happened, so still
+  // report success (the copy exists and the project is detached).
+  await useProjectStore.getState().loadProject(finalPath);
   return true;
 }

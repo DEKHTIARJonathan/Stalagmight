@@ -36,7 +36,6 @@ function makeSystem(filePath: string, name: string, shots: GeometryShot[]): Syst
     station_count: 3,
     gps_center: [0, 0],
     gps_bounds: null,
-    collab_enabled: false,
     is_remote: false,
   };
   const geometry: SurveyGeometry = { shots, origin: [0, 0] };

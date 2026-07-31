@@ -73,6 +73,10 @@ function parseMockVersion(source: string): number {
  * and the line that opens the block. All three parsers slice from that opener to the
  * matching close and read one level of keys - nested blocks are skipped by brace
  * depth, so `project_header`'s own fields never leak into the top-level set.
+ *
+ * Because it reads exactly ONE level, the nested `project_header` block needs its
+ * own pass with its own opener (see the `*HeaderFields` parsers below) - the
+ * envelope pass sees only the `project_header` key itself, never what is inside it.
  */
 function fieldsInBlock(
   source: string,
@@ -131,6 +135,51 @@ function parseMockEnvelopeKeys(source: string): string[] {
     '`const envelope = {` in e2e-playwright/mocks/tauri-ipc.ts',
   );
 }
+
+function parseRustHeaderFields(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /pub struct ProjectHeaderBinary \{\n/,
+    /^\s*pub ([a-z_][a-z0-9_]*):/,
+    '`pub struct ProjectHeaderBinary {` in load_binary.rs',
+  );
+}
+
+function parseTsHeaderFields(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /\ninterface ProjectHeaderBinary \{\n/,
+    /^\s*([a-z_][a-z0-9_]*)\??:/,
+    '`interface ProjectHeaderBinary {` in loadProjectBinary.ts',
+  );
+}
+
+function parseMockHeaderKeys(source: string): string[] {
+  return fieldsInBlock(
+    source,
+    /\n\s*project_header: \{\n/,
+    /^\s*([a-z_][a-z0-9_]*):/,
+    "the mock envelope's `project_header: {` block in e2e-playwright/mocks/tauri-ipc.ts",
+  );
+}
+
+/**
+ * Header fields the Playwright mock's `project_header` literal knowingly omits.
+ *
+ * Empty, and that is the goal: the mock sets every field Rust sends. The list
+ * exists for the case where a new Rust header field genuinely has no mock
+ * counterpart yet - park it here WITH the reason rather than leaving the
+ * comparison off, so the omission is recorded instead of invisible. (Its first
+ * and only entry so far was `validation`, the per-project thresholds of #57;
+ * every consumer reads that as `project?.validation ?? defaultConfig.validation`,
+ * so a mocked load leaving it `undefined` silently rendered global defaults
+ * instead of crashing - which is exactly how it survived unnoticed.)
+ *
+ * Every entry is asserted to still be BOTH sent by Rust AND absent from the mock,
+ * so an exemption whose reason has expired fails here until it is deleted. An
+ * exemption nobody has to revisit is an exemption that quietly grows.
+ */
+const MOCK_HEADER_GAPS: string[] = [];
 
 describe('binary wire-format version contract', () => {
   it('the Rust encoder and the TS decoder agree on the envelope version', () => {
@@ -195,6 +244,60 @@ describe('binary wire-format version contract', () => {
         'mock envelope in e2e-playwright/mocks/tauri-ipc.ts does not set, so every mocked ' +
         'project load resolves them as `undefined` - which reads as a broken feature rather ' +
         'than a stale fixture. Add them to the mock envelope literal.',
+    ).toEqual([]);
+  });
+
+  it('the TS decoder and the Playwright mock carry every project_header field Rust sends', () => {
+    // The envelope comparison above reads ONE level, so it stops at the
+    // `project_header` key and never looks inside - yet the header is where the
+    // schema actually churns (it is a mirror of `Project` minus the bulk arrays,
+    // so it grows a field whenever the project model does; the v4 bump was a
+    // `collab` field LEAVING it). The exact bug the envelope test was written for
+    // - a field added on the Rust side that the decoder or the mock never grew,
+    // resolving `undefined` in every mocked load with the version tripwire green -
+    // applies to the nested block verbatim, so it gets the same treatment.
+    const rustFields = parseRustHeaderFields(fs.readFileSync(RUST_PATH, 'utf8'));
+    const tsFields = parseTsHeaderFields(fs.readFileSync(TS_PATH, 'utf8'));
+    const mockKeys = parseMockHeaderKeys(fs.readFileSync(MOCK_PATH, 'utf8'));
+
+    // Sanity-anchor the parses before trusting the set comparisons: a truncated
+    // slice would make the `missing` filters below vacuously empty.
+    expect(rustFields.length).toBeGreaterThan(10);
+    expect(tsFields.length).toBeGreaterThan(10);
+    expect(mockKeys.length).toBeGreaterThan(10);
+
+    const missingFromTs = rustFields.filter((f) => !tsFields.includes(f));
+    expect(
+      missingFromTs,
+      `The Rust project header (ProjectHeaderBinary in load_binary.rs) carries field(s) ` +
+        `[${missingFromTs.join(', ')}] that \`ProjectHeaderBinary\` in ` +
+        'src/utils/loadProjectBinary.ts does not declare, so the decoder drops them ' +
+        'silently. Add them to the TS interface (and read them in `decodeEnvelope`).',
+    ).toEqual([]);
+
+    const missingFromMock = rustFields.filter(
+      (f) => !mockKeys.includes(f) && !MOCK_HEADER_GAPS.includes(f),
+    );
+    expect(
+      missingFromMock,
+      `The Rust project header carries field(s) [${missingFromMock.join(', ')}] that the ` +
+        "Playwright mock's `project_header:` literal in e2e-playwright/mocks/tauri-ipc.ts " +
+        'does not set, so every mocked project load resolves them as `undefined` - which ' +
+        'reads as a broken feature rather than a stale fixture. Add them to the mock ' +
+        'literal (or, with a reason, to MOCK_HEADER_GAPS in this file).',
+    ).toEqual([]);
+
+    // ...and the exemption list may not outlive its reason. An entry the mock now
+    // sets, or that Rust no longer sends, is dead weight that would hide a REAL
+    // future omission of that same field name.
+    const staleGaps = MOCK_HEADER_GAPS.filter(
+      (f) => mockKeys.includes(f) || !rustFields.includes(f),
+    );
+    expect(
+      staleGaps,
+      `MOCK_HEADER_GAPS entr(y/ies) [${staleGaps.join(', ')}] in this file are stale - the ` +
+        'Playwright mock now sets them, or the Rust header no longer carries them. Delete ' +
+        'them so the field is checked like every other one.',
     ).toEqual([]);
   });
 });

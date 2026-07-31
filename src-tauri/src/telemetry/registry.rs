@@ -121,6 +121,9 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.save_display_setting",
     "command.save_dive_plan",
     "command.save_project",
+    // Recent-projects rename-by-path command (recent-projects metadata panel;
+    // project need not be open).
+    "command.set_project_name_for_path",
     "command.set_shot_kind",
     "command.set_station_comment",
     "command.set_zero_datum",
@@ -162,6 +165,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "command.speleodb_start_editing",
     "command.speleodb_take_remote",
     "command.speleodb_unlink",
+    "command.speleodb_remove_link_at",
     "command.speleodb_update",
     "command.split_shot_at_distance",
     "command.suggest_all_import_placements",
@@ -262,6 +266,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.speleodb-quit",
     "action.dialog.speleodb-no-permission",
     "action.dialog.speleodb-unpushed-local",
+    "action.dialog.speleodb-managed-file",
     "action.dialog.speleodb-restore",
     "action.dialog.speleodb-revert",
     "action.dialog.speleodb-project",
@@ -332,6 +337,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dialog-cancel.speleodb-quit",
     "dialog-cancel.speleodb-no-permission",
     "dialog-cancel.speleodb-unpushed-local",
+    "dialog-cancel.speleodb-managed-file",
     "dialog-cancel.speleodb-restore",
     "dialog-cancel.speleodb-revert",
     "dialog-cancel.speleodb-project",
@@ -429,6 +435,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "dwell.dialog.speleodb-quit",
     "dwell.dialog.speleodb-no-permission",
     "dwell.dialog.speleodb-unpushed-local",
+    "dwell.dialog.speleodb-managed-file",
     "dwell.dialog.speleodb-restore",
     "dwell.dialog.speleodb-revert",
     "dwell.dialog.speleodb-project",
@@ -457,18 +464,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "action.dialog.compass-import",
     "dialog-cancel.compass-import",
     "dwell.dialog.compass-import",
-    // Collaboration-mode IPC commands (Ariane sibling .tml workflow).
-    "command.set_collab_enabled",
-    "command.set_collab_enabled_for_path",
-    "command.set_project_name_for_path",
-    "command.get_collab_state",
-    "command.detect_collab_changes",
-    "command.apply_collab_changes",
-    "command.collab_sibling_when_disabled",
-    // collab-review dialog (action/cancel/dwell trio).
-    "action.dialog.collab-review",
-    "dialog-cancel.collab-review",
-    "dwell.dialog.collab-review",
     // SVG stick-map export preview command.
     "command.preview_svg_export",
     // Folder-access permission guidance dialog (action/cancel/dwell trio).
@@ -576,6 +571,7 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.dialog.speleodb-quit",
     "active-dwell.dialog.speleodb-no-permission",
     "active-dwell.dialog.speleodb-unpushed-local",
+    "active-dwell.dialog.speleodb-managed-file",
     "active-dwell.dialog.speleodb-restore",
     "active-dwell.dialog.speleodb-revert",
     "active-dwell.dialog.speleodb-project",
@@ -592,7 +588,6 @@ pub(super) const EVENT_NAMES: &[&str] = &[
     "active-dwell.placement",
     "active-dwell.dialog.delete-shot-choice",
     "active-dwell.dialog.compass-import",
-    "active-dwell.dialog.collab-review",
     "active-dwell.dialog.save-permission",
     // Active-dwell mirrors for the dialogs master added (#57/#95/#118).
     "active-dwell.dialog.project-settings",
@@ -974,11 +969,25 @@ mod tests {
         //       finds its context stale after acquiring can hand back what IT took
         //       without surrendering a lock inherited from a sibling session on the
         //       same account: command.speleodb_release_lock_acquired_here = 697.
+        //   - 10 retired collaboration-mode events (Ariane sibling .tml workflow
+        //       removed entirely, not via REMOVED_COMMANDS/REMOVED_DIALOGS):
+        //       command.{set_collab_enabled, set_collab_enabled_for_path,
+        //       get_collab_state, detect_collab_changes, apply_collab_changes,
+        //       collab_sibling_when_disabled},
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .collab-review removed = 687.
+        //   + 1 SpeleoDB foreign-copy de-link command (canonical local storage:
+        //       the strip half of the managed-file prompt):
+        //       command.speleodb_remove_link_at = 688.
+        //   + 4 managed-file dialog events (canonical local storage: the prompt a
+        //       refused non-canonical open raises):
+        //       {action.dialog,dialog-cancel,dwell.dialog,active-dwell.dialog}
+        //       .speleodb-managed-file = 692.
         //   + 1 gas-only config write (#357 item 2), so Plan mode's gas controls
         //       stop persisting a whole `Config` spread from a store snapshot that
         //       could already be stale, and silently reverting another partial
-        //       save: command.update_gas_config = 698.
-        assert_eq!(EVENT_NAMES.len(), 698);
+        //       save: command.update_gas_config = 693.
+        assert_eq!(EVENT_NAMES.len(), 693);
     }
 
     /// Active-dwell mirrors every dwell state 1:1 (#31): for each `dwell.<key>` there

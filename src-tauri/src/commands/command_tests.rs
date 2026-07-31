@@ -173,7 +173,7 @@ fn project_with_section(shots: Vec<ShotData>) -> Project {
 
 fn save_project_to_temp(app: &tauri::App<MockRuntime>, dir: &TempDir) -> PathBuf {
     let path = dir.path().join("project");
-    let result = project::save_project(state(app), Some(path.clone()), None);
+    let result = project::save_project(state(app), Some(path.clone()));
     assert_success(&result);
     path.with_extension("stalx")
 }
@@ -811,7 +811,7 @@ fn test_close_project_clears_state() {
 #[test]
 fn test_save_project_fails_when_no_project() {
     let app = app_with_state();
-    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")), None);
+    let result = project::save_project(state(&app), Some(PathBuf::from("/tmp/nope.stalx")));
     assert_failure_contains(&result, "No project open");
 }
 
@@ -829,7 +829,7 @@ fn test_save_project_creates_stalx_extension() {
         create_project(&app);
         let dir = TempDir::new().unwrap();
         let raw_path = dir.path().join("project_data");
-        let result = project::save_project(state(&app), Some(raw_path), None);
+        let result = project::save_project(state(&app), Some(raw_path));
         assert_success(&result);
         let saved_path = dir.path().join("project_data.stalx");
         assert!(saved_path.exists());
@@ -1133,7 +1133,7 @@ fn test_save_project_fails_when_output_is_directory() {
             let blocked = dir.path().join("blocked.stalx");
             fs::create_dir_all(&blocked).unwrap();
 
-            let result = project::save_project(state(&app), Some(blocked.clone()), None);
+            let result = project::save_project(state(&app), Some(blocked.clone()));
             assert_failure_contains(&result, "Failed to finalize save");
 
             let temp_path = blocked.with_extension("stalx.tmp");
@@ -1456,7 +1456,7 @@ fn test_delete_project_removes_file_and_recent() {
             let saved_path = save_project_to_temp(&app, &dir);
             assert!(saved_path.exists(), "precondition: .stalx written to disk");
 
-            let result = project::delete_project(state(&app), saved_path.clone(), false);
+            let result = project::delete_project(state(&app), saved_path.clone());
             assert_success(&result);
             assert!(
                 !saved_path.exists(),
@@ -1464,48 +1464,6 @@ fn test_delete_project_removes_file_and_recent() {
             );
             let recent = project::list_recent_projects(state(&app));
             assert!(!recent.iter().any(|p| p.file_path == saved_path));
-        });
-    });
-}
-
-#[test]
-fn test_delete_project_removes_tml_sibling() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        with_restored_config(&app, || {
-            create_project(&app);
-            let dir = TempDir::new().unwrap();
-            let saved_path = save_project_to_temp(&app, &dir);
-            let tml = saved_path.with_extension("tml");
-            fs::write(&tml, b"<dummy/>").unwrap();
-            assert!(tml.exists());
-
-            let result = project::delete_project(state(&app), saved_path.clone(), true);
-            assert_success(&result);
-            assert!(!saved_path.exists());
-            assert!(!tml.exists(), "collab sibling .tml should be deleted too");
-        });
-    });
-}
-
-#[test]
-fn test_delete_project_keeps_unconfirmed_tml() {
-    with_config_lock(|| {
-        let app = app_with_state();
-        with_restored_config(&app, || {
-            create_project(&app);
-            let dir = TempDir::new().unwrap();
-            let saved_path = save_project_to_temp(&app, &dir);
-            // A same-stem .tml exists but the caller did NOT confirm it's this
-            // project's collab file (delete_collab_sibling = false): it may be an
-            // unrelated/imported Ariane file, so it must be left on disk.
-            let tml = saved_path.with_extension("tml");
-            fs::write(&tml, b"<dummy/>").unwrap();
-
-            let result = project::delete_project(state(&app), saved_path.clone(), false);
-            assert_success(&result);
-            assert!(!saved_path.exists(), "project .stalx should be deleted");
-            assert!(tml.exists(), "unconfirmed sibling .tml must NOT be deleted");
         });
     });
 }
@@ -1519,7 +1477,7 @@ fn test_delete_project_tolerates_missing_file() {
             // should still succeed (there is simply nothing to remove).
             let dir = TempDir::new().unwrap();
             let missing = dir.path().join("never-saved.stalx");
-            let result = project::delete_project(state(&app), missing.clone(), false);
+            let result = project::delete_project(state(&app), missing.clone());
             assert_success(&result);
             assert!(!missing.exists());
         });
@@ -1527,12 +1485,12 @@ fn test_delete_project_tolerates_missing_file() {
 }
 
 #[test]
-fn test_delete_project_partial_failure_still_prunes_recents() {
-    // Regression (#118 review N3): once the primary `.stalx` is trashed, a later
-    // failure (here the collab `.tml` sibling) must NOT report the whole delete as
-    // a failure - that would strand a "File not found" zombie row, because the
-    // frontend skips its recents refresh on `!success`. It should drop the entry
-    // and return a partial success carrying a warning.
+fn test_delete_project_leaves_a_same_stem_tml_alone() {
+    // Deleting a project trashes its `.stalx` and nothing else. A same-stem
+    // `.tml` beside it is an ordinary file as far as this app is concerned -
+    // very likely one the user imported from or exported to - so it must
+    // survive. (It used to be trashed too, when it was a collaboration
+    // sibling this app owned.)
     with_config_lock(|| {
         let app = app_with_state();
         with_restored_config(&app, || {
@@ -1545,33 +1503,847 @@ fn test_delete_project_partial_failure_still_prunes_recents() {
                     .any(|p| p.file_path == saved_path),
                 "precondition: saved project is listed in recents"
             );
-            // Force the sibling's trash to fail deterministically: a *directory* at
-            // the `.tml` path makes `fs::remove_file` (the test-build send_to_trash)
-            // error, while the primary `.stalx` (a file) still trashes cleanly.
             let tml = saved_path.with_extension("tml");
-            fs::create_dir(&tml).unwrap();
+            fs::write(&tml, b"not ours").unwrap();
 
-            let result = project::delete_project(state(&app), saved_path.clone(), true);
+            let result = project::delete_project(state(&app), saved_path.clone());
 
-            assert!(
-                result.success,
-                "primary delete succeeded → overall success, not failure"
-            );
+            assert!(result.success, "the .stalx delete succeeded");
             assert!(!saved_path.exists(), "project .stalx should be trashed");
-            assert!(tml.exists(), "the un-trashable sibling is left in place");
             assert!(
-                result
-                    .warnings
-                    .iter()
-                    .any(|w| w.code == "delete_project_sibling_failed"),
-                "leftover sibling is surfaced as a warning, got {:?}",
-                result.warnings
+                tml.exists(),
+                "an unrelated same-stem .tml must be left alone"
             );
             assert!(
                 !project::list_recent_projects(state(&app))
                     .iter()
                     .any(|p| p.file_path == saved_path),
-                "recents must be pruned even though the sibling failed"
+                "recents must be pruned"
+            );
+        });
+    });
+}
+
+/// Once the `.stalx` has been trashed the delete HAS happened, so a later problem
+/// must not be reported as a failure.
+///
+/// The frontend refreshes its recents list only on `success`, so a failure returned
+/// after the file is already gone leaves the deleted project rendered as a permanent
+/// "File not found" zombie row that no amount of clicking can remove. The contract
+/// is therefore all three of: `success: true`, a `delete_project_persist_failed`
+/// warning naming what went wrong, and the recents entry dropped anyway.
+///
+/// The surviving post-trash failure is the recents persist (the `.tml` sibling this
+/// used to fail on belonged to the removed collab mode, and is now an unrelated file
+/// the delete never touches - see the same-stem test above).
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn test_delete_project_partial_failure_still_prunes_recents() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Skip when running as root - file permission restrictions don't apply to UID 0
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
+
+    // Same technique as test_open_project_updates_recent_projects_when_config_save_fails:
+    // take the config lock WITHOUT redirecting `config_path()` to a temp dir, and point
+    // the platform's config root at a read-only directory so every `config.save()` fails
+    // deterministically (`save_to_path` cannot create its parent there). Linux resolves
+    // the root from XDG_CONFIG_HOME; the `directories` crate ignores that on macOS and
+    // derives from HOME instead.
+    let _config_guard = crate::test_helpers::config_lock_guard();
+    let readonly_dir = TempDir::new().unwrap();
+    let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+    perms.set_mode(0o555);
+    fs::set_permissions(readonly_dir.path(), perms).unwrap();
+    #[cfg(target_os = "linux")]
+    let _env_guard = EnvVarGuard::set("XDG_CONFIG_HOME", readonly_dir.path().to_str().unwrap());
+    #[cfg(target_os = "macos")]
+    let _env_guard = EnvVarGuard::set("HOME", readonly_dir.path().to_str().unwrap());
+
+    let app = app_with_state();
+    create_project(&app);
+    let project_dir = TempDir::new().unwrap();
+    let saved_path = save_project_to_temp(&app, &project_dir);
+    // The save could not persist the config either - that is the point - but it DID
+    // update the in-memory recents, so there is a real entry for the delete to prune.
+    assert!(
+        config::get_config(state(&app))
+            .general
+            .recent_projects
+            .contains(&saved_path),
+        "precondition: the saved project is in recents"
+    );
+    assert!(
+        !crate::config::Config::config_path().unwrap().exists(),
+        "precondition: the config root is genuinely unwritable"
+    );
+
+    let result = project::delete_project(state(&app), saved_path.clone());
+
+    // Restore permissions BEFORE the assertions: a panicking assert would otherwise
+    // unwind past this and leave TempDir unable to clean up.
+    let mut perms = fs::metadata(readonly_dir.path()).unwrap().permissions();
+    perms.set_mode(0o755);
+    fs::set_permissions(readonly_dir.path(), perms).unwrap();
+
+    assert!(
+        result.success,
+        "the .stalx was trashed, so the delete succeeded overall: {:?}",
+        result.error
+    );
+    assert!(!saved_path.exists(), "project .stalx should be trashed");
+    assert!(
+        result
+            .warnings
+            .iter()
+            .any(|w| w.code == "delete_project_persist_failed"),
+        "the un-persisted recents list must be surfaced as a warning, got {:?}",
+        result.warnings
+    );
+    assert!(
+        !config::get_config(state(&app))
+            .general
+            .recent_projects
+            .contains(&saved_path),
+        "recents must be pruned even though the persist failed - otherwise the \
+         deleted project stays on screen as an unremovable zombie row"
+    );
+}
+
+/// Deleting the `.stalx` backing the OPEN project tears the whole SESSION down, not
+/// just the project slot.
+///
+/// It used to only do `*self.project.lock() = None`, which left behind a live SQLite
+/// handle on a file that no longer exists, plus the entire undo/redo stack - so an
+/// undo could replay against a deleted project. `delete_project` now routes through
+/// the same `close_project` teardown a real close uses.
+///
+/// Observed through the surface the frontend itself has: `get_project_state` for the
+/// project slot, the raw-data reader for the database handle (the only command that
+/// reports `self.database == None` distinctly - see
+/// `test_raw_data_commands_fail_without_db`), and `can_undo`/`can_redo` +
+/// `get_undo_stack`/`get_redo_stack` for the two stacks.
+#[test]
+fn test_delete_project_of_open_project_tears_down_the_session() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+
+            // Two undoable commands and then one undo, so BOTH stacks are genuinely
+            // non-empty going in - asserting "empty afterwards" on a stack that was
+            // already empty would prove nothing.
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            create_section_with_shots(&app, vec![shot_data(2.0)]);
+            assert_success(&history::undo(state(&app)));
+
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("precondition: a project is open")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(saved_path.as_path()),
+                "precondition: the path being deleted IS the open project"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                "precondition: the project database handle is live"
+            );
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: the undo stack is non-empty"
+            );
+            assert!(
+                history::can_redo(state(&app)),
+                "precondition: the redo stack is non-empty"
+            );
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+
+            assert_success(&result);
+            assert!(!saved_path.exists(), "project .stalx should be trashed");
+
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the open project must be dropped when its file is deleted"
+            );
+            let db_err = raw_data::get_raw_table_names_impl(state(&app).inner()).expect_err(
+                "the database handle LEAKED: still open on a file that was just deleted",
+            );
+            assert!(
+                db_err.contains("No project database"),
+                "expected the no-database error, got: {db_err}"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries): an undo must never be able to \
+                 replay against a deleted project",
+                history::get_undo_stack(state(&app)).len()
+            );
+            assert!(
+                history::get_undo_stack(state(&app)).is_empty(),
+                "the undo stack LEAKED: {:?}",
+                history::get_undo_stack(state(&app))
+            );
+            assert!(
+                !history::can_redo(state(&app)),
+                "the redo stack LEAKED ({} entries): a redo must never be able to \
+                 replay against a deleted project",
+                history::get_redo_stack(state(&app)).len()
+            );
+            assert!(
+                history::get_redo_stack(state(&app)).is_empty(),
+                "the redo stack LEAKED: {:?}",
+                history::get_redo_stack(state(&app))
+            );
+        });
+    });
+}
+
+/// The teardown runs BEFORE the file is handed to the OS delete, not after.
+///
+/// On Windows the ordering is what makes the delete possible at all (SQLite holds the
+/// file without `FILE_SHARE_DELETE`, so both the Recycle-Bin move and the
+/// `remove_file` fallback fail with "Access is denied" while the handle is alive), but
+/// "the delete would have failed" is not observable on Unix. The other side of the
+/// same coin is: force the removal to FAIL and the session must be torn down anyway -
+/// which can only happen if the teardown ran FIRST, because the trash step returns
+/// early on failure, so a teardown placed after it would never be reached. That is
+/// exactly the trade-off `delete_project`'s own comment documents ("the project is now
+/// closed and its undo history dropped even though the file survives").
+///
+/// Unix-only for the same reason as the partial-failure test above: making the removal
+/// fail deterministically means taking write permission off the parent directory
+/// (`fs::remove_file` needs it), and that is a POSIX mode bit.
+#[test]
+#[cfg(any(target_os = "linux", target_os = "macos"))]
+fn test_delete_project_tears_down_before_removing_the_file() {
+    use std::os::unix::fs::PermissionsExt;
+
+    // Skip when running as root - file permission restrictions don't apply to UID 0
+    if unsafe { libc::geteuid() } == 0 {
+        eprintln!("Skipping: test requires non-root (chmod 555 has no effect as root)");
+        return;
+    }
+
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history to tear down"
+            );
+
+            // Drop write permission on the project's parent directory so the
+            // `fs::remove_file` behind `send_to_trash` fails with EACCES.
+            let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+            perms.set_mode(0o555);
+            fs::set_permissions(dir.path(), perms).unwrap();
+
+            let result = project::delete_project(state(&app), saved_path.clone());
+
+            // Restore permissions BEFORE the assertions: a panicking assert would
+            // otherwise unwind past this and leave TempDir unable to clean up.
+            let mut perms = fs::metadata(dir.path()).unwrap().permissions();
+            perms.set_mode(0o755);
+            fs::set_permissions(dir.path(), perms).unwrap();
+
+            assert_failure_contains(&result, "Failed to delete");
+            assert!(
+                saved_path.exists(),
+                "precondition: the removal really did fail, so the file survived"
+            );
+
+            // The removal never happened, yet the session is gone - so the teardown
+            // must have run before it.
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the teardown must precede the file removal: the project is still open, \
+                 so the close can only have been sequenced AFTER the (failed) delete"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the teardown must precede the file removal: the database handle is \
+                 still live, so the close can only have been sequenced AFTER the \
+                 (failed) delete"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the teardown must precede the file removal: the undo stack still has \
+                 {} entries",
+                history::get_undo_stack(state(&app)).len()
+            );
+
+            // The documented cost of closing first: recents is left untouched on this
+            // branch, so the user can reopen the project that survived.
+            assert!(
+                project::list_recent_projects(state(&app))
+                    .iter()
+                    .any(|p| p.file_path == saved_path),
+                "a failed delete must leave the recents entry so the surviving project \
+                 stays re-openable"
+            );
+
+            // ...and the FAILURE result still reports the teardown. This is the branch
+            // the flag exists for: the frontend cannot derive it from `success` here,
+            // and a frontend that tried kept rendering a project the backend had
+            // already dropped.
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "a failed delete that already tore the session down must still report it"
+            );
+        });
+    });
+}
+
+/// The teardown is REPORTED to the caller (`CommandResult::session_closed`), and only
+/// when it actually happened.
+///
+/// The frontend clears its own copy of the session off this bit. It cannot derive it:
+/// not from `success` (see the pre-removal-teardown test above, where the teardown
+/// happened and the result is a failure) and not from the path it asked to delete
+/// (`same_file` canonicalizes - see the alias test below). The negative half matters
+/// just as much: an absent flag is what tells the frontend the delete hit some OTHER
+/// file, and acting on it anyway would throw a live project's undo history away.
+#[test]
+fn test_delete_project_reports_whether_it_closed_the_session() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let dir = TempDir::new().unwrap();
+
+            // A project that is NOT open: save it, then close the session.
+            create_project(&app);
+            let other_path = save_project_to_temp(&app, &dir);
+            assert_success(&project::close_project(state(&app), None));
+
+            // ...and the one that IS open, in its own directory so the two saves
+            // don't collide on `project.stalx`.
+            let open_dir = TempDir::new().unwrap();
+            create_project(&app);
+            let open_path = save_project_to_temp(&app, &open_dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+            let other = project::delete_project(state(&app), other_path.clone());
+            assert_success(&other);
+            assert!(!other_path.exists(), "the unrelated .stalx was deleted");
+            assert_eq!(
+                other.session_closed, None,
+                "deleting an unrelated project must not report - or perform - a close"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_some(),
+                "the OPEN project must survive an unrelated delete"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                "the open project's database handle must survive an unrelated delete"
+            );
+            assert!(
+                history::can_undo(state(&app)),
+                "the open project's undo stack must survive an unrelated delete"
+            );
+
+            let own = project::delete_project(state(&app), open_path.clone());
+            assert_success(&own);
+            assert_eq!(
+                own.session_closed,
+                Some(true),
+                "deleting the OPEN project's own .stalx must report the close"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "precondition for the flag: the session really was torn down"
+            );
+        });
+    });
+}
+
+/// A SECOND SPELLING of the open project's path still tears the session down, and
+/// still reports it.
+///
+/// The match is `same_file`, which canonicalizes, so a `..` segment (and on Windows a
+/// case or short-name variant) resolves to the same file. A plain `==` was survivable
+/// while the check only kept an autosave from resurrecting the file, but the Windows
+/// delete DEPENDS on it firing: SQLite holds the file without `FILE_SHARE_DELETE`, so
+/// missing the close means the trash fails with "Access is denied".
+///
+/// The alias needs a `..` rather than a `.`: `Path`'s `PartialEq` compares
+/// `components()`, which already normalizes `CurDir` away, so `<dir>/./x` and
+/// `<dir>/x` are equal even to `==` and would prove nothing. `ParentDir` is NOT
+/// normalized away, so only canonicalization resolves it.
+#[test]
+fn test_delete_project_matches_an_alias_of_the_open_path() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history to tear down"
+            );
+
+            // Same file, different spelling: <dir>/sub/../project.stalx. The open
+            // project's `file_path` is the plain <dir>/project.stalx, and `sub` has
+            // to really exist for `canonicalize` to resolve the `..` through it.
+            fs::create_dir(dir.path().join("sub")).unwrap();
+            let alias = dir.path().join("sub").join("..").join("project.stalx");
+            assert_ne!(
+                alias, saved_path,
+                "precondition: the alias is not literally the open project's path"
+            );
+
+            let result = project::delete_project(state(&app), alias);
+
+            assert_success(&result);
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "an alias of the open project's path must still close the session"
+            );
+            assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the open project must be dropped when an alias of its path is deleted"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the database handle LEAKED: still open on a file that was just deleted"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries)",
+                history::get_undo_stack(state(&app)).len()
+            );
+            // The recents prune matches on file identity too, so the entry stored
+            // under the plain path goes with it - see
+            // `test_delete_project_by_an_alias_prunes_the_recents_entry` for the
+            // focused version of that (this test is about the live SQLite handle,
+            // which is what the Windows delete depends on).
+            assert!(
+                !config::get_config(state(&app))
+                    .general
+                    .recent_projects
+                    .contains(&saved_path),
+                "an aliased delete must prune the recents row too"
+            );
+        });
+    });
+}
+
+/// Deleting a project through an ALIAS of the path stored in recents still prunes the
+/// recents row.
+///
+/// The prune used to compare raw paths with `!=`, so a `..` segment (or a symlink, or a
+/// Windows case variant) trashed the `.stalx` and left the row behind - the "File not
+/// found" zombie row `delete_project`'s own doc promises to avoid, and a uniquely sticky
+/// one: the row's file no longer exists, so a second delete cannot clear it either.
+///
+/// Two things make the assertion real:
+///
+/// - The alias uses a `..` segment, NOT a `.`: `Path`'s `PartialEq` compares
+///   `components()`, which already normalizes `CurDir` away, so `<dir>/./x` and
+///   `<dir>/x` are equal even to `==` and the test would prove nothing. `ParentDir` is
+///   not normalized away, so only canonicalization resolves it. (Same trap as
+///   `test_delete_project_matches_an_alias_of_the_open_path`.)
+/// - It is asserted against `config.general.recent_projects` rather than
+///   `list_recent_projects`, which reads each entry's metadata off disk and SKIPS the
+///   ones it cannot open. A deleted project's file is gone either way, so that view
+///   reports it as absent whether or not the row was actually pruned.
+///
+/// The project is CLOSED first so the delete's own session teardown is out of the
+/// picture: this is about the prune alone. A second, unrelated project is left in
+/// recents (and open) to pin the other half of the contract - matching on file identity
+/// must not over-prune, and an alias of one project is not a delete of another.
+#[test]
+fn test_delete_project_by_an_alias_prunes_the_recents_entry() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // The project to delete by alias, then closed.
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            assert_success(&project::close_project(state(&app), None));
+
+            // An unrelated bystander, in its own directory so the two saves don't
+            // collide on `project.stalx`. Left OPEN as well.
+            let other_dir = TempDir::new().unwrap();
+            create_project(&app);
+            let other_path = save_project_to_temp(&app, &other_dir);
+
+            let recents_before = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                recents_before.contains(&saved_path) && recents_before.contains(&other_path),
+                "precondition: both projects are in recents under their plain paths, \
+                 got {recents_before:?}"
+            );
+
+            // Same file, different spelling: <dir>/sub/../project.stalx. `sub` has to
+            // really exist for `canonicalize` to resolve the `..` through it.
+            fs::create_dir(dir.path().join("sub")).unwrap();
+            let alias = dir.path().join("sub").join("..").join("project.stalx");
+            assert_ne!(
+                alias, saved_path,
+                "precondition: the alias is not literally the stored recents path"
+            );
+
+            let result = project::delete_project(state(&app), alias);
+
+            assert_success(&result);
+            assert!(!saved_path.exists(), "the aliased .stalx should be trashed");
+            let recents_after = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                !recents_after.contains(&saved_path),
+                "an aliased delete must prune the recents row, or it becomes a \
+                 permanent 'File not found' zombie: {recents_after:?}"
+            );
+            assert!(
+                recents_after.contains(&other_path),
+                "and must not over-prune: an unrelated project's row has to survive: \
+                 {recents_after:?}"
+            );
+            assert_eq!(
+                result.session_closed, None,
+                "the deleted project was already closed and the OPEN one is a \
+                 different file, so no session was torn down"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_some(),
+                "the unrelated open project must survive"
+            );
+            assert!(other_path.exists(), "and so must its .stalx");
+        });
+    });
+}
+
+/// A DANGLING symlink is still an entry on disk, so deleting it unlinks it.
+///
+/// The removal is guarded on "is there anything at this path", and `Path::exists`
+/// answers that by FOLLOWING the link - so for a broken link it says `false`, the
+/// guard skipped the removal, and the recents row was pruned while the dead link
+/// stayed on disk forever. `symlink_metadata` is the question that actually matches
+/// what `send_to_trash` operates on.
+///
+/// Unix-only for the same reason as the tests below: creating a symlink on Windows
+/// needs Developer Mode or `SeCreateSymbolicLinkPrivilege`.
+#[test]
+#[cfg(unix)]
+fn test_delete_project_unlinks_a_dangling_symlink() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            let dir = TempDir::new().unwrap();
+            let link = dir.path().join("dangling.stalx");
+            std::os::unix::fs::symlink(dir.path().join("gone.stalx"), &link).unwrap();
+            assert!(
+                !link.exists(),
+                "precondition: `exists()` follows the link and reports false, which is \
+                 exactly what made the old guard skip the removal"
+            );
+            assert!(
+                fs::symlink_metadata(&link).is_ok(),
+                "precondition: but there IS an entry at that path to unlink"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the dead link the user named must be gone, not left behind under a \
+                 `success: true`"
+            );
+        });
+    });
+}
+
+/// Deleting a SYMLINK to the open project removes the link and NOTHING else: the
+/// referent's `.stalx`, its session and its recents row all survive.
+///
+/// The removal never follows that last hop - `trash::delete`, its `fs::remove_file`
+/// fallback and the deterministic `cfg(test)` `fs::remove_file` all remove the LINK -
+/// so applying referent identity here reported a destruction that had not happened:
+/// the link vanished, and with it the user's open session and the recents row for a
+/// project whose file was still sitting on disk, all under a `success: true`. Identity
+/// is therefore EXACT-PATH when the final component is a symlink.
+///
+/// The `canonicalize` precondition is what makes this non-vacuous: it proves the link
+/// really does resolve to the open project, i.e. that `same_file` WOULD have matched it
+/// and torn the session down.
+///
+/// Unix-only because creating a symlink on Windows needs either Developer Mode or
+/// `SeCreateSymbolicLinkPrivilege`; the production rule itself is platform-neutral
+/// (`symlink_metadata` reports Windows symlinks the same way).
+#[test]
+#[cfg(unix)]
+fn test_delete_project_of_a_symlink_to_the_open_project_spares_the_referent() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let saved_path = save_project_to_temp(&app, &dir);
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history that must NOT be torn down"
+            );
+
+            let link = dir.path().join("link.stalx");
+            std::os::unix::fs::symlink(&saved_path, &link).unwrap();
+            assert_eq!(
+                link.canonicalize().unwrap(),
+                saved_path.canonicalize().unwrap(),
+                "precondition: the link resolves to the open project, so referent \
+                 identity WOULD have matched it - this is what stops the test being \
+                 vacuous"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the link the user named must be gone"
+            );
+            assert!(
+                saved_path.exists(),
+                "the referent was never named, so it must still be on disk - deleting a \
+                 link must never destroy the project behind it"
+            );
+
+            // The session is still valid: its file is right there.
+            assert_eq!(
+                result.session_closed, None,
+                "the referent's session is still backed by a real file, so nothing may \
+                 be torn down - and the frontend must not be told it was"
+            );
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("the open project must survive the deletion of a link to it")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(saved_path.as_path()),
+                "the open project must still be the referent"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_ok(),
+                "the database handle must survive: its file was never deleted"
+            );
+            assert!(
+                history::can_undo(state(&app)),
+                "the undo history must survive: nothing was destroyed that it could \
+                 replay against"
+            );
+            assert!(
+                config::get_config(state(&app))
+                    .general
+                    .recent_projects
+                    .contains(&saved_path),
+                "the referent's recents row must survive - pruning it would cost the \
+                 user their way back to a project that is still on disk"
+            );
+        });
+    });
+}
+
+/// ...but a symlink that IS the path the project was OPENED THROUGH still tears the
+/// session down.
+///
+/// The other half of the exact-path rule, and the reason it is exact-path rather than
+/// "a symlink never closes anything": once the link is gone, a session whose
+/// `file_path` points at it is backed by nothing, so every later autosave, save and
+/// undo persist would target a path that no longer exists. The teardown is what keeps
+/// that from happening.
+///
+/// The recents assertions are also what make this test non-vacuous: under referent
+/// identity the prune took the REFERENT's row too, stranding the user with no route
+/// back to a project that was never deleted.
+#[test]
+#[cfg(unix)]
+fn test_delete_project_of_the_symlink_it_was_opened_through_closes_the_session() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            // Save under the real name, close, then reopen THROUGH the link so the
+            // session's own `file_path` is the link rather than the referent.
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let real_path = save_project_to_temp(&app, &dir);
+            assert_success(&project::close_project(state(&app), None));
+
+            let link = dir.path().join("link.stalx");
+            std::os::unix::fs::symlink(&real_path, &link).unwrap();
+            assert_success(&open_project(state(&app), link.clone()));
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+
+            assert_eq!(
+                project::get_project_state(state(&app))
+                    .expect("precondition: a project is open")
+                    .project
+                    .file_path
+                    .as_deref(),
+                Some(link.as_path()),
+                "precondition: the session was opened through the link, so its \
+                 file_path IS the link"
+            );
+            let recents_before = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                recents_before.contains(&link) && recents_before.contains(&real_path),
+                "precondition: both spellings have their own recents row (the save \
+                 stored one, the open through the link the other), got \
+                 {recents_before:?}"
+            );
+
+            let result = project::delete_project(state(&app), link.clone());
+
+            assert_success(&result);
+            assert!(
+                fs::symlink_metadata(&link).is_err(),
+                "the link must be gone"
+            );
+            assert!(
+                real_path.exists(),
+                "the referent was not named, so it survives even here"
+            );
+
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "the session's own file_path was the link we just removed, so it MUST \
+                 be torn down - leaving it open points every later save at a path that \
+                 no longer exists"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "precondition for the flag: the session really was torn down"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the database handle LEAKED: still open through a link that is gone"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries)",
+                history::get_undo_stack(state(&app)).len()
+            );
+
+            let recents_after = config::get_config(state(&app)).general.recent_projects;
+            assert!(
+                !recents_after.contains(&link),
+                "the link's own row must be pruned - its file is gone, so it would be a \
+                 'File not found' zombie: {recents_after:?}"
+            );
+            assert!(
+                recents_after.contains(&real_path),
+                "and the referent's row must NOT be: its .stalx is still on disk and \
+                 that row is now the user's only route to it: {recents_after:?}"
+            );
+        });
+    });
+}
+
+/// A symlink in a PARENT directory is not the same thing at all: the final component is
+/// a real file, the delete really does destroy it, and referent identity still applies.
+///
+/// This is the regression guard for the stat that draws the line.
+/// `symlink_metadata` resolves symlinks in the parent components but not the last one,
+/// which is exactly the distinction the rule needs - swap it for anything that follows
+/// the whole path (`metadata`) and a link to the open project is treated as the project
+/// itself again; swap it for anything that follows none of it and THIS case loses the
+/// teardown that the Windows delete depends on (SQLite holds the file without
+/// `FILE_SHARE_DELETE`, so a missed close means "Access is denied").
+#[test]
+#[cfg(unix)]
+fn test_delete_project_through_a_symlinked_parent_dir_matches_by_identity() {
+    with_config_lock(|| {
+        let app = app_with_state();
+        with_restored_config(&app, || {
+            create_project(&app);
+            let dir = TempDir::new().unwrap();
+            let real_dir = dir.path().join("realdir");
+            fs::create_dir(&real_dir).unwrap();
+            assert_success(&project::save_project(
+                state(&app),
+                Some(real_dir.join("project")),
+            ));
+            let saved_path = real_dir.join("project.stalx");
+            assert!(
+                saved_path.exists(),
+                "precondition: the .stalx really is under the real directory"
+            );
+            create_section_with_shots(&app, vec![shot_data(1.0)]);
+            assert!(
+                history::can_undo(state(&app)),
+                "precondition: there is real undo history to tear down"
+            );
+
+            // <dir>/linkdir -> <dir>/realdir, so <dir>/linkdir/project.stalx is a
+            // second spelling of the open project's path - NOT a link to it.
+            let link_dir = dir.path().join("linkdir");
+            std::os::unix::fs::symlink(&real_dir, &link_dir).unwrap();
+            let through_link = link_dir.join("project.stalx");
+            assert!(
+                !fs::symlink_metadata(&through_link)
+                    .unwrap()
+                    .file_type()
+                    .is_symlink(),
+                "precondition: only the PARENT is a link - the final component must \
+                 stat as an ordinary file, or this test is exercising the other rule"
+            );
+
+            let result = project::delete_project(state(&app), through_link);
+
+            assert_success(&result);
+            assert!(
+                !saved_path.exists(),
+                "the delete really did destroy the file under the real path, so \
+                 referent identity is the correct reading here"
+            );
+            assert_eq!(
+                result.session_closed,
+                Some(true),
+                "a second spelling of the open project's path must still close the \
+                 session: on Windows the trash is denied outright while SQLite's handle \
+                 is alive"
+            );
+            assert!(
+                project::get_project_state(state(&app)).is_none(),
+                "the open project must be dropped when its file is deleted through a \
+                 symlinked parent directory"
+            );
+            assert!(
+                raw_data::get_raw_table_names_impl(state(&app).inner()).is_err(),
+                "the database handle LEAKED: still open on a file that was just deleted"
+            );
+            assert!(
+                !history::can_undo(state(&app)),
+                "the undo stack LEAKED ({} entries)",
+                history::get_undo_stack(state(&app)).len()
+            );
+            assert!(
+                !config::get_config(state(&app))
+                    .general
+                    .recent_projects
+                    .contains(&saved_path),
+                "the recents row is stored under the real path and its file is gone, so \
+                 it must be pruned or it becomes a 'File not found' zombie"
             );
         });
     });
@@ -1586,7 +2358,7 @@ fn test_save_project_fails_when_directory_missing() {
         let missing_dir = dir.path().join("missing");
         let path = missing_dir.join("project");
 
-        let result = project::save_project(state(&app), Some(path), None);
+        let result = project::save_project(state(&app), Some(path));
         assert_failure_contains(&result, "Failed to create save file");
         assert!(!missing_dir.exists());
     });

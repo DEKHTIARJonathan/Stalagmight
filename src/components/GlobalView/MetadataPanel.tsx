@@ -99,14 +99,13 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
     }
   }, [singleProject?.file_path, onRemoveFromRecent]);
 
-  // Destructive: permanently delete the project files (distinct from the
+  // Destructive: permanently delete the project file (distinct from the
   // forget-only Remove above). Routes through the shared confirm dialog.
   const handleDeleteProject = useCallback(() => {
     if (singleProject?.file_path) {
       openDialog('delete-project', {
         path: singleProject.file_path,
         name: singleProject.name,
-        collabEnabled: singleProject.collab_enabled,
         // A remote (SpeleoDB) recent is only a local cache copy; deleting it leaves
         // the project on the server, so the dialog frames it as "local copy".
         isRemote: singleProject.is_remote,
@@ -115,7 +114,6 @@ const MetadataPanel: FC<MetadataPanelProps> = ({
   }, [
     singleProject?.file_path,
     singleProject?.name,
-    singleProject?.collab_enabled,
     singleProject?.is_remote,
     openDialog,
   ]);

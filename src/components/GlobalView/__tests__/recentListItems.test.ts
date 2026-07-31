@@ -31,7 +31,6 @@ function project(partial: Partial<ProjectMetadata> & { file_path: string }): Pro
     station_count: 0,
     gps_center: null,
     gps_bounds: null,
-    collab_enabled: false,
     ...partial,
   } as ProjectMetadata;
 }

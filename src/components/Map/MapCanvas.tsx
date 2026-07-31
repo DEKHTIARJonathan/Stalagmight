@@ -13,7 +13,7 @@ import {
 } from '../../store/uiStore';
 import { selectComputeGate, useGasPlanStore } from '../../store/gasPlanStore';
 import { selectActiveStations, selectActiveSurveyData } from '../../store/geometrySelectors';
-import { isMutatingTool } from '../../utils/toolUtils';
+import { isMutatingTool, toolCursor } from '../../utils/toolUtils';
 import { hasEligibleClosures } from '../../utils/closures';
 import { useShallow } from 'zustand/react/shallow';
 import {
@@ -2548,22 +2548,9 @@ function MapCanvas() {
     // Placement mode manages its own cursor - don't override
     if (placementMode) return;
 
-    const cursors: Record<string, string> = {
-      select: 'default',
-      pan: 'grab',
-      zoom: 'zoom-in',
-      merge: 'cell',
-      measure: 'crosshair',
-      move_station: 'move',
-      move_segment: 'move',
-      move_shot: 'move',
-      comment: 'crosshair',
-      move_comment: 'crosshair',
-    };
-
     // In supported tools with Ctrl held, show grab cursor for panning
     const ctrlPan = CTRL_PAN_TOOLS.includes(activeTool) && ctrlHeld;
-    const base = ctrlPan ? 'grab' : cursors[activeTool] ?? 'default';
+    const base = ctrlPan ? 'grab' : toolCursor(activeTool);
 
     // If hovering over a feature, SurveyLayer sets cursor to 'pointer'
     // Otherwise, set cursor based on active tool
@@ -2846,27 +2833,19 @@ function MapCanvas() {
           customPanActiveRef.current = false;
           ctrlPanActiveRef.current = false;
         }, 50);
-        // Restore cursor: if Ctrl still held, show grab cursor for next potential pan
-        // Otherwise restore the tool cursor
-        if (e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool)) {
-          map.current.getCanvas().style.cursor = 'grab';
+        // Restore cursor: if Ctrl still held, show grab cursor for next potential
+        // pan; otherwise restore the tool cursor. Hand it to SurveyLayer rather
+        // than writing the canvas directly, exactly as the passive effect above
+        // does - it owns the hover-vs-tool precedence, including Move
+        // Station/Shot's arrow fallback, which a raw `move` write here would
+        // defeat with nothing to correct it (hover only re-derives when the
+        // hovered id CHANGES, so a pointer resting on empty map keeps it).
+        const ctrlStillPanning = e.ctrlKey && CTRL_PAN_TOOLS.includes(activeTool);
+        const restored = ctrlStillPanning ? 'grab' : toolCursor(activeTool);
+        if (surveyLayerRef.current) {
+          surveyLayerRef.current.setBaseCursor(restored, ctrlStillPanning);
         } else {
-          const cursors: Record<string, string> = {
-            select: 'default',
-            pan: 'grab',
-            zoom: 'zoom-in',
-            draw: 'crosshair',
-            delete: 'not-allowed',
-            merge: 'cell',
-            measure: 'crosshair',
-            move_section: 'move',
-            move_station: 'default',
-            move_segment: 'move',
-            move_shot: 'default',
-            comment: 'crosshair',
-            move_comment: 'crosshair',
-          };
-          map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+          map.current.getCanvas().style.cursor = restored;
         }
       }
     };
@@ -3632,21 +3611,18 @@ function MapCanvas() {
       if (!noPanTools.includes(activeTool)) {
         map.current.dragPan.enable();
       }
-      // Reset cursor based on current tool
-      const cursors: Record<string, string> = {
-        select: 'default',
-        pan: 'grab',
-        zoom: 'zoom-in',
-        merge: 'crosshair',
-        measure: 'crosshair',
-        move_section: 'move',
-        move_station: 'move',
-        move_segment: 'move',
-        move_shot: 'move',
-        comment: 'crosshair',
-        move_comment: 'crosshair',
-      };
-      map.current.getCanvas().style.cursor = cursors[activeTool] ?? 'default';
+      // Reset cursor based on current tool. This effect keys on `activeTool` as
+      // well as `placementMode`, so it also runs on an ordinary tool switch,
+      // AFTER the passive effect above (effects run in declaration order) - a
+      // raw write here therefore lands on top of the precedence that effect just
+      // applied. Today the end state is still correct, because a later hover
+      // recompute settles it back, but that is luck rather than design: hand it
+      // to the same owner instead of racing it.
+      if (surveyLayerRef.current) {
+        surveyLayerRef.current.setBaseCursor(toolCursor(activeTool));
+      } else {
+        map.current.getCanvas().style.cursor = toolCursor(activeTool);
+      }
     }
   }, [placementMode, activeTool]);
 

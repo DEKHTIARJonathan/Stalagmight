@@ -768,8 +768,10 @@ pub struct GeneralConfig {
     /// Onboarding flow IDs already completed/skipped by the user
     #[serde(default)]
     pub onboarding_completed_flows: Vec<String>,
-    /// Set on the first launch that arms the guides. Once true, no guide ever
-    /// auto-starts again - "Restart guides" in Settings clears it to re-arm.
+    /// Burned once the one-shot orientation tour (`workspace-basics`) is
+    /// actually on screen. It gates that tour only - the contextual guides
+    /// repeat-suppress per flow via `onboarding_completed_flows`.
+    /// "Restart onboarding" in Settings clears it to re-arm.
     #[serde(default)]
     pub onboarding_first_launch_done: bool,
     /// Whether anonymous telemetry is enabled

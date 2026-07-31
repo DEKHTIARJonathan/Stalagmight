@@ -21,28 +21,13 @@ pub fn update_project_settings(
 }
 
 /// Save the current project.
-///
-/// `is_autosave` is honoured by the collab-sibling write path: when
-/// `true` and the project's `CollabState.write_tml_on_autosave` is
-/// `false`, the sibling `.tml` is skipped so autosave doesn't churn
-/// the file Ariane is editing.  Defaults to `false` so existing
-/// frontend callers that don't supply the field get manual-save
-/// semantics (always write the `.tml`).
 #[tauri::command]
-pub fn save_project(
-    state: State<AppState>,
-    path: Option<PathBuf>,
-    is_autosave: Option<bool>,
-) -> CommandResult {
-    save_project_impl(state.inner(), path, is_autosave.unwrap_or(false))
+pub fn save_project(state: State<AppState>, path: Option<PathBuf>) -> CommandResult {
+    save_project_impl(state.inner(), path)
 }
 
-pub(crate) fn save_project_impl(
-    state: &AppState,
-    path: Option<PathBuf>,
-    is_autosave: bool,
-) -> CommandResult {
-    state.execute(Command::SaveProject { path, is_autosave })
+pub(crate) fn save_project_impl(state: &AppState, path: Option<PathBuf>) -> CommandResult {
+    state.execute(Command::SaveProject { path })
 }
 
 /// Close the current project. `release_lock` (default `true`) best-effort releases
@@ -64,6 +49,13 @@ pub(crate) fn close_project_impl(state: &AppState, release_lock: bool) -> Comman
     // link row lives there). Best-effort + gated so the keep-lock path can opt out.
     if release_lock {
         state.speleodb_release_held_lock_best_effort();
+    } else {
+        // "Keep lock": the user chose to hold the server mutex past this close.
+        // Recorded on the claim BEFORE the teardown, while the link row is still
+        // readable - and recorded at all because the stranded-claim janitor
+        // cannot otherwise tell a deliberate keep from a session that died
+        // holding a lock, and would hand this one back on the next status poll.
+        state.speleodb_keep_open_lock_deliberately();
     }
     state.execute(Command::CloseProject)
 }
@@ -186,20 +178,12 @@ pub(crate) fn remove_from_recent_projects_impl(state: &AppState, path: PathBuf) 
 /// list. The destructive counterpart to `remove_from_recent_projects`; see
 /// [`AppState::delete_project`] for the OS-trash / permanent-delete semantics.
 #[tauri::command]
-pub fn delete_project(
-    state: State<AppState>,
-    path: PathBuf,
-    delete_collab_sibling: bool,
-) -> CommandResult {
-    delete_project_impl(state.inner(), path, delete_collab_sibling)
+pub fn delete_project(state: State<AppState>, path: PathBuf) -> CommandResult {
+    delete_project_impl(state.inner(), path)
 }
 
-pub(crate) fn delete_project_impl(
-    state: &AppState,
-    path: PathBuf,
-    delete_collab_sibling: bool,
-) -> CommandResult {
-    state.delete_project(path, delete_collab_sibling)
+pub(crate) fn delete_project_impl(state: &AppState, path: PathBuf) -> CommandResult {
+    state.delete_project(path)
 }
 
 /// Rename a recent project's display name by path (project need not be open).
