@@ -9,6 +9,17 @@
 #
 # esbuild is needed by Vite on every install. edgedriver and geckodriver are
 # needed only by the quarantined WebdriverIO suite under e2e/legacy/.
+#
+# `packages` is not here to declare a monorepo - this repo is a single package.
+# pnpm 9 reads this file only as a workspace definition and aborts with
+# "packages field missing or empty" if the key is absent, and pnpm 9 is the one
+# major that cannot self-switch to the pin, so without this line a contributor
+# on a stale global pnpm 9 hits an error that points nowhere near the cause.
+# Verified layout-identical on pnpm 11 with and without it (same top-level
+# node_modules, same .bin, same .pnpm dir count).
+packages:
+  - .
+
 allowBuilds:
   esbuild: true
   edgedriver: true
