@@ -84,22 +84,27 @@ Undo and redo stacks are serialized to the SQLite database synchronously on proj
 - On project close, stacks are cleared from memory (DB retains persisted entries)
 - Files written before schema v7 get their persisted stacks dropped on open: pre-v7 builds serialized untouched nullable `ShotUpdates` fields as explicit `null`s, which the v7 `double_option` semantics would replay as "clear the field" (see `UNDO_FORMAT_SAFE_VERSION` / `drop_legacy_undo_history` in `persistence/sqlite.rs`)
 
-### Incremental writes (#303)
+### Every save is a full rewrite (#303)
 
-A save writes only what CHANGED. Each entry has a stable id (`head_dropped + position`,
-stored in the existing `sequence` column, so the on-disk shape is unchanged); a save
-upserts the ids at or after the first one whose content differs and deletes whatever falls
-outside the surviving range. Ids survive both mutations a stack sees - a tail append moves
-nothing, and a front eviction bumps `head_dropped` by exactly the number removed.
+`UndoStack::rows_to_persist` serializes every entry in the persisted window and
+`Database::save_undo_stack_with_timestamps` writes the lot, `DELETE`-all then `INSERT`
+with `sequence` renumbered 0..n. There is no incremental path and there cannot be one:
+`save_project` builds a fresh `.stalx.tmp` and renames it over the target, so every save
+writes into a file that has no undo tables at all. Anything a save skips is gone.
 
-This is what makes a deep stack affordable. The old shape was `DELETE FROM undo_stack` +
-re-INSERT + re-gzip of every entry on every save, including the 30s autosave: fine for a
-20-entry window, seconds of compression for a byte-budgeted one, since a delete-heavy
-session's whole-project snapshots are megabytes each.
+This was tried the other way. An incremental writer (upsert only the ids at or after the
+first changed one, delete what falls outside the surviving range) SILENTLY DROPPED the
+history: a save with no undo change since the last one - an idle autosave, or the push's
+own flush right after another save - wrote zero rows into a file that had none, so the
+commit it produced carried no history at all. The unit test that blessed it ran the
+database helper against a database that persisted between calls, which is exactly the
+assumption the save path breaks. The whole apparatus (`PersistPlan`, `StackSync`, the
+stable ids) has been removed rather than left standing as scaffolding.
 
-A save to a different file (Save As, the first save of a deferred project, a re-open) or a
-load forces one full rewrite - the ids in memory cannot be assumed to line up with rows
-this bookkeeping has never seen, and a load also filters and trims.
+The cost is real and is what `UNDO_BYTE_BUDGET_BYTES` bounds: a save re-gzips the whole
+persisted stack, which is fine for a 20-entry window and would be seconds of compression
+for an unbounded byte-budgeted one, since a delete-heavy session's whole-project snapshots
+are megabytes each.
 
 ## Hybrid mode for SpeleoDB projects (#303)
 
@@ -111,8 +116,19 @@ stack holds at push time is what every commit stores forever. Two policies, reso
 | | `Full` (default) | `Disabled` | Local project |
 |---|---|---|---|
 | In-memory depth | byte budget | `undo_history_limit` | `undo_history_limit` |
-| Persisted depth | byte budget | `undo_persist_limit` | `undo_persist_limit` |
+| Persisted depth | byte budget (undo); redo NOT persisted | `undo_persist_limit` | `undo_persist_limit` |
 | Rides in the push | yes (undo only) | no | n/a |
+
+**Full mode does not persist the redo stack at all.** The byte budget applies to the undo
+and redo stacks independently, so persisting both made every 30 s autosave serialize and
+gzip up to twice the documented budget - and the redo half bought nothing, because
+`redo_stack` is unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES` and so never reaches the
+server. The accepted price is that a Full-mode linked project loses redo-after-reopen:
+close it with a redo branch outstanding and reopening finds the redo stack empty. Every
+other mode persists redo under `undo_persist_limit`, where the window already bounds what
+a save costs. The IN-MEMORY doubling is untouched - both stacks can still hold
+`UNDO_BYTE_BUDGET_BYTES` each while the project is open; only the save cost is bounded
+here.
 
 **The byte budget** (`UNDO_BYTE_BUDGET_BYTES`, 32 MiB of serialized JSON ~= 2.5 MB per
 commit) replaces the entry-count window rather than joining it. Count is the wrong unit

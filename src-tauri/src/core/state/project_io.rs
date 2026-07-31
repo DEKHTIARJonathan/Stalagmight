@@ -738,38 +738,51 @@ impl AppState {
         };
 
         if let Ok(undo_stack) = self.undo_stack.lock() {
-            // Every save writes the WHOLE (budgeted) stack, because the pipeline above
+            // Every save writes the WHOLE (windowed) stack, because the pipeline above
             // built a fresh temp file and renamed it over the target: the reopened `db`
-            // has no undo tables to add to. See `StackSync`.
-            let undo_plan = undo_stack.persist_plan(PersistStack::Undo, count_limit);
-            let redo_plan = undo_stack.persist_plan(PersistStack::Redo, count_limit);
+            // has no undo tables to add to. See `UndoStack::rows_to_persist`.
+            let undo_rows = undo_stack.rows_to_persist(PersistStack::Undo, count_limit);
 
-            let undo_synced = match db.sync_undo_stack(&undo_plan) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve undo history",
-                        "Failed to persist undo stack"
-                    );
-                    false
-                }
+            // [#303] Full mode - the `count_limit == None` branch - persists NO redo at
+            // all. The byte budget is applied to the undo and redo stacks independently,
+            // so writing both made every 30 s autosave serialize and gzip up to twice
+            // the documented budget, and the redo half buys nothing on a linked project:
+            // `redo_stack` is unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`, so none
+            // of it ever reaches the server.
+            //
+            // The price, accepted knowingly: a Full-mode linked project loses
+            // redo-after-reopen. Close it with a redo branch outstanding and reopening
+            // finds the redo stack empty. That was the deliberate trade for the smallest
+            // save cost on exactly the projects whose saves are most expensive; every
+            // other mode keeps persisting redo under the count window, where the window
+            // already bounds what a save costs.
+            //
+            // NOT addressed here, deliberately: the IN-MEMORY doubling. Both stacks can
+            // still hold `UNDO_BYTE_BUDGET_BYTES` each while the project is open. This
+            // bounds the SAVE cost only.
+            let redo_rows = if count_limit.is_some() {
+                undo_stack.rows_to_persist(PersistStack::Redo, count_limit)
+            } else {
+                Vec::new()
             };
-            let redo_synced = match db.sync_redo_stack(&redo_plan) {
-                Ok(()) => true,
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        purpose = "preserve redo history",
-                        "Failed to persist redo stack"
-                    );
-                    false
-                }
-            };
+
+            if let Err(e) = db.save_undo_stack_with_timestamps(undo_rows) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve undo history",
+                    "Failed to persist undo stack"
+                );
+            }
+            if let Err(e) = db.save_redo_stack_with_timestamps(redo_rows) {
+                tracing::warn!(
+                    error = %e,
+                    purpose = "preserve redo history",
+                    "Failed to persist redo stack"
+                );
+            }
             // Both failures are already logged. Nothing to reconcile afterwards: the
             // next save rewrites the whole stack regardless, so a partial failure costs
             // this file's history and not the next one's.
-            let _ = (undo_synced, redo_synced);
         }
     }
 

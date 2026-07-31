@@ -5,7 +5,7 @@ use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use crate::core::undo::{UndoData, UndoEntry};
-use crate::core::{Command, CommandResult, UndoStack};
+use crate::core::{Command, CommandResult, PersistStack, UndoStack};
 use crate::models::{
     ClosureStrategy, Coordinates, GpsCoordinates, ImportPlacement, ImportSectionConfig,
     LoopClosure, Project, SectionData, SectionId, SectionUpdates, ShotData, ShotId, ShotKind,
@@ -15000,6 +15000,81 @@ fn test_save_project_persists_undo_redo_stacks() {
     assert!(!redo.is_empty(), "redo stack should be persisted");
 }
 
+/// [#303] A Full-mode linked project persists its undo history and NO redo.
+///
+/// The byte budget is applied to the undo and redo stacks independently, so persisting
+/// both made every 30 s autosave serialize and gzip up to twice the documented budget -
+/// and none of the redo half ever reaches the server, because `redo_stack` is
+/// unconditionally in `PUSH_SNAPSHOT_LOCAL_TABLES`.
+///
+/// The empty redo table is the deliberate cost, not an accident: a Full-mode linked
+/// project has no redo-after-reopen. The test above pins the other half - every
+/// count-windowed project (local, Disabled mode) still persists redo.
+#[test]
+fn full_mode_save_persists_undo_but_not_redo() {
+    let temp_dir = TempDir::new().unwrap();
+    let save_path = temp_dir.path().join("full-mode-undo.stalx");
+
+    // Seed a linked `.stalx` with the per-project override set explicitly, so the
+    // policy does not depend on whatever the global default happens to be.
+    {
+        let mut db = Database::open(&save_path).unwrap();
+        db.save_project(&Project::new("Linked".to_string(), None))
+            .unwrap();
+        db.save_speleo_link(Some(&SpeleoLink {
+            undo_mode: Some(crate::models::UndoMode::Full),
+            ..fixture_speleo_link()
+        }))
+        .unwrap();
+    }
+
+    let state = AppState::new().unwrap();
+    assert!(state.open_project(save_path.clone()).success);
+    // A remote open leaves editing disabled; this test is about the save path, not the
+    // lock, so take the write side the way a lock-acquire would.
+    state.set_edit_enabled(true);
+
+    state.execute(Command::CreateSection {
+        name: Some("Kept".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#ff0000".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(5.0)],
+    });
+    state.execute(Command::CreateSection {
+        name: Some("Undone".to_string()),
+        surveyor: None,
+        date: None,
+        color: "#00ff00".to_string(),
+        direction: None,
+        shots: vec![test_shot_data(3.0)],
+    });
+    state.undo();
+    assert!(
+        state.can_redo(),
+        "the undo must leave a redo branch in memory"
+    );
+
+    let saved = state.save_project(None);
+    assert!(saved.success, "save failed: {:?}", saved.error);
+
+    let db = Database::open_existing(&save_path).unwrap();
+    assert!(
+        !db.load_undo_stack_with_timestamps()
+            .unwrap_or_default()
+            .is_empty(),
+        "Full mode persists the undo history - that is what rides in the next commit"
+    );
+    assert!(
+        db.load_redo_stack_with_timestamps()
+            .unwrap_or_default()
+            .is_empty(),
+        "Full mode must persist NO redo: it doubles the save cost and never reaches \
+         the server"
+    );
+}
+
 #[test]
 fn test_open_project_missing_file() {
     let state = AppState::new().unwrap();
@@ -21023,10 +21098,7 @@ fn a_persisted_none_entry_does_not_block_the_history_beneath_it() {
     let mut persisted: Vec<(String, String, Option<String>)> = {
         let stack = state.undo_stack.lock().unwrap();
         assert_eq!(stack.len(), 2);
-        stack
-            .entries_to_persist(20)
-            .map(|e| UndoStack::serialize_entry_with_timestamp(e).unwrap())
-            .collect()
+        stack.rows_to_persist(PersistStack::Undo, Some(20))
     };
     persisted.push(
         UndoStack::serialize_entry_with_timestamp(&UndoEntry {
@@ -21226,7 +21298,7 @@ fn a_shotless_reverse_leaves_the_redo_branch_intact() {
     );
 }
 
-/// `entries_to_persist` copies the stack verbatim, so an unfiltered load would
+/// `rows_to_persist` copies the stack verbatim, so an unfiltered load would
 /// write the poison straight back to disk on the next save.
 #[test]
 fn a_loaded_none_entry_is_not_re_persisted() {
@@ -21253,12 +21325,14 @@ fn a_loaded_none_entry_is_not_re_persisted() {
     let mut stack = state.undo_stack.lock().unwrap();
     stack.load_from_persisted_with_timestamps(persisted, vec![]);
 
-    let to_persist: Vec<&UndoEntry> = stack.entries_to_persist(20).collect();
+    let to_persist = stack.rows_to_persist(PersistStack::Undo, Some(20));
     assert_eq!(to_persist.len(), 1);
+    // The rows are already serialized, and a `UndoData::None` is the unit variant, so
+    // it reaches the database as the bare JSON string `"None"`.
     assert!(
         !to_persist
             .iter()
-            .any(|e| matches!(e.undo_data, UndoData::None)),
+            .any(|(_, undo_data_json, _)| undo_data_json == r#""None""#),
         "the poison must not be written back to disk"
     );
 }

@@ -1262,45 +1262,40 @@ fn test_display_settings_persistence() {
     );
 }
 
-/// [#303] The sync writes every row it is given, at the ids it is given.
+/// [#303] The writer writes every row it is given, renumbering `sequence` 0..n so
+/// `ORDER BY sequence` reproduces stack order.
 ///
-/// This test used to assert the OPPOSITE - that a second call left pre-existing rows in
-/// place, proving an incremental write. It was measuring the helper against a database
-/// that persists between calls, which is NOT how saving works: `save_project` builds a
-/// fresh `.stalx.tmp` and renames it over the target, so every save writes into a file
-/// with no undo tables. The "optimization" that test blessed silently dropped the
-/// history whenever nothing had changed since the previous save.
+/// There used to be an incremental `sync_undo_stack` here, and a test asserting the
+/// OPPOSITE of this - that a second call left pre-existing rows in place. It was
+/// measuring the helper against a database that persists between calls, which is NOT how
+/// saving works: `save_project` builds a fresh `.stalx.tmp` and renames it over the
+/// target, so every save writes into a file with no undo tables. The "optimization" that
+/// test blessed silently dropped the history whenever nothing had changed since the
+/// previous save.
 #[test]
-fn undo_persist_sync_writes_the_rows_it_is_given() {
-    use crate::core::{PersistPlan, PersistRow};
-
+fn undo_persist_save_writes_the_rows_it_is_given() {
     let db = Database::in_memory().unwrap();
 
-    let row = |id: u64| PersistRow {
-        id,
-        command_json: format!(r#"{{"type":"Cmd{id}"}}"#),
-        undo_data_json: format!(r#"{{"n":{id}}}"#),
-        timestamp: Some("2026-07-01T00:00:00+00:00".to_owned()),
+    let row = |id: u64| {
+        (
+            format!(r#"{{"type":"Cmd{id}"}}"#),
+            format!(r#"{{"n":{id}}}"#),
+            Some("2026-07-01T00:00:00+00:00".to_owned()),
+        )
     };
 
-    db.sync_undo_stack(&PersistPlan {
-        rows: (0..50).map(row).collect(),
-        keep_range: Some((0, 49)),
-    })
-    .unwrap();
+    db.save_undo_stack_with_timestamps((0..50).map(row).collect())
+        .unwrap();
 
     let loaded = db.load_undo_stack_with_timestamps().unwrap();
     assert_eq!(loaded.len(), 50);
     assert_eq!(loaded[0].1, r#"{"type":"Cmd0"}"#);
     assert_eq!(loaded[49].1, r#"{"type":"Cmd49"}"#);
 
-    // A second call with one more row rewrites the range it is handed and keeps the
-    // ordering by `sequence`.
-    db.sync_undo_stack(&PersistPlan {
-        rows: (0..51).map(row).collect(),
-        keep_range: Some((0, 50)),
-    })
-    .unwrap();
+    // A second call with one more row rewrites the table and keeps the ordering by
+    // `sequence`.
+    db.save_undo_stack_with_timestamps((0..51).map(row).collect())
+        .unwrap();
     let loaded = db.load_undo_stack_with_timestamps().unwrap();
     assert_eq!(loaded.len(), 51);
     assert_eq!(
@@ -1309,45 +1304,39 @@ fn undo_persist_sync_writes_the_rows_it_is_given() {
     );
 }
 
-/// [#303] The delete half of the sync: rows outside the surviving id range go, whether
-/// they fell off the FRONT (a byte-budget trim) or the BACK (an undo popping the tail).
+/// [#303] The delete half: a save is a full rewrite, so rows the stack no longer holds
+/// leave the table - whether they fell off the FRONT (a byte-budget trim) or the BACK
+/// (an undo popping the tail), and all of them when the stack is empty.
 #[test]
-fn undo_persist_sync_deletes_rows_outside_the_kept_range() {
-    use crate::core::{PersistPlan, PersistRow};
-
+fn undo_persist_save_leaves_no_stragglers() {
     let db = Database::in_memory().unwrap();
-    let row = |id: u64| PersistRow {
-        id,
-        command_json: format!(r#"{{"type":"Cmd{id}"}}"#),
-        undo_data_json: format!(r#"{{"n":{id}}}"#),
-        timestamp: None,
+    let row = |id: u64| {
+        (
+            format!(r#"{{"type":"Cmd{id}"}}"#),
+            format!(r#"{{"n":{id}}}"#),
+            None,
+        )
     };
-    db.sync_undo_stack(&PersistPlan {
-        rows: (0..5).map(row).collect(),
-        keep_range: Some((0, 4)),
-    })
-    .unwrap();
+    db.save_undo_stack_with_timestamps((0..5).map(row).collect())
+        .unwrap();
 
-    // ids 0 and 1 evicted from the front, id 4 popped off the back: only 2..=3 survive,
-    // and nothing needs rewriting.
-    db.sync_undo_stack(&PersistPlan {
-        rows: vec![],
-        keep_range: Some((2, 3)),
-    })
-    .unwrap();
+    // Two evicted from the front, one popped off the back: only the middle two are
+    // handed over, and the other three must not survive.
+    db.save_undo_stack_with_timestamps((2..4).map(row).collect())
+        .unwrap();
 
     let loaded = db.load_undo_stack_with_timestamps().unwrap();
     assert_eq!(
-        loaded.iter().map(|(seq, ..)| *seq).collect::<Vec<_>>(),
-        vec![2, 3]
+        loaded
+            .iter()
+            .map(|(_, cmd, ..)| cmd.clone())
+            .collect::<Vec<_>>(),
+        vec![r#"{"type":"Cmd2"}"#, r#"{"type":"Cmd3"}"#]
     );
 
-    // An empty stack clears the table outright.
-    db.sync_undo_stack(&PersistPlan {
-        rows: vec![],
-        keep_range: None,
-    })
-    .unwrap();
+    // An empty stack clears the table outright - the shape a Full-mode project's redo
+    // save takes on every save (#303 F05).
+    db.save_undo_stack_with_timestamps(vec![]).unwrap();
     assert!(db.load_undo_stack_with_timestamps().unwrap().is_empty());
 }
 
