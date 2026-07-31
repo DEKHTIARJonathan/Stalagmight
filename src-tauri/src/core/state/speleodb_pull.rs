@@ -35,17 +35,53 @@ use crate::speleodb::{SpeleoAdoptResult, SpeleoDbError, SpeleoErrorDto, SpeleoOp
 /// "what happened to this project" is the only useful thing a message can say.
 const ADOPT_COMMIT_MESSAGE: &str = "Adopt into Stalagmight";
 
-/// Filename an adoption builds its converted project into, beside the cache `.stalx`
-/// it will be renamed over.
+/// Prefix of the filename an adoption builds its converted project into, beside the
+/// cache `.stalx` it will be renamed over. The full name appends this process's id -
+/// see [`adopt_staging_name`].
 ///
-/// A fixed name rather than a unique one: adoption is single-writer by construction
-/// (it holds the project's write mutex, and the cache path is per project), so two
-/// of them cannot race for it - and a fixed name is one a crashed adoption's
-/// leftovers can be recognised and removed by, which a random one is not. Nothing
-/// scans this directory for `.stalx` files: `scan_cache` walks project-id
-/// DIRECTORIES and reads the one canonical path inside each, so a leftover here is
-/// inert rather than a second candidate.
-const ADOPT_STAGING_STALX: &str = "adopt-staging.stalx";
+/// A PREFIX rather than a fixed name, because the obvious justification for a fixed
+/// one does not survive contact with this flow: "adoption holds the project's write
+/// mutex, so two of them cannot race" is false here, since a lock it cannot take is
+/// deliberately NOT a reason to stop - every lock-less route (read-only member,
+/// offline, mutex held by a third party, unreadable probe) still converts. Two app
+/// instances on one machine adopting the same project therefore share a cache
+/// directory with no mutex between them, and a fixed name has each one's
+/// remove-then-create unlink the other's in-flight database.
+///
+/// The prefix is what a crashed adoption's leftovers are still recognisable by, which
+/// is the one thing the fixed name was actually buying. Nothing scans this directory
+/// for `.stalx` files: `scan_cache` walks project-id DIRECTORIES and reads the one
+/// canonical path inside each, so a leftover here is inert rather than a second
+/// candidate.
+const ADOPT_STAGING_PREFIX: &str = "adopt-staging-";
+
+/// This process's staging filename. Per-process, so two instances adopting the same
+/// project cannot delete each other's work in progress.
+fn adopt_staging_name() -> String {
+    format!("{ADOPT_STAGING_PREFIX}{}.stalx", std::process::id())
+}
+
+/// Remove this process's leftover staging files from `dir` - the ones a previous
+/// adoption in THIS process died holding.
+///
+/// Scoped to our own pid on purpose. A sweep by bare prefix would delete a sibling
+/// instance's live staging database, which is the collision the pid is here to avoid;
+/// another process's leftovers are its own to clean up when it next adopts, and are
+/// inert in the meantime.
+fn sweep_own_staging(dir: &Path) {
+    let ours = adopt_staging_name();
+    let path = dir.join(&ours);
+    if let Err(e) = std::fs::remove_file(&path) {
+        if e.kind() != std::io::ErrorKind::NotFound {
+            tracing::warn!(
+                error = %e,
+                path = %path.display(),
+                purpose = "clear this process's leftover adoption staging file",
+                "speleodb_adopt_ariane: could not remove a stale staging .stalx"
+            );
+        }
+    }
+}
 
 /// Whether an adoption is holding the project's write mutex.
 ///
@@ -847,17 +883,25 @@ impl AppState {
 
     /// [#214] Adopt an Ariane (`.tml`-only) SpeleoDB project: the ONE sanctioned
     /// server-`.tml` read, a one-time bootstrap (never an ongoing reconcile).
-    /// Download the dump, import its `ariane.tml` through the existing TML importer,
-    /// save a new `.stalx` at the same cache path a pull would use, stamp the
-    /// hand-off link, and best-effort flip the server project `type` ariane→other.
+    ///
+    /// The whole hand-over, in order: take the project's write mutex, download the
+    /// dump, import its `ariane.tml` through the existing TML importer, save a new
+    /// `.stalx` at the same cache path a pull would use, stamp the hand-off link,
+    /// push it with its Ariane sidecar, release the mutex, flip the server project
+    /// `type` ariane→other, and close so the webview's own load is a real load.
+    ///
+    /// It DOES push - that is the point of taking the lock first, and of taking it
+    /// before the download rather than after the import. Only the routes that cannot
+    /// push leave the conversion local: a mutex held by anyone, an unreadable lock
+    /// probe, no write access, or no network. Those are not failures - the project is
+    /// adopted either way, `has_unpushed_edits` stays set, and [`AdoptUpload`] says
+    /// which happened so the webview can too.
     ///
     /// The FE calls this only after `speleodb_open_project` surfaced
-    /// `SpeleoDbAction::Adopt` and the user confirmed. Like a pull, it does NOT push;
-    /// the adopted `.stalx` is marked dirty (`has_unpushed_edits = true`) so the
-    /// first Start-editing → Done pushes it and makes the server `.stalx`-canonical.
-    /// Adoption replaces the open `AppState` project (the FE runs its usual
-    /// unsaved-changes guard first, exactly as for any open); the webview then
-    /// reloads `local_path`, which opens read-only-remote (`is_remote`, #191).
+    /// `SpeleoDbAction::Adopt` and the user confirmed. Adoption replaces the open
+    /// `AppState` project (the FE runs its usual unsaved-changes guard first, exactly
+    /// as for any open); the webview then reloads `local_path`, which opens
+    /// read-only-remote (`is_remote`, #191) once the lock has been handed back.
     ///
     /// `discard_local == true` waives the un-pushed-edits guard below, for the ONE
     /// caller that arrives having already had that loss confirmed - see the command
@@ -1121,7 +1165,7 @@ impl AppState {
         // The conversion IS the edit and it happened just now, so `now` is both true and
         // the value that works: the push below starts after this line, so
         // `last_edit_at <= push_start` and a landed push clears the bit.
-        if let Err(e) = self.speleodb_set_open_link(&crate::models::SpeleoLink {
+        let stamped = self.speleodb_set_open_link(&crate::models::SpeleoLink {
             endpoint: endpoint.clone(),
             project_id: project_id.clone(),
             project_name,
@@ -1129,7 +1173,8 @@ impl AppState {
             has_unpushed_edits: true,
             last_edit_at: Some(chrono::Utc::now().to_rfc3339()),
             last_verify_at: None,
-        }) {
+        });
+        if let Err(e) = &stamped {
             tracing::warn!(
                 error = %e,
                 project_id = %project_id,
@@ -1138,19 +1183,37 @@ impl AppState {
             );
         }
 
-        // The conversion exists, so the lock has a hand-over to belong to: the guard's
-        // "release it, nothing came of this" duty ends here, and `speleodb_done`'s
-        // rules take over (release when the push lands, keep it when a retry could
-        // still recover the work).
-        lock_guard.disarm();
+        // The conversion exists AND it is linked, so the lock has a hand-over to
+        // belong to: the guard's "release it, nothing came of this" duty ends here,
+        // and `speleodb_done`'s rules take over (release when the push lands, keep it
+        // when a retry could still recover the work).
+        //
+        // Conditional on the stamp, because an unstamped project has no hand-over to
+        // give the lock TO. `speleodb_start_editing` opens by reading the link
+        // (`speleodb_session_snapshot` -> `speleodb_open_link`), so with no link row it
+        // returns `NoRemoteProject` before touching the mutex - and a guard disarmed
+        // ahead of that leaves the lock held by nobody's code, until the server-side
+        // timeout. The documented "retry from the status button" is no recovery either:
+        // that button reads the very link that failed to write. Only the next login's
+        // held-lock prompt, which is server-derived, would ever find it.
+        if stamped.is_ok() {
+            lock_guard.disarm();
+        }
 
         // Upload the converted `.stalx` with its Ariane sidecar and hand the lock
         // back. Best-effort by construction: every failure arm leaves the adopted
         // project on disk, stamped dirty, and reports why - adoption that could not
         // reach the server is still an adoption.
-        let upload = match lock {
-            AdoptLock::Held => self.adopt_hand_over(),
-            AdoptLock::NotTaken(why) => why,
+        let upload = match (stamped, lock) {
+            (Ok(()), AdoptLock::Held) => self.adopt_hand_over(),
+            (Ok(()), AdoptLock::NotTaken(why)) => why,
+            // Nothing to hand over: the push reads the link to decide whether to run at
+            // all. Say so rather than letting `start_editing` discover it and report the
+            // same thing one indirection later. The guard above is still armed, so the
+            // lock this call took goes back on the way out.
+            (Err(e), _) => AdoptUpload::Failed {
+                message: format!("the converted project could not be linked to SpeleoDB: {e}"),
+            },
         };
 
         // Flip the server project `type` ariane→other, and ONLY once the `.stalx` is
@@ -1417,10 +1480,14 @@ impl AppState {
         let previous = self.open_project_path();
         // Beside `dest`, so the promote is a same-directory rename: cross-filesystem
         // renames are not atomic and would reintroduce the torn window this avoids.
-        let staged = dest.with_file_name(ADOPT_STAGING_STALX);
-        // A leftover from an adoption that died mid-flight. Create reserves the exact
-        // path only when nothing is there (it auto-renames around an existing file).
-        let _ = std::fs::remove_file(&staged);
+        let staged = dest.with_file_name(adopt_staging_name());
+        // A leftover from an adoption that died mid-flight IN THIS PROCESS. Create
+        // reserves the exact path only when nothing is there (it auto-renames around an
+        // existing file), and the pid in the name is what keeps this from clearing a
+        // sibling instance's live staging database.
+        if let Some(dir) = staged.parent() {
+            sweep_own_staging(dir);
+        }
 
         if let Err(e) = self.adopt_build_into(tml_path, &staged, project_name) {
             self.adopt_abandon_staging(&staged, previous.as_deref());
@@ -1447,6 +1514,23 @@ impl AppState {
         // path, the same case the failed-replace recovery uses it for.
         let reopened = self.open_project(dest.to_path_buf());
         if !reopened.success {
+            // The rename already consumed the staging file, so there is nothing to
+            // clean up - but the close above still has to be undone. Without this the
+            // one arm that fails AFTER a successful promote is also the one arm that
+            // leaves the backend with nothing open, under a shell still rendering the
+            // old project and still sending it edits: exactly the hazard the abandon
+            // path exists to prevent, reintroduced by the one exit that skipped it.
+            if let Some(previous) = previous.as_deref() {
+                let restored = self.open_project(previous.to_path_buf());
+                if !restored.success {
+                    tracing::warn!(
+                        error = ?restored.error,
+                        path = %previous.display(),
+                        purpose = "undo the pre-promote close after the adopted project failed to open",
+                        "speleodb_adopt_ariane: could not reopen the project the adoption replaced"
+                    );
+                }
+            }
             return Err(local_dto(SpeleoDbError::Io(format!(
                 "could not open the adopted project: {}",
                 reopened.error.unwrap_or_else(|| "unknown error".to_owned())
@@ -2079,7 +2163,19 @@ mod tests {
             .find("fn speleodb_adopt_ariane")
             .expect("the adoption verb is present");
         let body = &src[start..];
-        &body[..body.find("\n    }\n").expect("fn body terminates")]
+        let body = &body[..body.find("\n    }\n").expect("fn body terminates")];
+        // The terminator is "a closing brace at method indentation", which is the
+        // method's own only as long as nothing inside the body is written at that
+        // indent. A refactor that introduces one truncates this slice - and the
+        // tripwires built on it include NEGATIVE assertions (`!body.contains(..)`),
+        // which then pass over an empty tail without anyone noticing. Anchoring on the
+        // verb's own return is what makes a short slice loud instead of silent.
+        assert!(
+            body.contains("Ok(SpeleoAdoptResult {"),
+            "the sliced body must reach the verb's return, or every tripwire built on \
+             it is measuring a fragment"
+        );
+        body
     }
 
     /// Adoption reads a tree and writes it straight back, so the whole span between
@@ -2210,10 +2306,19 @@ mod tests {
             sentinel,
             "a failed adoption must leave the copy it was replacing byte-for-byte"
         );
+        // By PREFIX, not by our own name: the point is that no staging file survives,
+        // and a check for `adopt_staging_name()` alone would pass over a leftover
+        // written under any other pid.
+        let staging_left: Vec<_> = std::fs::read_dir(temp.path())
+            .expect("read the cache dir")
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .filter(|name| name.starts_with(super::ADOPT_STAGING_PREFIX))
+            .collect();
         assert!(
-            !temp.path().join(super::ADOPT_STAGING_STALX).exists(),
-            "and must not leave a whole survey behind in a staging file nothing will \
-             ever open"
+            staging_left.is_empty(),
+            "a failed adoption must not leave a whole survey behind in a staging file \
+             nothing will ever open, found: {staging_left:?}"
         );
     }
 

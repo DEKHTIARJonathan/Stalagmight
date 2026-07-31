@@ -1673,8 +1673,14 @@ fn speleodb_anchor(latitude: f64, longitude: f64) -> (f64, f64) {
 }
 
 fn speleodb_anchor_component(value: f64, limit: f64) -> f64 {
-    // NaN survives both the clamp and the compare, and the geometry sweep has
-    // already replaced it with 0.0 by the time anything is written.
+    // NaN survives both the clamp and the compare, and would then be written as an
+    // anchor of exactly 0.0 - the no-map case this nudge exists to prevent.
+    //
+    // It cannot arrive: `GpsCoordinates::new` rejects a non-finite component at
+    // construction, so no datum in a loaded project carries one. NOT the geometry
+    // sweep, which an earlier version of this comment credited - that sweep runs in
+    // `enforce_ariane_geometry_invariants`, AFTER this function, so it could not have
+    // cleaned up behind us even if it were the only guard.
     let clamped = value.clamp(-limit, limit);
     if as_written(clamped).abs() <= SPELEODB_ANCHOR_EPSILON {
         let nudge = 1.0 / ARIANE_WRITTEN_DECIMALS;
@@ -1758,14 +1764,20 @@ fn harden_for_speleodb(shots: &mut Vec<ExportShot>) {
         // are unique per SECTION by design (see `shot_export_uuid`), so a repeat
         // across sections is legal in the model and has to be dropped here;
         // omitting the optional element costs nothing downstream.
-        let keep = shot
+        //
+        // The CANONICAL spelling is written back, not the one that came in.
+        // `Uuid::parse_str` accepts `{braced}`, `urn:uuid:…` and hyphenless forms, so
+        // the gate below passes strings that are perfectly good v4s and nothing like
+        // the `8-4-4-4-12` the server's field expects. Emitting the input verbatim
+        // would fail the whole file on a spelling the check had just approved, which
+        // is the exact class of failure this function exists to prevent.
+        let canonical = shot
             .uuid
             .as_deref()
             .and_then(speleodb_uuid)
-            .is_some_and(|parsed| seen_uuids.insert(parsed));
-        if !keep {
-            shot.uuid = None;
-        }
+            .filter(|parsed| seen_uuids.insert(*parsed))
+            .map(|parsed| parsed.hyphenated().to_string());
+        shot.uuid = canonical;
     }
 
     // Ids come off one counter that is never reset, so this cannot fire; it is
@@ -4112,6 +4124,21 @@ mod tests {
                 as_written(fixed) >= delta,
                 "a {delta} m drop repaired to {fixed} writes as {} and no longer covers it",
                 format_f64(fixed)
+            );
+            // TIGHTNESS, which is the half the covering check above cannot see. That
+            // one restates the postcondition the repair's own verify loop enforces, so
+            // it holds for any implementation the loop can walk up to - including ones
+            // that overshoot. This is the bound that says the repair absorbs the
+            // rounding and does not invent survey data: a tape may grow into the last
+            // written decimal and no further.
+            //
+            // Loop exhaustion needs no separate assertion - it returns a value that
+            // still writes short, which is exactly what the covering check catches.
+            let one_ulp = 1.0 / ARIANE_WRITTEN_DECIMALS;
+            assert!(
+                fixed - delta < 2.0 * one_ulp,
+                "repairing a {delta} m drop to {fixed} lengthens the tape by more than \
+                 the rounding it exists to absorb"
             );
         }
     }

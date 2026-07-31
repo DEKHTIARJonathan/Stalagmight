@@ -1348,10 +1348,24 @@ describe('useOpenRemoteProject (#218)', () => {
    * authoritative.
    */
   it.each([
-    ['pushed and re-typed', { kind: 'pushed' }, true, 'success'],
-    ['pushed but still typed ariane', { kind: 'pushed' }, false, 'warning'],
-    ['never uploaded', { kind: 'lock_held', email: null }, false, 'warning'],
-  ])('adoptRemote toasts %s as %s', async (_label, upload, typeFlipped, expected) => {
+    ['pushed and re-typed', { kind: 'pushed' }, true, 'success', 'uploaded to SpeleoDB'],
+    [
+      'pushed but still typed ariane',
+      { kind: 'pushed' },
+      false,
+      'warning',
+      'type could not be changed',
+    ],
+    [
+      'never uploaded',
+      { kind: 'lock_held', email: null },
+      false,
+      'warning',
+      'on this machine only',
+    ],
+  ])(
+    'adoptRemote toasts %s as %s',
+    async (_label, upload, typeFlipped, expectedKind, expectedPhrase) => {
     const showToast = vi.fn();
     useUIStore.setState({ showToast });
     invokeIpcMock.mockImplementation((cmd: string) => {
@@ -1365,10 +1379,20 @@ describe('useOpenRemoteProject (#218)', () => {
       return Promise.resolve(null);
     });
 
-    await hook().adoptRemote(SUMMARY);
+      await hook().adoptRemote(SUMMARY);
 
-    expect(showToast).toHaveBeenCalledWith(expect.any(String), 'speleodb-adopted', expected);
-  });
+      // The MESSAGE is pinned too, not just the colour. Two of these three rows are
+      // amber, so asserting the colour alone let the two amber messages swap places
+      // and stay green - and "uploaded, but the type could not be changed" shown for
+      // an adoption that never reached the server is a materially wrong thing to tell
+      // someone about where their work is.
+      expect(showToast).toHaveBeenCalledWith(
+        expect.stringContaining(expectedPhrase),
+        'speleodb-adopted',
+        expectedKind,
+      );
+    },
+  );
 
   /**
    * `pushed` is read from a shape that can grow arms, and only ONE of them means the

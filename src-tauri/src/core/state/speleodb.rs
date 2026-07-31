@@ -3053,15 +3053,17 @@ impl AppState {
     /// there. Idempotent - a project already typed `other` costs nothing, which is
     /// every push after the first.
     ///
-    /// Called only from arms where the upload CONFLUDED, never before one. Flipping
+    /// Called only from arms where the upload CONCLUDED, never before one. Flipping
     /// ahead of a landing recreates the state this exists to avoid: a project typed
     /// `other` whose only file is the Ariane one that type says to disregard, openable
     /// by nobody.
     ///
-    /// `server_kind` is the type read before the upload. `None` means the read failed,
-    /// and this declines to act on it: the flip is not urgent, and guessing costs a
-    /// write against a project we know nothing current about. The next push reads it
-    /// again.
+    /// `server_kind` is the type read before the upload. `None` means we do not have
+    /// one - either the read failed, or it never ran (`fold_metadata == false`, the
+    /// initial publish push, where the project was created milliseconds ago and its
+    /// type is ours already). This declines to act on either: the flip is not urgent,
+    /// and guessing costs a write against a project we know nothing current about. The
+    /// next push reads it again.
     ///
     /// Called directly rather than through the auth handler, like adoption's own flip
     /// and for the same reason: this is a swallowed best-effort call at the end of a
@@ -3318,10 +3320,18 @@ mod tests {
         let upload = src
             .find("fn speleodb_upload")
             .expect("the upload is defined");
-        let body = &src[upload
-            ..src
-                .find("fn speleodb_heal_managed_type")
-                .expect("the helper is defined after it")];
+        let helper = src
+            .find("fn speleodb_heal_managed_type")
+            .expect("the helper is defined");
+        // Asserted, not assumed: `find` answers presence, not position, so slicing
+        // straight from one to the other turns "the helper moved above the upload"
+        // into a start>end slice PANIC - a real failure, reported as the wrong thing.
+        assert!(
+            upload < helper,
+            "this tripwire slices from the upload to the helper, so the helper has to \
+             be defined after it"
+        );
+        let body = &src[upload..helper];
         let landings: Vec<_> = body
             .match_indices("let landed = self.speleodb_revision_landed(")
             .map(|(at, _)| at)

@@ -548,15 +548,24 @@ pub enum AdoptUpload {
     /// Nothing was uploaded and the user must reconcile.
     Diverged,
     /// The lock or the upload failed outright (no write access, offline, a server
-    /// error). `message` is the already-humanised reason, for a toast.
+    /// error). `message` is the humanised reason.
+    ///
+    /// `message` here and `email` above are DIAGNOSTIC, not display: the webview
+    /// branches on `kind` alone and its three toasts are fixed strings, so neither
+    /// value reaches a user today. They are carried because the alternative is a
+    /// backend that knows why it stopped and throws it away before the boundary - the
+    /// log line in `adopt_hand_over` is what reads them. Rendering the holder's email
+    /// in the local-only toast is the obvious next use and needs no backend change.
     Failed { message: String },
 }
 
 /// [#214] Result of adopting an Ariane (`.tml`-only) project: the imported
 /// `.stalx` now lives at `local_path` (the webview reloads it through the normal
 /// `open_project` flow). `type_flipped` reports whether the server project `type`
-/// was successfully PATCHed ariane→other; when `false` the adoption still
-/// succeeded locally (the user likely lacks write access) and the webview says so.
+/// ended up PATCHed ariane→other. `false` covers TWO cases now, and the webview must
+/// not read it alone: the PATCH was attempted and refused (no write access), or it was
+/// never attempted because the upload did not land. `upload` is what tells them apart,
+/// which is why the toast keys on `pushed && type_flipped` rather than on this field.
 ///
 /// `upload` is the hand-over half: adoption uploads the converted project before
 /// returning, so a successful adopt leaves nothing stranded in the local cache.
