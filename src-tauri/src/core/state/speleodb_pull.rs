@@ -962,7 +962,7 @@ impl AppState {
         // acquire → commit, which is seconds; adoption's download-and-convert is not,
         // and a span held across it would block logout - and every other lock operation
         // - for as long as an import takes.
-        let (endpoint, token, insecure_http, concurrent_session, lock) = {
+        let (endpoint, token, insecure_http, my_email, concurrent_session, lock) = {
             let _lock_ops = self.speleodb_lock_ops_guard();
             let (endpoint, token) = self.speleodb_active_token().map_err(local_dto)?;
             let insecure_http = self.speleodb_insecure_http();
@@ -988,11 +988,15 @@ impl AppState {
             // needs the probe to be honest about not knowing.
             let holder =
                 self.speleodb_lock_holder_checked(&endpoint, &token, insecure_http, &project_id);
-            let concurrent_session = self.speleodb_my_email().is_some_and(|me| {
-                sync::concurrent_session_notice(
-                    holder.as_ref().ok().and_then(Option::as_deref),
-                    &me,
-                )
+            // The account whose token takes the mutex below, captured HERE rather than
+            // re-read later. The release verdict at the end of this function compares
+            // the server's holder against it, and a sign-out or account switch landing
+            // in between changes what `speleodb_my_email()` answers without changing who
+            // acquired - so a live re-read there would be comparing the mutex against a
+            // stranger's identity, or against no identity at all.
+            let my_email = self.speleodb_my_email();
+            let concurrent_session = my_email.as_deref().is_some_and(|me| {
+                sync::concurrent_session_notice(holder.as_ref().ok().and_then(Option::as_deref), me)
             });
 
             // THE LOCK COMES FIRST - before the head resolve, before the download.
@@ -1013,7 +1017,14 @@ impl AppState {
             // this flow existed, and both still do - the copy simply stays local, stamped
             // with un-pushed edits, which is exactly what it is.
             let lock = self.adopt_take_lock(&endpoint, &token, insecure_http, &project_id, holder);
-            (endpoint, token, insecure_http, concurrent_session, lock)
+            (
+                endpoint,
+                token,
+                insecure_http,
+                my_email,
+                concurrent_session,
+                lock,
+            )
         };
 
         // Arms the hand-back for every way the stretch below can return early. Disarmed
@@ -1289,12 +1300,19 @@ impl AppState {
         // A mutex that is not ours means the release did land, whatever the transport
         // said on the way back.
         //
-        // Only ever demotes, and only on a positive answer: an unreadable holder
-        // (`None`) leaves the protective reading in place, because "we could not ask"
-        // must never become "the lock is free".
+        // Only ever demotes, and only on a POSITIVE answer. There are two ways not to
+        // have one, and both keep the protective arm: a holder the GET could not read,
+        // and an identity of our own we could not establish. `lock_held_by_me` answers
+        // false for either, so testing `!lock_held_by_me(..)` alone would read "we do
+        // not know who we are" as "the lock is somebody else's" and drop the warning in
+        // exactly the case with least evidence for it - the same "we could not ask"
+        // becoming "the lock is free" that the holder side is guarded against.
+        // `my_email` is `None` on a poisoned session mutex as readily as on a sign-out,
+        // so this needs no race to reach.
         let upload = match (upload, &finalized.holder) {
             (AdoptUpload::PushedLockHeld, Some(holder))
-                if !lock_held_by_me(holder.as_deref(), self.speleodb_my_email().as_deref()) =>
+                if my_email.is_some()
+                    && !lock_held_by_me(holder.as_deref(), my_email.as_deref()) =>
             {
                 tracing::info!(
                     holder = ?holder,
@@ -1307,7 +1325,13 @@ impl AppState {
                 // and the held-lock prompt all read it, and each would try to hand back
                 // a lock that is either gone or, if another writer took it in between,
                 // somebody else's.
-                self.speleodb_note_lock_acquired(None);
+                //
+                // Scoped to THIS project. `speleodb_note_lock_acquired(None)` says "the
+                // account holds nothing" and drops EVERY claim it owns - including a
+                // lock deliberately kept on another project, whose janitor retry pointer
+                // and authorship provenance would go with it, over a call that
+                // established nothing about that project at all.
+                let _ = self.speleodb_forget_lock_acquired_for(&project_id);
                 AdoptUpload::Pushed
             }
             (upload, _) => upload,
@@ -1559,16 +1583,29 @@ impl AppState {
     /// dirty bit honestly and say what is left to do.
     fn adopt_hand_over(&self, expected_id: &str) -> AdoptUpload {
         let outcome = self.adopt_hand_over_inner(expected_id);
-        // Logged HERE rather than at each arm, so no arm can be added without one.
-        // Every non-`Pushed` outcome reaches the user as the same "it stayed local"
-        // toast, deliberately - there is nothing they can do differently about a lock
-        // held versus a push that did not confirm - which makes this the only record of
-        // WHICH it was. Diagnosing the first of these without it meant reading the
-        // server's mutex table.
+        // Logged HERE rather than at each arm, so no arm can be added without one. The
+        // outcomes that never reached the server all reach the user as the same "it
+        // stayed local" toast, deliberately - there is nothing they can do differently
+        // about a lock held versus a push that did not confirm - which makes this the
+        // only record of WHICH it was. Diagnosing the first of these without it meant
+        // reading the server's mutex table.
         match &outcome {
-            AdoptUpload::Pushed | AdoptUpload::PushedLockHeld => tracing::info!(
+            AdoptUpload::Pushed => tracing::info!(
                 purpose = "confirm the adoption reached the server",
                 "speleodb_adopt_ariane: conversion pushed and the lock handed back"
+            ),
+            // Its OWN arm. Sharing the one above asserted the opposite of the server
+            // state - it says the lock came back, and this outcome is defined by its
+            // not having - and carried no `outcome` field to tell the two apart, so the
+            // trail for a stuck adoption read as a clean finish. Since the holder
+            // re-check this also covers "the release may have landed but we could not
+            // establish whose the mutex is", which is why the message does not assert
+            // that it is still ours.
+            AdoptUpload::PushedLockHeld => tracing::warn!(
+                outcome = ?outcome,
+                purpose = "report an adoption whose upload landed but whose lock did not come back",
+                "speleodb_adopt_ariane: conversion pushed; the write lock is still ours or \
+                 could not be confirmed released"
             ),
             other => tracing::warn!(
                 outcome = ?other,
