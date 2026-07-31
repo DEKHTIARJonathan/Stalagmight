@@ -3,6 +3,7 @@ import { render, waitFor } from '@testing-library/react';
 
 import ExportPreview from '../ExportPreview';
 import { useProjectStore } from '../../../store/projectStore';
+import { useUIStore } from '../../../store/uiStore';
 import { DEFAULT_IMAGE_OPTIONS } from '../../../store/exportStore';
 import type { ExportImageOptions } from '../../../types/commands';
 
@@ -24,9 +25,12 @@ vi.mock('../../../utils/ipc', () => ({
  * the light theme showed a dark-ramp preview beside a themed file.
  */
 describe('ExportPreview depth endpoints (#360)', () => {
+  /** The options of the MOST RECENT preview request. Deliberately not `find` -
+   *  the theme-change case turns on a SECOND request, which the first match
+   *  would hide. */
   const previewOptions = (): ExportImageOptions => {
-    const call = invokeIpcMock.mock.calls.find((c) => c[0] === 'preview_svg_export');
-    return (call![1] as { options: ExportImageOptions }).options;
+    const calls = invokeIpcMock.mock.calls.filter((c) => c[0] === 'preview_svg_export');
+    return (calls[calls.length - 1]![1] as { options: ExportImageOptions }).options;
   };
 
   beforeEach(() => {
@@ -53,5 +57,25 @@ describe('ExportPreview depth endpoints (#360)', () => {
     });
     expect(previewOptions().depth_shallow).toBe('#14487f');
     expect(previewOptions().depth_deep).toBe('#a52a1a');
+  });
+
+  it('re-asks when the theme changes under an open preview', async () => {
+    // The theme reaches the payload off the live document, not through
+    // `options`, so it has to be an explicit dependency of the request. Without
+    // it the Export-mode panel keeps the old ramp after an in-place theme
+    // switch while the FILE follows the new one - the same preview-vs-file
+    // drift, just moved. Asserting the first fetch alone cannot see this.
+    const opts = { ...DEFAULT_IMAGE_OPTIONS, color_mode: 'depth' } as ExportImageOptions;
+    render(<ExportPreview options={opts} />);
+    await waitFor(() => expect(previewOptions().depth_shallow).toBe('#14487f'));
+
+    // Switch to the E-Ink Kaleido ramp the way the app does: the CSS vars
+    // change, and `resolvedTheme` in the store is what announces it.
+    document.documentElement.style.setProperty('--cc-depth-shallow', '#0050a0');
+    document.documentElement.style.setProperty('--cc-depth-deep', '#cc0000');
+    useUIStore.setState({ resolvedTheme: 'kaleido_eink' as never });
+
+    await waitFor(() => expect(previewOptions().depth_shallow).toBe('#0050a0'));
+    expect(previewOptions().depth_deep).toBe('#cc0000');
   });
 });
