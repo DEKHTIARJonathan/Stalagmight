@@ -84,6 +84,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             )
             .into());
         }
+        // `trim` clears surrounding whitespace but not an interior newline, and
+        // the value is about to be interpolated into a cargo directive that is
+        // parsed one line at a time - so a newline in it would emit a second
+        // directive of the attacker's choosing. Weak threat model (setting the
+        // variable already means controlling the build), but the check is one
+        // line and the failure would be silent.
+        if endpoint.contains(['\n', '\r']) {
+            return Err("TELEMETRY_ENDPOINT must be a single line".into());
+        }
         println!("cargo::rustc-env=TELEMETRY_ENDPOINT={endpoint}");
     }
 
